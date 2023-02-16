@@ -1,0 +1,357 @@
+# Role Based Access Control (RBAC)
+
+## Summary
+
+RBAC places restrictions on what actions a user can do based on the privileges granted to that user. PostgreSQL has a
+rich and well tested RBAC design and implementation, which we will base our implementation off of.
+
+## Goals
+
+- Allow users to create restrictions around who is allowed to do what.
+
+## Non-Goals
+
+- Data governance.
+- Frontegg integration.
+
+## Description
+
+If you want to skim this doc, then skip to the [Phase 1 - Attributes](#phase-1---attributes) section and only look at
+the subsection headers, tables, and SQL statements.
+
+### Existing RBAC Features in Materialize
+
+- Creating/Deleting roles
+    - We currently require clients to specify the `LOGIN` and `SUPERUSER` attributes when creating a role.
+    - We support parsing `NOLOGIN` and `NOSUPERUSER` attributes, but will fail the query if those are present.
+    - `CREATE ROLE <role-name> LOGIN SUPERUSER`.
+    - `DROP ROLE <role-name>`.
+    - We support `CREATE USER` as is treated as an alias for `CREATE ROLE LOGIN`.
+- `mz_roles`: catalog table that stores role names, id, and oid.
+- When a new user connects, a new role is automatically created for them with `LOGIN` and `SUPERUSER`.
+
+### PostgreSQL Background
+
+#### Docs
+
+- [Roles](https://www.postgresql.org/docs/current/user-manag.html)
+- [Privileges](https://www.postgresql.org/docs/current/ddl-priv.html)
+- [`CREATE ROLE`](https://www.postgresql.org/docs/current/sql-createrole.html)
+- [`DROP ROLE`](https://www.postgresql.org/docs/current/sql-droprole.html)
+- [`ALTER ROLE`](https://www.postgresql.org/docs/current/sql-alterrole.html)
+- [`GRANT`](https://www.postgresql.org/docs/current/sql-grant.html)
+- [`REVOKE`](https://www.postgresql.org/docs/current/sql-revoke.html)
+- [`SET ROLE`](https://www.postgresql.org/docs/current/sql-set-role.html)
+- [`REASSIGN OWNED`](https://www.postgresql.org/docs/current/sql-reassign-owned.html)
+- [`DROP OWNED`](https://www.postgresql.org/docs/current/sql-drop-owned.html)
+
+#### Implementation
+
+https://github.com/postgres/postgres/blob/master/src/backend/catalog/aclchk.c
+Note: There may be more, but this is a good starting point.
+
+### Phase 1 - Attributes
+
+See [Role Attributes](https://www.postgresql.org/docs/current/role-attributes.html) for all PostgreSQL attributes.
+
+Attributes belong to a role and describe what that role is allowed to do in the system. They are independent of any
+particular object. We will support the following attributes:
+
+| Name                      | Option Name     | Description                                                                                                                                           | From PostgreSQL |
+|---------------------------|-----------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------|
+| login privilege           | `LOGIN`         | Roles with this attribute can establish a database connection.                                                                                        | Yes             |
+| superuser status          | `SUPERUSER`     | Can bypass all permission checks, except login.                                                                                                       | Yes             |
+| database creation         | `CREATEDB`      | Can create a database.                                                                                                                                | Yes             |
+| role creation             | `CREATEROLE`    | Can create, alter, drop, grant membership to, and revoke membership from roles.                                                                       | Yes             |
+| inheritance of privileges | `INHERIT`       | Can inherit the privileges of roles that it is a member of. On by default. For this project we can keep this as a mandatory attribute.                | Yes             |
+| cluster creation          | `CREATECLUSTER` | Can create a cluster.                                                                                                                                 | No              |
+| persisted data creation   | `CREATEPERSIST` | Can write data to S3, either directly or indirectly (for example inserting into a table would be directly and creating a source would be indirectly). | No              |
+
+These attributes will be added to the attributes accepted by the `CREATE ROLE` statement. Additionally, we will not
+require `LOGIN` or `SUPERUSER` for new roles.
+
+We will add the following SQL statement:
+
+- `ALTER ROLE <role_name> [ WITH ] <option> [ ... ]`
+    - `<role_name>` is the name of the role to alter.
+    - `<option>`: is one of the Option Name’s from above OR one of the option names from above with a `NO` prepended (
+      ex: `NOLOGIN`). An option without a `NO` grants the attribute, an option with a `NO` revokes the attribute. All
+      unmentioned attributes are left unchanged.
+    - Anyone with the `CREATEROLE` attribute can run this on any other role
+        - `SUPERUSER` attribute is required to change the `SUPERUSER` attribute on another role.
+        - `SUPERUSER` can run this without `CREATEROLE`.
+    - `WITH` is ignored.
+
+When a new user logs in, we will create a new role for them with only the `LOGIN` and `INHERIT` attributes.
+
+#### Implementation Details
+
+- Each attribute will be added as a column to `mz_roles` with boolean values.
+- Attributes will be checked before operations in the sequencer.
+
+#### Out of Scope for Phase
+
+- `IN ROLE`, `IN GROUP` options for `CREATE ROLE`.
+- `ROLE`, `USER` options for `CREATE ROLE`.
+
+#### Out of Scope for Project
+
+- The following attributes:
+    - password
+    - bypassing row-level security
+    - connection limit
+- The following `CREATE ROLE` options:
+    - `VALID UNTIL`
+    - `SYSID`
+    - `ADMIN`
+- `ALTER ROLE RENAME`
+- `ALTER ROLE SET`
+- `ALTER ROLE RESET`
+- `CURRENT_ROLE`, `CURRENT_USER`, `SESSION_USER` aliases for `<role_name>` in `ALTER ROLE`.
+
+### Phase 2 - Role Membership
+
+See [Role Membership](https://www.postgresql.org/docs/current/role-membership.html) for PostgreSQL role membership.
+
+Role membership involves the ability of one role to be a member of another role. A role inherits all the privileges (not
+attributes) of the roles it is a member of, unless `NOINHERIT` is set. Even if `NOINHERIT` is set, you can still use the
+privileges of that role via `SET ROLE`. We will add the following SQL commands:
+
+- `GRANT <group_role> TO [ GROUP ] <role>`
+    - Adds `<role>` as a member of `<group_role>`.
+    - Any role with the `CREATEROLE` attribute OR superusers can grant membership to any other role.
+        - `CREATEROLE` roles cannot grant roles with `SUPERUSER`.
+        - Note: PostgreSQL allows other roles to grant membership with the `WITH ADMIN OPTION` option. We will leave
+          this as future work.
+    - Circular memberships are NOT allowed.
+    - `GROUP` is ignored.
+- `REVOKE <group_role> FROM [ GROUP ] <role> [ CASCADE | RESTRICT ]`
+    - Removes `<role>` as a member from `<group_role>`.
+    - Any role with the `CREATEROLE` attribute OR superusers can revoke membership from any other member.
+        - `CREATEROLE` roles cannot revoke roles with `SUPERUSER`.
+        - Note: PostgreSQL allows other roles to grant membership with the `WITH ADMIN OPTION` option. We will leave
+          this as future work.
+    - `GROUP` is ignored.
+    - Default is `RESTRICT`.
+- `SET ROLE <role_name>`
+    - Sets the current role to `<role_name>`.
+    - Requires the current role to be a member of `<role_name>`.
+- `RESET ROLE`
+    - Sets the current role to the role the connection was established with.
+
+We will add the following options to `CREATE ROLE`:`IN ROLE`,`IN GROUP`,`ROLE`,`USER`.
+
+We will modify `DROP ROLE <role_name>` so that when `<role_name>` is dropped, all other roles have their membership
+revoked.
+
+We will add the following functions:
+
+- `current_role()`
+    - Returns the current role of the session.
+- `current_user()`
+    - Alias for `current_role()`.
+- `session_user()`
+    - Returns the role that initiated the database connection.
+
+NOTE: Since we won't support `SET ROLE` yet, these functions will all behave identically.
+
+#### Implementation Details
+
+- The catalog will store role membership.
+- When attributes are checked in the sequencer, we will check the attributes of all roles that the current role is a
+  member of.
+
+#### Out of Scope for Phase
+
+- `GRANT` privileges.
+- `REVOKE` privileges.
+
+#### Out of Scope for Project
+
+- `CURRENT_ROLE`, `CURRENT_USER`, `SESSION_USER`, and `PUBLIC` aliases for `<role>` in `GRANT` and `REVOKE`.
+- `GRANTED BY` option for `GRANT` and `REVOKE`.
+- `[ WITH ADMIN OPTION ]` option for `GRANT`.
+- `[ADMIN OPTION FOR ]` option for `REVOKE`.
+- `SET ROLE`
+- `RESET ROLE`
+
+### Phase 3 - Privileges
+
+See [Privileges](https://www.postgresql.org/docs/current/ddl-priv.html) for PostgreSQL privileges.
+
+Roles can be granted and revoked certain privileges on objects, that allow them to perform some action with that object.
+
+We will support the following privileges:
+
+| Privilege | Description                                                              | Abbreviation | Applicable Object Types                       | From PostgreSQL |
+|-----------|--------------------------------------------------------------------------|--------------|-----------------------------------------------|-----------------|
+| `SELECT`  | Allows reading rows from an object.                                      | r(”read”)    | Table, View, Materialized View, Source        | Yes             |
+| `INSERT`  | Allows inserting into an object.                                         | a(”append”)  | Table                                         | Yes             |
+| `UPDATE`  | Allows updating an object (requires SELECT if a read is necessary).      | w(”write”)   | Table                                         | Yes             |
+| `DELETE`  | Allows deleting from an object (requires SELECT if a read is necessary). | d            | Table                                         | Yes             |
+| `CREATE`  | Allows creating a new object within another object.                      | C            | Database, Schema, Cluster                     | Yes             |
+| `USAGE`   | Allows using an object or looking up members of an object.               | U            | Database, Schema, Connection, Secret, Cluster | Yes             |
+
+We will support the following object types:
+
+| Object Type          | All Privileges | From PostgreSQL |
+|----------------------|----------------|-----------------|
+| `DATABASE`           | UC             | Yes             |
+| `SCHEMA`             | UC             | Yes             |
+| `TABLE`              | arwd           | Yes             |
+| `VIEW`               | r              | Yes             |
+| `MATERIALIZED  VIEW` | r              | Yes             |
+| `INDEX`              |                | Yes             |
+| `SOURCE`             | r              | No              |
+| `SINK`               |                | No              |
+| `CONNECTION`         | U              | No              |
+| `SECRET`             | U              | No              |
+| `CLUSTER`            | UC             | No              |
+
+When any of these objects are created, the creating role is assigned as the owner of that object. Only the owner (and
+superusers) can destroy or alter that object. The owner is given all privileges on an object by default, though these
+privileges can be revoked.
+
+PostgreSQL allows arwd privileges on all table like objects (view, materialized view, etc.) even though they aren't
+useful. We remove privileges that don't make sense.
+
+Here is a summary of all the privileges, attributes, and ownership needed to perform certain actions:
+
+| Operation                            | Privilege, Attribute, and OwnerShip                                         |
+|--------------------------------------|-----------------------------------------------------------------------------|
+| `ALTER` (NOT role)                   | Ownership of the object, `SCHEMA(C)`                                        |
+| `ALTER ROLE`                         | `CREATEROLE` (NOTE: Only `SUPERUSER` can change the `SUPERUSER` attribute). |
+| `COPY TO`                            | `CLUSTER(U)`, `OBJECT(r)`                                                   |
+| `COPY FROM`                          | `OBJECT(a)`                                                                 |
+| `CREATE CLUSTER`                     | `CREATECLUSTER`                                                             |
+| `CREATE CLUSTER REPLICA`             | `CLUSTER(C)`, `CREATECLUSTER`                                               |
+| `CREATE {SECRET, TABLE, TYPE, VIEW}` | `SCHEMA(C)`                                                                 |
+| `CREATE CONNECTION`                  | `SCHEMA(C)`, sometimes `SECRET(U)`                                          |
+| `CREATE DATABASE`                    | `CREATEDATABASE`                                                            |
+| `CREATE INDEX`                       | `SCHEMA(C)`, `CLUSTER(C)`                                                   |
+| `CREATE MATERIALIZED VIEW`           | `CREATEPERSIST`, `SCHEMA(C)`, `CLUSTER(C)`                                  |
+| `CREATE SOURCE`                      | `CREATEPERSIST`, `SCHEMA(C)`, `CLUSTER(C)` sometimes `CONNECTION(U)`        |
+| `CREATE TABLE`                       | `CREATEPERSIST`, `SCHEMA(C)`                                                |
+| `CREATE {ROLE, USER}`                | `CREATEROLE` (NOTE: only `SUPERUSER`s can create other `SUPERUSER`s).       |
+| `CREATE SCHEMA`                      | `DATABASE(C)`                                                               |
+| `DELETE`                             | `OBJECT(d)` usually `CLUSTER(U)`, `OBJECT(r)`                               |
+| `DROP` (NOT ROLE)                    | Ownership of the object                                                     |
+| `DROP ROLE`                          | `CREATEROLE` (NOTE: only `SUPERUSER`s can drop other `SUPERUSER`s).         |
+| `EXPLAIN`                            | usually `OBJECT(r)`                                                         |
+| `INSERT INTO ... VALUES`             | `OBJECT(a)`                                                                 |
+| `INSERT INTO ... SELECT`             | `CLUSTER(U)`,`OBJECT(a)` usually `OBJECT(r)`                                |
+| `{SELECT, SHOW, SUBSCRIBE}`          | `CLUSTER(U)`, usually `OBJECT(r)`                                           |
+| `SET CLUSTER`                        | `CLUSTER(U)`                                                                |
+| `SET DATABASE`                       | `DATABASE(U)`                                                               |
+| resolve object in schema             | `SCHEMA(U)`                                                                 |
+| `UPDATE`                             | `OBJECT(w)` usually `CLUSTER(U)`, `OBJECT(r)`                               |
+
+Superusers can do anything in the above table.
+
+In order to execute a read, the role only needs `r` permission on the direct objects being read. For example, a role can
+read from a view if it has `r` privileges on that view even if it does not have `r` privileges on the underlying objects
+within that view.
+
+We will add the following SQL commands:
+
+- `GRANT <privilege> ON <object> TO [ GROUP ] <role>`
+    - Gives `<privilege>` on `<object>` to `<role>`.
+    - Only the owner of `<object>` can grant privileges on it.
+        - Note: PostgreSQL allows other roles to grant privileges with the `WITH GRANT OPTION` option.
+    - `GROUP` is ignored.
+- `GRANT ALL [ PRIVILEGES ] ON <object> TO [ GROUP ] <role>`
+    - Same as grant above, but for all privileges.
+    - `PRIVILEGES` is ignored.
+- `REVOKE <privilege> ON <object> FROM [ GROUP ] <role>`
+    - Revokes `<privilege>` on `<object>` from `<role>`.
+    - Only the owner of `<object>` can revoke privileges from it.
+        - Note: PostgreSQL allows other roles to revoke privileges with the `WITH GRANT OPTION` option.
+    - `GROUP` is ignored.
+- `REVOKE ALL [ PRIVILEGES ] ON <object> FROM [ GROUP ] <role>`
+    - Same as revoke above but for all privileges.
+    - `PRIVILEGES` is ignored.
+- `ALTER <object_type> <object_name> OWNER TO <new_owner>`
+    - Transfers ownership of `<object_name>` to `<new_owner>`.
+    - Can only be run by the current owner (or member of owning role) or a superuser.
+    - Requires membership of `<new_owner>`.
+    - Requires `CREATE` privilege on the schema where `<object_name>` resides if the object resides in a schema.
+        - Rationale is that this is equivalent to `DROP` then `CREATE`.
+    - Requires `CREATE` privilege on the database where `<object_name>` resides if the object is a database.
+- `REASSIGN OWNED BY <old_role> TO <new_role>`
+    - Transfers ownership of all objects owned by `<old_role>` to `<new_role>`.
+    - Can only be run by a member of `<old_role>` and `<new_role>` or a superuser.
+    - Requires `CREATE` privilege on all schemas and databases where all objects reside.
+        - TODO: This isn't explicitly stated in th docs, but would make sense base on the `ALTER` privileges. I will
+          double-check this.
+    - In PostgreSQL, this only affects the current database. We will diverge here and have it affect all databases.
+- `DROP OWNED BY <name> [ CASCADE | RESTRICT]`
+    - Drops all objects owned by `<name>`.
+    - Requires membership of `<name>`.
+    - In PostgreSQL, this only affects the current database. We will diverge here and have it affect all databases.
+    - Revokes all privileges granted to `<name>`.
+    - Does not drop owned databases or clusters.
+    - Default is `RESTRICT`.
+
+We will update `DROP ROLE` so that roles cannot be dropped until it meets the following criteria:
+
+- No objects are owned by the role.
+- The role contains no privileges.
+
+We will update `DROP <object>` so that it revokes all privileges on `<object>`.
+
+#### Implementation Details
+
+- Privileges will be stored in the catalog.
+- Privileges will be checked before operations in the sequencer.
+
+#### Out of Scope for Project
+
+- `CURRENT_ROLE`, `CURRENT_USER`, `SESSION_USER`, and `PUBLIC` aliases in `GRANT`, `REVOKE`, `ALTER`, `REASSIGN OWNED`
+  and `DROP OWNED`.
+- `GRANTED BY` option for `GRANT` and `REVOKE`.
+- `WITH GRANT OPTION` in `GRANT`.
+- `GRANT OPTION FOR` in `REVOKE`.
+- The following privileges:
+    - `TRUNCATE`
+    - `REFERENCES`
+    - `TRIGGER`
+    - `CONNECT`
+    - `TEMPORARY`
+    - `EXECUTE`
+    - `SET`
+    - `ALTER SYSTEM`
+- The following object types:
+    - `DOMAIN`
+    - `FUNCTION` or `PROCEDURE`
+    - `FOREIGN DATA WRAPPER`
+    - `FOREIGN SERVER`
+    - `LANGUAGE`
+    - `LARGE OBJECT`
+    - `PARAMETER`
+    - `SEQUENCE`
+    - `Table column`
+    - `TABLESPACE`
+    - `TYPE`
+- Adding the necessary pg views to support all role based `psql` meta-commands.
+
+## Alternatives
+
+- PostgreSQL breaks from the SQL standard in a couple of places in their RBAC implementation. We may want to consider a
+  design that is more in line with the SQL standard than PostgreSQL.
+
+## Open questions
+
+- What should the default role be when a new Materialize instance is started up for the first time, and what should be
+  the privileges and attributes? How will clients connect to this role?It should probably have `LOGIN` and `SUPERUSER`
+  attributes.
+- PostgreSQL grants certain privileges on certain object types to all roles. None of those overlap with the set of
+  objects and privileges we have, but do we want to do something similar?
+- Do we want different `SELECT` privileges based on if a new dataflow will be spun up or if we can use an existing one?
+    - Pros: We can differentiate between using existing compute resources vs creating new ones when reading.
+    - Cons: Users (and the database) are unable to determine if they're allowed to execute a read until after that read
+      has been fully planned.
+- What views/functions/commands do we want to add to help users query the current set of privileges.
+- What do privileges look like for system objects? Probably everyone should get `SELECT` permission by default.
+- Do we want to change `DROP OWNED` so that it drops databases and clusters?
+- What are security labels in PostgreSQL and do we want them?
+    
