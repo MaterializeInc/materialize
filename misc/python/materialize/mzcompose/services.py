@@ -149,11 +149,15 @@ class Materialized(Service):
             volumes += DEFAULT_MZ_VOLUMES
         volumes += volumes_extra
 
+        ports = [6875, 6876, 6877, 6878, 26257]
+        if not external_cockroach:
+            ports.append(8080)
+
         config.update(
             {
                 "depends_on": depends_on,
                 "command": command,
-                "ports": [6875, 6876, 6877, 6878, 26257],
+                "ports": ports,
                 "environment": environment,
                 "volumes": volumes,
                 "tmpfs": ["/tmp"],
@@ -494,7 +498,7 @@ class Cockroach(Service):
             config={
                 "image": image,
                 "networks": {"default": {"aliases": aliases}},
-                "ports": [26257],
+                "ports": [8080, 26257],
                 "command": command,
                 "volumes": volumes,
                 "init": True,
