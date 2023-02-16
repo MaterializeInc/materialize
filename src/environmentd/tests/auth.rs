@@ -130,8 +130,6 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
 use mz_ore::task::RuntimeExt;
 
-use crate::util::PostgresErrorExt;
-
 pub mod util;
 
 /// A certificate authority for use in tests.
@@ -299,9 +297,13 @@ where
     connector.connect(uri.host().unwrap(), stream).unwrap()
 }
 
-enum Assert<E> {
+// Use two error types because some tests need to retry certain errors because
+// there's a race condition for which is produced and they always need a
+// postgres-style error.
+enum Assert<E, D = ()> {
     Success,
     Err(E),
+    DbErr(D),
 }
 
 enum TestCase<'a> {
@@ -310,7 +312,12 @@ enum TestCase<'a> {
         password: Option<&'a str>,
         ssl_mode: SslMode,
         configure: Box<dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a>,
-        assert: Assert<Box<dyn Fn(postgres::Error) + 'a>>,
+        assert: Assert<
+            // A non-retrying, raw error.
+            Box<dyn Fn(&tokio_postgres::error::Error) + 'a>,
+            // A check that retries until it gets a DbError.
+            Box<dyn Fn(&tokio_postgres::error::DbError) + 'a>,
+        >,
     },
     Http {
         user: &'static str,
@@ -359,27 +366,48 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                     user, password, ssl_mode
                 );
 
-                let pg_client = server
-                    .pg_config()
+                let tls = make_pg_tls(configure);
+                let mut pg_client = server.pg_config();
+                pg_client
                     .ssl_mode(*ssl_mode)
                     .user(user)
-                    .password(password.unwrap_or(""))
-                    .connect(make_pg_tls(configure));
+                    .password(password.unwrap_or(""));
 
                 match assert {
                     Assert::Success => {
-                        let mut pg_client = pg_client.unwrap();
+                        let mut pg_client = pg_client.connect(tls).unwrap();
                         let row = pg_client.query_one("SELECT current_user", &[]).unwrap();
                         assert_eq!(row.get::<_, String>(0), *user);
+                    }
+                    Assert::DbErr(check) => {
+                        // This sometimes returns a network error, so retry until we get a db error.
+                        Retry::default()
+                            .max_duration(Duration::from_secs(10))
+                            .retry(|_| {
+                                // Due to delayed startup, we must attempt a query to
+                                // check if there was a login error.
+                                let err = match pg_client.connect(tls.clone()) {
+                                    Ok(mut pg_client) => {
+                                        pg_client.query_one("SELECT 1", &[]).unwrap_err()
+                                    }
+                                    Err(err) => err,
+                                };
+                                let Some(err) = err.as_db_error() else {
+                                    return Err(());
+                                };
+                                check(err);
+                                Ok(())
+                            })
+                            .unwrap();
                     }
                     Assert::Err(check) => {
                         // Due to delayed startup, we must attempt a query to
                         // check if there was a login error.
-                        let err = match pg_client {
+                        let err = match pg_client.connect(tls.clone()) {
                             Ok(mut pg_client) => pg_client.query_one("SELECT 1", &[]).unwrap_err(),
                             Err(err) => err,
                         };
-                        check(err)
+                        check(&err);
                     }
                 }
             }
@@ -449,6 +477,7 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                         };
                         check(code, message)
                     }
+                    Assert::DbErr(_) => unreachable!(),
                 }
             }
             TestCase::Ws {
@@ -502,6 +531,7 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                         };
                         check(code, message.to_string())
                     }
+                    Assert::DbErr(_) => unreachable!(),
                 }
             }
         }
@@ -946,8 +976,7 @@ fn test_auth_base() {
                 password: Some(frontegg_password),
                 ssl_mode: SslMode::Disable,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
-                assert: Assert::Err(Box::new(|err| {
-                    let err = err.unwrap_db_error();
+                assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(
                         *err.code(),
                         SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION
@@ -968,8 +997,7 @@ fn test_auth_base() {
                 password: Some(frontegg_password),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
-                assert: Assert::Err(Box::new(|err| {
-                    let err = err.unwrap_db_error();
+                assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
                     assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
                 })),
@@ -990,8 +1018,7 @@ fn test_auth_base() {
                 password: Some("bad password"),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
-                assert: Assert::Err(Box::new(|err| {
-                    let err = err.unwrap_db_error();
+                assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
                     assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
                 })),
@@ -1012,8 +1039,7 @@ fn test_auth_base() {
                 password: Some(&format!("mznope_{client_id}{secret}")),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
-                assert: Assert::Err(Box::new(|err| {
-                    let err = err.unwrap_db_error();
+                assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
                     assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
                 })),
@@ -1037,8 +1063,7 @@ fn test_auth_base() {
                 password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
-                assert: Assert::Err(Box::new(|err| {
-                    let err = err.unwrap_db_error();
+                assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
                     assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
                 })),
@@ -1174,7 +1199,7 @@ fn test_auth_base() {
                 password: None,
                 ssl_mode: SslMode::Disable,
                 configure: Box::new(|_| Ok(())),
-                assert: Assert::Err(Box::new(|err| {
+                assert: Assert::DbErr(Box::new(|err| {
                     assert_contains!(err.to_string(), "unauthorized login to user 'mz_system'");
                 })),
             },
@@ -1195,8 +1220,7 @@ fn test_auth_base() {
                 password: Some(frontegg_password),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
-                assert: Assert::Err(Box::new(|err| {
-                    let err = err.unwrap_db_error();
+                assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), r#"role "user@_.com" does not exist"#);
                     assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
                 })),
@@ -1216,8 +1240,7 @@ fn test_auth_base() {
                 password: None,
                 ssl_mode: SslMode::Disable,
                 configure: Box::new(|_| Ok(())),
-                assert: Assert::Err(Box::new(|err| {
-                    let err = err.unwrap_db_error();
+                assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(
                         *err.code(),
                         SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION
@@ -1261,7 +1284,7 @@ fn test_auth_base() {
                 password: None,
                 ssl_mode: SslMode::Prefer,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
-                assert: Assert::Err(Box::new(|err| {
+                assert: Assert::DbErr(Box::new(|err| {
                     assert_contains!(err.to_string(), "unauthorized login to user 'mz_system'");
                 })),
             },
