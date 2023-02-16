@@ -124,7 +124,6 @@ impl JoinImplementation {
             implementation,
         } = relation
         {
-            let inputs_len = inputs.len();
             if !matches!(implementation, IndexedFilter(..)) {
                 let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
 
@@ -311,13 +310,8 @@ impl JoinImplementation {
                     &filters,
                 );
 
-                // Employ delta join plans only for multi-way joins of at least three inputs.
-                *relation = if inputs_len > 2 {
-                    delta_query_plan.or(differential_plan)
-                } else {
-                    differential_plan
-                }
-                .expect("Failed to produce a join plan");
+                *relation = delta_query_plan.or(differential_plan)
+                    .expect("Failed to produce a join plan");
             }
         }
         Ok(())
@@ -400,12 +394,21 @@ mod delta_queries {
             implementation,
         } = &mut new_join
         {
-            if inputs.len() < 2 {
+            if inputs.len() <= 2 {
+                // if inputs.len() == 0 then something is very wrong.
+                //
+                // if inputs.len() == 1:
                 // Single input joins are filters and should be planned as
                 // differential plans instead of delta queries. Because a
                 // a filter gets converted into a single input join only when
                 // there are existing arrangements, without this early return,
                 // filters will always be planned as delta queries.
+                // (ggevay: This is an old comment, and I'm not sure whether a single-input join
+                // could still actually occur. It is not happening in any of our slts currently.)
+                //
+                // if inputs.len() == 2:
+                // We decided to always plan this as a differential join for now, see here:
+                // https://github.com/MaterializeInc/materialize/pull/16099#issuecomment-1316857374
                 return Err(TransformError::Internal(String::from(
                     "should be planned as differential plan",
                 )));
