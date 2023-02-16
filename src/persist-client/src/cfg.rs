@@ -124,6 +124,7 @@ impl PersistConfig {
                 compaction_heuristic_min_updates: AtomicUsize::new(1024),
                 compaction_memory_bound_bytes: AtomicUsize::new(1024 * MB),
                 compaction_minimum_timeout: Self::DEFAULT_COMPACTION_MINIMUM_TIMEOUT,
+                compare_and_append_extra_merge_effort: AtomicUsize::new(0),
                 consensus_connection_pool_ttl: Duration::from_secs(300),
                 consensus_connection_pool_ttl_stagger: Duration::from_secs(6),
                 gc_blob_delete_concurrency_limit: AtomicUsize::new(32),
@@ -225,6 +226,9 @@ pub struct DynamicConfig {
     compaction_heuristic_min_parts: AtomicUsize,
     compaction_heuristic_min_updates: AtomicUsize,
     compaction_memory_bound_bytes: AtomicUsize,
+    // WIP finish hooking this up to LaunchDarkly once we've hashed out the
+    // semantics and naming
+    compare_and_append_extra_merge_effort: AtomicUsize,
     gc_blob_delete_concurrency_limit: AtomicUsize,
     state_versions_recent_live_diffs_limit: AtomicUsize,
 
@@ -296,12 +300,33 @@ impl DynamicConfig {
         self.compaction_minimum_timeout
     }
 
+    /// Fuel added to every compare_and_append call
+    ///
+    /// This is intended to be an analog to `idle_merge_effort`, which in
+    /// differential dataflow configures an arrangement to introduce extra fuel
+    /// on every operator invocation. This causes data in a Trace to continue
+    /// compacting, even when new updates are not being introduced.
+    ///
+    /// Persist doesn't have anything that directly corresponds to operator
+    /// invocations, but we do the best we can to match the spirit of
+    /// idle_merge_effort. Specifically, we introduce the additional fuel on
+    /// each compare_and_append call. In practice, compare_and_append gets
+    /// called on a regular cadence to advance the frontier, so even in no
+    /// updates are being added, we'll eventually compact things down. This does
+    /// mean, however, that tuning the tuning for this constant will likely be
+    /// quite different.
+    pub fn compare_and_append_extra_merge_effort(&self) -> usize {
+        self.compare_and_append_extra_merge_effort
+            .load(Self::LOAD_ORDERING)
+    }
+
     /// The minimum TTL of a connection to Postgres/CRDB before it is proactively
     /// terminated. Connections are routinely culled to balance load against the
     /// downstream database.
     pub fn consensus_connection_pool_ttl(&self) -> Duration {
         self.consensus_connection_pool_ttl
     }
+
     /// The minimum time between TTLing connections to Postgres/CRDB. This delay is
     /// used to stagger reconnections to avoid stampedes and high tail latencies.
     /// This value should be much less than `consensus_connection_pool_ttl` so that

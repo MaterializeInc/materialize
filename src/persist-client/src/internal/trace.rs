@@ -185,16 +185,32 @@ impl<T: Timestamp + Lattice> Trace<T> {
     }
 
     #[must_use]
+    pub fn push_batch_and_exert(
+        &mut self,
+        batch: HollowBatch<T>,
+        effort: usize,
+    ) -> Vec<FueledMergeReq<T>> {
+        let mut effort = isize::try_from(effort).expect("effort should fit in an isize");
+        let mut merge_reqs = Vec::new();
+        self.spine
+            .insert(SpineBatch::Merged(Arc::new(batch)), &mut merge_reqs);
+        self.spine.exert(&mut effort, &mut merge_reqs);
+        Self::remove_redundant_merge_reqs(merge_reqs)
+    }
+
+    #[must_use]
     pub fn push_batch(&mut self, batch: HollowBatch<T>) -> Vec<FueledMergeReq<T>> {
         let mut merge_reqs = Vec::new();
         self.spine
             .insert(SpineBatch::Merged(Arc::new(batch)), &mut merge_reqs);
-        // Spine::roll_up (internally used by insert) clears all batches out of
-        // levels below a target by walking up from level 0 and merging each
-        // level into the next (providing the necessary fuel). In practice, this
-        // means we'll get a series of requests like `(a, b), (a, b, c), ...`.
-        // It's a waste to do all of these (we'll throw away the results), so we
-        // filter out any that are entirely covered by some other request.
+        Self::remove_redundant_merge_reqs(merge_reqs)
+    }
+
+    #[must_use]
+    pub fn exert(&mut self, effort: usize) -> Vec<FueledMergeReq<T>> {
+        let mut effort = isize::try_from(effort).expect("effort should fit in an isize");
+        let mut merge_reqs = Vec::new();
+        self.spine.exert(&mut effort, &mut merge_reqs);
         Self::remove_redundant_merge_reqs(merge_reqs)
     }
 
@@ -253,6 +269,13 @@ impl<T: Timestamp + Lattice> Trace<T> {
         reqs
     }
 
+    // Spine::roll_up (internally used by insert) clears all batches out of
+    // levels below a target by walking up from level 0 and merging each
+    // level into the next (providing the necessary fuel). In practice, this
+    // means we'll get a series of requests like `(a, b), (a, b, c), ...`.
+    // It's a waste to do all of these (we'll throw away the results), so we
+    // filter out any that are entirely covered by some other request.
+    //
     // This is only called with the results of one `insert` and so the length of
     // `merge_reqs` is bounded by the number of levels in the spine (or possibly
     // some small constant multiple?). The number of levels is logarithmic in
@@ -700,7 +723,6 @@ impl<T: Timestamp + Lattice> Spine<T> {
     /// permitted to perform proportionate work.
     ///
     /// When this function is called, `effort` must be non-negative
-    #[allow(dead_code)]
     pub fn exert(&mut self, effort: &mut isize, merge_reqs: &mut Vec<FueledMergeReq<T>>) {
         // If there is work to be done, ...
         self.tidy_layers();

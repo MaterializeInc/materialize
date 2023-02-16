@@ -236,6 +236,11 @@ where
         writer_id: &WriterId,
         heartbeat_timestamp_ms: u64,
     ) -> Result<Result<(SeqNo, WriterMaintenance<T>), InvalidUsage<T>>, Upper<T>> {
+        let extra_effort = self
+            .applier
+            .cfg
+            .dynamic
+            .compare_and_append_extra_merge_effort();
         let idempotency_token = IdempotencyToken::new();
         loop {
             let res = self
@@ -243,6 +248,7 @@ where
                     batch,
                     writer_id,
                     heartbeat_timestamp_ms,
+                    extra_effort,
                     &idempotency_token,
                     None,
                 )
@@ -277,6 +283,7 @@ where
         batch: &HollowBatch<T>,
         writer_id: &WriterId,
         heartbeat_timestamp_ms: u64,
+        extra_effort: usize,
         idempotency_token: &IdempotencyToken,
         // Only exposed for testing. In prod, this always starts as None, but
         // making it a parameter allows us to simulate hitting an indeterminate
@@ -381,6 +388,7 @@ where
                         writer_id,
                         heartbeat_timestamp_ms,
                         idempotency_token,
+                        extra_effort,
                     )
                 })
                 .await;
@@ -1580,10 +1588,18 @@ pub mod datadriven {
         let indeterminate = args
             .optional::<String>("prev_indeterminate")
             .map(|x| Indeterminate::new(anyhow::Error::msg(x)));
+        let extra_effort = args.optional("effort").unwrap_or_default();
         let now = (datadriven.client.cfg.now)();
         let (_, maintenance) = datadriven
             .machine
-            .compare_and_append_idempotent(&batch, &writer_id, now, &token, indeterminate)
+            .compare_and_append_idempotent(
+                &batch,
+                &writer_id,
+                now,
+                extra_effort,
+                &token,
+                indeterminate,
+            )
             .await
             .map_err(|err| anyhow!("{:?}", err))?
             .expect("invalid usage");
