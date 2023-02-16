@@ -13,8 +13,9 @@ use std::collections::BTreeMap;
 use mz_ore::collections::CollectionExt;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement};
+use mz_sql::plan::{Params, PlanContext};
 
-use crate::catalog::{Catalog, SerializedCatalogItem};
+use crate::catalog::{Catalog, ConnCatalog, SerializedCatalogItem};
 
 use super::storage::Transaction;
 
@@ -60,9 +61,12 @@ pub(crate) async fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> 
     // it. You probably should be adding a basic AST migration above, unless
     // you are really certain you want one of these crazy migrations.
     let cat = Catalog::load_catalog_items(&mut tx, catalog)?;
-    let _conn_cat = cat.for_system_session();
+    let conn_cat = cat.for_system_session();
 
-    rewrite_items(&mut tx, |_item| Ok(()))?;
+    rewrite_items(&mut tx, |item| {
+        normalize_create_secrets(&conn_cat, item)?;
+        Ok(())
+    })?;
     tx.commit().await.map_err(|e| e.into())
 }
 
@@ -142,3 +146,29 @@ fn csr_url_path_rewrite(stmt: &mut mz_sql::ast::Statement<Raw>) {
 // ****************************************************************************
 // Semantic migrations -- Weird migrations that require access to the catalog
 // ****************************************************************************
+
+/// Add normalization to all CREATE SECRET statements.
+// TODO: Released in version 0.44; delete at any later release.
+fn normalize_create_secrets(
+    cat: &ConnCatalog,
+    stmt: &mut mz_sql::ast::Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    if matches!(stmt, mz_sql::ast::Statement::CreateSecret(..)) {
+        // Resolve Statement<Raw> to Statement<Aug>.
+        let (resolved_stmt, _depends_on) = mz_sql::names::resolve(cat, stmt.clone())?;
+        // Ok to use `PlanContext::zero()` because wall time is never used.
+        let plan = mz_sql::plan::plan(
+            Some(&PlanContext::zero()),
+            cat,
+            resolved_stmt,
+            &Params::empty(),
+        )?;
+        let create_secret_plan = match plan {
+            mz_sql::plan::Plan::CreateSecret(plan) => plan,
+            _ => unreachable!("create secret statement can only plan into create secret plan"),
+        };
+        *stmt = mz_sql::parse::parse(&create_secret_plan.secret.create_sql)?.into_element();
+    }
+
+    Ok(())
+}
