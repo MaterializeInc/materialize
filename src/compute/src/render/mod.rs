@@ -600,7 +600,7 @@ where
     /// This method allows for `plan` to contain a `LetRec` variant at its root, and is planned
     /// in the context of `level` pre-existing iteration coordinates.
     ///
-    /// This method recursively descends `LetRec` nodes, establishing nested scopes for each 
+    /// This method recursively descends `LetRec` nodes, establishing nested scopes for each
     /// and establishing the appropriate recursive dependencies among the bound variables.
     /// Once non-`LetRec` nodes are reached it calls in to `render_plan` which will error if
     /// furher `LetRec` variants are found.

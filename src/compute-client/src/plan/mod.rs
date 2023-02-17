@@ -1105,6 +1105,9 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     assert!(pre_existing.is_none());
                     lir_values.push(lir_value);
                 }
+                for id in ids.iter() {
+                    arrangements.insert(Id::Local(*id), AvailableCollections::new_raw());
+                }
                 // Plan the body using initial and `value` arrangements,
                 // and then remove reference to the value arrangements.
                 let (body, b_keys) = Plan::from_mir_inner(body, arrangements, debug_info)?;
