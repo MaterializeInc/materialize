@@ -122,7 +122,7 @@ use mz_expr::Id;
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::source::persist_source;
-use mz_storage_client::source::persist_source::FlowControl;
+use mz_storage_client::source::persist_source::{Consolidation, FlowControl};
 use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::probe::{self, ProbeNotify};
 
@@ -221,6 +221,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         dataflow.until.clone(),
                         mfp.as_mut(),
                         Some(flow_control),
+                        Consolidation::Maybe,
                         // Copy the logic in DeltaJoin/Get/Join to start.
                         |_timer, count| count > 1_000_000,
                     );

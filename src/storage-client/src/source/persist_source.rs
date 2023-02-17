@@ -39,6 +39,17 @@ pub use mz_persist_client::operators::shard_source::FlowControl;
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::operator::CollectionExt;
 
+/// Request a particular guarantee about consolidation from the source.
+/// It is legal for the source to satisfy a request for consolidation with an ordinary consolidate
+/// operator, but the hope is for it to be able to do something more clever.
+pub enum Consolidation {
+    /// No guarantees about how the resulting collection's data is consolidated.
+    Maybe,
+    /// Guarantees that the resulting collections is consolidated, but not necessarily exchanged
+    /// the way the normal consolidate operator would do it.
+    Consolidated,
+}
+
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
 ///
@@ -70,6 +81,7 @@ pub fn persist_source<G, YFn>(
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
     flow_control: Option<FlowControl<G>>,
+    consolidation: Consolidation,
     yield_fn: YFn,
 ) -> (
     Collection<G, Row, Diff>,
@@ -89,6 +101,7 @@ where
         until,
         map_filter_project,
         flow_control,
+        consolidation,
         yield_fn,
     );
     let (ok_stream, err_stream) = stream.map_fallible("OkErr", |d| d);
@@ -111,6 +124,7 @@ pub fn persist_source_core<G, YFn>(
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
     flow_control: Option<FlowControl<G>>,
+    consolidation: Consolidation,
     yield_fn: YFn,
 ) -> (Collection<G, Result<Row, DataflowError>, Diff>, Rc<dyn Any>)
 where
@@ -130,10 +144,12 @@ where
         Arc::new(metadata.relation_desc),
         Arc::new(UnitSchema),
     );
-    let rows = decode_and_mfp(&fetched, &name, until, map_filter_project, yield_fn);
+    let rows = decode_and_mfp(&fetched, &name, until, map_filter_project, yield_fn).as_collection();
 
-    let rows = rows.as_collection().consolidate();
-
+    let rows = match consolidation {
+        Consolidation::Maybe => rows,
+        Consolidation::Consolidated => rows.consolidate(),
+    };
     (rows, token)
 }
 

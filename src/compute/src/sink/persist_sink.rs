@@ -36,6 +36,7 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::source::persist_source;
+use mz_storage_client::source::persist_source::Consolidation;
 use mz_storage_client::types::errors::DataflowError;
 use mz_storage_client::types::sources::SourceData;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
@@ -103,6 +104,7 @@ where
         Antichain::new(), // we want all updates
         None,             // no MFP
         None,             // no flow control
+        Consolidation::Maybe,
         // Copy the logic in DeltaJoin/Get/Join to start.
         |_timer, count| count > 1_000_000,
     );
