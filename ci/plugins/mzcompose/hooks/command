@@ -27,6 +27,13 @@ fi
 
 echo "system uptime: $(cut -f1 -d' ' /proc/uptime)"
 
+JSON=$(curl -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer $GITHUB_TOKEN" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "https://api.github.com/rate_limit")
+
+echo $JSON
+
 # Sometimes build cancellations prevent us from properly cleaning up the last
 # Docker Compose run, which can leave old containers or volumes around that will
 # interfere with this build.
