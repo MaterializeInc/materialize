@@ -2393,7 +2393,6 @@ SELECT
     r.id AS replica_id,
     m.process_id,
     m.cpu_nano_cores::float8 / s.cpu_nano_cores * 100 AS cpu_percent,
-    m.cpu_nano_cores::float8 / (s.workers * 10000000) AS cpu_percent_normalized,
     m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent
 FROM
     mz_cluster_replicas AS r
