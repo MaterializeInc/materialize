@@ -736,10 +736,10 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
                 match reported_frontier {
                     ReportedFrontier::Reported(old_frontier) => {
-                        assert!(PartialOrder::less_equal(old_frontier, &new_frontier))
+                        assert!(PartialOrder::less_than(old_frontier, &new_frontier))
                     }
-                    ReportedFrontier::NotReported { .. } => {
-                        // TODO: ensure subscribe frontiers don't regress
+                    ReportedFrontier::NotReported { lower } => {
+                        assert!(PartialOrder::less_equal(lower, &new_frontier))
                     }
                 }
 

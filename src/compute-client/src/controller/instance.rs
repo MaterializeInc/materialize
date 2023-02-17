@@ -831,6 +831,7 @@ where
     /// # Panics
     ///
     /// Panics if any of the `updates` references an absent collection.
+    /// Panics if any of the `updates` regresses an existing write frontier.
     #[tracing::instrument(level = "debug", skip(self))]
     fn update_write_frontiers(
         &mut self,
@@ -855,6 +856,15 @@ where
             let old_upper = collection
                 .replica_write_frontiers
                 .insert(replica_id, new_upper.clone());
+
+            // Safety check against frontier regressions.
+            if let Some(old) = &old_upper {
+                assert!(
+                    PartialOrder::less_equal(old, new_upper),
+                    "Frontier regression: {old:?} -> {new_upper:?}, \
+                     collection={id}, replica={replica_id}",
+                );
+            }
 
             if new_upper.is_empty() {
                 dropped_collection_ids.push(*id);
