@@ -52,6 +52,8 @@ pub trait AstInfo: Clone {
     type DataType: AstDisplay + Clone + Hash + Debug + Eq + Ord;
     /// The type stored next to CTEs for their assigned ID.
     type CteId: Clone + Hash + Debug + Eq + Ord;
+    /// The type used for role references.
+    type RoleName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Default)]
@@ -65,6 +67,7 @@ impl AstInfo for Raw {
     type ClusterName = RawClusterName;
     type DataType = RawDataType;
     type CteId = ();
+    type RoleName = Ident;
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]

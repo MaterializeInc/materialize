@@ -1546,6 +1546,7 @@ where
         // to the storage dependencies.
         let policies = identifiers
             .into_iter()
+            .filter(|id| self.collection(*id).is_ok())
             .map(|id| (id, ReadPolicy::ValidFrom(Antichain::new())))
             .collect();
         self.set_read_policy(policies);

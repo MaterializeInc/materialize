@@ -83,6 +83,10 @@ Copy
 Count
 Counter
 Create
+Createcluster
+Createdb
+Createpersist
+Createrole
 Cross
 Csv
 Current
@@ -166,6 +170,7 @@ Include
 Index
 Indexes
 Info
+Inherit
 Inline
 Inner
 Insert
@@ -220,6 +225,11 @@ Names
 Natural
 Next
 No
+Nocreatecluster
+Nocreatedb
+Nocreatepersist
+Nocreaterole
+Noinherit
 Nologin
 None
 Nosuperuser

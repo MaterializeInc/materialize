@@ -22,7 +22,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::GlobalId;
-use mz_sql::catalog::{CatalogError as SqlCatalogError, CatalogItemType};
+use mz_sql::catalog::{CatalogError as SqlCatalogError, CatalogItemType, RoleAttributes};
 use mz_sql::names::{
     DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, RoleId, SchemaId,
     SchemaSpecifier,
@@ -35,7 +35,7 @@ use crate::catalog::builtin::{
     BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES, BUILTIN_ROLES,
 };
 use crate::catalog::error::{Error, ErrorKind};
-use crate::catalog::{is_reserved_name, SystemObjectMapping};
+use crate::catalog::{is_reserved_name, SerializedRole, SystemObjectMapping, INTROSPECTION_USER};
 use crate::catalog::{SerializedReplicaConfig, DEFAULT_CLUSTER_REPLICA_NAME};
 use crate::coord::timeline;
 
@@ -62,6 +62,8 @@ const SYSTEM_CLUSTER_ID_ALLOC_KEY: &str = "system_compute";
 const REPLICA_ID_ALLOC_KEY: &str = "replica";
 pub(crate) const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 pub(crate) const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
+
+const MATERIALIZE_ROLE: &str = "materialize";
 
 async fn migrate(
     stash: &mut Stash,
@@ -255,7 +257,18 @@ async fn migrate(
                     id: RoleId::User(MATERIALIZE_ROLE_ID),
                 },
                 RoleValue {
-                    name: "materialize".into(),
+                    role: SerializedRole {
+                        name: MATERIALIZE_ROLE.into(),
+                        attributes: RoleAttributes {
+                            super_user: true,
+                            inherit: true,
+                            create_role: true,
+                            create_db: true,
+                            create_cluster: true,
+                            create_persist: true,
+                            can_login: true,
+                        },
+                    },
                 },
             )?;
             let id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
@@ -267,7 +280,7 @@ async fn migrate(
                         ObjectType::Role,
                         EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
                             id: MATERIALIZE_ROLE_ID.to_string(),
-                            name: "materialize".into(),
+                            name: MATERIALIZE_ROLE.into(),
                         }),
                         None,
                         now,
@@ -358,6 +371,31 @@ async fn migrate(
             txn.cluster_replicas.update(|_k, v| Some(v.clone()))?;
             Ok(())
         },
+        // Attributes were added to role definitions.
+        //
+        // Introduced in v0.45.0
+        |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
+            for (role_key, role_value) in txn.roles_old.delete(|_, _| true) {
+                let is_materialize_role = role_value.name == MATERIALIZE_ROLE;
+                let is_mz_introspection_role = role_value.name == INTROSPECTION_USER.name;
+                let migrated_role_value = RoleValue {
+                    role: SerializedRole {
+                        name: role_value.name,
+                        attributes: RoleAttributes {
+                            super_user: !is_mz_introspection_role,
+                            inherit: true,
+                            create_role: is_materialize_role,
+                            create_db: is_materialize_role,
+                            create_cluster: is_materialize_role,
+                            create_persist: is_materialize_role,
+                            can_login: true,
+                        },
+                    },
+                };
+                txn.roles.insert(role_key, migrated_role_value)?;
+            }
+            Ok(())
+        },
         // Add new migrations above.
         //
         // Migrations should be preceded with a comment of the following form:
@@ -398,7 +436,7 @@ fn add_new_builtin_roles_migration(txn: &mut Transaction<'_>) -> Result<(), cata
         .roles
         .items()
         .into_values()
-        .map(|value| value.name)
+        .map(|value| value.role.name)
         .collect();
     for builtin_role in &*BUILTIN_ROLES {
         assert!(
@@ -407,7 +445,7 @@ fn add_new_builtin_roles_migration(txn: &mut Transaction<'_>) -> Result<(), cata
             BUILTIN_PREFIXES.join(", ")
         );
         if !role_names.contains(builtin_role.name) {
-            txn.insert_system_role(builtin_role.name)?;
+            txn.insert_system_role(SerializedRole::from(*builtin_role))?;
         }
     }
     Ok(())
@@ -660,12 +698,12 @@ impl Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_roles(&mut self) -> Result<Vec<(RoleId, String)>, Error> {
+    pub async fn load_roles(&mut self) -> Result<Vec<(RoleId, SerializedRole)>, Error> {
         Ok(COLLECTION_ROLE
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
-            .map(|(k, v)| (k.id, v.name))
+            .map(|(k, v)| (k.id, v.role))
             .collect())
     }
 
@@ -994,6 +1032,7 @@ pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Er
         databases,
         schemas,
         roles,
+        roles_old,
         items,
         clusters,
         cluster_replicas,
@@ -1012,6 +1051,8 @@ pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Er
                     tx.peek_one(tx.collection(COLLECTION_DATABASE.name()).await?),
                     tx.peek_one(tx.collection(COLLECTION_SCHEMA.name()).await?),
                     tx.peek_one(tx.collection(COLLECTION_ROLE.name()).await?),
+                    // TODO(jkosh44) Delete in V0.45.0
+                    tx.peek_one(tx.collection(COLLECTION_ROLE_OLD.name()).await?),
                     tx.peek_one(tx.collection(COLLECTION_ITEM.name()).await?),
                     tx.peek_one(tx.collection(COLLECTION_CLUSTERS.name()).await?),
                     tx.peek_one(tx.collection(COLLECTION_CLUSTER_REPLICAS.name()).await?),
@@ -1040,7 +1081,8 @@ pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Er
             a.database_id == b.database_id && a.name == b.name
         }),
         items: TableTransaction::new(items, |a, b| a.schema_id == b.schema_id && a.name == b.name),
-        roles: TableTransaction::new(roles, |a, b| a.name == b.name),
+        roles: TableTransaction::new(roles, |a, b| a.role.name == b.role.name),
+        roles_old: TableTransaction::new(roles_old, |a, b| a.name == b.name),
         clusters: TableTransaction::new(clusters, |a, b| a.name == b.name),
         cluster_replicas: TableTransaction::new(cluster_replicas, |a, b| {
             a.cluster_id == b.cluster_id && a.name == b.name
@@ -1063,6 +1105,8 @@ pub struct Transaction<'a> {
     schemas: TableTransaction<SchemaKey, SchemaValue>,
     items: TableTransaction<ItemKey, ItemValue>,
     roles: TableTransaction<RoleKey, RoleValue>,
+    // TODO(jkosh44) Delete in v0.45.0
+    roles_old: TableTransaction<RoleKey, RoleValueOld>,
     clusters: TableTransaction<ClusterKey, ClusterValue>,
     cluster_replicas: TableTransaction<ClusterReplicaKey, ClusterReplicaValue>,
     introspection_sources:
@@ -1165,17 +1209,17 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn insert_user_role(&mut self, role_name: &str) -> Result<RoleId, Error> {
-        self.insert_role(role_name, USER_ROLE_ID_ALLOC_KEY, RoleId::User)
+    pub fn insert_user_role(&mut self, role: SerializedRole) -> Result<RoleId, Error> {
+        self.insert_role(role, USER_ROLE_ID_ALLOC_KEY, RoleId::User)
     }
 
-    fn insert_system_role(&mut self, role_name: &str) -> Result<RoleId, Error> {
-        self.insert_role(role_name, SYSTEM_ROLE_ID_ALLOC_KEY, RoleId::System)
+    fn insert_system_role(&mut self, role: SerializedRole) -> Result<RoleId, Error> {
+        self.insert_role(role, SYSTEM_ROLE_ID_ALLOC_KEY, RoleId::System)
     }
 
     fn insert_role<F>(
         &mut self,
-        role_name: &str,
+        role: SerializedRole,
         id_alloc_key: &str,
         role_id_variant: F,
     ) -> Result<RoleId, Error>
@@ -1184,16 +1228,10 @@ impl<'a> Transaction<'a> {
     {
         let id = self.get_and_increment_id(id_alloc_key.to_string())?;
         let id = role_id_variant(id);
-        match self.roles.insert(
-            RoleKey { id },
-            RoleValue {
-                name: role_name.to_string(),
-            },
-        ) {
+        let name = role.name.clone();
+        match self.roles.insert(RoleKey { id }, RoleValue { role }) {
             Ok(_) => Ok(id),
-            Err(_) => Err(Error::new(ErrorKind::RoleAlreadyExists(
-                role_name.to_owned(),
-            ))),
+            Err(_) => Err(Error::new(ErrorKind::RoleAlreadyExists(name))),
         }
     }
 
@@ -1381,7 +1419,7 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn remove_role(&mut self, name: &str) -> Result<(), Error> {
-        let n = self.roles.delete(|_k, v| v.name == name).len();
+        let n = self.roles.delete(|_k, v| v.role.name == name).len();
         assert!(n <= 1);
         if n == 1 {
             Ok(())
@@ -1484,7 +1522,7 @@ impl<'a> Transaction<'a> {
     /// Updates all items with ids matching the keys of `items` in the transaction, to the
     /// corresponding value in `items`.
     ///
-    /// Returns an error if any id in `ids` is not found.
+    /// Returns an error if any id in `items` is not found.
     ///
     /// NOTE: On error, there still may be some items updated in the transaction. It is
     /// up to the called to either abort the transaction or commit.
@@ -1510,6 +1548,54 @@ impl<'a> Transaction<'a> {
             let update_ids: BTreeSet<_> = items.into_keys().collect();
             let item_ids: BTreeSet<_> = self.items.items().keys().map(|k| k.gid).collect();
             let mut unknown = update_ids.difference(&item_ids);
+            Err(SqlCatalogError::UnknownItem(unknown.join(", ")).into())
+        }
+    }
+
+    /// Updates role `id` in the transaction to `role`.
+    ///
+    /// Returns an error if `id` is not found.
+    ///
+    /// Runtime is linear with respect to the total number of items in the stash.
+    /// DO NOT call this function in a loop, use [`Self::update_roles`] instead.
+    pub fn update_role(&mut self, id: RoleId, role: SerializedRole) -> Result<(), Error> {
+        let n = self.roles.update(move |k, _v| {
+            if k.id == id {
+                Some(RoleValue { role: role.clone() })
+            } else {
+                None
+            }
+        })?;
+        assert!(n <= 1);
+        if n == 1 {
+            Ok(())
+        } else {
+            Err(SqlCatalogError::UnknownItem(id.to_string()).into())
+        }
+    }
+
+    /// Updates all roles with ids matching the keys of `roles` in the transaction, to the
+    /// corresponding value in `roles`.
+    ///
+    /// Returns an error if any id in `roles` is not found.
+    ///
+    /// NOTE: On error, there still may be some roles updated in the transaction. It is
+    /// up to the called to either abort the transaction or commit.
+    pub fn update_roles(&mut self, roles: BTreeMap<RoleId, SerializedRole>) -> Result<(), Error> {
+        let n = self.roles.update(|k, _v| {
+            if let Some(role) = roles.get(&k.id) {
+                Some(RoleValue { role: role.clone() })
+            } else {
+                None
+            }
+        })?;
+        let n = usize::try_from(n).expect("Must be positive and fit in usize");
+        if n == roles.len() {
+            Ok(())
+        } else {
+            let update_ids: BTreeSet<_> = roles.into_keys().collect();
+            let role_ids: BTreeSet<_> = self.roles.items().keys().map(|k| k.id).collect();
+            let mut unknown = update_ids.difference(&role_ids);
             Err(SqlCatalogError::UnknownItem(unknown.join(", ")).into())
         }
     }
@@ -1747,6 +1833,7 @@ pub async fn initialize_stash(stash: &mut Stash) -> Result<(), Error> {
                     schema,
                     item,
                     role,
+                    role_old,
                     timestamp,
                     system_configuration,
                     audit_log,
@@ -1763,6 +1850,8 @@ pub async fn initialize_stash(stash: &mut Stash) -> Result<(), Error> {
                     add_batch(&tx, &COLLECTION_SCHEMA),
                     add_batch(&tx, &COLLECTION_ITEM),
                     add_batch(&tx, &COLLECTION_ROLE),
+                    // TODO(jkosh44) Delete in v0.45.0
+                    add_batch(&tx, &COLLECTION_ROLE_OLD),
                     add_batch(&tx, &COLLECTION_TIMESTAMP),
                     add_batch(&tx, &COLLECTION_SYSTEM_CONFIGURATION),
                     add_batch(&tx, &COLLECTION_AUDIT_LOG),
@@ -1780,6 +1869,7 @@ pub async fn initialize_stash(stash: &mut Stash) -> Result<(), Error> {
                     schema,
                     item,
                     role,
+                    role_old,
                     timestamp,
                     system_configuration,
                     audit_log,
@@ -1905,6 +1995,12 @@ pub struct RoleKey {
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 pub struct RoleValue {
+    role: SerializedRole,
+}
+
+// TODO(jkosh44) Delete in v0.45.0
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+pub struct RoleValueOld {
     name: String,
 }
 
@@ -1963,7 +2059,10 @@ pub static COLLECTION_DATABASE: TypedCollection<DatabaseKey, DatabaseValue> =
 pub static COLLECTION_SCHEMA: TypedCollection<SchemaKey, SchemaValue> =
     TypedCollection::new("schema");
 pub static COLLECTION_ITEM: TypedCollection<ItemKey, ItemValue> = TypedCollection::new("item");
-pub static COLLECTION_ROLE: TypedCollection<RoleKey, RoleValue> = TypedCollection::new("role");
+pub static COLLECTION_ROLE: TypedCollection<RoleKey, RoleValue> = TypedCollection::new("role_new");
+// TODO(jkosh44) Delete in V0.45.0
+pub static COLLECTION_ROLE_OLD: TypedCollection<RoleKey, RoleValueOld> =
+    TypedCollection::new("role");
 pub static COLLECTION_TIMESTAMP: TypedCollection<TimestampKey, TimestampValue> =
     TypedCollection::new("timestamp");
 pub static COLLECTION_SYSTEM_CONFIGURATION: TypedCollection<

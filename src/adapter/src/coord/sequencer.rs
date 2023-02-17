@@ -44,16 +44,16 @@ use mz_sql::catalog::{CatalogCluster, CatalogError, CatalogItemType, CatalogType
 use mz_sql::names::QualifiedObjectName;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
-    AlterOptionParameter, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
-    AlterSystemResetPlan, AlterSystemSetPlan, CopyFormat, CreateClusterPlan,
-    CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DropClusterReplicasPlan,
-    DropClustersPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan,
-    ExplainPlan, FetchPlan, IndexOption, InsertPlan, MaterializedView, MutationKind,
-    OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan,
-    ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
-    SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, View,
+    AlterOptionParameter, AlterRolePlan, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan,
+    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, CopyFormat,
+    CreateClusterPlan, CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
+    CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, DropClusterReplicasPlan, DropClustersPlan, DropDatabasePlan, DropItemsPlan,
+    DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan, IndexOption, InsertPlan,
+    MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen,
+    RaisePlan, ReadThenWritePlan, ResetVariablePlan, RotateKeysPlan, SendDiffsPlan,
+    SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, View,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
@@ -335,6 +335,9 @@ impl Coordinator {
             }
             Plan::AlterIndexResetOptions(plan) => {
                 tx.send(self.sequence_alter_index_reset_options(plan), session);
+            }
+            Plan::AlterRole(plan) => {
+                tx.send(self.sequence_alter_role(&session, plan).await, session);
             }
             Plan::AlterSecret(plan) => {
                 tx.send(self.sequence_alter_secret(&session, plan).await, session);
@@ -762,12 +765,13 @@ impl Coordinator {
     pub(crate) async fn sequence_create_role(
         &mut self,
         session: &Session,
-        plan: CreateRolePlan,
+        CreateRolePlan { name, attributes }: CreateRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateRole {
-            name: plan.name,
+            name,
             oid,
+            attributes,
         };
         self.catalog_transact(Some(session), vec![op])
             .await
@@ -1786,9 +1790,9 @@ impl Coordinator {
         plan: DropRolesPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let ops = plan
-            .names
+            .ids
             .into_iter()
-            .map(|name| catalog::Op::DropRole { name })
+            .map(|(id, name)| catalog::Op::DropRole { id, name })
             .collect();
         self.catalog_transact(Some(session), ops).await?;
         Ok(ExecuteResponse::DroppedRole)
@@ -3627,6 +3631,25 @@ impl Coordinator {
         Ok(())
     }
 
+    async fn sequence_alter_role(
+        &mut self,
+        session: &Session,
+        AlterRolePlan {
+            id,
+            name,
+            attributes,
+        }: AlterRolePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let op = catalog::Op::AlterRole {
+            id,
+            name,
+            attributes,
+        };
+        self.catalog_transact(Some(session), vec![op])
+            .await
+            .map(|_| ExecuteResponse::AlteredRole)
+    }
+
     async fn sequence_alter_secret(
         &mut self,
         session: &Session,
@@ -3950,6 +3973,7 @@ impl Coordinator {
             | Plan::AlterNoop(_)
             | Plan::AlterIndexSetOptions(_)
             | Plan::AlterIndexResetOptions(_)
+            | Plan::AlterRole(_)
             | Plan::AlterSink(_)
             | Plan::AlterSource(_)
             | Plan::AlterItemRename(_)

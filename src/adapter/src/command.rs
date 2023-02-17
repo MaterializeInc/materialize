@@ -177,6 +177,8 @@ pub enum ExecuteResponse {
     AlteredObject(ObjectType),
     /// The index was altered.
     AlteredIndexLogicalCompaction,
+    /// The role was altered.
+    AlteredRole,
     /// The system configuration was altered.
     AlteredSystemConfiguration,
     /// The query was canceled.
@@ -311,6 +313,7 @@ impl ExecuteResponse {
         match self {
             AlteredObject(o) => Some(format!("ALTER {}", o)),
             AlteredIndexLogicalCompaction => Some("ALTER INDEX".into()),
+            AlteredRole => Some("ALTER ROLE".into()),
             AlteredSystemConfiguration => Some("ALTER SYSTEM".into()),
             Canceled => None,
             ClosedCursor => Some("CLOSE CURSOR".into()),
@@ -390,6 +393,7 @@ impl ExecuteResponse {
             AlterIndexSetOptions | AlterIndexResetOptions => {
                 vec![AlteredObject, AlteredIndexLogicalCompaction]
             }
+            AlterRole => vec![AlteredRole],
             AlterSystemSet | AlterSystemReset | AlterSystemResetAll => {
                 vec![AlteredSystemConfiguration]
             }

@@ -31,7 +31,7 @@ use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, Timely
 use mz_pgrepr::oid;
 use mz_repr::{RelationDesc, RelationType, ScalarType};
 use mz_sql::catalog::{
-    CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, TypeReference,
+    CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, RoleAttributes, TypeReference,
 };
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::healthcheck::{MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC};
@@ -158,6 +158,7 @@ pub struct BuiltinRole {
     ///
     /// IMPORTANT: Must start with a prefix from [`BUILTIN_PREFIXES`].
     pub name: &'static str,
+    pub attributes: RoleAttributes,
 }
 
 #[derive(Clone, Debug)]
@@ -1491,7 +1492,14 @@ pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false)),
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("super_user", ScalarType::Bool.nullable(false))
+        .with_column("inherit", ScalarType::Bool.nullable(false))
+        .with_column("create_role", ScalarType::Bool.nullable(false))
+        .with_column("create_db", ScalarType::Bool.nullable(false))
+        .with_column("create_cluster", ScalarType::Bool.nullable(false))
+        .with_column("create_persist", ScalarType::Bool.nullable(false))
+        .with_column("can_login", ScalarType::Bool.nullable(false)),
     is_retained_metrics_relation: false,
 });
 pub static MZ_PSEUDO_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2604,14 +2612,10 @@ AS SELECT
         WHEN r.name = 'mz_system' THEN true
         ELSE false
     END AS rolsuper,
-    -- MZ doesn't have role inheritence
-    false AS rolinherit,
-    -- All roles can create other roles
-    true AS rolcreaterole,
-    -- All roles can create other dbs
-    true AS rolcreatedb,
-    -- All roles can login
-    true AS rolcanlogin,
+    inherit AS rolinherit,
+    create_role AS rolcreaterole,
+    create_db AS rolcreatedb,
+    can_login AS rolcanlogin,
     -- MZ doesn't support replication in the same way Postgres does
     false AS rolreplication,
     -- MZ doesn't how row level security
@@ -2816,10 +2820,28 @@ ON mz_catalog.mz_secrets (schema_id)",
 
 pub static MZ_SYSTEM_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*SYSTEM_USER.name,
+    attributes: RoleAttributes {
+        super_user: true,
+        inherit: true,
+        create_role: true,
+        create_db: true,
+        create_cluster: true,
+        create_persist: true,
+        can_login: true,
+    },
 });
 
 pub static MZ_INTROSPECTION_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*INTROSPECTION_USER.name,
+    attributes: RoleAttributes {
+        super_user: false,
+        inherit: true,
+        create_role: false,
+        create_db: false,
+        create_cluster: false,
+        create_persist: false,
+        can_login: true,
+    },
 });
 
 pub static MZ_SYSTEM_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| BuiltinCluster {

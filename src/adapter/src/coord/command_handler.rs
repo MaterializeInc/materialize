@@ -22,7 +22,7 @@ use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::ScalarType;
 use mz_sql::ast::{InsertSource, Query, Raw, SetExpr, Statement};
-use mz_sql::catalog::SessionCatalog as _;
+use mz_sql::catalog::{RoleAttributes, SessionCatalog};
 use mz_sql::plan::{CreateRolePlan, Params};
 
 use crate::client::ConnectionId;
@@ -180,6 +180,15 @@ impl Coordinator {
             }
             let plan = CreateRolePlan {
                 name: session.user().name.to_string(),
+                attributes: RoleAttributes {
+                    super_user: false,
+                    inherit: true,
+                    create_role: false,
+                    create_db: false,
+                    create_cluster: false,
+                    create_persist: false,
+                    can_login: true,
+                },
             };
             if let Err(err) = self.sequence_create_role(&session, plan).await {
                 let _ = tx.send(Response {
@@ -373,6 +382,7 @@ impl Coordinator {
                     | Statement::AlterSink(_)
                     | Statement::AlterSource(_)
                     | Statement::AlterObjectRename(_)
+                    | Statement::AlterRole(_)
                     | Statement::AlterSystemSet(_)
                     | Statement::AlterSystemReset(_)
                     | Statement::AlterSystemResetAll(_)

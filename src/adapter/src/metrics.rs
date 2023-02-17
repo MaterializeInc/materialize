@@ -104,6 +104,7 @@ where
         StatementKind::CreateSecret => "create_secret",
         StatementKind::AlterObjectRename => "alter_object_rename",
         StatementKind::AlterIndex => "alter_index",
+        StatementKind::AlterRole => "alter_role",
         StatementKind::AlterSecret => "alter_secret",
         StatementKind::AlterSink => "alter_sink",
         StatementKind::AlterSource => "alter_source",

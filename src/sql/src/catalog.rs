@@ -141,6 +141,11 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Resolves the named role.
     fn resolve_role(&self, role_name: &str) -> Result<&dyn CatalogRole, CatalogError>;
 
+    /// Gets a role by its ID.
+    ///
+    /// Panics if `id` does not specify a valid role.
+    fn get_role(&self, id: &RoleId) -> &dyn CatalogRole;
+
     /// Resolves the named cluster.
     ///
     /// If the provided name is `None`, resolves the currently active cluster.
@@ -272,6 +277,25 @@ pub trait CatalogSchema {
     fn has_items(&self) -> bool;
 }
 
+/// Attributes belonging to a [`CatalogRole`].
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+pub struct RoleAttributes {
+    /// Indicates whether the role has super user status.
+    pub super_user: bool,
+    /// Indicates whether the role has inheritance of privileges.
+    pub inherit: bool,
+    /// Indicates whether the role is allowed to create more roles.
+    pub create_role: bool,
+    /// Indicates whether the role is allowed to create databases.
+    pub create_db: bool,
+    /// Indicates whether the role is allowed to create clusters.
+    pub create_cluster: bool,
+    /// Indicates whether the role is allowed to create persisted data.
+    pub create_persist: bool,
+    /// Indicates whether the role can login.
+    pub can_login: bool,
+}
+
 /// A role in a [`SessionCatalog`].
 pub trait CatalogRole {
     /// Returns a fully-specified name of the role.
@@ -279,6 +303,27 @@ pub trait CatalogRole {
 
     /// Returns a stable ID for the role.
     fn id(&self) -> RoleId;
+
+    /// Indicates whether the role has super user status.
+    fn is_super_user(&self) -> bool;
+
+    /// Indicates whether the role has inheritance of privileges.
+    fn is_inherit(&self) -> bool;
+
+    /// Indicates whether the role has the role creation attribute.
+    fn create_role(&self) -> bool;
+
+    /// Indicates whether the role has the database creation attribute.
+    fn create_db(&self) -> bool;
+
+    /// Indicates whether the role has the cluster creation attribute.
+    fn create_cluster(&self) -> bool;
+
+    /// Indicates whether the role has the persist creation attribute.
+    fn create_persist(&self) -> bool;
+
+    /// Indicates whether the role has login privilege.
+    fn can_login(&self) -> bool;
 }
 
 /// A cluster in a [`SessionCatalog`].
@@ -875,6 +920,10 @@ impl SessionCatalog for DummyCatalog {
     }
 
     fn get_schema(&self, _: &ResolvedDatabaseSpecifier, _: &SchemaSpecifier) -> &dyn CatalogSchema {
+        unimplemented!()
+    }
+
+    fn get_role(&self, _: &RoleId) -> &dyn CatalogRole {
         unimplemented!()
     }
 
