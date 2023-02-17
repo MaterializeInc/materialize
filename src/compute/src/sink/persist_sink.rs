@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{Collection, Hashable};
+use differential_dataflow::{AsCollection, Collection, Hashable};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{
     Broadcast, Capability, CapabilitySet, ConnectLoop, Feedback, Inspect,
@@ -35,6 +35,7 @@ use mz_persist_client::write::WriterEnrichedHollowBatch;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::source::persist_source;
 use mz_storage_client::types::errors::DataflowError;
 use mz_storage_client::types::sources::SourceData;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
@@ -93,7 +94,7 @@ where
     // `persist_source` to select an appropriate `as_of`. We only care about times beyond the
     // current shard upper anyway.
     let source_as_of = None;
-    let (ok_stream, err_stream, token) = mz_storage_client::source::persist_source::persist_source(
+    let (persist_stream, token) = persist_source::persist_source_core(
         &desired_collection.scope(),
         sink_id,
         Arc::clone(&compute_state.persist_clients),
@@ -105,11 +106,7 @@ where
         // Copy the logic in DeltaJoin/Get/Join to start.
         |_timer, count| count > 1_000_000,
     );
-    use differential_dataflow::AsCollection;
-    let persist_collection = ok_stream
-        .as_collection()
-        .map(Ok)
-        .concat(&err_stream.as_collection().map(Err));
+    let persist_collection = persist_stream.as_collection();
 
     Some(Rc::new((
         install_desired_into_persist(
