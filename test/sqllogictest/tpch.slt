@@ -243,7 +243,7 @@ Explained Query:
       Project (#5, #2, #8, #0, #1, #3, #4, #6) // { arity: 8 }
         Join on=(#0 = #9 AND #7 = #10) type=differential // { arity: 11 }
           implementation
-            %1[#0, #1]UKKA » %0:l4[#0, #7]KKA
+            %1[#0, #1]UKK » %0:l4[#0, #7]KK
           ArrangeBy keys=[[#0, #7]] // { arity: 9 }
             Get l4 // { arity: 9 }
           ArrangeBy keys=[[#0, #1]] // { arity: 2 }
@@ -448,7 +448,7 @@ Explained Query:
         Filter (#40 = "ASIA") AND (#12 < 1995-01-01) AND (#12 >= 1994-01-01) // { arity: 42 }
           Join on=(#0 = #9 AND eq(#3, #34, #35) AND #8 = #17 AND #19 = #33 AND #37 = #39) type=differential // { arity: 42 }
             implementation
-              %5:region[#0]KAef » %4:nation[#2]KAef » %0:customer[#3]KAef » %1:orders[#1]KAeiif » %2:lineitem[#0]KAeiif » %3:supplier[#0, #1]KKAeiif
+              %5:region[#0]KAef » %4:nation[#2]KAef » %0:customer[#3]KAef » %1:orders[#1]KAeiif » %2:lineitem[#0]KAeiif » %3:supplier[#0, #1]KKeiif
             ArrangeBy keys=[[#3]] // { arity: 8 }
               Get materialize.public.customer // { arity: 8 }
             ArrangeBy keys=[[#1]] // { arity: 9 }
@@ -869,7 +869,7 @@ Explained Query:
         Filter (#1 > (#2 * 0.0001)) // { arity: 3 }
           CrossJoin type=differential // { arity: 3 }
             implementation
-              %1[×]UA » %0[×]A
+              %1[×]UA » %0[×]
             ArrangeBy keys=[[]] // { arity: 2 }
               Reduce group_by=[#0] aggregates=[sum((#2 * integer_to_numeric(#1)))] // { arity: 2 }
                 Get l0 // { arity: 3 }
@@ -989,7 +989,7 @@ Explained Query:
                 Map (null) // { arity: 17 }
                   Join on=(#0 = #8 AND #1 = #9 AND #2 = #10 AND #3 = #11 AND #4 = #12 AND #5 = #13 AND #6 = #14 AND #7 = #15) type=differential // { arity: 16 }
                     implementation
-                      %0[#0..=#7]KKKKKKKKA » %1:customer[#0..=#7]KKKKKKKKA
+                      %0[#0..=#7]KKKKKKKK » %1:customer[#0..=#7]KKKKKKKK
                     ArrangeBy keys=[[#0..=#7]] // { arity: 8 }
                       Union // { arity: 8 }
                         Negate // { arity: 8 }
@@ -1109,7 +1109,7 @@ Explained Query:
       Project (#0..=#2, #4, #8) // { arity: 5 }
         Join on=(#0 = #7 AND #8 = #9) type=differential // { arity: 10 }
           implementation
-            %0:supplier[#0]KA » %1:l0[#0]UKA » %2[#0]UKA
+            %0:supplier[#0]KA » %1:l0[#0]UKA » %2[#0]UK
           ArrangeBy keys=[[#0]] // { arity: 7 }
             Get materialize.public.supplier // { arity: 7 }
           ArrangeBy keys=[[#0]] // { arity: 2 }
@@ -1175,7 +1175,7 @@ Explained Query:
         Project (#0..=#3) // { arity: 4 }
           Join on=(#0 = #4) type=differential // { arity: 5 }
             implementation
-              %0:l0[#0]KA » %1[#0]KA
+              %0:l0[#0]K » %1[#0]K
             ArrangeBy keys=[[#0]] // { arity: 4 }
               Get l0 // { arity: 4 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
@@ -1186,7 +1186,7 @@ Explained Query:
                       Filter ((#1) IS NULL OR (#0 = #1)) // { arity: 2 }
                         CrossJoin type=differential // { arity: 2 }
                           implementation
-                            %1:supplier[×]Alf » %0:l1[×]Alf
+                            %1:supplier[×]lf » %0:l1[×]lf
                           ArrangeBy keys=[[]] // { arity: 1 }
                             Get l1 // { arity: 1 }
                           ArrangeBy keys=[[]] // { arity: 1 }
@@ -1258,7 +1258,7 @@ Explained Query:
           Filter (numeric_to_double(#1) < (0.2 * (numeric_to_double(#4) / bigint_to_double(case when (#5 = 0) then null else #5 end)))) // { arity: 6 }
             Join on=(#0 = #3) type=differential // { arity: 6 }
               implementation
-                %1[#0]UKA » %0:l1[#0]KA
+                %1[#0]UKA » %0:l1[#0]K
               ArrangeBy keys=[[#0]] // { arity: 3 }
                 Get l1 // { arity: 3 }
               ArrangeBy keys=[[#0]] // { arity: 3 }
@@ -1335,7 +1335,7 @@ Explained Query:
           Filter (#7 > 300) // { arity: 8 }
             Join on=(#2 = #6) type=differential // { arity: 8 }
               implementation
-                %1[#0]UKAif » %0:l1[#2]KAif
+                %1[#0]UKAif » %0:l1[#2]Kif
               ArrangeBy keys=[[#2]] // { arity: 6 }
                 Get l1 // { arity: 6 }
               ArrangeBy keys=[[#0]] // { arity: 2 }
@@ -1491,7 +1491,7 @@ Explained Query:
       Project (#1, #2) // { arity: 2 }
         Join on=(#0 = #3) type=differential // { arity: 4 }
           implementation
-            %1[#0]UKA » %0:l0[#0]KA
+            %1[#0]UKA » %0:l0[#0]K
           ArrangeBy keys=[[#0]] // { arity: 3 }
             Get l0 // { arity: 3 }
           ArrangeBy keys=[[#0]] // { arity: 1 }
@@ -1500,7 +1500,7 @@ Explained Query:
                 Filter (integer_to_numeric(#2) > #5) // { arity: 6 }
                   Join on=(#0 = #4 AND #1 = #3) type=differential // { arity: 6 }
                     implementation
-                      %1[#1, #0]UKKA » %0:l1[#0, #1]KKAf
+                      %1[#1, #0]UKK » %0:l1[#0, #1]KKf
                     ArrangeBy keys=[[#0, #1]] // { arity: 3 }
                       Project (#0, #1, #3) // { arity: 3 }
                         Filter (#0 = #2) // { arity: 4 }
@@ -1525,7 +1525,7 @@ Explained Query:
         Project (#0..=#3) // { arity: 4 }
           Join on=(#1 = #6) type=differential // { arity: 7 }
             implementation
-              %2[#0]UKA » %1:partsupp[#0]KA » %0[×]A
+              %2[#0]UKA » %1:partsupp[#0]KA » %0[×]
             ArrangeBy keys=[[]] // { arity: 1 }
               Distinct group_by=[#0] // { arity: 1 }
                 Project (#0) // { arity: 1 }
@@ -1607,7 +1607,7 @@ Explained Query:
         Project (#1) // { arity: 1 }
           Join on=(#0 = #4 AND #2 = #3) type=differential // { arity: 5 }
             implementation
-              %0:l2[#2, #0]KKA » %1[#0, #1]KKA
+              %0:l2[#2, #0]KK » %1[#0, #1]KK
             ArrangeBy keys=[[#2, #0]] // { arity: 3 }
               Get l2 // { arity: 3 }
             ArrangeBy keys=[[#0, #1]] // { arity: 2 }
@@ -1618,7 +1618,7 @@ Explained Query:
                       Filter (#1 != #4) AND (#14 > #13) // { arity: 18 }
                         Join on=(#0 = #2) type=differential // { arity: 18 }
                           implementation
-                            %1:l1[#0]KAf » %0:l3[#0]KAf
+                            %1:l1[#0]KAf » %0:l3[#0]Kf
                           ArrangeBy keys=[[#0]] // { arity: 2 }
                             Get l3 // { arity: 2 }
                           Get l1 // { arity: 16 }
@@ -1632,7 +1632,7 @@ Explained Query:
         Project (#0..=#2) // { arity: 3 }
           Join on=(#0 = #4 AND #2 = #3) type=differential // { arity: 5 }
             implementation
-              %1[#1, #0]UKKA » %0:l0[#0, #2]KKA
+              %1[#1, #0]UKK » %0:l0[#0, #2]KK
             ArrangeBy keys=[[#0, #2]] // { arity: 3 }
               Get l0 // { arity: 3 }
             ArrangeBy keys=[[#1, #0]] // { arity: 2 }
@@ -1641,7 +1641,7 @@ Explained Query:
                   Filter (#1 != #4) // { arity: 18 }
                     Join on=(#0 = #2) type=differential // { arity: 18 }
                       implementation
-                        %0[#0]KA » %1:l1[#0]KA
+                        %1:l1[#0]KA » %0[#0]K
                       ArrangeBy keys=[[#0]] // { arity: 2 }
                         Distinct group_by=[#1, #0] // { arity: 2 }
                           Project (#0, #2) // { arity: 2 }
@@ -1736,7 +1736,7 @@ Explained Query:
         Project (#1, #2) // { arity: 2 }
           Join on=(#0 = #3) type=differential // { arity: 4 }
             implementation
-              %0:l1[#0]KA » %1[#0]KA
+              %0:l1[#0]K » %1[#0]K
             ArrangeBy keys=[[#0]] // { arity: 3 }
               Get l1 // { arity: 3 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
@@ -1763,7 +1763,7 @@ Explained Query:
           Filter (numeric_to_double(#2) > (numeric_to_double(#3) / bigint_to_double(case when (#4 = 0) then null else #4 end))) // { arity: 5 }
             CrossJoin type=differential // { arity: 5 }
               implementation
-                %1[×]UA » %0:l0[×]Aef
+                %1[×]UA » %0:l0[×]ef
               ArrangeBy keys=[[]] // { arity: 3 }
                 Project (#0, #4, #5) // { arity: 3 }
                   Filter ((#8 = "13") OR (#8 = "17") OR (#8 = "18") OR (#8 = "23") OR (#8 = "29") OR (#8 = "30") OR (#8 = "31")) // { arity: 9 }
