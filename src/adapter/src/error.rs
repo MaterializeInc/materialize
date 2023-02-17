@@ -181,6 +181,8 @@ pub enum AdapterError {
         cluster_name: String,
         replica_name: String,
     },
+    /// The named setting does not exist.
+    UnrecognizedConfigurationParam(String),
     /// A generic error occurred.
     //
     // TODO(benesch): convert all those errors to structured errors.
@@ -515,6 +517,11 @@ impl fmt::Display for AdapterError {
             } => write!(
                 f,
                 "cluster replica '{cluster_name}.{replica_name}' does not exist"
+            ),
+            AdapterError::UnrecognizedConfigurationParam(setting_name) => write!(
+                f,
+                "unrecognized configuration parameter {}",
+                setting_name.quoted()
             ),
             AdapterError::UnstableDependency { object_type, .. } => {
                 write!(f, "cannot create {object_type} with unstable dependencies")

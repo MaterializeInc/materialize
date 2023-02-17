@@ -703,6 +703,16 @@ fn eval_unmaterializable_func(
             .expect("known to be a valid array");
         Ok(MirScalarExpr::Literal(Ok(row), f.output_type()))
     };
+    let pack_dict = |mut datums: Vec<(String, String)>| {
+        datums.sort();
+        let mut row = Row::default();
+        row.packer().push_dict(
+            datums
+                .iter()
+                .map(|(key, value)| (key.as_str(), Datum::from(value.as_str()))),
+        );
+        Ok(MirScalarExpr::Literal(Ok(row), f.output_type()))
+    };
     let pack = |datum| {
         Ok(MirScalarExpr::literal_ok(
             datum,
@@ -738,6 +748,11 @@ fn eval_unmaterializable_func(
                     .collect(),
             )
         }
+        UnmaterializableFunc::ViewableVariables => pack_dict(
+            Coordinator::viewable_variables(state, session)
+                .map(|var| (var.name().to_lowercase(), var.value()))
+                .collect(),
+        ),
         UnmaterializableFunc::CurrentTimestamp => {
             let t: Datum = session.pcx().wall_time.try_into()?;
             pack(t)

@@ -1940,6 +1940,14 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "current_database" => Scalar {
             params!() => UnmaterializableFunc::CurrentDatabase, 861;
         },
+        "current_setting" => Scalar {
+            params!(String) => Operation::unary(|_ecx, name| {
+                current_settings(name, HirScalarExpr::literal_false())
+            }) => ScalarType::String, 2077;
+            params!(String, Bool) => Operation::binary(|_ecx, name, missing_ok| {
+                current_settings(name, missing_ok)
+            }) => ScalarType::String, 3294;
+        },
         "current_user" => Scalar {
             params!() => UnmaterializableFunc::CurrentUser, 745;
         },
@@ -3827,4 +3835,33 @@ pub fn resolve_op(op: &str) -> Result<&'static [FuncImpl<HirScalarExpr>], PlanEr
         // JsonApplyPathPredicate
         None => bail_unsupported!(format!("[{}]", op)),
     }
+}
+
+// Since ViewableVariables is unmaterializeable (which can't be eval'd) that
+// depend on their arguments, implement directly with Hir.
+fn current_settings(
+    name: HirScalarExpr,
+    missing_ok: HirScalarExpr,
+) -> Result<HirScalarExpr, PlanError> {
+    // MapGetValue returns Null if the key doesn't exist in the map.
+    let expr = HirScalarExpr::call_binary(
+        HirScalarExpr::CallUnmaterializable(UnmaterializableFunc::ViewableVariables),
+        HirScalarExpr::call_unary(name, UnaryFunc::Lower(func::Lower)),
+        BinaryFunc::MapGetValue,
+    );
+    let expr = HirScalarExpr::If {
+        cond: Box::new(missing_ok),
+        then: Box::new(expr.clone()),
+        els: Box::new(HirScalarExpr::CallVariadic {
+            func: VariadicFunc::ErrorIfNull,
+            exprs: vec![
+                expr,
+                HirScalarExpr::literal(
+                    Datum::String("unrecognized configuration parameter"),
+                    ScalarType::String,
+                ),
+            ],
+        }),
+    };
+    Ok(expr)
 }
