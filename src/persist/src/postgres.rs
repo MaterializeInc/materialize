@@ -352,11 +352,14 @@ impl Consensus for PostgresConsensus {
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1";
-        let row = {
+        let row = async {
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
-            client.query_opt(&statement, &[&key]).await?
-        };
+            let result = client.query_opt(&statement, &[&key]).await?;
+            Ok::<Option<tokio_postgres::Row>, ExternalError>(result)
+        }
+        .timeout(self.knobs.query_timeout())
+        .await??;
         let row = match row {
             None => return Ok(None),
             Some(row) => row,
@@ -419,11 +422,16 @@ impl Consensus for PostgresConsensus {
                          SELECT * FROM consensus WHERE shard = $1
                      )
                      ON CONFLICT DO NOTHING";
-            let client = self.get_connection().await?;
-            let statement = client.prepare_cached(q).await?;
-            client
-                .execute(&statement, &[&key, &new.seqno, &new.data.as_ref()])
-                .await?
+            async {
+                let client = self.get_connection().await?;
+                let statement = client.prepare_cached(q).await?;
+                let result = client
+                    .execute(&statement, &[&key, &new.seqno, &new.data.as_ref()])
+                    .await?;
+                Ok::<u64, ExternalError>(result)
+            }
+            .timeout(self.knobs.query_timeout())
+            .await??
         };
 
         if result == 1 {
@@ -455,6 +463,7 @@ impl Consensus for PostgresConsensus {
                     "limit must be [0, i64::MAX]. was: {:?}", limit
                 )));
         };
+        // TODO: add a timeout to this scan when we're confident it cannot ask for an unbounded # of rows
         let rows = {
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
@@ -480,6 +489,8 @@ impl Consensus for PostgresConsensus {
                     SELECT * FROM consensus WHERE shard = $1 AND sequence_number >= $2
                 )";
 
+        // TODO: add a timeout to this delete when it cannot do an unbounded amount of work.
+        // If we let this implementation be CRDB-specific, we could use `DELETE ... LIMIT`
         let result = {
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
@@ -512,9 +523,10 @@ impl Consensus for PostgresConsensus {
 
 #[cfg(test)]
 mod tests {
-    use crate::location::tests::consensus_impl_test;
     use tracing::info;
     use uuid::Uuid;
+
+    use crate::location::tests::consensus_impl_test;
 
     use super::*;
 
