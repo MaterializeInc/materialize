@@ -230,6 +230,8 @@ pub struct Args {
     /// The default allows all local connections.
     /// "*" allows all.
     /// "*.domain.com" allows connections from any matching subdomain.
+    ///
+    /// Wildcards in other positions (e.g., "https://*.foo.com" or "https://foo.*.com") have no effect.
     #[structopt(long, env = "CORS_ALLOWED_ORIGIN")]
     cors_allowed_origin: Vec<HeaderValue>,
     /// How stringently to demand TLS authentication and encryption.
