@@ -226,6 +226,12 @@ pub struct Args {
     internal_http_listen_addr: SocketAddr,
     /// Enable cross-origin resource sharing (CORS) for HTTP requests from the
     /// specified origin.
+    ///
+    /// The default allows all local connections.
+    /// "*" allows all.
+    /// "*.domain.com" allows connections from any matching subdomain.
+    ///
+    /// Wildcards in other positions (e.g., "https://*.foo.com" or "https://foo.*.com") have no effect.
     #[structopt(long, env = "CORS_ALLOWED_ORIGIN")]
     cors_allowed_origin: Vec<HeaderValue>,
     /// How stringently to demand TLS authentication and encryption.
@@ -630,7 +636,21 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     {
         cors::Any.into()
     } else if !args.cors_allowed_origin.is_empty() {
-        AllowOrigin::list(args.cors_allowed_origin)
+        let allowed = args.cors_allowed_origin.clone();
+        AllowOrigin::predicate(move |origin: &HeaderValue, _request_parts: _| {
+            for val in &allowed {
+                // For each specified allow cors origin, check if it starts with
+                // a *. and allow anything from that glob. Otherwise check for
+                // an exact match.
+                if (val.as_bytes().starts_with(b"*.")
+                    && origin.as_bytes().ends_with(&val.as_bytes()[1..]))
+                    || origin == val
+                {
+                    return true;
+                }
+            }
+            false
+        })
     } else {
         let port = args.http_listen_addr.port();
         AllowOrigin::list([
