@@ -543,7 +543,7 @@ def workflow_test_github_15496(c: Composition) -> None:
             CREATE CLUSTER cluster1 REPLICAS (
                 r1 (
                     STORAGECTL ADDRESSES ['clusterd_nopanic:2100'],
-                    STORAGE ADDRESSES ['clusterd_no_panic:2103'],
+                    STORAGE ADDRESSES ['clusterd_nopanic:2103'],
                     COMPUTECTL ADDRESSES ['clusterd_nopanic:2101'],
                     COMPUTE ADDRESSES ['clusterd_nopanic:2102'],
                     WORKERS 2
@@ -610,7 +610,7 @@ def workflow_test_github_17510(c: Composition) -> None:
             CREATE CLUSTER cluster1 REPLICAS (
                 r1 (
                     STORAGECTL ADDRESSES ['clusterd_nopanic:2100'],
-                    STORAGE ADDRESSES ['clusterd_no_panic:2103'],
+                    STORAGE ADDRESSES ['clusterd_nopanic:2103'],
                     COMPUTECTL ADDRESSES ['clusterd_nopanic:2101'],
                     COMPUTE ADDRESSES ['clusterd_nopanic:2102'],
                     WORKERS 2
@@ -627,6 +627,16 @@ def workflow_test_github_17510(c: Composition) -> None:
               FROM data;
             INSERT INTO base VALUES (1, 1, 1, 1);
             INSERT INTO base VALUES (1, 1, 1, -1), (1, 1, 1, -1);
+            CREATE MATERIALIZED VIEW constant_sums AS
+              SELECT SUM(data2) AS sum2, SUM(data4) AS sum4, SUM(data8) AS sum8
+              FROM (
+                  SELECT * FROM (
+                      VALUES (1::uint2, 1::uint4, 1::uint8, 1),
+                          (1::uint2, 1::uint4, 1::uint8, -1),
+                          (1::uint2, 1::uint4, 1::uint8, -1)
+                  ) AS base (data2, data4, data8, diff),
+                  repeat_row(diff)
+              );
             """
         )
         c.testdrive(
@@ -635,23 +645,46 @@ def workflow_test_github_17510(c: Composition) -> None:
             > SET cluster = cluster1;
 
             # Run a queries that would generate panics before the fix.
-
             ! SELECT SUM(data2) FROM data;
             contains:uint8 out of range
 
             ! SELECT SUM(data4) FROM data;
             contains:uint8 out of range
 
+            ! SELECT * FROM constant_sums;
+            contains:constant folding encountered reduce on collection with non-positive multiplicities
+
             # The following statement succeeds with a negative accumulation,
             # which is the behavior introduced in https://github.com/MaterializeInc/materialize/pull/16852
             > SELECT SUM(data8) FROM data;
             -1
+
+            # Test repairs
+            > INSERT INTO base VALUES (1, 1, 1, 1), (1, 1, 1, 1);
+
+            > SELECT SUM(data2) FROM data;
+            1
+
+            > SELECT SUM(data4) FROM data;
+            1
+
+            > SELECT SUM(data8) FROM data;
+            1
 
             # Ensure that the output types for uint sums are unaffected.
             > SELECT c.name, c.type
               FROM mz_materialized_views mv
                    JOIN mz_columns c USING (id)
               WHERE mv.name = 'sum_types'
+              ORDER BY c.type, c.name;
+            sum8 numeric
+            sum2 uint8
+            sum4 uint8
+
+            > SELECT c.name, c.type
+              FROM mz_materialized_views mv
+                   JOIN mz_columns c USING (id)
+              WHERE mv.name = 'constant_sums'
               ORDER BY c.type, c.name;
             sum8 numeric
             sum2 uint8
