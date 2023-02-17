@@ -9,7 +9,11 @@
 
 //! Implementation of [Consensus] backed by Postgres.
 
-use crate::cfg::ConsensusKnobs;
+use std::fmt::Formatter;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -20,22 +24,21 @@ use deadpool_postgres::{
     Hook, HookError, HookErrorCause, ManagerConfig, Object, PoolError, RecyclingMethod,
 };
 use deadpool_postgres::{Manager, Pool};
-use mz_ore::cast::CastFrom;
-use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::SYSTEM_TIME;
 use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
 use postgres_openssl::MakeTlsConnector;
-use std::fmt::Formatter;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use tracing::debug;
 
+use mz_ore::cast::CastFrom;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::SYSTEM_TIME;
+
+use crate::cfg::ConsensusKnobs;
 use crate::error::Error;
 use crate::location::{Consensus, ExternalError, SeqNo, VersionedData, SCAN_ALL};
 use crate::metrics::PostgresConsensusMetrics;
+use crate::timeout::TimeoutExt;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS consensus (
@@ -143,6 +146,9 @@ impl PostgresConsensusConfig {
             fn connection_pool_ttl_stagger(&self) -> Duration {
                 Duration::MAX
             }
+            fn query_timeout(&self) -> Duration {
+                Duration::MAX
+            }
         }
 
         let config = PostgresConsensusConfig::new(
@@ -157,6 +163,7 @@ impl PostgresConsensusConfig {
 /// Implementation of [Consensus] over a Postgres database.
 pub struct PostgresConsensus {
     pool: Pool,
+    knobs: Arc<dyn ConsensusKnobs>,
     metrics: PostgresConsensusMetrics,
 }
 
@@ -184,6 +191,7 @@ impl PostgresConsensus {
         let last_ttl_connection = AtomicU64::new(0);
         let connections_created = config.metrics.connpool_connections_created.clone();
         let ttl_reconnections = config.metrics.connpool_ttl_reconnections.clone();
+        let knobs = Arc::clone(&config.knobs);
         let pool = Pool::builder(manager)
             .max_size(config.knobs.connection_pool_max_size())
             .post_create(Hook::async_fn(move |client, _| {
@@ -202,7 +210,7 @@ impl PostgresConsensus {
                 // maintained by the pool after bursty workloads.
 
                 // add a bias towards TTLing older connections first
-                if conn_metrics.age() < config.knobs.connection_pool_ttl() {
+                if conn_metrics.age() < knobs.connection_pool_ttl() {
                     return Ok(());
                 }
 
@@ -211,7 +219,7 @@ impl PostgresConsensus {
                 let elapsed_since_last_ttl = Duration::from_millis(now.saturating_sub(last_ttl));
 
                 // stagger out reconnections to avoid stampeding the DB
-                if elapsed_since_last_ttl > config.knobs.connection_pool_ttl_stagger()
+                if elapsed_since_last_ttl > knobs.connection_pool_ttl_stagger()
                     && last_ttl_connection
                         .compare_exchange_weak(last_ttl, now, Ordering::SeqCst, Ordering::SeqCst)
                         .is_ok()
@@ -245,6 +253,7 @@ impl PostgresConsensus {
 
         Ok(PostgresConsensus {
             pool,
+            knobs: Arc::clone(&config.knobs),
             metrics: config.metrics,
         })
     }
@@ -386,14 +395,19 @@ impl Consensus for PostgresConsensus {
                        WHERE shard = $1
                        ORDER BY sequence_number DESC LIMIT 1) = $4;
             "#;
-            let client = self.get_connection().await?;
-            let statement = client.prepare_cached(q).await?;
-            client
-                .execute(
-                    &statement,
-                    &[&key, &new.seqno, &new.data.as_ref(), &expected],
-                )
-                .await?
+            async {
+                let client = self.get_connection().await?;
+                let statement = client.prepare_cached(q).await?;
+                let result = client
+                    .execute(
+                        &statement,
+                        &[&key, &new.seqno, &new.data.as_ref(), &expected],
+                    )
+                    .await?;
+                Ok::<u64, ExternalError>(result)
+            }
+            .timeout(self.knobs.query_timeout())
+            .await??
         } else {
             // Insert the new row as long as no other row exists for the same shard.
             let q = "INSERT INTO consensus SELECT $1, $2, $3 WHERE

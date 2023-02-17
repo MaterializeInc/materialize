@@ -274,6 +274,14 @@ impl From<tokio::task::JoinError> for ExternalError {
     }
 }
 
+impl From<tokio::time::error::Elapsed> for ExternalError {
+    fn from(x: tokio::time::error::Elapsed) -> Self {
+        ExternalError::Indeterminate(Indeterminate {
+            inner: anyhow::Error::new(x),
+        })
+    }
+}
+
 /// Configuration of whether a [Blob::set] must occur atomically.
 #[derive(Debug)]
 pub enum Atomicity {
