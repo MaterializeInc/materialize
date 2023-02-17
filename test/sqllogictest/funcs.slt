@@ -247,7 +247,7 @@ Explained Query:
     Map (date_truncts(#0, #1)) // { arity: 3 }
       CrossJoin type=differential // { arity: 2 }
         implementation
-          %0:date_trunc_fields[×]A » %1:date_trunc_timestamps[×]A
+          %0:date_trunc_fields[×] » %1:date_trunc_timestamps[×]
         ArrangeBy keys=[[]] // { arity: 1 }
           Get materialize.public.date_trunc_fields // { arity: 1 }
         ArrangeBy keys=[[]] // { arity: 1 }

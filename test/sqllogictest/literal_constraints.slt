@@ -745,7 +745,7 @@ WHERE
 Explained Query:
   CrossJoin type=differential // { arity: 3 }
     implementation
-      %0:t1[×]Ae » %1:t2[×]Ae
+      %0:t1[×]e » %1:t2[×]e
     ArrangeBy keys=[[]] // { arity: 2 }
       Project (#0, #1) // { arity: 2 }
         ReadExistingIndex materialize.public.t1 lookup_value=(2, "l2")

@@ -75,7 +75,7 @@ explain with(arity, join_impls) select * from foo, bar where foo.a = abs(bar.a) 
 Explained Query:
   CrossJoin type=differential // { arity: 6 }
     implementation
-      %0:foo[×]Aef » %1:bar[×]Aef
+      %0:foo[×]ef » %1:bar[×]ef
     ArrangeBy keys=[[]] // { arity: 3 }
       Filter (#0 = 3) // { arity: 3 }
         Get materialize.public.foo // { arity: 3 }

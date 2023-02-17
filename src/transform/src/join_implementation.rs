@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 
 use mz_expr::visit::{Visit, VisitChildren};
-use mz_expr::JoinImplementation::IndexedFilter;
+use mz_expr::JoinImplementation::{Differential, IndexedFilter, Unimplemented};
 use mz_expr::{
     FilterCharacteristics, Id, JoinInputCharacteristics, JoinInputMapper, MapFilterProject,
     MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
@@ -121,81 +121,111 @@ impl JoinImplementation {
         if let MirRelationExpr::Join {
             inputs,
             equivalences,
-            implementation,
+            // (Note that `JoinImplementation` runs in a fixpoint loop.)
+            // If the current implementation is
+            //  - Unimplemented, then we need to come up with an implementation.
+            //  - Differential, then we consider switching to a Delta join, because we might have
+            //    inserted some ArrangeBys that create new arrangements when we came up with the
+            //    Differential plan, in which case a Delta join might have become viable.
+            //  - Delta, then we are good already.
+            //  - IndexedFilter, then we just leave that alone, because those are out of scope
+            //    for JoinImplementation (they are created by `LiteralConstraints`).
+            // We don't want to change from a Differential plan to an other Differential plan, or
+            // from a Delta plan to an other Delta plan, because the second run cannot distinguish
+            // between an ArrangeBy that marks an already existing arrangement and an ArrangeBy
+            // that was inserted by a previous run of JoinImplementation. (We should eventually
+            // refactor this to make ArrangeBy unambiguous somehow. Maybe move JoinImplementation
+            // to the lowering.)
+            implementation: implementation @ (Unimplemented | Differential(..)),
         } = relation
         {
-            if !matches!(implementation, IndexedFilter(..)) {
-                let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
+            let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
 
-                // Canonicalize the equivalence classes
-                mz_expr::canonicalize::canonicalize_equivalences(
-                    equivalences,
-                    input_types.iter().map(|t| &t.column_types),
-                );
+            // Canonicalize the equivalence classes
+            mz_expr::canonicalize::canonicalize_equivalences(
+                equivalences,
+                input_types.iter().map(|t| &t.column_types),
+            );
 
-                // Common information of broad utility.
-                let input_mapper = JoinInputMapper::new_from_input_types(&input_types);
+            // Common information of broad utility.
+            let input_mapper = JoinInputMapper::new_from_input_types(&input_types);
 
-                // The first fundamental question is whether we should employ a delta query or not.
-                //
-                // Here we conservatively use the rule that if sufficient arrangements exist we will
-                // use a delta query (except for 2-input joins).
-                // An arrangement is considered available for an input
-                // - if it is a `Get` with columns present in `indexes`,
-                //   - or the same wrapped by an IndexedFilter,
-                // - if it is an `ArrangeBy` with the columns present (note that the ArrangeBy might
-                //   have been inserted by a previous run of JoinImplementation),
-                // - if it is a `Reduce` whose output is arranged the right way,
-                // - if it is a filter wrapped around either of these (see the mfp extraction).
-                //
-                // The `IndexedFilter` case above is to avoid losing some Delta joins
-                // due to `IndexedFilter` on a join input. This means that in the absolute worst
-                // case (when the `IndexedFilter` doesn't filter out anything), we will fully
-                // re-create some arrangements that we already have for that input. This worst case
-                // is still better than what can happen if we lose a Delta join: Differential joins
-                // will create several new arrangements that doesn't even have a size bound, i.e.,
-                // they might be larger than any user-created index.
+            // The first fundamental question is whether we should employ a delta query or not.
+            //
+            // Here we conservatively use the rule that if sufficient arrangements exist we will
+            // use a delta query (except for 2-input joins).
+            // An arrangement is considered available for an input
+            // - if it is a `Get` with columns present in `indexes`,
+            //   - or the same wrapped by an IndexedFilter,
+            // - if it is an `ArrangeBy` with the columns present (note that the ArrangeBy might
+            //   have been inserted by a previous run of JoinImplementation),
+            // - if it is a `Reduce` whose output is arranged the right way,
+            // - if it is a filter wrapped around either of these (see the mfp extraction).
+            //
+            // The `IndexedFilter` case above is to avoid losing some Delta joins
+            // due to `IndexedFilter` on a join input. This means that in the absolute worst
+            // case (when the `IndexedFilter` doesn't filter out anything), we will fully
+            // re-create some arrangements that we already have for that input. This worst case
+            // is still better than what can happen if we lose a Delta join: Differential joins
+            // will create several new arrangements that doesn't even have a size bound, i.e.,
+            // they might be larger than any user-created index.
 
-                let unique_keys = input_types
-                    .into_iter()
-                    .map(|typ| typ.keys)
-                    .collect::<Vec<_>>();
-                let mut available_arrangements = vec![Vec::new(); inputs.len()];
-                let mut filters = Vec::new();
+            let unique_keys = input_types
+                .into_iter()
+                .map(|typ| typ.keys)
+                .collect::<Vec<_>>();
+            let mut available_arrangements = vec![Vec::new(); inputs.len()];
+            let mut filters = Vec::new();
 
-                // We figure out what predicates from mfp_above could be pushed to which input.
-                // We won't actually push these down now; this just informs FilterCharacteristics.
-                let (map, mut filter, _) = mfp_above.as_map_filter_project();
-                let all_errors = filter.iter().all(|p| p.is_literal_err());
-                let (_, pushed_through_map) = PredicatePushdown::push_filters_through_map(
-                    &map,
-                    &mut filter,
-                    mfp_above.input_arity,
-                    all_errors,
-                )?;
-                let (_, push_downs) = PredicatePushdown::push_filters_through_join(
-                    &input_mapper,
-                    equivalences,
-                    pushed_through_map,
-                );
+            // We figure out what predicates from mfp_above could be pushed to which input.
+            // We won't actually push these down now; this just informs FilterCharacteristics.
+            let (map, mut filter, _) = mfp_above.as_map_filter_project();
+            let all_errors = filter.iter().all(|p| p.is_literal_err());
+            let (_, pushed_through_map) = PredicatePushdown::push_filters_through_map(
+                &map,
+                &mut filter,
+                mfp_above.input_arity,
+                all_errors,
+            )?;
+            let (_, push_downs) = PredicatePushdown::push_filters_through_join(
+                &input_mapper,
+                equivalences,
+                pushed_through_map,
+            );
 
-                for index in 0..inputs.len() {
-                    // We can work around mfps, as we can lift the mfps into the join execution.
+            for index in 0..inputs.len() {
+                // We can work around mfps, as we can lift the mfps into the join execution.
+                let (mfp, input) = MapFilterProject::extract_non_errors_from_expr(&inputs[index]);
+                let (_, filter, project) = mfp.as_map_filter_project();
+
+                // We gather filter characteristics:
+                // - From the filter that is directly at the top mfp of the input.
+                // - IndexedFilter joins are constructed from literal equality filters.
+                // - If the input is an ArrangeBy, then we gather filter characteristics from
+                //   the mfp below the ArrangeBy. (JoinImplementation often inserts ArrangeBys.)
+                // - From filters that could be pushed down from above the join to this input.
+                //   (In LIR, these will be executed right after the join path executes the join
+                //   for this input.)
+                // - (No need to look behind Gets, see the inline_mfp argument of RelationCSE.)
+                let mut characteristics = FilterCharacteristics::filter_characteristics(&filter)?;
+                if matches!(
+                    input,
+                    MirRelationExpr::Join {
+                        implementation: IndexedFilter(..),
+                        ..
+                    }
+                ) {
+                    characteristics.add_literal_equality();
+                }
+                if let MirRelationExpr::ArrangeBy {
+                    input: arrange_by_input,
+                    ..
+                } = input
+                {
                     let (mfp, input) =
-                        MapFilterProject::extract_non_errors_from_expr(&inputs[index]);
-                    let (_, filter, project) = mfp.as_map_filter_project();
-
-                    // We gather filter characteristics:
-                    // - From the filter that is directly at the top mfp of the input.
-                    // - IndexedFilter joins are constructed from literal equality filters.
-                    // - If the input is an ArrangeBy, then we gather filter characteristics from
-                    //   the mfp below the ArrangeBy. (JoinImplementation often inserts ArrangeBys.)
-                    // - From filters that could be pushed down from above the join to this input.
-                    //   (In LIR, these will be executed right after the join path executes the join
-                    //   for this input.)
-                    // - (No need to look behind Gets, see the inline_mfp argument of RelationCSE.)
-                    let mut characteristics =
-                        FilterCharacteristics::filter_characteristics(&filter)?;
+                        MapFilterProject::extract_non_errors_from_expr(arrange_by_input);
+                    let (_, filter, _) = mfp.as_map_filter_project();
+                    characteristics |= FilterCharacteristics::filter_characteristics(&filter)?;
                     if matches!(
                         input,
                         MirRelationExpr::Join {
@@ -205,113 +235,109 @@ impl JoinImplementation {
                     ) {
                         characteristics.add_literal_equality();
                     }
-                    if let MirRelationExpr::ArrangeBy {
-                        input: arrange_by_input,
-                        ..
-                    } = input
-                    {
-                        let (mfp, input) =
-                            MapFilterProject::extract_non_errors_from_expr(arrange_by_input);
-                        let (_, filter, _) = mfp.as_map_filter_project();
-                        characteristics |= FilterCharacteristics::filter_characteristics(&filter)?;
-                        if matches!(
-                            input,
-                            MirRelationExpr::Join {
-                                implementation: IndexedFilter(..),
-                                ..
-                            }
-                        ) {
-                            characteristics.add_literal_equality();
-                        }
-                    }
-                    characteristics |=
-                        FilterCharacteristics::filter_characteristics(&push_downs[index])?;
-                    filters.push(characteristics);
+                }
+                characteristics |=
+                    FilterCharacteristics::filter_characteristics(&push_downs[index])?;
+                filters.push(characteristics);
 
-                    // Collect available arrangements on this input.
-                    match input {
-                        MirRelationExpr::Get { id, typ: _ } => {
+                // Collect available arrangements on this input.
+                match input {
+                    MirRelationExpr::Get { id, typ: _ } => {
+                        available_arrangements[index]
+                            .extend(indexes.get(*id).map(|key| key.to_vec()));
+                    }
+                    MirRelationExpr::ArrangeBy { input, keys } => {
+                        // We may use any presented arrangement keys.
+                        available_arrangements[index].extend(keys.clone());
+                        if let MirRelationExpr::Get { id, typ: _ } = &**input {
                             available_arrangements[index]
                                 .extend(indexes.get(*id).map(|key| key.to_vec()));
                         }
-                        MirRelationExpr::ArrangeBy { input, keys } => {
-                            // We may use any presented arrangement keys.
-                            available_arrangements[index].extend(keys.clone());
-                            if let MirRelationExpr::Get { id, typ: _ } = &**input {
-                                available_arrangements[index]
-                                    .extend(indexes.get(*id).map(|key| key.to_vec()));
-                            }
-                        }
-                        MirRelationExpr::Reduce { group_key, .. } => {
-                            // The first `group_key.len()` columns form an arrangement key.
-                            available_arrangements[index]
-                                .push((0..group_key.len()).map(MirScalarExpr::Column).collect());
-                        }
-                        MirRelationExpr::Join {
-                            implementation: IndexedFilter(id, ..),
-                            ..
-                        } => {
-                            available_arrangements[index].extend(
-                                indexes.get(Id::Global(id.clone())).map(|key| key.to_vec()),
-                            );
-                        }
-                        _ => {}
                     }
-                    available_arrangements[index].sort();
-                    available_arrangements[index].dedup();
-                    let reverse_project = project
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, c)| (c, i))
-                        .collect::<BTreeMap<_, _>>();
-                    // Eliminate arrangements referring to columns that have been
-                    // projected away by surrounding MFPs.
-                    available_arrangements[index].retain(|key| {
-                        key.iter()
-                            .all(|k| k.support().iter().all(|c| reverse_project.contains_key(c)))
-                    });
-                    // Permute arrangements so columns reference what is after the MFP.
-                    for key in available_arrangements[index].iter_mut() {
-                        for k in key.iter_mut() {
-                            k.permute_map(&reverse_project);
-                        }
+                    MirRelationExpr::Reduce { group_key, .. } => {
+                        // The first `group_key.len()` columns form an arrangement key.
+                        available_arrangements[index]
+                            .push((0..group_key.len()).map(MirScalarExpr::Column).collect());
                     }
-                    // Currently we only support using arrangements all of whose
-                    // key components can be found in some equivalence.
-                    // Note: because `order_input` currently only finds arrangements
-                    // with exact key matches, the code below can be removed with no
-                    // change in behavior, but this is being kept for a future
-                    // TODO: expand `order_input`
-                    available_arrangements[index].retain(|key| {
-                        key.iter().all(|k| {
-                            let k = input_mapper.map_expr_to_global(k.clone(), index);
-                            equivalences
-                                .iter()
-                                .any(|equivalence| equivalence.contains(&k))
-                        })
-                    });
+                    MirRelationExpr::Join {
+                        implementation: IndexedFilter(id, ..),
+                        ..
+                    } => {
+                        available_arrangements[index]
+                            .extend(indexes.get(Id::Global(id.clone())).map(|key| key.to_vec()));
+                    }
+                    _ => {}
                 }
+                available_arrangements[index].sort();
+                available_arrangements[index].dedup();
+                let reverse_project = project
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, c)| (c, i))
+                    .collect::<BTreeMap<_, _>>();
+                // Eliminate arrangements referring to columns that have been
+                // projected away by surrounding MFPs.
+                available_arrangements[index].retain(|key| {
+                    key.iter()
+                        .all(|k| k.support().iter().all(|c| reverse_project.contains_key(c)))
+                });
+                // Permute arrangements so columns reference what is after the MFP.
+                for key in available_arrangements[index].iter_mut() {
+                    for k in key.iter_mut() {
+                        k.permute_map(&reverse_project);
+                    }
+                }
+                // Currently we only support using arrangements all of whose
+                // key components can be found in some equivalence.
+                // Note: because `order_input` currently only finds arrangements
+                // with exact key matches, the code below can be removed with no
+                // change in behavior, but this is being kept for a future
+                // TODO: expand `order_input`
+                available_arrangements[index].retain(|key| {
+                    key.iter().all(|k| {
+                        let k = input_mapper.map_expr_to_global(k.clone(), index);
+                        equivalences
+                            .iter()
+                            .any(|equivalence| equivalence.contains(&k))
+                    })
+                });
+            }
 
-                // Determine if we can perform delta queries with the existing arrangements.
-                // We could defer the execution if we are sure we know we want one input,
-                // but we could imagine wanting the best from each and then comparing the two.
-                let delta_query_plan = delta_queries::plan(
+            let old_implementation = implementation.clone();
+
+            let delta_query_plan = || {
+                delta_queries::plan(
                     relation,
                     &input_mapper,
                     &available_arrangements,
                     &unique_keys,
                     &filters,
-                );
-                let differential_plan = differential::plan(
+                )
+            };
+            let differential_plan = || {
+                differential::plan(
                     relation,
                     &input_mapper,
                     &available_arrangements,
                     &unique_keys,
                     &filters,
-                );
+                )
+            };
 
-                *relation = delta_query_plan.or(differential_plan)
-                    .expect("Failed to produce a join plan");
+            match old_implementation {
+                Unimplemented => {
+                    *relation = delta_query_plan()
+                        .or_else(|_| differential_plan())
+                        .expect("Failed to produce a join plan")
+                }
+                Differential(..) => {
+                    // As noted above, we don't want to change from Differential to an other
+                    // Differential, so we only consider Delta joins here.
+                    if let Ok(delta_query_plan) = delta_query_plan() {
+                        *relation = delta_query_plan;
+                    }
+                }
+                _ => unreachable!(), // because of the match statement that is one level up
             }
         }
         Ok(())
@@ -407,8 +433,11 @@ mod delta_queries {
                 // could still actually occur. It is not happening in any of our slts currently.)
                 //
                 // if inputs.len() == 2:
-                // We decided to always plan this as a differential join for now, see here:
+                // We decided to always plan this as a differential join for now, because the usual
+                // advantage of a Delta join avoiding intermediate arrangements doesn't apply.
+                // See more details here:
                 // https://github.com/MaterializeInc/materialize/pull/16099#issuecomment-1316857374
+                // https://github.com/MaterializeInc/materialize/pull/17708#discussion_r1112848747
                 return Err(TransformError::Internal(String::from(
                     "should be planned as differential plan",
                 )));
@@ -590,6 +619,11 @@ mod differential {
 /// Modify `inputs` to ensure specified arrangements are available.
 ///
 /// Lift filter predicates when all needed arrangements are otherwise available.
+///
+/// Returns
+///  - The lifted mfps combined into one mfp.
+///  - Permutations for each input, which were lifted as part of the mfp lifting. These should be
+///    applied to the join order.
 fn implement_arrangements<'a>(
     inputs: &mut [MirRelationExpr],
     available_arrangements: &[Vec<Vec<MirScalarExpr>>],
