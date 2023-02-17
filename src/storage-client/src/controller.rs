@@ -1258,7 +1258,7 @@ where
             let storage_dependencies = description.get_storage_dependencies();
 
             let data_shard_since = since_handle.since().clone();
-            let dependency_since = self.determine_dependency_since(&storage_dependencies)?;
+            let dependency_since = self.determine_collection_since_joins(&storage_dependencies)?;
             let combined_since = data_shard_since.join(&dependency_since);
             self.install_read_capabilities(&storage_dependencies, combined_since.clone())?;
 
@@ -1288,6 +1288,55 @@ where
         for (id, description) in to_create {
             match description.data_source {
                 DataSource::Ingestion(ingestion) => {
+                    let remap_id = ingestion.remap_collection_id;
+                    let remap_collection_since = self
+                        .collection(remap_id)
+                        .expect("remap collection must exist")
+                        .implied_capability
+                        .clone();
+
+                    // Install read capability on all non-remap subsources on remap collection.
+                    for id in ingestion.subsource_ids().filter(|id| *id != remap_id) {
+                        let collection = self.collection(id).expect("known to exist");
+
+                        // We do not yet have firm guarantees that the since of
+                        // the remap collection was not advanced beyond those of
+                        // its dependents, so we can cheat the implied
+                        // capability here.
+                        if timely::order::PartialOrder::less_than(
+                            &collection.implied_capability,
+                            &remap_collection_since,
+                        ) {
+                            assert!(
+                                timely::order::PartialOrder::less_than(
+                                    &remap_collection_since,
+                                    &collection.write_frontier
+                                ),
+                                "write frontier ({:?}) must be in advance remap collection's since ({:?})",
+                                collection.write_frontier,
+                                remap_collection_since,
+                            );
+                            mz_ore::soft_assert!(
+                                matches!(collection.read_policy, ReadPolicy::ValidFrom(_)),
+                                "subsources should not have compaction enabled until ingestion is created, but {:?} \
+                                has read policy {:?}",
+                                id,
+                                collection.read_policy
+                            );
+
+                            self.set_read_policy(vec![(
+                                id,
+                                ReadPolicy::ValidFrom(remap_collection_since.clone()),
+                            )]);
+                        }
+
+                        let collection = self.collection_mut(id).expect("known to exist");
+                        collection.storage_dependencies.push(remap_id);
+                        let capability = collection.implied_capability.clone();
+
+                        self.install_read_capabilities(&[remap_id], capability)?;
+                    }
+
                     // Each ingestion is augmented with the collection metadata.
                     let mut source_imports = BTreeMap::new();
                     for (id, _) in ingestion.source_imports {
@@ -1429,7 +1478,7 @@ where
             return Err(StorageError::SourceIdReused(id));
         }
 
-        let dependency_since = self.determine_dependency_since(&[from_id])?;
+        let dependency_since = self.determine_collection_since_joins(&[from_id])?;
         self.install_read_capabilities(&[from_id], dependency_since.clone())?;
 
         info!(
@@ -2072,19 +2121,23 @@ where
     }
 
     /// Return the since frontier at which we can read from all the given
-    /// dependencies.
-    fn determine_dependency_since(
+    /// collections.
+    ///
+    /// The outer error is a potentially recoverable internal error, while the
+    /// inner error is appropriate to return to the adapter.
+    fn determine_collection_since_joins(
         &mut self,
-        storage_dependencies: &[GlobalId],
+        collections: &[GlobalId],
     ) -> Result<Antichain<T>, StorageError> {
-        let mut dependency_since = Antichain::from_elem(T::minimum());
-        for id in storage_dependencies {
+        let mut joined_since = Antichain::from_elem(T::minimum());
+        for id in collections {
             let collection = self.collection(*id)?;
+
             let since = collection.implied_capability.clone();
-            dependency_since.join_assign(&since);
+            joined_since.join_assign(&since);
         }
 
-        Ok(dependency_since)
+        Ok(joined_since)
     }
 
     /// Install read capabilities on the given `storage_dependencies`.
