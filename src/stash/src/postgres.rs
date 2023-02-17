@@ -15,8 +15,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
-use futures::future::TryFutureExt;
 use futures::future::{self, BoxFuture};
+use futures::future::{FutureExt, TryFutureExt};
 use futures::{Future, StreamExt};
 use postgres_openssl::MakeTlsConnector;
 use prometheus::{IntCounter, IntCounterVec};
@@ -24,6 +24,7 @@ use rand::Rng;
 
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
+use tokio::time::Interval;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Statement};
 use tracing::{error, event, info, warn, Level};
@@ -74,6 +75,10 @@ CREATE TABLE uppers (
     upper bigint
 );
 ";
+
+// Force reconnection every few minutes to allow cockroach to rebalance
+// connections after it restarts during maintenance or upgrades.
+const RECONNECT_INTERVAL: Duration = Duration::from_secs(300);
 
 struct PreparedStatements {
     select_epoch: Statement,
@@ -298,6 +303,7 @@ impl StashFactory {
             schema,
             tls: tls.clone(),
             client: None,
+            reconnect: tokio::time::interval(RECONNECT_INTERVAL),
             statements: None,
             epoch: None,
             // The call to rand::random here assumes that the seed source is from a secure
@@ -394,6 +400,8 @@ pub struct Stash {
     schema: Option<String>,
     tls: MakeTlsConnector,
     client: Option<Client>,
+    reconnect: Interval,
+
     statements: Option<PreparedStatements>,
     epoch: Option<NonZeroI64>,
     nonce: [u8; 16],
@@ -599,6 +607,12 @@ impl Stash {
             .into_retry_stream();
         let mut retry = Box::pin(retry);
         let mut attempt: u64 = 0;
+
+        // Actively reconnect to allow cockroach to rebalanace.
+        if self.reconnect.tick().now_or_never().is_some() {
+            self.client = None;
+        }
+
         loop {
             // Execute the operation in a transaction or savepoint.
             match self.transact_inner(&f).await {
@@ -812,6 +826,7 @@ struct Consolidator {
     consolidations: BTreeMap<Id, Antichain<Timestamp>>,
 
     client: Option<Client>,
+    reconnect: Interval,
     stmt_candidates: Option<Statement>,
     stmt_insert: Option<Statement>,
     stmt_delete: Option<Statement>,
@@ -828,6 +843,7 @@ impl Consolidator {
             tls,
             sinces_rx,
             client: None,
+            reconnect: tokio::time::interval(RECONNECT_INTERVAL),
             stmt_candidates: None,
             stmt_insert: None,
             stmt_delete: None,
@@ -844,6 +860,10 @@ impl Consolidator {
             // Wait for the next consolidation request.
             while let Some((id, ts)) = self.sinces_rx.recv().await {
                 self.insert(id, ts);
+
+                if self.reconnect.tick().now_or_never().is_some() {
+                    self.client = None;
+                }
 
                 while !self.consolidations.is_empty() {
                     // Accumulate any pending requests that have come in during
