@@ -49,7 +49,7 @@ Delete this section if no tips.
 ### Checklist
 
 - [ ] This PR has adequate test coverage / QA involvement has been duly considered.
-- [ ] This PR has an associated design doc, is a design doc, or is sufficiently small to not require a design.
+- [ ] This PR has an associated up-to-date design doc, is a design doc, or is sufficiently small to not require a design.
   <!-- Reference the design in the description. -->
 - [ ] This PR evolves [an existing `$T ⇔ Proto$T` mapping](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/command-and-response-binary-encoding.md) (possibly in a backwards-incompatible way) and therefore is tagged with a `T-proto` label.
 - [ ] If this PR will require changes to cloud orchestration, there is a companion cloud PR to account for those changes that is tagged with the release-blocker label ([example](https://github.com/MaterializeInc/cloud/pull/5021)).
