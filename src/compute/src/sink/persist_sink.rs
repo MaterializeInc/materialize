@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{AsCollection, Collection, Hashable};
+use differential_dataflow::{Collection, Hashable};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{
     Broadcast, Capability, CapabilitySet, ConnectLoop, Feedback, Inspect,
@@ -94,7 +94,7 @@ where
     // `persist_source` to select an appropriate `as_of`. We only care about times beyond the
     // current shard upper anyway.
     let source_as_of = None;
-    let (persist_stream, token) = persist_source::persist_source_core(
+    let (persist_collection, token) = persist_source::persist_source_core(
         &desired_collection.scope(),
         sink_id,
         Arc::clone(&compute_state.persist_clients),
@@ -106,7 +106,6 @@ where
         // Copy the logic in DeltaJoin/Get/Join to start.
         |_timer, count| count > 1_000_000,
     );
-    let persist_collection = persist_stream.as_collection();
 
     Some(Rc::new((
         install_desired_into_persist(

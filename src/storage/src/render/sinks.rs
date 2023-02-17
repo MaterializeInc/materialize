@@ -16,7 +16,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
-use differential_dataflow::{AsCollection, Collection, Hashable};
+use differential_dataflow::{Collection, Hashable};
 use timely::dataflow::Scope;
 use tracing::warn;
 
@@ -68,8 +68,7 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
     );
     needed_tokens.push(source_token);
 
-    let ok_collection =
-        apply_sink_envelope(sink_id, sink, &sink_render, ok_collection.as_collection());
+    let ok_collection = apply_sink_envelope(sink_id, sink, &sink_render, ok_collection);
 
     let healthchecker_args = HealthcheckerArgs {
         persist_clients: Arc::clone(&storage_state.persist_clients),
@@ -83,7 +82,7 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
         sink,
         sink_id,
         ok_collection,
-        err_collection.as_collection(),
+        err_collection,
         healthchecker_args,
     );
 

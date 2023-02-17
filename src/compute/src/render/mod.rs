@@ -235,12 +235,15 @@ pub fn build_compute_dataflow<A: Allocate>(
                     // possible.
                     if let Some(logger) = compute_state.compute_logger.clone() {
                         let export_ids = dataflow.export_ids().collect();
-                        ok_stream = ok_stream.log_import_frontiers(logger, *source_id, export_ids);
+                        ok_stream = ok_stream
+                            .inner
+                            .log_import_frontiers(logger, *source_id, export_ids)
+                            .as_collection();
                     }
 
                     let (oks, errs) = (
-                        ok_stream.as_collection().leave_region().leave_region(),
-                        err_stream.as_collection().leave_region().leave_region(),
+                        ok_stream.leave_region().leave_region(),
+                        err_stream.leave_region().leave_region(),
                     );
 
                     imported_sources.push((mz_expr::Id::Global(*source_id), (oks, errs)));

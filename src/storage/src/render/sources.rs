@@ -367,10 +367,8 @@ where
                                     // Copy the logic in DeltaJoin/Get/Join to start.
                                     |_timer, count| count > 1_000_000,
                                 );
-                            let (tx_source_ok, tx_source_err) = (
-                                tx_source_ok_stream.as_collection(),
-                                tx_source_err_stream.as_collection(),
-                            );
+                            let (tx_source_ok, tx_source_err) =
+                                (tx_source_ok_stream, tx_source_err_stream);
                             needed_tokens.push(tx_token);
                             error_collections.push(tx_source_err);
 
@@ -428,13 +426,13 @@ where
                             );
                             (stream, Some(tok))
                         } else {
-                            (std::iter::empty().to_stream(scope), None)
+                            (std::iter::empty().to_stream(scope).as_collection(), None)
                         };
                     let (upsert_ok, upsert_err) = super::upsert::upsert(
                         &transformed_results,
                         resume_upper,
                         upsert_envelope.clone(),
-                        previous_stream,
+                        previous_stream.inner,
                         previous_token,
                     );
 

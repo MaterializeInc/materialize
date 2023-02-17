@@ -9,6 +9,7 @@
 
 //! A source that reads from an a persist shard.
 
+use differential_dataflow::{AsCollection, Collection};
 use std::any::Any;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -20,7 +21,7 @@ use timely::communication::Push;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::Bundle;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{Capability, OkErr};
+use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::scheduling::Activator;
@@ -36,6 +37,7 @@ use crate::types::sources::SourceData;
 
 pub use mz_persist_client::operators::shard_source::FlowControl;
 use mz_timely_util::buffer::ConsolidateBuffer;
+use mz_timely_util::operator::CollectionExt;
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -70,8 +72,8 @@ pub fn persist_source<G, YFn>(
     flow_control: Option<FlowControl<G>>,
     yield_fn: YFn,
 ) -> (
-    Stream<G, (Row, Timestamp, Diff)>,
-    Stream<G, (DataflowError, Timestamp, Diff)>,
+    Collection<G, Row, Diff>,
+    Collection<G, DataflowError, Diff>,
     Rc<dyn Any>,
 )
 where
@@ -89,10 +91,7 @@ where
         flow_control,
         yield_fn,
     );
-    let (ok_stream, err_stream) = stream.ok_err(|(d, t, r)| match d {
-        Ok(row) => Ok((row, t, r)),
-        Err(err) => Err((err, t, r)),
-    });
+    let (ok_stream, err_stream) = stream.map_fallible("OkErr", |d| d);
     (ok_stream, err_stream, token)
 }
 
@@ -113,10 +112,7 @@ pub fn persist_source_core<G, YFn>(
     map_filter_project: Option<&mut MfpPlan>,
     flow_control: Option<FlowControl<G>>,
     yield_fn: YFn,
-) -> (
-    Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
-    Rc<dyn Any>,
-)
+) -> (Collection<G, Result<Row, DataflowError>, Diff>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     YFn: Fn(Instant, usize) -> bool + 'static,
@@ -135,6 +131,9 @@ where
         Arc::new(UnitSchema),
     );
     let rows = decode_and_mfp(&fetched, &name, until, map_filter_project, yield_fn);
+
+    let rows = rows.as_collection().consolidate();
+
     (rows, token)
 }
 
