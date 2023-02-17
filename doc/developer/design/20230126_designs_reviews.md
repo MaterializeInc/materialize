@@ -1,11 +1,13 @@
 - Feature name: designs-revisited
-- Associated issues: None
-- Associated PRs: #17482
+- Associated issues and PRs: [#17482][#17482]
+
+[#17482]: https://github.com/MaterializeInc/materialize/pull/17482
 
 # Summary
 [summary]: #summary
 
-We're updating the design review process to make it easier for engineers to write design documents, allow for better reviews, and document the expectations around changes and their design more clearly.
+We're updating the design review process to make it easier for engineers to write design documents, allow for better reviews, and clearly document expectations.
+We accompany the update with refined design document requirements.
 
 # Motivation
 [motivation]: #motivation
@@ -47,8 +49,8 @@ This raises the question of why we did not follow it recently.
 
 To address this, we propose the following steps, some of which are part of the change around this document:
 * Revisit the design doc [README](./README.md) to make expectations clearer.
-* Update the [pull request template](/.github/pull_request_template.md) to include a step reminding engineers to think about design documents.
 * Update the [template](./00000000_template.md) to match what we're outlining in this design.
+* Update the [pull request template](/.github/pull_request_template.md) to include a step reminding engineers to write a design document.
 
 Specifically, the current interpretation of design documents is to write one for large changes, where it is not clear what large means.
 Instead, we propose that each change should come with a design doc unless it is small enough to be non-contentious or immediately clear what needs to be done.
@@ -62,28 +64,25 @@ It is something to consider in the future, but seems to be too heavyweight at th
 Additionally, it would require tooling to enforce certain state transitions, which we don't have the capacity for at the moment.
 
 Notable examples for RFC-style processes follow:
-* Rust's RFC process aims at creating high-quality designs, while giving authors the confidence that they get the attention they deserve.
+* Rust's [RFC process](https://rust-lang.github.io/rfcs/) aims at creating high-quality designs, while giving authors the confidence that they get the attention they deserve.
   It is rather heavy-weight and has an own bot to ensure proper state transitions and to nag reviewers.
   We can learn from it that good guidance seems to result in better design.
-* Ember's design process follows Rust's process, but is less formal.
+  Rust's [RFC process](https://rust-lang.github.io/rfcs/0002-rfc-process.html) demonstrates that guidelines can encourage good designs.
+  It requires engineers to follow a specific set of steps to shepherd their proposals from an initial idea through reviews to a final design.
+
+  These steps seem to be involved, and require tooling/awareness to be carried out correctly.
+  We see this as a viable alternative once the company grows further and needs to make technically difficult decisions, but it seems to heavyweight to implement it at this point.
+* Ember's [design process](https://rfcs.emberjs.com/) follows Rust's process, but is less formal.
 
 One alternative is to not change the current design doc process and leave it as-is, which defaults to engineers creating designs in Notion.
 The benefit is that we don't add (perceived) overhead, but at the expense of the problems mentioned here.
 Specifically, it doesn't capture discussions well, and does not permit external users to understand design choices.
 
-## RFC-style process
-
-Rust's [RFC process](https://rust-lang.github.io/rfcs/0002-rfc-process.html) demonstrates that guidelines can encourage good designs.
-It requires engineers to follow a specific set of steps to shepherd their proposals from an initial idea through reviews to a final design.
-
-These steps seem to be involved, and require tooling/awareness to be carried out correctly.
-We see this as a viable alternative once the company grows further and needs to make technically difficult decisions, but it seems to heavyweight to implement it at this point.
-
 # Unresolved questions
 [unresolved-questions]: #unresolved-questions
 
 It is unclear if the changes we suggest will solve the problems around our current design document approach.
-It seems we need to try out different approaches to test if they improve the situation, and this is one of such experiments.
+We belive that it is a first step into the right direction, and with more experience we can decide whether it fulfills our goals or whether we need to refine the process.
 
 # Future work
 [future-work]: #future-work

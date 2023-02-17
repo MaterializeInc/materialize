@@ -15,7 +15,7 @@ same kind of broad feedback as having a short, in-person meeting.
 
 It's not expected that all questions will be answered prior to the meeting,
 but the meeting should not be an open-ended brainstorming process. There is
-upfront work that goes into the doc (see template) to allow for a productive
+upfront work that goes into the doc (see [template](./00000000_template.md)) to allow for a productive
 meeting, and it's best if attendees have time to read and digest the doc
 prior to the meeting.
 
@@ -34,20 +34,21 @@ Examples:
 
 ## When should you make a design document?
 
+Design docs should be written for all changes where an implementation does not immediately follow from the problem.
 Some specific times when you should write a design document:
-1. If the change is large/cross-cutting, e.g., will be spread over multiple PRs
-2. If the change will take more than a week to implement or will proceed in phases that need clearly delimited scope
-3. If there are multiple alternative implementations and no clear best option
-4. If it's going to involve multiple people coordinating changes
-5. If it changes a customer-facing/public API, or a major private API (for example, the API for implementing new sinks)
+1. If the change is large/cross-cutting, e.g., will be spread over multiple PRs.
+2. If the change will take more than a week to implement or will proceed in phases that need clearly delimited scope.
+3. If there are multiple alternative implementations and no clear best option.
+4. If it's going to involve multiple people coordinating changes.
+5. If it changes a customer-facing/public API, or a major private API (for example, the API for implementing new sinks).
 
-Many smaller changes do still benefit from a quick design doc to clarify
-thinking. Err on the side of writing a design document.
+Many smaller changes do still benefit from a quick design doc to clarify thinking.
+Err on the side of writing a design document.
 
 ## How should you make a design document?
 
 ### Creation
-1. Copy the template to a new date-prefixed file in `doc/developer/design` and fill it in.
+1. Copy the [template](./00000000_template.md) to a new date-prefixed file in `doc/developer/design` and fill it in.
 2. Submit a pull request---this makes it easy for others to add written comments.
 3. Announce that the design doc is ready for review in #eng-announce.
 
