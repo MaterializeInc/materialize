@@ -131,6 +131,7 @@ pub struct Config {
     now: NowFn,
     seed: u32,
     storage_usage_collection_interval: Duration,
+    storage_usage_retention_period: Option<Duration>,
     default_cluster_replica_size: String,
     builtin_cluster_replica_size: String,
     propagate_crashes: bool,
@@ -148,6 +149,7 @@ impl Default for Config {
             now: SYSTEM_TIME.clone(),
             seed: rand::random(),
             storage_usage_collection_interval: Duration::from_secs(3600),
+            storage_usage_retention_period: None,
             default_cluster_replica_size: "1".to_string(),
             builtin_cluster_replica_size: "1".to_string(),
             propagate_crashes: false,
@@ -201,6 +203,14 @@ impl Config {
         storage_usage_collection_interval: Duration,
     ) -> Self {
         self.storage_usage_collection_interval = storage_usage_collection_interval;
+        self
+    }
+
+    pub fn with_storage_usage_retention_period(
+        mut self,
+        storage_usage_retention_period: Duration,
+    ) -> Self {
+        self.storage_usage_retention_period = Some(storage_usage_retention_period);
         self
     }
 
@@ -358,6 +368,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         connection_context,
         tracing_handle,
         storage_usage_collection_interval: config.storage_usage_collection_interval,
+        storage_usage_retention_period: config.storage_usage_retention_period,
         segment_api_key: None,
         egress_ips: vec![],
         aws_account_id: None,

@@ -403,6 +403,7 @@ impl Usage {
             aws_principal_context: None,
             aws_privatelink_availability_zones: None,
             system_parameter_frontend: None,
+            storage_usage_retention_period: None,
         })
         .await?;
 

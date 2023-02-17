@@ -308,6 +308,7 @@ pub struct Config {
     pub connection_context: ConnectionContext,
     pub storage_usage_client: StorageUsageClient,
     pub storage_usage_collection_interval: Duration,
+    pub storage_usage_retention_period: Option<Duration>,
     pub segment_client: Option<mz_segment::Client>,
     pub egress_ips: Vec<Ipv4Addr>,
     pub system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
@@ -1211,6 +1212,7 @@ pub async fn serve(
         connection_context,
         storage_usage_client,
         storage_usage_collection_interval,
+        storage_usage_retention_period,
         segment_client,
         egress_ips,
         aws_account_id,
@@ -1275,6 +1277,7 @@ pub async fn serve(
             aws_principal_context,
             aws_privatelink_availability_zones,
             system_parameter_frontend,
+            storage_usage_retention_period,
         })
         .await?;
     let session_id = catalog.config().session_id;

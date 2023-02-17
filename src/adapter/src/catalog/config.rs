@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::Deserialize;
 
@@ -64,6 +65,8 @@ pub struct Config<'a> {
     /// Catalog::open. A `None` value indicates that the initial sync should be
     /// skipped.
     pub system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
+    /// How long to retain storage usage records
+    pub storage_usage_retention_period: Option<Duration>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
