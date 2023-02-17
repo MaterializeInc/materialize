@@ -523,10 +523,9 @@ impl Consensus for PostgresConsensus {
 
 #[cfg(test)]
 mod tests {
+    use crate::location::tests::consensus_impl_test;
     use tracing::info;
     use uuid::Uuid;
-
-    use crate::location::tests::consensus_impl_test;
 
     use super::*;
 
