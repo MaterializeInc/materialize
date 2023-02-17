@@ -11,7 +11,6 @@
 
 //! The tunable knobs for persist.
 
-use prometheus::core::{Atomic, AtomicF64};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -127,7 +126,8 @@ impl PersistConfig {
                 compaction_minimum_timeout: Self::DEFAULT_COMPACTION_MINIMUM_TIMEOUT,
                 consensus_connection_pool_ttl: Duration::from_secs(300),
                 consensus_connection_pool_ttl_stagger: Duration::from_secs(6),
-                consensus_query_timeout: RwLock::new(Duration::from_secs(12)),
+                consensus_connect_timeout: RwLock::new(Self::DEFAULT_CONSENSUS_CONNECT_TIMEOUT),
+                consensus_query_timeout: RwLock::new(Self::DEFAULT_CONSENSUS_QUERY_TIMEOUT),
                 gc_blob_delete_concurrency_limit: AtomicUsize::new(32),
                 state_versions_recent_live_diffs_limit: AtomicUsize::new(usize::cast_from(
                     30 * Self::NEED_ROLLUP_THRESHOLD,
@@ -168,8 +168,10 @@ impl PersistConfig {
     pub const DEFAULT_BLOB_TARGET_SIZE: usize = 128 * MB;
     /// Default value for [`DynamicConfig::compaction_minimum_timeout`].
     pub const DEFAULT_COMPACTION_MINIMUM_TIMEOUT: Duration = Duration::from_secs(90);
+    /// Default value for [`DynamicConfig::consensus_connect_timeout`].
+    pub const DEFAULT_CONSENSUS_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
     /// Default value for [`DynamicConfig::consensus_query_timeout`].
-    pub const DEFAULT_CONSENSUS_QUERY_TIMEOUT: Duration = Duration::from_secs(12);
+    pub const DEFAULT_CONSENSUS_QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 
     // Move this to a PersistConfig field when we actually have read leases.
     //
@@ -200,6 +202,14 @@ impl ConsensusKnobs for PersistConfig {
 
     fn connection_pool_ttl_stagger(&self) -> Duration {
         self.dynamic.consensus_connection_pool_ttl_stagger()
+    }
+
+    fn connect_timeout(&self) -> Duration {
+        *self
+            .dynamic
+            .consensus_connect_timeout
+            .read()
+            .expect("lock poisoned")
     }
 
     fn query_timeout(&self) -> Duration {
@@ -247,6 +257,7 @@ pub struct DynamicConfig {
     consensus_connection_pool_ttl: Duration,
     consensus_connection_pool_ttl_stagger: Duration,
     consensus_query_timeout: RwLock<Duration>,
+    consensus_connect_timeout: RwLock<Duration>,
 }
 
 impl DynamicConfig {
@@ -332,6 +343,13 @@ impl DynamicConfig {
     pub fn consensus_query_timeout(&self) -> Duration {
         *self.consensus_query_timeout.read().expect("lock poisoned")
     }
+    /// The duration to wait for a Consensus Postgres/CRDB connection to be made before retrying.
+    pub fn consensus_connect_timeout(&self) -> Duration {
+        *self
+            .consensus_connect_timeout
+            .read()
+            .expect("lock poisoned")
+    }
 
     /// The maximum number of concurrent blob deletes during garbage collection.
     pub fn gc_blob_delete_concurrency_limit(&self) -> usize {
@@ -409,6 +427,8 @@ pub struct PersistParameters {
     pub blob_target_size: Option<usize>,
     /// Configures [`DynamicConfig::compaction_minimum_timeout`].
     pub compaction_minimum_timeout: Option<Duration>,
+    /// Configures [`DynamicConfig::consensus_connect_timeout`].
+    pub consensus_connect_timeout: Option<Duration>,
     /// Configures [`DynamicConfig::consensus_query_timeout`].
     pub consensus_query_timeout: Option<Duration>,
 }
@@ -421,11 +441,13 @@ impl PersistParameters {
         let Self {
             blob_target_size: self_blob_target_size,
             compaction_minimum_timeout: self_compaction_minimum_timeout,
+            consensus_connect_timeout: self_consensus_connect_timeout,
             consensus_query_timeout: self_consensus_query_timeout,
         } = self;
         let Self {
             blob_target_size: other_blob_target_size,
             compaction_minimum_timeout: other_compaction_minimum_timeout,
+            consensus_connect_timeout: other_consensus_connect_timeout,
             consensus_query_timeout: other_consensus_query_timeout,
         } = other;
         if let Some(v) = other_blob_target_size {
@@ -436,6 +458,9 @@ impl PersistParameters {
         }
         if let Some(v) = other_consensus_query_timeout {
             *self_consensus_query_timeout = Some(v);
+        }
+        if let Some(v) = other_consensus_connect_timeout {
+            *self_consensus_connect_timeout = Some(v);
         }
     }
 
@@ -448,10 +473,12 @@ impl PersistParameters {
         let Self {
             blob_target_size,
             compaction_minimum_timeout,
+            consensus_connect_timeout,
             consensus_query_timeout,
         } = self;
         blob_target_size.is_none()
             && compaction_minimum_timeout.is_none()
+            && consensus_connect_timeout.is_none()
             && consensus_query_timeout.is_none()
     }
 
@@ -465,6 +492,7 @@ impl PersistParameters {
         let Self {
             blob_target_size,
             compaction_minimum_timeout,
+            consensus_connect_timeout,
             consensus_query_timeout,
         } = self;
         if let Some(blob_target_size) = blob_target_size {
@@ -474,6 +502,14 @@ impl PersistParameters {
         }
         if let Some(_compaction_minimum_timeout) = compaction_minimum_timeout {
             // TODO: Figure out how to represent Durations in DynamicConfig.
+        }
+        if let Some(consensus_connect_timeout) = consensus_connect_timeout {
+            let mut timeout = cfg
+                .dynamic
+                .consensus_query_timeout
+                .write()
+                .expect("lock poisoned");
+            *timeout = *consensus_connect_timeout;
         }
         if let Some(consensus_query_timeout) = consensus_query_timeout {
             let mut timeout = cfg
@@ -491,6 +527,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
         ProtoPersistParameters {
             blob_target_size: self.blob_target_size.into_proto(),
             compaction_minimum_timeout: self.compaction_minimum_timeout.into_proto(),
+            consensus_connect_timeout: self.consensus_connect_timeout.into_proto(),
             consensus_query_timeout: self.consensus_query_timeout.into_proto(),
         }
     }
@@ -499,6 +536,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
         Ok(Self {
             blob_target_size: proto.blob_target_size.into_rust()?,
             compaction_minimum_timeout: proto.compaction_minimum_timeout.into_rust()?,
+            consensus_connect_timeout: proto.consensus_connect_timeout.into_rust()?,
             consensus_query_timeout: proto.consensus_query_timeout.into_rust()?,
         })
     }

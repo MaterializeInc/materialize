@@ -5889,6 +5889,8 @@ impl Catalog {
         PersistParameters {
             blob_target_size: Some(config.persist_blob_target_size()),
             compaction_minimum_timeout: Some(config.persist_compaction_minimum_timeout()),
+            consensus_connect_timeout: Some(config.persist_consensus_connect_timeout()),
+            consensus_query_timeout: Some(config.persist_consensus_query_timeout()),
         }
     }
 }
