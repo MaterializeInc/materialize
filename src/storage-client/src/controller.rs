@@ -1182,18 +1182,48 @@ where
         let mut to_create = Vec::with_capacity(to_register.len());
         // This work mutates the controller state, so must be done serially. Because there
         // is no io-bound work, its very fast.
-        for (id, description, write, since_handle, metadata) in to_register {
+        for (id, description, mut write, since_handle, metadata) in to_register {
             let storage_dependencies = description.get_storage_dependencies();
 
             let data_shard_since = since_handle.since().clone();
             let dependency_since = self.determine_dependency_since(&storage_dependencies)?;
             let combined_since = data_shard_since.join(&dependency_since);
+
+            // Ensure out write handle's upper is in advance of the combined
+            // since unless they're being initialized.
+            let mut upper = write.upper().clone();
+            while PartialOrder::less_equal(&upper, &combined_since)
+                && upper.as_option() != Some(&T::minimum())
+            {
+                let since = combined_since.as_option().expect("collection not closed");
+                let new_upper = Antichain::from_elem(since.step_forward());
+                match write
+                    .compare_and_append(
+                        Vec::<((crate::types::sources::SourceData, ()), T, Diff)>::new(),
+                        upper,
+                        new_upper.clone(),
+                    )
+                    .await
+                    .expect("valid usage; we are the only writer")
+                {
+                    Ok(()) => {
+                        upper = new_upper;
+                    }
+                    Err(UpperMismatch {
+                        expected: _,
+                        current,
+                    }) => {
+                        upper = current;
+                    }
+                }
+            }
+
             self.install_read_capabilities(&storage_dependencies, combined_since.clone())?;
 
             let collection_state = CollectionState::new(
                 description.clone(),
                 combined_since,
-                write.upper().clone(),
+                upper,
                 storage_dependencies,
                 metadata.clone(),
             );
@@ -2494,6 +2524,12 @@ impl<T: Timestamp> CollectionState<T> {
         storage_dependencies: Vec<GlobalId>,
         metadata: CollectionMetadata,
     ) -> Self {
+        assert!(
+            PartialOrder::less_than(&since, &write_frontier)
+                || write_frontier == Antichain::from_elem(T::minimum()),
+            "since must never be equal to or in advance of write frontier unless being initialized"
+        );
+
         let mut read_capabilities = MutableAntichain::new();
         read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
         Self {
