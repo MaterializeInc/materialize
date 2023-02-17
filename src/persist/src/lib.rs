@@ -97,5 +97,6 @@ pub mod metrics;
 pub mod postgres;
 pub mod retry;
 pub mod s3;
+pub mod timeout;
 pub mod unreliable;
 pub mod workload;
