@@ -614,7 +614,7 @@ impl Coordinator {
         // express the entries' dependency graph.
         let mut entries_awaiting_dependencies: BTreeMap<
             GlobalId,
-            Vec<(catalog::CatalogEntry, BTreeSet<GlobalId>)>,
+            Vec<(catalog::CatalogEntry, Vec<GlobalId>)>,
         > = BTreeMap::new();
         let mut loaded_items = BTreeSet::new();
         let mut unsorted_entries: VecDeque<_> = self
@@ -622,7 +622,7 @@ impl Coordinator {
             .entries()
             .cloned()
             .map(|entry| {
-                let remaining_deps = entry.uses().clone();
+                let remaining_deps = entry.uses().to_vec();
                 (entry, remaining_deps)
             })
             .collect();
@@ -651,31 +651,6 @@ impl Coordinator {
                 }
             }
         }
-
-        // Topologically sort entries:
-        // - If one item uses the other, preserve that causal dependency
-        // - Else, treat each item as if its ID were max(greatest dependency,
-        //   self); this lets the item "bubble up" to the position of its
-        //   greatest dependency, where it can be properly checked using the
-        //   prior condition
-        entries.sort_by(|a, b| {
-            use std::cmp::Ordering;
-            if a.used_by().contains(&b.id()) {
-                Ordering::Less
-            } else if b.used_by().contains(&a.id()) {
-                Ordering::Greater
-            } else {
-                let a_cmp = match a.uses().iter().max() {
-                    Some(id) => std::cmp::max(*id, a.id()),
-                    None => a.id(),
-                };
-                let b_cmp = match b.uses().iter().max() {
-                    Some(id) => std::cmp::max(*id, b.id()),
-                    None => b.id(),
-                };
-                a_cmp.cmp(&b_cmp)
-            }
-        });
 
         let logs: BTreeSet<_> = BUILTINS::logs()
             .map(|log| self.catalog.resolve_builtin_log(log))
