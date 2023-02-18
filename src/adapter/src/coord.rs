@@ -609,7 +609,49 @@ impl Coordinator {
             .storage
             .drop_sinks_unvalidated(builtin_migration_metadata.previous_sink_ids);
 
-        let mut entries: Vec<_> = self.catalog.entries().cloned().collect();
+        // Load catalog entries based on topological dependency sorting. We do
+        // this to reinforce that `GlobalId`'s `Ord` implementation does not
+        // express the entries' dependency graph.
+        let mut entries_awaiting_dependencies: BTreeMap<
+            GlobalId,
+            Vec<(catalog::CatalogEntry, BTreeSet<GlobalId>)>,
+        > = BTreeMap::new();
+        let mut loaded_items = BTreeSet::new();
+        let mut unsorted_entries: VecDeque<_> = self
+            .catalog
+            .entries()
+            .cloned()
+            .map(|entry| {
+                let remaining_deps = entry.uses().clone();
+                (entry, remaining_deps)
+            })
+            .collect();
+        let mut entries = Vec::with_capacity(unsorted_entries.len());
+
+        while let Some((entry, mut remaining_deps)) = unsorted_entries.pop_front() {
+            remaining_deps.retain(|dep| !loaded_items.contains(dep));
+            // While you cannot assume anything about the ordering of
+            // dependencies based on their GlobalId, it is not secret knowledge
+            // that the most likely final dependency is that with the greatest
+            // ID.
+            match remaining_deps.last() {
+                Some(dep) => {
+                    entries_awaiting_dependencies
+                        .entry(*dep)
+                        .or_default()
+                        .push((entry, remaining_deps));
+                }
+                None => {
+                    let id = entry.id();
+                    if let Some(waiting_on_this_dep) = entries_awaiting_dependencies.remove(&id) {
+                        unsorted_entries.extend(waiting_on_this_dep);
+                    }
+                    loaded_items.insert(id);
+                    entries.push(entry);
+                }
+            }
+        }
+
         // Topologically sort entries:
         // - If one item uses the other, preserve that causal dependency
         // - Else, treat each item as if its ID were max(greatest dependency,
