@@ -30,7 +30,7 @@ use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::MirScalarExpr;
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
-use mz_repr::explain::{DummyHumanizer, ExprHumanizer};
+use mz_repr::explain::ExprHumanizer;
 use mz_repr::{ColumnName, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::Expr;
 use mz_sql_parser::ast::UnresolvedObjectName;
@@ -839,7 +839,7 @@ impl SessionCatalog for DummyCatalog {
     }
 
     fn active_database(&self) -> Option<&DatabaseId> {
-        Some(&DatabaseId(0))
+        None
     }
 
     fn active_cluster(&self) -> &str {
@@ -859,7 +859,7 @@ impl SessionCatalog for DummyCatalog {
     }
 
     fn get_database(&self, _: &DatabaseId) -> &dyn CatalogDatabase {
-        &DummyDatabase
+        unimplemented!()
     }
 
     fn resolve_schema(&self, _: Option<&str>, _: &str) -> Result<&dyn CatalogSchema, CatalogError> {
@@ -926,7 +926,7 @@ impl SessionCatalog for DummyCatalog {
     }
 
     fn now(&self) -> EpochMillis {
-        (self.config().now)()
+        0
     }
 
     fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName {
@@ -939,37 +939,16 @@ impl SessionCatalog for DummyCatalog {
 }
 
 impl ExprHumanizer for DummyCatalog {
-    fn humanize_id(&self, id: GlobalId) -> Option<String> {
-        DummyHumanizer.humanize_id(id)
+    fn humanize_id(&self, _: GlobalId) -> Option<String> {
+        None
     }
 
-    fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String> {
-        DummyHumanizer.humanize_id_unqualified(id)
+    fn humanize_id_unqualified(&self, _: GlobalId) -> Option<String> {
+        None
     }
 
-    fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
-        DummyHumanizer.humanize_scalar_type(ty)
-    }
-}
-
-/// A dummy [`CatalogDatabase`] implementation.
-///
-/// This implementation is suitable for use in tests that plan queries which are
-/// not demanding of the catalog, as many methods are unimplemented.
-#[derive(Debug)]
-pub struct DummyDatabase;
-
-impl CatalogDatabase for DummyDatabase {
-    fn name(&self) -> &str {
-        "dummy"
-    }
-
-    fn id(&self) -> DatabaseId {
-        DatabaseId(0)
-    }
-
-    fn has_schemas(&self) -> bool {
-        true
+    fn humanize_scalar_type(&self, _: &ScalarType) -> String {
+        unimplemented!()
     }
 }
 
