@@ -189,9 +189,14 @@ pub fn plan_insert_query(
         );
     }
     let desc = table.desc(&scx.catalog.resolve_full_name(table.name()))?;
-    let defaults = table
+    let mut defaults = table
         .table_details()
-        .expect("attempted to insert into non-table");
+        .expect("attempted to insert into non-table")
+        .to_vec();
+
+    for default in &mut defaults {
+        transform_ast::transform_expr(scx, default)?;
+    }
 
     if table.id().is_system() {
         sql_bail!(
@@ -307,7 +312,7 @@ pub fn plan_insert_query(
         if let Some(src_idx) = col_to_source.get(&col_idx) {
             project_key.push(*src_idx);
         } else {
-            let hir = plan_default_expr(scx, default, &col_typ.scalar_type)?;
+            let hir = plan_default_expr(scx, &default, &col_typ.scalar_type)?;
             project_key.push(expr_arity + map_exprs.len());
             map_exprs.push(hir);
         }
@@ -335,7 +340,8 @@ pub fn plan_insert_query(
         let mut output_columns = vec![];
         let mut new_exprs = vec![];
         let mut new_type = RelationType::empty();
-        for si in returning {
+        for mut si in returning {
+            transform_ast::transform_select_item(scx, &mut si)?;
             for (select_item, column_name) in expand_select_item(ecx, &si, &table_func_names)? {
                 let expr = match &select_item {
                     ExpandedSelectItem::InputOrdinal(i) => HirScalarExpr::column(*i),
@@ -444,12 +450,19 @@ pub fn plan_copy_from_rows(
     columns: Vec<usize>,
     rows: Vec<mz_repr::Row>,
 ) -> Result<HirRelationExpr, PlanError> {
+    let scx = StatementContext::new(Some(pcx), catalog);
+
     let table = catalog.get_item(&id);
     let desc = table.desc(&catalog.resolve_full_name(table.name()))?;
 
-    let defaults = table
+    let mut defaults = table
         .table_details()
-        .expect("attempted to insert into non-table");
+        .expect("attempted to insert into non-table")
+        .to_vec();
+
+    for default in &mut defaults {
+        transform_ast::transform_expr(&scx, default)?;
+    }
 
     let column_types = columns
         .iter()
@@ -484,14 +497,12 @@ pub fn plan_copy_from_rows(
     // Maps from table column index to position in the source query
     let col_to_source: BTreeMap<_, _> = columns.iter().enumerate().map(|(a, b)| (b, a)).collect();
 
-    let scx = StatementContext::new(Some(pcx), catalog);
-
     let column_details = desc.iter_types().zip_eq(defaults).enumerate();
     for (col_idx, (col_typ, default)) in column_details {
         if let Some(src_idx) = col_to_source.get(&col_idx) {
             project_key.push(*src_idx);
         } else {
-            let hir = plan_default_expr(&scx, default, &col_typ.scalar_type)?;
+            let hir = plan_default_expr(&scx, &default, &col_typ.scalar_type)?;
             project_key.push(typ.arity() + map_exprs.len());
             map_exprs.push(hir);
         }
