@@ -26,6 +26,13 @@ use crate::names::{Aug, PartialObjectName, ResolvedDataType};
 use crate::normalize;
 use crate::plan::{PlanError, StatementContext};
 
+pub fn transform_select_item<'a>(
+    scx: &StatementContext,
+    si: &'a mut SelectItem<Aug>,
+) -> Result<(), PlanError> {
+    run_transforms(scx, |t, si| t.visit_select_item_mut(si), si)
+}
+
 pub fn transform_query<'a>(
     scx: &StatementContext,
     query: &'a mut Query<Aug>,

@@ -25,6 +25,9 @@ materialize.public.t  "CREATE TABLE \"materialize\".\"public\".\"t\" (\"a\" \"pg
 > CREATE TABLE s (a int DEFAULT 1)
 > DROP TABLE s;
 
+> CREATE TABLE s (a int DEFAULT (1))
+> DROP TABLE s;
+
 > CREATE TABLE s (a date DEFAULT now())
 > DROP TABLE s;
 

@@ -103,17 +103,17 @@ use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
-    plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
-    AlterNoopPlan, AlterOptionParameter, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan,
-    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, ComputeReplicaConfig,
-    ComputeReplicaIntrospectionConfig, CreateClusterPlan, CreateClusterReplicaPlan,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropClusterReplicasPlan,
-    DropClustersPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
-    FullObjectName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan, QueryContext,
-    ReplicaConfig, RotateKeysPlan, Secret, Sink, Source, SourceSinkClusterConfig, Table, Type,
-    View,
+    plan_utils, query, transform_ast, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
+    AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter, AlterSecretPlan, AlterSinkPlan,
+    AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
+    ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, CreateClusterPlan,
+    CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
+    DropClusterReplicasPlan, DropClustersPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
+    DropSchemaPlan, FullObjectName, HirScalarExpr, Index, Ingestion, MaterializedView, Params,
+    Plan, QueryContext, ReplicaConfig, RotateKeysPlan, Secret, Sink, Source,
+    SourceSinkClusterConfig, Table, Type, View,
 };
 
 pub fn describe_create_database(
@@ -220,7 +220,9 @@ pub fn plan_create_table(
                 ColumnOption::Default(expr) => {
                     // Ensure expression can be planned and yields the correct
                     // type.
-                    let _ = query::plan_default_expr(scx, expr, &ty)?;
+                    let mut expr = expr.clone();
+                    transform_ast::transform_expr(scx, &mut expr)?;
+                    let _ = query::plan_default_expr(scx, &expr, &ty)?;
                     default = expr.clone();
                 }
                 ColumnOption::Unique { is_primary } => {
