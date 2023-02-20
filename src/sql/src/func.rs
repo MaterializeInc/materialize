@@ -339,7 +339,7 @@ pub fn sql_impl(
 
         let (mut expr, _) = names::resolve(qcx.scx.catalog, expr.clone())?;
         // Desugar the expression
-        transform_ast::transform_expr(&scx, &mut expr)?;
+        transform_ast::transform(&scx, &mut expr)?;
 
         let ecx = ExprContext {
             qcx: &qcx,
@@ -417,7 +417,7 @@ fn sql_impl_table_func_inner(
 
         let query = query.clone();
         let (mut query, _) = names::resolve(qcx.scx.catalog, query)?;
-        transform_ast::transform_query(&scx, &mut query)?;
+        transform_ast::transform(&scx, &mut query)?;
 
         query::plan_nested_query(&mut qcx, &query)
     };

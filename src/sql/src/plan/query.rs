@@ -108,7 +108,7 @@ pub fn plan_root_query(
     mut query: Query<Aug>,
     lifetime: QueryLifetime,
 ) -> Result<PlannedQuery<HirRelationExpr>, PlanError> {
-    transform_ast::transform_query(scx, &mut query)?;
+    transform_ast::transform(scx, &mut query)?;
     let mut qcx = QueryContext::root(scx, lifetime);
     let (mut expr, scope, mut finishing) = plan_query(&mut qcx, &query)?;
 
@@ -195,7 +195,7 @@ pub fn plan_insert_query(
         .to_vec();
 
     for default in &mut defaults {
-        transform_ast::transform_expr(scx, default)?;
+        transform_ast::transform(scx, default)?;
     }
 
     if table.id().is_system() {
@@ -243,7 +243,7 @@ pub fn plan_insert_query(
     // Plan the source.
     let expr = match source {
         InsertSource::Query(mut query) => {
-            transform_ast::transform_query(scx, &mut query)?;
+            transform_ast::transform(scx, &mut query)?;
 
             match query {
                 // Special-case simple VALUES clauses as PostgreSQL does.
@@ -341,7 +341,7 @@ pub fn plan_insert_query(
         let mut new_exprs = vec![];
         let mut new_type = RelationType::empty();
         for mut si in returning {
-            transform_ast::transform_select_item(scx, &mut si)?;
+            transform_ast::transform(scx, &mut si)?;
             for (select_item, column_name) in expand_select_item(ecx, &si, &table_func_names)? {
                 let expr = match &select_item {
                     ExpandedSelectItem::InputOrdinal(i) => HirScalarExpr::column(*i),
@@ -461,7 +461,7 @@ pub fn plan_copy_from_rows(
         .to_vec();
 
     for default in &mut defaults {
-        transform_ast::transform_expr(&scx, default)?;
+        transform_ast::transform(&scx, default)?;
     }
 
     let column_types = columns
@@ -525,11 +525,7 @@ pub fn plan_delete_query(
     scx: &StatementContext,
     mut delete_stmt: DeleteStatement<Aug>,
 ) -> Result<ReadThenWritePlan, PlanError> {
-    transform_ast::run_transforms(
-        scx,
-        |t, delete_stmt| t.visit_delete_statement_mut(delete_stmt),
-        &mut delete_stmt,
-    )?;
+    transform_ast::transform(scx, &mut delete_stmt)?;
 
     let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
     plan_mutation_query_inner(
@@ -546,11 +542,7 @@ pub fn plan_update_query(
     scx: &StatementContext,
     mut update_stmt: UpdateStatement<Aug>,
 ) -> Result<ReadThenWritePlan, PlanError> {
-    transform_ast::run_transforms(
-        scx,
-        |t, update_stmt| t.visit_update_statement_mut(update_stmt),
-        &mut update_stmt,
-    )?;
+    transform_ast::transform(scx, &mut update_stmt)?;
 
     let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
 
@@ -827,7 +819,7 @@ pub fn plan_up_to(
     let scope = Scope::empty();
     let desc = RelationDesc::empty();
     let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
-    transform_ast::transform_expr(scx, &mut up_to)?;
+    transform_ast::transform(scx, &mut up_to)?;
     let ecx = &ExprContext {
         qcx: &qcx,
         name: "UP TO",
@@ -854,7 +846,7 @@ pub fn plan_as_of(
                 let scope = Scope::empty();
                 let desc = RelationDesc::empty();
                 let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
-                transform_ast::transform_expr(scx, expr)?;
+                transform_ast::transform(scx, expr)?;
                 let ecx = &ExprContext {
                     qcx: &qcx,
                     name: "AS OF",
@@ -885,7 +877,7 @@ pub fn plan_secret_as(
     let desc = RelationDesc::empty();
     let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
 
-    transform_ast::transform_expr(scx, &mut expr)?;
+    transform_ast::transform(scx, &mut expr)?;
 
     let ecx = &ExprContext {
         qcx: &qcx,
@@ -943,7 +935,7 @@ pub fn plan_params<'a>(
     let mut types = Vec::new();
     let temp_storage = &RowArena::new();
     for (mut expr, ty) in params.into_iter().zip(&desc.param_types) {
-        transform_ast::transform_expr(scx, &mut expr)?;
+        transform_ast::transform(scx, &mut expr)?;
 
         let ecx = &ExprContext {
             qcx: &qcx,
@@ -990,7 +982,7 @@ pub fn plan_index_exprs<'a>(
     };
     let mut out = vec![];
     for mut expr in exprs {
-        transform_ast::transform_expr(scx, &mut expr)?;
+        transform_ast::transform(scx, &mut expr)?;
         let expr = plan_expr_or_col_index(ecx, &expr)?;
         let mut expr = expr.lower_uncorrelated()?;
         expr.reduce(&on_desc.typ().column_types);

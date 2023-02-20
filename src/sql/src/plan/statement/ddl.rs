@@ -221,7 +221,7 @@ pub fn plan_create_table(
                     // Ensure expression can be planned and yields the correct
                     // type.
                     let mut expr = expr.clone();
-                    transform_ast::transform_expr(scx, &mut expr)?;
+                    transform_ast::transform(scx, &mut expr)?;
                     let _ = query::plan_default_expr(scx, &expr, &ty)?;
                     default = expr.clone();
                 }
