@@ -51,19 +51,25 @@ Regarding point (2), we note that: (a) The error detection strategy for invalid 
 
 #### Translation Specifics
 
-Putting the two aspects above together, our approach comprises first redefining the meaning of MIR `Reduce`, denoted $\texttt{Reduce}^{\text{MIR}}$, to include an additional aggregate validity column. That is, the output schema of $\texttt{Reduce}^{\text{MIR}}$ is now defined as:
+Putting the two aspects above together, our approach comprises first redefining the meaning of MIR `Reduce`, denoted `Reduce^{MIR}`, to include an additional aggregate validity column. That is, the output schema of `Reduce^{MIR}` is now defined as:
 
-$\text{OutputSchema}(\texttt{Reduce}^{\text{MIR}} [\texttt{key}, [\texttt{aggrs}], \texttt{monotonic}, \texttt{expectedGroupSize}] (\texttt{input})) =$
-&nbsp;&nbsp;&nbsp; $(\text{typeof}(\texttt{key}_1), \ldots, \text{typeof}(\texttt{key}_k), \text{typeof}(\texttt{aggr}_1), \ldots, \text{typeof}(\texttt{aggr}_l), valid)$,
+```
+Output_Schema(Reduce^{MIR} {key, aggrs, monotonic, expected_group_size} (input^{MIR})) =
+    (typeof(key_1), ..., typeof(key_k), typeof(aggr_1), ..., typeof(aggr_l), valid)
+```
 
-where $\texttt{key}_1, \ldots, \texttt{key}_k \in \texttt{key}$,  $\texttt{aggr}_1, \ldots, \texttt{aggr}_l \in [\texttt{aggrs}]$, and $\texttt{valid}$ being either type `Datum::True` or type `Datum::False`.
+where `key_1, ..., key_k` $\in$ `key`,  `aggr_1, ..., aggr_l` $\in$ `aggrs`, and `valid` being either type `Datum::True` or type `Datum::False`.
 
-Then, we translate HIR `Reduce`, denoted $\texttt{Reduce}^{\text{HIR}}$, as a map-project chain applied over $\texttt{Reduce}^{\text{MIR}}$, namely:
+Then, we translate HIR `Reduce`, denoted `Reduce^{HIR}`, as a map-project chain applied over `Reduce^{MIR}`, namely:
 
-$[[\texttt{Reduce}^{\text{HIR}}[\texttt{key}, [\texttt{aggrs}], \texttt{expectedGroupSize}] (\texttt{input})]]^\text{MIR} =$
-&nbsp;&nbsp;&nbsp; $\texttt{Project}^{\text{MIR}} [0, \ldots, k + l - 1] \big ($ 
-&nbsp;&nbsp;&nbsp; $\texttt{Map}^{\text{MIR}} [\texttt{error\_if\_false}(k+l)] ($
-&nbsp;&nbsp;&nbsp; $\texttt{Reduce}^{\text{MIR}} [[\![\texttt{key}]\!]^\text{MIR}, [\texttt{aggrs}], \texttt{false}, \texttt{expected\_group\_size}] ([\![\texttt{input}]\!]^\text{MIR}) ) \big)$
+```
+[[Reduce^{HIR} {key, aggrs, expected_group_size} (input^{HIR})]]^{MIR} =
+    Project^{MIR} {0, ..., k + l - 1} (
+        Map^{MIR} {error_if_false(k+l)} (
+            Reduce^{MIR} {[[key]]^{MIR}, aggrs, false, expected_group_size} ([[input^{HIR}]]^{MIR})
+        )
+    )
+```
 
 Since the translation is performed during HIR-to-MIR lowering, the query optimizer will have the opportunity to apply all relevant MIR transformations to the expression produced. In particular, the map and projection can be hoisted so that the arrangement produced by the reduction can be reused by other operators in the query, e.g., a join. With such an optimization, we would delay producing errors in favor of minimizing memory footprint. Importantly, since this optimization already exists, it would be applied without requiring any specific knowledge that the error expression was introduced for checking invalid accumulations in reductions, fitting naturally into the query optimization pipeline.
 
