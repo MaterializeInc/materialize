@@ -117,16 +117,13 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-pub(crate) fn info_log_non_zero_metrics(metric_families: &[MetricFamily]) {
+fn info_log_non_zero_metrics(metric_families: &[MetricFamily]) {
     for mf in metric_families {
         for m in mf.get_metric() {
             let val = match mf.get_field_type() {
                 MetricType::COUNTER => m.get_counter().get_value(),
                 MetricType::GAUGE => m.get_gauge().get_value(),
-                x => {
-                    warn!("unhandled {} metric type: {:?}", mf.get_name(), x);
-                    continue;
-                }
+                x => unimplemented!("unhandled metric type: {:?}", x),
             };
             if val == 0.0 {
                 continue;

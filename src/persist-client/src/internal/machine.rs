@@ -1054,7 +1054,7 @@ pub mod datadriven {
             .check_ts_codec()
             .expect("shard codecs should not change");
         let mut s = String::new();
-        while let Some(x) = states.next(|_| {}) {
+        while let Some(x) = states.next() {
             if x.seqno < from {
                 continue;
             }

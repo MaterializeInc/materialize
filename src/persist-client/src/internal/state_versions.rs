@@ -9,7 +9,6 @@
 
 //! A durable, truncatable log of versions of [State].
 
-use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::ops::ControlFlow::{Break, Continue};
 use std::sync::Arc;
@@ -18,7 +17,6 @@ use std::time::SystemTime;
 use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use mz_ore::cast::CastFrom;
 use mz_persist::location::{
     Atomicity, Blob, Consensus, Indeterminate, SeqNo, VersionedData, SCAN_ALL,
 };
@@ -32,9 +30,7 @@ use crate::internal::encoding::UntypedState;
 use crate::internal::machine::{retry_determinate, retry_external};
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey, RollupId};
-use crate::internal::state::{
-    HollowBatch, HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState,
-};
+use crate::internal::state::{HollowRollup, NoOpStateTransition, State, TypedState};
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::{Metrics, PersistConfig, ShardId};
 
@@ -273,28 +269,13 @@ impl StateVersions {
 
                 shard_metrics.set_since(new_state.since());
                 shard_metrics.set_upper(new_state.upper());
-                shard_metrics
-                    .batch_part_count
-                    .set(u64::cast_from(new_state.batch_part_count()));
-                shard_metrics
-                    .update_count
-                    .set(u64::cast_from(new_state.num_updates()));
-                let size_metrics = new_state.size_metrics();
-                shard_metrics
-                    .largest_batch_size
-                    .set(u64::cast_from(size_metrics.largest_batch_bytes));
-                shard_metrics
-                    .usage_current_state_batches_bytes
-                    .set(u64::cast_from(size_metrics.state_batches_bytes));
-                shard_metrics
-                    .usage_current_state_rollups_bytes
-                    .set(u64::cast_from(size_metrics.state_rollups_bytes));
-                shard_metrics
-                    .seqnos_held
-                    .set(u64::cast_from(new_state.seqnos_held()));
-                shard_metrics
-                    .encoded_diff_size
-                    .inc_by(u64::cast_from(payload_len));
+                shard_metrics.set_batch_part_count(new_state.batch_part_count());
+                shard_metrics.set_update_count(new_state.num_updates());
+                let (largest_batch_size, encoded_batch_size) = new_state.batch_size_metrics();
+                shard_metrics.set_largest_batch_size(largest_batch_size);
+                shard_metrics.set_encoded_batch_size(encoded_batch_size);
+                shard_metrics.set_seqnos_held(new_state.seqnos_held());
+                shard_metrics.inc_encoded_diff_size(payload_len);
                 Ok(Ok(()))
             }
             Err(live_diffs) => {
@@ -649,9 +630,7 @@ impl StateVersions {
             state.encode(&mut buf);
             Bytes::from(buf)
         });
-        shard_metrics
-            .latest_rollup_size
-            .set(u64::cast_from(buf.len()));
+        shard_metrics.set_encoded_rollup_size(buf.len());
         EncodedRollup {
             shard_id: state.shard_id,
             seqno: state.seqno,
@@ -829,8 +808,6 @@ pub struct StateVersionsIter<T> {
     key_codec: String,
     val_codec: String,
     diff_codec: String,
-    #[cfg(debug_assertions)]
-    validator: ReferencedBlobValidator<T>,
 }
 
 impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
@@ -854,57 +831,17 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
             key_codec,
             val_codec,
             diff_codec,
-            #[cfg(debug_assertions)]
-            validator: ReferencedBlobValidator::default(),
         }
     }
 
-    /// Advances first to some starting state (in practice, usually the first
-    /// live state), and then through each successive state, for as many diffs
-    /// as this iterator was initialized with.
-    ///
-    /// The `inspect_diff_fn` callback can be used to inspect diffs directly as
-    /// they are applied. The first call to `next` returns a
-    /// [InspectDiff::FromInitial] representing a diff from the initial state.
-    pub fn next<F: for<'a> FnMut(InspectDiff<'a, T>)>(
-        &mut self,
-        mut inspect_diff_fn: F,
-    ) -> Option<&State<T>> {
+    pub fn next(&mut self) -> Option<&State<T>> {
         let diff = match self.diffs.pop() {
             Some(x) => x,
             None => return None,
         };
-        let diff = self
-            .metrics
-            .codecs
-            .state_diff
-            .decode(|| StateDiff::decode(&self.cfg.build_version, &diff.data));
-
-        // A bit hacky, but the first diff in StateVersionsIter is always a
-        // no-op.
-        if diff.seqno_to == self.state.seqno {
-            let inspect = InspectDiff::FromInitial(&self.state);
-            #[cfg(debug_assertions)]
-            {
-                inspect.referenced_blob_fn(|x| self.validator.add_inc_blob(x));
-            }
-            inspect_diff_fn(inspect);
-        } else {
-            let inspect = InspectDiff::Diff(&diff);
-            #[cfg(debug_assertions)]
-            {
-                inspect.referenced_blob_fn(|x| self.validator.add_inc_blob(x));
-            }
-            inspect_diff_fn(inspect);
-        }
-
-        let diff_seqno_to = diff.seqno_to;
-        self.state.apply_diffs(&self.metrics, std::iter::once(diff));
-        assert_eq!(self.state.seqno, diff_seqno_to);
-        #[cfg(debug_assertions)]
-        {
-            self.validator.validate_against_state(&self.state);
-        }
+        self.state
+            .apply_encoded_diffs(&self.cfg, &self.metrics, std::iter::once(&diff));
+        assert_eq!(self.state.seqno, diff.seqno);
         Some(&self.state)
     }
 
@@ -969,73 +906,5 @@ impl<K, V, T: Timestamp + Lattice + Codec64, D> TypedStateVersionsIter<K, V, T, 
 
     pub fn state(&self) -> &TypedState<K, V, T, D> {
         &self.state
-    }
-}
-
-/// This represents a diff, either directly or, in the case of the FromInitial
-/// variant, a diff from the initial state. (We could instead compute the diff
-/// from the initial state and replace this with only a `StateDiff<T>`, but don't
-/// for efficiency.)
-#[derive(Debug)]
-pub enum InspectDiff<'a, T> {
-    FromInitial(&'a State<T>),
-    Diff(&'a StateDiff<T>),
-}
-
-impl<T: Timestamp + Lattice + Codec64> InspectDiff<'_, T> {
-    /// A callback invoked for each blob added this state transition.
-    ///
-    /// Blob removals, along with all other diffs, are ignored.
-    pub fn referenced_blob_fn<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, f: F) {
-        match self {
-            InspectDiff::FromInitial(x) => x.map_blobs(f),
-            InspectDiff::Diff(x) => x.map_blob_inserts(f),
-        }
-    }
-}
-
-#[cfg(debug_assertions)]
-struct ReferencedBlobValidator<T> {
-    // A copy of every batch and rollup referenced by some state iterator,
-    // computed by scanning the full copy of state at each seqno.
-    full_batches: BTreeSet<HollowBatch<T>>,
-    full_rollups: BTreeSet<HollowRollup>,
-    // A copy of every batch and rollup referenced by some state iterator,
-    // computed incrementally.
-    inc_batches: BTreeSet<HollowBatch<T>>,
-    inc_rollups: BTreeSet<HollowRollup>,
-}
-
-#[cfg(debug_assertions)]
-impl<T> Default for ReferencedBlobValidator<T> {
-    fn default() -> Self {
-        Self {
-            full_batches: Default::default(),
-            full_rollups: Default::default(),
-            inc_batches: Default::default(),
-            inc_rollups: Default::default(),
-        }
-    }
-}
-
-#[cfg(debug_assertions)]
-impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
-    fn add_inc_blob(&mut self, x: HollowBlobRef<'_, T>) {
-        match x {
-            HollowBlobRef::Batch(x) => assert!(self.inc_batches.insert(x.clone())),
-            HollowBlobRef::Rollup(x) => assert!(self.inc_rollups.insert(x.clone())),
-        }
-    }
-    fn validate_against_state(&mut self, x: &State<T>) {
-        x.map_blobs(|x| match x {
-            HollowBlobRef::Batch(x) => {
-                self.full_batches.insert(x.clone());
-            }
-            HollowBlobRef::Rollup(x) => {
-                self.full_rollups.insert(x.clone());
-            }
-        });
-        assert_eq!(self.inc_batches, self.full_batches);
-        assert_eq!(self.inc_rollups, self.full_rollups);
     }
 }
