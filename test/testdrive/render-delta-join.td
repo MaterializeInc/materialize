@@ -14,15 +14,19 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 > CREATE INDEX i1 ON t1(f1);
 > CREATE TABLE t2(f1 INT, f2 INT);
 > CREATE INDEX i2 ON t2(f1);
+> CREATE TABLE t3(f1 INT, f2 INT);
+> CREATE INDEX i3 ON t3(f1);
 > INSERT INTO t1 VALUES (1, 2);
 > INSERT INTO t2 SELECT s, s FROM generate_series(0, 2000) AS s;
+> INSERT INTO t3 SELECT s, s FROM generate_series(0, 2000) AS s;
 
 > select count(*) as count from t2;
 count
 ----
 2001
 
-> CREATE VIEW delta_join (t1_f1, t1_f2, t2_f1, t2_f2) AS SELECT * FROM t1, t2 WHERE t1.f1 = t2.f1;
+> CREATE VIEW delta_join (t1_f1, t1_f2, t2_f1, t2_f2, t3_f1, t3_f2) AS
+    SELECT * FROM t1, t2, t3 WHERE t1.f1 = t2.f1 AND t1.f1 = t3.f1;
 
 # This causes a delta join to be executed.
 > SELECT COUNT(*) FROM delta_join;
@@ -31,8 +35,7 @@ count
 1
 
 > EXPLAIN WITH(join_impls) VIEW delta_join;
-"delta_join:  Project (#0, #1, #0, #3)    Filter (#0) IS NOT NULL      Join on=(#0 = #2) type=differential        implementation          %1:t2[#0] » %0:t1[#0]KA        ArrangeBy keys=[[#0]]          Get t1        ArrangeBy keys=[[#0]]          Get t2Used Indexes:  - i1  - i2"
-
+"delta_join:  Project (#0, #1, #0, #3, #0, #5)    Filter (#0) IS NOT NULL      Join on=(eq(#0, #2, #4)) type=delta        implementation          %0:t1 » %1:t2[#0]KA » %2:t3[#0]KA          %1:t2 » %0:t1[#0]KA » %2:t3[#0]KA          %2:t3 » %0:t1[#0]KA » %1:t2[#0]KA        ArrangeBy keys=[[#0]]          Get t1        ArrangeBy keys=[[#0]]          Get t2        ArrangeBy keys=[[#0]]          Get t3Used Indexes:  - i1  - i2  - i3"
 > SELECT count(*) AS count FROM delta_join;
 count
 ----
