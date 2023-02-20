@@ -459,9 +459,7 @@ where
         });
 
         let shard_metrics = machine.applier.metrics.shards.shard(&req.shard_id);
-        shard_metrics
-            .gc_seqno_held_parts
-            .set(u64::cast_from(seqno_held_parts.len()));
+        shard_metrics.set_gc_seqno_held_parts(seqno_held_parts.len());
         shard_metrics.gc_live_diffs.set(live_diffs);
         report_step_timing(&machine.applier.metrics.gc.steps.finish_seconds);
     }

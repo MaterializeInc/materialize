@@ -130,7 +130,6 @@ impl PersistConfig {
                 state_versions_recent_live_diffs_limit: AtomicUsize::new(usize::cast_from(
                     30 * Self::NEED_ROLLUP_THRESHOLD,
                 )),
-                usage_state_fetch_concurrency_limit: AtomicUsize::new(8),
             }),
             compaction_enabled: !compaction_disabled,
             compaction_concurrency_limit: 5,
@@ -228,7 +227,6 @@ pub struct DynamicConfig {
     compaction_memory_bound_bytes: AtomicUsize,
     gc_blob_delete_concurrency_limit: AtomicUsize,
     state_versions_recent_live_diffs_limit: AtomicUsize,
-    usage_state_fetch_concurrency_limit: AtomicUsize,
 
     // TODO: Figure out how to make these dynamic.
     compaction_minimum_timeout: Duration,
@@ -332,12 +330,6 @@ impl DynamicConfig {
     /// by GC.
     pub fn state_versions_recent_live_diffs_limit(&self) -> usize {
         self.state_versions_recent_live_diffs_limit
-            .load(Self::LOAD_ORDERING)
-    }
-
-    /// The maximum number of concurrent state fetches during usage computation.
-    pub fn usage_state_fetch_concurrency_limit(&self) -> usize {
-        self.usage_state_fetch_concurrency_limit
             .load(Self::LOAD_ORDERING)
     }
 
