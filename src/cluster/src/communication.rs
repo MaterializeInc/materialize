@@ -144,7 +144,7 @@ async fn create_sockets(
     // [btv] Binding to the address (which is of the form
     // `hostname:port`) unnecessarily involves a DNS query. We should
     // get the port from here, but otherwise just bind to `0.0.0.0`.
-    // Previously we bound to `my_address`, which caused c
+    // Previously we bound to `my_address`, which caused
     // https://github.com/MaterializeInc/cloud/issues/5070 .
 
     // Motivation for `unwrap` (and indexing) vs. `expect`:
