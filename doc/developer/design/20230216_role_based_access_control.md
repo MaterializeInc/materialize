@@ -12,7 +12,6 @@ rich and well tested RBAC design and implementation, which we will base our impl
 ## Non-Goals
 
 - Data governance.
-- Frontegg integration.
 
 ## Description
 
@@ -46,6 +45,7 @@ the subsection headers, tables, and SQL statements.
 - [`DROP OWNED`](https://www.postgresql.org/docs/current/sql-drop-owned.html)
 
 #### Implementation
+
 - [`acl.h`](https://github.com/postgres/postgres/blob/master/src/include/utils/acl.h)
 - [`acl.c`](https://github.com/postgres/postgres/blob/master/src/backend/utils/adt/acl.c)
 - [`aclchk_internal.h`](https://github.com/postgres/postgres/blob/master/src/include/utils/aclchk_internal.h)
@@ -85,7 +85,8 @@ We will add the following SQL statement:
         - `SUPERUSER` can run this without `CREATEROLE`.
     - `WITH` is ignored.
 
-When a new user logs in, we will create a new role for them with only the `LOGIN` and `INHERIT` attributes.
+When a new user logs in, we will create a new role for them with only the `LOGIN` and `INHERIT` attributes. If that user
+is a frontegg admin, then the role will also have the `SUPERUSER` attribute.
 
 #### Implementation Details
 
@@ -168,17 +169,25 @@ NOTE: Since we won't support `SET ROLE` yet, these functions will all behave ide
 
 - `GRANT` privileges.
 - `REVOKE` privileges.
+- `PUBLIC` alias for `<role>` in `GRANT` and `REVOKE`.
 
 #### Out of Scope for Project
 
-- `CURRENT_ROLE`, `CURRENT_USER`, `SESSION_USER`, and `PUBLIC` aliases for `<role>` in `GRANT` and `REVOKE`.
+- `CURRENT_ROLE`, `CURRENT_USER`, and `SESSION_USER` aliases for `<role>` in `GRANT` and `REVOKE`.
 - `GRANTED BY` option for `GRANT` and `REVOKE`.
 - `[ WITH ADMIN OPTION ]` option for `GRANT`.
 - `[ADMIN OPTION FOR ]` option for `REVOKE`.
 - `SET ROLE`
 - `RESET ROLE`
 
-### Phase 3 - Privileges
+### Phase 3 - `PUBLIC` role
+
+See [Grant](https://www.postgresql.org/docs/current/sql-grant.html) for PostgreSQL `PUBLIC` details (grep for PUBLIC).
+
+`PUBLIC` is a special keyword that is accepted anywhere a role name would be accepted. The key word PUBLIC indicates
+that the changes are to be applied to all roles, including those that might be created later.
+
+### Phase 4 - Privileges
 
 See [Privileges](https://www.postgresql.org/docs/current/ddl-priv.html) for PostgreSQL privileges.
 
@@ -309,7 +318,7 @@ We will update `DROP <object>` so that it revokes all privileges on `<object>`.
 
 #### Out of Scope for Project
 
-- `CURRENT_ROLE`, `CURRENT_USER`, `SESSION_USER`, and `PUBLIC` aliases in `GRANT`, `REVOKE`, `ALTER`, `REASSIGN OWNED`
+- `CURRENT_ROLE`, `CURRENT_USER`, `SESSION_USER`, aliases in `GRANT`, `REVOKE`, `ALTER`, `REASSIGN OWNED`
   and `DROP OWNED`.
 - `GRANTED BY` option for `GRANT` and `REVOKE`.
 - `WITH GRANT OPTION` in `GRANT`.
