@@ -53,8 +53,8 @@ use mz_sql::ast::Expr;
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError as SqlCatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogItemType,
-    CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId, IdReference, NameReference,
-    RoleAttributes, SessionCatalog, TypeReference,
+    CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId, IdReference,
+    NameReference, RoleAttributes, SessionCatalog, TypeReference,
 };
 use mz_sql::names::{
     Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
@@ -4202,7 +4202,7 @@ impl Catalog {
                 schema_id: SchemaId,
             },
             DropRole {
-                name: String,
+                id: RoleId,
             },
             DropCluster {
                 id: ClusterId,
@@ -4923,7 +4923,7 @@ impl Catalog {
                             name: name.clone(),
                         }),
                     )?;
-                    catalog_action(state, builtin_table_updates, Action::DropRole { name })?;
+                    catalog_action(state, builtin_table_updates, Action::DropRole { id })?;
                 }
                 Op::DropCluster { id } => {
                     let cluster = state.get_cluster(id);
@@ -5438,10 +5438,10 @@ impl Catalog {
                     db.schemas_by_id.remove(&schema_id);
                 }
 
-                Action::DropRole { name } => {
-                    if let Some(id) = state.roles_by_name.remove(&name) {
-                        state.roles_by_id.remove(&id);
-                        info!("drop role {}", name);
+                Action::DropRole { id } => {
+                    if let Some(role) = state.roles_by_id.remove(&id) {
+                        state.roles_by_name.remove(role.name());
+                        info!("drop role {}", role.name());
                     }
                 }
 
