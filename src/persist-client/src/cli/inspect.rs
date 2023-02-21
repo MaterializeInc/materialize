@@ -31,6 +31,7 @@ use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
 use serde_json::json;
 
+use crate::async_runtime::CpuHeavyRuntime;
 use crate::cli::admin::{make_blob, make_consensus};
 use crate::error::CodecConcreteType;
 use crate::fetch::EncodedPart;
@@ -39,7 +40,8 @@ use crate::internal::paths::{
     BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey,
 };
 use crate::internal::state::{ProtoStateDiff, ProtoStateRollup, State};
-use crate::{Metrics, PersistConfig, ShardId, StateVersions};
+use crate::usage::{HumanBytes, StorageUsageClient};
+use crate::{Metrics, PersistClient, PersistConfig, ShardId, StateVersions};
 
 const READ_ALL_BUILD_INFO: BuildInfo = BuildInfo {
     version: "10000000.0.0+test",
@@ -261,7 +263,7 @@ pub async fn fetch_state_rollups(args: &StateArgs) -> Result<impl serde::Seriali
         .fetch_all_live_states::<u64>(shard_id)
         .await
         .check_ts_codec()?;
-    while let Some(v) = state_iter.next() {
+    while let Some(v) = state_iter.next(|_| {}) {
         for rollup in v.collections.rollups.values() {
             rollup_keys.insert(rollup.key.clone());
         }
@@ -300,7 +302,7 @@ pub async fn fetch_state_diffs(
         .fetch_all_live_states::<u64>(shard_id)
         .await
         .check_ts_codec()?;
-    while let Some(_) = state_iter.next() {
+    while let Some(_) = state_iter.next(|_| {}) {
         live_states.push(state_iter.into_proto());
     }
 
@@ -558,7 +560,7 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
     let mut known_parts = BTreeSet::new();
     let mut known_rollups = BTreeSet::new();
     let mut known_writers = BTreeSet::new();
-    while let Some(v) = state_iter.next() {
+    while let Some(v) = state_iter.next(|_| {}) {
         for writer_id in v.collections.writers.keys() {
             known_writers.insert(writer_id.clone());
         }
@@ -589,180 +591,41 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
 
 /// Returns information about blob usage for a shard
 pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
-    let shard_id = args.shard_id();
-    let state_versions = args.open().await?;
+    let shard_id = if args.shard_id.is_empty() {
+        None
+    } else {
+        Some(args.shard_id())
+    };
+    let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
+    let metrics_registry = MetricsRegistry::new();
+    let metrics = Arc::new(Metrics::new(&cfg, &metrics_registry));
+    let consensus =
+        make_consensus(&cfg, &args.consensus_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
+    let blob = make_blob(&cfg, &args.blob_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
+    let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
+    let usage = StorageUsageClient::open(PersistClient::new(
+        cfg,
+        blob,
+        consensus,
+        metrics,
+        cpu_heavy_runtime,
+    )?);
 
-    let mut s3_contents_before = BTreeMap::new();
-    let () = state_versions
-        .blob
-        .list_keys_and_metadata(&BlobKeyPrefix::Shard(&shard_id).to_string(), &mut |b| {
-            s3_contents_before.insert(b.key.to_owned(), usize::cast_from(b.size_in_bytes));
-        })
-        .await?;
-
-    let mut state_iter = state_versions
-        .fetch_all_live_states::<u64>(shard_id)
-        .await
-        .check_ts_codec()?;
-
-    let mut referenced_parts = BTreeMap::new();
-    let mut referenced_rollups = BTreeSet::new();
-    while let Some(state) = state_iter.next() {
-        state.collections.trace.map_batches(|b| {
-            for part in b.parts.iter() {
-                referenced_parts.insert(
-                    part.key.complete(&shard_id).to_string(),
-                    part.encoded_size_bytes,
-                );
-            }
-        });
-        for rollup in state.collections.rollups.values() {
-            referenced_rollups.insert(rollup.key.complete(&shard_id).to_string());
+    if let Some(shard_id) = shard_id {
+        let usage = usage.shard_usage(shard_id).await;
+        println!("{}\n{}", shard_id, usage);
+    } else {
+        let usage = usage.shards_usage().await;
+        let mut by_shard = usage.by_shard.iter().collect::<Vec<_>>();
+        by_shard.sort_by_key(|(_, x)| x.total_bytes());
+        by_shard.reverse();
+        for (shard_id, usage) in by_shard {
+            println!("{}\n{}\n", shard_id, usage);
         }
+        println!("unattributable: {}", HumanBytes(usage.unattributable_bytes));
     }
-
-    let mut current_parts = BTreeMap::new();
-    let mut current_rollups = BTreeSet::new();
-    state_iter.state().collections.trace.map_batches(|b| {
-        for part in b.parts.iter() {
-            current_parts.insert(
-                part.key.complete(&shard_id).to_string(),
-                part.encoded_size_bytes,
-            );
-        }
-    });
-    for rollup in state_iter.state().collections.rollups.values() {
-        current_rollups.insert(rollup.key.complete(&shard_id).to_string());
-    }
-
-    // There's a bit of a race condition between fetching s3 and state, but
-    // probably fine for most cases?
-    let (mut referenced_by_state_count, mut referenced_by_state_bytes) = (0, 0);
-    let (mut current_writer_pending_count, mut current_writer_pending_bytes) = (0, 0);
-    let (mut leaked_count, mut leaked_bytes) = (0, 0);
-    for (key, bytes) in s3_contents_before.iter() {
-        let referenced_by_state =
-            referenced_parts.contains_key(key) || referenced_rollups.contains(key);
-        if referenced_by_state {
-            referenced_by_state_count += 1;
-            referenced_by_state_bytes += bytes;
-        } else {
-            let current_writer_pending =
-                match BlobKey::parse_ids(key).expect("key should be in known format") {
-                    (_, PartialBlobKey::Batch(writer_id, _)) => state_iter
-                        .state()
-                        .collections
-                        .writers
-                        .contains_key(&writer_id),
-                    (_, PartialBlobKey::Rollup(_, _)) => false,
-                };
-            if current_writer_pending {
-                current_writer_pending_count += 1;
-                current_writer_pending_bytes += bytes;
-            } else {
-                leaked_count += 1;
-                leaked_bytes += bytes;
-            }
-        }
-    }
-    let (mut gc_able_parts_count, mut gc_able_parts_bytes) = (0, 0);
-    let (current_parts_count, current_parts_bytes) =
-        (current_parts.len(), current_parts.values().sum::<usize>());
-    for (key, bytes) in referenced_parts.iter() {
-        if !current_parts.contains_key(key) {
-            gc_able_parts_count += 1;
-            gc_able_parts_bytes += bytes;
-        }
-    }
-    let (mut gc_able_rollups_count, mut gc_able_rollups_bytes) = (0, 0);
-    let (mut current_rollups_count, mut current_rollups_bytes) = (0, 0);
-    for key in referenced_rollups.iter() {
-        let Some(bytes) = s3_contents_before.get(key) else {
-            println!("unknown size due to race condition: {}", key);
-            continue;
-        };
-        if current_rollups.contains(key) {
-            current_rollups_count += 1;
-            current_rollups_bytes += *bytes;
-        } else {
-            gc_able_rollups_count += 1;
-            gc_able_rollups_bytes += *bytes;
-        }
-    }
-
-    println!(
-        "total s3 contents:        {} ({} blobs)",
-        human_bytes(s3_contents_before.values().sum::<usize>()),
-        s3_contents_before.len(),
-    );
-    println!(
-        "  leaked:                 {} ({} blobs)",
-        human_bytes(leaked_bytes),
-        leaked_count,
-    );
-    println!(
-        "  current writer pending: {} ({} blobs)",
-        human_bytes(current_writer_pending_bytes),
-        current_writer_pending_count,
-    );
-    println!(
-        "  referenced:             {} ({} blobs)",
-        human_bytes(referenced_by_state_bytes),
-        referenced_by_state_count,
-    );
-    println!(
-        "    gc-able:              {} ({} blobs)",
-        human_bytes(gc_able_parts_bytes + gc_able_rollups_bytes),
-        gc_able_parts_count + gc_able_rollups_count,
-    );
-    println!(
-        "      gc-able parts:      {} ({} blobs)",
-        human_bytes(gc_able_parts_bytes),
-        gc_able_parts_count,
-    );
-    println!(
-        "      gc-able rollups:    {} ({} blobs)",
-        human_bytes(gc_able_rollups_bytes),
-        gc_able_rollups_count,
-    );
-    println!(
-        "    current:              {} ({} blobs)",
-        human_bytes(current_parts_bytes + current_rollups_bytes),
-        current_parts_count + current_rollups_count,
-    );
-    println!(
-        "      current parts:      {} ({} blobs)",
-        human_bytes(current_parts_bytes),
-        current_parts_count,
-    );
-    println!(
-        "      current rollups:    {} ({} blobs)",
-        human_bytes(current_rollups_bytes),
-        current_rollups_count,
-    );
 
     Ok(())
-}
-
-fn human_bytes(bytes: usize) -> String {
-    if bytes < 10_240 {
-        return format!("{}B", bytes);
-    }
-    #[allow(clippy::as_conversions)]
-    let mut bytes = bytes as f64 / 1_024f64;
-    if bytes < 10_240f64 {
-        return format!("{:.1}KiB", bytes);
-    }
-    bytes = bytes / 1_024f64;
-    if bytes < 10_240f64 {
-        return format!("{:.1}MiB", bytes);
-    }
-    bytes = bytes / 1_024f64;
-    if bytes < 10_240f64 {
-        return format!("{:.1}GiB", bytes);
-    }
-    bytes = bytes / 1_024f64;
-    format!("{:.1}TiB", bytes)
 }
 
 // All `inspect` command are read-only.

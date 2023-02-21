@@ -340,11 +340,13 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
 
     // Initialize storage usage client.
     let storage_usage_client = StorageUsageClient::open(
-        config.controller.persist_location.blob_uri.clone(),
-        &config.controller.persist_clients,
-    )
-    .await
-    .context("opening storage usage client")?;
+        config
+            .controller
+            .persist_clients
+            .open(config.controller.persist_location.clone())
+            .await
+            .context("opening storage usage client")?,
+    );
 
     // TODO(teskje): Remove this migration in v0.42, since v0.41+ will only create orchestrator
     // resources in the "cluster" namespace.
