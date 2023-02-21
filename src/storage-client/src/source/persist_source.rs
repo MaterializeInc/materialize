@@ -21,7 +21,7 @@ use timely::communication::Push;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::Bundle;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::Capability;
+use timely::dataflow::operators::{Capability, Operator};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::scheduling::Activator;
@@ -29,7 +29,7 @@ use timely::scheduling::Activator;
 use mz_expr::MfpPlan;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::fetch::FetchedPart;
-use mz_repr::{DatumVec, Diff, GlobalId, Row, Timestamp};
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
 
 use crate::controller::CollectionMetadata;
 use crate::types::errors::DataflowError;
@@ -144,20 +144,25 @@ where
         Arc::new(metadata.relation_desc),
         Arc::new(UnitSchema),
     );
-    let rows = decode_and_mfp(&fetched, &name, until, map_filter_project, yield_fn).as_collection();
+    let rows = decode(&fetched, &name, until.clone(), yield_fn).as_collection();
 
     let rows = match consolidation {
         Consolidation::Maybe => rows,
         Consolidation::Consolidated => rows.consolidate(),
     };
+
+    let rows = match map_filter_project.map(|mfp| mfp.take()) {
+        None => rows,
+        Some(mfp_plan) => mfp(rows, &name, until, mfp_plan),
+    };
+
     (rows, token)
 }
 
-pub fn decode_and_mfp<G, YFn>(
+pub fn decode<G, YFn>(
     fetched: &Stream<G, FetchedPart<SourceData, (), Timestamp, Diff>>,
     name: &str,
     until: Antichain<Timestamp>,
-    mut map_filter_project: Option<&mut MfpPlan>,
     yield_fn: YFn,
 ) -> Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>
 where
@@ -165,21 +170,12 @@ where
     YFn: Fn(Instant, usize) -> bool + 'static,
 {
     let scope = fetched.scope();
-    let mut builder = OperatorBuilder::new(
-        format!("persist_source::decode_and_mfp({})", name),
-        scope.clone(),
-    );
+    let mut builder =
+        OperatorBuilder::new(format!("persist_source::decode({})", name), scope.clone());
     let operator_info = builder.operator_info();
 
     let mut fetched_input = builder.new_input(fetched, Pipeline);
     let (mut updates_output, updates_stream) = builder.new_output();
-
-    // Re-used state for processing and building rows.
-    let mut datum_vec = mz_repr::DatumVec::new();
-    let mut row_builder = Row::default();
-
-    // Extract the MFP if it exists; leave behind an identity MFP in that case.
-    let map_filter_project = map_filter_project.as_mut().map(|mfp| mfp.take());
 
     builder.build(move |_caps| {
         // Acquire an activator to reschedule the operator when it has unfinished work.
@@ -211,9 +207,6 @@ where
                     start_time,
                     &yield_fn,
                     &until,
-                    map_filter_project.as_ref(),
-                    &mut datum_vec,
-                    &mut row_builder,
                     &mut handle,
                 );
                 if done {
@@ -246,9 +239,6 @@ impl PendingWork {
         start_time: Instant,
         yield_fn: YFn,
         until: &Antichain<Timestamp>,
-        map_filter_project: Option<&MfpPlan>,
-        datum_vec: &mut DatumVec,
-        row_builder: &mut Row,
         output: &mut ConsolidateBuffer<Timestamp, Result<Row, DataflowError>, Diff, P>,
     ) -> bool
     where
@@ -260,42 +250,8 @@ impl PendingWork {
                 continue;
             }
             match (key, val) {
-                (Ok(SourceData(Ok(row))), Ok(())) => {
-                    if let Some(mfp) = map_filter_project {
-                        let arena = mz_repr::RowArena::new();
-                        let mut datums_local = datum_vec.borrow_with(&row);
-                        for result in mfp.evaluate(
-                            &mut datums_local,
-                            &arena,
-                            time,
-                            diff,
-                            |time| !until.less_equal(time),
-                            row_builder,
-                        ) {
-                            match result {
-                                Ok((row, time, diff)) => {
-                                    // Additional `until` filtering due to temporal filters.
-                                    if !until.less_equal(&time) {
-                                        output.give_at(&self.capability, (Ok(row), time, diff));
-                                        *work += 1;
-                                    }
-                                }
-                                Err((err, time, diff)) => {
-                                    // Additional `until` filtering due to temporal filters.
-                                    if !until.less_equal(&time) {
-                                        output.give_at(&self.capability, (Err(err), time, diff));
-                                        *work += 1;
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        output.give_at(&self.capability, (Ok(row), time, diff));
-                        *work += 1;
-                    }
-                }
-                (Ok(SourceData(Err(err))), Ok(())) => {
-                    output.give_at(&self.capability, (Err(err), time, diff));
+                (Ok(SourceData(data)), Ok(())) => {
+                    output.give_at(&self.capability, (data, time, diff));
                     *work += 1;
                 }
                 // TODO(petrosagg): error handling
@@ -309,4 +265,55 @@ impl PendingWork {
         }
         true
     }
+}
+
+pub fn mfp<G>(
+    collection: Collection<G, Result<Row, DataflowError>, Diff>,
+    name: &str,
+    until: Antichain<Timestamp>,
+    mfp: MfpPlan,
+) -> Collection<G, Result<Row, DataflowError>, Diff>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    // Re-used state for processing and building rows.
+    let mut datum_vec = mz_repr::DatumVec::new();
+    let mut row_builder = Row::default();
+
+    collection
+        .inner
+        .unary(Pipeline, &format!("persist_source::mfp({name})"), |_, _| {
+            let mut vector = Vec::new();
+            move |input, output| {
+                input.for_each(|time, data| {
+                    data.swap(&mut vector);
+                    let mut session = output.session(&time);
+                    for (row, ts, diff) in vector.drain(..) {
+                        match row {
+                            Ok(row) => {
+                                let arena = mz_repr::RowArena::new();
+                                let mut datums_local = datum_vec.borrow_with(&row);
+                                for result in mfp.evaluate(
+                                    &mut datums_local,
+                                    &arena,
+                                    ts,
+                                    diff,
+                                    |time| !until.less_equal(time),
+                                    &mut row_builder,
+                                ) {
+                                    session.give(match result {
+                                        Ok((r, t, d)) => (Ok(r), t, d),
+                                        Err((e, t, d)) => (Err(e), t, d),
+                                    });
+                                }
+                            }
+                            Err(e) => {
+                                session.give((Err(e), ts, diff));
+                            }
+                        }
+                    }
+                });
+            }
+        })
+        .as_collection()
 }
