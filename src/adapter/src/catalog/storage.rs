@@ -252,6 +252,7 @@ async fn migrate(
                     name: "information_schema".into(),
                 },
             )?;
+            // TODO(jkosh44) This role should be removed, but we need to think of a good local dev workaround.
             txn.roles.insert(
                 RoleKey {
                     id: RoleId::User(MATERIALIZE_ROLE_ID),
@@ -1419,7 +1420,12 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn remove_role(&mut self, name: &str) -> Result<(), Error> {
-        let n = self.roles.delete(|_k, v| v.role.name == name).len();
+        let roles = self.roles.delete(|_k, v| v.role.name == name);
+        assert!(
+            roles.iter().all(|(k, _)| k.id.is_user()),
+            "cannot delete non-user roles"
+        );
+        let n = roles.len();
         assert!(n <= 1);
         if n == 1 {
             Ok(())
@@ -1571,32 +1577,6 @@ impl<'a> Transaction<'a> {
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownItem(id.to_string()).into())
-        }
-    }
-
-    /// Updates all roles with ids matching the keys of `roles` in the transaction, to the
-    /// corresponding value in `roles`.
-    ///
-    /// Returns an error if any id in `roles` is not found.
-    ///
-    /// NOTE: On error, there still may be some roles updated in the transaction. It is
-    /// up to the called to either abort the transaction or commit.
-    pub fn update_roles(&mut self, roles: BTreeMap<RoleId, SerializedRole>) -> Result<(), Error> {
-        let n = self.roles.update(|k, _v| {
-            if let Some(role) = roles.get(&k.id) {
-                Some(RoleValue { role: role.clone() })
-            } else {
-                None
-            }
-        })?;
-        let n = usize::try_from(n).expect("Must be positive and fit in usize");
-        if n == roles.len() {
-            Ok(())
-        } else {
-            let update_ids: BTreeSet<_> = roles.into_keys().collect();
-            let role_ids: BTreeSet<_> = self.roles.items().keys().map(|k| k.id).collect();
-            let mut unknown = update_ids.difference(&role_ids);
-            Err(SqlCatalogError::UnknownItem(unknown.join(", ")).into())
         }
     }
 

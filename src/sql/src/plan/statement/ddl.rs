@@ -2508,12 +2508,13 @@ fn plan_role_attributes(
 
     if planned_attributes.super_user == Some(false)
         || planned_attributes.can_login == Some(false)
+        || planned_attributes.inherit.is_some()
         || planned_attributes.create_cluster.is_some()
         || planned_attributes.create_db.is_some()
         || planned_attributes.create_persist.is_some()
         || planned_attributes.create_role.is_some()
     {
-        scx.require_unsafe_mode("non-default role attributes")?;
+        scx.require_unsafe_mode("roles that don't have exactly LOGIN and SUPERUSER attributes")?;
     }
 
     Ok(planned_attributes)
