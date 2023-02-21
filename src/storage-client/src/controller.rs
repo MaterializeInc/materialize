@@ -460,6 +460,10 @@ pub trait StorageController: Debug + Send {
 #[derive(Clone, Derivative)]
 #[derivative(Debug)]
 pub enum ReadPolicy<T> {
+    /// No-one has yet requested a `ReadPolicy` from us, which means that we can
+    /// still change the implied_capability/the collection since if we need
+    /// to.
+    NoPolicy { initial_since: Antichain<T> },
     /// Maintain the collection as valid from this frontier onward.
     ValidFrom(Antichain<T>),
     /// Maintain the collection as valid from a function of the write frontier.
@@ -529,6 +533,7 @@ impl ReadPolicy<mz_repr::Timestamp> {
 impl<T: Timestamp> ReadPolicy<T> {
     pub fn frontier(&self, write_frontier: AntichainRef<T>) -> Antichain<T> {
         match self {
+            ReadPolicy::NoPolicy { initial_since } => initial_since.clone(),
             ReadPolicy::ValidFrom(frontier) => frontier.clone(),
             ReadPolicy::LagWriteFrontier(logic) => logic(write_frontier),
             ReadPolicy::Multiple(policies) => {
@@ -1103,6 +1108,8 @@ where
         Ok(())
     }
 
+    // TODO(aljoscha): It would be swell if we could refactor this Leviathan of
+    // a method/move individual parts to their own methods.
     #[tracing::instrument(level = "debug", skip_all)]
     async fn create_collections(
         &mut self,
@@ -1255,18 +1262,13 @@ where
         // This work mutates the controller state, so must be done serially. Because there
         // is no io-bound work, its very fast.
         for (id, description, write, since_handle, metadata) in to_register {
-            let storage_dependencies = description.get_storage_dependencies();
-
             let data_shard_since = since_handle.since().clone();
-            let dependency_since = self.determine_collection_since_joins(&storage_dependencies)?;
-            let combined_since = data_shard_since.join(&dependency_since);
-            self.install_read_capabilities(&storage_dependencies, combined_since.clone())?;
 
             let collection_state = CollectionState::new(
                 description.clone(),
-                combined_since,
+                data_shard_since,
                 write.upper().clone(),
-                storage_dependencies,
+                vec![],
                 metadata.clone(),
             );
 
@@ -1276,6 +1278,108 @@ where
             self.state.collections.insert(id, collection_state);
 
             to_create.push((id, description));
+        }
+
+        // Patch up the since of all subsources (which includes the "main"
+        // collection) and install read holds from the subsources on the since
+        // of the remap collection. We need to do this here because a) the since
+        // of the remap collection might be in advance of the since of the data
+        // collections because we lazily forward commands to downgrade the since
+        // to persist, and b) at the time the subsources are created we know
+        // close to nothing about them, not even that they are subsources.
+        //
+        // N.B. Patching up the since based on the since of the remap collection
+        // is correct because the since of the remap collection can advance iff
+        // the storage controller allowed it to, which it only does when it
+        // would also allow the since of the data collections to advance. It's
+        // just that we need to reconcile outselves to the outside world
+        // (persist) here.
+        //
+        // TODO(aljoscha): We should find a way to put this information and the
+        // read holds in place when we create the subsource collections. OR, we
+        // could create the subsource collections only as part of creating the
+        // main source/ingestion.
+        for (_id, description) in to_create.iter() {
+            match &description.data_source {
+                DataSource::Ingestion(ingestion) => {
+                    let storage_dependencies = description.get_storage_dependencies();
+                    let dependency_since =
+                        self.determine_collection_since_joins(&storage_dependencies)?;
+
+                    // Install read capability for all non-remap subsources on
+                    // remap collection.
+                    //
+                    // N.B. The "main" collection of the source is included in
+                    // `source_exports`.
+                    for id in ingestion.source_exports.keys() {
+                        let collection = self.collection(*id).expect("known to exist");
+
+                        // At the time of collection creation, we did not yet
+                        // have firm guarantees that the since of our
+                        // dependencies was not advanced beyond those of its
+                        // dependents, so we need to patch up the
+                        // implied_capability/since of the collction.
+                        //
+                        // TODO(aljoscha): This comes largely from the fact that
+                        // subsources are created with a `DataSource::Other`, so
+                        // we have no idea (at their creation time) that they
+                        // are a subsource, or that they are a subsource of a
+                        // source where they need a read hold on that
+                        // ingestion's remap collection.
+                        if timely::order::PartialOrder::less_than(
+                            &collection.implied_capability,
+                            &dependency_since,
+                        ) {
+                            assert!(
+                                timely::order::PartialOrder::less_than(
+                                    &dependency_since,
+                                    &collection.write_frontier
+                                ),
+                                "write frontier ({:?}) must be in advance dependency collection's since ({:?})",
+                                collection.write_frontier,
+                                dependency_since,
+                            );
+                            mz_ore::soft_assert!(
+                                matches!(collection.read_policy, ReadPolicy::NoPolicy { .. }),
+                                "subsources should not have external read holds installed until \
+                                their ingestion is created, but {:?} has read policy {:?}",
+                                id,
+                                collection.read_policy
+                            );
+
+                            // This patches up the implied_capability!
+                            self.set_read_policy(vec![(
+                                *id,
+                                ReadPolicy::NoPolicy {
+                                    initial_since: dependency_since.clone(),
+                                },
+                            )]);
+
+                            // We have to re-borrow.
+                            let collection = self.collection(*id).expect("known to exist");
+                            assert!(
+                                collection.implied_capability == dependency_since,
+                                "monkey patching the implied_capability to {:?} did not work, is still {:?}",
+                                dependency_since,
+                                collection.implied_capability,
+                            );
+                        }
+
+                        // Fill in the storage dependencies.
+                        let collection = self.collection_mut(*id).expect("known to exist");
+                        collection
+                            .storage_dependencies
+                            .extend(storage_dependencies.iter().cloned());
+
+                        let read_hold = collection.implied_capability.clone();
+                        self.install_read_capabilities(&storage_dependencies, read_hold)?;
+                    }
+                }
+                DataSource::Introspection(_) | DataSource::Progress | DataSource::Other => {
+                    // No since to patch up and no read holds to install on
+                    // dependencies!
+                }
+            }
         }
 
         // Reborrow `&mut self` immutably, same reasoning as above.
@@ -1288,55 +1392,6 @@ where
         for (id, description) in to_create {
             match description.data_source {
                 DataSource::Ingestion(ingestion) => {
-                    let remap_id = ingestion.remap_collection_id;
-                    let remap_collection_since = self
-                        .collection(remap_id)
-                        .expect("remap collection must exist")
-                        .implied_capability
-                        .clone();
-
-                    // Install read capability on all non-remap subsources on remap collection.
-                    for id in ingestion.subsource_ids().filter(|id| *id != remap_id) {
-                        let collection = self.collection(id).expect("known to exist");
-
-                        // We do not yet have firm guarantees that the since of
-                        // the remap collection was not advanced beyond those of
-                        // its dependents, so we can cheat the implied
-                        // capability here.
-                        if timely::order::PartialOrder::less_than(
-                            &collection.implied_capability,
-                            &remap_collection_since,
-                        ) {
-                            assert!(
-                                timely::order::PartialOrder::less_than(
-                                    &remap_collection_since,
-                                    &collection.write_frontier
-                                ),
-                                "write frontier ({:?}) must be in advance remap collection's since ({:?})",
-                                collection.write_frontier,
-                                remap_collection_since,
-                            );
-                            mz_ore::soft_assert!(
-                                matches!(collection.read_policy, ReadPolicy::ValidFrom(_)),
-                                "subsources should not have compaction enabled until ingestion is created, but {:?} \
-                                has read policy {:?}",
-                                id,
-                                collection.read_policy
-                            );
-
-                            self.set_read_policy(vec![(
-                                id,
-                                ReadPolicy::ValidFrom(remap_collection_since.clone()),
-                            )]);
-                        }
-
-                        let collection = self.collection_mut(id).expect("known to exist");
-                        collection.storage_dependencies.push(remap_id);
-                        let capability = collection.implied_capability.clone();
-
-                        self.install_read_capabilities(&[remap_id], capability)?;
-                    }
-
                     // Each ingestion is augmented with the collection metadata.
                     let mut source_imports = BTreeMap::new();
                     for (id, _) in ingestion.source_imports {
@@ -2669,7 +2724,9 @@ impl<T: Timestamp> CollectionState<T> {
             description,
             read_capabilities,
             implied_capability: since.clone(),
-            read_policy: ReadPolicy::ValidFrom(since),
+            read_policy: ReadPolicy::NoPolicy {
+                initial_since: since,
+            },
             storage_dependencies,
             write_frontier,
             collection_metadata: metadata,
