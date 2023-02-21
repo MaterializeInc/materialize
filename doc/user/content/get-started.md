@@ -69,7 +69,7 @@ Download and install the [PostgreSQL installer](https://www.postgresql.org/downl
 Before getting started, let's prepare an isolated environment for experimenting that guarantees we won't interfere with other workloads running in your database. For that, we'll first create a new [cluster](/overview/key-concepts/#clusters) with dedicated physical resources.
 
 ```sql
-CREATE CLUSTER quickstart REPLICAS (xsmall_replica (SIZE = '2xsmall'));
+CREATE CLUSTER quickstart REPLICAS (small_replica (SIZE = '2xsmall'));
 ```
 
 And make it our active cluster:
@@ -97,7 +97,7 @@ To get you started, we provide a Kafka cluster with sample data that you can use
 
 ### Create a source
 
-The first step is to declare where to find and how to connect to the external data source. For this, we'll need three Materialize concepts: secrets, connections and [sources](/overview/key-concepts/#sources).
+The first step is to declare where to find and how to connect to the external data source. For this, we'll need three Materialize concepts: [secrets](/sql/create-secret/), [connections](/sql/create-connection/) and [sources](/overview/key-concepts/#sources).
 
 1. **Create secrets.** Secrets allow you to store sensitive credentials securely in Materialize. To retrieve the access credentials for the sample Kafka cluster, navigate to the [Materialize UI](https://cloud.materialize.com/showSourceCredentials) and replace the placeholders below with the provided values.
 
@@ -131,7 +131,7 @@ The first step is to declare where to find and how to connect to the external da
 
     Once created, these connections can be reused across multiple `CREATE SOURCE` statements.
 
-1. **Create sources.** Using that we have the details to connect, we can create a source for each Kafka topic we want to use.
+1. **Create sources.** Now that we have the details to connect, we can create a source for each Kafka topic we want to use.
 
     ```sql
     CREATE SOURCE qck.purchases
@@ -165,7 +165,7 @@ The first step is to declare where to find and how to connect to the external da
 
 ### Transform data
 
-Now that data is being ingested, we can start building SQL statements to transform it into something _actionable_.
+With data being ingested into Materialize, we can start building SQL statements to transform it into something _actionable_.
 
 1. Create a [view](/overview/key-concepts/#non-materialized-views) `item_purchases` that calculates rolling aggregations for each item in the inventory:
 
@@ -183,7 +183,7 @@ Now that data is being ingested, we can start building SQL statements to transfo
 
     As in other databases, a view doesn't store the results of the query, but simply provides an alias for the embedded `SELECT` statement.
 
-    To keep the results of this view incrementally maintained **in memory** within our cluster, we'll want to create an [index](/sql/create-index).
+    To keep the results of this view incrementally maintained **in memory** within our cluster, we'll create an [index](/sql/create-index).
 
 1. Create an index `item_purchases_idx`:
 
@@ -243,8 +243,8 @@ In streaming, time keeps ticking along — unlike in batch, where data is "froze
     CREATE VIEW qck.item_summary_5min AS
     SELECT *
     FROM qck.item_summary
-    WHERE (mz_now() >= latest_order
-    AND mz_now() < latest_order + INTERVAL '5' MINUTE);
+    WHERE mz_now() >= latest_order
+    AND mz_now() < latest_order + INTERVAL '5' MINUTE;
     ```
 
     Here, “in the past 5 minutes” is a moving target that changes over time. The `mz_now()` function is used to keep track of the logical time that your query executes (similar to `now()` in other systems, as explained more in-depth in ["now and mz_now functions"](/sql/functions/now_and_mz_now/)). As time advances, only the records that satisfy the time constraint are used in the view.
@@ -266,21 +266,16 @@ In streaming, time keeps ticking along — unlike in batch, where data is "froze
 
 1. From a different terminal window, open a new connection to Materialize.
 
-[//]: # "NOTE(morsapaes) It's not currently possible to create multiple replicas
-of clusters with scheduled sources/sinks, which means we either need to use
-SIZE instead of IN CLUSTER, or we don't showcase replication here and swap for
-e.g. data sharing across clusters"
-
 1. Add an additional replica to the `quickstart` cluster:
 
     ```sql
     CREATE CLUSTER REPLICA quickstart.bigger SIZE = 'xsmall';
     ```
 
-1. To simulate a failure, drop the `xsmall_replica`:
+1. To simulate a failure, drop the `small_replica`:
 
     ```sql
-    DROP CLUSTER REPLICA quickstart.xsmall_replica;
+    DROP CLUSTER REPLICA quickstart.small_replica;
     ```
 
     If you switch to the terminal window running the `SUBSCRIBE` command, you'll see that results are still being pushed out to the client.
@@ -290,7 +285,7 @@ to remove everything"
 
 ## What's next?
 
-That's it! You just created your first materialized view, tried out some common patterns enabled by SQL on streams, and tried to break Materialize! We encourage you to continue exploring the sample Kafka source, or try one of the use-case specific quickstarts. If you’re done for the time being, remember to clean up the environment we used for experimenting:
+That's it! You just created your first transformations on streaming data using common SQL patterns, and tried to break Materialize! We encourage you to continue exploring the sample Kafka source, or try one of the use-case specific quickstarts. If you’re done for the time being, remember to clean up the environment we used for experimenting:
 
 ```sql
 DROP CLUSTER quickstart CASCADE;
