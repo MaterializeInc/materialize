@@ -170,7 +170,7 @@ CREATE CONNECTION pg_connection TO POSTGRES (
 );
 ```
 
-If your PostgreSQL server is not exposed to the public internet, you can tunnel the connection through an AWS PrivateLink service or an SSH bastion host:
+If your PostgreSQL server is not exposed to the public internet, you can [tunnel the connection](/sql/create-connection/#network-security) through an AWS PrivateLink service or an SSH bastion host.
 
 {{< tabs tabID="1" >}}
 {{< tab "AWS PrivateLink">}}
@@ -194,6 +194,8 @@ CREATE CONNECTION pg_connection TO POSTGRES (
     DATABASE 'postgres'
 );
 ```
+
+For step-by-step instructions on creating AWS PrivateLink connections and configuring an AWS PrivateLink service to accept connections from Materialize, check [this guide](/ops/network-security/privatelink/).
 {{< /tab >}}
 {{< tab "SSH tunnel">}}
 ```sql
@@ -213,7 +215,7 @@ CREATE CONNECTION pg_connection TO POSTGRES (
 );
 ```
 
-For step-by-step instructions on creating SSH tunnel connections and configuring an SSH bastion server to accept connections from Materialize, check out [this guide](/ops/network-security/ssh-tunnel/).
+For step-by-step instructions on creating SSH tunnel connections and configuring an SSH bastion server to accept connections from Materialize, check [this guide](/ops/network-security/ssh-tunnel/).
 {{< /tab >}}
 {{< /tabs >}}
 
