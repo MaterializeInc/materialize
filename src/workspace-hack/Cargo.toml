@@ -48,7 +48,7 @@ futures-task = { version = "0.3.25" }
 futures-util = { version = "0.3.25", features = ["channel", "io", "sink"] }
 globset = { version = "0.4.9", features = ["serde1"] }
 hashbrown = { git = "https://github.com/MaterializeInc/hashbrown.git", features = ["raw"] }
-hyper = { version = "0.14.23", features = ["full"] }
+hyper = { version = "0.14.24", features = ["full"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 k8s-openapi = { version = "0.16.0", features = ["v1_24"] }
 kube = { version = "0.77.0", features = ["derive", "runtime", "ws"] }
@@ -146,7 +146,7 @@ futures-task = { version = "0.3.25" }
 futures-util = { version = "0.3.25", features = ["channel", "io", "sink"] }
 globset = { version = "0.4.9", features = ["serde1"] }
 hashbrown = { git = "https://github.com/MaterializeInc/hashbrown.git", features = ["raw"] }
-hyper = { version = "0.14.23", features = ["full"] }
+hyper = { version = "0.14.24", features = ["full"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 k8s-openapi = { version = "0.16.0", features = ["v1_24"] }
 kube = { version = "0.77.0", features = ["derive", "runtime", "ws"] }
