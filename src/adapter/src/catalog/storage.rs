@@ -1553,7 +1553,8 @@ impl<'a> Transaction<'a> {
     /// Returns an error if `id` is not found.
     ///
     /// Runtime is linear with respect to the total number of items in the stash.
-    /// DO NOT call this function in a loop, use [`Self::update_roles`] instead.
+    /// DO NOT call this function in a loop, implement and use some `Self::update_roles` instead.
+    /// You should model it after [`Self::update_items`].
     pub fn update_role(&mut self, id: RoleId, role: SerializedRole) -> Result<(), Error> {
         let n = self.roles.update(move |k, _v| {
             if k.id == id {
