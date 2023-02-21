@@ -54,6 +54,7 @@ where
         // and alert if the dataflow was dropped before completing.
         let subscribe_protocol_handle = Rc::new(RefCell::new(Some(SubscribeProtocol {
             sink_id,
+            sink_as_of: sink.as_of.frontier.clone(),
             subscribe_response_buffer: Some(Rc::clone(&compute_state.subscribe_response_buffer)),
             prev_upper: Antichain::from_elem(Timestamp::minimum()),
         })));
@@ -152,44 +153,57 @@ fn subscribe<G>(
 /// otherwise sends an indication that the protocol has finished without completion.
 struct SubscribeProtocol {
     pub sink_id: GlobalId,
+    pub sink_as_of: Antichain<Timestamp>,
     pub subscribe_response_buffer: Option<Rc<RefCell<Vec<(GlobalId, SubscribeResponse)>>>>,
     pub prev_upper: Antichain<Timestamp>,
 }
 
 impl SubscribeProtocol {
+    /// Attempt to send a batch of rows with the given `upper`.
+    ///
+    /// This method might refuse to send the requested batch if `upper` has not advanced far
+    /// enough. If this is the case, the `rows` buffer is unchanged. Only if `rows` has been
+    /// drained after this call returns was the batch successfully sent. If `rows` has not been
+    /// drained the caller is expected to re-submit its contents, potentially along with new rows,
+    /// at a later `upper`.
     fn send_batch(&mut self, upper: Antichain<Timestamp>, rows: &mut Vec<(Timestamp, Row, Diff)>) {
-        if self.prev_upper != upper {
-            let mut ship = Vec::new();
-            let mut keep = Vec::new();
-            differential_dataflow::consolidation::consolidate_updates(rows);
-            for (time, data, diff) in rows.drain(..) {
-                if upper.less_equal(&time) {
-                    keep.push((time, data, diff));
-                } else {
-                    ship.push((time, data, diff));
-                }
-            }
-            *rows = keep;
+        // Only send a batch if both conditions hold:
+        //  a) `upper` has reached or passed the sink's `as_of` frontier.
+        //  b) `upper` is different from when we last sent a batch.
+        if !PartialOrder::less_equal(&self.sink_as_of, &upper) || upper == self.prev_upper {
+            return;
+        }
 
-            let input_exhausted = upper.is_empty();
-            let buffer = self
-                .subscribe_response_buffer
-                .as_mut()
-                .expect("The subscribe response buffer is only cleared on drop.");
-            buffer.borrow_mut().push((
-                self.sink_id,
-                SubscribeResponse::Batch(SubscribeBatch {
-                    lower: self.prev_upper.clone(),
-                    upper: upper.clone(),
-                    updates: Ok(ship),
-                }),
-            ));
-            self.prev_upper = upper;
-            if input_exhausted {
-                // The dataflow's input has been exhausted; clear the channel,
-                // to avoid sending `SubscribeResponse::DroppedAt`.
-                self.subscribe_response_buffer = None;
+        let mut ship = Vec::new();
+        let mut keep = Vec::new();
+        differential_dataflow::consolidation::consolidate_updates(rows);
+        for (time, data, diff) in rows.drain(..) {
+            if upper.less_equal(&time) {
+                keep.push((time, data, diff));
+            } else {
+                ship.push((time, data, diff));
             }
+        }
+        *rows = keep;
+
+        let input_exhausted = upper.is_empty();
+        let buffer = self
+            .subscribe_response_buffer
+            .as_mut()
+            .expect("The subscribe response buffer is only cleared on drop.");
+        buffer.borrow_mut().push((
+            self.sink_id,
+            SubscribeResponse::Batch(SubscribeBatch {
+                lower: self.prev_upper.clone(),
+                upper: upper.clone(),
+                updates: Ok(ship),
+            }),
+        ));
+        self.prev_upper = upper;
+        if input_exhausted {
+            // The dataflow's input has been exhausted; clear the channel,
+            // to avoid sending `SubscribeResponse::DroppedAt`.
+            self.subscribe_response_buffer = None;
         }
     }
 }
