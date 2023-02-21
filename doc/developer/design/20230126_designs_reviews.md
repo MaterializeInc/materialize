@@ -51,6 +51,8 @@ To address this, we propose the following steps, some of which are part of the c
 * Revisit the design doc [README](./README.md) to make expectations clearer.
 * Update the [template](./00000000_template.md) to match what we're outlining in this design.
 * Update the [pull request template](/.github/pull_request_template.md) to include a step reminding engineers to write a design document.
+* Mark the design documents in Notion as deprecated.
+  We considered moving the design documents from Notion to GitHub, but decided against it due to the lack of rigorousness and missing discussions.
 
 Specifically, the current interpretation of design documents is to write one for large changes, where it is not clear what large means.
 Instead, we propose that each change should come with a design doc unless it is small enough to be non-contentious or immediately clear what needs to be done.
