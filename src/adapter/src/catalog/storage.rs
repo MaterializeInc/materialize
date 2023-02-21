@@ -376,7 +376,7 @@ async fn migrate(
         //
         // Introduced in v0.45.0
         //
-        // TODO(jkosh44) Can be cleared (pathed to be emptyp) in v0.46.0
+        // TODO(jkosh44) Can be cleared (pathed to be empty) in v0.46.0
         |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
             for (role_key, role_value) in txn.roles_old.delete(|_, _| true) {
                 let is_materialize_role = role_value.name == MATERIALIZE_ROLE;
