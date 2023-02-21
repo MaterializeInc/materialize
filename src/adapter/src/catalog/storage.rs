@@ -714,13 +714,14 @@ impl Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn prune_storage_usage<P>(&mut self, predicate: P) -> Result<(), StashError>
+    pub async fn prune_storage_usage<P>(&mut self, predicate: P) -> Result<(), Error>
     where
-        P: Fn(&VersionedStorageUsage) -> bool,
+        P: Fn(&VersionedStorageUsage) -> bool + Clone + Sync + Send + 'static,
     {
         COLLECTION_STORAGE_USAGE
-            .delete(&mut self.stash, |k, _v| predicate(&k))
+            .delete(&mut self.stash, move |k, _v| predicate(&k.metric))
             .await
+            .map_err(|e| e.into())
     }
 
     /// Load the persisted mapping of system object to global ID. Key is (schema-name, object-name).

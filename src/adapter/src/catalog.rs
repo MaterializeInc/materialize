@@ -2733,8 +2733,8 @@ impl Catalog {
         catalog
             .storage()
             .await
-            .prune_storage_usage(|e| u128::from(e.timestamp()) <= cutoff_ts)
-            .await;
+            .prune_storage_usage(move |e| u128::from(e.timestamp()) <= cutoff_ts)
+            .await?;
 
         // To avoid reading over storage_usage() multiple times, do both the
         // table updates and most-recent-timestamp calculations on a single
