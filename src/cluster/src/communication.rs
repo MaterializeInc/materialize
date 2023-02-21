@@ -152,7 +152,7 @@ async fn create_sockets(
         .captures(my_address)
     {
         Some(cap) => {
-            let p: u16 = cap[1].parse().expect("Port out of range");
+            let p: u16 = cap[1].parse().context("Port out of range")?;
             format!("0.0.0.0:{p}")
         }
         None => {
