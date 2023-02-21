@@ -47,6 +47,8 @@ class StartMz(MzcomposeAction):
         with c.override(mz):
             c.up("materialized")
 
+        c.sql("SET statement_timeout = '60s'")
+
         for config_param in [
             "max_tables",
             "max_sinks",
