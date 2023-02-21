@@ -3474,7 +3474,6 @@ impl Coordinator {
                                                         ))
                                                     }
                                                 };
-                                                desc.constraints_met(*idx, &updated)?;
                                                 updates.push((*idx, updated));
                                             }
                                             for (idx, new_value) in updates {
@@ -3491,6 +3490,13 @@ impl Coordinator {
                                                 diffs.push((row, -1))
                                             }
                                             MutationKind::Insert => diffs.push((row, 1)),
+                                        }
+                                    }
+                                    for (row, diff) in &diffs {
+                                        if *diff > 0 {
+                                            for (idx, datum) in row.iter().enumerate() {
+                                                desc.constraints_met(idx, &datum)?;
+                                            }
                                         }
                                     }
                                     Ok(diffs)

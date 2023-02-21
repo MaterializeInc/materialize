@@ -197,6 +197,21 @@ a       b
 ! INSERT INTO s VALUES (1 + NULL);
 contains:null value in column "a" violates not-null constraint
 
+! INSERT INTO s VALUES (case when now() = now() then NULL else 2 end);
+contains:null value in column "a" violates not-null constraint
+
+! INSERT INTO s SELECT (case when now() = now() then NULL else 2 end);
+contains:null value in column "a" violates not-null constraint
+
+> CREATE TABLE n (a int);
+
+> INSERT INTO n VALUES (NULL);
+
+! INSERT INTO s SELECT * FROM n;
+contains:null value in column "a" violates not-null constraint
+
+> DROP TABLE n
+
 > CREATE TABLE v (a timestamptz);
 > INSERT INTO v VALUES (now());
 
