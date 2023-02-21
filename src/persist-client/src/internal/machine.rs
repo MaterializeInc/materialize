@@ -1051,6 +1051,7 @@ pub mod datadriven {
             .state_versions
             .fetch_all_live_states::<u64>(datadriven.shard_id)
             .await
+            .expect("should only be called on an initialized shard")
             .check_ts_codec()
             .expect("shard codecs should not change");
         let mut s = String::new();
