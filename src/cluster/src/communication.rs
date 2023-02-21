@@ -147,19 +147,22 @@ async fn create_sockets(
     // Previously we bound to `my_address`, which caused
     // https://github.com/MaterializeInc/cloud/issues/5070 .
 
-    // Motivation for `unwrap` (and indexing) vs. `expect`:
-    // The `expect`s can fail if clusterd is invoked with bad
-    // arguments. The `unwrap` and indexing can only fail if there's
-    // a logic error in this code.
-    let my_port: u16 = regex::Regex::new(r":(\d{1,5})$")
+    let bind_address = match regex::Regex::new(r":(\d{1,5})$")
         .unwrap()
         .captures(my_address)
-        .expect("local address must end with a port number")[1]
-        .parse()
-        .expect("local address must end with a port number");
+    {
+        Some(cap) => {
+            let p: u16 = cap[1].parse().expect("Port out of range");
+            format!("0.0.0.0:{p}")
+        }
+        None => {
+            // Address is not of the form `hostname:port`; it's
+            // probably a path to a Unix-domain socket.
+            my_address.to_string()
+        }
+    };
     let listener = loop {
         let mut tries = 0;
-        let bind_address = format!("0.0.0.0:{my_port}");
         match Listener::bind(&bind_address).await {
             Ok(ok) => break ok,
             Err(e) => {
