@@ -151,9 +151,9 @@ async fn create_sockets(
     // The `expect`s can fail if clusterd is invoked with bad
     // arguments. The `unwrap` and indexing can only fail if there's
     // a logic error in this code.
-    let my_port: u16 = regex::Regex::new(r":(\d{1-5})$")
+    let my_port: u16 = regex::Regex::new(r":(\d{1,5})$")
         .unwrap()
-        .captures(&my_address)
+        .captures(my_address)
         .expect("local address must end with a port number")[1]
         .parse()
         .expect("local address must end with a port number");
