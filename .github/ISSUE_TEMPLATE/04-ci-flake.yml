@@ -11,7 +11,7 @@ name: "Internal: CI flake"
 description: >
   A CI job that failed but eventually passed after retry.
 title: "<TEST-NAME> is flaky"
-labels: [C-bug, C-triage, ci-flake]
+labels: [C-bug, ci-flake]
 body:
   - type: markdown
     attributes:
