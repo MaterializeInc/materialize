@@ -141,12 +141,12 @@ async fn create_sockets(
     let mut results: Vec<_> = (0..addresses.len()).map(|_| None).collect();
 
     let my_address = &addresses[my_index_uz];
+
     // [btv] Binding to the address (which is of the form
     // `hostname:port`) unnecessarily involves a DNS query. We should
     // get the port from here, but otherwise just bind to `0.0.0.0`.
     // Previously we bound to `my_address`, which caused
     // https://github.com/MaterializeInc/cloud/issues/5070 .
-
     let bind_address = match regex::Regex::new(r":(\d{1,5})$")
         .unwrap()
         .captures(my_address)
