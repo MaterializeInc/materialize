@@ -1359,7 +1359,7 @@ where
         let dependency_since = self.determine_dependency_since(&[from_id])?;
         self.install_read_capabilities(&[from_id], dependency_since.clone())?;
 
-        debug!(
+        info!(
             sink_id = id.to_string(),
             from_id = from_id.to_string(),
             acquired_since = ?dependency_since,
@@ -1381,7 +1381,7 @@ where
             acquired_since,
         }: CreateExportToken<T>,
     ) {
-        debug!(
+        info!(
             sink_id = id.to_string(),
             from_id = from_id.to_string(),
             acquired_since = ?acquired_since,
@@ -1476,7 +1476,7 @@ where
                 .initial_as_of
                 .maybe_fast_forward(&acquired_since);
 
-            debug!(
+            info!(
                 sink_id = id.to_string(),
                 from_id = from_id.to_string(),
                 acquired_since = ?acquired_since,
