@@ -375,6 +375,8 @@ async fn migrate(
         // Attributes were added to role definitions.
         //
         // Introduced in v0.45.0
+        //
+        // TODO(jkosh44) Can be cleared (pathed to be emptyp) in v0.46.0
         |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
             for (role_key, role_value) in txn.roles_old.delete(|_, _| true) {
                 let is_materialize_role = role_value.name == MATERIALIZE_ROLE;
@@ -1052,7 +1054,7 @@ pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Er
                     tx.peek_one(tx.collection(COLLECTION_DATABASE.name()).await?),
                     tx.peek_one(tx.collection(COLLECTION_SCHEMA.name()).await?),
                     tx.peek_one(tx.collection(COLLECTION_ROLE.name()).await?),
-                    // TODO(jkosh44) Delete in V0.45.0
+                    // TODO(jkosh44) Delete in V0.46.0
                     tx.peek_one(tx.collection(COLLECTION_ROLE_OLD.name()).await?),
                     tx.peek_one(tx.collection(COLLECTION_ITEM.name()).await?),
                     tx.peek_one(tx.collection(COLLECTION_CLUSTERS.name()).await?),
@@ -1106,7 +1108,7 @@ pub struct Transaction<'a> {
     schemas: TableTransaction<SchemaKey, SchemaValue>,
     items: TableTransaction<ItemKey, ItemValue>,
     roles: TableTransaction<RoleKey, RoleValue>,
-    // TODO(jkosh44) Delete in v0.45.0
+    // TODO(jkosh44) Delete in v0.46.0
     roles_old: TableTransaction<RoleKey, RoleValueOld>,
     clusters: TableTransaction<ClusterKey, ClusterValue>,
     cluster_replicas: TableTransaction<ClusterReplicaKey, ClusterReplicaValue>,
@@ -1830,7 +1832,7 @@ pub async fn initialize_stash(stash: &mut Stash) -> Result<(), Error> {
                     add_batch(&tx, &COLLECTION_SCHEMA),
                     add_batch(&tx, &COLLECTION_ITEM),
                     add_batch(&tx, &COLLECTION_ROLE),
-                    // TODO(jkosh44) Delete in v0.45.0
+                    // TODO(jkosh44) Delete in v0.46.0
                     add_batch(&tx, &COLLECTION_ROLE_OLD),
                     add_batch(&tx, &COLLECTION_TIMESTAMP),
                     add_batch(&tx, &COLLECTION_SYSTEM_CONFIGURATION),
@@ -1978,7 +1980,7 @@ pub struct RoleValue {
     role: SerializedRole,
 }
 
-// TODO(jkosh44) Delete in v0.45.0
+// TODO(jkosh44) Delete in v0.46.0
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 pub struct RoleValueOld {
     name: String,
@@ -2040,7 +2042,7 @@ pub static COLLECTION_SCHEMA: TypedCollection<SchemaKey, SchemaValue> =
     TypedCollection::new("schema");
 pub static COLLECTION_ITEM: TypedCollection<ItemKey, ItemValue> = TypedCollection::new("item");
 pub static COLLECTION_ROLE: TypedCollection<RoleKey, RoleValue> = TypedCollection::new("role_new");
-// TODO(jkosh44) Delete in V0.45.0
+// TODO(jkosh44) Delete in V0.46.0
 pub static COLLECTION_ROLE_OLD: TypedCollection<RoleKey, RoleValueOld> =
     TypedCollection::new("role");
 pub static COLLECTION_TIMESTAMP: TypedCollection<TimestampKey, TimestampValue> =
