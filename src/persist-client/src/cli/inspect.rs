@@ -262,6 +262,7 @@ pub async fn fetch_state_rollups(args: &StateArgs) -> Result<impl serde::Seriali
     let mut state_iter = state_versions
         .fetch_all_live_states::<u64>(shard_id)
         .await
+        .expect("requested shard should exist")
         .check_ts_codec()?;
     while let Some(v) = state_iter.next(|_| {}) {
         for rollup in v.collections.rollups.values() {
@@ -301,6 +302,7 @@ pub async fn fetch_state_diffs(
     let mut state_iter = state_versions
         .fetch_all_live_states::<u64>(shard_id)
         .await
+        .expect("requested shard should exist")
         .check_ts_codec()?;
     while let Some(_) = state_iter.next(|_| {}) {
         live_states.push(state_iter.into_proto());
@@ -555,6 +557,7 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
     let mut state_iter = state_versions
         .fetch_all_live_states::<u64>(shard_id)
         .await
+        .expect("requested shard should exist")
         .check_ts_codec()?;
 
     let mut known_parts = BTreeSet::new();
