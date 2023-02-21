@@ -336,9 +336,9 @@ A Postgres connection establishes a link to a single database of a
 
 Field                       | Value            | Required | Description
 ----------------------------|------------------|:--------:|-----------------------------
-`DATABASE`                  | `text`           | ✓        | Target database.
 `HOST`                      | `text`           | ✓        | Database hostname.
 `PORT`                      | `integer`        |          | Default: `5432`. Port number to connect to at the server host.
+`DATABASE`                  | `text`           | ✓        | Target database.
 `USER`                      | `text`           | ✓        | Database username.
 `PASSWORD`                  | secret           |          | Password for the connection
 `SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The absolute path to the certificate authority (CA) certificate in PEM format. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
