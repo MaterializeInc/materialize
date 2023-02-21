@@ -6211,6 +6211,8 @@ impl From<ReplicaLocation> for SerializedReplicaLocation {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct SerializedRole {
     pub name: String,
+    // TODO(jkosh44): Remove in v0.46.0
+    #[serde(default)]
     pub attributes: RoleAttributes,
 }
 

@@ -376,27 +376,21 @@ async fn migrate(
         //
         // Introduced in v0.45.0
         //
-        // TODO(jkosh44) Can be cleared (pathed to be empty) in v0.46.0
+        // TODO(jkosh44) Can be cleared (patched to be empty) in v0.46.0
         |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
-            for (role_key, role_value) in txn.roles_old.delete(|_, _| true) {
-                let is_materialize_role = role_value.name == MATERIALIZE_ROLE;
-                let is_mz_introspection_role = role_value.name == INTROSPECTION_USER.name;
-                let migrated_role_value = RoleValue {
-                    role: SerializedRole {
-                        name: role_value.name,
-                        attributes: RoleAttributes {
-                            super_user: !is_mz_introspection_role,
-                            inherit: true,
-                            create_role: is_materialize_role,
-                            create_db: is_materialize_role,
-                            create_cluster: is_materialize_role,
-                            create_persist: is_materialize_role,
-                            can_login: true,
-                        },
-                    },
-                };
-                txn.roles.insert(role_key, migrated_role_value)?;
-            }
+            txn.roles.update(|_role_key, role_value| {
+                let mut role_value = role_value.clone();
+                let is_materialize_role = role_value.role.name == MATERIALIZE_ROLE;
+                let is_mz_introspection_role = role_value.role.name == INTROSPECTION_USER.name;
+                role_value.role.attributes.super_user = !is_mz_introspection_role;
+                role_value.role.attributes.inherit = true;
+                role_value.role.attributes.create_role = is_materialize_role;
+                role_value.role.attributes.create_db = is_materialize_role;
+                role_value.role.attributes.create_cluster = is_materialize_role;
+                role_value.role.attributes.create_persist = is_materialize_role;
+                role_value.role.attributes.can_login = true;
+                Some(role_value)
+            })?;
             Ok(())
         },
         // Add new migrations above.
@@ -1035,7 +1029,6 @@ pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Er
         databases,
         schemas,
         roles,
-        roles_old,
         items,
         clusters,
         cluster_replicas,
@@ -1054,8 +1047,6 @@ pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Er
                     tx.peek_one(tx.collection(COLLECTION_DATABASE.name()).await?),
                     tx.peek_one(tx.collection(COLLECTION_SCHEMA.name()).await?),
                     tx.peek_one(tx.collection(COLLECTION_ROLE.name()).await?),
-                    // TODO(jkosh44) Delete in V0.46.0
-                    tx.peek_one(tx.collection(COLLECTION_ROLE_OLD.name()).await?),
                     tx.peek_one(tx.collection(COLLECTION_ITEM.name()).await?),
                     tx.peek_one(tx.collection(COLLECTION_CLUSTERS.name()).await?),
                     tx.peek_one(tx.collection(COLLECTION_CLUSTER_REPLICAS.name()).await?),
@@ -1085,7 +1076,6 @@ pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Er
         }),
         items: TableTransaction::new(items, |a, b| a.schema_id == b.schema_id && a.name == b.name),
         roles: TableTransaction::new(roles, |a, b| a.role.name == b.role.name),
-        roles_old: TableTransaction::new(roles_old, |a, b| a.name == b.name),
         clusters: TableTransaction::new(clusters, |a, b| a.name == b.name),
         cluster_replicas: TableTransaction::new(cluster_replicas, |a, b| {
             a.cluster_id == b.cluster_id && a.name == b.name
@@ -1108,8 +1098,6 @@ pub struct Transaction<'a> {
     schemas: TableTransaction<SchemaKey, SchemaValue>,
     items: TableTransaction<ItemKey, ItemValue>,
     roles: TableTransaction<RoleKey, RoleValue>,
-    // TODO(jkosh44) Delete in v0.46.0
-    roles_old: TableTransaction<RoleKey, RoleValueOld>,
     clusters: TableTransaction<ClusterKey, ClusterValue>,
     cluster_replicas: TableTransaction<ClusterReplicaKey, ClusterReplicaValue>,
     introspection_sources:
@@ -1815,7 +1803,6 @@ pub async fn initialize_stash(stash: &mut Stash) -> Result<(), Error> {
                     schema,
                     item,
                     role,
-                    role_old,
                     timestamp,
                     system_configuration,
                     audit_log,
@@ -1832,8 +1819,6 @@ pub async fn initialize_stash(stash: &mut Stash) -> Result<(), Error> {
                     add_batch(&tx, &COLLECTION_SCHEMA),
                     add_batch(&tx, &COLLECTION_ITEM),
                     add_batch(&tx, &COLLECTION_ROLE),
-                    // TODO(jkosh44) Delete in v0.46.0
-                    add_batch(&tx, &COLLECTION_ROLE_OLD),
                     add_batch(&tx, &COLLECTION_TIMESTAMP),
                     add_batch(&tx, &COLLECTION_SYSTEM_CONFIGURATION),
                     add_batch(&tx, &COLLECTION_AUDIT_LOG),
@@ -1851,7 +1836,6 @@ pub async fn initialize_stash(stash: &mut Stash) -> Result<(), Error> {
                     schema,
                     item,
                     role,
-                    role_old,
                     timestamp,
                     system_configuration,
                     audit_log,
@@ -1970,20 +1954,16 @@ pub struct ItemValue {
     definition: SerializedCatalogItem,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
 pub struct RoleKey {
     id: RoleId,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Debug)]
 pub struct RoleValue {
+    // flatten needed for backwards compatibility.
+    #[serde(flatten)]
     role: SerializedRole,
-}
-
-// TODO(jkosh44) Delete in v0.46.0
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
-pub struct RoleValueOld {
-    name: String,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
@@ -2041,10 +2021,7 @@ pub static COLLECTION_DATABASE: TypedCollection<DatabaseKey, DatabaseValue> =
 pub static COLLECTION_SCHEMA: TypedCollection<SchemaKey, SchemaValue> =
     TypedCollection::new("schema");
 pub static COLLECTION_ITEM: TypedCollection<ItemKey, ItemValue> = TypedCollection::new("item");
-pub static COLLECTION_ROLE: TypedCollection<RoleKey, RoleValue> = TypedCollection::new("role_new");
-// TODO(jkosh44) Delete in V0.46.0
-pub static COLLECTION_ROLE_OLD: TypedCollection<RoleKey, RoleValueOld> =
-    TypedCollection::new("role");
+pub static COLLECTION_ROLE: TypedCollection<RoleKey, RoleValue> = TypedCollection::new("role");
 pub static COLLECTION_TIMESTAMP: TypedCollection<TimestampKey, TimestampValue> =
     TypedCollection::new("timestamp");
 pub static COLLECTION_SYSTEM_CONFIGURATION: TypedCollection<

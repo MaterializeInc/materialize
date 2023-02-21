@@ -277,8 +277,9 @@ pub trait CatalogSchema {
     fn has_items(&self) -> bool;
 }
 
+// TODO(jkosh44): Remove `Defualt` from derive list in v0.46.0.
 /// Attributes belonging to a [`CatalogRole`].
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Default)]
 pub struct RoleAttributes {
     /// Indicates whether the role has super user status.
     pub super_user: bool,
