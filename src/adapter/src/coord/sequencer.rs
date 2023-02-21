@@ -3492,9 +3492,11 @@ impl Coordinator {
                                             MutationKind::Insert => diffs.push((row, 1)),
                                         }
                                     }
-                                    for (row, _) in &diffs {
-                                        for (idx, datum) in row.iter().enumerate() {
-                                            desc.constraints_met(idx, &datum)?;
+                                    for (row, diff) in &diffs {
+                                        if *diff > 0 {
+                                            for (idx, datum) in row.iter().enumerate() {
+                                                desc.constraints_met(idx, &datum)?;
+                                            }
                                         }
                                     }
                                     Ok(diffs)
