@@ -1,0 +1,27 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/17762
+mode cockroach
+
+query T
+SELECT
+	worker_id
+FROM
+	mz_internal.mz_scheduling_elapsed_internal
+	JOIN mz_indexes ON (NULL)
+	JOIN (
+			SELECT
+				worker_id AS a, CAST(NULLIF(records, CAST(NULL AS DECIMAL)) AS DECIMAL)
+			FROM
+				mz_internal.mz_records_per_dataflow
+		) ON (SELECT a IS NULL)
+WHERE
+	(SELECT a) IS NULL;
+----
