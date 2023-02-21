@@ -398,7 +398,13 @@ impl<T: std::fmt::Debug> From<ShardUsageCumulativeMaybeRacy<'_, T>> for ShardUsa
                 // anything into state. As a result, we know that anything it
                 // hasn't linked into state is now leaked and eligible for
                 // reclamation by a (future) leaked blob detector.
-                not_leaked_bytes += x.referenced_batches_bytes.get(writer_id).map_or(0, |x| *x);
+                let writer_referenced = x.referenced_batches_bytes.get(writer_id).map_or(0, |x| *x);
+                // It's possible, due to races, that a writer has more
+                // referenced batches in state than we saw for that writer in
+                // blob. Cap it at the number of bytes we saw in blob, otherwise
+                // we could hit the "blob inputs should be cumulative" panic
+                // below.
+                not_leaked_bytes += std::cmp::min(*bytes, writer_referenced);
             }
         }
         // For now, assume rollups aren't leaked. We could compute which rollups
@@ -951,5 +957,22 @@ mod tests {
             blob_usage_rollups: 0,
         }
         .run("1 0/1 0/1 0/1 0/1");
+    }
+
+    /// A regression test for (part of) #17752, which led to seeing the "blob
+    /// inputs should be cumulative" should be cumulative panic in
+    /// staging/canary.
+    #[test]
+    fn usage_regression_referenced_greater_than_blob() {
+        TestCase {
+            current_state_batches_bytes: 0,
+            current_state_bytes: 0,
+            referenced_other_bytes: 0,
+            referenced_batches_bytes: vec![('a', 5)],
+            live_writers: vec![],
+            blob_usage_by_writer: vec![('a', 3)],
+            blob_usage_rollups: 0,
+        }
+        .run("3 0/3 0/3 3/0 0/0");
     }
 }
