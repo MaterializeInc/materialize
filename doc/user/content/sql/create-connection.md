@@ -46,13 +46,15 @@ Field                                   | Value            | Required | Descript
 To connect to a Kafka broker that requires [SSL authentication](https://docs.confluent.io/platform/current/kafka/authentication_ssl.html),
 use the following options:
 
+##### SSL options {#kafka-auth-ssl-options}
+
 Field                       | Value            | Required | Description
 ----------------------------|------------------|:--------:|------------------
 `SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The absolute path to the certificate authority (CA) certificate in PEM format. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
 `SSL CERTIFICATE`           | secret or `text` | ✓        | Your SSL certificate in PEM format. Required for SSL client authentication.
 `SSL KEY`                   | secret           | ✓        | Your SSL certificate's key in PEM format. Required for SSL client authentication.
 
-##### Example {#kafka-auth-ssl}
+##### Example {#kafka-auth-ssl-example}
 
 ```sql
 CREATE SECRET kafka_ssl_crt AS '<BROKER_SSL_CRT>';
@@ -72,7 +74,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 To connect to a Kafka broker that requires [SASL authentication](https://docs.confluent.io/platform/current/kafka/authentication_sasl/auth-sasl-overview.html),
 use the following options.
 
-##### SASL options
+##### SASL options {#kafka-auth-sasl-options}
 
 Field                                   | Value            | Required | Description
 ----------------------------------------|------------------|:--------:|-------------------------------
@@ -81,7 +83,7 @@ Field                                   | Value            | Required | Descript
 `SASL PASSWORD`                         | secret           | ✓        | Your SASL password, if any. Required if `SASL MECHANISMS` is `PLAIN`.
 `SSL CERTIFICATE AUTHORITY`             | secret or `text` |          | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
 
-##### Example {#kafka-auth-sasl}
+##### Example {#kafka-auth-sasl-example}
 
 ```sql
 CREATE SECRET kafka_password AS '<BROKER_PASSWORD>';
@@ -435,7 +437,7 @@ an SSH bastion server to accept connections from Materialize, check [this guide]
 
 An AWS PrivateLink connection establishes a link to an [AWS PrivateLink] service.
 You can use AWS PrivateLink connections in [Confluent Schema Registry connections](#confluent-schema-registry),
-[Kafka connections](#kafka), and [Postgres connections](#postgres).
+[Kafka connections](#kafka), and [Postgres connections](#postgresql).
 
 #### Syntax {#aws-privatelink-syntax}
 
@@ -503,7 +505,7 @@ CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
 
 An SSH tunnel connection establishes a link to an SSH bastion server. You can
 use SSH tunnel connections in [Kafka connections](#kafka), and
-[Postgres connections](#postgres).
+[Postgres connections](#postgresql).
 
 #### Syntax {#ssh-tunnel-syntax}
 
