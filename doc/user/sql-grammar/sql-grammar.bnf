@@ -38,13 +38,26 @@ cluster_replica_def ::=
   replica_name '(' replica_option '=' value ( ',' replica_option '=' value )* ')'
 create_cluster_replica ::=
   'CREATE' 'CLUSTER' 'REPLICA' cluster_name '.' replica_name (option '=' value ( ',' option '=' value )*)?
-create_connection ::=
-  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO'
-  ( 'AWS' 'PRIVATELINK' | 'CONFLUENT' 'SCHEMA' 'REGISTRY' | 'KAFKA' | 'POSTGRES' | 'SSH' 'TUNNEL' )
+create_connection_kafka ::=
+  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'KAFKA'
+  '(' field '='? val ( ',' field '='? val )* ')'
+create_connection_csr ::=
+  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'CONFLUENT' 'SCHEMA' 'REGISTRY'
+  '(' field '='? val ( ',' field '='? val )* ')'
+create_connection_postgres ::=
+  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'POSTGRES'
+  '(' field '='? val ( ',' field '='? val )* ')'
+create_connection_aws_privatelink ::=
+  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'AWS' 'PRIVATELINK'
+  '(' field '='? val ( ',' field '='? val )* ')'
+create_connection_ssh_tunnel ::=
+  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'SSH' 'TUNNEL'
   '(' field '='? val ( ',' field '='? val )* ')'
 create_connection_kafka_brokers ::= 'BROKERS' '(' kafka_broker (',' kafka_broker)* ')'
-create_connection_kafka_broker ::=
-  "'host:port'" ('USING' ('AWS' 'PRIVATELINK' aws_connection ( '(' broker_option (',' broker_option)* ')' )? | 'SSH' 'TUNNEL' ssh_connection))?
+create_connection_kafka_broker_aws_privatelink ::=
+  "'host:port'" 'USING' 'AWS' 'PRIVATELINK' aws_connection ( '(' broker_option (',' broker_option)* ')' )?
+create_connection_kafka_broker_ssh_tunnel ::=
+  "'host:port'" 'USING' 'SSH' 'TUNNEL' ssh_connection
 broker_option ::= 'PORT' number | 'AVAILABILITY ZONE' az
 create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
