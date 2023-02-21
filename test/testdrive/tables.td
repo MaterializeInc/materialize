@@ -197,6 +197,9 @@ a       b
 ! INSERT INTO s VALUES (1 + NULL);
 contains:null value in column "a" violates not-null constraint
 
+! INSERT INTO s VALUES (case when now() = now() then NULL else 2 end);
+contains:null value in column "a" violates not-null constraint
+
 > CREATE TABLE v (a timestamptz);
 > INSERT INTO v VALUES (now());
 
