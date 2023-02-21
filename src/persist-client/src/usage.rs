@@ -159,26 +159,6 @@ impl StorageUsageClient {
             .await
     }
 
-    /// Returns a map of [ShardId] to its size (in bytes) stored in persist, as
-    /// well as the total bytes stored for unattributable data (the map key is
-    /// None) where the shard id is unknown. This latter count _should_ always
-    /// be 0, so it being nonzero indicates either persist wrote an invalid blob
-    /// key, or another process is storing data under the same path (!)
-    ///
-    /// TODO: Remove this in favor of using [Self::shards_usage] directly.
-    pub async fn shard_sizes(&self) -> BTreeMap<Option<ShardId>, u64> {
-        let usage = self.shards_usage().await;
-        let mut ret = usage
-            .by_shard
-            .iter()
-            .map(|(id, usage)| (Some(*id), usage.total_bytes()))
-            .collect::<BTreeMap<_, _>>();
-        if usage.unattributable_bytes > 0 {
-            ret.insert(None, usage.unattributable_bytes);
-        }
-        ret
-    }
-
     /// Computes [ShardUsage] for every shard in an env.
     pub async fn shards_usage(&self) -> ShardsUsage {
         let blob_usage = self.blob_raw_usage(BlobKeyPrefix::All).await;
@@ -656,10 +636,22 @@ mod tests {
             shard_two_size
         );
 
-        let shard_sizes = usage.shard_sizes().await;
-        assert_eq!(shard_sizes.len(), 2);
-        assert_eq!(shard_sizes.get(&Some(shard_id_one)), Some(&shard_one_size));
-        assert_eq!(shard_sizes.get(&Some(shard_id_two)), Some(&shard_two_size));
+        let shards_usage = usage.shards_usage().await;
+        assert_eq!(shards_usage.by_shard.len(), 2);
+        assert_eq!(
+            shards_usage
+                .by_shard
+                .get(&shard_id_one)
+                .map(|x| x.total_bytes()),
+            Some(shard_one_size)
+        );
+        assert_eq!(
+            shards_usage
+                .by_shard
+                .get(&shard_id_two)
+                .map(|x| x.total_bytes()),
+            Some(shard_two_size)
+        );
     }
 
     /// This is just a sanity check for the overall flow of computing ShardUsage.
