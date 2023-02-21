@@ -2724,26 +2724,25 @@ impl Catalog {
             builtin_table_updates.push(catalog.state.pack_audit_log_update(&event)?);
         }
 
-        // To avoid reading over storage_usage() multiple times, do both the
-        // table updates and most-recent-timestamp calculations on a single
-        // iterator.
-        let storage_usage_events = catalog.storage().await.storage_usage().await?;
         // If no usage retention period is set, we set it to an unreasonably large number
         // of milliseconds, so that the filter code is simpler.
         let cutoff_ts = match config.storage_usage_retention_period {
             None => u128::MIN,
             Some(period) => u128::from(catalog.storage().await.boot_ts()) - period.as_millis(),
         };
-        for event in storage_usage_events.filter(|e| u128::from(e.timestamp()) > cutoff_ts) {
-            builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
-        }
-
-        // Now prune rows that we no longer wish to retain
         catalog
             .storage()
             .await
             .prune_storage_usage(|e| u128::from(e.timestamp()) <= cutoff_ts)
             .await;
+
+        // To avoid reading over storage_usage() multiple times, do both the
+        // table updates and most-recent-timestamp calculations on a single
+        // iterator.
+        let storage_usage_events = catalog.storage().await.storage_usage().await?;
+        for event in storage_usage_events {
+            builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
+        }
 
         for ip in &catalog.state.egress_ips {
             builtin_table_updates.push(catalog.state.pack_egress_ip_update(ip)?);
