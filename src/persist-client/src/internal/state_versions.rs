@@ -420,8 +420,11 @@ impl StateVersions {
 
     /// Returns an iterator over all live states for the requested shard.
     ///
-    /// Panics if called on an uninitialized shard.
-    pub async fn fetch_all_live_states<T>(&self, shard_id: ShardId) -> UntypedStateVersionsIter<T>
+    /// Returns None if called on an uninitialized shard.
+    pub async fn fetch_all_live_states<T>(
+        &self,
+        shard_id: ShardId,
+    ) -> Option<UntypedStateVersionsIter<T>>
     where
         T: Timestamp + Lattice + Codec64,
     {
@@ -434,7 +437,7 @@ impl StateVersions {
         loop {
             let earliest_live_diff = match all_live_diffs.0.first() {
                 Some(x) => x,
-                None => panic!("fetch_live_states should only be called on an initialized shard"),
+                None => return None,
             };
             let state = match self
                 .fetch_rollup_at_seqno(
@@ -474,13 +477,13 @@ impl StateVersions {
                 }
             };
             assert_eq!(earliest_live_diff.seqno, state.seqno());
-            return UntypedStateVersionsIter {
+            return Some(UntypedStateVersionsIter {
                 shard_id,
                 cfg: self.cfg.clone(),
                 metrics: Arc::clone(&self.metrics),
                 state,
                 diffs: all_live_diffs.0,
-            };
+            });
         }
     }
 
@@ -1037,5 +1040,29 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
         });
         assert_eq!(self.inc_batches, self.full_batches);
         assert_eq!(self.inc_rollups, self.full_rollups);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::new_test_client;
+
+    use super::*;
+
+    /// Regression test for (part of) #17752, where an interrupted
+    /// `bin/environmentd --reset` resulted in panic in persist usage code.
+    #[tokio::test]
+    async fn fetch_all_live_states_regression_uninitialized() {
+        let client = new_test_client().await;
+        let state_versions = StateVersions::new(
+            client.cfg.clone(),
+            Arc::clone(&client.consensus),
+            Arc::clone(&client.blob),
+            Arc::clone(&client.metrics),
+        );
+        assert!(state_versions
+            .fetch_all_live_states::<u64>(ShardId::new())
+            .await
+            .is_none());
     }
 }
