@@ -31,15 +31,15 @@ impl crate::Transform for Project {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        let result = relation.try_visit_mut_pre(&mut |e| Ok(self.action(e)));
-        mz_repr::explain_new::trace_plan(&*relation);
-        result
+        relation.visit_mut_pre(&mut Self::action)?;
+        mz_repr::explain::trace_plan(&*relation);
+        Ok(())
     }
 }
 
 impl Project {
     /// Fuses Project operators with parent operators when possible.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+    pub fn action(relation: &mut MirRelationExpr) {
         if let MirRelationExpr::Project { input, outputs } = relation {
             while let MirRelationExpr::Project {
                 input: inner,

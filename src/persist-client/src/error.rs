@@ -182,9 +182,15 @@ impl<T> Determinacy for InvalidUsage<T> {
 #[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 pub struct CodecMismatch {
     /// The requested (K, V, T, D) codecs.
-    pub(crate) requested: (String, String, String, String),
+    ///
+    /// The last element in the tuple is Some when the name of the codecs match,
+    /// but the concrete types don't: e.g. mz_repr::Timestamp and u64.
+    pub(crate) requested: (String, String, String, String, Option<CodecConcreteType>),
     /// The actual (K, V, T, D) codecs in durable storage.
-    pub(crate) actual: (String, String, String, String),
+    ///
+    /// The last element in the tuple is Some when the name of the codecs match,
+    /// but the concrete types don't: e.g. mz_repr::Timestamp and u64.
+    pub(crate) actual: (String, String, String, String, Option<CodecConcreteType>),
 }
 
 impl std::error::Error for CodecMismatch {}
@@ -203,6 +209,12 @@ impl std::fmt::Display for CodecMismatch {
     }
 }
 
+/// The concrete type of a [mz_persist_types::Codec] or
+/// [mz_persist_types::Codec64] impl.
+#[derive(Debug)]
+#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
+pub struct CodecConcreteType(&'static str);
+
 impl<T> From<CodecMismatch> for InvalidUsage<T> {
     fn from(x: CodecMismatch) -> Self {
         InvalidUsage::CodecMismatch(Box::new(x))
@@ -212,6 +224,26 @@ impl<T> From<CodecMismatch> for InvalidUsage<T> {
 impl<T> From<Box<CodecMismatch>> for InvalidUsage<T> {
     fn from(x: Box<CodecMismatch>) -> Self {
         InvalidUsage::CodecMismatch(x)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct CodecMismatchT {
+    /// The requested T codec.
+    pub(crate) requested: String,
+    /// The actual T codec in durable storage.
+    pub(crate) actual: String,
+}
+
+impl std::error::Error for CodecMismatchT {}
+
+impl std::fmt::Display for CodecMismatchT {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "requested ts codec {:?} did not match one in durable storage {:?}",
+            self.requested, self.actual
+        )
     }
 }
 

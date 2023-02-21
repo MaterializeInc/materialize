@@ -11,13 +11,11 @@ use semver::Version;
 use std::collections::BTreeMap;
 
 use mz_ore::collections::CollectionExt;
-use mz_sql::ast::{
-    display::AstDisplay, CreateSourceStatement, CreateSourceSubsource, DeferredObjectName,
-    RawObjectName, Statement, UnresolvedObjectName,
-};
-use mz_sql::ast::{CreateReferencedSubsources, Raw};
+use mz_sql::ast::display::AstDisplay;
+use mz_sql::ast::{Raw, Statement};
+use mz_sql::plan::{Params, PlanContext};
 
-use crate::catalog::{Catalog, ConnCatalog, SerializedCatalogItem, SYSTEM_CONN_ID};
+use crate::catalog::{Catalog, ConnCatalog, SerializedCatalogItem};
 
 use super::storage::Transaction;
 
@@ -51,7 +49,11 @@ pub(crate) async fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> 
     };
     let mut tx = storage.transaction().await?;
     // First, do basic AST -> AST transformations.
-    rewrite_items(&mut tx, |_stmt| Ok(()))?;
+    rewrite_items(&mut tx, |stmt| {
+        subsource_type_option_rewrite(stmt);
+        csr_url_path_rewrite(stmt);
+        Ok(())
+    })?;
 
     // Then, load up a temporary catalog with the rewritten items, and perform
     // some transformations that require introspecting the catalog. These
@@ -62,7 +64,7 @@ pub(crate) async fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> 
     let conn_cat = cat.for_system_session();
 
     rewrite_items(&mut tx, |item| {
-        deferred_object_name_rewrite(&conn_cat, item)?;
+        normalize_create_secrets(&conn_cat, item)?;
         Ok(())
     })?;
     tx.commit().await.map_err(|e| e.into())
@@ -89,45 +91,84 @@ pub(crate) async fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> 
 // AST migrations -- Basic AST -> AST transformations
 // ****************************************************************************
 
+// Mark all current subsources as "references" subsources in anticipation of
+// adding "progress" subsources.
+// TODO: delete in version v0.45 (released in v0.43 + 1 additional release)
+fn subsource_type_option_rewrite(stmt: &mut mz_sql::ast::Statement<Raw>) {
+    use mz_sql::ast::CreateSubsourceOptionName;
+
+    if let Statement::CreateSubsource(mz_sql::ast::CreateSubsourceStatement {
+        with_options, ..
+    }) = stmt
+    {
+        if !with_options.iter().any(|option| {
+            matches!(
+                option.name,
+                CreateSubsourceOptionName::Progress | CreateSubsourceOptionName::References
+            )
+        }) {
+            with_options.push(mz_sql::ast::CreateSubsourceOption {
+                name: CreateSubsourceOptionName::References,
+                value: Some(mz_sql::ast::WithOptionValue::Value(
+                    mz_sql::ast::Value::Boolean(true),
+                )),
+            });
+        }
+    }
+}
+
+// Remove any present CSR URL paths because we now error on them. We clear them
+// during planning, so this doesn't affect planning.
+// TODO: Released in version 0.43; delete at any later release.
+fn csr_url_path_rewrite(stmt: &mut mz_sql::ast::Statement<Raw>) {
+    use mz_sql::ast::{CreateConnection, CsrConnectionOptionName, Value, WithOptionValue};
+
+    if let Statement::CreateConnection(mz_sql::ast::CreateConnectionStatement {
+        connection: CreateConnection::Csr { with_options },
+        ..
+    }) = stmt
+    {
+        for opt in with_options.iter_mut() {
+            if opt.name != CsrConnectionOptionName::Url {
+                continue;
+            }
+            let Some(WithOptionValue::Value(Value::String(value))) = opt.value.as_mut() else {
+                continue;
+            };
+            if let Ok(mut url) = reqwest::Url::parse(value) {
+                url.set_path("");
+                *value = url.to_string();
+            }
+        }
+    }
+}
+
 // ****************************************************************************
 // Semantic migrations -- Weird migrations that require access to the catalog
 // ****************************************************************************
 
-// Rewrites all subsource references to be qualified by their IDs, which is the
-// mechanism by which `DeferredObjectName` differentiates between user input and
-// created objects.
-fn deferred_object_name_rewrite(
+/// Add normalization to all CREATE SECRET statements.
+// TODO: Released in version 0.44; delete at any later release.
+fn normalize_create_secrets(
     cat: &ConnCatalog,
     stmt: &mut mz_sql::ast::Statement<Raw>,
 ) -> Result<(), anyhow::Error> {
-    if let Statement::CreateSource(CreateSourceStatement {
-        subsources: Some(CreateReferencedSubsources::Subset(create_source_subsources)),
-        ..
-    }) = stmt
-    {
-        for CreateSourceSubsource { subsource, .. } in create_source_subsources {
-            let object_name = subsource.as_mut().unwrap();
-            let name: UnresolvedObjectName = match object_name {
-                DeferredObjectName::Deferred(name) => name.clone(),
-                DeferredObjectName::Named(..) => continue,
-            };
-
-            let partial_subsource_name =
-                mz_sql::normalize::unresolved_object_name(name.clone()).expect("resolvable");
-            let qualified_subsource_name = cat
-                .resolve_item_name(&partial_subsource_name)
-                .expect("known to exist");
-            let entry = cat
-                .state
-                .try_get_entry_in_schema(qualified_subsource_name, SYSTEM_CONN_ID)
-                .expect("known to exist");
-            let id = entry.id();
-
-            *subsource = Some(DeferredObjectName::Named(RawObjectName::Id(
-                id.to_string(),
-                name,
-            )));
-        }
+    if matches!(stmt, mz_sql::ast::Statement::CreateSecret(..)) {
+        // Resolve Statement<Raw> to Statement<Aug>.
+        let (resolved_stmt, _depends_on) = mz_sql::names::resolve(cat, stmt.clone())?;
+        // Ok to use `PlanContext::zero()` because wall time is never used.
+        let plan = mz_sql::plan::plan(
+            Some(&PlanContext::zero()),
+            cat,
+            resolved_stmt,
+            &Params::empty(),
+        )?;
+        let create_secret_plan = match plan {
+            mz_sql::plan::Plan::CreateSecret(plan) => plan,
+            _ => unreachable!("create secret statement can only plan into create secret plan"),
+        };
+        *stmt = mz_sql::parse::parse(&create_secret_plan.secret.create_sql)?.into_element();
     }
+
     Ok(())
 }

@@ -9,14 +9,14 @@
 
 //! Structured name types for SQL objects.
 
-use anyhow::anyhow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
 
+use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_controller::clusters::ClusterId;
 use mz_expr::LocalId;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
@@ -94,7 +94,7 @@ impl fmt::Display for QualifiedObjectName {
 ///
 /// This is like a [`FullObjectName`], but either the database or schema name may be
 /// omitted.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PartialObjectName {
     pub database: Option<String>,
     pub schema: Option<String>,
@@ -154,7 +154,7 @@ impl From<String> for PartialObjectName {
 }
 
 /// A fully-qualified human readable name of a schema in the catalog.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct FullSchemaName {
     /// The database name
     pub database: RawDatabaseSpecifier,
@@ -235,7 +235,7 @@ impl From<Option<String>> for RawDatabaseSpecifier {
 }
 
 /// An id of a database.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ResolvedDatabaseSpecifier {
     /// The "ambient" database, which is always present and is not named
     /// explicitly, but by omission.
@@ -272,7 +272,7 @@ impl From<u64> for ResolvedDatabaseSpecifier {
  * their Id.
  */
 /// An id of a schema.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum SchemaSpecifier {
     /// A temporary schema
     Temporary,
@@ -342,16 +342,16 @@ impl From<SchemaSpecifier> for u64 {
 // Aug is the type variable assigned to an AST that has already been
 // name-resolved. An AST in this state has global IDs populated next to table
 // names, and local IDs assigned to CTE definitions and references.
-#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Default)]
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Copy, Clone, Default)]
 pub struct Aug;
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ObjectQualifiers {
     pub database_spec: ResolvedDatabaseSpecifier,
     pub schema_spec: SchemaSpecifier,
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ResolvedObjectName {
     Object {
         id: GlobalId,
@@ -414,7 +414,7 @@ impl std::fmt::Display for ResolvedObjectName {
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ResolvedSchemaName {
     Schema {
         database_spec: ResolvedDatabaseSpecifier,
@@ -451,7 +451,7 @@ impl AstDisplay for ResolvedSchemaName {
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ResolvedDatabaseName {
     Database { id: DatabaseId, name: String },
     Error,
@@ -466,9 +466,9 @@ impl AstDisplay for ResolvedDatabaseName {
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ResolvedClusterName {
-    pub id: ComputeInstanceId,
+    pub id: ClusterId,
     /// If set, a name to print in the `AstDisplay` implementation instead of
     /// `None`. This is only meant to be used by the `NameSimplifier`.
     ///
@@ -488,7 +488,7 @@ impl AstDisplay for ResolvedClusterName {
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ResolvedDataType {
     AnonymousList(Box<ResolvedDataType>),
     AnonymousMap {
@@ -700,18 +700,18 @@ impl fmt::Display for RoleId {
 #[derive(Debug)]
 pub struct NameResolver<'a> {
     catalog: &'a dyn SessionCatalog,
-    ctes: HashMap<String, LocalId>,
+    ctes: BTreeMap<String, LocalId>,
     status: Result<(), PlanError>,
-    ids: HashSet<GlobalId>,
+    ids: BTreeSet<GlobalId>,
 }
 
 impl<'a> NameResolver<'a> {
     fn new(catalog: &'a dyn SessionCatalog) -> NameResolver {
         NameResolver {
             catalog,
-            ctes: HashMap::new(),
+            ctes: BTreeMap::new(),
             status: Ok(()),
-            ids: HashSet::new(),
+            ids: BTreeSet::new(),
         }
     }
 
@@ -966,7 +966,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     Some(item) => item,
                     None => {
                         if self.status.is_ok() {
-                            self.status = Err(sql_err!("invalid id {}", &gid));
+                            self.status = Err(PlanError::InvalidId(gid));
                         }
                         return ResolvedObjectName::Error;
                     }
@@ -1073,7 +1073,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
     ) -> <Aug as AstInfo>::ClusterName {
         match cluster_name {
             RawClusterName::Unresolved(ident) => {
-                match self.catalog.resolve_compute_instance(Some(ident.as_str())) {
+                match self.catalog.resolve_cluster(Some(ident.as_str())) {
                     Ok(cluster) => ResolvedClusterName {
                         id: cluster.id(),
                         print_name: None,
@@ -1081,8 +1081,9 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     Err(e) => {
                         self.status = Err(e.into());
                         ResolvedClusterName {
-                            // The id is arbitrary here, we just need some dummy value to return.
-                            id: ComputeInstanceId::System(0),
+                            // The ID is arbitrary here; we just need some dummy
+                            // value to return.
+                            id: ClusterId::System(0),
                             print_name: None,
                         }
                     }
@@ -1096,8 +1097,9 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 Err(e) => {
                     self.status = Err(e.into());
                     ResolvedClusterName {
-                        // The id is arbitrary here, we just need some dummy value to return.
-                        id: ComputeInstanceId::System(0),
+                        // The ID is arbitrary here; we just need some dummy
+                        // value to return.
+                        id: ClusterId::System(0),
                         print_name: None,
                     }
                 }
@@ -1125,11 +1127,12 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     ResolvedObjectName::Object { id, .. } => {
                         let item = self.catalog.get_item(id);
                         if item.item_type() != CatalogItemType::Secret {
-                            self.status = Err(PlanError::InvalidSecret(object_name.clone()));
+                            self.status =
+                                Err(PlanError::InvalidSecret(Box::new(object_name.clone())));
                         }
                     }
                     ResolvedObjectName::Cte { .. } => {
-                        self.status = Err(PlanError::InvalidSecret(object_name.clone()));
+                        self.status = Err(PlanError::InvalidSecret(Box::new(object_name.clone())));
                     }
                     ResolvedObjectName::Error => {}
                 }
@@ -1140,7 +1143,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 match &object_name {
                     ResolvedObjectName::Object { .. } => {}
                     ResolvedObjectName::Cte { .. } => {
-                        self.status = Err(PlanError::InvalidObject(object_name.clone()));
+                        self.status = Err(PlanError::InvalidObject(Box::new(object_name.clone())));
                     }
                     ResolvedObjectName::Error => {}
                 }
@@ -1170,7 +1173,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
 pub fn resolve<N>(
     catalog: &dyn SessionCatalog,
     node: N,
-) -> Result<(N::Folded, HashSet<GlobalId>), PlanError>
+) -> Result<(N::Folded, BTreeSet<GlobalId>), PlanError>
 where
     N: FoldNode<Raw, Aug>,
 {
@@ -1194,13 +1197,13 @@ where
 /// the final `GlobalIds` and use this TransientResolver to walk through all the ASTs and make them
 /// refer to the final GlobalIds of the objects.
 pub struct TransientResolver<'a> {
-    /// A HashMap mapping each transient global id to its final non-transient global id
-    allocation: &'a HashMap<GlobalId, GlobalId>,
+    /// A map from transient `GlobalId`s to their final non-transient `GlobalId`s.
+    allocation: &'a BTreeMap<GlobalId, GlobalId>,
     status: Result<(), PlanError>,
 }
 
 impl<'a> TransientResolver<'a> {
-    fn new(allocation: &'a HashMap<GlobalId, GlobalId>) -> Self {
+    fn new(allocation: &'a BTreeMap<GlobalId, GlobalId>) -> Self {
         TransientResolver {
             allocation,
             status: Ok(()),
@@ -1226,7 +1229,7 @@ impl Fold<Aug, Aug> for TransientResolver<'_> {
                             full_name: full_name.clone(),
                             print_id,
                         };
-                        self.status = Err(PlanError::InvalidObject(obj));
+                        self.status = Err(PlanError::InvalidObject(Box::new(obj)));
                         transient_id
                     }
                 };
@@ -1273,7 +1276,7 @@ impl Fold<Aug, Aug> for TransientResolver<'_> {
 }
 
 pub fn resolve_transient_ids<N>(
-    allocation: &HashMap<GlobalId, GlobalId>,
+    allocation: &BTreeMap<GlobalId, GlobalId>,
     node: N,
 ) -> Result<N::Folded, PlanError>
 where
@@ -1287,7 +1290,7 @@ where
 
 #[derive(Debug, Default)]
 pub struct DependencyVisitor {
-    ids: HashSet<GlobalId>,
+    ids: BTreeSet<GlobalId>,
 }
 
 impl<'ast> Visit<'ast, Aug> for DependencyVisitor {
@@ -1315,7 +1318,7 @@ impl<'ast> Visit<'ast, Aug> for DependencyVisitor {
     }
 }
 
-pub fn visit_dependencies<'ast, N>(node: &'ast N) -> HashSet<GlobalId>
+pub fn visit_dependencies<'ast, N>(node: &'ast N) -> BTreeSet<GlobalId>
 where
     N: VisitNode<'ast, Aug> + 'ast,
 {
@@ -1333,7 +1336,7 @@ pub struct NameSimplifier<'a> {
 
 impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
     fn visit_cluster_name_mut(&mut self, node: &mut ResolvedClusterName) {
-        node.print_name = Some(self.catalog.get_compute_instance(node.id).name().into());
+        node.print_name = Some(self.catalog.get_cluster(node.id).name().into());
     }
 
     fn visit_object_name_mut(&mut self, name: &mut ResolvedObjectName) {

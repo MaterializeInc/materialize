@@ -48,6 +48,7 @@
 //! [Batch::Merger]: differential_dataflow::trace::Batch::Merger
 
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
@@ -64,7 +65,7 @@ use crate::internal::state::HollowBatch;
 #[derive(Debug, Clone, PartialEq)]
 pub struct FueledMergeReq<T> {
     pub desc: Description<T>,
-    pub inputs: Vec<HollowBatch<T>>,
+    pub inputs: Vec<Arc<HollowBatch<T>>>,
 }
 
 #[derive(Debug)]
@@ -162,20 +163,6 @@ impl<T> Trace<T> {
         });
         ret
     }
-
-    pub fn batch_size_metrics(&self) -> (usize, usize) {
-        let mut largest_batch_size = 0;
-        let mut encoded_batch_size = 0;
-        self.map_batches(|b| {
-            let mut this_batch_size = 0;
-            for part in b.parts.iter() {
-                this_batch_size += part.encoded_size_bytes;
-            }
-            largest_batch_size = std::cmp::max(largest_batch_size, this_batch_size);
-            encoded_batch_size += this_batch_size;
-        });
-        (largest_batch_size, encoded_batch_size)
-    }
 }
 
 impl<T: Timestamp + Lattice> Trace<T> {
@@ -187,7 +174,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
     pub fn push_batch(&mut self, batch: HollowBatch<T>) -> Vec<FueledMergeReq<T>> {
         let mut merge_reqs = Vec::new();
         self.spine
-            .insert(SpineBatch::Merged(batch), &mut merge_reqs);
+            .insert(SpineBatch::Merged(Arc::new(batch)), &mut merge_reqs);
         // Spine::roll_up (internally used by insert) clears all batches out of
         // levels below a target by walking up from level 0 and merging each
         // level into the next (providing the necessary fuel). In practice, this
@@ -289,10 +276,10 @@ impl<T: Timestamp + Lattice> Trace<T> {
 #[derive(Debug, Clone)]
 #[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 enum SpineBatch<T> {
-    Merged(HollowBatch<T>),
+    Merged(Arc<HollowBatch<T>>),
     Fueled {
         desc: Description<T>,
-        parts: Vec<HollowBatch<T>>,
+        parts: Vec<Arc<HollowBatch<T>>>,
         // A cached version of parts.iter().map(|x| x.len).sum()
         len: usize,
     },
@@ -335,14 +322,14 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
 
     fn desc(&self) -> &Description<T> {
         match self {
-            SpineBatch::Merged(HollowBatch { desc, .. }) => desc,
+            SpineBatch::Merged(b) => &b.desc,
             SpineBatch::Fueled { desc, .. } => desc,
         }
     }
 
     pub fn len(&self) -> usize {
         match self {
-            SpineBatch::Merged(HollowBatch { len, .. }) => *len,
+            SpineBatch::Merged(b) => b.len,
             // NB: This is an upper bound on len, we won't know for sure until
             // we compact it.
             SpineBatch::Fueled { len, parts, .. } => {
@@ -359,12 +346,12 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
     }
 
     pub fn empty(lower: Antichain<T>, upper: Antichain<T>, since: Antichain<T>) -> Self {
-        SpineBatch::Merged(HollowBatch {
+        SpineBatch::Merged(Arc::new(HollowBatch {
             desc: Description::new(lower, upper, since),
             parts: vec![],
             len: 0,
             runs: vec![],
-        })
+        }))
     }
 
     pub fn begin_merge(
@@ -408,7 +395,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
             if res.output.len > self.len() {
                 return ApplyMergeResult::NotAppliedTooManyUpdates;
             }
-            *self = SpineBatch::Merged(res.output.clone());
+            *self = SpineBatch::Merged(Arc::new(res.output.clone()));
             return ApplyMergeResult::AppliedExact;
         }
 
@@ -445,7 +432,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
                     (Some(lower), Some(upper)) => {
                         let mut new_parts = vec![];
                         new_parts.extend_from_slice(&parts[..lower]);
-                        new_parts.push(res.output.clone());
+                        new_parts.push(Arc::new(res.output.clone()));
                         new_parts.extend_from_slice(&parts[upper + 1..]);
                         let new_spine_batch = SpineBatch::Fueled {
                             desc: desc.to_owned(),
@@ -502,14 +489,27 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
         }
 
         let desc = Description::new(lower, upper, since);
+        let len = self.b1.len() + self.b2.len();
 
-        let mut merged_parts = Vec::new();
-        let mut append_parts = |b| match b {
-            SpineBatch::Merged(b) => merged_parts.push(b),
-            SpineBatch::Fueled { parts, .. } => merged_parts.extend_from_slice(&parts),
-        };
-        append_parts(self.b1);
-        append_parts(self.b2);
+        // Pre-size the merged_parts Vec. Benchmarking has shown that, at least
+        // in the worst case, the double iteration is absolutely worth having
+        // merged_parts pre-sized.
+        let mut merged_parts_len = 0;
+        for b in [&self.b1, &self.b2] {
+            match b {
+                SpineBatch::Merged(_) => merged_parts_len += 1,
+                SpineBatch::Fueled { parts, .. } => merged_parts_len += parts.len(),
+            }
+        }
+        let mut merged_parts = Vec::with_capacity(merged_parts_len);
+        for b in [self.b1, self.b2] {
+            match b {
+                SpineBatch::Merged(b) => merged_parts.push(b),
+                SpineBatch::Fueled { mut parts, .. } => merged_parts.append(&mut parts),
+            }
+        }
+        // Sanity check the pre-size code.
+        debug_assert_eq!(merged_parts.len(), merged_parts_len);
 
         merge_reqs.push(FueledMergeReq {
             desc: desc.clone(),
@@ -518,7 +518,7 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
 
         SpineBatch::Fueled {
             desc,
-            len: merged_parts.iter().map(|x| x.len).sum(),
+            len,
             parts: merged_parts,
         }
     }
@@ -1235,18 +1235,13 @@ pub mod datadriven {
         let mut s = String::new();
         datadriven.trace.spine.map_batches(|b| {
             let b = match b {
-                SpineBatch::Merged(HollowBatch {
-                    desc,
-                    len,
-                    parts,
-                    runs: _runs,
-                }) => format!(
+                SpineBatch::Merged(b) => format!(
                     "{:?}{:?}{:?} {}{}\n",
-                    desc.lower().elements(),
-                    desc.upper().elements(),
-                    desc.since().elements(),
-                    len,
-                    parts
+                    b.desc.lower().elements(),
+                    b.desc.upper().elements(),
+                    b.desc.since().elements(),
+                    b.len,
+                    b.parts
                         .iter()
                         .map(|x| format!(" {}", x.key))
                         .collect::<Vec<_>>()

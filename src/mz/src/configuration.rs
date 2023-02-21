@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
-use crate::region::CloudProviderRegion;
+use crate::api::CloudProviderRegion;
 use crate::vault::Token;
 
 pub const WEB_DOCS_URL: &str = "https://www.materialize.com/docs";
@@ -41,10 +41,13 @@ impl Endpoint {
     }
 
     /// Returns the URL for the OAuth token exchange.
-    pub fn web_login_url(&self, profile_name: &str) -> Url {
+    pub fn web_login_url(&self, profile_name: &str, port: u16) -> Url {
         let mut url = self.with_path(&["account", "login"]);
         let mut query_pairs = url.query_pairs_mut();
-        query_pairs.append_pair("redirectUrl", "/access/cli");
+        query_pairs.append_pair(
+            "redirectUrl",
+            &format!("/access/cli?redirectUri=http://localhost:{port}"),
+        );
         query_pairs.append_pair("profile", profile_name);
         drop(query_pairs);
         url
@@ -123,35 +126,35 @@ struct Profile0 {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub(crate) struct Configuration {
+pub struct Configuration {
     #[serde(skip)]
     modified: bool,
     current_profile: String,
     profiles: BTreeMap<String, Profile0>,
 }
 
-pub(crate) struct Profile<'a> {
+pub struct Profile<'a> {
     _modified: &'a mut bool,
     profile: &'a mut Profile0,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct FronteggAuth {
+pub struct FronteggAuth {
     pub access_token: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct FronteggAPIToken {
-    pub(crate) client_id: String,
-    pub(crate) secret: String,
+    pub client_id: String,
+    pub secret: String,
 }
 
-pub(crate) struct ValidProfile<'a> {
-    pub(crate) profile: &'a Profile<'a>,
-    pub(crate) frontegg_auth: FronteggAuth,
-    pub(crate) app_password: String,
+pub struct ValidProfile<'a> {
+    pub profile: &'a Profile<'a>,
+    pub frontegg_auth: FronteggAuth,
+    pub app_password: String,
 }
 
 #[allow(dead_code)]
@@ -160,7 +163,7 @@ impl Configuration {
     const PROFILES_FILE_NAME: &str = "profiles.toml";
     const DEFAULT_PROFILE: &str = "default";
 
-    pub(crate) fn load(profile: Option<&str>) -> Result<Configuration, anyhow::Error> {
+    pub fn load(profile: Option<&str>) -> Result<Configuration, anyhow::Error> {
         fn path_exists(path: &PathBuf) -> bool {
             fs::metadata(path).is_ok()
         }
@@ -197,11 +200,11 @@ impl Configuration {
         Ok(config)
     }
 
-    pub(crate) fn current_profile(&self) -> String {
+    pub fn current_profile(&self) -> String {
         self.current_profile.to_string()
     }
 
-    pub(crate) fn get_profile(&mut self) -> Result<Profile, anyhow::Error> {
+    pub fn get_profile(&mut self) -> Result<Profile, anyhow::Error> {
         let profile = &self.current_profile;
         self.profiles
             .get_mut(profile)
@@ -212,7 +215,7 @@ impl Configuration {
             .context("Profile not found. Please, add one or login using `mz login`.")
     }
 
-    pub(crate) fn get_profiles(&self, profile: Option<String>) -> Vec<String> {
+    pub fn get_profiles(&self, profile: Option<String>) -> Vec<String> {
         let mut keys = self
             .profiles
             .keys()
@@ -226,12 +229,12 @@ impl Configuration {
         keys
     }
 
-    pub(crate) fn update_current_profile(&mut self, profile: String) {
+    pub fn update_current_profile(&mut self, profile: String) {
         self.modified = true;
         self.current_profile = profile;
     }
 
-    pub(crate) fn create_or_update_profile(
+    pub fn create_or_update_profile(
         &mut self,
         endpoint: Endpoint,
         name: String,
@@ -251,7 +254,7 @@ impl Configuration {
         );
     }
 
-    pub(crate) fn close(self) -> Result<(), anyhow::Error> {
+    pub fn close(self) -> Result<(), anyhow::Error> {
         if !self.modified {
             return Ok(());
         }
@@ -290,15 +293,15 @@ impl Profile<'_> {
         &self.profile.endpoint
     }
 
-    pub(crate) fn get_email(&self) -> &str {
+    pub fn get_email(&self) -> &str {
         &self.profile.email
     }
 
-    pub(crate) fn get_default_region(&self) -> Option<CloudProviderRegion> {
+    pub fn get_default_region(&self) -> Option<CloudProviderRegion> {
         self.profile.region
     }
 
-    pub(crate) fn set_default_region(&mut self, region: CloudProviderRegion) {
+    pub fn set_default_region(&mut self, region: CloudProviderRegion) {
         *self._modified = true;
         self.profile.region = Some(region)
     }
@@ -311,7 +314,7 @@ impl Profile<'_> {
             .try_into()
     }
 
-    pub(crate) async fn validate(
+    pub async fn validate(
         &self,
         name: &str,
         client: &Client,

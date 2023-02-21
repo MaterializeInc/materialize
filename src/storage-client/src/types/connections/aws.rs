@@ -9,14 +9,11 @@
 
 //! AWS configuration for sources and sinks.
 
-use http::Uri;
-use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::url::URL_PATTERN;
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 
@@ -26,38 +23,6 @@ include!(concat!(
     env!("OUT_DIR"),
     "/mz_storage_client.types.connections.aws.rs"
 ));
-
-/// A wrapper for [`Uri`] that implements [`Serialize`] and `Deserialize`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct SerdeUri(#[serde(with = "http_serde::uri")] pub Uri);
-
-/// Generate a random `SerdeUri` based on an arbitrary URL
-/// It doesn't cover the full spectrum of valid URIs, but just a wide enough sample
-/// to test our Protobuf roundtripping logic.
-fn any_serde_uri() -> impl Strategy<Value = SerdeUri> {
-    URL_PATTERN.prop_map(|s| SerdeUri(s.parse().unwrap()))
-}
-
-impl Arbitrary for SerdeUri {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        any_serde_uri().boxed()
-    }
-}
-
-impl RustType<ProtoSerdeUri> for SerdeUri {
-    fn into_proto(&self) -> ProtoSerdeUri {
-        ProtoSerdeUri {
-            uri: self.0.to_string(),
-        }
-    }
-
-    fn from_proto(proto: ProtoSerdeUri) -> Result<Self, TryFromProtoError> {
-        Ok(SerdeUri(proto.uri.parse()?))
-    }
-}
 
 /// AWS configuration overrides for a source or sink.
 ///
@@ -74,7 +39,7 @@ pub struct AwsConfig {
     /// The AWS role to assume.
     pub role: Option<AwsAssumeRole>,
     /// The custom AWS endpoint to use, if any.
-    pub endpoint: Option<SerdeUri>,
+    pub endpoint: Option<String>,
 }
 
 impl RustType<ProtoAwsConfig> for AwsConfig {
@@ -83,7 +48,7 @@ impl RustType<ProtoAwsConfig> for AwsConfig {
             credentials: Some(self.credentials.into_proto()),
             region: self.region.clone(),
             role: self.role.into_proto(),
-            endpoint: self.endpoint.into_proto(),
+            endpoint: self.endpoint.clone(),
         }
     }
 
@@ -94,7 +59,7 @@ impl RustType<ProtoAwsConfig> for AwsConfig {
                 .into_rust_if_some("ProtoAwsConfig::credentials")?,
             region: proto.region,
             role: proto.role.into_rust()?,
-            endpoint: proto.endpoint.into_rust()?,
+            endpoint: proto.endpoint,
         })
     }
 }
@@ -159,8 +124,8 @@ impl AwsConfig {
     ) -> aws_types::SdkConfig {
         use aws_config::default_provider::region::DefaultRegionChain;
         use aws_config::sts::AssumeRoleProvider;
-        use aws_smithy_http::endpoint::Endpoint;
-        use aws_types::credentials::SharedCredentialsProvider;
+        use aws_credential_types::provider::SharedCredentialsProvider;
+        use aws_credential_types::Credentials;
         use aws_types::region::Region;
 
         let region = match &self.region {
@@ -177,7 +142,7 @@ impl AwsConfig {
             session_token,
         } = &self.credentials;
 
-        let mut cred_provider = SharedCredentialsProvider::new(aws_types::Credentials::from_keys(
+        let mut cred_provider = SharedCredentialsProvider::new(Credentials::from_keys(
             access_key_id.get_string(secrets_reader).await.unwrap(),
             secrets_reader
                 .read_string(*secret_access_key)
@@ -211,9 +176,7 @@ impl AwsConfig {
             .region(region)
             .credentials_provider(cred_provider);
         if let Some(endpoint) = &self.endpoint {
-            let endpoint =
-                Endpoint::immutable_uri(endpoint.0.clone()).expect("invalid AWS endpoint");
-            loader = loader.endpoint_resolver(endpoint);
+            loader = loader.endpoint_url(endpoint);
         }
         loader.load().await
     }

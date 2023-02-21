@@ -71,6 +71,7 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
@@ -352,7 +353,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
 
             // Create the state for new processes.
             let mut new_process_states = vec![];
-            for i in process_states.len()..scale.get() {
+            for i in process_states.len()..scale.into() {
                 // Allocate listeners for each TCP proxy, if requested.
                 let mut ports = vec![];
                 let mut tcp_proxy_addrs = BTreeMap::new();
@@ -402,16 +403,13 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
 
             // Update the in-memory process state. We do this after we've created
             // all process states to avoid partially updating our in-memory state.
-            process_states.truncate(scale.get());
+            process_states.truncate(scale.into());
             process_states.extend(new_process_states);
         }
 
         self.maybe_write_prometheus_service_discovery_file().await;
 
-        Ok(Box::new(ProcessService {
-            run_dir,
-            scale: scale.get(),
-        }))
+        Ok(Box::new(ProcessService { run_dir, scale }))
     }
 
     async fn drop_service(&self, id: &str) -> Result<(), anyhow::Error> {
@@ -842,13 +840,13 @@ struct AddressedTcpListener {
 #[derive(Debug, Clone)]
 struct ProcessService {
     run_dir: PathBuf,
-    scale: usize,
+    scale: u16,
 }
 
 impl Service for ProcessService {
     fn addresses(&self, port: &str) -> Vec<String> {
         (0..self.scale)
-            .map(|i| socket_path(&self.run_dir, port, i))
+            .map(|i| socket_path(&self.run_dir, port, i.into()))
             .collect()
     }
 }

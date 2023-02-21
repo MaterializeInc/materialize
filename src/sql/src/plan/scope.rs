@@ -41,7 +41,7 @@
 //! I've tried to refactor this code several times to no avail. It works better
 //! than you might expect. But you have been warned. Tread carefully!
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::iter;
 
 use mz_ore::iter::IteratorExt;
@@ -61,7 +61,7 @@ pub struct ScopeItem {
     pub column_name: ColumnName,
     /// The expressions from which this scope item is derived. Used by `GROUP
     /// BY`.
-    pub exprs: HashSet<Expr<Aug>>,
+    pub exprs: BTreeSet<Expr<Aug>>,
     /// Whether the column is the return value of a function that produces only
     /// a single column. This accounts for a strange PostgreSQL special case
     /// around whole-row expansion.
@@ -127,7 +127,7 @@ impl ScopeItem {
         ScopeItem {
             table_name: None,
             column_name: "?column?".into(),
-            exprs: HashSet::new(),
+            exprs: BTreeSet::new(),
             from_single_column_function: false,
             allow_unqualified_references: true,
             lateral_error_if_referenced: false,
@@ -432,10 +432,10 @@ impl Scope {
         }
     }
 
-    fn table_names(&self) -> HashSet<&PartialObjectName> {
+    fn table_names(&self) -> BTreeSet<&PartialObjectName> {
         self.items
             .iter()
             .filter_map(|name| name.table_name.as_ref())
-            .collect::<HashSet<&PartialObjectName>>()
+            .collect::<BTreeSet<&PartialObjectName>>()
     }
 }

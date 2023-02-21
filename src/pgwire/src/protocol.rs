@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::future::Future;
 use std::iter;
@@ -17,7 +17,6 @@ use std::mem;
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{pending, BoxFuture, FutureExt};
 use itertools::izip;
-use mz_adapter::AdapterNotice;
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
@@ -30,7 +29,7 @@ use mz_adapter::session::{
     EndTransactionAction, ExternalUserMetadata, InProgressRows, Portal, PortalState,
     RowBatchStream, TransactionStatus,
 };
-use mz_adapter::{ExecuteResponse, PeekResponseUnary, RowsFuture};
+use mz_adapter::{AdapterNotice, ExecuteResponse, PeekResponseUnary, RowsFuture};
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
@@ -79,7 +78,7 @@ pub struct RunParams<'a, A> {
     /// The protocol version that the client provided in the startup message.
     pub version: i32,
     /// The parameters that the client provided in the startup message.
-    pub params: HashMap<String, String>,
+    pub params: BTreeMap<String, String>,
     /// Frontegg authentication.
     pub frontegg: Option<&'a FronteggAuthentication>,
     /// Whether this is an internal server that permits access to restricted
@@ -1262,8 +1261,8 @@ where
             ExecuteResponse::AlteredIndexLogicalCompaction
             | ExecuteResponse::AlteredObject(..)
             | ExecuteResponse::AlteredSystemConfiguration
-            | ExecuteResponse::CreatedComputeInstance { .. }
-            | ExecuteResponse::CreatedComputeReplica { .. }
+            | ExecuteResponse::CreatedCluster { .. }
+            | ExecuteResponse::CreatedClusterReplica { .. }
             | ExecuteResponse::CreatedConnection { .. }
             | ExecuteResponse::CreatedDatabase { .. }
             | ExecuteResponse::CreatedIndex { .. }
@@ -1282,8 +1281,8 @@ where
             | ExecuteResponse::Deleted(..)
             | ExecuteResponse::DiscardedAll
             | ExecuteResponse::DiscardedTemp
-            | ExecuteResponse::DroppedComputeInstance
-            | ExecuteResponse::DroppedComputeReplica
+            | ExecuteResponse::DroppedCluster
+            | ExecuteResponse::DroppedClusterReplica
             | ExecuteResponse::DroppedConnection
             | ExecuteResponse::DroppedDatabase
             | ExecuteResponse::DroppedIndex
@@ -1777,12 +1776,15 @@ fn describe_rows(stmt_desc: &StatementDesc, formats: &[mz_pgrepr::Format]) -> Ba
 }
 
 fn parse_sql(sql: &str) -> Result<Vec<Statement<Raw>>, ErrorResponse> {
-    mz_sql::parse::parse(sql).map_err(|e| {
-        // Convert our 0-based byte position to pgwire's 1-based character
-        // position.
-        let pos = sql[..e.pos].chars().count() + 1;
-        ErrorResponse::error(SqlState::SYNTAX_ERROR, e.message).with_position(pos)
-    })
+    match mz_sql::parse::parse_with_limit(sql) {
+        Ok(result) => result.map_err(|e| {
+            // Convert our 0-based byte position to pgwire's 1-based character
+            // position.
+            let pos = sql[..e.pos].chars().count() + 1;
+            ErrorResponse::error(SqlState::SYNTAX_ERROR, e.message).with_position(pos)
+        }),
+        Err(e) => Err(ErrorResponse::error(SqlState::PROGRAM_LIMIT_EXCEEDED, e)),
+    }
 }
 
 type GetResponse = fn(

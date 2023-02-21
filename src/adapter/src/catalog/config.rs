@@ -7,21 +7,20 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
-use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::Deserialize;
 
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::AwsExternalIdPrefix;
-use mz_compute_client::controller::ComputeReplicaAllocation;
+use mz_controller::clusters::ReplicaAllocation;
 use mz_ore::metrics::MetricsRegistry;
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 use mz_sql::catalog::EnvironmentId;
-use mz_storage_client::types::hosts::StorageHostResourceAllocation;
 
 use crate::catalog::storage;
 use crate::config::SystemParameterFrontend;
@@ -47,10 +46,8 @@ pub struct Config<'a> {
     pub metrics_registry: &'a MetricsRegistry,
     /// Map of strings to corresponding compute replica sizes.
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
-    /// Map of strings to corresponding storage host sizes.
-    pub storage_host_sizes: StorageHostSizeMap,
-    /// Default storage host size, should be a key from storage_host_sizes.
-    pub default_storage_host_size: Option<String>,
+    /// Default storage cluster size. Must be a key from cluster_replica_sizes.
+    pub default_storage_cluster_size: Option<String>,
     /// Values to set for system parameters, if those system parameters have not
     /// already been set by the system user.
     pub bootstrap_system_parameters: BTreeMap<String, String>,
@@ -63,15 +60,17 @@ pub struct Config<'a> {
     /// Context for generating an AWS Principal.
     pub aws_principal_context: Option<AwsPrincipalContext>,
     /// Supported AWS PrivateLink availability zone ids.
-    pub aws_privatelink_availability_zones: Option<HashSet<String>>,
+    pub aws_privatelink_availability_zones: Option<BTreeSet<String>>,
     /// A optional frontend used to pull system parameters for initial sync in
     /// Catalog::open. A `None` value indicates that the initial sync should be
     /// skipped.
     pub system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
+    /// How long to retain storage usage records
+    pub storage_usage_retention_period: Option<Duration>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct ClusterReplicaSizeMap(pub HashMap<String, ComputeReplicaAllocation>);
+pub struct ClusterReplicaSizeMap(pub BTreeMap<String, ReplicaAllocation>);
 
 impl Default for ClusterReplicaSizeMap {
     fn default() -> Self {
@@ -97,72 +96,49 @@ impl Default for ClusterReplicaSizeMap {
                 let workers = 1 << i;
                 (
                     workers.to_string(),
-                    ComputeReplicaAllocation {
+                    ReplicaAllocation {
                         memory_limit: None,
                         cpu_limit: None,
-                        scale: NonZeroUsize::new(1).unwrap(),
-                        workers: NonZeroUsize::new(workers).unwrap(),
+                        scale: 1,
+                        workers,
                     },
                 )
             })
-            .collect::<HashMap<_, _>>();
+            .collect::<BTreeMap<_, _>>();
 
         for i in 1..=5 {
             let scale = 1 << i;
             inner.insert(
                 format!("{scale}-1"),
-                ComputeReplicaAllocation {
+                ReplicaAllocation {
                     memory_limit: None,
                     cpu_limit: None,
-                    scale: NonZeroUsize::new(scale).unwrap(),
-                    workers: NonZeroUsize::new(1).unwrap(),
+                    scale,
+                    workers: 1,
                 },
             );
 
             inner.insert(
                 format!("{scale}-{scale}"),
-                ComputeReplicaAllocation {
+                ReplicaAllocation {
                     memory_limit: None,
                     cpu_limit: None,
-                    scale: NonZeroUsize::new(scale).unwrap(),
-                    workers: NonZeroUsize::new(scale).unwrap(),
+                    scale,
+                    workers: scale.into(),
                 },
             );
         }
 
         inner.insert(
             "2-4".to_string(),
-            ComputeReplicaAllocation {
+            ReplicaAllocation {
                 memory_limit: None,
                 cpu_limit: None,
-                scale: NonZeroUsize::new(2).unwrap(),
-                workers: NonZeroUsize::new(4).unwrap(),
+                scale: 2,
+                workers: 4,
             },
         );
         Self(inner)
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct StorageHostSizeMap(pub HashMap<String, StorageHostResourceAllocation>);
-
-impl Default for StorageHostSizeMap {
-    fn default() -> Self {
-        Self(
-            (0..=5)
-                .map(|i| {
-                    let workers = 1 << i;
-                    (
-                        workers.to_string(),
-                        StorageHostResourceAllocation {
-                            memory_limit: None,
-                            cpu_limit: None,
-                            workers: NonZeroUsize::new(workers).unwrap(),
-                        },
-                    )
-                })
-                .collect::<HashMap<_, _>>(),
-        )
     }
 }
 

@@ -40,7 +40,7 @@ impl AstDisplay for Schema {
 }
 impl_display!(Schema);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AvroSchemaOptionName {
     /// The `CONFLUENT WIRE FORMAT [=] <bool>` option.
     ConfluentWireFormat,
@@ -54,7 +54,7 @@ impl AstDisplay for AvroSchemaOptionName {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AvroSchemaOption<T: AstInfo> {
     pub name: AvroSchemaOptionName,
     pub value: Option<WithOptionValue<T>>,
@@ -135,7 +135,7 @@ impl<T: AstInfo> AstDisplay for ProtobufSchema<T> {
 }
 impl_display_t!(ProtobufSchema);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CsrConfigOptionName {
     AvroKeyFullname,
     AvroValueFullname,
@@ -151,7 +151,7 @@ impl AstDisplay for CsrConfigOptionName {
 }
 impl_display!(CsrConfigOptionName);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// An option in a `{FROM|INTO} CONNECTION ...` statement.
 pub struct CsrConfigOption<T: AstInfo> {
     pub name: CsrConfigOptionName,
@@ -545,7 +545,7 @@ impl<T: AstInfo> AstDisplay for DbzTxMetadataOption<T> {
 }
 impl_display_t!(DbzTxMetadataOption);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum KafkaConnectionOptionName {
     Broker,
     Brokers,
@@ -577,7 +577,7 @@ impl AstDisplay for KafkaConnectionOptionName {
 }
 impl_display!(KafkaConnectionOptionName);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// An option in a `CREATE CONNECTION...KAFKA`.
 pub struct KafkaConnectionOption<T: AstInfo> {
     pub name: KafkaConnectionOptionName,
@@ -595,7 +595,7 @@ impl<T: AstInfo> AstDisplay for KafkaConnectionOption<T> {
 }
 impl_display_t!(KafkaConnectionOption);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CsrConnectionOptionName {
     AwsPrivatelink,
     Password,
@@ -625,7 +625,7 @@ impl AstDisplay for CsrConnectionOptionName {
 }
 impl_display!(CsrConnectionOptionName);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// An option in a `CREATE CONNECTION...CONFLUENT SCHEMA REGISTRY`.
 pub struct CsrConnectionOption<T: AstInfo> {
     pub name: CsrConnectionOptionName,
@@ -643,7 +643,7 @@ impl<T: AstInfo> AstDisplay for CsrConnectionOption<T> {
 }
 impl_display_t!(CsrConnectionOption);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PostgresConnectionOptionName {
     AwsPrivatelink,
     Database,
@@ -677,7 +677,7 @@ impl AstDisplay for PostgresConnectionOptionName {
 }
 impl_display!(PostgresConnectionOptionName);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// An option in a `CREATE CONNECTION ... POSTGRES`.
 pub struct PostgresConnectionOption<T: AstInfo> {
     pub name: PostgresConnectionOptionName,
@@ -695,7 +695,7 @@ impl<T: AstInfo> AstDisplay for PostgresConnectionOption<T> {
 }
 impl_display_t!(PostgresConnectionOption);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AwsConnectionOptionName {
     AccessKeyId,
     Endpoint,
@@ -719,7 +719,7 @@ impl AstDisplay for AwsConnectionOptionName {
 }
 impl_display!(AwsConnectionOptionName);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// An option in a `CREATE CONNECTION...AWS`.
 pub struct AwsConnectionOption<T: AstInfo> {
     pub name: AwsConnectionOptionName,
@@ -737,7 +737,7 @@ impl<T: AstInfo> AstDisplay for AwsConnectionOption<T> {
 }
 impl_display_t!(AwsConnectionOption);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AwsPrivatelinkConnectionOptionName {
     ServiceName,
     AvailabilityZones,
@@ -753,7 +753,7 @@ impl AstDisplay for AwsPrivatelinkConnectionOptionName {
 }
 impl_display!(AwsPrivatelinkConnectionOptionName);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// An option in a `CREATE CONNECTION...AWS PRIVATELINK`.
 pub struct AwsPrivatelinkConnectionOption<T: AstInfo> {
     pub name: AwsPrivatelinkConnectionOptionName,
@@ -771,7 +771,7 @@ impl<T: AstInfo> AstDisplay for AwsPrivatelinkConnectionOption<T> {
 }
 impl_display_t!(AwsPrivatelinkConnectionOption);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SshConnectionOptionName {
     Host,
     Port,
@@ -789,7 +789,7 @@ impl AstDisplay for SshConnectionOptionName {
 }
 impl_display!(SshConnectionOptionName);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// An option in a `CREATE CONNECTION...SSH`.
 pub struct SshConnectionOption<T: AstInfo> {
     pub name: SshConnectionOptionName,
@@ -867,7 +867,7 @@ impl<T: AstInfo> AstDisplay for CreateConnection<T> {
 }
 impl_display_t!(CreateConnection);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum KafkaConfigOptionName {
     Acks,
     ClientId,
@@ -911,7 +911,7 @@ impl AstDisplay for KafkaConfigOptionName {
 }
 impl_display!(KafkaConfigOptionName);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// An option in a `{FROM|INTO} CONNECTION ...` statement.
 pub struct KafkaConfigOption<T: AstInfo> {
     pub name: KafkaConfigOptionName,
@@ -954,7 +954,7 @@ pub struct KafkaSourceConnection<T: AstInfo> {
     pub key: Option<Vec<Ident>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PgConfigOptionName {
     /// Hex encoded string of binary serialization of `dataflow_types::PostgresSourceDetails`
     Details,
@@ -975,7 +975,7 @@ impl AstDisplay for PgConfigOptionName {
 }
 impl_display!(PgConfigOptionName);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// An option in a `{FROM|INTO} CONNECTION ...` statement.
 pub struct PgConfigOption<T: AstInfo> {
     pub name: PgConfigOptionName,
@@ -1114,10 +1114,11 @@ impl AstDisplay for LoadGenerator {
 }
 impl_display!(LoadGenerator);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LoadGeneratorOptionName {
     ScaleFactor,
     TickInterval,
+    MaxCardinality,
 }
 
 impl AstDisplay for LoadGeneratorOptionName {
@@ -1125,12 +1126,13 @@ impl AstDisplay for LoadGeneratorOptionName {
         f.write_str(match self {
             LoadGeneratorOptionName::ScaleFactor => "SCALE FACTOR",
             LoadGeneratorOptionName::TickInterval => "TICK INTERVAL",
+            LoadGeneratorOptionName::MaxCardinality => "MAX CARDINALITY",
         })
     }
 }
 impl_display!(LoadGeneratorOptionName);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// An option in a `CREATE CONNECTION...SSH`.
 pub struct LoadGeneratorOption<T: AstInfo> {
     pub name: LoadGeneratorOptionName,
@@ -1332,10 +1334,9 @@ impl AstDisplay for KeyConstraint {
 }
 impl_display!(KeyConstraint);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CreateSourceOptionName {
     IgnoreKeys,
-    Remote,
     Size,
     Timeline,
     TimestampInterval,
@@ -1345,7 +1346,6 @@ impl AstDisplay for CreateSourceOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
             CreateSourceOptionName::IgnoreKeys => "IGNORE KEYS",
-            CreateSourceOptionName::Remote => "REMOTE",
             CreateSourceOptionName::Size => "SIZE",
             CreateSourceOptionName::Timeline => "TIMELINE",
             CreateSourceOptionName::TimestampInterval => "TIMESTAMP INTERVAL",
@@ -1354,7 +1354,7 @@ impl AstDisplay for CreateSourceOptionName {
 }
 impl_display!(CreateSourceOptionName);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// An option in a `CREATE SOURCE...` statement.
 pub struct CreateSourceOption<T: AstInfo> {
     pub name: CreateSourceOptionName,

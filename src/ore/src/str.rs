@@ -178,6 +178,12 @@ pub struct Indent {
     mark: Vec<usize>,
 }
 
+impl AsMut<Indent> for Indent {
+    fn as_mut(&mut self) -> &mut Indent {
+        self
+    }
+}
+
 impl Indent {
     /// Construct a new `Indent` where one level is represented
     /// by the given `unit` repeated `step` times.
@@ -232,33 +238,6 @@ pub trait IndentLike {
     fn indented_if<F>(&mut self, guard: bool, f: F) -> fmt::Result
     where
         F: FnMut(&mut Self) -> fmt::Result;
-}
-
-impl IndentLike for Indent {
-    fn indented<F>(&mut self, mut f: F) -> fmt::Result
-    where
-        F: FnMut(&mut Self) -> fmt::Result,
-    {
-        *self += 1;
-        let result = f(self);
-        *self -= 1;
-        result
-    }
-
-    fn indented_if<F>(&mut self, guard: bool, mut f: F) -> fmt::Result
-    where
-        F: FnMut(&mut Self) -> fmt::Result,
-    {
-        if guard {
-            *self += 1;
-        }
-        let result = f(self);
-
-        if guard {
-            *self -= 1;
-        }
-        result
-    }
 }
 
 impl<T: AsMut<Indent>> IndentLike for T {

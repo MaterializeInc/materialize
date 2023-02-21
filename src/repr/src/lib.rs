@@ -71,6 +71,7 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
@@ -100,7 +101,7 @@ mod timestamp;
 pub mod adt;
 pub mod antichain;
 pub mod chrono;
-pub mod explain_new;
+pub mod explain;
 pub mod global_id;
 pub mod strconv;
 pub mod url;

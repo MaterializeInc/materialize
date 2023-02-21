@@ -23,13 +23,17 @@
 use std::error::Error;
 use std::fmt;
 
+use bytesize::ByteSize;
 use itertools::Itertools;
 use tracing::warn;
 
+use mz_ore::cast::u64_to_usize;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::option::OptionExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
+use IsLateral::*;
+use IsOptional::*;
 
 use crate::ast::*;
 use crate::keywords::*;
@@ -40,6 +44,9 @@ use crate::lexer::{self, Token};
 // a healthy factor to be conservative.
 const RECURSION_LIMIT: usize = 128;
 
+/// Maximum allowed size for a batch of statements
+pub const MAX_STATEMENT_BATCH_SIZE: usize = u64_to_usize(bytesize::MB);
+
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
     ($parser:expr, $pos:expr, $MSG:expr) => {
@@ -48,6 +55,24 @@ macro_rules! parser_err {
     ($parser:expr, $pos:expr, $($arg:tt)*) => {
         Err($parser.error($pos, format!($($arg)*)))
     };
+}
+
+/// Parses a SQL string containing zero or more SQL statements.
+/// Statements larger than [`MAX_STATEMENT_BATCH_SIZE`] are rejected.
+///
+/// The outer Result is for errors related to the statement size. The inner Result is for
+/// errors during the parsing.
+#[tracing::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
+pub fn parse_statements_with_limit(
+    sql: &str,
+) -> Result<Result<Vec<Statement<Raw>>, ParserError>, String> {
+    if sql.bytes().count() > MAX_STATEMENT_BATCH_SIZE {
+        return Err(format!(
+            "statement batch size cannot exceed {}",
+            ByteSize::b(u64::cast_from(MAX_STATEMENT_BATCH_SIZE))
+        ));
+    }
+    Ok(parse_statements(sql))
 }
 
 /// Parses a SQL string containing zero or more SQL statements.
@@ -118,13 +143,11 @@ enum IsOptional {
     Optional,
     Mandatory,
 }
-use IsOptional::*;
 
 enum IsLateral {
     Lateral,
     NotLateral,
 }
-use IsLateral::*;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParserError {
@@ -2378,12 +2401,42 @@ impl<'a> Parser<'a> {
 
         let (columns, constraints) = self.parse_columns(Mandatory)?;
 
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Parser::parse_create_subsource_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
+
         Ok(Statement::CreateSubsource(CreateSubsourceStatement {
             name,
             if_not_exists,
             columns,
             constraints,
+            with_options,
         }))
+    }
+
+    /// Parse the name of a CREATE SINK optional parameter
+    fn parse_create_subsource_option_name(
+        &mut self,
+    ) -> Result<CreateSubsourceOptionName, ParserError> {
+        let name = match self.expect_one_of_keywords(&[PROGRESS, REFERENCES])? {
+            PROGRESS => CreateSubsourceOptionName::Progress,
+            REFERENCES => CreateSubsourceOptionName::References,
+            _ => unreachable!(),
+        };
+        Ok(name)
+    }
+
+    /// Parse a NAME = VALUE parameter for CREATE SINK
+    fn parse_create_subsource_option(&mut self) -> Result<CreateSubsourceOption<Raw>, ParserError> {
+        Ok(CreateSubsourceOption {
+            name: self.parse_create_subsource_option_name()?,
+            value: self.parse_optional_option_value()?,
+        })
     }
 
     fn parse_create_source(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -2391,6 +2444,7 @@ impl<'a> Parser<'a> {
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
         let (col_names, key_constraint) = self.parse_source_columns()?;
+        let in_cluster = self.parse_optional_in_cluster()?;
         self.expect_keyword(FROM)?;
         let connection = self.parse_create_source_connection()?;
         let format = match self.parse_one_of_keywords(&[KEY, FORMAT]) {
@@ -2413,13 +2467,19 @@ impl<'a> Parser<'a> {
             None
         };
 
-        let subsources = if self.parse_keywords(&[FOR, TABLES]) {
+        let referenced_subsources = if self.parse_keywords(&[FOR, TABLES]) {
             self.expect_token(&Token::LParen)?;
             let subsources = self.parse_comma_separated(Parser::parse_subsource_references)?;
             self.expect_token(&Token::RParen)?;
-            Some(CreateReferencedSubsources::Subset(subsources))
+            Some(ReferencedSubsources::Subset(subsources))
         } else if self.parse_keywords(&[FOR, ALL, TABLES]) {
-            Some(CreateReferencedSubsources::All)
+            Some(ReferencedSubsources::All)
+        } else {
+            None
+        };
+
+        let progress_subsource = if self.parse_keywords(&[EXPOSE, PROGRESS, AS]) {
+            Some(self.parse_deferred_object_name()?)
         } else {
             None
         };
@@ -2436,6 +2496,7 @@ impl<'a> Parser<'a> {
 
         Ok(Statement::CreateSource(CreateSourceStatement {
             name,
+            in_cluster,
             col_names,
             connection,
             format,
@@ -2443,8 +2504,9 @@ impl<'a> Parser<'a> {
             envelope,
             if_not_exists,
             key_constraint,
+            referenced_subsources,
+            progress_subsource,
             with_options,
-            subsources,
         }))
     }
 
@@ -2505,21 +2567,19 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_source_option_name(&mut self) -> Result<CreateSourceOptionName, ParserError> {
-        let name =
-            match self.expect_one_of_keywords(&[IGNORE, REMOTE, SIZE, TIMELINE, TIMESTAMP])? {
-                IGNORE => {
-                    self.expect_keyword(KEYS)?;
-                    CreateSourceOptionName::IgnoreKeys
-                }
-                REMOTE => CreateSourceOptionName::Remote,
-                SIZE => CreateSourceOptionName::Size,
-                TIMELINE => CreateSourceOptionName::Timeline,
-                TIMESTAMP => {
-                    self.expect_keyword(INTERVAL)?;
-                    CreateSourceOptionName::TimestampInterval
-                }
-                _ => unreachable!(),
-            };
+        let name = match self.expect_one_of_keywords(&[IGNORE, SIZE, TIMELINE, TIMESTAMP])? {
+            IGNORE => {
+                self.expect_keyword(KEYS)?;
+                CreateSourceOptionName::IgnoreKeys
+            }
+            SIZE => CreateSourceOptionName::Size,
+            TIMELINE => CreateSourceOptionName::Timeline,
+            TIMESTAMP => {
+                self.expect_keyword(INTERVAL)?;
+                CreateSourceOptionName::TimestampInterval
+            }
+            _ => unreachable!(),
+        };
         Ok(name)
     }
 
@@ -2536,6 +2596,7 @@ impl<'a> Parser<'a> {
         self.expect_keyword(SINK)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
+        let in_cluster = self.parse_optional_in_cluster()?;
         self.expect_keyword(FROM)?;
         let from = self.parse_raw_name()?;
         self.expect_keyword(INTO)?;
@@ -2562,6 +2623,7 @@ impl<'a> Parser<'a> {
 
         Ok(Statement::CreateSink(CreateSinkStatement {
             name,
+            in_cluster,
             from,
             connection,
             format,
@@ -2573,10 +2635,9 @@ impl<'a> Parser<'a> {
 
     /// Parse the name of a CREATE SINK optional parameter
     fn parse_create_sink_option_name(&mut self) -> Result<CreateSinkOptionName, ParserError> {
-        let name = match self.expect_one_of_keywords(&[REMOTE, SIZE, SNAPSHOT])? {
+        let name = match self.expect_one_of_keywords(&[SIZE, SNAPSHOT])? {
             SIZE => CreateSinkOptionName::Size,
             SNAPSHOT => CreateSinkOptionName::Snapshot,
-            REMOTE => CreateSinkOptionName::Remote,
             _ => unreachable!(),
         };
         Ok(name)
@@ -2751,7 +2812,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_load_generator_option(&mut self) -> Result<LoadGeneratorOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[SCALE, TICK])? {
+        let name = match self.expect_one_of_keywords(&[SCALE, TICK, MAX])? {
             SCALE => {
                 self.expect_keyword(FACTOR)?;
                 LoadGeneratorOptionName::ScaleFactor
@@ -2759,6 +2820,10 @@ impl<'a> Parser<'a> {
             TICK => {
                 self.expect_keyword(INTERVAL)?;
                 LoadGeneratorOptionName::TickInterval
+            }
+            MAX => {
+                self.expect_keyword(CARDINALITY)?;
+                LoadGeneratorOptionName::MaxCardinality
             }
             _ => unreachable!(),
         };
@@ -3099,17 +3164,26 @@ impl<'a> Parser<'a> {
         let name = match self.expect_one_of_keywords(&[
             AVAILABILITY,
             COMPUTE,
+            COMPUTECTL,
             IDLE,
             INTROSPECTION,
-            REMOTE,
             SIZE,
+            STORAGE,
+            STORAGECTL,
             WORKERS,
         ])? {
             AVAILABILITY => {
                 self.expect_keyword(ZONE)?;
                 ReplicaOptionName::AvailabilityZone
             }
-            COMPUTE => ReplicaOptionName::Compute,
+            COMPUTE => {
+                self.expect_keyword(ADDRESSES)?;
+                ReplicaOptionName::ComputeAddresses
+            }
+            COMPUTECTL => {
+                self.expect_keyword(ADDRESSES)?;
+                ReplicaOptionName::ComputectlAddresses
+            }
             IDLE => {
                 self.expect_keywords(&[ARRANGEMENT, MERGE, EFFORT])?;
                 ReplicaOptionName::IdleArrangementMergeEffort
@@ -3119,8 +3193,15 @@ impl<'a> Parser<'a> {
                 INTERVAL => ReplicaOptionName::IntrospectionInterval,
                 _ => unreachable!(),
             },
-            REMOTE => ReplicaOptionName::Remote,
             SIZE => ReplicaOptionName::Size,
+            STORAGE => {
+                self.expect_keyword(ADDRESSES)?;
+                ReplicaOptionName::StorageAddresses
+            }
+            STORAGECTL => {
+                self.expect_keyword(ADDRESSES)?;
+                ReplicaOptionName::StoragectlAddresses
+            }
             WORKERS => ReplicaOptionName::Workers,
             _ => unreachable!(),
         };
@@ -5596,6 +5677,8 @@ impl<'a> Parser<'a> {
             self.expect_keyword(FOR)?;
         }
 
+        let no_errors = self.parse_keyword(BROKEN);
+
         // VIEW name | MATERIALIZED VIEW name | query
         let explainee = if self.parse_keyword(VIEW) {
             Explainee::View(self.parse_raw_name()?)
@@ -5609,6 +5692,7 @@ impl<'a> Parser<'a> {
             stage: stage.unwrap_or(ExplainStage::OptimizedPlan),
             config_flags,
             format,
+            no_errors,
             explainee,
         }))
     }

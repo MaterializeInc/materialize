@@ -25,7 +25,7 @@ class StoragedStart(Action):
         return {CockroachIsRunning, MinioIsRunning}
 
     def run(self, c: Composition) -> None:
-        c.start_and_wait_for_tcp(services=["storaged"])
+        c.up("storaged")
 
     def provides(self) -> List[Capability]:
         return [StoragedRunning()]
@@ -40,7 +40,7 @@ class StoragedRestart(Action):
 
     def run(self, c: Composition) -> None:
         c.kill("storaged")
-        c.start_and_wait_for_tcp(services=["storaged"])
+        c.up("storaged")
 
 
 class StoragedKill(Action):

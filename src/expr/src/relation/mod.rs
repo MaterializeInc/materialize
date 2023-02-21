@@ -10,7 +10,7 @@
 #![warn(missing_docs)]
 
 use std::cmp::{max, Ordering};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::num::NonZeroUsize;
 
@@ -24,14 +24,13 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::RecursionLimitError;
-use mz_ore::str::{separated, Indent};
+use mz_ore::str::Indent;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
-use mz_repr::explain_new::DisplayText;
-use mz_repr::explain_new::{DummyHumanizer, ExprHumanizer};
+use mz_repr::explain::text::text_string_at;
+use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
 
-use crate::explain::{Indices, ViewExplanation};
 use crate::visit::{Visit, VisitChildren};
 use crate::{
     func as scalar_func, EvalError, FilterCharacteristics, Id, LocalId, MirScalarExpr, UnaryFunc,
@@ -1350,29 +1349,21 @@ impl MirRelationExpr {
         None
     }
 
-    /// Pretty-print this MirRelationExpr to a string.
-    ///
-    /// This method allows an additional `ExprHumanizer` which can annotate
-    /// identifiers with human-meaningful names for the identifiers.
-    pub fn pretty_humanized(&self, id_humanizer: &impl ExprHumanizer) -> String {
-        ViewExplanation::new(self, id_humanizer).to_string()
-    }
-
-    /// Pretty-print this MirRelationExpr to a string.
+    /// Pretty-print this [MirRelationExpr] to a string.
     pub fn pretty(&self) -> String {
-        ViewExplanation::new(self, &DummyHumanizer).to_string()
+        let config = ExplainConfig::default();
+        self.explain(&config, None)
     }
 
-    /// Print this MirRelationExpr to a JSON-formatted string.
-    pub fn json(&self) -> String {
-        serde_json::to_string(self).unwrap()
-    }
-
-    /// Pretty-print this MirRelationExpr to a string with type information.
-    pub fn pretty_typed(&self) -> String {
-        let mut explanation = ViewExplanation::new(self, &DummyHumanizer);
-        explanation.explain_types();
-        explanation.to_string()
+    /// Pretty-print this [MirRelationExpr] to a string using a custom
+    /// [ExplainConfig] and an optionally provided [ExprHumanizer].
+    pub fn explain(&self, config: &ExplainConfig, humanizer: Option<&dyn ExprHumanizer>) -> String {
+        text_string_at(self, || PlanRenderingContext {
+            indent: Indent::default(),
+            humanizer: humanizer.unwrap_or(&DummyHumanizer),
+            annotations: BTreeMap::default(),
+            config,
+        })
     }
 
     /// Take ownership of `self`, leaving an empty `MirRelationExpr::Constant` with the correct type.
@@ -1430,6 +1421,33 @@ impl MirRelationExpr {
                 value: Box::new(self),
                 body: Box::new(body),
             }
+        }
+    }
+
+    /// Like [MirRelationExpr::let_in], but with a fallible return type.
+    pub fn let_in_fallible<Body, E>(
+        self,
+        id_gen: &mut IdGen,
+        body: Body,
+    ) -> Result<MirRelationExpr, E>
+    where
+        Body: FnOnce(&mut IdGen, MirRelationExpr) -> Result<MirRelationExpr, E>,
+    {
+        if let MirRelationExpr::Get { .. } = self {
+            // already done
+            body(id_gen, self)
+        } else {
+            let id = LocalId::new(id_gen.allocate_id());
+            let get = MirRelationExpr::Get {
+                id: Id::Local(id),
+                typ: self.typ(),
+            };
+            let body = (body)(id_gen, get)?;
+            Ok(MirRelationExpr::Let {
+                id,
+                value: Box::new(self),
+                body: Box::new(body),
+            })
         }
     }
 
@@ -2457,18 +2475,6 @@ impl AggregateExpr {
     }
 }
 
-impl fmt::Display for AggregateExpr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(
-            f,
-            "{}({}{})",
-            self.func,
-            if self.distinct { "distinct " } else { "" },
-            self.expr
-        )
-    }
-}
-
 /// Describe a join implementation in dataflow.
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
 pub enum JoinImplementation {
@@ -2605,31 +2611,6 @@ pub struct RowSetFinishing {
     pub offset: usize,
     /// Include only given columns.
     pub project: Vec<usize>,
-}
-
-impl DisplayText<Indent> for RowSetFinishing {
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut Indent) -> fmt::Result {
-        write!(f, "{}Finish", ctx)?;
-        // order by
-        if !self.order_by.is_empty() {
-            let order_by = separated(", ", &self.order_by);
-            write!(f, " order_by=[{}]", order_by)?;
-        }
-        // limit
-        if let Some(limit) = self.limit {
-            write!(f, " limit={}", limit)?;
-        }
-        // offset
-        if self.offset > 0 {
-            write!(f, " offset={}", self.offset)?;
-        }
-        // project
-        {
-            let project = Indices(&self.project);
-            write!(f, " output=[{}]", project)?;
-        }
-        writeln!(f, "")
-    }
 }
 
 impl RustType<ProtoRowSetFinishing> for RowSetFinishing {
@@ -3010,7 +2991,7 @@ mod tests {
     use proptest::prelude::*;
 
     use mz_proto::protobuf_roundtrip;
-    use mz_repr::explain_new::text_string_at;
+    use mz_repr::explain::text::text_string_at;
 
     use super::*;
 
@@ -3072,7 +3053,7 @@ mod tests {
             project: vec![1, 3, 4, 5],
         };
 
-        let act = text_string_at(&finishing, Indent::default);
+        let act = text_string_at(&finishing, mz_ore::str::Indent::default);
 
         let exp = {
             use mz_ore::fmt::FormatBuffer;

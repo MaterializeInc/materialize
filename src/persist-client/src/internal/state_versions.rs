@@ -9,6 +9,7 @@
 
 //! A durable, truncatable log of versions of [State].
 
+use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::ops::ControlFlow::{Break, Continue};
 use std::sync::Arc;
@@ -17,6 +18,7 @@ use std::time::SystemTime;
 use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use mz_ore::cast::CastFrom;
 use mz_persist::location::{
     Atomicity, Blob, Consensus, Indeterminate, SeqNo, VersionedData, SCAN_ALL,
 };
@@ -25,11 +27,14 @@ use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
 use tracing::{debug, debug_span, trace, warn, Instrument};
 
-use crate::error::CodecMismatch;
+use crate::error::{CodecMismatch, CodecMismatchT};
+use crate::internal::encoding::UntypedState;
 use crate::internal::machine::{retry_determinate, retry_external};
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey, RollupId};
-use crate::internal::state::{NoOpStateTransition, State};
+use crate::internal::state::{
+    HollowBatch, HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState,
+};
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::{Metrics, PersistConfig, ShardId};
 
@@ -97,6 +102,23 @@ pub struct RecentLiveDiffs(pub Vec<VersionedData>);
 #[derive(Debug, Clone)]
 pub struct AllLiveDiffs(pub Vec<VersionedData>);
 
+#[derive(Debug, Clone)]
+pub struct EncodedRollup {
+    pub(crate) shard_id: ShardId,
+    pub(crate) seqno: SeqNo,
+    pub(crate) key: PartialRollupKey,
+    buf: Bytes,
+}
+
+impl EncodedRollup {
+    pub fn to_hollow(&self) -> HollowRollup {
+        HollowRollup {
+            key: self.key.clone(),
+            encoded_size_bytes: Some(self.buf.len()),
+        }
+    }
+}
+
 impl StateVersions {
     pub fn new(
         cfg: PersistConfig,
@@ -117,7 +139,7 @@ impl StateVersions {
     pub async fn maybe_init_shard<K, V, T, D>(
         &self,
         shard_metrics: &ShardMetrics,
-    ) -> Result<State<K, V, T, D>, Box<CodecMismatch>>
+    ) -> Result<TypedState<K, V, T, D>, Box<CodecMismatch>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -131,7 +153,8 @@ impl StateVersions {
         if !recent_live_diffs.0.is_empty() {
             return self
                 .fetch_current_state(&shard_id, recent_live_diffs.0)
-                .await;
+                .await
+                .check_codecs(&shard_id);
         }
 
         // Shard is not initialized, try initializing it.
@@ -154,7 +177,10 @@ impl StateVersions {
                 // We lost a CaS race and someone else initialized the shard,
                 // use the value included in the CaS expectation error.
 
-                let state = self.fetch_current_state(&shard_id, live_diffs).await;
+                let state = self
+                    .fetch_current_state(&shard_id, live_diffs)
+                    .await
+                    .check_codecs(&shard_id);
 
                 // Clean up the rollup blob that we were trying to reference.
                 //
@@ -163,15 +189,19 @@ impl StateVersions {
                 // ourselves and get an expectation mismatch. Use the actual
                 // fetched state to determine if our rollup actually made it in
                 // and decide whether to delete based on that.
-                let (_, rollup_key) = initial_state.latest_rollup();
+                let (_, rollup) = initial_state.latest_rollup();
                 let should_delete_rollup = match state.as_ref() {
-                    Ok(state) => !state.collections.rollups.values().any(|x| x == rollup_key),
+                    Ok(state) => !state
+                        .collections
+                        .rollups
+                        .values()
+                        .any(|x| &x.key == &rollup.key),
                     // If the codecs don't match, then we definitely didn't
                     // write the state.
                     Err(_codec_mismatch) => true,
                 };
                 if should_delete_rollup {
-                    self.delete_rollup(&shard_id, rollup_key).await;
+                    self.delete_rollup(&shard_id, &rollup.key).await;
                 }
 
                 state
@@ -188,7 +218,7 @@ impl StateVersions {
         cmd_name: &str,
         shard_metrics: &ShardMetrics,
         expected: Option<SeqNo>,
-        new_state: &State<K, V, T, D>,
+        new_state: &TypedState<K, V, T, D>,
         diff: &StateDiff<T>,
     ) -> Result<Result<(), Vec<VersionedData>>, Indeterminate>
     where
@@ -243,13 +273,28 @@ impl StateVersions {
 
                 shard_metrics.set_since(new_state.since());
                 shard_metrics.set_upper(new_state.upper());
-                shard_metrics.set_batch_part_count(new_state.batch_part_count());
-                shard_metrics.set_update_count(new_state.num_updates());
-                let (largest_batch_size, encoded_batch_size) = new_state.batch_size_metrics();
-                shard_metrics.set_largest_batch_size(largest_batch_size);
-                shard_metrics.set_encoded_batch_size(encoded_batch_size);
-                shard_metrics.set_seqnos_held(new_state.seqnos_held());
-                shard_metrics.inc_encoded_diff_size(payload_len);
+                shard_metrics
+                    .batch_part_count
+                    .set(u64::cast_from(new_state.batch_part_count()));
+                shard_metrics
+                    .update_count
+                    .set(u64::cast_from(new_state.num_updates()));
+                let size_metrics = new_state.size_metrics();
+                shard_metrics
+                    .largest_batch_size
+                    .set(u64::cast_from(size_metrics.largest_batch_bytes));
+                shard_metrics
+                    .usage_current_state_batches_bytes
+                    .set(u64::cast_from(size_metrics.state_batches_bytes));
+                shard_metrics
+                    .usage_current_state_rollups_bytes
+                    .set(u64::cast_from(size_metrics.state_rollups_bytes));
+                shard_metrics
+                    .seqnos_held
+                    .set(u64::cast_from(new_state.seqnos_held()));
+                shard_metrics
+                    .encoded_diff_size
+                    .inc_by(u64::cast_from(payload_len));
                 Ok(Ok(()))
             }
             Err(live_diffs) => {
@@ -271,16 +316,13 @@ impl StateVersions {
     /// copy of all or recent live diffs, to avoid fetches where possible.
     ///
     /// Panics if called on an uninitialized shard.
-    pub async fn fetch_current_state<K, V, T, D>(
+    pub async fn fetch_current_state<T>(
         &self,
         shard_id: &ShardId,
         mut live_diffs: Vec<VersionedData>,
-    ) -> Result<State<K, V, T, D>, Box<CodecMismatch>>
+    ) -> UntypedState<T>
     where
-        K: Debug + Codec,
-        V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
     {
         let retry = self
             .metrics
@@ -300,7 +342,7 @@ impl StateVersions {
                 .fetch_rollup_at_key(shard_id, &latest_diff.latest_rollup_key)
                 .await
             {
-                Some(x) => x?,
+                Some(x) => x,
                 None => {
                     // The rollup that this diff referenced is gone, so the diff
                     // must be out of date. Try again. Intentionally don't sleep on retry.
@@ -328,10 +370,10 @@ impl StateVersions {
                 }
             };
 
-            let rollup_seqno = state.seqno;
+            let rollup_seqno = state.seqno();
             let diffs = live_diffs.iter().filter(|x| x.seqno > rollup_seqno);
             state.apply_encoded_diffs(&self.cfg, &self.metrics, diffs);
-            return Ok(state);
+            return state;
         }
     }
 
@@ -342,7 +384,7 @@ impl StateVersions {
     /// back to fetching all of them when necessary.
     pub async fn fetch_and_update_to_current<K, V, T, D>(
         &self,
-        state: &mut State<K, V, T, D>,
+        state: &mut TypedState<K, V, T, D>,
     ) -> Result<(), Box<CodecMismatch>>
     where
         K: Debug + Codec,
@@ -370,7 +412,8 @@ impl StateVersions {
             let recent_live_diffs = self.fetch_recent_live_diffs::<T>(&state.shard_id).await;
             *state = self
                 .fetch_current_state(&state.shard_id, recent_live_diffs.0)
-                .await?;
+                .await
+                .check_codecs(&state.shard_id)?;
             Ok(())
         }
     }
@@ -378,32 +421,30 @@ impl StateVersions {
     /// Returns an iterator over all live states for the requested shard.
     ///
     /// Panics if called on an uninitialized shard.
-    pub async fn fetch_all_live_states<K, V, T, D>(
-        &self,
-        shard_id: &ShardId,
-    ) -> Result<StateVersionsIter<K, V, T, D>, Box<CodecMismatch>>
+    pub async fn fetch_all_live_states<T>(&self, shard_id: ShardId) -> UntypedStateVersionsIter<T>
     where
-        K: Debug + Codec,
-        V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
     {
         let retry = self
             .metrics
             .retries
             .fetch_live_states
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
-        let mut all_live_diffs = self.fetch_all_live_diffs(shard_id).await;
+        let mut all_live_diffs = self.fetch_all_live_diffs(&shard_id).await;
         loop {
             let earliest_live_diff = match all_live_diffs.0.first() {
                 Some(x) => x,
                 None => panic!("fetch_live_states should only be called on an initialized shard"),
             };
             let state = match self
-                .fetch_rollup_at_seqno(shard_id, all_live_diffs.0.clone(), earliest_live_diff.seqno)
+                .fetch_rollup_at_seqno(
+                    &shard_id,
+                    all_live_diffs.0.clone(),
+                    earliest_live_diff.seqno,
+                )
                 .await
             {
-                Some(x) => x?,
+                Some(x) => x,
                 None => {
                     // We maintain an invariant that a rollup always exists for
                     // the earliest live diff. Since we didn't find out, that
@@ -413,7 +454,7 @@ impl StateVersions {
                     // Intentionally don't sleep on retry.
                     retry.retries.inc();
                     let earliest_before_refetch = earliest_live_diff.seqno;
-                    all_live_diffs = self.fetch_all_live_diffs(shard_id).await;
+                    all_live_diffs = self.fetch_all_live_diffs(&shard_id).await;
 
                     // We should only hit the race condition that leads to a
                     // refetch if the set of live diffs changed out from under
@@ -432,13 +473,14 @@ impl StateVersions {
                     continue;
                 }
             };
-            assert_eq!(earliest_live_diff.seqno, state.seqno);
-            return Ok(StateVersionsIter::new(
-                self.cfg.clone(),
-                Arc::clone(&self.metrics),
+            assert_eq!(earliest_live_diff.seqno, state.seqno());
+            return UntypedStateVersionsIter {
+                shard_id,
+                cfg: self.cfg.clone(),
+                metrics: Arc::clone(&self.metrics),
                 state,
-                all_live_diffs.0,
-            ));
+                diffs: all_live_diffs.0,
+            };
         }
     }
 
@@ -468,7 +510,7 @@ impl StateVersions {
         T: Timestamp + Lattice + Codec64,
     {
         let path = shard_id.to_string();
-        let scan_limit = self.cfg.state_versions_recent_live_diffs_limit;
+        let scan_limit = self.cfg.dynamic.state_versions_recent_live_diffs_limit();
         let oldest_diffs =
             retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
                 self.consensus
@@ -546,24 +588,30 @@ impl StateVersions {
     async fn write_initial_rollup<K, V, T, D>(
         &self,
         shard_metrics: &ShardMetrics,
-    ) -> (State<K, V, T, D>, StateDiff<T>)
+    ) -> (TypedState<K, V, T, D>, StateDiff<T>)
     where
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64,
     {
-        let empty_state = State::new(
+        let empty_state = TypedState::new(
             self.cfg.build_version.clone(),
             shard_metrics.shard_id,
             self.cfg.hostname.clone(),
             (self.cfg.now)(),
         );
         let rollup_seqno = empty_state.seqno.next();
-        let rollup_key = PartialRollupKey::new(rollup_seqno, &RollupId::new());
+        let rollup = HollowRollup {
+            key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
+            // Chicken-and-egg problem here. We don't know the size of the
+            // rollup until we encode it, but it includes a reference back to
+            // itself.
+            encoded_size_bytes: None,
+        };
         let (applied, initial_state) = match empty_state
             .clone_apply(&self.cfg, &mut |_, _, state| {
-                state.add_and_remove_rollups((rollup_seqno, &rollup_key), &[])
+                state.add_and_remove_rollups((rollup_seqno, &rollup), &[])
             }) {
             Continue(x) => x,
             Break(NoOpStateTransition(_)) => {
@@ -575,22 +623,22 @@ impl StateVersions {
             "add_and_remove_rollups should apply to the empty state"
         );
 
-        let () = self
-            .write_rollup_blob(shard_metrics, &initial_state, &rollup_key)
-            .await;
-        assert_eq!(initial_state.seqno, rollup_seqno);
+        let rollup = self.encode_rollup_blob(shard_metrics, &initial_state, rollup.key);
+        let () = self.write_rollup_blob(&rollup).await;
+        assert_eq!(initial_state.seqno, rollup.seqno);
 
-        let diff = StateDiff::from_diff(&empty_state, &initial_state);
+        let diff = StateDiff::from_diff(&empty_state.state, &initial_state.state);
         (initial_state, diff)
     }
 
-    /// Writes the given state as a rollup to the specified key.
-    pub async fn write_rollup_blob<K, V, T, D>(
+    /// Encodes the given state as a rollup to be written to the specified key.
+    pub fn encode_rollup_blob<K, V, T, D>(
         &self,
         shard_metrics: &ShardMetrics,
-        state: &State<K, V, T, D>,
-        key: &PartialRollupKey,
-    ) where
+        state: &TypedState<K, V, T, D>,
+        key: PartialRollupKey,
+    ) -> EncodedRollup
+    where
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
@@ -601,19 +649,31 @@ impl StateVersions {
             state.encode(&mut buf);
             Bytes::from(buf)
         });
-        let payload_len = buf.len();
+        shard_metrics
+            .latest_rollup_size
+            .set(u64::cast_from(buf.len()));
+        EncodedRollup {
+            shard_id: state.shard_id,
+            seqno: state.seqno,
+            key,
+            buf,
+        }
+    }
+
+    /// Writes the given state rollup out to blob.
+    pub async fn write_rollup_blob(&self, rollup: &EncodedRollup) {
+        let payload_len = rollup.buf.len();
         retry_external(&self.metrics.retries.external.rollup_set, || async {
             self.blob
                 .set(
-                    &key.complete(&state.shard_id),
-                    Bytes::clone(&buf),
+                    &rollup.key.complete(&rollup.shard_id),
+                    Bytes::clone(&rollup.buf),
                     Atomicity::RequireAtomic,
                 )
                 .await
         })
         .instrument(debug_span!("rollup::set", payload_len))
         .await;
-        shard_metrics.set_encoded_rollup_size(payload_len);
     }
 
     /// Fetches a rollup for the given SeqNo, if it exists.
@@ -622,17 +682,14 @@ impl StateVersions {
     /// or recent live diffs, to avoid fetches where possible.
     ///
     /// Panics if called on an uninitialized shard.
-    async fn fetch_rollup_at_seqno<K, V, T, D>(
+    async fn fetch_rollup_at_seqno<T>(
         &self,
         shard_id: &ShardId,
         live_diffs: Vec<VersionedData>,
         seqno: SeqNo,
-    ) -> Option<Result<State<K, V, T, D>, Box<CodecMismatch>>>
+    ) -> Option<UntypedState<T>>
     where
-        K: Debug + Codec,
-        V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
     {
         let rollup_key_for_migration = live_diffs.iter().find_map(|x| {
             let diff = self
@@ -650,15 +707,9 @@ impl StateVersions {
                 })
         });
 
-        let state = match self
-            .fetch_current_state::<K, V, T, D>(shard_id, live_diffs)
-            .await
-        {
-            Ok(x) => x,
-            Err(err) => return Some(Err(err)),
-        };
-        if let Some(rollup_key) = state.collections.rollups.get(&seqno) {
-            return self.fetch_rollup_at_key(shard_id, rollup_key).await;
+        let state = self.fetch_current_state::<T>(shard_id, live_diffs).await;
+        if let Some(rollup) = state.rollups().get(&seqno) {
+            return self.fetch_rollup_at_key(shard_id, &rollup.key).await;
         }
 
         // MIGRATION: We maintain an invariant that the _current state_ contains
@@ -693,24 +744,20 @@ impl StateVersions {
         // bailing us out. After the next deploy, this should initially start at
         // > 0 and then settle down to 0. After the next prod envs wipe, we can
         // remove the migration.
-        let rollup_key =
-            rollup_key_for_migration.expect("someone should have a key for this rollup");
+        let rollup = rollup_key_for_migration.expect("someone should have a key for this rollup");
         tracing::info!("only found rollup for {} {} via migration", shard_id, seqno);
         self.metrics.state.rollup_at_seqno_migration.inc();
-        self.fetch_rollup_at_key(shard_id, &rollup_key).await
+        self.fetch_rollup_at_key(shard_id, &rollup.key).await
     }
 
     /// Fetches the rollup at the given key, if it exists.
-    async fn fetch_rollup_at_key<K, V, T, D>(
+    async fn fetch_rollup_at_key<T>(
         &self,
         shard_id: &ShardId,
         rollup_key: &PartialRollupKey,
-    ) -> Option<Result<State<K, V, T, D>, Box<CodecMismatch>>>
+    ) -> Option<UntypedState<T>>
     where
-        K: Debug + Codec,
-        V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
     {
         retry_external(&self.metrics.retries.external.rollup_get, || async {
             self.blob.get(&rollup_key.complete(shard_id)).await
@@ -721,7 +768,7 @@ impl StateVersions {
             self.metrics
                 .codecs
                 .state
-                .decode(|| State::decode(&self.cfg.build_version, &buf))
+                .decode(|| UntypedState::decode(&self.cfg.build_version, &buf))
         })
     }
 
@@ -735,25 +782,164 @@ impl StateVersions {
     }
 }
 
-/// An iterator over consecutive versions of [State].
-pub struct StateVersionsIter<K, V, T, D> {
+pub struct UntypedStateVersionsIter<T> {
+    shard_id: ShardId,
     cfg: PersistConfig,
     metrics: Arc<Metrics>,
-    state: State<K, V, T, D>,
+    state: UntypedState<T>,
     diffs: Vec<VersionedData>,
 }
 
-impl<K, V, T: Timestamp + Lattice + Codec64, D> StateVersionsIter<K, V, T, D> {
+impl<T: Timestamp + Lattice + Codec64> UntypedStateVersionsIter<T> {
+    pub fn check_codecs<K: Codec, V: Codec, D: Codec64>(
+        self,
+    ) -> Result<TypedStateVersionsIter<K, V, T, D>, Box<CodecMismatch>> {
+        let state = self.state.check_codecs(&self.shard_id)?;
+        Ok(TypedStateVersionsIter::new(
+            self.cfg,
+            self.metrics,
+            state,
+            self.diffs,
+        ))
+    }
+
+    pub(crate) fn check_ts_codec(self) -> Result<StateVersionsIter<T>, CodecMismatchT> {
+        let key_codec = self.state.key_codec.clone();
+        let val_codec = self.state.val_codec.clone();
+        let diff_codec = self.state.diff_codec.clone();
+        let state = self.state.check_ts_codec(&self.shard_id)?;
+        Ok(StateVersionsIter::new(
+            self.cfg,
+            self.metrics,
+            state,
+            self.diffs,
+            key_codec,
+            val_codec,
+            diff_codec,
+        ))
+    }
+}
+
+/// An iterator over consecutive versions of [State].
+pub struct StateVersionsIter<T> {
+    cfg: PersistConfig,
+    metrics: Arc<Metrics>,
+    state: State<T>,
+    diffs: Vec<VersionedData>,
+    key_codec: String,
+    val_codec: String,
+    diff_codec: String,
+    #[cfg(debug_assertions)]
+    validator: ReferencedBlobValidator<T>,
+}
+
+impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
     fn new(
         cfg: PersistConfig,
         metrics: Arc<Metrics>,
-        state: State<K, V, T, D>,
+        state: State<T>,
+        // diffs is stored reversed so we can efficiently pop off the Vec.
+        mut diffs: Vec<VersionedData>,
+        key_codec: String,
+        val_codec: String,
+        diff_codec: String,
+    ) -> Self {
+        assert!(diffs.first().map_or(true, |x| x.seqno == state.seqno));
+        diffs.reverse();
+        StateVersionsIter {
+            cfg,
+            metrics,
+            state,
+            diffs,
+            key_codec,
+            val_codec,
+            diff_codec,
+            #[cfg(debug_assertions)]
+            validator: ReferencedBlobValidator::default(),
+        }
+    }
+
+    /// Advances first to some starting state (in practice, usually the first
+    /// live state), and then through each successive state, for as many diffs
+    /// as this iterator was initialized with.
+    ///
+    /// The `inspect_diff_fn` callback can be used to inspect diffs directly as
+    /// they are applied. The first call to `next` returns a
+    /// [InspectDiff::FromInitial] representing a diff from the initial state.
+    pub fn next<F: for<'a> FnMut(InspectDiff<'a, T>)>(
+        &mut self,
+        mut inspect_diff_fn: F,
+    ) -> Option<&State<T>> {
+        let diff = match self.diffs.pop() {
+            Some(x) => x,
+            None => return None,
+        };
+        let diff = self
+            .metrics
+            .codecs
+            .state_diff
+            .decode(|| StateDiff::decode(&self.cfg.build_version, &diff.data));
+
+        // A bit hacky, but the first diff in StateVersionsIter is always a
+        // no-op.
+        if diff.seqno_to == self.state.seqno {
+            let inspect = InspectDiff::FromInitial(&self.state);
+            #[cfg(debug_assertions)]
+            {
+                inspect.referenced_blob_fn(|x| self.validator.add_inc_blob(x));
+            }
+            inspect_diff_fn(inspect);
+        } else {
+            let inspect = InspectDiff::Diff(&diff);
+            #[cfg(debug_assertions)]
+            {
+                inspect.referenced_blob_fn(|x| self.validator.add_inc_blob(x));
+            }
+            inspect_diff_fn(inspect);
+        }
+
+        let diff_seqno_to = diff.seqno_to;
+        self.state.apply_diffs(&self.metrics, std::iter::once(diff));
+        assert_eq!(self.state.seqno, diff_seqno_to);
+        #[cfg(debug_assertions)]
+        {
+            self.validator.validate_against_state(&self.state);
+        }
+        Some(&self.state)
+    }
+
+    pub fn state(&self) -> &State<T> {
+        &self.state
+    }
+
+    pub fn into_proto(&self) -> impl serde::Serialize {
+        self.state.into_proto(
+            self.key_codec.clone(),
+            self.val_codec.clone(),
+            self.diff_codec.clone(),
+        )
+    }
+}
+
+/// An iterator over consecutive versions of [TypedState].
+pub struct TypedStateVersionsIter<K, V, T, D> {
+    cfg: PersistConfig,
+    metrics: Arc<Metrics>,
+    state: TypedState<K, V, T, D>,
+    diffs: Vec<VersionedData>,
+}
+
+impl<K, V, T: Timestamp + Lattice + Codec64, D> TypedStateVersionsIter<K, V, T, D> {
+    fn new(
+        cfg: PersistConfig,
+        metrics: Arc<Metrics>,
+        state: TypedState<K, V, T, D>,
         // diffs is stored reversed so we can efficiently pop off the Vec.
         mut diffs: Vec<VersionedData>,
     ) -> Self {
         assert!(diffs.first().map_or(true, |x| x.seqno == state.seqno));
         diffs.reverse();
-        StateVersionsIter {
+        TypedStateVersionsIter {
             cfg,
             metrics,
             state,
@@ -770,7 +956,7 @@ impl<K, V, T: Timestamp + Lattice + Codec64, D> StateVersionsIter<K, V, T, D> {
         self.diffs.last().map(|x| x.seqno)
     }
 
-    pub fn next(&mut self) -> Option<&State<K, V, T, D>> {
+    pub fn next(&mut self) -> Option<&TypedState<K, V, T, D>> {
         let diff = match self.diffs.pop() {
             Some(x) => x,
             None => return None,
@@ -781,7 +967,75 @@ impl<K, V, T: Timestamp + Lattice + Codec64, D> StateVersionsIter<K, V, T, D> {
         Some(&self.state)
     }
 
-    pub fn state(&self) -> &State<K, V, T, D> {
+    pub fn state(&self) -> &TypedState<K, V, T, D> {
         &self.state
+    }
+}
+
+/// This represents a diff, either directly or, in the case of the FromInitial
+/// variant, a diff from the initial state. (We could instead compute the diff
+/// from the initial state and replace this with only a `StateDiff<T>`, but don't
+/// for efficiency.)
+#[derive(Debug)]
+pub enum InspectDiff<'a, T> {
+    FromInitial(&'a State<T>),
+    Diff(&'a StateDiff<T>),
+}
+
+impl<T: Timestamp + Lattice + Codec64> InspectDiff<'_, T> {
+    /// A callback invoked for each blob added this state transition.
+    ///
+    /// Blob removals, along with all other diffs, are ignored.
+    pub fn referenced_blob_fn<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, f: F) {
+        match self {
+            InspectDiff::FromInitial(x) => x.map_blobs(f),
+            InspectDiff::Diff(x) => x.map_blob_inserts(f),
+        }
+    }
+}
+
+#[cfg(debug_assertions)]
+struct ReferencedBlobValidator<T> {
+    // A copy of every batch and rollup referenced by some state iterator,
+    // computed by scanning the full copy of state at each seqno.
+    full_batches: BTreeSet<HollowBatch<T>>,
+    full_rollups: BTreeSet<HollowRollup>,
+    // A copy of every batch and rollup referenced by some state iterator,
+    // computed incrementally.
+    inc_batches: BTreeSet<HollowBatch<T>>,
+    inc_rollups: BTreeSet<HollowRollup>,
+}
+
+#[cfg(debug_assertions)]
+impl<T> Default for ReferencedBlobValidator<T> {
+    fn default() -> Self {
+        Self {
+            full_batches: Default::default(),
+            full_rollups: Default::default(),
+            inc_batches: Default::default(),
+            inc_rollups: Default::default(),
+        }
+    }
+}
+
+#[cfg(debug_assertions)]
+impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
+    fn add_inc_blob(&mut self, x: HollowBlobRef<'_, T>) {
+        match x {
+            HollowBlobRef::Batch(x) => assert!(self.inc_batches.insert(x.clone())),
+            HollowBlobRef::Rollup(x) => assert!(self.inc_rollups.insert(x.clone())),
+        }
+    }
+    fn validate_against_state(&mut self, x: &State<T>) {
+        x.map_blobs(|x| match x {
+            HollowBlobRef::Batch(x) => {
+                self.full_batches.insert(x.clone());
+            }
+            HollowBlobRef::Rollup(x) => {
+                self.full_rollups.insert(x.clone());
+            }
+        });
+        assert_eq!(self.inc_batches, self.full_batches);
+        assert_eq!(self.inc_rollups, self.full_rollups);
     }
 }

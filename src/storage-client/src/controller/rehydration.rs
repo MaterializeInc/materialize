@@ -7,42 +7,46 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Rehydration of storage hosts.
+//! Rehydration of storage replicas.
 //!
-//! Rehydration is the process of bringing a crashed `clusterd` process back
-//! up to date. The [`RehydratingStorageClient`] records all commands it
-//! observes in a minimal form. If it observes a send or receive failure while
-//! communicating with the underlying client, it will reconnect the client and
-//! replay the command stream.
+//! Rehydration is the process of bringing a crashed storage replica back up to
+//! date. The [`RehydratingStorageClient`] records all commands it observes in a
+//! minimal form. If it observes a send or receive failure while communicating
+//! with the underlying client, it will reconnect the client and replay the
+//! command stream.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
+use std::num::NonZeroI64;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
 use differential_dataflow::lattice::Lattice;
-use futures::Stream;
+use futures::{Stream, StreamExt};
+use mz_persist_types::codec_impls::UnitSchema;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::select;
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio::sync::Mutex;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::warn;
 
 use mz_build_info::BuildInfo;
+use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
 use mz_ore::retry::Retry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId};
-use mz_service::client::GenericClient;
+use mz_service::client::{GenericClient, Partitioned};
 
 use crate::client::{
     CreateSinkCommand, CreateSourceCommand, StorageClient, StorageCommand, StorageGrpcClient,
     StorageResponse,
 };
 use crate::controller::ResumptionFrontierCalculator;
+use crate::metrics::RehydratingStorageClientMetrics;
 use crate::types::parameters::StorageParameters;
 use crate::types::sources::SourceData;
 
@@ -51,36 +55,40 @@ use crate::types::sources::SourceData;
 /// See the [module documentation](self) for details.
 #[derive(Debug)]
 pub struct RehydratingStorageClient<T> {
-    command_tx: UnboundedSender<StorageCommand<T>>,
+    command_tx: UnboundedSender<RehydrationCommand<T>>,
     response_rx: UnboundedReceiverStream<StorageResponse<T>>,
     _task: AbortOnDropHandle<()>,
 }
+
+type PartitionedClient<T> = Partitioned<StorageGrpcClient, StorageCommand<T>, StorageResponse<T>>;
 
 impl<T> RehydratingStorageClient<T>
 where
     T: Timestamp + Lattice + Codec64,
     StorageGrpcClient: StorageClient<T>,
 {
-    /// Creates a `RehydratingStorageClient` for a storage host with the given
-    /// network address.
+    /// Creates a `RehydratingStorageClient` that is not yet connected to
+    /// a storage replica.
     pub fn new(
-        addr: String,
         build_info: &'static BuildInfo,
-        persist: Arc<Mutex<PersistClientCache>>,
+        persist: Arc<PersistClientCache>,
+        metrics: RehydratingStorageClientMetrics,
+        envd_epoch: NonZeroI64,
     ) -> RehydratingStorageClient<T> {
         let (command_tx, command_rx) = unbounded_channel();
         let (response_tx, response_rx) = unbounded_channel();
         let mut task = RehydrationTask {
-            addr,
             build_info,
             command_rx,
             response_tx,
             sources: BTreeMap::new(),
             sinks: BTreeMap::new(),
-            uppers: HashMap::new(),
+            uppers: BTreeMap::new(),
             initialized: false,
+            current_epoch: ClusterStartupEpoch::new(envd_epoch, 0),
             config: Default::default(),
             persist,
+            metrics,
         };
         let task = mz_ore::task::spawn(|| "rehydration", async move { task.run().await });
         RehydratingStorageClient {
@@ -90,10 +98,17 @@ where
         }
     }
 
+    /// Connects to the storage replica at the specified network address.
+    pub fn connect(&mut self, location: ClusterReplicaLocation) {
+        self.command_tx
+            .send(RehydrationCommand::Connect { location })
+            .expect("rehydration task should not drop first");
+    }
+
     /// Sends a command to the underlying client.
     pub fn send(&mut self, cmd: StorageCommand<T>) {
         self.command_tx
-            .send(cmd)
+            .send(RehydrationCommand::Send(cmd))
             .expect("rehydration task should not drop first");
     }
 
@@ -103,39 +118,63 @@ where
     }
 }
 
+#[derive(Debug, Clone)]
+enum RehydrationCommand<T> {
+    /// (Re)connect to a storage replica.
+    Connect {
+        /// The location of the (singular) replica we are going to connect to.
+        location: ClusterReplicaLocation,
+    },
+    /// Send the contained storage command to the replica.
+    Send(StorageCommand<T>),
+}
+
 /// A task that manages rehydration.
 struct RehydrationTask<T> {
-    /// The network address of the storage host.
-    addr: String,
     /// The build information for this process.
     build_info: &'static BuildInfo,
-    /// A channel upon which commands intended for the storage host are delivered.
-    command_rx: UnboundedReceiver<StorageCommand<T>>,
-    /// A channel upon which responses from the storage host are delivered.
+    /// A channel upon which commands intended for the storage replica are
+    /// delivered.
+    command_rx: UnboundedReceiver<RehydrationCommand<T>>,
+    /// A channel upon which responses from the storage replica are delivered.
     response_tx: UnboundedSender<StorageResponse<T>>,
     /// The sources that have been observed.
     sources: BTreeMap<GlobalId, CreateSourceCommand<T>>,
     /// The exports that have been observed.
     sinks: BTreeMap<GlobalId, CreateSinkCommand<T>>,
     /// The upper frontier information received.
-    uppers: HashMap<GlobalId, Antichain<T>>,
+    uppers: BTreeMap<GlobalId, Antichain<T>>,
     /// Set to `true` once [`StorageCommand::InitializationComplete`] has been
     /// observed.
     initialized: bool,
+    /// The current epoch for the replica we are connecting to.
+    current_epoch: ClusterStartupEpoch,
     /// Storage configuration that has been observed.
     config: StorageParameters,
     /// A handle to Persist
-    persist: Arc<Mutex<PersistClientCache>>,
+    persist: Arc<PersistClientCache>,
+    /// Prometheus metrics
+    metrics: RehydratingStorageClientMetrics,
 }
 
-enum RehydrationTaskState {
-    /// The storage host should be (re)hydrated.
-    Rehydrate,
-    /// Communication with the storage host is live. Commands and responses should
-    /// be forwarded until an error occurs.
-    Pump { client: StorageGrpcClient },
+enum RehydrationTaskState<T: Timestamp + Lattice> {
+    /// Wait for the address of the storage replica to connect to.
+    AwaitAddress,
+    /// The storage replica should be (re)hydrated.
+    Rehydrate {
+        /// The location of the storage replica.
+        location: ClusterReplicaLocation,
+    },
+    /// Communication with the storage replica is live. Commands and responses
+    /// should be forwarded until an error occurs.
+    Pump {
+        /// The location of the storage replica.
+        location: ClusterReplicaLocation,
+        /// The connected client for the replica.
+        client: PartitionedClient<T>,
+    },
     /// The caller has asked us to shut down communication with this storage
-    /// host.
+    /// cluster.
     Done,
 }
 
@@ -145,52 +184,119 @@ where
     StorageGrpcClient: StorageClient<T>,
 {
     async fn run(&mut self) {
-        let mut state = RehydrationTaskState::Rehydrate;
+        let mut state = RehydrationTaskState::AwaitAddress;
         loop {
             state = match state {
-                RehydrationTaskState::Rehydrate => self.step_rehydrate().await,
-                RehydrationTaskState::Pump { client } => self.step_pump(client).await,
+                RehydrationTaskState::AwaitAddress => self.step_await_address().await,
+                RehydrationTaskState::Rehydrate { location } => self.step_rehydrate(location).await,
+                RehydrationTaskState::Pump { location, client } => {
+                    self.step_pump(location, client).await
+                }
                 RehydrationTaskState::Done => break,
             }
         }
     }
 
-    async fn step_rehydrate(&mut self) -> RehydrationTaskState {
-        // Reconnect to the storage host.
-        let client = Retry::default()
-            .clamp_backoff(Duration::from_secs(1))
-            .retry_async(|state| {
-                let addr = self.addr.clone();
-                let version = self.build_info.semver_version();
-                async move {
-                    match StorageGrpcClient::connect(addr.clone(), version).await {
-                        Ok(client) => Ok(client),
-                        Err(e) => {
-                            if state.i >= mz_service::retry::INFO_MIN_RETRIES {
-                                tracing::info!(
-                                    "error connecting to storage host {addr}, retrying in {:?}: {e}",
-                                    state.next_backoff.unwrap()
-                                );
-                            } else {
-                                tracing::debug!(
-                                    "error connecting to storage host {addr}, retrying in {:?}: {e}",
-                                    state.next_backoff.unwrap()
-                                );
-                            }
-                            Err(e)
-                        }
-                    }
+    async fn step_await_address(&mut self) -> RehydrationTaskState<T> {
+        loop {
+            match self.command_rx.recv().await {
+                None => break RehydrationTaskState::Done,
+                Some(RehydrationCommand::Connect { location }) => {
+                    break RehydrationTaskState::Rehydrate { location }
                 }
-            })
-            .await
-            .expect("retry retries forever");
+                Some(RehydrationCommand::Send(command)) => {
+                    self.absorb_command(&command);
+                }
+            }
+        }
+    }
+
+    async fn step_rehydrate(
+        &mut self,
+        location: ClusterReplicaLocation,
+    ) -> RehydrationTaskState<T> {
+        // Reconnect to the storage replica.
+        let stream = Retry::default()
+            .clamp_backoff(Duration::from_secs(1))
+            .into_retry_stream();
+        tokio::pin!(stream);
+
+        // TODO(guswynn): cluster-unification: share this code with compute, by consolidating
+        // on use of `ReplicaTask`.
+        let (client, timely_command) = loop {
+            let state = stream.next().await.expect("infinite stream");
+            // Drain any pending commands, in case we've been told to connect
+            // to a new storage replica.
+            loop {
+                match self.command_rx.try_recv() {
+                    Ok(RehydrationCommand::Connect { location }) => {
+                        return RehydrationTaskState::Rehydrate { location };
+                    }
+                    Ok(RehydrationCommand::Send(command)) => {
+                        self.absorb_command(&command);
+                    }
+                    Err(TryRecvError::Disconnected) => return RehydrationTaskState::Done,
+                    Err(TryRecvError::Empty) => break,
+                }
+            }
+
+            let timely_config = TimelyConfig {
+                workers: location.workers,
+                // Overridden by the storage `PartitionedState` implementation.
+                process: 0,
+                addresses: location.dataflow_addrs.clone(),
+                // This value is not currently used by storage, so we just choose
+                // some identifiable value.
+                //
+                // TODO(guswynn): cluster-unification: ensure this is cleaned up when
+                // the compute and storage command streams are merged.
+                idle_arrangement_merge_effort: 1337,
+            };
+            let dests = location
+                .ctl_addrs
+                .clone()
+                .into_iter()
+                .map(|addr| (addr, self.metrics.clone()))
+                .collect();
+            let version = self.build_info.semver_version();
+            let client = StorageGrpcClient::connect_partitioned(dests, version).await;
+
+            let client = match client {
+                Ok(client) => client,
+                Err(e) => {
+                    if state.i >= mz_service::retry::INFO_MIN_RETRIES {
+                        tracing::info!(
+                            "error connecting to {:?} for storage, retrying in {:?}: {e}",
+                            location,
+                            state.next_backoff.unwrap()
+                        );
+                    } else {
+                        tracing::debug!(
+                            "error connecting to {:?} for storage, retrying in {:?}: {e}",
+                            location,
+                            state.next_backoff.unwrap()
+                        );
+                    }
+                    continue;
+                }
+            };
+
+            // The first epoch we actually send to the cluster will be `1`, just like compute.
+            let new_epoch = ClusterStartupEpoch::new(
+                self.current_epoch.envd(),
+                self.current_epoch.replica() + 1,
+            );
+            self.current_epoch = new_epoch;
+            let timely_command = StorageCommand::CreateTimely {
+                config: timely_config,
+                epoch: new_epoch,
+            };
+
+            break (client, timely_command);
+        };
 
         for ingest in self.sources.values_mut() {
-            let mut persist_clients = self.persist.lock().await;
-            let mut state = ingest
-                .description
-                .initialize_state(&mut persist_clients)
-                .await;
+            let mut state = ingest.description.initialize_state(&self.persist).await;
             let resume_upper = ingest
                 .description
                 .calculate_resumption_frontier(&mut state)
@@ -199,8 +305,8 @@ where
         }
 
         for export in self.sinks.values_mut() {
-            let mut persist_clients = self.persist.lock().await;
-            let persist_client = persist_clients
+            let persist_client = self
+                .persist
                 .open(
                     export
                         .description
@@ -214,6 +320,17 @@ where
                 .open_leased_reader::<SourceData, (), T, Diff>(
                     export.description.from_storage_metadata.data_shard,
                     "rehydration since",
+                    // This is also `from_desc`, but this would be the _only_ usage
+                    // of `from_desc` in storage, and we try to be consistent about
+                    // where we get `RelationDesc`s for perist clients
+                    Arc::new(
+                        export
+                            .description
+                            .from_storage_metadata
+                            .relation_desc
+                            .clone(),
+                    ),
+                    Arc::new(UnitSchema),
                 )
                 .await
                 .expect("from collection disappeared");
@@ -228,6 +345,7 @@ where
 
         // Rehydrate all commands.
         let mut commands = vec![
+            timely_command,
             StorageCommand::UpdateConfiguration(self.config.clone()),
             StorageCommand::CreateSources(self.sources.values().cloned().collect()),
             StorageCommand::CreateSinks(self.sinks.values().cloned().collect()),
@@ -235,76 +353,86 @@ where
         if self.initialized {
             commands.push(StorageCommand::InitializationComplete)
         }
-        self.send_commands(client, commands).await
+        self.send_commands(location, client, commands).await
     }
 
-    async fn step_pump(&mut self, mut client: StorageGrpcClient) -> RehydrationTaskState {
+    async fn step_pump(
+        &mut self,
+        location: ClusterReplicaLocation,
+        mut client: PartitionedClient<T>,
+    ) -> RehydrationTaskState<T> {
         select! {
-            // Command from controller to forward to storage host.
+            // Command from controller to forward to storage cluster.
             command = self.command_rx.recv() => match command {
                 None => RehydrationTaskState::Done,
-                Some(command) => {
+                Some(RehydrationCommand::Connect { location }) => RehydrationTaskState::Rehydrate { location },
+                Some(RehydrationCommand::Send(command)) => {
                     self.absorb_command(&command);
-                    self.send_commands(client, vec![command]).await
+                    self.send_commands(location, client, vec![command]).await
                 }
             },
-            // Response from storage host to forward to controller.
+            // Response from storage cluster to forward to controller.
             response = client.recv() => {
                 let response = match response.transpose() {
                     None => {
-                        // In the future, if a storage host politely hangs up,
-                        // we might want to take it as a signal that a new
+                        // In the future, if a storage cluster politely hangs
+                        // up, we might want to take it as a signal that a new
                         // controller has taken over. For now we just try to
                         // reconnect.
-                        Err(anyhow!("storage host unexpectedly gracefully terminated connection"))
+                        Err(anyhow!("storage cluster unexpectedly gracefully terminated connection"))
                     }
                     Some(response) => response,
                 };
 
-                self.send_response(client, response)
+                self.send_response(location, client, response)
             }
         }
     }
 
     async fn send_commands(
         &mut self,
-        mut client: StorageGrpcClient,
+        location: ClusterReplicaLocation,
+        mut client: PartitionedClient<T>,
         commands: impl IntoIterator<Item = StorageCommand<T>>,
-    ) -> RehydrationTaskState {
+    ) -> RehydrationTaskState<T> {
         for command in commands {
             if let Err(e) = client.send(command).await {
-                return self.send_response(client, Err(e));
+                return self.send_response(location.clone(), client, Err(e));
             }
         }
-        RehydrationTaskState::Pump { client }
+        RehydrationTaskState::Pump { location, client }
     }
 
     fn send_response(
         &mut self,
-        client: StorageGrpcClient,
+        location: ClusterReplicaLocation,
+        client: PartitionedClient<T>,
         response: Result<StorageResponse<T>, anyhow::Error>,
-    ) -> RehydrationTaskState {
+    ) -> RehydrationTaskState<T> {
         match response {
             Ok(response) => {
                 if let Some(response) = self.absorb_response(response) {
                     if self.response_tx.send(response).is_err() {
                         RehydrationTaskState::Done
                     } else {
-                        RehydrationTaskState::Pump { client }
+                        RehydrationTaskState::Pump { location, client }
                     }
                 } else {
-                    RehydrationTaskState::Pump { client }
+                    RehydrationTaskState::Pump { location, client }
                 }
             }
             Err(e) => {
-                warn!("storage host produced error, reconnecting: {e}");
-                RehydrationTaskState::Rehydrate
+                warn!("storage cluster produced error, reconnecting: {e}");
+                RehydrationTaskState::Rehydrate { location }
             }
         }
     }
 
     fn absorb_command(&mut self, command: &StorageCommand<T>) {
         match command {
+            StorageCommand::CreateTimely { .. } => {
+                // We assume these are ordered correctly
+            }
             StorageCommand::InitializationComplete => self.initialized = true,
             StorageCommand::UpdateConfiguration(params) => {
                 self.config.update(params.clone());
@@ -313,9 +441,8 @@ where
                 for ingestion in ingestions {
                     self.sources.insert(ingestion.id, ingestion.clone());
                     // Initialize the uppers we are tracking
-                    for &export_id in ingestion.description.source_exports.keys() {
-                        self.uppers
-                            .insert(export_id, Antichain::from_elem(T::minimum()));
+                    for id in ingestion.description.subsource_ids() {
+                        self.uppers.insert(id, Antichain::from_elem(T::minimum()));
                     }
                 }
             }
@@ -360,9 +487,9 @@ where
                 }
                 Some(StorageResponse::DroppedIds(dropped_ids))
             }
-            StorageResponse::StatisticsUpdates(stats) => {
+            StorageResponse::StatisticsUpdates(source_stats, sink_stats) => {
                 // Just forward it along.
-                Some(StorageResponse::StatisticsUpdates(stats))
+                Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats))
             }
         }
     }

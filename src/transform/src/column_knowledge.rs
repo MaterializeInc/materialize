@@ -59,7 +59,7 @@ impl crate::Transform for ColumnKnowledge {
         let result = self
             .harvest(expr, &mut BTreeMap::new(), &mut knowledge_stack)
             .map(|_| ());
-        mz_repr::explain_new::trace_plan(&*expr);
+        mz_repr::explain::trace_plan(&*expr);
         result
     }
 }

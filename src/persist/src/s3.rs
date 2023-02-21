@@ -10,6 +10,7 @@
 //! An S3 implementation of [Blob] storage.
 
 use std::cmp;
+use std::fmt::{Debug, Formatter};
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
@@ -19,31 +20,85 @@ use aws_config::default_provider::{credentials, region};
 use aws_config::meta::region::ProvideRegion;
 use aws_config::sts::AssumeRoleProvider;
 use aws_config::timeout::TimeoutConfig;
+use aws_credential_types::provider::SharedCredentialsProvider;
+use aws_credential_types::Credentials;
+use aws_sdk_s3::config::{AsyncSleep, Sleep};
 use aws_sdk_s3::model::{CompletedMultipartUpload, CompletedPart};
 use aws_sdk_s3::types::{ByteStream, SdkError};
 use aws_sdk_s3::Client as S3Client;
-use aws_smithy_http::endpoint::Endpoint;
-use aws_types::credentials::SharedCredentialsProvider;
 use aws_types::region::Region;
-use aws_types::Credentials;
 use bytes::{Buf, Bytes};
 use futures_util::FutureExt;
-use mz_ore::task::RuntimeExt;
 use tokio::runtime::Handle as AsyncHandle;
 use tracing::{debug, debug_span, trace, trace_span, Instrument};
 use uuid::Uuid;
 
 use mz_ore::cast::CastFrom;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::task::RuntimeExt;
 
+use crate::cfg::BlobKnobs;
 use crate::error::Error;
 use crate::location::{Atomicity, Blob, BlobMetadata, ExternalError};
+use crate::metrics::S3BlobMetrics;
 
 /// Configuration for opening an [S3Blob].
 #[derive(Clone, Debug)]
 pub struct S3BlobConfig {
+    metrics: S3BlobMetrics,
     client: S3Client,
     bucket: String,
     prefix: String,
+}
+
+// There is no simple way to hook into the S3 client to capture when its various timeouts
+// are hit. Instead, we pass along marker values that inform our [MetricsSleep] impl which
+// type of timeout was requested so it can substitute in a dynamic value set by config
+// from the caller.
+const OPERATION_TIMEOUT_MARKER: Duration = Duration::new(111, 1111);
+const OPERATION_ATTEMPT_TIMEOUT_MARKER: Duration = Duration::new(222, 2222);
+const CONNECT_TIMEOUT_MARKER: Duration = Duration::new(333, 3333);
+const READ_TIMEOUT_MARKER: Duration = Duration::new(444, 4444);
+
+#[derive(Debug)]
+struct MetricsSleep {
+    knobs: Box<dyn BlobKnobs>,
+    metrics: S3BlobMetrics,
+}
+
+impl AsyncSleep for MetricsSleep {
+    fn sleep(&self, duration: Duration) -> Sleep {
+        let (duration, metric) = match duration {
+            OPERATION_TIMEOUT_MARKER => (
+                self.knobs.operation_timeout(),
+                Some(self.metrics.operation_timeouts.clone()),
+            ),
+            OPERATION_ATTEMPT_TIMEOUT_MARKER => (
+                self.knobs.operation_attempt_timeout(),
+                Some(self.metrics.operation_attempt_timeouts.clone()),
+            ),
+            CONNECT_TIMEOUT_MARKER => (
+                self.knobs.connect_timeout(),
+                Some(self.metrics.connect_timeouts.clone()),
+            ),
+            READ_TIMEOUT_MARKER => (
+                self.knobs.read_timeout(),
+                Some(self.metrics.read_timeouts.clone()),
+            ),
+            duration => (duration, None),
+        };
+
+        // the sleep future we return here will only be polled to
+        // completion if its corresponding http request to S3 times
+        // out, meaning we can chain incrementing the appropriate
+        // timeout counter to when it finishes
+        Sleep::new(tokio::time::sleep(duration).map(|x| {
+            if let Some(counter) = metric {
+                counter.inc();
+            }
+            x
+        }))
+    }
 }
 
 impl S3BlobConfig {
@@ -61,6 +116,8 @@ impl S3BlobConfig {
         endpoint: Option<String>,
         region: Option<String>,
         credentials: Option<(String, String)>,
+        knobs: Box<dyn BlobKnobs>,
+        metrics: S3BlobMetrics,
     ) -> Result<Self, Error> {
         let region = match region {
             Some(region_name) => Some(Region::new(region_name)),
@@ -88,26 +145,30 @@ impl S3BlobConfig {
         }
 
         if let Some(endpoint) = endpoint {
-            let endpoint = Endpoint::immutable(endpoint)
-                .map_err(|e| format!("parsing S3 blob endpoint: {e}"))?;
-            loader = loader.endpoint_resolver(endpoint)
+            loader = loader.endpoint_url(endpoint)
         }
 
+        // NB: we must always use the custom sleep impl if we use the timeout marker values
+        loader = loader.sleep_impl(MetricsSleep {
+            knobs,
+            metrics: metrics.clone(),
+        });
         loader = loader.timeout_config(
             TimeoutConfig::builder()
                 // maximum time allowed for a top-level S3 API call (including internal retries)
-                .operation_timeout(Duration::from_secs(180))
+                .operation_timeout(OPERATION_TIMEOUT_MARKER)
                 // maximum time allowed for a single network call
-                .operation_attempt_timeout(Duration::from_secs(90))
+                .operation_attempt_timeout(OPERATION_ATTEMPT_TIMEOUT_MARKER)
                 // maximum time until a connection succeeds
-                .connect_timeout(Duration::from_secs(30))
+                .connect_timeout(CONNECT_TIMEOUT_MARKER)
                 // maximum time to read the first byte of a response
-                .read_timeout(Duration::from_secs(60))
+                .read_timeout(READ_TIMEOUT_MARKER)
                 .build(),
         );
 
-        let client = aws_sdk_s3::Client::new(&loader.load().await);
+        let client = mz_aws_s3_util::new_client(&loader.load().await);
         Ok(S3BlobConfig {
+            metrics,
             client,
             bucket,
             prefix,
@@ -161,12 +222,47 @@ impl S3BlobConfig {
             }
         };
 
+        struct TestBlobKnobs;
+        impl std::fmt::Debug for TestBlobKnobs {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                f.debug_struct("TestBlobKnobs").finish_non_exhaustive()
+            }
+        }
+        impl BlobKnobs for TestBlobKnobs {
+            fn operation_timeout(&self) -> Duration {
+                OPERATION_TIMEOUT_MARKER
+            }
+
+            fn operation_attempt_timeout(&self) -> Duration {
+                OPERATION_ATTEMPT_TIMEOUT_MARKER
+            }
+
+            fn connect_timeout(&self) -> Duration {
+                CONNECT_TIMEOUT_MARKER
+            }
+
+            fn read_timeout(&self) -> Duration {
+                READ_TIMEOUT_MARKER
+            }
+        }
+
         // Give each test a unique prefix so they don't conflict. We don't have
         // to worry about deleting any data that we create because the bucket is
         // set to auto-delete after 1 day.
         let prefix = Uuid::new_v4().to_string();
         let role_arn = None;
-        let config = S3BlobConfig::new(bucket, prefix, role_arn, None, None, None).await?;
+        let metrics = S3BlobMetrics::new(&MetricsRegistry::new());
+        let config = S3BlobConfig::new(
+            bucket,
+            prefix,
+            role_arn,
+            None,
+            None,
+            None,
+            Box::new(TestBlobKnobs),
+            metrics,
+        )
+        .await?;
         Ok(Some(config))
     }
 
@@ -181,6 +277,7 @@ impl S3BlobConfig {
 /// Implementation of [Blob] backed by S3.
 #[derive(Debug)]
 pub struct S3Blob {
+    metrics: S3BlobMetrics,
     client: S3Client,
     bucket: String,
     prefix: String,
@@ -195,6 +292,7 @@ impl S3Blob {
     /// Opens the given location for non-exclusive read-write access.
     pub async fn open(config: S3BlobConfig) -> Result<Self, ExternalError> {
         let ret = S3Blob {
+            metrics: config.metrics,
             client: config.client,
             bucket: config.bucket,
             prefix: config.prefix,
@@ -250,6 +348,7 @@ impl Blob for S3Blob {
         // the headers before the full data body has completed. This gives us
         // the number of parts. We can then proceed to fetch the body of the
         // first request concurrently with the rest of the parts of the object.
+        self.metrics.get_part.inc();
         let object = self
             .client
             .get_object()
@@ -309,16 +408,16 @@ impl Blob for S3Blob {
             for part_num in 2..=num_parts {
                 // TODO: Add the key and part number once this can be annotated
                 // with metadata.
-                let part_fut = async_runtime.spawn_named(
-                    || "persist_s3blob_get_header",
+                let part_fut = async_runtime.spawn_named(|| "persist_s3blob_get_header", {
+                    self.metrics.get_part.inc();
                     self.client
                         .get_object()
                         .bucket(&self.bucket)
                         .key(&path)
                         .part_number(part_num)
                         .send()
-                        .map(move |res| (start_headers.elapsed(), res)),
-                );
+                        .map(move |res| (start_headers.elapsed(), res))
+                });
                 part_futs.push(part_fut);
             }
 
@@ -446,6 +545,7 @@ impl Blob for S3Blob {
         let strippable_root_prefix = format!("{}/", self.prefix);
 
         loop {
+            self.metrics.list_objects.inc();
             let resp = self
                 .client
                 .list_objects_v2()
@@ -509,6 +609,7 @@ impl Blob for S3Blob {
         // deletion. This return value is only used for metrics, so it's
         // unfortunate, but fine.
         let path = self.get_path(key);
+        self.metrics.delete_head.inc();
         let head_res = self
             .client
             .head_object()
@@ -521,6 +622,7 @@ impl Blob for S3Blob {
             Err(SdkError::ServiceError(err)) if err.err().is_not_found() => return Ok(None),
             Err(err) => return Err(ExternalError::from(anyhow!("s3 delete head err: {}", err))),
         };
+        self.metrics.delete_object.inc();
         let _ = self
             .client
             .delete_object()
@@ -540,6 +642,7 @@ impl S3Blob {
 
         let value_len = value.len();
         let part_span = trace_span!("s3set_single", payload_len = value_len);
+        self.metrics.set_single.inc();
         self.client
             .put_object()
             .bucket(&self.bucket)
@@ -566,6 +669,7 @@ impl S3Blob {
 
         // Start the multi part request and get an upload id.
         trace!("s3 PutObject multi start {}b", value.len());
+        self.metrics.set_multi_create.inc();
         let upload_res = self
             .client
             .create_multipart_upload()
@@ -600,16 +704,19 @@ impl S3Blob {
                 // TODO: Add the key and part number once this can be annotated
                 // with metadata.
                 || "persist_s3blob_put_part",
-                self.client
-                    .upload_part()
-                    .bucket(&self.bucket)
-                    .key(&path)
-                    .upload_id(upload_id)
-                    .part_number(part_num as i32)
-                    .body(ByteStream::from(value.slice(part_range)))
-                    .send()
-                    .instrument(part_span)
-                    .map(move |res| (start_parts.elapsed(), res)),
+                {
+                    self.metrics.set_multi_part.inc();
+                    self.client
+                        .upload_part()
+                        .bucket(&self.bucket)
+                        .key(&path)
+                        .upload_id(upload_id)
+                        .part_number(part_num as i32)
+                        .body(ByteStream::from(value.slice(part_range)))
+                        .send()
+                        .instrument(part_span)
+                        .map(move |res| (start_parts.elapsed(), res))
+                },
             );
             part_futs.push((part_num, part_fut));
         }
@@ -668,6 +775,7 @@ impl S3Blob {
         // abort_multipart_upload work, but it would be complex and affect perf.
         // Let's see how far we can get without it.
         let start_complete = Instant::now();
+        self.metrics.set_multi_complete.inc();
         self.client
             .complete_multipart_upload()
             .bucket(&self.bucket)
@@ -862,6 +970,7 @@ mod tests {
             let config = config.clone();
             async move {
                 let config = S3BlobConfig {
+                    metrics: config.metrics.clone(),
                     client: config.client.clone(),
                     bucket: config.bucket.clone(),
                     prefix: format!("{}/s3_blob_impl_test/{}", config.prefix, path),

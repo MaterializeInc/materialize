@@ -20,14 +20,14 @@ installing Apple's developer tools, which includes a C compiler. Then it's a
 cinch to install CMake:
 
 ```
-brew install cmake
+brew install cmake postgresql
 ```
 
 On Debian-based Linux variants, it's even easier:
 
 ```shell
 sudo apt update
-sudo apt install build-essential cmake
+sudo apt install build-essential cmake postgresql-client
 ```
 
 On other platforms, you'll have to figure out how to get these tools yourself.
@@ -51,9 +51,13 @@ Running Materialize locally requires a running CockroachDB server.
 On macOS, when using Homebrew, CockroachDB can be installed and started via:
 
 ```shell
-brew install cockroachdb/cockroach/cockroach
+brew install materializeinc/cockroach/cockroach
 brew services start cockroach
 ```
+
+(We recommend use of our [forked Homebrew tap][forked-cockroach-tap] because it
+runs CockroachDB using an in-memory store, which avoids slow filesystem
+operations on macOS.)
 
 On Linux, we recommend using Docker:
 
@@ -96,7 +100,7 @@ documentation. Then please update this guide with the new instructions!
 You will need JDK 8 or 11. The easiest way to install this is via Homebrew:
 
 ```shell
-brew install --cask homebrew/cask-versions/temurin8
+brew install --cask homebrew/cask-versions/temurin11
 ```
 
 Then, download and extract the Confluent Platform tarball:
@@ -116,7 +120,7 @@ If you have multiple JDKs installed and your current JAVA_HOME points to an inco
 you can explicitly run confluent with JDK 8 or 11:
 
 ```
-JAVA_HOME=$(/usr/libexec/java_home -v 1.8) confluent local services start
+JAVA_HOME=$(/usr/libexec/java_home -v 1.11) confluent local services start
 ```
 
 #### Linux
@@ -128,7 +132,7 @@ Confluent Platform:
 curl http://packages.confluent.io/deb/6.0/archive.key | sudo apt-key add -
 sudo add-apt-repository "deb [arch=amd64] https://packages.confluent.io/deb/6.0 stable main"
 sudo apt update
-sudo apt install openjdk-8-jre-headless confluent-community-2.13
+sudo apt install openjdk-11-jre-headless confluent-community-2.13
 echo export CONFLUENT_HOME=/ >> ~/.bashrc
 source ~/.bashrc
 confluent local services start
@@ -466,6 +470,7 @@ source /path/to/materialize/misc/completions/zsh/*
 [github-https]: https://help.github.com/en/github/authenticating-to-github/creating-a-personal-access-token-for-the-command-line
 [hakari documentation]: https://docs.rs/cargo-hakari/latest/cargo_hakari/about/index.html
 [Homebrew]: https://brew.sh
+[forked-cockroach-tap]: https://github.com/materializeInc/homebrew-cockroach
 [Kubernetes]: https://kubernetes.io
 [materialize-dbt-utils]: https://github.com/MaterializeInc/materialize-dbt-utils
 [Nix]: https://nixos.org

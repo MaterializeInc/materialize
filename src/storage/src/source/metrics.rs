@@ -270,7 +270,7 @@ pub struct SourceBaseMetrics {
     pub(crate) bytes_read: IntCounter,
 
     /// Metrics that are also exposed to users.
-    pub(crate) source_statistics: crate::source::statistics::SourceStatisticsMetricsDefinitions,
+    pub(crate) source_statistics: crate::statistics::SourceStatisticsMetricsDefinitions,
 }
 
 impl SourceBaseMetrics {
@@ -288,10 +288,9 @@ impl SourceBaseMetrics {
                 name: "mz_bytes_read_total",
                 help: "Count of bytes read from sources",
             )),
-            source_statistics:
-                crate::source::statistics::SourceStatisticsMetricsDefinitions::register_with(
-                    registry,
-                ),
+            source_statistics: crate::statistics::SourceStatisticsMetricsDefinitions::register_with(
+                registry,
+            ),
         }
     }
 }

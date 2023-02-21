@@ -71,6 +71,7 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
@@ -152,7 +153,7 @@
 //! cargo run --bin mz-pgtest -- test/pgtest/test.pt
 //! ```
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::io::{ErrorKind, Read, Write};
 use std::net::TcpStream;
@@ -191,7 +192,7 @@ impl PgConn {
             Message::AuthenticationOk => {}
             _ => bail!("expected AuthenticationOk"),
         };
-        conn.until(vec!["ReadyForQuery"], vec!['C', 'S', 'M'], HashSet::new())?;
+        conn.until(vec!["ReadyForQuery"], vec!['C', 'S', 'M'], BTreeSet::new())?;
         Ok(conn)
     }
 
@@ -205,7 +206,7 @@ impl PgConn {
         &mut self,
         until: Vec<&str>,
         err_field_typs: Vec<char>,
-        ignore: HashSet<String>,
+        ignore: BTreeSet<String>,
     ) -> anyhow::Result<Vec<String>> {
         let mut msgs = Vec::with_capacity(until.len());
         for expect in until {
@@ -410,7 +411,7 @@ pub struct PgTest {
     addr: String,
     user: String,
     timeout: Duration,
-    conns: HashMap<String, PgConn>,
+    conns: BTreeMap<String, PgConn>,
     verbose: bool,
 }
 
@@ -418,7 +419,7 @@ impl PgTest {
     pub fn new(addr: String, user: String, timeout: Duration) -> anyhow::Result<Self> {
         let verbose = std::env::var_os("PGTEST_VERBOSE").is_some();
         let conn = PgConn::new(&addr, &user, timeout.clone(), verbose)?;
-        let mut conns = HashMap::new();
+        let mut conns = BTreeMap::new();
         conns.insert(DEFAULT_CONN.to_string(), conn);
 
         Ok(PgTest {
@@ -449,7 +450,7 @@ impl PgTest {
         conn: Option<String>,
         until: Vec<&str>,
         err_field_typs: Vec<char>,
-        ignore: HashSet<String>,
+        ignore: BTreeSet<String>,
     ) -> anyhow::Result<Vec<String>> {
         let conn = self.get_conn(conn)?;
         conn.until(until, err_field_typs, ignore)
@@ -629,7 +630,7 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: String, user: String, timeo
                         None => vec!['C', 'S', 'M'],
                     }
                 };
-                let mut ignore = HashSet::new();
+                let mut ignore = BTreeSet::new();
                 if let Some(values) = args.remove("ignore") {
                     for v in values {
                         ignore.insert(v);

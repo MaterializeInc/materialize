@@ -92,6 +92,7 @@ message ProtoUnmaterializableFunc {
         google.protobuf.Empty pg_postmaster_start_time = 12;
         google.protobuf.Empty version = 13;
         google.protobuf.Empty mz_version_num = 14;
+        google.protobuf.Empty current_setting = 15;
     }
 }
 
@@ -414,7 +415,7 @@ message ProtoUnaryFunc {
 }
 
 message ProtoBinaryFunc {
-    message ProtoRangeContainsElemInner {
+    message ProtoRangeContainsInner {
         mz_repr.relation_and_scalar.ProtoScalarType elem_type = 1;
         bool rev = 2;
     }
@@ -588,7 +589,17 @@ message ProtoBinaryFunc {
         google.protobuf.Empty mod_uint16 = 169;
         google.protobuf.Empty mod_uint32 = 170;
         google.protobuf.Empty mod_uint64 = 171;
-        ProtoRangeContainsElemInner range_contains_elem = 172;
+        ProtoRangeContainsInner range_contains_elem = 172;
+        bool range_contains_range = 173;
+        google.protobuf.Empty range_overlaps = 174;
+        google.protobuf.Empty range_after = 175;
+        google.protobuf.Empty range_before = 176;
+        google.protobuf.Empty range_overleft = 177;
+        google.protobuf.Empty range_overright = 178;
+        google.protobuf.Empty range_adjacent = 179;
+        google.protobuf.Empty range_union = 180;
+        google.protobuf.Empty range_intersection = 181;
+        google.protobuf.Empty range_difference = 182;
     }
 }
 

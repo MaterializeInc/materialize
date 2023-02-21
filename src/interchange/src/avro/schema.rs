@@ -35,8 +35,8 @@
 //! SQL type, not a series of them. Thus, in these cases, we just bail. For example, it's
 //! not possible to ingest an array or map whose element type is an Essential Union.
 
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::ops::Deref;
 use std::str::FromStr;
@@ -95,7 +95,7 @@ fn validate_schema_1(schema: SchemaNode) -> anyhow::Result<Vec<(ColumnName, Colu
 /// Get the series of (one or more) SQL columns corresponding to an Avro union.
 /// See module comments for details.
 fn get_union_columns<'a>(
-    seen_avro_nodes: &mut HashSet<usize>,
+    seen_avro_nodes: &mut BTreeSet<usize>,
     schema: SchemaNode<'a>,
     base_name: Option<&str>,
 ) -> anyhow::Result<Vec<(ColumnName, ColumnType)>> {
@@ -165,7 +165,7 @@ fn get_union_columns<'a>(
 }
 
 fn get_named_columns<'a>(
-    seen_avro_nodes: &mut HashSet<usize>,
+    seen_avro_nodes: &mut BTreeSet<usize>,
     schema: SchemaNode<'a>,
     base_name: Option<&str>,
 ) -> anyhow::Result<Vec<(ColumnName, ColumnType)>> {
@@ -186,7 +186,7 @@ fn get_named_columns<'a>(
 /// It is an error if this node should correspond to more than one column
 /// (because it is an Essential Union in the sense described in the module docs).
 fn validate_schema_2(
-    seen_avro_nodes: &mut HashSet<usize>,
+    seen_avro_nodes: &mut BTreeSet<usize>,
     schema: SchemaNode,
 ) -> anyhow::Result<ScalarType> {
     Ok(match schema.inner {
@@ -369,14 +369,14 @@ impl<C> fmt::Debug for ConfluentAvroResolver<C> {
 
 #[derive(Debug)]
 struct SchemaCache<C> {
-    cache: HashMap<i32, Result<Schema, AvroError>>,
+    cache: BTreeMap<i32, Result<Schema, AvroError>>,
     ccsr_client: C,
 }
 
 impl<C: Deref<Target = mz_ccsr::Client>> SchemaCache<C> {
     fn new(ccsr_client: C) -> Result<SchemaCache<C>, anyhow::Error> {
         Ok(SchemaCache {
-            cache: HashMap::new(),
+            cache: BTreeMap::new(),
             ccsr_client,
         })
     }

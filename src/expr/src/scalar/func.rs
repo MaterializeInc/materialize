@@ -32,11 +32,11 @@ use sha1::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
 
 use mz_lowertest::MzReflect;
-use mz_ore::cast;
 use mz_ore::cast::CastFrom;
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::option::OptionExt;
 use mz_ore::result::ResultExt;
+use mz_ore::{cast, soft_assert};
 use mz_pgrepr::Type;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::ArrayDimension;
@@ -83,6 +83,7 @@ pub enum UnmaterializableFunc {
     PgBackendPid,
     PgPostmasterStartTime,
     Version,
+    ViewableVariables,
 }
 
 impl UnmaterializableFunc {
@@ -107,6 +108,11 @@ impl UnmaterializableFunc {
             UnmaterializableFunc::PgBackendPid => ScalarType::Int32.nullable(false),
             UnmaterializableFunc::PgPostmasterStartTime => ScalarType::TimestampTz.nullable(false),
             UnmaterializableFunc::Version => ScalarType::String.nullable(false),
+            UnmaterializableFunc::ViewableVariables => ScalarType::Map {
+                value_type: Box::new(ScalarType::String),
+                custom_id: None,
+            }
+            .nullable(false),
         }
     }
 }
@@ -130,6 +136,7 @@ impl fmt::Display for UnmaterializableFunc {
             UnmaterializableFunc::PgBackendPid => f.write_str("pg_backend_pid"),
             UnmaterializableFunc::PgPostmasterStartTime => f.write_str("pg_postmaster_start_time"),
             UnmaterializableFunc::Version => f.write_str("version"),
+            UnmaterializableFunc::ViewableVariables => f.write_str("viewable_variables"),
         }
     }
 }
@@ -141,6 +148,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
             UnmaterializableFunc::CurrentDatabase => CurrentDatabase(()),
             UnmaterializableFunc::CurrentSchemasWithSystem => CurrentSchemasWithSystem(()),
             UnmaterializableFunc::CurrentSchemasWithoutSystem => CurrentSchemasWithoutSystem(()),
+            UnmaterializableFunc::ViewableVariables => CurrentSetting(()),
             UnmaterializableFunc::CurrentTimestamp => CurrentTimestamp(()),
             UnmaterializableFunc::CurrentUser => CurrentUser(()),
             UnmaterializableFunc::MzEnvironmentId => MzEnvironmentId(()),
@@ -166,6 +174,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
                     Ok(UnmaterializableFunc::CurrentSchemasWithoutSystem)
                 }
                 CurrentTimestamp(()) => Ok(UnmaterializableFunc::CurrentTimestamp),
+                CurrentSetting(()) => Ok(UnmaterializableFunc::ViewableVariables),
                 CurrentUser(()) => Ok(UnmaterializableFunc::CurrentUser),
                 MzEnvironmentId(()) => Ok(UnmaterializableFunc::MzEnvironmentId),
                 MzNow(()) => Ok(UnmaterializableFunc::MzNow),
@@ -1261,7 +1270,59 @@ where
 {
     let range = a.unwrap_range();
     let elem = R::try_from(b).expect("type checking must produce correct R");
-    Datum::from(range.contains(&elem))
+    Datum::from(range.contains_elem(&elem))
+}
+
+macro_rules! range_fn {
+    ($fn:expr) => {
+        paste::paste! {
+
+            fn [< range_ $fn >]<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a>
+            {
+                let l = a.unwrap_range();
+                let r = b.unwrap_range();
+                Datum::from(Range::<Datum<'a>>::$fn(&l, &r))
+            }
+        }
+    };
+}
+
+range_fn!(contains_range);
+range_fn!(overlaps);
+range_fn!(after);
+range_fn!(before);
+range_fn!(overleft);
+range_fn!(overright);
+range_fn!(adjacent);
+
+fn range_union<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let l = a.unwrap_range();
+    let r = b.unwrap_range();
+    l.union(&r)?.into_result(temp_storage)
+}
+
+fn range_intersection<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let l = a.unwrap_range();
+    let r = b.unwrap_range();
+    l.intersection(&r).into_result(temp_storage)
+}
+
+fn range_difference<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let l = a.unwrap_range();
+    let r = b.unwrap_range();
+    l.difference(&r)?.into_result(temp_storage)
 }
 
 fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -1906,6 +1967,16 @@ pub enum BinaryFunc {
     PowerNumeric,
     GetByte,
     RangeContainsElem { elem_type: ScalarType, rev: bool },
+    RangeContainsRange { rev: bool },
+    RangeOverlaps,
+    RangeAfter,
+    RangeBefore,
+    RangeOverleft,
+    RangeOverright,
+    RangeAdjacent,
+    RangeUnion,
+    RangeIntersection,
+    RangeDifference,
 }
 
 impl BinaryFunc {
@@ -2212,6 +2283,16 @@ impl BinaryFunc {
                 }
                 _ => unreachable!(),
             }),
+            BinaryFunc::RangeContainsRange { rev: _ } => Ok(eager!(range_contains_range)),
+            BinaryFunc::RangeOverlaps => Ok(eager!(range_overlaps)),
+            BinaryFunc::RangeAfter => Ok(eager!(range_after)),
+            BinaryFunc::RangeBefore => Ok(eager!(range_before)),
+            BinaryFunc::RangeOverleft => Ok(eager!(range_overleft)),
+            BinaryFunc::RangeOverright => Ok(eager!(range_overright)),
+            BinaryFunc::RangeAdjacent => Ok(eager!(range_adjacent)),
+            BinaryFunc::RangeUnion => eager!(range_union, temp_storage),
+            BinaryFunc::RangeIntersection => eager!(range_intersection, temp_storage),
+            BinaryFunc::RangeDifference => eager!(range_difference, temp_storage),
         }
     }
 
@@ -2365,7 +2446,22 @@ impl BinaryFunc {
 
             GetByte => ScalarType::Int32.nullable(in_nullable),
 
-            RangeContainsElem { .. } => ScalarType::Bool.nullable(in_nullable),
+            RangeContainsElem { .. }
+            | RangeContainsRange { .. }
+            | RangeOverlaps
+            | RangeAfter
+            | RangeBefore
+            | RangeOverleft
+            | RangeOverright
+            | RangeAdjacent => ScalarType::Bool.nullable(in_nullable),
+
+            RangeUnion | RangeIntersection | RangeDifference => {
+                soft_assert!(
+                    input1_type.scalar_type.without_modifiers()
+                        == input2_type.scalar_type.without_modifiers()
+                );
+                input1_type.scalar_type.without_modifiers().nullable(true)
+            }
         }
     }
 
@@ -2490,6 +2586,16 @@ impl BinaryFunc {
                 | ModFloat64
                 | ModNumeric
                 | RangeContainsElem { .. }
+                | RangeContainsRange { .. }
+                | RangeOverlaps
+                | RangeAfter
+                | RangeBefore
+                | RangeOverleft
+                | RangeOverright
+                | RangeAdjacent
+                | RangeUnion
+                | RangeIntersection
+                | RangeDifference
         )
     }
 
@@ -2619,7 +2725,17 @@ impl BinaryFunc {
             | ListListConcat
             | ListElementConcat
             | ElementListConcat
-            | RangeContainsElem { .. } => true,
+            | RangeContainsElem { .. }
+            | RangeContainsRange { .. }
+            | RangeOverlaps
+            | RangeAfter
+            | RangeBefore
+            | RangeOverleft
+            | RangeOverright
+            | RangeAdjacent
+            | RangeUnion
+            | RangeIntersection
+            | RangeDifference => true,
             ToCharTimestamp
             | ToCharTimestampTz
             | DateBinTimestamp
@@ -2878,6 +2994,18 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::RangeContainsElem { rev, .. } => {
                 f.write_str(if *rev { "<@" } else { "@>" })
             }
+            BinaryFunc::RangeContainsRange { rev, .. } => {
+                f.write_str(if *rev { "<@" } else { "@>" })
+            }
+            BinaryFunc::RangeOverlaps => f.write_str("&&"),
+            BinaryFunc::RangeAfter => f.write_str(">>"),
+            BinaryFunc::RangeBefore => f.write_str("<<"),
+            BinaryFunc::RangeOverleft => f.write_str("&<"),
+            BinaryFunc::RangeOverright => f.write_str("&>"),
+            BinaryFunc::RangeAdjacent => f.write_str("-|-"),
+            BinaryFunc::RangeUnion => f.write_str("+"),
+            BinaryFunc::RangeIntersection => f.write_str("*"),
+            BinaryFunc::RangeDifference => f.write_str("-"),
         }
     }
 }
@@ -3079,6 +3207,18 @@ impl Arbitrary for BinaryFunc {
             (bool::arbitrary(), mz_repr::arb_range_type())
                 .prop_map(|(rev, elem_type)| BinaryFunc::RangeContainsElem { elem_type, rev })
                 .boxed(),
+            bool::arbitrary()
+                .prop_map(|rev| BinaryFunc::RangeContainsRange { rev })
+                .boxed(),
+            Just(BinaryFunc::RangeOverlaps).boxed(),
+            Just(BinaryFunc::RangeAfter).boxed(),
+            Just(BinaryFunc::RangeBefore).boxed(),
+            Just(BinaryFunc::RangeOverleft).boxed(),
+            Just(BinaryFunc::RangeOverright).boxed(),
+            Just(BinaryFunc::RangeAdjacent).boxed(),
+            Just(BinaryFunc::RangeUnion).boxed(),
+            Just(BinaryFunc::RangeIntersection).boxed(),
+            Just(BinaryFunc::RangeDifference).boxed(),
         ])
     }
 }
@@ -3255,12 +3395,22 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::Power => Power(()),
             BinaryFunc::PowerNumeric => PowerNumeric(()),
             BinaryFunc::GetByte => GetByte(()),
-            BinaryFunc::RangeContainsElem { elem_type, rev } => RangeContainsElem(
-                crate::scalar::proto_binary_func::ProtoRangeContainsElemInner {
+            BinaryFunc::RangeContainsElem { elem_type, rev } => {
+                RangeContainsElem(crate::scalar::proto_binary_func::ProtoRangeContainsInner {
                     elem_type: Some(elem_type.into_proto()),
                     rev: *rev,
-                },
-            ),
+                })
+            }
+            BinaryFunc::RangeContainsRange { rev } => RangeContainsRange(*rev),
+            BinaryFunc::RangeOverlaps => RangeOverlaps(()),
+            BinaryFunc::RangeAfter => RangeAfter(()),
+            BinaryFunc::RangeBefore => RangeBefore(()),
+            BinaryFunc::RangeOverleft => RangeOverleft(()),
+            BinaryFunc::RangeOverright => RangeOverright(()),
+            BinaryFunc::RangeAdjacent => RangeAdjacent(()),
+            BinaryFunc::RangeUnion => RangeUnion(()),
+            BinaryFunc::RangeIntersection => RangeIntersection(()),
+            BinaryFunc::RangeDifference => RangeDifference(()),
         };
         ProtoBinaryFunc { kind: Some(kind) }
     }
@@ -3446,9 +3596,19 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 RangeContainsElem(inner) => Ok(BinaryFunc::RangeContainsElem {
                     elem_type: inner
                         .elem_type
-                        .into_rust_if_some("ProtoRangeContainsElemInner::elem_type")?,
+                        .into_rust_if_some("ProtoRangeContainsInner::elem_type")?,
                     rev: inner.rev,
                 }),
+                RangeContainsRange(rev) => Ok(BinaryFunc::RangeContainsRange { rev }),
+                RangeOverlaps(()) => Ok(BinaryFunc::RangeOverlaps),
+                RangeAfter(()) => Ok(BinaryFunc::RangeAfter),
+                RangeBefore(()) => Ok(BinaryFunc::RangeBefore),
+                RangeOverleft(()) => Ok(BinaryFunc::RangeOverleft),
+                RangeOverright(()) => Ok(BinaryFunc::RangeOverright),
+                RangeAdjacent(()) => Ok(BinaryFunc::RangeAdjacent),
+                RangeUnion(()) => Ok(BinaryFunc::RangeUnion),
+                RangeIntersection(()) => Ok(BinaryFunc::RangeIntersection),
+                RangeDifference(()) => Ok(BinaryFunc::RangeDifference),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoBinaryFunc::kind"))
@@ -3562,7 +3722,9 @@ impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
             // If we can convert to the input type then we call the function
             Ok(input) => self.call(input).into_result(temp_storage),
             // If we can't and we got a non-null datum something went wrong in the planner
-            Err(Ok(datum)) if !datum.is_null() => panic!("invalid input type"),
+            Err(Ok(datum)) if !datum.is_null() => {
+                Err(EvalError::Internal("invalid input type".into()))
+            }
             // Otherwise we just propagate NULLs and errors
             Err(res) => res,
         }

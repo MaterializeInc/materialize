@@ -71,6 +71,7 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
@@ -79,6 +80,8 @@
 // #![warn(missing_docs)]
 
 //! The public API for the compute layer.
+
+mod metrics;
 
 pub mod controller;
 pub mod explain;

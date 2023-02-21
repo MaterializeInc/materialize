@@ -106,6 +106,34 @@ true
     time > 0
 16
 
+> CREATE MATERIALIZED VIEW mvv AS SELECT * FROM vv
+
+> SELECT COUNT(*)
+  FROM (SELECT DISTINCT delays.export_id, delays.import_id
+        FROM
+            mz_internal.mz_raw_worker_compute_delays AS delays)
+3
+
+> SELECT COUNT(*)
+  FROM (SELECT DISTINCT import_frontiers.export_id, import_frontiers.import_id
+        FROM
+            mz_internal.mz_worker_compute_import_frontiers AS import_frontiers)
+3
+
+> DROP MATERIALIZED VIEW mvv
+
+> SELECT COUNT(*)
+  FROM (SELECT DISTINCT delays.export_id, delays.import_id
+        FROM
+            mz_internal.mz_raw_worker_compute_delays AS delays)
+2
+
+> SELECT COUNT(*)
+  FROM (SELECT DISTINCT import_frontiers.export_id, import_frontiers.import_id
+        FROM
+            mz_internal.mz_worker_compute_import_frontiers AS import_frontiers)
+2
+
 > DROP INDEX vv_primary_idx
 
 > SELECT COUNT(*)
@@ -138,3 +166,13 @@ true
 
 ! SELECT * FROM mz_internal.mz_active_peeks AS OF 0
 contains: Timestamp (0) is not valid for all inputs
+
+# Test that logged subscribe frontiers advance beyond 0.
+
+$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT true FROM mz_internal.mz_compute_frontiers WHERE export_id LIKE 't%' AND time > 0)
+> FETCH 1 c WITH (timeout='5s');
+<TIMESTAMP> 1 true
+> COMMIT

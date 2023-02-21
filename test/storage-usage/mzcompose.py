@@ -210,9 +210,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("tests", nargs="*", default=None, help="run specified tests")
     args = parser.parse_args()
 
-    c.start_and_wait_for_tcp(services=["redpanda", "postgres", "materialized"])
-    c.wait_for_postgres()
-    c.wait_for_materialized()
+    c.up("redpanda", "postgres", "materialized")
 
     c.up("testdrive", persistent=True)
 

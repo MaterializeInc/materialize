@@ -206,10 +206,22 @@ impl Value {
     /// Converts a Materialize datum from this value.
     pub fn into_datum<'a>(self, buf: &'a RowArena, typ: &Type) -> Datum<'a> {
         match self {
-            Value::Array { .. } => {
-                // This situation is handled gracefully by Value::decode; if we
-                // wind up here it's a programming error.
-                unreachable!("into_datum cannot be called on Value::Array");
+            Value::Array { dims, elements } => {
+                let element_pg_type = match typ {
+                    Type::Array(t) => &*t,
+                    _ => panic!("Value::Array should have type Type::Array. Found {:?}", typ),
+                };
+                buf.make_datum(|packer| {
+                    packer
+                        .push_array(
+                            &dims,
+                            elements.into_iter().map(|element| match element {
+                                Some(element) => element.into_datum(buf, element_pg_type),
+                                None => Datum::Null,
+                            }),
+                        )
+                        .unwrap();
+                })
             }
             Value::Int2Vector { .. } => {
                 // This situation is handled gracefully by Value::decode; if we

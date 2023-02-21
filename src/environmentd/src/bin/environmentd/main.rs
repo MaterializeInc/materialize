@@ -71,6 +71,7 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
@@ -99,14 +100,15 @@ use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
 use once_cell::sync::Lazy;
+use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
-use tokio::sync::Mutex;
 use tower_http::cors::{self, AllowOrigin};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use url::Url;
 use uuid::Uuid;
 
-use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageHostSizeMap};
+use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
 use mz_environmentd::{TlsConfig, TlsMode, BUILD_INFO};
@@ -124,7 +126,8 @@ use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::{PersistConfig, PersistLocation};
+use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_service::emit_boot_diagnostics;
 use mz_sql::catalog::EnvironmentId;
@@ -223,6 +226,12 @@ pub struct Args {
     internal_http_listen_addr: SocketAddr,
     /// Enable cross-origin resource sharing (CORS) for HTTP requests from the
     /// specified origin.
+    ///
+    /// The default allows all local connections.
+    /// "*" allows all.
+    /// "*.domain.com" allows connections from any matching subdomain.
+    ///
+    /// Wildcards in other positions (e.g., "https://*.foo.com" or "https://foo.*.com") have no effect.
     #[structopt(long, env = "CORS_ALLOWED_ORIGIN")]
     cors_allowed_origin: Vec<HeaderValue>,
     /// How stringently to demand TLS authentication and encryption.
@@ -436,9 +445,6 @@ pub struct Args {
         value_delimiter = ';'
     )]
     bootstrap_system_parameter: Vec<KeyValueArg<String, String>>,
-    /// A map from size name to resource allocations for storage hosts.
-    #[clap(long, env = "STORAGE_HOST_SIZES")]
-    storage_host_sizes: Option<String>,
     /// Default storage host size
     #[clap(long, env = "DEFAULT_STORAGE_HOST_SIZE")]
     default_storage_host_size: Option<String>,
@@ -450,6 +456,11 @@ pub struct Args {
         default_value = "3600s"
     )]
     storage_usage_collection_interval_sec: Duration,
+    /// The period for which to retain usage records. Note that the retention
+    /// period is only evaluated at server start time, so rebooting the server
+    /// is required to discard old records.
+    #[clap(long, env = "STORAGE_USAGE_RETENTION_PERIOD", parse(try_from_str = humantime::parse_duration))]
+    storage_usage_retention_period: Option<Duration>,
     /// An API key for Segment. Enables export of audit events to Segment.
     #[clap(long, env = "SEGMENT_API_KEY")]
     segment_api_key: Option<String>,
@@ -556,11 +567,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             .build()?,
     );
 
-    let metrics_registry = MetricsRegistry::new();
-    let metrics = Metrics::register_into(&metrics_registry);
-
-    runtime.block_on(mz_alloc::register_metrics_into(&metrics_registry));
-
     // Configure tracing to log the service name when using the process
     // orchestrator, which intermingles log output from multiple services. Other
     // orchestrators separate log output from different services.
@@ -574,6 +580,13 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             service_name: "environmentd",
             build_info: BUILD_INFO,
         }))?;
+
+    let span = tracing::info_span!("environmentd::run").entered();
+
+    let metrics_registry = MetricsRegistry::new();
+    let metrics = Metrics::register_into(&metrics_registry);
+
+    runtime.block_on(mz_alloc::register_metrics_into(&metrics_registry));
 
     // Initialize fail crate for failpoint support
     let _failpoint_scenario = FailScenario::setup();
@@ -623,7 +636,21 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     {
         cors::Any.into()
     } else if !args.cors_allowed_origin.is_empty() {
-        AllowOrigin::list(args.cors_allowed_origin)
+        let allowed = args.cors_allowed_origin.clone();
+        AllowOrigin::predicate(move |origin: &HeaderValue, _request_parts: _| {
+            for val in &allowed {
+                // For each specified allow cors origin, check if it starts with
+                // a *. and allow anything from that glob. Otherwise check for
+                // an exact match.
+                if (val.as_bytes().starts_with(b"*.")
+                    && origin.as_bytes().ends_with(&val.as_bytes()[1..]))
+                    || origin == val
+                {
+                    return true;
+                }
+            }
+            false
+        })
     } else {
         let port = args.http_listen_addr.port();
         AllowOrigin::list([
@@ -710,7 +737,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone()),
         &metrics_registry,
     );
-    let persist_clients = Arc::new(Mutex::new(persist_clients));
+    let persist_clients = Arc::new(persist_clients);
     let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
     let controller = ControllerConfig {
         build_info: &mz_environmentd::BUILD_INFO,
@@ -725,6 +752,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         init_container_image: args.orchestrator_kubernetes_init_container_image,
         now: SYSTEM_TIME.clone(),
         postgres_factory: StashFactory::new(&metrics_registry),
+        metrics_registry: metrics_registry.clone(),
     };
 
     let cluster_replica_sizes: ClusterReplicaSizeMap = match args.cluster_replica_sizes {
@@ -732,15 +760,13 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
     };
 
-    let storage_host_sizes: StorageHostSizeMap = match args.storage_host_sizes {
-        None => Default::default(),
-        Some(json) => serde_json::from_str(&json).context("parsing storage host map")?,
-    };
-
-    // Ensure default storage host size actually exists in the passed map
-    if let Some(default_storage_host_size) = &args.default_storage_host_size {
-        if !storage_host_sizes.0.contains_key(default_storage_host_size) {
-            bail!("default storage host size is unknown");
+    // Ensure default storage cluster size actually exists in the passed map
+    if let Some(default_storage_cluster_size) = &args.default_storage_host_size {
+        if !cluster_replica_sizes
+            .0
+            .contains_key(default_storage_cluster_size)
+        {
+            bail!("default storage cluster size is unknown");
         }
     }
 
@@ -765,6 +791,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         now,
         environment_id: args.environment_id,
         cluster_replica_sizes,
+        default_storage_cluster_size: args.default_storage_host_size,
         bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
         bootstrap_builtin_cluster_replica_size: args.bootstrap_builtin_cluster_replica_size,
         bootstrap_system_parameters: args
@@ -772,8 +799,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             .into_iter()
             .map(|kv| (kv.key, kv.value))
             .collect(),
-        storage_host_sizes,
-        default_storage_host_size: args.default_storage_host_size,
         availability_zones: args.availability_zone,
         connection_context: ConnectionContext::from_cli_args(
             &args.tracing.log_filter.inner,
@@ -782,6 +807,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         ),
         tracing_handle,
         storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
+        storage_usage_retention_period: args.storage_usage_retention_period,
         segment_api_key: args.segment_api_key,
         egress_ips: args.announce_egress_ip,
         aws_account_id: args.aws_account_id,
@@ -802,6 +828,9 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             .try_into()
             .expect("must fit"),
     );
+    let span = span.exit();
+    let id = span.context().span().span_context().trace_id();
+    drop(span);
 
     println!(
         "environmentd {} listening...",
@@ -817,6 +846,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         " Internal HTTP address: {}",
         server.internal_http_local_addr()
     );
+
+    println!(" Root trace ID: {id}");
 
     // Block forever.
     loop {

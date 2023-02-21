@@ -45,15 +45,15 @@ impl crate::Transform for Join {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), TransformError> {
-        let result = relation.try_visit_mut_post(&mut |e| self.action(e));
-        mz_repr::explain_new::trace_plan(&*relation);
-        result
+        relation.try_visit_mut_post(&mut Self::action)?;
+        mz_repr::explain::trace_plan(&*relation);
+        Ok(())
     }
 }
 
 impl Join {
     /// Fuses multiple `Join` operators into one `Join` operator.
-    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), TransformError> {
+    pub fn action(relation: &mut MirRelationExpr) -> Result<(), TransformError> {
         if let MirRelationExpr::Join {
             inputs,
             equivalences,

@@ -31,7 +31,7 @@ class DebeziumStart(Action):
         return [DebeziumRunning()]
 
     def run(self, c: Composition) -> None:
-        c.start_and_wait_for_tcp(services=["debezium"])
+        c.up("debezium")
 
 
 class DebeziumStop(Action):
@@ -120,12 +120,10 @@ class CreateDebeziumSource(Action):
                     > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
 
                     > CREATE SOURCE {self.debezium_source.name}
+                      IN CLUSTER storaged
                       FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.{self.postgres_table.name}')
                       FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                       ENVELOPE DEBEZIUM
-                      WITH (
-                        REMOTE 'storaged:2100'
-                      )
                     """
                 )
             )

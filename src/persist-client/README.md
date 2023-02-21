@@ -105,8 +105,8 @@ bigger than this cap.
   outstanding.
 
 [BatchBuilder]: crate::batch::BatchBuilder
-[blob_target_size]: crate::PersistConfig::blob_target_size
-[batch_builder_max_outstanding_parts]: crate::PersistConfig::batch_builder_max_outstanding_parts
+[blob_target_size]: crate::cfg::DynamicConfig::blob_target_size
+[batch_builder_max_outstanding_parts]: crate::cfg::DynamicConfig::batch_builder_max_outstanding_parts
 
 A persist reader uses as most `3B` memory per [Listen] and per [Subscribe].
 

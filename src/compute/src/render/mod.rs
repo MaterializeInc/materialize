@@ -108,9 +108,8 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::AsCollection;
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
-use timely::dataflow::operators::InspectCore;
 use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::Scope;
 use timely::order::Product;
 use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
@@ -120,7 +119,7 @@ use timely::PartialOrder;
 use mz_compute_client::plan::Plan;
 use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
 use mz_expr::Id;
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::source::persist_source;
 use mz_storage_client::source::persist_source::FlowControl;
@@ -129,8 +128,7 @@ use mz_timely_util::probe::{self, ProbeNotify};
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
-use crate::logging::compute::ComputeEvent;
-use crate::logging::compute::Logger;
+use crate::logging::compute::LogImportFrontiers;
 pub use context::CollectionBundle;
 use context::{ArrangementFlavor, Context};
 
@@ -209,9 +207,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     );
                     let flow_control = FlowControl {
                         progress_stream: flow_control_input,
-                        // TODO: Enable flow control with a sensible limit value. This is currently
-                        // blocked by a bug in `persist_source` (#16995).
-                        max_inflight_bytes: usize::MAX,
+                        max_inflight_bytes: compute_state.dataflow_max_inflight_bytes,
                     };
 
                     // Note: For correctness, we require that sources only emit times advanced by
@@ -233,14 +229,13 @@ pub fn build_compute_dataflow<A: Allocate>(
                     // For the moment, assert that it is either trivial or `None`.
                     assert!(mfp.map(|x| x.is_identity()).unwrap_or(true));
 
-                    // If logging is enabled, intercept frontier advancements coming from persist to track materialization lags.
-                    // Note that we do this here instead of in the server.rs worker loop since we want to catch the wall-clock
-                    // time of the frontier advancement for each dataflow as early as possible.
+                    // If logging is enabled, log source frontier advancements. Note that we do
+                    // this here instead of in the server.rs worker loop since we want to catch the
+                    // wall-clock time of the frontier advancement for each dataflow as early as
+                    // possible.
                     if let Some(logger) = compute_state.compute_logger.clone() {
                         let export_ids = dataflow.export_ids().collect();
-                        ok_stream = intercept_source_instantiation_frontiers(
-                            &ok_stream, logger, *source_id, export_ids,
-                        );
+                        ok_stream = ok_stream.log_import_frontiers(logger, *source_id, export_ids);
                     }
 
                     let (oks, errs) = (
@@ -281,7 +276,8 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Import declared indexes into the rendering context.
                 for (idx_id, idx) in &dataflow.index_imports {
-                    context.import_index(compute_state, &mut tokens, *idx_id, &idx.0);
+                    let export_ids = dataflow.export_ids().collect();
+                    context.import_index(compute_state, &mut tokens, export_ids, *idx_id, &idx.0);
                 }
 
                 // Build declared objects.
@@ -300,7 +296,6 @@ pub fn build_compute_dataflow<A: Allocate>(
                             let oks_v = Variable::new(region, Product::new(Default::default(), 1));
                             let err_v = Variable::new(region, Product::new(Default::default(), 1));
 
-                            use differential_dataflow::operators::Consolidate;
                             context.insert_id(
                                 Id::Local(*id),
                                 CollectionBundle::from_collections(
@@ -368,7 +363,8 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Import declared indexes into the rendering context.
                 for (idx_id, idx) in &dataflow.index_imports {
-                    context.import_index(compute_state, &mut tokens, *idx_id, &idx.0);
+                    let export_ids = dataflow.export_ids().collect();
+                    context.import_index(compute_state, &mut tokens, export_ids, *idx_id, &idx.0);
                 }
 
                 // Build declared objects.
@@ -404,47 +400,6 @@ pub fn build_compute_dataflow<A: Allocate>(
     })
 }
 
-// This helper function adds an operator to track source instantiation frontier advancements
-// in a dataflow. The tracking supports instrospection sources populated by compute logging.
-fn intercept_source_instantiation_frontiers<G>(
-    source_instantiation: &Stream<G, (Row, mz_repr::Timestamp, Diff)>,
-    logger: Logger,
-    source_id: GlobalId,
-    dataflow_ids: Vec<GlobalId>,
-) -> Stream<G, (Row, mz_repr::Timestamp, Diff)>
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-{
-    let mut previous_time = None;
-    source_instantiation.inspect_container(move |event| {
-        if let Err(frontier) = event {
-            if let Some(previous) = previous_time {
-                for dataflow_id in dataflow_ids.iter() {
-                    logger.log(ComputeEvent::SourceFrontier(
-                        *dataflow_id,
-                        source_id,
-                        previous,
-                        -1,
-                    ));
-                }
-            }
-            if let Some(time) = frontier.get(0) {
-                for dataflow_id in dataflow_ids.iter() {
-                    logger.log(ComputeEvent::SourceFrontier(
-                        *dataflow_id,
-                        source_id,
-                        *time,
-                        1,
-                    ));
-                }
-                previous_time = Some(*time);
-            } else {
-                previous_time = None;
-            }
-        }
-    })
-}
-
 // This implementation block allows child timestamps to vary from parent timestamps,
 // but requires the parent timestamp to be `repr::Timestamp`.
 impl<'g, G, T> Context<Child<'g, G, T>, Row>
@@ -456,6 +411,7 @@ where
         &mut self,
         compute_state: &mut ComputeState,
         tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
+        export_ids: Vec<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
     ) {
@@ -466,7 +422,7 @@ where
             );
 
             let token = traces.to_drop().clone();
-            let (ok_arranged, ok_button) = traces.oks_mut().import_frontier_core(
+            let (mut ok_arranged, ok_button) = traces.oks_mut().import_frontier_core(
                 &self.scope.parent,
                 &format!("Index({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
@@ -478,8 +434,18 @@ where
                 self.as_of_frontier.clone(),
                 self.until.clone(),
             );
+
+            // If logging is enabled, log import frontier advancements. Note that we do
+            // this here instead of in the server.rs worker loop since we want to catch the
+            // wall-clock time of the frontier advancement for each dataflow as early as
+            // possible.
+            if let Some(logger) = compute_state.compute_logger.clone() {
+                ok_arranged = ok_arranged.log_import_frontiers(logger, idx_id, export_ids);
+            }
+
             let ok_arranged = ok_arranged.enter(&self.scope);
             let err_arranged = err_arranged.enter(&self.scope);
+
             self.update_id(
                 Id::Global(idx.on_id),
                 CollectionBundle::from_expressions(
@@ -526,7 +492,7 @@ where
         import_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
-        mut probes: Vec<probe::Handle<mz_repr::Timestamp>>,
+        probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -541,21 +507,15 @@ where
                 Id::Global(idx_id)
             )
         });
-        let arrangement = bundle.arrangement(&idx.key);
 
-        // Set up probes to notify on index frontier advancement.
-        if let Some(arr) = &arrangement {
-            let (collection, _) = arr.as_collection();
-            let stream = collection.inner;
-            for handle in probes.iter_mut() {
-                stream.probe_notify_with(handle);
-            }
-        }
+        compute_state
+            .flow_control_probes
+            .insert(idx_id, probes.clone());
 
-        compute_state.flow_control_probes.insert(idx_id, probes);
-
-        match arrangement {
+        match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
+                // Set up probes to notify on index frontier advancement.
+                oks.stream.probe_notify_with(probes);
                 compute_state.traces.set(
                     idx_id,
                     TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
@@ -597,7 +557,7 @@ where
         import_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
-        mut probes: Vec<probe::Handle<mz_repr::Timestamp>>,
+        probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -612,26 +572,19 @@ where
                 Id::Global(idx_id)
             )
         });
-        let arrangement = bundle.arrangement(&idx.key);
 
-        // Set up probes to notify on index frontier advancement.
-        if let Some(arr) = &arrangement {
-            let (collection, _) = arr.as_collection();
-            let stream = collection.leave().inner;
-            for handle in probes.iter_mut() {
-                stream.probe_notify_with(handle);
-            }
-        }
+        compute_state
+            .flow_control_probes
+            .insert(idx_id, probes.clone());
 
-        compute_state.flow_control_probes.insert(idx_id, probes);
-
-        match arrangement {
+        match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
                 use differential_dataflow::operators::arrange::Arrange;
                 let oks = oks
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .leave()
                     .arrange();
+                oks.stream.probe_notify_with(probes);
                 let errs = errs
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .leave()

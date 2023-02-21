@@ -125,7 +125,7 @@ Create a materialization for each SQL statement you're planning to deploy. Each 
 
 ### Sources
 
-In Materialize, a [source](/sql/create-source) describes an **external** system you want to read data from, and provides details about how to decode and interpret that data. You can instruct dbt to create a source using the custom `source` materialization. Once a source has been defined, it can be referenced from another model using the dbt [`source()`](https://docs.getdbt.com/reference/dbt-jinja-functions/source) function.
+In Materialize, a [source](/sql/create-source) describes an **external** system you want to read data from, and provides details about how to decode and interpret that data. You can instruct dbt to create a source using the custom `source` materialization. Once a source has been defined, it can be referenced from another model using the dbt [`ref()`](https://docs.getdbt.com/reference/dbt-jinja-functions/source) function.
 
 {{< note >}}
 To connect to a Kafka broker or PostgreSQL database, you first need to [create a connection](/sql/create-connection) that specifies access and authentication parameters.
@@ -139,20 +139,26 @@ Create a [Kafka source](/sql/create-source/kafka/).
 ```sql
 {{ config(materialized='source') }}
 
-CREATE SOURCE IF NOT EXISTS {{ this }}
+CREATE SOURCE {{ this }}
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'topic_a')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   WITH (SIZE = '3xsmall')
 ```
 
+The source above would be compiled to:
+
+```
+database.schema.kafka_topic_a
+```
+
 {{< /tab >}} {{< tab "PostgreSQL">}}
 Create a [PostgreSQL source](/sql/create-source/postgres/).
 
-**Filename:** sources/postgres.sql
+**Filename:** sources/pg.sql
 ```sql
 {{ config(materialized='source') }}
 
-CREATE SOURCE IF NOT EXISTS {{ this }}
+CREATE SOURCE {{ this }}
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
   FOR ALL TABLES
   WITH (SIZE = '3xsmall')
@@ -160,33 +166,44 @@ CREATE SOURCE IF NOT EXISTS {{ this }}
 
 Materialize will automatically create a **subsource** for each table in the `mz_source` publication. Pulling subsources into the dbt context automatically isn't supported yet. Follow the discussion in [dbt-core #6104](https://github.com/dbt-labs/dbt-core/discussions/6104#discussioncomment-3957001) for updates!
 
-{{< /tab >}} {{< /tabs >}}
-
-Sources are defined in `.yml` files nested under a `sources:` key.
+A possible **workaround** is to define PostgreSQL sources as a [dbt source](https://docs.getdbt.com/docs/build/sources) in a `.yml` file, nested under a `sources:` key, and list each subsource under the `tables:` key.
 
 ```yaml
 sources:
-  - name: postgres
+  - name: pg
     schema: "{{ target.schema }}"
     tables:
-      - name: postgres_table_a
-      - name: postgres_table_b
-  - name: kafka
-    schema: "{{ target.schema }}"
-    tables:
-      - name: kafka_topic_a
+      - name: table_a
+      - name: table_b
 ```
 
-The sources above would be compiled to:
+Once a subsource has been defined this way, it can be referenced from another model using the dbt [`source()`](https://docs.getdbt.com/reference/dbt-jinja-functions/source) function. To ensure that dbt is able to determine the proper order to run the models in, you should additionally force a dependency on the parent source model (`pg`), as described in the [dbt documentation](https://docs.getdbt.com/reference/dbt-jinja-functions/ref#forcing-dependencies).
+
+**Filename:** staging/dep_subsources.sql
+```sql
+-- depends_on: {{ ref('pg') }}
+{{ config(materialized='view') }}
+
+SELECT
+    table_a.foo AS foo,
+    table_b.bar AS bar
+FROM {{ source('pg','table_a') }}
+INNER JOIN
+     {{ source('pg','table_b') }}
+    ON table_a.id = table_b.foo_id
 ```
-database.schema.postgres_table_a
-database.schema.postgres_table_b
-database.schema.kafka_topic_a
+
+The source and subsources above would be compiled to:
+
 ```
+database.schema.pg
+database.schema.table_a
+database.schema.table_b
+```
+
+{{< /tab >}} {{< /tabs >}}
 
 * Use the `{{ this }}` [relation](https://docs.getdbt.com/reference/dbt-jinja-functions/this) to generate a fully-qualified name for the source from the base model name.
-
-* To grab information about your current Materialize connection, use the `{{ target }}` [relation](https://docs.getdbt.com/reference/dbt-jinja-functions/target).
 
 ### Views and materialized views
 
@@ -202,11 +219,11 @@ dbt models are materialized as `views` by default, so to create a [view](/sql/cr
 ```sql
 SELECT
     col_a, ...
-FROM {{ source('kafka','kafka_topic_a') }}
+FROM {{ ref('kafka_topic_a') }}
 ```
 
 The model above would be compiled to `database.schema.view_a`.
-One thing to note here is that the model depends on the Kafka source defined above. To express this dependency and track the **lineage** of your project, you can use the dbt [`source()`](https://docs.getdbt.com/reference/dbt-jinja-functions/source) function.
+One thing to note here is that the model depends on the Kafka source defined above. To express this dependency and track the **lineage** of your project, you can use the dbt [`ref()`](https://docs.getdbt.com/reference/dbt-jinja-functions/ref) function.
 
 #### Materialized views
 
@@ -235,7 +252,7 @@ Create a [Kafka sink](/sql/create-sink).
 ```sql
 {{ config(materialized='sink') }}
 
-CREATE SINK IF NOT EXISTS {{ this }}
+CREATE SINK {{ this }}
   FROM {{ ref('materialized_view_a') }}
   INTO KAFKA CONNECTION kafka_connection (TOPIC 'topic_c')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
@@ -279,7 +296,7 @@ Component                            | Value     | Description
 `columns`                            | `list`    | One or more columns on which the index is defined. To create an index that uses _all_ columns, use the `default` component instead.
 `name`                               | `string`  | The name for the index. If unspecified, Materialize will use the materialization name and column names provided.
 `cluster`                            | `string`  | The cluster to use to create the index. If unspecified, indexes will be created in the cluster used to create the materialization.
-`default`                            | `bool`    | Default: `False`. If set to `True`, creates a default index that uses all columns.
+`default`                            | `bool`    | Default: `False`. If set to `True`, creates a [default index](/sql/create-index/#syntax).
 
 ##### Creating a multi-column index
 

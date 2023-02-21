@@ -10,9 +10,9 @@ publish = false
 anyhow = "1.0.66"
 async-stream = "0.3.3"
 async-trait = "0.1.59"
-aws-config = { version = "0.52.0", default-features = false, features = ["native-tls"] }
-aws-smithy-http = "0.52.0"
-aws-types = { version = "0.52.0", features = ["hardcoded-credentials"] }
+aws-config = { version = "0.53.0", default-features = false, features = ["native-tls"] }
+aws-credential-types = { version = "0.53.0", features = ["hardcoded-credentials"] }
+aws-types = "0.53.0"
 bytes = "1.3.0"
 chrono = { version = "0.4.23", default-features = false, features = ["std"] }
 dec = "0.4.8"
@@ -21,16 +21,16 @@ differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-
 futures = "0.3.25"
 globset = { version = "0.4.9", features = ["serde1"] }
 http = "0.2.8"
-http-serde = "1.1.2"
 itertools = { version = "0.10.5" }
+once_cell = "1.16.0"
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
 mz-cloud-resources = { path = "../cloud-resources" }
+mz-cluster-client = { path = "../cluster-client" }
 mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-ore = { path = "../ore", features = ["async", "tracing_"] }
-mz-orchestrator = { path = "../orchestrator" }
 mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
@@ -43,6 +43,7 @@ mz-ssh-util = { path = "../ssh-util" }
 mz-stash = { path = "../stash" }
 mz-timely-util = { path = "../timely-util" }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
+prometheus = { version = "0.13.3", default-features = false }
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git", features = ["boxed_union"]}
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
@@ -50,7 +51,7 @@ regex = { version = "1.7.0" }
 serde = { version = "1.0.152", features = ["derive"] }
 thiserror = "1.0.37"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.23.0", features = ["fs", "rt", "sync", "test-util"] }
+tokio = { version = "1.24.2", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde"] }
 tokio-stream = "0.1.11"
 tonic = "0.8.2"
@@ -61,12 +62,13 @@ uuid = { version = "1.2.2", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [build-dependencies]
+prost-build = "0.11.2"
 protobuf-src = "1.1.0"
 tonic-build = "0.8.2"
 
 [dev-dependencies]
 itertools = "0.10.5"
-tokio = { version = "1.23.0", features = ["test-util"] }
+tokio = { version = "1.24.2", features = ["test-util"] }
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux

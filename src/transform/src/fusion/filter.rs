@@ -63,15 +63,15 @@ impl crate::Transform for Filter {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        let result = relation.try_visit_mut_pre(&mut |e| Ok(self.action(e)));
-        mz_repr::explain_new::trace_plan(&*relation);
-        result
+        relation.visit_mut_pre(&mut Self::action)?;
+        mz_repr::explain::trace_plan(&*relation);
+        Ok(())
     }
 }
 
 impl Filter {
     /// Fuses multiple `Filter` operators into one and canonicalizes predicates.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+    pub fn action(relation: &mut MirRelationExpr) {
         if let MirRelationExpr::Filter { input, predicates } = relation {
             // consolidate nested filters.
             while let MirRelationExpr::Filter {

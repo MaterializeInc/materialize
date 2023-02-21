@@ -34,7 +34,7 @@ Project (#0)
     InnerJoin (true AND (#0 = #1))
       Get l0
       Get l0
-  Where
+  With
     cte l0 =
       Filter (#0 < 3)
         Get materialize.public.y
@@ -50,7 +50,7 @@ WITH t AS (SELECT * FROM y WHERE a < 3)
 Return
   Filter (select(Get l0) < #0)
     Get materialize.public.y
-Where
+With
   cte l0 =
     Filter (#0 < 3)
       Get materialize.public.y
@@ -524,12 +524,12 @@ Project (#1)
       Return
         Filter (select(Get l6) < select(Get l7))
           Get l3
-      Where
+      With
         cte l6 =
           Return
             Reduce aggregates=[min(#0)]
               Get l4
-          Where
+          With
             cte l4 =
               Get l3
         cte l7 =
@@ -537,17 +537,17 @@ Project (#1)
             Get l2
         cte l3 =
           Get l1
-  Where
+  With
     cte l8 =
       Return
         Filter (select(Get l5) > 1)
           Get l3
-      Where
+      With
         cte l5 =
           Return
             Reduce aggregates=[max(#0)]
               Get l4
-          Where
+          With
             cte l4 =
               Get l3
         cte l3 =
@@ -568,7 +568,7 @@ WITH a(a) AS (SELECT a FROM y) SELECT * FROM (WITH a(a) AS (SELECT a FROM a) SEL
 ----
 Return
   Get l1
-Where
+With
   cte l1 =
     Get l0
   cte l0 =

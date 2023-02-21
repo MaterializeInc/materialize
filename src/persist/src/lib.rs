@@ -71,6 +71,7 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
@@ -89,6 +90,7 @@ pub mod error;
 pub mod file;
 pub mod gen;
 pub mod indexed;
+pub mod intercept;
 pub mod location;
 pub mod mem;
 pub mod metrics;
@@ -97,6 +99,3 @@ pub mod retry;
 pub mod s3;
 pub mod unreliable;
 pub mod workload;
-
-#[cfg(any(test, debug_assertions))]
-pub mod intercept;

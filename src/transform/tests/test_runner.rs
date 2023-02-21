@@ -71,33 +71,39 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-/// This module defines a small language for directly constructing RelationExprs and running
-/// various optimizations on them. It uses datadriven, so the output of each test can be rewritten
-/// by setting the REWRITE environment variable.
-/// TODO(justin):
-/// * It's currently missing a mechanism to run just a single test file
-/// * There is some duplication between this and the SQL planner
+//! This module defines a small language for directly constructing RelationExprs and running
+//! various optimizations on them. It uses datadriven, so the output of each test can be rewritten
+//! by setting the REWRITE environment variable.
+//! TODO(justin):
+//! * It's currently missing a mechanism to run just a single test file
+//! * There is some duplication between this and the SQL planner
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::BTreeMap;
     use std::fmt::Write;
+    use std::time::Duration;
 
     use anyhow::{anyhow, Error};
+    use mz_expr::explain::ExplainContext;
     use mz_expr::{Id, MirRelationExpr};
     use mz_expr_test_util::{
-        build_rel, generate_explanation, json_to_spec, MirRelationExprDeserializeContext,
-        TestCatalog,
+        build_rel, json_to_spec, MirRelationExprDeserializeContext, TestCatalog,
     };
     use mz_lowertest::{deserialize, tokenize};
+    use mz_ore::collections::HashMap;
     use mz_ore::str::separated;
+    use mz_repr::explain::{Explain, ExplainConfig, ExplainFormat, UsedIndexes};
     use mz_repr::GlobalId;
     use mz_transform::dataflow::{optimize_dataflow_demand_inner, optimize_dataflow_filters_inner};
     use mz_transform::{EmptyIndexOracle, Optimizer, Transform, TransformArgs};
     use proc_macro2::TokenTree;
+
+    use super::explain::Explainable;
 
     // Global options
     const IN: &str = "in";
@@ -178,7 +184,39 @@ mod tests {
                 json_to_spec(&serde_json::to_string(rel).unwrap(), cat).0
             ),
             FormatType::Json => format!("{}\n", serde_json::to_string(rel).unwrap()),
-            FormatType::Explain(format) => generate_explanation(cat, rel, *format),
+            FormatType::Explain(format) => {
+                let format_contains = |key: &str| {
+                    format
+                        .map(|format| format.contains(&key.to_string()))
+                        .unwrap_or(false)
+                };
+
+                let config = ExplainConfig {
+                    arity: false,
+                    join_impls: true,
+                    keys: format_contains("types"), // FIXME: use `keys`
+                    linear_chains: false,
+                    non_negative: false,
+                    no_fast_path: false,
+                    raw_plans: false,
+                    raw_syntax: false,
+                    subtree_size: false,
+                    timing: false,
+                    types: format_contains("types"),
+                };
+
+                let context = ExplainContext {
+                    config: &config,
+                    humanizer: cat,
+                    used_indexes: UsedIndexes::new(vec![]),
+                    finishing: None,
+                    duration: Duration::default(),
+                };
+
+                Explainable(&mut rel.clone())
+                    .explain(&ExplainFormat::Text, &context)
+                    .unwrap()
+            }
         }
     }
 
@@ -294,7 +332,7 @@ mod tests {
                 mz_transform::column_knowledge::ColumnKnowledge::default(),
             )),
             "Demand" => Ok(Box::new(mz_transform::demand::Demand::default())),
-            "FilterFusion" => Ok(Box::new(mz_transform::fusion::filter::Filter)),
+            "Fusion" => Ok(Box::new(mz_transform::fusion::Fusion)),
             "FoldConstants" => Ok(Box::new(mz_transform::fold_constants::FoldConstants {
                 limit: None,
             })),
@@ -328,12 +366,11 @@ mod tests {
             "RelationCSE" => Ok(Box::new(mz_transform::cse::relation_cse::RelationCSE::new(
                 false,
             ))),
-            "TopKFusion" => Ok(Box::new(mz_transform::fusion::top_k::TopK)),
             "ThresholdElision" => Ok(Box::new(mz_transform::threshold_elision::ThresholdElision)),
             "UnionBranchCancellation" => Ok(Box::new(
                 mz_transform::union_cancel::UnionBranchCancellation,
             )),
-            "UnionFusion" => Ok(Box::new(mz_transform::fusion::union::Union)),
+            "UnionFusion" => Ok(Box::new(mz_transform::fusion::union::UnionNegate)),
             _ => Err(anyhow!(
                 "no transform named {} (you might have to add it to get_transform)",
                 name
@@ -487,14 +524,14 @@ mod tests {
         datadriven::walk("tests/testdata", |f| {
             let mut catalog = TestCatalog::default();
             f.run(move |s| -> String {
+                let args = s.args.clone().into();
                 match s.directive.as_str() {
                     "cat" => match catalog.handle_test_command(&s.input) {
                         Ok(()) => String::from("ok\n"),
                         Err(err) => format!("error: {}\n", err),
                     },
                     "build" => {
-                        match run_single_view_testcase(&s.input, &catalog, &s.args, TestType::Build)
-                        {
+                        match run_single_view_testcase(&s.input, &catalog, &args, TestType::Build) {
                             // Generally, explanations for fully optimized queries
                             // are not allowed to have whitespace at the end;
                             // however, a partially optimized query can.
@@ -510,25 +547,20 @@ mod tests {
                         }
                     }
                     "opt" => {
-                        match run_single_view_testcase(&s.input, &catalog, &s.args, TestType::Opt) {
+                        match run_single_view_testcase(&s.input, &catalog, &args, TestType::Opt) {
                             Ok(msg) => msg,
                             Err(err) => format!("error: {}\n", err),
                         }
                     }
                     "steps" => {
-                        match run_single_view_testcase(&s.input, &catalog, &s.args, TestType::Steps)
-                        {
+                        match run_single_view_testcase(&s.input, &catalog, &args, TestType::Steps) {
                             Ok(msg) => msg,
                             Err(err) => format!("error: {}\n", err),
                         }
                     }
                     "crossview" => {
-                        match run_multiview_testcase(
-                            &s.input,
-                            &mut catalog,
-                            &s.args,
-                            TestType::Build,
-                        ) {
+                        match run_multiview_testcase(&s.input, &mut catalog, &args, TestType::Build)
+                        {
                             Ok(msg) => format!(
                                 "{}",
                                 separated("\n", msg.split('\n').map(|s| s.trim_end()))
@@ -537,12 +569,8 @@ mod tests {
                         }
                     }
                     "crossviewopt" => {
-                        match run_multiview_testcase(
-                            &s.input,
-                            &mut catalog,
-                            &s.args,
-                            TestType::Build,
-                        ) {
+                        match run_multiview_testcase(&s.input, &mut catalog, &args, TestType::Build)
+                        {
                             Ok(msg) => msg,
                             Err(err) => format!("error: {}\n", err),
                         }
@@ -551,5 +579,61 @@ mod tests {
                 }
             })
         });
+    }
+}
+
+/// This duplicates code from `mz_adapter` as we don't want to move
+/// [`mz_transform::attribute`] and [`mz_transform::normalize_lets`] to
+/// [`mz_expr`].
+mod explain {
+    use mz_expr::explain::{enforce_linear_chains, ExplainContext, ExplainSinglePlan};
+    use mz_expr::MirRelationExpr;
+    use mz_repr::explain::{Explain, ExplainError, UnsupportedFormat};
+    use mz_transform::attribute::annotate_plan;
+    use mz_transform::normalize_lets::normalize_lets;
+
+    /// Newtype struct for wrapping types that should
+    /// implement the [`mz_repr::explain::Explain`] trait.
+    pub(crate) struct Explainable<'a, T>(pub &'a mut T);
+
+    impl<'a> Explain<'a> for Explainable<'a, MirRelationExpr> {
+        type Context = ExplainContext<'a>;
+
+        type Text = ExplainSinglePlan<'a, MirRelationExpr>;
+
+        type Json = UnsupportedFormat;
+
+        type Dot = UnsupportedFormat;
+
+        fn explain_text(
+            &'a mut self,
+            context: &'a Self::Context,
+        ) -> Result<Self::Text, ExplainError> {
+            self.as_explain_single_plan(context)
+        }
+    }
+
+    impl<'a> Explainable<'a, MirRelationExpr> {
+        fn as_explain_single_plan(
+            &'a mut self,
+            context: &'a ExplainContext<'a>,
+        ) -> Result<ExplainSinglePlan<'a, MirRelationExpr>, ExplainError> {
+            // normalize the representation as linear chains
+            // (this implies !context.config.raw_plans by construction)
+            if context.config.linear_chains {
+                enforce_linear_chains(self.0)?;
+            };
+            // unless raw plans are explicitly requested
+            // normalize the representation of nested Let bindings
+            // and enforce sequential Let binding IDs
+            if !context.config.raw_plans {
+                normalize_lets(self.0).map_err(|e| ExplainError::UnknownError(e.to_string()))?;
+            }
+
+            Ok(ExplainSinglePlan {
+                context,
+                plan: annotate_plan(self.0, context)?,
+            })
+        }
     }
 }

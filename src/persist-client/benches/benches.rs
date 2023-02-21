@@ -71,6 +71,7 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
@@ -93,8 +94,9 @@ use mz_persist::postgres::{PostgresConsensus, PostgresConsensusConfig};
 use mz_persist::s3::{S3Blob, S3BlobConfig};
 use mz_persist::workload::DataGenerator;
 use mz_persist_client::async_runtime::CpuHeavyRuntime;
+use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{PersistClient, PersistConfig};
+use mz_persist_client::PersistClient;
 use mz_persist_types::Codec64;
 
 // The "plumbing" and "porcelain" names are from git [1]. Our "plumbing"
@@ -163,6 +165,7 @@ pub fn bench_persist(c: &mut Criterion) {
         bench_compare_and_set(1, ncpus_useful);
     }
     plumbing::bench_encode_batch("plumbing/encode_batch", throughput, c, &data);
+    plumbing::bench_trace_push_batch(c);
 }
 
 fn create_mem_mem_client() -> Result<PersistClient, ExternalError> {

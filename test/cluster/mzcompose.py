@@ -10,6 +10,7 @@
 import re
 import time
 from textwrap import dedent
+from threading import Thread
 from typing import Tuple
 
 from pg8000.dbapi import ProgrammingError
@@ -24,7 +25,6 @@ from materialize.mzcompose.services import (
     Postgres,
     Redpanda,
     SchemaRegistry,
-    Service,
     Testdrive,
     Zookeeper,
 )
@@ -35,10 +35,10 @@ SERVICES = [
     SchemaRegistry(),
     Localstack(),
     Cockroach(setup_materialize=True),
-    Clusterd(name="compute_1"),
-    Clusterd(name="compute_2"),
-    Clusterd(name="compute_3"),
-    Clusterd(name="compute_4"),
+    Clusterd(name="clusterd1"),
+    Clusterd(name="clusterd2"),
+    Clusterd(name="clusterd3"),
+    Clusterd(name="clusterd4"),
     # We use mz_panic() in some test scenarios, so environmentd must stay up.
     Materialized(propagate_crashes=False, external_cockroach=True),
     Redpanda(),
@@ -47,7 +47,6 @@ SERVICES = [
         volumes_extra=[".:/workdir/smoke"],
         materialize_params={"cluster": "cluster1"},
     ),
-    Clusterd(name="storage"),
 ]
 
 
@@ -59,21 +58,24 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-github-15535",
         "test-github-15799",
         "test-github-15930",
+        "test-github-15496",
         "test-remote-storage",
         "test-drop-default-cluster",
         "test-upsert",
         "test-resource-limits",
         "test-invalid-compute-reuse",
-        "test-builtin-migration",
         "pg-snapshot-resumption",
+        "pg-snapshot-partial-failure",
         "test-system-table-indexes",
+        "test-replica-targeted-subscribe-abort",
+        "test-compute-reconciliation-reuse",
     ]:
         with c.test_case(name):
             c.workflow(name)
 
 
 def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """Run testdrive in a variety of compute cluster configurations."""
+    """Run testdrive in a variety of cluster configurations."""
 
     parser.add_argument(
         "glob",
@@ -84,33 +86,34 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
 
     c.down(destroy_volumes=True)
-    c.start_and_wait_for_tcp(
-        services=["zookeeper", "kafka", "schema-registry", "localstack"]
-    )
+    c.up("zookeeper", "kafka", "schema-registry", "localstack")
     c.up("materialized")
-    c.wait_for_materialized()
 
-    # Create a remote cluster and verify that tests pass.
-    c.up("compute_1")
-    c.up("compute_2")
+    # Create a cluster and verify that tests pass.
+    c.up("clusterd1")
+    c.up("clusterd2")
     c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
     c.sql(
         """CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            REMOTE ['compute_1:2101', 'compute_2:2101'],
-            COMPUTE ['compute_1:2102', 'compute_2:2102'],
+            STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
+            COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
             WORKERS 2
-            ));
+        ));
     """
     )
     c.run("testdrive", *args.glob)
 
-    # Add a replica to that remote cluster and verify that tests still pass.
-    c.up("compute_3")
-    c.up("compute_4")
+    # Add a replica to that cluster and verify that tests still pass.
+    c.up("clusterd3")
+    c.up("clusterd4")
     c.sql(
         """CREATE CLUSTER REPLICA cluster1.replica2
-            REMOTE ['compute_3:2101', 'compute_4:2101'],
-            COMPUTE ['compute_3:2102', 'compute_4:2102'],
+            STORAGECTL ADDRESSES ['clusterd3:2100', 'clusterd4:2100'],
+            STORAGE ADDRESSES ['clusterd3:2103', 'clusterd4:2103'],
+            COMPUTECTL ADDRESSES ['clusterd3:2101', 'clusterd4:2101'],
+            COMPUTE ADDRESSES ['clusterd3:2102', 'clusterd4:2102'],
             WORKERS 2
     """
     )
@@ -118,7 +121,7 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     # Kill one of the nodes in the first replica of the compute cluster and
     # verify that tests still pass.
-    c.kill("compute_1")
+    c.kill("clusterd1")
     c.run("testdrive", *args.glob)
 
     # Leave only replica 2 up and verify that tests still pass.
@@ -130,18 +133,19 @@ def workflow_test_invalid_compute_reuse(c: Composition) -> None:
     """Ensure clusterds correctly crash if used in unsupported communication config"""
     c.down(destroy_volumes=True)
     c.up("materialized")
-    c.wait_for_materialized()
 
     # Create a remote cluster and verify that tests pass.
-    c.up("compute_1")
-    c.up("compute_2")
+    c.up("clusterd1")
+    c.up("clusterd2")
     c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
     c.sql(
         """CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            REMOTE ['compute_1:2101', 'compute_2:2101'],
-            COMPUTE ['compute_1:2102', 'compute_2:2102'],
+            STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
+            COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
             WORKERS 2
-            ));
+        ));
     """
     )
     c.sql("DROP CLUSTER cluster1 CASCADE;")
@@ -149,15 +153,17 @@ def workflow_test_invalid_compute_reuse(c: Composition) -> None:
     # Note the different WORKERS argument
     c.sql(
         """CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            REMOTE ['compute_1:2101', 'compute_2:2101'],
-            COMPUTE ['compute_1:2102', 'compute_2:2102'],
+            STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
+            COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
             WORKERS 1
-            ));
+        ));
     """
     )
 
     # This should ensure that compute crashed (and does not just hang forever)
-    c1 = c.invoke("logs", "compute_1", capture=True)
+    c1 = c.invoke("logs", "clusterd1", capture=True)
     assert (
         "halting process: new timely configuration does not match existing timely configuration"
         in c1.stdout
@@ -169,15 +175,7 @@ def workflow_test_github_12251(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     c.up("materialized")
-    c.wait_for_materialized()
-    c.up("compute_1")
-    c.sql(
-        """
-        DROP CLUSTER IF EXISTS cluster1 CASCADE;
-        CREATE CLUSTER cluster1 REPLICAS (replica1 (REMOTE ['compute_1:2101'], COMPUTE ['compute_1:2102'], WORKERS 2));
-        SET cluster = cluster1;
-        """
-    )
+
     start_time = time.process_time()
     try:
         c.sql(
@@ -217,20 +215,19 @@ def workflow_test_github_15531(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     c.up("materialized")
-    c.up("compute_1")
-    c.wait_for_materialized()
+    c.up("clusterd1")
 
     # helper function to get command history metrics for clusterd
     def find_clusterd_command_history_metrics(c: Composition) -> Tuple[int, int]:
         metrics = c.exec(
-            "compute_1", "curl", "localhost:6878/metrics", capture=True
+            "clusterd1", "curl", "localhost:6878/metrics", capture=True
         ).stdout
 
         history_len = None
         dataflow_count = None
         for metric in metrics.splitlines():
-            if metric.startswith("mz_compute_comamnd_history_size"):
-                history_len = int(metric[len("mz_compute_comamnd_history_size") :])
+            if metric.startswith("mz_compute_command_history_size"):
+                history_len = int(metric[len("mz_compute_command_history_size") :])
             elif metric.startswith("mz_compute_dataflow_count_in_history"):
                 dataflow_count = int(
                     metric[len("mz_compute_dataflow_count_in_history") :]
@@ -249,8 +246,10 @@ def workflow_test_github_15531(c: Composition) -> None:
     c.sql(
         """
         CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            REMOTE ['compute_1:2101'],
-            COMPUTE ['compute_1:2102'],
+            STORAGECTL ADDRESSES ['clusterd1:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103'],
+            COMPUTECTL ADDRESSES ['clusterd1:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102'],
             WORKERS 2
         ));
         SET cluster = cluster1;
@@ -324,15 +323,16 @@ def workflow_test_github_15535(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     c.up("materialized")
-    c.up("compute_1")
-    c.wait_for_materialized()
+    c.up("clusterd1")
 
     # Set up a dataflow on clusterd.
     c.sql(
         """
         CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            REMOTE ['compute_1:2101'],
-            COMPUTE ['compute_1:2102'],
+            STORAGECTL ADDRESSES ['clusterd1:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103'],
+            COMPUTECTL ADDRESSES ['clusterd1:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102'],
             WORKERS 2
         ));
         SET cluster = cluster1;
@@ -346,7 +346,6 @@ def workflow_test_github_15535(c: Composition) -> None:
     # Restart environmentd to trigger a reconciliation on clusterd.
     c.kill("materialized")
     c.up("materialized")
-    c.wait_for_materialized()
 
     print("Sleeping to wait for frontier updates")
     time.sleep(10)
@@ -388,21 +387,24 @@ def workflow_test_github_15799(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     c.up("materialized")
-    c.up("compute_1")
-    c.up("compute_2")
-    c.wait_for_materialized()
+    c.up("clusterd1")
+    c.up("clusterd2")
 
     c.sql(
         """
         CREATE CLUSTER cluster1 REPLICAS (
             logging_on (
-                REMOTE ['compute_1:2101'],
-                COMPUTE ['compute_1:2102'],
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
                 WORKERS 2
             ),
             logging_off (
-                REMOTE ['compute_2:2101'],
-                COMPUTE ['compute_2:2102'],
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd2:2101'],
+                COMPUTE ADDRESSES ['clusterd2:2102'],
                 WORKERS 2,
                 INTROSPECTION INTERVAL 0
             )
@@ -434,15 +436,16 @@ def workflow_test_github_15930(c: Composition) -> None:
     ):
         c.up("testdrive", persistent=True)
         c.up("materialized")
-        c.up("compute_1")
-        c.wait_for_materialized()
+        c.up("clusterd1")
 
         c.sql(
             """
             CREATE CLUSTER cluster1 REPLICAS (
                 logging_on (
-                    REMOTE ['compute_1:2101'],
-                    COMPUTE ['compute_1:2102'],
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
                     WORKERS 2
                 )
             );
@@ -463,7 +466,6 @@ def workflow_test_github_15930(c: Composition) -> None:
         # Restart environmentd to trigger a reconciliation on clusterd.
         c.kill("materialized")
         c.up("materialized")
-        c.wait_for_materialized()
 
         # verify again that we can query the introspection source
         c.testdrive(
@@ -486,12 +488,19 @@ def workflow_test_github_15930(c: Composition) -> None:
             """
         )
 
+        cursor = c.sql_cursor()
+        cursor.execute("SET cluster = cluster1;")
+        cursor.execute("BEGIN;")
+        cursor.execute("DECLARE c CURSOR FOR SUBSCRIBE t;")
+        cursor.execute("FETCH ALL c;")
+
         # Restart environmentd to trigger yet another reconciliation on clusterd.
         c.kill("materialized")
         c.up("materialized")
-        c.wait_for_materialized()
 
-        # verify yet again that we can query the introspection source and now the table.
+        # Verify yet again that we can query the introspection source and now the table.
+        # The subscribe should have been dropped during reconciliation, so we expect to not find a
+        # frontier entry for it.
         c.testdrive(
             input=dedent(
                 """
@@ -505,21 +514,78 @@ def workflow_test_github_15930(c: Composition) -> None:
         )
 
 
+def workflow_test_github_15496(c: Composition) -> None:
+    """
+    Test that a reduce collation over a source with an invalid accumulation does not
+    panic, but rather logs errors, when soft assertions are turned off.
+
+    Regression test for https://github.com/MaterializeInc/materialize/issues/15496.
+    """
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Clusterd(
+            name="clusterd_nopanic",
+            environment_extra=[
+                "MZ_SOFT_ASSERTIONS=0",
+            ],
+        ),
+        Testdrive(no_reset=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.up("clusterd_nopanic")
+
+        # set up a test cluster and run a testdrive regression script
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (
+                r1 (
+                    STORAGECTL ADDRESSES ['clusterd_nopanic:2100'],
+                    STORAGE ADDRESSES ['clusterd_no_panic:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd_nopanic:2101'],
+                    COMPUTE ADDRESSES ['clusterd_nopanic:2102'],
+                    WORKERS 2
+                )
+            );
+            """
+        )
+        c.testdrive(
+            dedent(
+                f"""
+            # Set data for test up
+            > SET cluster = cluster1;
+
+            > CREATE TABLE base (data bigint, diff bigint);
+
+            > CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
+
+            > INSERT INTO base VALUES (1, 1);
+
+            > INSERT INTO base VALUES (1, -1), (1, -1);
+
+            # Run a query that would generate a panic before the fix. Note that
+            # we expect the query to succeed for now, but follow-up work might
+            # eventually lead us to favor a SQL-level error for such a query, as
+            # tracked by https://github.com/MaterializeInc/materialize/issues/17178
+            > SELECT SUM(data), MAX(data) FROM data;
+            <null> <null>
+            """
+            )
+        )
+
+        # ensure that an error was put into the logs
+        c1 = c.invoke("logs", "clusterd_nopanic", capture=True)
+        assert "Mismatched aggregates for key in ReduceCollation" in c1.stdout
+
+
 def workflow_test_upsert(c: Composition) -> None:
     """Test creating upsert sources and continuing to ingest them after a restart."""
     with c.override(
         Testdrive(default_timeout="30s", no_reset=True, consistent_seed=True),
     ):
         c.down(destroy_volumes=True)
-        dependencies = [
-            "materialized",
-            "zookeeper",
-            "kafka",
-            "schema-registry",
-        ]
-        c.start_and_wait_for_tcp(
-            services=dependencies,
-        )
+        c.up("materialized", "zookeeper", "kafka", "schema-registry")
 
         c.run("testdrive", "upsert/01-create-sources.td")
         # Sleep to make sure the errors have made it to persist.
@@ -542,16 +608,14 @@ def workflow_test_remote_storage(c: Composition) -> None:
     with c.override(
         Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
     ):
-        dependencies = [
+        c.up(
             "cockroach",
             "materialized",
-            "storage",
+            "clusterd1",
+            "clusterd2",
             "zookeeper",
             "kafka",
             "schema-registry",
-        ]
-        c.start_and_wait_for_tcp(
-            services=dependencies,
         )
 
         c.run("testdrive", "storage/01-create-sources.td")
@@ -560,10 +624,14 @@ def workflow_test_remote_storage(c: Composition) -> None:
         c.up("materialized")
         c.run("testdrive", "storage/02-after-environmentd-restart.td")
 
-        c.kill("storage")
+        # just kill one of the clusterd's and make sure we can recover.
+        # `clusterd2` will die on its own.
+        c.kill("clusterd1")
         c.run("testdrive", "storage/03-while-clusterd-down.td")
 
-        c.up("storage")
+        # Bring back both clusterd's
+        c.up("clusterd1")
+        c.up("clusterd2")
         c.run("testdrive", "storage/04-after-clusterd-restart.td")
 
 
@@ -572,7 +640,6 @@ def workflow_test_drop_default_cluster(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     c.up("materialized")
-    c.wait_for_materialized()
 
     c.sql("DROP CLUSTER default CASCADE")
     c.sql("CREATE CLUSTER default REPLICAS (default (SIZE '1'))")
@@ -588,195 +655,9 @@ def workflow_test_resource_limits(c: Composition) -> None:
         Postgres(),
         Materialized(),
     ):
-        dependencies = [
-            "materialized",
-            "postgres",
-        ]
-        c.start_and_wait_for_tcp(
-            services=dependencies,
-        )
+        c.up("materialized", "postgres")
 
         c.run("testdrive", "resources/resource-limits.td")
-
-
-def workflow_test_builtin_migration(c: Composition) -> None:
-    """Exercise the builtin object migration code by upgrading between two versions
-    that will have a migration triggered between them. Create a materialized view
-    over the affected builtin object to confirm that the migration was successful
-    """
-
-    c.down(destroy_volumes=True)
-    with c.override(
-        # Random commit before the migrations that we are testing.
-        Service(
-            name="materialized",
-            config={
-                "image": "materialize/materialized:devel-aa4128c9c485322f90ab0af2b9cb4d16e1c470c0",
-                "command": [
-                    "--persist-blob-url=file:///mzdata/persist/blob",
-                    "--adapter-stash-url=postgres://root@cockroach:26257?options=--search_path=adapter",
-                    "--storage-stash-url=postgres://root@cockroach:26257?options=--search_path=storage",
-                    "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus",
-                ],
-                "depends_on": {"cockroach": {"condition": "service_healthy"}},
-                "ports": [6875],
-                "volumes": [
-                    "mzdata:/mzdata",
-                ],
-            },
-        ),
-        Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
-    ):
-        c.up("testdrive", persistent=True)
-        c.up("materialized")
-        c.wait_for_materialized()
-
-        c.testdrive(
-            input=dedent(
-                """
-        # pg_catalog.pg_proc migration
-
-        # The limit is added to avoid having to update the number every time we add a function.
-        > CREATE VIEW v1 AS SELECT COUNT(*) FROM (SELECT * FROM pg_proc ORDER BY oid LIMIT 5);
-        > SELECT * FROM v1;
-        5
-        ! SELECT DISTINCT proowner FROM pg_proc;
-        contains:column "proowner" does not exist
-
-        # mz_internal.mz_dataflow_operator_reachability migration
-
-        # Populate mz_dataflow_operator_reachability
-        > CREATE TABLE t (a INT);
-        > CREATE DEFAULT INDEX ON t;
-
-        > SELECT pg_typeof(address) FROM mz_internal.mz_dataflow_operator_reachability LIMIT 1;
-        "bigint list"
-
-        # mz_internal.mz_cluster_replica_statuses migration
-
-        > SELECT pg_typeof(process_id) FROM mz_internal.mz_cluster_replica_statuses LIMIT 1;
-        "bigint"
-
-        ! SELECT updated_at FROM mz_internal.mz_cluster_replica_statuses;
-        contains:column "updated_at" does not exist
-
-        > SELECT last_update FROM mz_internal.mz_cluster_replica_statuses LIMIT 0;
-
-        # mz_internal.mz_show_cluster_replicas migration
-
-        ! SELECT ready FROM mz_internal.mz_show_cluster_replicas LIMIT 0;
-        contains:column "ready" does not exist
-
-        # mz_catalog.mz_sources migration
-
-        > CREATE MATERIALIZED VIEW source_types AS SELECT type FROM mz_catalog.mz_sources WHERE id LIKE 'u%';
-
-        > CREATE SOURCE load_gen_source FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
-
-        > SELECT * FROM source_types
-        load-generator
-    """
-            )
-        )
-
-        c.kill("materialized")
-
-    with c.override(
-        # This will stop working if we introduce a breaking change.
-        Materialized(external_cockroach=True),
-        Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
-    ):
-        c.up("testdrive", persistent=True)
-        c.up("materialized")
-        c.wait_for_materialized()
-
-        c.testdrive(
-            input=dedent(
-                """
-        # pg_catalog.pg_proc migration
-
-        > SELECT * FROM v1;
-        5
-        # This column is new after the migration
-        > SELECT DISTINCT proowner FROM pg_proc;
-        <null>
-
-        # mz_internal.mz_dataflow_operator_reachability migration
-
-        > SELECT pg_typeof(address) FROM mz_internal.mz_dataflow_operator_reachability LIMIT 1;
-        "uint8 list"
-
-        # mz_internal.mz_cluster_replica_statuses migration
-
-        > SELECT pg_typeof(process_id) FROM mz_internal.mz_cluster_replica_statuses LIMIT 1;
-        "uint8"
-
-        ! SELECT last_update FROM mz_internal.mz_cluster_replica_statuses;
-        contains:column "last_update" does not exist
-
-        > SELECT updated_at FROM mz_internal.mz_cluster_replica_statuses LIMIT 0;
-
-        # mz_internal.mz_show_cluster_replicas migration
-
-        > SELECT ready FROM mz_internal.mz_show_cluster_replicas LIMIT 0;
-
-        # mz_catalog.mz_sources migration
-
-        > SELECT * FROM source_types
-        load-generator
-    """
-            )
-        )
-
-    # Restart materialize and test that everything still works to ensure that the migration was persisted correctly.
-    with c.override(
-        # This will stop working if we introduce a breaking change.
-        Materialized(external_cockroach=True),
-        Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
-    ):
-        c.up("testdrive", persistent=True)
-        c.up("materialized")
-        c.wait_for_materialized()
-
-        c.testdrive(
-            input=dedent(
-                """
-        # pg_catalog.pg_proc migration
-
-        > SELECT * FROM v1;
-        5
-        # This column is new after the migration
-        > SELECT DISTINCT proowner FROM pg_proc;
-        <null>
-
-        # mz_internal.mz_dataflow_operator_reachability migration
-
-        > SELECT pg_typeof(address) FROM mz_internal.mz_dataflow_operator_reachability LIMIT 1;
-        "uint8 list"
-
-        # mz_internal.mz_cluster_replica_statuses migration
-
-        > SELECT pg_typeof(process_id) FROM mz_internal.mz_cluster_replica_statuses LIMIT 1;
-        "uint8"
-
-        ! SELECT last_update FROM mz_internal.mz_cluster_replica_statuses;
-        contains:column "last_update" does not exist
-
-        > SELECT updated_at FROM mz_internal.mz_cluster_replica_statuses LIMIT 0;
-
-        # mz_internal.mz_show_cluster_replicas migration
-
-        > SELECT ready FROM mz_internal.mz_show_cluster_replicas LIMIT 0;
-
-        # mz_catalog.mz_sources migration
-
-        # mz_catalog.mz_sources migration
-
-        > SELECT * FROM source_types
-        load-generator
-    """
-            )
-        )
 
 
 def workflow_pg_snapshot_resumption(c: Composition) -> None:
@@ -792,14 +673,7 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
             name="storage", environment_extra=["FAILPOINTS=pg_snapshot_failure=return"]
         ),
     ):
-        dependencies = [
-            "materialized",
-            "postgres",
-            "storage",
-        ]
-        c.start_and_wait_for_tcp(
-            services=dependencies,
-        )
+        c.up("materialized", "postgres", "storage")
 
         c.run("testdrive", "pg-snapshot-resumption/01-configure-postgres.td")
         c.run("testdrive", "pg-snapshot-resumption/02-create-sources.td")
@@ -816,9 +690,7 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
             # turn off the failpoint
             Clusterd(name="storage")
         ):
-            c.start_and_wait_for_tcp(
-                services=["storage"],
-            )
+            c.up("storage")
             c.run("testdrive", "pg-snapshot-resumption/04-verify-data.td")
 
 
@@ -835,12 +707,7 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
             ],
         ),
     ):
-        dependencies = [
-            "materialized",
-        ]
-        c.start_and_wait_for_tcp(
-            services=dependencies,
-        )
+        c.up("materialized")
 
         c.run("testdrive", "resources/bootstrapped-system-vars.td")
 
@@ -852,13 +719,7 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
             ],
         ),
     ):
-        dependencies = [
-            "materialized",
-        ]
-        c.start_and_wait_for_tcp(
-            services=dependencies,
-        )
-
+        c.up("materialized")
         c.run("testdrive", "resources/bootstrapped-system-vars.td")
 
 
@@ -873,7 +734,6 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
     ):
         c.up("testdrive", persistent=True)
         c.up("materialized")
-        c.wait_for_materialized()
         c.testdrive(
             input=dedent(
                 """
@@ -891,7 +751,6 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
     ):
         c.up("testdrive", persistent=True)
         c.up("materialized")
-        c.wait_for_materialized()
         c.testdrive(
             input=dedent(
                 """
@@ -900,3 +759,199 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
     """
             )
         )
+
+
+def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
+    """
+    Test that a replica-targeted SUBSCRIBE is aborted when the target
+    replica disconnects.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("clusterd1")
+    c.up("clusterd2")
+
+    c.sql(
+        """
+        DROP CLUSTER IF EXISTS cluster1 CASCADE;
+        CREATE CLUSTER cluster1 REPLICAS (
+            replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 2
+            ),
+            replica2 (
+                STORAGECTL ADDRESSES ['clusterd2:2100'],
+                STORAGE ADDRESSES ['clusterd2:2103'],
+                COMPUTECTL ADDRESSES ['clusterd2:2101'],
+                COMPUTE ADDRESSES ['clusterd2:2102'],
+                WORKERS 2
+            )
+        );
+        CREATE TABLE t (a int);
+        """
+    )
+
+    def drop_replica_with_delay() -> None:
+        time.sleep(2)
+        c.sql("DROP CLUSTER REPLICA cluster1.replica1;")
+
+    dropper = Thread(target=drop_replica_with_delay)
+    dropper.start()
+
+    try:
+        c.sql(
+            """
+            SET cluster = cluster1;
+            SET cluster_replica = replica1;
+            BEGIN;
+            DECLARE c CURSOR FOR SUBSCRIBE t;
+            FETCH c WITH (timeout = '5s');
+            """
+        )
+    except ProgrammingError as e:
+        assert "target replica failed or was dropped" in e.args[0]["M"], e
+    else:
+        assert False, "SUBSCRIBE didn't return the expected error"
+
+    dropper.join()
+
+    def kill_replica_with_delay() -> None:
+        time.sleep(2)
+        c.kill("clusterd2")
+
+    killer = Thread(target=kill_replica_with_delay)
+    killer.start()
+
+    try:
+        c.sql(
+            """
+            SET cluster = cluster1;
+            SET cluster_replica = replica2;
+            BEGIN;
+            DECLARE c CURSOR FOR SUBSCRIBE t;
+            FETCH c WITH (timeout = '5s');
+            """
+        )
+    except ProgrammingError as e:
+        assert "target replica failed or was dropped" in e.args[0]["M"], e
+    else:
+        assert False, "SUBSCRIBE didn't return the expected error"
+
+    killer.join()
+
+
+def workflow_pg_snapshot_partial_failure(c: Composition) -> None:
+    """Test PostgreSQL snapshot partial failure"""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        # Start postgres for the pg source
+        Postgres(),
+        Testdrive(no_reset=True),
+        Clusterd(
+            name="storage", environment_extra=["FAILPOINTS=pg_snapshot_pause=return(2)"]
+        ),
+    ):
+        c.up("materialized", "postgres", "storage")
+
+        c.run("testdrive", "pg-snapshot-partial-failure/01-configure-postgres.td")
+        c.run("testdrive", "pg-snapshot-partial-failure/02-create-sources.td")
+
+        c.run("testdrive", "pg-snapshot-partial-failure/03-verify-good-sub-source.td")
+
+        c.kill("storage")
+        # Restart the storage instance with the failpoint off...
+        with c.override(
+            # turn off the failpoint
+            Clusterd(name="storage")
+        ):
+            c.run("testdrive", "pg-snapshot-partial-failure/04-add-more-data.td")
+            c.up("storage")
+            c.run("testdrive", "pg-snapshot-partial-failure/05-verify-data.td")
+
+
+def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
+    """
+    Test that compute reconciliation reuses existing dataflows.
+
+    Note that this is currently not working, due to #17594. This test
+    tests the current, undesired behavior and must be adjusted once
+    #17594 is fixed.
+    """
+
+    c.down(destroy_volumes=True)
+
+    c.up("materialized")
+    c.up("clusterd1")
+
+    # Helper function to get reconciliation metrics for clusterd.
+    def fetch_reconciliation_metrics() -> Tuple[int, int]:
+        metrics = c.exec(
+            "clusterd1", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+
+        reused = 0
+        replaced = 0
+        for metric in metrics.splitlines():
+            if metric.startswith("mz_compute_reconciliation_reused_dataflows"):
+                reused += int(metric.split()[1])
+            elif metric.startswith("mz_compute_reconciliation_replaced_dataflows"):
+                replaced += int(metric.split()[1])
+
+        return reused, replaced
+
+    # Set up a cluster and a number of dataflows that can be reconciled.
+    c.sql(
+        """
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (
+            STORAGECTL ADDRESSES ['clusterd1:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103'],
+            COMPUTECTL ADDRESSES ['clusterd1:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102'],
+            WORKERS 1
+        ));
+        SET cluster = cluster1;
+
+        -- index on table
+        CREATE TABLE t1 (a int);
+        CREATE DEFAULT INDEX on t1;
+
+        -- index on view
+        CREATE VIEW v AS SELECT a + 1 FROM t1;
+        CREATE DEFAULT INDEX on v;
+
+        -- materialized view on table
+        CREATE TABLE t2 (a int);
+        CREATE MATERIALIZED VIEW mv1 AS SELECT a + 1 FROM t2;
+
+        -- materialized view on index
+        CREATE MATERIALIZED VIEW mv2 AS SELECT a + 1 FROM t1;
+        """
+    )
+
+    # Give the dataflows some time to make progress and get compacted.
+    # This is done to trigger the bug described in #17594.
+    time.sleep(10)
+
+    # Restart environmentd to trigger a reconciliation.
+    c.kill("materialized")
+    c.up("materialized")
+
+    # Perform a query to ensure reconciliation has finished.
+    c.sql(
+        """
+        SET cluster = cluster1;
+        SELECT * FROM v;
+        """
+    )
+
+    reused, replaced = fetch_reconciliation_metrics()
+
+    # TODO(#17594): Flip these once the bug is fixed.
+    assert reused == 0
+    assert replaced == 4

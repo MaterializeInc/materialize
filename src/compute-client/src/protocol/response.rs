@@ -47,6 +47,13 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// Replicas must send `FrontierUppers` responses for compute collections that are indexes or
     /// storage sinks. Replicas must not send `FrontierUppers` responses for subscribes.
     ///
+    /// Replicas must never report regressing frontiers. Specifically:
+    ///
+    ///   * The first frontier reported for a collection must not be less than that collection's
+    ///     initial `as_of` frontier.
+    ///   * Subsequent reported frontiers for a collection must not be less than any frontier
+    ///     reported previously for the same collection.
+    ///
     /// Replicas must send a `FrontierUppers` response reporting advancement to the empty frontier
     /// for a collection in two cases:
     ///
@@ -61,11 +68,13 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     ///   * The replica must not send further `FrontierUppers` responses for that collection.
     ///
     /// The replica must not send `FrontierUppers` responses for collections that have not
-    /// been created previously by a [`CreateDataflows` command]. An exception are `FrontierUppers`
-    /// responses that report the empty frontier. ([#16247])
+    /// been created previously by a [`CreateDataflows` command] or by a [`CreateInstance`
+    /// command]. An exception are `FrontierUppers` responses that report the empty frontier.
+    /// ([#16247])
     ///
     /// [`AllowCompaction` command]: super::command::ComputeCommand::AllowCompaction
     /// [`CreateDataflows` command]: super::command::ComputeCommand::CreateDataflows
+    /// [`CreateInstance` command]: super::command::ComputeCommand::CreateInstance
     /// [#16247]: https://github.com/MaterializeInc/materialize/issues/16247
     /// [#16275]: https://github.com/MaterializeInc/materialize/issues/16275
     FrontierUppers(Vec<(GlobalId, Antichain<T>)>),
@@ -96,7 +105,8 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// subscribe dataflow's `as_of` until the subscribe advances to the empty frontier or is
     /// dropped. The time intervals of consecutive [`Batch`]es must be increasing, contiguous,
     /// non-overlapping, and non-empty. All updates transmitted in a batch must have times within
-    /// that batch’s time interval.
+    /// that batch’s time interval. The `upper` of the first [`Batch`] of a subscribe must not be
+    /// less than that subscribe's initial `as_of` frontier.
     ///
     /// The replica must send [`DroppedAt`] responses if the subscribe was dropped in response to
     /// an [`AllowCompaction` command] that advanced its read frontier to the empty frontier. The

@@ -73,19 +73,19 @@ Materialize provides public Kafka topics and a Confluent Schema Registry for its
 
     ```sql
     CREATE SOURCE IF NOT EXISTS purchases
-    FROM KAFKA CONNECTION kafka_connection (TOPIC 'purchases')
+    FROM KAFKA CONNECTION kafka_connection (TOPIC 'mysql.shop.purchases')
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_basic_http
     ENVELOPE DEBEZIUM
     WITH (SIZE = '3xsmall');
 
     CREATE SOURCE IF NOT EXISTS items
-    FROM KAFKA CONNECTION kafka_connection (TOPIC 'items')
+    FROM KAFKA CONNECTION kafka_connection (TOPIC 'mysql.shop.items')
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_basic_http
     ENVELOPE DEBEZIUM
     WITH (SIZE = '3xsmall');
 
     CREATE SOURCE IF NOT EXISTS users
-    FROM KAFKA CONNECTION kafka_connection (TOPIC 'users')
+    FROM KAFKA CONNECTION kafka_connection (TOPIC 'mysql.shop.users')
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_basic_http
     ENVELOPE DEBEZIUM
     WITH (SIZE = '3xsmall');
@@ -110,7 +110,7 @@ Reuse your `psql` session and build the analytics:
         FROM purchases
         LEFT JOIN users
             ON purchases.user_id = users.id
-        WHERE deleted is false
+        WHERE deleted = 0
         GROUP BY 1, 2;
     ```
 

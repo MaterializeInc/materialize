@@ -71,10 +71,11 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fs::File;
 use std::io;
@@ -82,11 +83,9 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::time::Duration;
 
-use aws_smithy_http::endpoint::Endpoint;
+use aws_credential_types::Credentials;
 use aws_types::region::Region;
-use aws_types::Credentials;
 use globset::GlobBuilder;
-use http::Uri;
 use itertools::Itertools;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -117,7 +116,7 @@ struct Args {
     ///
     /// Passing `--var foo=bar` will create a variable named `arg.foo` with the
     /// value `bar`. Can be specified multiple times to set multiple variables.
-    #[clap(long, value_name = "NAME=VALUE")]
+    #[clap(long, env = "VAR", use_delimiter = true, value_name = "NAME=VALUE")]
     var: Vec<String>,
     /// A random number to distinguish each testdrive run.
     #[clap(long, value_name = "N")]
@@ -224,7 +223,7 @@ struct Args {
     kafka_default_partitions: usize,
     /// Arbitrary rdkafka options for testdrive to use when connecting to the
     /// Kafka broker.
-    #[clap(long, value_name = "KEY=VAL", parse(from_str = parse_kafka_opt))]
+    #[clap(long, env = "KAFKA_OPTION", use_delimiter=true, value_name = "KEY=VAL", parse(from_str = parse_kafka_opt))]
     kafka_option: Vec<(String, String)>,
     /// URL of the schema registry that testdrive will connect to.
     #[clap(long, value_name = "URL", default_value = "http://localhost:8081")]
@@ -266,7 +265,7 @@ struct Args {
         value_name = "URL",
         env = "AWS_ENDPOINT"
     )]
-    aws_endpoint: Option<Uri>,
+    aws_endpoint: Option<String>,
 
     #[clap(
         long,
@@ -331,7 +330,7 @@ async fn main() {
                     args.aws_secret_access_key,
                     None,
                 ))
-                .endpoint_resolver(Endpoint::immutable_uri(endpoint).unwrap())
+                .endpoint_url(endpoint)
                 .load()
                 .await;
             let account = "000000000000".into();
@@ -457,7 +456,7 @@ async fn main() {
     }
 
     let mut error_count = 0;
-    let mut error_files = HashSet::new();
+    let mut error_files = BTreeSet::new();
     let mut junit = match args.junit_report {
         Some(filename) => match File::create(&filename) {
             Ok(file) => Some((file, junit_report::TestSuite::new("testdrive"))),

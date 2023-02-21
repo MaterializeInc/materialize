@@ -6,6 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from textwrap import dedent
 
 import pg8000.exceptions
 
@@ -34,19 +35,74 @@ SERVICES = [
 
 def workflow_github_8021(c: Composition) -> None:
     c.up("materialized")
-    c.wait_for_materialized("materialized")
     c.run("testdrive", "github-8021.td")
 
     # Ensure MZ can boot
     c.kill("materialized")
     c.up("materialized")
-    c.wait_for_materialized("materialized")
+    c.kill("materialized")
+
+
+# Test that `mz_internal.mz_object_dependencies` re-populates.
+def workflow_github_17578(c: Composition) -> None:
+    c.up("testdrive_no_reset", persistent=True)
+    c.up("materialized")
+
+    c.testdrive(
+        service="testdrive_no_reset",
+        input=dedent(
+            """
+            > CREATE SOURCE with_subsources FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
+
+            > SELECT
+              top_level_s.name as source,
+              s.name AS subsource
+              FROM mz_internal.mz_object_dependencies AS d
+              JOIN mz_sources AS s ON s.id = d.referenced_object_id
+              JOIN mz_sources AS top_level_s ON top_level_s.id = d.object_id
+              WHERE top_level_s.name = 'with_subsources';
+            source          subsource
+            -------------------------
+            with_subsources accounts
+            with_subsources auctions
+            with_subsources bids
+            with_subsources organizations
+            with_subsources users
+            """
+        ),
+    )
+
+    # Restart mz
+    c.kill("materialized")
+    c.up("materialized")
+
+    c.testdrive(
+        service="testdrive_no_reset",
+        input=dedent(
+            """
+            > SELECT
+              top_level_s.name as source,
+              s.name AS subsource
+              FROM mz_internal.mz_object_dependencies AS d
+              JOIN mz_sources AS s ON s.id = d.referenced_object_id
+              JOIN mz_sources AS top_level_s ON top_level_s.id = d.object_id
+              WHERE top_level_s.name = 'with_subsources';
+            source          subsource
+            -------------------------
+            with_subsources accounts
+            with_subsources auctions
+            with_subsources bids
+            with_subsources organizations
+            with_subsources users
+            """
+        ),
+    )
+
     c.kill("materialized")
 
 
 def workflow_audit_log(c: Composition) -> None:
     c.up("materialized")
-    c.wait_for_materialized(service="materialized")
 
     # Create some audit log entries.
     c.sql("CREATE TABLE t (i INT)")
@@ -57,7 +113,6 @@ def workflow_audit_log(c: Composition) -> None:
     # Restart mz.
     c.kill("materialized")
     c.up("materialized")
-    c.wait_for_materialized()
 
     # Verify the audit log entries are still present and have not changed.
     restart_log = c.sql_query("SELECT * FROM mz_audit_events ORDER BY id")
@@ -70,15 +125,7 @@ def workflow_audit_log(c: Composition) -> None:
 # Test for GitHub issue #13726
 def workflow_timelines(c: Composition) -> None:
     for _ in range(3):
-        c.start_and_wait_for_tcp(
-            services=[
-                "zookeeper",
-                "kafka",
-                "schema-registry",
-                "materialized",
-            ]
-        )
-        c.wait_for_materialized()
+        c.up("zookeeper", "kafka", "schema-registry", "materialized")
         c.run("testdrive", "timelines.td")
         c.rm(
             "zookeeper",
@@ -101,8 +148,7 @@ def workflow_stash(c: Composition) -> None:
     with c.override(Materialized(external_cockroach=True)):
         c.up("cockroach")
 
-        c.start_and_wait_for_tcp(services=["materialized"])
-        c.wait_for_materialized("materialized")
+        c.up("materialized")
 
         cursor = c.sql_cursor()
         cursor.execute("CREATE TABLE a (i INT)")
@@ -132,7 +178,6 @@ def workflow_stash(c: Composition) -> None:
 
 def workflow_storage_managed_collections(c: Composition) -> None:
     c.up("materialized")
-    c.wait_for_materialized(service="materialized")
 
     # Create some storage shard entries.
     c.sql("CREATE TABLE t (i INT)")
@@ -149,7 +194,6 @@ def workflow_storage_managed_collections(c: Composition) -> None:
     # Restart mz.
     c.kill("materialized")
     c.up("materialized")
-    c.wait_for_materialized()
 
     # Verify the shard mappings are still present and have not changed.
     restart_user_shards = None
@@ -164,8 +208,71 @@ def workflow_storage_managed_collections(c: Composition) -> None:
         raise Exception("user shards empty or not equal after restart")
 
 
+def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
+    c.up("testdrive_no_reset", persistent=True)
+    c.up("materialized")
+
+    c.testdrive(
+        service="testdrive_no_reset",
+        input=dedent(
+            """
+            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+
+            # We can create a cluster with sizes '1' and '2'
+            > CREATE CLUSTER test REPLICAS (r1 (SIZE '1'), r2 (SIZE '2'))
+
+            > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
+            test r1 1 true
+            test r2 2 true
+
+            # We cannot create replicas with size '2' after restricting allowed_cluster_replica_sizes to '1'
+            $ postgres-execute connection=mz_system
+            ALTER SYSTEM SET allowed_cluster_replica_sizes = '1'
+
+            ! CREATE CLUSTER REPLICA test.r3 SIZE '2'
+            contains:unknown cluster replica size 2
+            """
+        ),
+    )
+
+    # Assert that mz restarts successfully even in the presence of replica sizes that are not allowed
+    c.kill("materialized")
+    c.up("materialized")
+
+    c.testdrive(
+        service="testdrive_no_reset",
+        input=dedent(
+            """
+            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+
+            # Cluster replica of disallowed sizes still exist
+            > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
+            test r1 1 true
+            test r2 2 true
+
+            # We cannot create replicas with size '2' (system parameter value persists across restarts)
+            ! CREATE CLUSTER REPLICA test.r3 SIZE '2'
+            contains:unknown cluster replica size 2
+
+            # We can create replicas with size '2' after listing that size as allowed
+            $ postgres-execute connection=mz_system
+            ALTER SYSTEM SET allowed_cluster_replica_sizes = '1', '2'
+
+            > CREATE CLUSTER REPLICA test.r3 SIZE '2'
+
+            > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
+            test r1 1 true
+            test r2 2 true
+            test r3 2 true
+            """
+        ),
+    )
+
+
 def workflow_default(c: Composition) -> None:
+    c.workflow("github-17578")
     c.workflow("github-8021")
     c.workflow("audit-log")
     c.workflow("timelines")
     c.workflow("stash")
+    c.workflow("allowed-cluster-replica-sizes")

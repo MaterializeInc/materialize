@@ -30,15 +30,15 @@ impl crate::Transform for ProjectionExtraction {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        let result = relation.try_visit_mut_post(&mut |e| self.action(e));
-        mz_repr::explain_new::trace_plan(&*relation);
+        let result = relation.try_visit_mut_post(&mut Self::action);
+        mz_repr::explain::trace_plan(&*relation);
         result
     }
 }
 
 impl ProjectionExtraction {
     /// Transform column references in a `Map` into a `Project`.
-    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
+    pub fn action(relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
         if let MirRelationExpr::Map { input, scalars } = relation {
             if scalars
                 .iter()

@@ -71,13 +71,14 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
 //! Abstractions for management of cloud resources that have no equivalent when running
 //! locally, like AWS PrivateLink endpoints.
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::fmt::{self, Debug};
 
 use async_trait::async_trait;
@@ -146,7 +147,7 @@ pub trait CloudResourceController: Debug + Send + Sync {
     async fn delete_vpc_endpoint(&self, id: GlobalId) -> Result<(), anyhow::Error>;
 
     /// Lists existing `VpcEndpoint` Kubernetes objects.
-    async fn list_vpc_endpoints(&self) -> Result<HashSet<GlobalId>, anyhow::Error>;
+    async fn list_vpc_endpoints(&self) -> Result<BTreeSet<GlobalId>, anyhow::Error>;
 }
 
 /// Returns the name to use for the VPC endpoint with the given ID.

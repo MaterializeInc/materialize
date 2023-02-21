@@ -161,7 +161,7 @@ Once logical replication is enabled:
 
 ### Create a source
 
-Postgres sources ingest the raw replication stream data for all tables included in a publication to avoid creating multiple replication slots and minimize the required bandwidth.
+Postgres sources ingest the raw replication stream data for all tables included in a publication to avoid creating multiple [replication slots](/sql/create-source/postgres/#postgresql-replication-slots) and minimize the required bandwidth.
 
 When you define a Postgres source, Materialize will automatically create a **subsource** for each original table in the publication (so you don't have to!):
 
@@ -295,6 +295,8 @@ As a _superuser_ (`cloudsqlsuperuser`):
 {{< /tab >}}
 
 {{< /tabs >}}
+
+Once logical replication is enabled:
 
 1. Grant enough privileges to ensure Debezium can operate in the database. The specific privileges will depend on how much control you want to give to the replication user, so we recommend following the [Debezium documentation](https://debezium.io/documentation/reference/connectors/postgresql.html#postgresql-replication-user-privileges).
 

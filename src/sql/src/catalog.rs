@@ -12,7 +12,7 @@
 //! Catalog abstraction layer.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
@@ -27,10 +27,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::MirScalarExpr;
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
-use mz_repr::explain_new::{DummyHumanizer, ExprHumanizer};
+use mz_repr::explain::ExprHumanizer;
 use mz_repr::{ColumnName, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::Expr;
 use mz_sql_parser::ast::UnresolvedObjectName;
@@ -85,8 +85,11 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Returns the database to use if one is not explicitly specified.
     fn active_database(&self) -> Option<&DatabaseId>;
 
-    /// Returns the compute instance to use if one is not explicitly specified.
-    fn active_compute_instance(&self) -> &str;
+    /// Returns the cluster to use if one is not explicitly specified.
+    fn active_cluster(&self) -> &str;
+
+    /// Returns the resolved search paths for the current user. (Invalid search paths are skipped.)
+    fn search_path(&self) -> &[(ResolvedDatabaseSpecifier, SchemaSpecifier)];
 
     /// Returns the descriptor of the named prepared statement on the session, or
     /// None if the prepared statement does not exist.
@@ -138,14 +141,13 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Resolves the named role.
     fn resolve_role(&self, role_name: &str) -> Result<&dyn CatalogRole, CatalogError>;
 
-    /// Resolves the named compute instance.
+    /// Resolves the named cluster.
     ///
-    /// If the provided name is `None`, resolves the currently-active compute
-    /// instance.
-    fn resolve_compute_instance<'a, 'b>(
+    /// If the provided name is `None`, resolves the currently active cluster.
+    fn resolve_cluster<'a, 'b>(
         &'a self,
-        compute_instance_name: Option<&'b str>,
-    ) -> Result<&dyn CatalogComputeInstance<'a>, CatalogError>;
+        cluster_name: Option<&'b str>,
+    ) -> Result<&dyn CatalogCluster<'a>, CatalogError>;
 
     /// Resolves a partially-specified item name.
     ///
@@ -180,8 +182,8 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Reports whether the specified type exists in the catalog.
     fn item_exists(&self, name: &QualifiedObjectName) -> bool;
 
-    /// Gets a compute instance by ID.
-    fn get_compute_instance(&self, id: ComputeInstanceId) -> &dyn CatalogComputeInstance;
+    /// Gets a cluster by ID.
+    fn get_cluster(&self, id: ClusterId) -> &dyn CatalogCluster;
 
     /// Finds a name like `name` that is not already in use.
     ///
@@ -200,7 +202,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     fn now(&self) -> EpochMillis;
 
     /// Returns the set of supported AWS PrivateLink availability zone ids.
-    fn aws_privatelink_availability_zones(&self) -> Option<HashSet<String>>;
+    fn aws_privatelink_availability_zones(&self) -> Option<BTreeSet<String>>;
 }
 
 /// Configuration associated with a catalog.
@@ -279,24 +281,24 @@ pub trait CatalogRole {
     fn id(&self) -> RoleId;
 }
 
-/// A compute instance in a [`SessionCatalog`].
-pub trait CatalogComputeInstance<'a> {
-    /// Returns a fully-specified name of the compute instance.
+/// A cluster in a [`SessionCatalog`].
+pub trait CatalogCluster<'a> {
+    /// Returns a fully-specified name of the cluster.
     fn name(&self) -> &str;
 
-    /// Returns a stable ID for the compute instance.
-    fn id(&self) -> ComputeInstanceId;
+    /// Returns a stable ID for the cluster.
+    fn id(&self) -> ClusterId;
 
-    /// Returns the ID of the object this compute instance is linked to, if
+    /// Returns the ID of the object this cluster is linked to, if
     /// any.
     fn linked_object_id(&self) -> Option<GlobalId>;
 
-    /// Returns the set of non-transient exports (indexes, materialized views)
-    /// of this cluster.
-    fn exports(&self) -> &std::collections::HashSet<GlobalId>;
+    /// Returns the objects that are bound to this cluster.
+    fn bound_objects(&self) -> &BTreeSet<GlobalId>;
 
-    /// Returns the set of replicas of this cluster.
-    fn replica_names(&self) -> HashSet<&String>;
+    /// Returns the replicas of the cluster as a map from replica name to
+    /// replica ID.
+    fn replicas(&self) -> &BTreeMap<String, ReplicaId>;
 }
 
 /// An item in a [`SessionCatalog`].
@@ -746,10 +748,10 @@ pub enum CatalogError {
     UnknownSchema(String),
     /// Unknown role.
     UnknownRole(String),
-    /// Unknown compute instance.
-    UnknownComputeInstance(String),
-    /// Unknown compute replica.
-    UnknownComputeReplica(String),
+    /// Unknown cluster.
+    UnknownCluster(String),
+    /// Unknown cluster replica.
+    UnknownClusterReplica(String),
     /// Unknown item.
     UnknownItem(String),
     /// Unknown function.
@@ -782,8 +784,8 @@ impl fmt::Display for CatalogError {
             Self::UnknownConnection(name) => write!(f, "connection \"{}\" does not exist", name),
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
-            Self::UnknownComputeInstance(name) => write!(f, "unknown cluster '{}'", name),
-            Self::UnknownComputeReplica(name) => {
+            Self::UnknownCluster(name) => write!(f, "unknown cluster '{}'", name),
+            Self::UnknownClusterReplica(name) => {
                 write!(f, "unknown cluster replica '{}'", name)
             }
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
@@ -837,11 +839,15 @@ impl SessionCatalog for DummyCatalog {
     }
 
     fn active_database(&self) -> Option<&DatabaseId> {
-        Some(&DatabaseId(0))
+        None
     }
 
-    fn active_compute_instance(&self) -> &str {
+    fn active_cluster(&self) -> &str {
         "dummy"
+    }
+
+    fn search_path(&self) -> &[(ResolvedDatabaseSpecifier, SchemaSpecifier)] {
+        &[]
     }
 
     fn get_prepared_statement_desc(&self, _: &str) -> Option<&StatementDesc> {
@@ -853,7 +859,7 @@ impl SessionCatalog for DummyCatalog {
     }
 
     fn get_database(&self, _: &DatabaseId) -> &dyn CatalogDatabase {
-        &DummyDatabase
+        unimplemented!()
     }
 
     fn resolve_schema(&self, _: Option<&str>, _: &str) -> Result<&dyn CatalogSchema, CatalogError> {
@@ -888,10 +894,10 @@ impl SessionCatalog for DummyCatalog {
         unimplemented!();
     }
 
-    fn resolve_compute_instance<'a, 'b>(
+    fn resolve_cluster<'a, 'b>(
         &'a self,
         _: Option<&'b str>,
-    ) -> Result<&'a dyn CatalogComputeInstance, CatalogError> {
+    ) -> Result<&'a dyn CatalogCluster, CatalogError> {
         unimplemented!();
     }
 
@@ -907,7 +913,7 @@ impl SessionCatalog for DummyCatalog {
         false
     }
 
-    fn get_compute_instance(&self, _: ComputeInstanceId) -> &dyn CatalogComputeInstance {
+    fn get_cluster(&self, _: ClusterId) -> &dyn CatalogCluster {
         unimplemented!();
     }
 
@@ -920,57 +926,36 @@ impl SessionCatalog for DummyCatalog {
     }
 
     fn now(&self) -> EpochMillis {
-        (self.config().now)()
+        0
     }
 
     fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName {
         name
     }
 
-    fn aws_privatelink_availability_zones(&self) -> Option<HashSet<String>> {
+    fn aws_privatelink_availability_zones(&self) -> Option<BTreeSet<String>> {
         unimplemented!()
     }
 }
 
 impl ExprHumanizer for DummyCatalog {
-    fn humanize_id(&self, id: GlobalId) -> Option<String> {
-        DummyHumanizer.humanize_id(id)
+    fn humanize_id(&self, _: GlobalId) -> Option<String> {
+        None
     }
 
-    fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String> {
-        DummyHumanizer.humanize_id_unqualified(id)
+    fn humanize_id_unqualified(&self, _: GlobalId) -> Option<String> {
+        None
     }
 
-    fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
-        DummyHumanizer.humanize_scalar_type(ty)
-    }
-}
-
-/// A dummy [`CatalogDatabase`] implementation.
-///
-/// This implementation is suitable for use in tests that plan queries which are
-/// not demanding of the catalog, as many methods are unimplemented.
-#[derive(Debug)]
-pub struct DummyDatabase;
-
-impl CatalogDatabase for DummyDatabase {
-    fn name(&self) -> &str {
-        "dummy"
-    }
-
-    fn id(&self) -> DatabaseId {
-        DatabaseId(0)
-    }
-
-    fn has_schemas(&self) -> bool {
-        true
+    fn humanize_scalar_type(&self, _: &ScalarType) -> String {
+        unimplemented!()
     }
 }
 
 /// Provides a method of generating a 3-layer catalog on the fly, and then
 /// resolving objects within it.
 pub(crate) struct ErsatzCatalog<'a, T>(
-    pub HashMap<String, HashMap<String, HashMap<String, &'a T>>>,
+    pub BTreeMap<String, BTreeMap<String, BTreeMap<String, &'a T>>>,
 );
 
 impl<'a, T> ErsatzCatalog<'a, T> {

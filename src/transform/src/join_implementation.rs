@@ -69,7 +69,7 @@ impl crate::Transform for JoinImplementation {
         args: TransformArgs,
     ) -> Result<(), TransformError> {
         let result = self.action_recursive(relation, &mut IndexMap::new(args.indexes));
-        mz_repr::explain_new::trace_plan(&*relation);
+        mz_repr::explain::trace_plan(&*relation);
         result
     }
 }

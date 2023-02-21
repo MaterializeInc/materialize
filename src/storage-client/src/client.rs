@@ -14,7 +14,7 @@
 
 //! The public API of the storage layer.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::iter;
 
@@ -25,19 +25,19 @@ use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{Antichain, MutableAntichain};
 use timely::PartialOrder;
-use tokio_stream::wrappers::UnboundedReceiverStream;
-use tonic::{Request, Response, Status, Streaming};
+use tonic::{Request, Status, Streaming};
 
+use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
-use mz_service::grpc::{BidiProtoClient, ClientTransport, GrpcClient, GrpcServer, ResponseStream};
+use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
 use mz_timely_util::progress::any_antichain;
 
-use crate::client::proto_storage_client::ProtoStorageClient;
 use crate::client::proto_storage_server::ProtoStorage;
 use crate::controller::CollectionMetadata;
+use crate::metrics::RehydratingStorageClientMetrics;
 use crate::types::parameters::StorageParameters;
 use crate::types::sinks::{MetadataFilled, StorageSinkDesc};
 use crate::types::sources::IngestionDescription;
@@ -63,24 +63,17 @@ impl<T: Send> GenericClient<StorageCommand<T>, StorageResponse<T>> for Box<dyn S
     }
 }
 
-pub type StorageGrpcClient = GrpcClient<ProtoStorageClient<ClientTransport>>;
+#[derive(Debug, Clone)]
+pub enum StorageProtoServiceTypes {}
 
-#[async_trait]
-impl BidiProtoClient for ProtoStorageClient<ClientTransport> {
+impl ProtoServiceTypes for StorageProtoServiceTypes {
     type PC = ProtoStorageCommand;
     type PR = ProtoStorageResponse;
-
-    fn new(inner: ClientTransport) -> Self {
-        ProtoStorageClient::new(inner)
-    }
-
-    async fn establish_bidi_stream(
-        &mut self,
-        rx: UnboundedReceiverStream<Self::PC>,
-    ) -> Result<Response<Streaming<Self::PR>>, Status> {
-        self.command_response_stream(rx).await
-    }
+    type STATS = RehydratingStorageClientMetrics;
+    const URL: &'static str = "/mz_storage_client.client.ProtoStorage/CommandResponseStream";
 }
+
+pub type StorageGrpcClient = GrpcClient<StorageProtoServiceTypes>;
 
 #[async_trait]
 impl<F, G> ProtoStorage for GrpcServer<F>
@@ -101,6 +94,12 @@ where
 /// Commands related to the ingress and egress of collections.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum StorageCommand<T = mz_repr::Timestamp> {
+    /// Specifies to the storage server(s) the shape of the timely cluster
+    /// we want created, before other commands are sent.
+    CreateTimely {
+        config: TimelyConfig,
+        epoch: ClusterStartupEpoch,
+    },
     /// Indicates that the controller has sent all commands reflecting its
     /// initial state.
     InitializationComplete,
@@ -211,8 +210,13 @@ impl Arbitrary for CreateSinkCommand<mz_repr::Timestamp> {
 impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoStorageCommand {
         use proto_storage_command::Kind::*;
+        use proto_storage_command::*;
         ProtoStorageCommand {
             kind: Some(match self {
+                StorageCommand::CreateTimely { config, epoch } => CreateTimely(ProtoCreateTimely {
+                    config: Some(config.into_proto()),
+                    epoch: Some(epoch.into_proto()),
+                }),
                 StorageCommand::InitializationComplete => InitializationComplete(()),
                 StorageCommand::UpdateConfiguration(params) => {
                     UpdateConfiguration(params.into_proto())
@@ -234,7 +238,14 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
 
     fn from_proto(proto: ProtoStorageCommand) -> Result<Self, TryFromProtoError> {
         use proto_storage_command::Kind::*;
+        use proto_storage_command::*;
         match proto.kind {
+            Some(CreateTimely(ProtoCreateTimely { config, epoch })) => {
+                Ok(StorageCommand::CreateTimely {
+                    config: config.into_rust_if_some("ProtoCreateTimely::config")?,
+                    epoch: epoch.into_rust_if_some("ProtoCreateTimely::epoch")?,
+                })
+            }
             Some(InitializationComplete(())) => Ok(StorageCommand::InitializationComplete),
             Some(UpdateConfiguration(params)) => {
                 Ok(StorageCommand::UpdateConfiguration(params.into_rust()?))
@@ -261,6 +272,7 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         Union::new(vec![
+            // TODO(guswynn): cluster-unification: also test `CreateTimely` here.
             proptest::collection::vec(any::<CreateSourceCommand<mz_repr::Timestamp>>(), 1..4)
                 .prop_map(StorageCommand::CreateSources)
                 .boxed(),
@@ -287,11 +299,13 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
     }
 }
 
-/// This structure represents a full set up updates for the `mz_source_statistics`
-/// table, for a specific source-worker pair. It is structured like this for simplicity
-/// and efficiency: Each storage worker can individually collect and consolidate metrics,
-/// then control how much `StorageResponse` traffic is produced when sending updates
-/// back to the controller to be written.
+// These structure represents a full set up updates for the `mz_source_statistics`
+// and `mz_sink_statistics` tables for a specific source-worker/sink-worker pair.
+// They are structured like this for simplicity
+// and efficiency: Each storage worker can individually collect and consolidate metrics,
+// then control how much `StorageResponse` traffic is produced when sending updates
+// back to the controller to be written.
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SourceStatisticsUpdate {
     pub id: GlobalId,
@@ -301,6 +315,46 @@ pub struct SourceStatisticsUpdate {
     pub updates_staged: u64,
     pub updates_committed: u64,
     pub bytes_received: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SinkStatisticsUpdate {
+    pub id: GlobalId,
+    pub worker_id: usize,
+    pub messages_staged: u64,
+    pub messages_committed: u64,
+    pub bytes_staged: u64,
+    pub bytes_committed: u64,
+}
+
+/// A trait that abstracts over user-facing statistics objects, used
+/// by `spawn_statistics_scraper`.
+pub trait PackableStats {
+    /// Pack `self` into the `Row`.
+    fn pack(&self, packer: mz_repr::RowPacker<'_>);
+}
+impl PackableStats for SourceStatisticsUpdate {
+    fn pack(&self, mut packer: mz_repr::RowPacker<'_>) {
+        use mz_repr::Datum;
+        packer.push(Datum::from(self.id.to_string().as_str()));
+        packer.push(Datum::from(u64::cast_from(self.worker_id)));
+        packer.push(Datum::from(self.snapshot_committed));
+        packer.push(Datum::from(self.messages_received));
+        packer.push(Datum::from(self.updates_staged));
+        packer.push(Datum::from(self.updates_committed));
+        packer.push(Datum::from(self.bytes_received));
+    }
+}
+impl PackableStats for SinkStatisticsUpdate {
+    fn pack(&self, mut packer: mz_repr::RowPacker<'_>) {
+        use mz_repr::Datum;
+        packer.push(Datum::from(self.id.to_string().as_str()));
+        packer.push(Datum::from(u64::cast_from(self.worker_id)));
+        packer.push(Datum::from(self.messages_staged));
+        packer.push(Datum::from(self.messages_committed));
+        packer.push(Datum::from(self.bytes_staged));
+        packer.push(Datum::from(self.bytes_committed));
+    }
 }
 
 /// Responses that the storage nature of a worker/dataflow can provide back to the coordinator.
@@ -315,13 +369,14 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
     DroppedIds(Vec<GlobalId>),
 
     /// A list of statistics updates, currently only for sources.
-    StatisticsUpdates(Vec<SourceStatisticsUpdate>),
+    StatisticsUpdates(Vec<SourceStatisticsUpdate>, Vec<SinkStatisticsUpdate>),
 }
 
 impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoStorageResponse {
         use proto_storage_response::{
-            Kind::*, ProtoDroppedIds, ProtoSourceStatisticsUpdate, ProtoStatisticsUpdates,
+            Kind::*, ProtoDroppedIds, ProtoSinkStatisticsUpdate, ProtoSourceStatisticsUpdate,
+            ProtoStatisticsUpdates,
         };
         ProtoStorageResponse {
             kind: Some(match self {
@@ -329,20 +384,33 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                 StorageResponse::DroppedIds(ids) => DroppedIds(ProtoDroppedIds {
                     ids: ids.into_proto(),
                 }),
-                StorageResponse::StatisticsUpdates(stats) => Stats(ProtoStatisticsUpdates {
-                    source_updates: stats
-                        .iter()
-                        .map(|update| ProtoSourceStatisticsUpdate {
-                            id: Some(update.id.into_proto()),
-                            worker_id: u64::cast_from(update.worker_id),
-                            snapshot_committed: update.snapshot_committed,
-                            messages_received: update.messages_received,
-                            updates_staged: update.updates_staged,
-                            updates_committed: update.updates_committed,
-                            bytes_received: update.bytes_received,
-                        })
-                        .collect(),
-                }),
+                StorageResponse::StatisticsUpdates(source_stats, sink_stats) => {
+                    Stats(ProtoStatisticsUpdates {
+                        source_updates: source_stats
+                            .iter()
+                            .map(|update| ProtoSourceStatisticsUpdate {
+                                id: Some(update.id.into_proto()),
+                                worker_id: u64::cast_from(update.worker_id),
+                                snapshot_committed: update.snapshot_committed,
+                                messages_received: update.messages_received,
+                                updates_staged: update.updates_staged,
+                                updates_committed: update.updates_committed,
+                                bytes_received: update.bytes_received,
+                            })
+                            .collect(),
+                        sink_updates: sink_stats
+                            .iter()
+                            .map(|update| ProtoSinkStatisticsUpdate {
+                                id: Some(update.id.into_proto()),
+                                worker_id: u64::cast_from(update.worker_id),
+                                messages_staged: update.messages_staged,
+                                messages_committed: update.messages_committed,
+                                bytes_staged: update.bytes_staged,
+                                bytes_committed: update.bytes_committed,
+                            })
+                            .collect(),
+                    })
+                }
             }),
         }
     }
@@ -371,6 +439,22 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                             updates_staged: update.updates_staged,
                             updates_committed: update.updates_committed,
                             bytes_received: update.bytes_received,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, TryFromProtoError>>()?,
+                stats
+                    .sink_updates
+                    .into_iter()
+                    .map(|update| {
+                        Ok(SinkStatisticsUpdate {
+                            id: update.id.into_rust_if_some(
+                                "ProtoStorageResponse::stats::sink_updates::id",
+                            )?,
+                            worker_id: usize::cast_from(update.worker_id),
+                            messages_staged: update.messages_staged,
+                            messages_committed: update.messages_committed,
+                            bytes_staged: update.bytes_staged,
+                            bytes_committed: update.bytes_committed,
                         })
                     })
                     .collect::<Result<Vec<_>, TryFromProtoError>>()?,
@@ -404,10 +488,10 @@ impl Arbitrary for StorageResponse<mz_repr::Timestamp> {
 #[derive(Debug)]
 pub struct PartitionedStorageState<T> {
     /// Number of partitions the state machine represents.
-    parts: u32,
+    parts: usize,
     /// Upper frontiers for sources and sinks, both unioned across all partitions and from each
     /// individual partition.
-    uppers: HashMap<GlobalId, (MutableAntichain<T>, Vec<Option<Antichain<T>>>)>,
+    uppers: BTreeMap<GlobalId, (MutableAntichain<T>, Vec<Option<Antichain<T>>>)>,
 }
 
 impl<T> Partitionable<StorageCommand<T>, StorageResponse<T>>
@@ -419,8 +503,8 @@ where
 
     fn new(parts: usize) -> PartitionedStorageState<T> {
         PartitionedStorageState {
-            parts: parts.try_into().expect("more than 4 billion partitions"),
-            uppers: HashMap::new(),
+            parts,
+            uppers: BTreeMap::new(),
         }
     }
 }
@@ -430,16 +514,28 @@ where
     T: timely::progress::Timestamp,
 {
     fn observe_command(&mut self, command: &StorageCommand<T>) {
+        // Note that `observe_command` is quite different in `mz_compute_client`.
+        // Compute (currently) only sends the command to 1 process,
+        // but storage fan's out to all workers, allowing the storage processes
+        // to self-coordinate how commands and internal commands are ordered.
+        //
+        // TODO(guswynn): cluster-unification: consolidate this with compute.
         match command {
+            StorageCommand::CreateTimely { .. } => {
+                // Similarly, we don't reset state here like compute, because,
+                // until we are required to manage multiple replicas, we can handle
+                // keeping track of state across restarts of storage server(s).
+            }
             StorageCommand::CreateSources(ingestions) => {
                 for ingestion in ingestions {
-                    for &export_id in ingestion.description.source_exports.keys() {
+                    for export_id in ingestion.description.subsource_ids() {
                         let mut frontier = MutableAntichain::new();
-                        frontier.update_iter(iter::once((T::minimum(), i64::from(self.parts))));
-                        let part_frontiers = vec![
-                            Some(Antichain::from_elem(T::minimum()));
-                            usize::cast_from(self.parts)
-                        ];
+                        // TODO(guswynn): cluster-unification: fix this dangerous use of `as`, by
+                        // merging the types that compute and storage use.
+                        #[allow(clippy::as_conversions)]
+                        frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
+                        let part_frontiers =
+                            vec![Some(Antichain::from_elem(T::minimum())); self.parts];
                         let previous = self.uppers.insert(export_id, (frontier, part_frontiers));
                         assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", export_id, command);
                     }
@@ -448,11 +544,11 @@ where
             StorageCommand::CreateSinks(exports) => {
                 for export in exports {
                     let mut frontier = MutableAntichain::new();
-                    frontier.update_iter(iter::once((T::minimum(), i64::from(self.parts))));
-                    let part_frontiers = vec![
-                        Some(Antichain::from_elem(T::minimum()));
-                        usize::cast_from(self.parts)
-                    ];
+                    // TODO(guswynn): cluster-unification: fix this dangerous use of `as`, by
+                    // merging the types that compute and storage use.
+                    #[allow(clippy::as_conversions)]
+                    frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
+                    let part_frontiers = vec![Some(Antichain::from_elem(T::minimum())); self.parts];
                     let previous = self.uppers.insert(export.id, (frontier, part_frontiers));
                     assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", export.id, command);
                 }
@@ -473,7 +569,22 @@ where
     fn split_command(&mut self, command: StorageCommand<T>) -> Vec<Option<StorageCommand<T>>> {
         self.observe_command(&command);
 
-        vec![Some(command); usize::cast_from(self.parts)]
+        match command {
+            StorageCommand::CreateTimely { config, epoch } => {
+                let timely_cmds = config.split_command(self.parts);
+
+                let timely_cmds = timely_cmds
+                    .into_iter()
+                    .map(|config| Some(StorageCommand::CreateTimely { config, epoch }))
+                    .collect();
+                timely_cmds
+            }
+            command => {
+                // Fan out to all processes (which will fan out to all workers).
+                // StorageState manages ordering of commands internally.
+                vec![Some(command); self.parts]
+            }
+        }
     }
 
     fn absorb_response(
@@ -538,11 +649,14 @@ where
                     Some(Ok(StorageResponse::DroppedIds(new_drops)))
                 }
             }
-            StorageResponse::StatisticsUpdates(stats) => {
+            StorageResponse::StatisticsUpdates(source_stats, sink_stats) => {
                 // Just forward it along; the `worker_id` should have been set in `storage_state`.
                 // We _could_ consolidate across worker_id's, here, but each worker only produces
                 // responses periodically, so we avoid that complexity.
-                Some(Ok(StorageResponse::StatisticsUpdates(stats)))
+                Some(Ok(StorageResponse::StatisticsUpdates(
+                    source_stats,
+                    sink_stats,
+                )))
             }
         }
     }

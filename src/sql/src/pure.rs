@@ -11,7 +11,7 @@
 //!
 //! See the [crate-level documentation](crate) for details.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
 use std::path::Path;
 use std::sync::Arc;
@@ -34,24 +34,24 @@ use mz_repr::{strconv, GlobalId};
 use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    ColumnDef, ColumnOption, ColumnOptionDef, CsrConnection, CsrSeedAvro, CsrSeedProtobuf,
-    CsrSeedProtobufSchema, DbzMode, DeferredObjectName, Envelope, Ident, KafkaConfigOption,
-    KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection, PgConfigOption,
-    PgConfigOptionName, ReaderSchemaSelectionStrategy, TableConstraint, UnresolvedObjectName,
+    ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CsrConnection, CsrSeedAvro,
+    CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, DeferredObjectName, Envelope, Ident,
+    KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection,
+    PgConfigOption, PgConfigOptionName, ReaderSchemaSelectionStrategy, UnresolvedObjectName,
 };
 use mz_storage_client::types::connections::aws::AwsConfig;
 use mz_storage_client::types::connections::{Connection, ConnectionContext};
 use mz_storage_client::types::sources::PostgresSourcePublicationDetails;
 
 use crate::ast::{
-    AvroSchema, CreateReferencedSubsources, CreateSourceConnection, CreateSourceFormat,
-    CreateSourceStatement, CreateSourceSubsource, CreateSubsourceStatement, CsrConnectionAvro,
-    CsrConnectionProtobuf, CsvColumns, Format, ProtobufSchema, Value, WithOptionValue,
+    AvroSchema, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,
+    CreateSourceSubsource, CreateSubsourceStatement, CsrConnectionAvro, CsrConnectionProtobuf,
+    CsvColumns, Format, ProtobufSchema, ReferencedSubsources, Value, WithOptionValue,
 };
 use crate::catalog::{ErsatzCatalog, SessionCatalog};
 use crate::kafka_util;
 use crate::kafka_util::KafkaConfigOptionExtracted;
-use crate::names::{Aug, RawDatabaseSpecifier, ResolvedObjectName};
+use crate::names::{Aug, RawDatabaseSpecifier};
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
@@ -110,12 +110,17 @@ pub async fn purify_create_source(
         format,
         envelope,
         include_metadata: _,
-        subsources: requested_subsources,
+        referenced_subsources: requested_subsources,
+        progress_subsource,
         ..
     } = &mut stmt;
 
+    if progress_subsource.is_some() {
+        bail_unsupported!("PROGRESS subsources not yet supported");
+    }
+
     // Disallow manually targetting subsources, this syntax is reserved for purification only
-    if let Some(CreateReferencedSubsources::Subset(subsources)) = requested_subsources {
+    if let Some(ReferencedSubsources::Subset(subsources)) = requested_subsources {
         for CreateSourceSubsource {
             subsource,
             reference: _,
@@ -268,13 +273,13 @@ pub async fn purify_create_source(
                 })?;
 
             // An index from table name -> schema name -> database name -> PostgresTableDesc
-            let mut tables_by_name = HashMap::new();
+            let mut tables_by_name = BTreeMap::new();
             for table in &publication_tables {
                 tables_by_name
                     .entry(table.name.clone())
-                    .or_insert_with(HashMap::new)
+                    .or_insert_with(BTreeMap::new)
                     .entry(table.namespace.clone())
-                    .or_insert_with(HashMap::new)
+                    .or_insert_with(BTreeMap::new)
                     .entry(connection.database.clone())
                     .or_insert(table);
             }
@@ -285,7 +290,7 @@ pub async fn purify_create_source(
 
             let mut validated_requested_subsources = vec![];
             match requested_subsources {
-                Some(CreateReferencedSubsources::All) => {
+                Some(ReferencedSubsources::All) => {
                     for table in &publication_tables {
                         let upstream_name = UnresolvedObjectName::qualified(&[
                             &connection.database,
@@ -296,18 +301,18 @@ pub async fn purify_create_source(
                         validated_requested_subsources.push((upstream_name, subsource_name, table));
                     }
                 }
-                Some(CreateReferencedSubsources::Subset(subsources)) => {
+                Some(ReferencedSubsources::Subset(subsources)) => {
                     // The user manually selected a subset of upstream tables so we need to
                     // validate that the names actually exist and are not ambiguous
 
                     // An index from table name -> schema name -> database name -> PostgresTableDesc
-                    let mut tables_by_name = HashMap::new();
+                    let mut tables_by_name = BTreeMap::new();
                     for table in &publication_tables {
                         tables_by_name
                             .entry(table.name.clone())
-                            .or_insert_with(HashMap::new)
+                            .or_insert_with(BTreeMap::new)
                             .entry(table.namespace.clone())
-                            .or_insert_with(HashMap::new)
+                            .or_insert_with(BTreeMap::new)
                             .entry(connection.database.clone())
                             .or_insert(table);
                     }
@@ -318,7 +323,7 @@ pub async fn purify_create_source(
                 None => {}
             };
 
-            let mut text_cols_dict: HashMap<u32, HashSet<String>> = HashMap::new();
+            let mut text_cols_dict: BTreeMap<u32, BTreeSet<String>> = BTreeMap::new();
 
             for name in text_columns.iter_mut() {
                 let (qual, col) = match name.0.split_last().expect("must have at least one element")
@@ -426,19 +431,12 @@ pub async fn purify_create_source(
 
                 // Create the targeted AST node for the original CREATE SOURCE statement
                 let transient_id = GlobalId::Transient(u64::cast_from(i));
-                let partial_subsource_name =
-                    normalize::unresolved_object_name(subsource_name.clone())?;
-                let qualified_subsource_name =
-                    scx.allocate_qualified_name(partial_subsource_name.clone())?;
-                let full_subsource_name = scx.allocate_full_name(partial_subsource_name)?;
+                let subsource =
+                    scx.allocate_resolved_object_name(transient_id, subsource_name.clone())?;
+
                 targeted_subsources.push(CreateSourceSubsource {
                     reference: upstream_name,
-                    subsource: Some(DeferredObjectName::Named(ResolvedObjectName::Object {
-                        id: transient_id,
-                        qualifiers: qualified_subsource_name.qualifiers,
-                        full_name: full_subsource_name,
-                        print_id: true,
-                    })),
+                    subsource: Some(DeferredObjectName::Named(subsource)),
                 });
 
                 // Create the subsource statement
@@ -455,6 +453,10 @@ pub async fn purify_create_source(
                     // one without and now we're producing garbage data.
                     constraints: vec![],
                     if_not_exists: false,
+                    with_options: vec![CreateSubsourceOption {
+                        name: CreateSubsourceOptionName::References,
+                        value: Some(WithOptionValue::Value(Value::Boolean(true))),
+                    }],
                 };
                 subsources.push((transient_id, subsource));
             }
@@ -465,7 +467,7 @@ pub async fn purify_create_source(
                 });
             }
 
-            *requested_subsources = Some(CreateReferencedSubsources::Subset(targeted_subsources));
+            *requested_subsources = Some(ReferencedSubsources::Subset(targeted_subsources));
 
             // Remove any old detail references
             options.retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
@@ -493,7 +495,7 @@ pub async fn purify_create_source(
 
             let mut validated_requested_subsources = vec![];
             match requested_subsources {
-                Some(CreateReferencedSubsources::All) => {
+                Some(ReferencedSubsources::All) => {
                     let available_subsources = match &available_subsources {
                         Some(available_subsources) => available_subsources,
                         None => {
@@ -506,7 +508,7 @@ pub async fn purify_create_source(
                         validated_requested_subsources.push((upstream_name, subsource_name, desc));
                     }
                 }
-                Some(CreateReferencedSubsources::Subset(selected_subsources)) => {
+                Some(ReferencedSubsources::Subset(selected_subsources)) => {
                     let available_subsources = match &available_subsources {
                         Some(available_subsources) => available_subsources,
                         None => {
@@ -517,7 +519,7 @@ pub async fn purify_create_source(
                     // validate that the names actually exist and are not ambiguous
 
                     // An index from table name -> schema name -> database name -> PostgresTableDesc
-                    let mut tables_by_name = HashMap::new();
+                    let mut tables_by_name = BTreeMap::new();
                     for (subsource_name, (_, desc)) in available_subsources {
                         let database = match &subsource_name.database {
                             RawDatabaseSpecifier::Name(database) => database.clone(),
@@ -525,9 +527,9 @@ pub async fn purify_create_source(
                         };
                         tables_by_name
                             .entry(subsource_name.item.clone())
-                            .or_insert_with(HashMap::new)
+                            .or_insert_with(BTreeMap::new)
                             .entry(subsource_name.schema.clone())
-                            .or_insert_with(HashMap::new)
+                            .or_insert_with(BTreeMap::new)
                             .entry(database)
                             .or_insert(desc);
                     }
@@ -548,59 +550,15 @@ pub async fn purify_create_source(
             for (i, (upstream_name, subsource_name, desc)) in
                 validated_requested_subsources.into_iter().enumerate()
             {
-                // Figure out the schema of the subsource
-                let mut columns = vec![];
-                for (column_name, column_type) in desc.iter() {
-                    let name = Ident::new(column_name.as_str().to_owned());
-
-                    let ty = mz_pgrepr::Type::from(&column_type.scalar_type);
-                    let data_type = scx.resolve_type(ty)?;
-
-                    let options = if !column_type.nullable {
-                        vec![ColumnOptionDef {
-                            name: None,
-                            option: ColumnOption::NotNull,
-                        }]
-                    } else {
-                        vec![]
-                    };
-
-                    columns.push(ColumnDef {
-                        name,
-                        data_type,
-                        collation: None,
-                        options,
-                    });
-                }
-
-                let mut table_constraints = vec![];
-                for key in desc.typ().keys.iter() {
-                    let mut col_names = vec![];
-                    for col_idx in key {
-                        col_names.push(columns[*col_idx].name.clone());
-                    }
-                    table_constraints.push(TableConstraint::Unique {
-                        name: None,
-                        columns: col_names,
-                        is_primary: false,
-                    });
-                }
+                let (columns, table_constraints) = scx.relation_desc_into_table_defs(desc)?;
 
                 // Create the targeted AST node for the original CREATE SOURCE statement
                 let transient_id = GlobalId::Transient(u64::cast_from(i));
-                let partial_subsource_name =
-                    normalize::unresolved_object_name(subsource_name.clone())?;
-                let qualified_subsource_name =
-                    scx.allocate_qualified_name(partial_subsource_name.clone())?;
-                let full_subsource_name = scx.allocate_full_name(partial_subsource_name)?;
+                let subsource =
+                    scx.allocate_resolved_object_name(transient_id, subsource_name.clone())?;
                 targeted_subsources.push(CreateSourceSubsource {
                     reference: upstream_name,
-                    subsource: Some(DeferredObjectName::Named(ResolvedObjectName::Object {
-                        id: transient_id,
-                        qualifiers: qualified_subsource_name.qualifiers,
-                        full_name: full_subsource_name,
-                        print_id: true,
-                    })),
+                    subsource: Some(DeferredObjectName::Named(subsource)),
                 });
 
                 // Create the subsource statement
@@ -613,12 +571,15 @@ pub async fn purify_create_source(
                     // worried about introducing junk data.
                     constraints: table_constraints,
                     if_not_exists: false,
+                    with_options: vec![CreateSubsourceOption {
+                        name: CreateSubsourceOptionName::References,
+                        value: Some(WithOptionValue::Value(Value::Boolean(true))),
+                    }],
                 };
                 subsources.push((transient_id, subsource));
             }
             if available_subsources.is_some() {
-                *requested_subsources =
-                    Some(CreateReferencedSubsources::Subset(targeted_subsources));
+                *requested_subsources = Some(ReferencedSubsources::Subset(targeted_subsources));
             }
         }
     }

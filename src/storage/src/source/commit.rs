@@ -8,17 +8,13 @@
 // by the Apache License, Version 2.0.
 
 //! Drivers for upstream commit
-use std::collections::HashMap;
-
 use async_trait::async_trait;
-use tokio::sync::watch;
+use timely::progress::Antichain;
 
-use mz_expr::PartitionId;
-use mz_ore::task;
 use mz_repr::GlobalId;
-use mz_storage_client::types::sources::MzOffset;
+use mz_storage_client::types::sources::SourceTimestamp;
 
-use crate::source::types::{OffsetCommitMetrics, OffsetCommitter};
+use crate::source::types::OffsetCommitter;
 
 /// An OffsetCommitter that simply logs its callbacks.
 pub struct LogCommitter {
@@ -28,11 +24,8 @@ pub struct LogCommitter {
 }
 
 #[async_trait]
-impl OffsetCommitter for LogCommitter {
-    async fn commit_offsets(
-        &self,
-        offsets: HashMap<PartitionId, MzOffset>,
-    ) -> Result<(), anyhow::Error> {
+impl<Time: SourceTimestamp> OffsetCommitter<Time> for LogCommitter {
+    async fn commit_offsets(&self, offsets: Antichain<Time>) -> Result<(), anyhow::Error> {
         tracing::trace!(
             ?offsets,
             "source reader({}) \
@@ -43,66 +36,4 @@ impl OffsetCommitter for LogCommitter {
         );
         Ok(())
     }
-}
-
-pub(crate) struct OffsetCommitHandle {
-    sender: watch::Sender<HashMap<PartitionId, MzOffset>>,
-}
-
-impl OffsetCommitHandle {
-    pub(crate) fn commit_offsets(&self, offsets: HashMap<PartitionId, MzOffset>) {
-        self.sender
-            .send(offsets)
-            .expect("the receiver to drop first")
-    }
-}
-
-pub(crate) fn drive_offset_committer<S: OffsetCommitter + Send + Sync + 'static>(
-    sc: S,
-    source_id: GlobalId,
-    worker_id: usize,
-    worker_count: usize,
-    metrics: OffsetCommitMetrics,
-) -> OffsetCommitHandle {
-    let (tx, mut rx): (_, watch::Receiver<HashMap<PartitionId, MzOffset>>) =
-        watch::channel(Default::default());
-    let _ = task::spawn(
-        || format!("offset commiter({source_id}) {worker_id}/{worker_count}"),
-        async move {
-            let mut last_offsets: HashMap<PartitionId, MzOffset> = HashMap::new();
-            // loop waiting on changes. Note we could miss updates,
-            // but this is fine: we work on committing of offsets
-            // as fast as the `OffsetCommitter` allows us.
-            while let Ok(()) = rx.changed().await {
-                // Clone out of the watch to avoid holding the read lock
-                // for longer that necessary.
-                let new_offsets: HashMap<PartitionId, MzOffset> = {
-                    let new_offsets = rx.borrow();
-                    new_offsets.clone()
-                };
-
-                // If we actually have new offsets, and they aren't exactly the same
-                // as the previous ones we tried (we don't attempt any partial ordering
-                // here), then we commit them, logging errors.
-                //
-                // TODO(guswynn): only push updates.
-                if !new_offsets.is_empty()
-                    && (last_offsets.is_empty() || last_offsets != new_offsets)
-                {
-                    last_offsets = new_offsets.clone();
-                    if let Err(e) = sc.commit_offsets(new_offsets).await {
-                        metrics.offset_commit_failures.inc();
-                        tracing::warn!(
-                            %e,
-                            "Failed to commit offsets for {source_id} ({worker_id}/{worker_count}"
-                        );
-                    }
-                }
-            }
-
-            // Error's mean the send side has dropped, so we silently shutdown.
-        },
-    );
-
-    OffsetCommitHandle { sender: tx }
 }

@@ -13,39 +13,29 @@ use std::time::Duration;
 
 use anyhow::bail;
 use differential_dataflow::lattice::Lattice;
-use futures::stream::BoxStream;
-use futures::stream::StreamExt;
-use futures::TryFutureExt;
-use mz_orchestrator::ServiceProcessMetrics;
 use timely::progress::Timestamp;
 use tokio::select;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio::task::JoinHandle;
 
 use mz_build_info::BuildInfo;
+use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
 use mz_ore::retry::Retry;
+use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_service::client::GenericClient;
 
 use crate::logging::LoggingConfig;
-use crate::protocol::command::{ComputeCommand, ComputeStartupEpoch, TimelyConfig};
+use crate::metrics::ReplicaMetrics;
+use crate::protocol::command::ComputeCommand;
 use crate::protocol::response::ComputeResponse;
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
-use super::orchestrator::ComputeOrchestrator;
-use super::{ComputeInstanceId, ComputeReplicaLocation, ReplicaId};
-
-/// A response from a replica to the controller
-#[derive(Debug)]
-pub(crate) enum ReplicaResponse<T> {
-    ComputeResponse(ComputeResponse<T>),
-    MetricsUpdate(Result<Vec<ServiceProcessMetrics>, anyhow::Error>),
-}
+use super::ReplicaId;
 
 /// Replica-specific configuration.
 #[derive(Clone, Debug)]
 pub(super) struct ReplicaConfig {
-    pub location: ComputeReplicaLocation,
+    pub location: ClusterReplicaLocation,
     pub logging: LoggingConfig,
     pub idle_arrangement_merge_effort: u32,
 }
@@ -62,11 +52,11 @@ pub(super) struct Replica<T> {
     ///
     /// If receiving from the channel returns `None`, the replica has failed
     /// and requires rehydration.
-    response_rx: UnboundedReceiver<ReplicaResponse<T>>,
+    response_rx: UnboundedReceiver<ComputeResponse<T>>,
+    /// A handle to the task that aborts it when the replica is dropped.
+    _task: AbortOnDropHandle<()>,
     /// Configuration specific to this replica.
     pub config: ReplicaConfig,
-    /// Handle to the active-replication-replica task.
-    pub replica_task: Option<JoinHandle<()>>,
 }
 
 impl<T> Replica<T>
@@ -76,11 +66,10 @@ where
 {
     pub(super) fn spawn(
         id: ReplicaId,
-        instance_id: ComputeInstanceId,
         build_info: &'static BuildInfo,
         config: ReplicaConfig,
-        orchestrator: ComputeOrchestrator,
-        epoch: ComputeStartupEpoch,
+        epoch: ClusterStartupEpoch,
+        metrics: ReplicaMetrics,
     ) -> Self {
         // Launch a task to handle communication with the replica
         // asynchronously. This isolates the main controller thread from
@@ -88,17 +77,16 @@ where
         let (command_tx, command_rx) = unbounded_channel();
         let (response_tx, response_rx) = unbounded_channel();
 
-        let replica_task = mz_ore::task::spawn(
+        let task = mz_ore::task::spawn(
             || format!("active-replication-replica-{id}"),
             ReplicaTask {
-                instance_id,
                 replica_id: id,
                 build_info,
                 config: config.clone(),
-                orchestrator,
                 command_rx,
                 response_tx,
                 epoch,
+                metrics,
             }
             .run(),
         );
@@ -106,8 +94,8 @@ where
         Self {
             command_tx,
             response_rx,
+            _task: task.abort_on_drop(),
             config,
-            replica_task: Some(replica_task),
         }
     }
 
@@ -122,15 +110,13 @@ where
     /// Receives the next response from this replica.
     ///
     /// This method is cancellation safe.
-    pub(super) async fn recv(&mut self) -> Option<ReplicaResponse<T>> {
+    pub(super) async fn recv(&mut self) -> Option<ComputeResponse<T>> {
         self.response_rx.recv().await
     }
 }
 
 /// Configuration for `replica_task`.
 struct ReplicaTask<T> {
-    /// The ID of the compute instance.
-    instance_id: ComputeInstanceId,
     /// The ID of the replica.
     replica_id: ReplicaId,
     /// Replica configuration.
@@ -140,36 +126,12 @@ struct ReplicaTask<T> {
     /// A channel upon which commands intended for the replica are delivered.
     command_rx: UnboundedReceiver<ComputeCommand<T>>,
     /// A channel upon which responses from the replica are delivered.
-    response_tx: UnboundedSender<ReplicaResponse<T>>,
-    /// Orchestrator responsible for setting up clusterds
-    orchestrator: ComputeOrchestrator,
+    response_tx: UnboundedSender<ComputeResponse<T>>,
     /// A number (technically, pair of numbers) identifying this incarnation of the replica.
     /// The semantics of this don't matter, except that it must strictly increase.
-    epoch: ComputeStartupEpoch,
-}
-
-fn metrics_stream(
-    orchestrator: ComputeOrchestrator,
-    instance_id: ComputeInstanceId,
-    replica_id: ReplicaId,
-) -> BoxStream<'static, Result<Vec<ServiceProcessMetrics>, anyhow::Error>> {
-    const METRICS_INTERVAL: Duration = Duration::from_secs(10);
-
-    // TODO[btv] -- I tried implementing a `watch_metrics` function,
-    // similar to `watch_services`, but it crashed due to
-    // https://github.com/kube-rs/kube/issues/1092 .
-    //
-    // If `metrics-server` can be made to fill in `resourceVersion`,
-    // or if that bug is fixed, we can try that again rather than using this inelegant
-    // loop.
-    let s = async_stream::stream! {
-        let mut interval = tokio::time::interval(METRICS_INTERVAL);
-        loop {
-            interval.tick().await;
-            yield orchestrator.fetch_replica_metrics(instance_id, replica_id).await;
-        }
-    };
-    s.boxed()
+    epoch: ClusterStartupEpoch,
+    /// Replica metrics
+    metrics: ReplicaMetrics,
 }
 
 impl<T> ReplicaTask<T>
@@ -180,50 +142,44 @@ where
     /// Asynchronously forwards commands to and responses from a single replica.
     async fn run(self) {
         let ReplicaTask {
-            instance_id,
             replica_id,
             config,
             build_info,
             command_rx,
             response_tx,
-            orchestrator,
             epoch,
+            metrics,
         } = self;
 
         tracing::info!("starting replica task for {replica_id}");
 
-        let result = orchestrator
-            .ensure_replica_location(instance_id, replica_id, config.location)
-            .and_then(|(command_addrs, workers, timely_addrs)| {
-                let timely_config = TimelyConfig {
-                    workers,
-                    process: 0,
-                    addresses: timely_addrs,
-                    idle_arrangement_merge_effort: config.idle_arrangement_merge_effort,
-                };
-                let cmd_spec = CommandSpecialization {
-                    logging_config: config.logging,
-                    timely_config,
-                    epoch,
-                };
-                let metrics = metrics_stream(orchestrator.clone(), instance_id, replica_id);
+        let addrs = config.location.ctl_addrs;
+        let timely_config = TimelyConfig {
+            workers: config.location.workers,
+            process: 0,
+            addresses: config.location.dataflow_addrs,
+            idle_arrangement_merge_effort: config.idle_arrangement_merge_effort,
+        };
+        let cmd_spec = CommandSpecialization {
+            logging_config: config.logging,
+            timely_config,
+            epoch,
+        };
 
-                run_message_loop(
-                    replica_id,
-                    command_rx,
-                    response_tx,
-                    build_info,
-                    command_addrs,
-                    cmd_spec,
-                    metrics,
-                )
-            })
-            .await;
+        let result = run_message_loop(
+            replica_id,
+            command_rx,
+            response_tx,
+            build_info,
+            addrs,
+            cmd_spec,
+            metrics,
+        )
+        .await;
 
-        if let Err(error) = result {
-            tracing::warn!("replica task for {replica_id} failed: {error}");
-        } else {
-            panic!("replica message loop should never return successfully");
+        match result {
+            Ok(()) => tracing::info!("stopped replica task for {replica_id}"),
+            Err(error) => tracing::warn!("replica task for {replica_id} failed: {error}"),
         }
     }
 }
@@ -233,29 +189,33 @@ where
 /// The initial replica connection is retried forever (with backoff). Once connected, the task
 /// returns (with an `Err`) if it encounters an error condition (e.g. the replica disconnects).
 ///
-/// If no error condition is encountered, the task runs forever. The instance controller should
-/// expected to abort the task when the replica is removed.
+/// If no error condition is encountered, the task runs until the controller disconnects from the
+/// command channel, or the task is dropped.
 async fn run_message_loop<T>(
     replica_id: ReplicaId,
     mut command_rx: UnboundedReceiver<ComputeCommand<T>>,
-    response_tx: UnboundedSender<ReplicaResponse<T>>,
+    response_tx: UnboundedSender<ComputeResponse<T>>,
     build_info: &BuildInfo,
     addrs: Vec<String>,
     cmd_spec: CommandSpecialization,
-    mut metrics: BoxStream<'static, Result<Vec<ServiceProcessMetrics>, anyhow::Error>>,
+    metrics: ReplicaMetrics,
 ) -> Result<(), anyhow::Error>
 where
     T: Timestamp + Lattice,
     ComputeGrpcClient: ComputeClient<T>,
 {
     let mut client = Retry::default()
-        .clamp_backoff(Duration::from_secs(32))
+        .clamp_backoff(Duration::from_secs(1))
         .retry_async(|state| {
-            let addrs = addrs.clone();
+            let dests = addrs
+                .clone()
+                .into_iter()
+                .map(|addr| (addr, metrics.clone()))
+                .collect();
             let version = build_info.semver_version();
 
             async move {
-                match ComputeGrpcClient::connect_partitioned(addrs, version).await {
+                match ComputeGrpcClient::connect_partitioned(dests, version).await {
                     Ok(client) => Ok(client),
                     Err(e) => {
                         if state.i >= mz_service::retry::INFO_MIN_RETRIES {
@@ -281,7 +241,10 @@ where
         select! {
             // Command from controller to forward to replica.
             command = command_rx.recv() => match command {
-                None => bail!("controller unexpectedly dropped command_rx"),
+                None => {
+                    // Controller is no longer interested in this replica. Shut down.
+                    break;
+                }
                 Some(mut command) => {
                     cmd_spec.specialize_command(&mut command);
                     client.send(command).await?;
@@ -289,27 +252,24 @@ where
             },
             // Response from replica to forward to controller.
             response = client.recv() => {
-                let response = match response? {
-                    None => bail!("replica unexpectedly gracefully terminated connection"),
-                    Some(response) => response,
+                let Some(response) = response? else {
+                    bail!("replica unexpectedly gracefully terminated connection");
                 };
-                response_tx.send(ReplicaResponse::ComputeResponse(response))?;
-            }
-            metrics_result = metrics.next() => {
-                let Some(metrics_result) = metrics_result else {
-                    tracing::error!("Metrics stream unexpectedly terminated");
-                    continue;
-                };
-                response_tx.send(ReplicaResponse::MetricsUpdate(metrics_result))?;
+                if response_tx.send(response).is_err() {
+                    // Controller is no longer interested in this replica. Shut down.
+                    break;
+                }
             }
         }
     }
+
+    Ok(())
 }
 
 struct CommandSpecialization {
     logging_config: LoggingConfig,
     timely_config: TimelyConfig,
-    epoch: ComputeStartupEpoch,
+    epoch: ClusterStartupEpoch,
 }
 
 impl CommandSpecialization {

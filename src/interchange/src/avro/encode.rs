@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt;
 
 use byteorder::{NetworkEndian, WriteBytesExt};
@@ -16,7 +16,7 @@ use itertools::Itertools;
 use once_cell::sync::Lazy;
 use serde_json::json;
 
-use mz_avro::types::{AvroMap, DecimalValue, ToAvro, Value};
+use mz_avro::types::{DecimalValue, ToAvro, Value};
 use mz_avro::Schema;
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::jsonb::JsonbRef;
@@ -143,7 +143,7 @@ impl AvroSchemaGenerator {
                 let row_schema = build_row_schema_json(
                     &columns,
                     key_fullname.unwrap_or("row"),
-                    &HashMap::new(),
+                    &BTreeMap::new(),
                 )?;
                 Some(KeyInfo {
                     schema: Schema::parse(&row_schema).expect("valid schema constructed"),
@@ -385,7 +385,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                             (key.to_string(), value)
                         })
                         .collect();
-                    Value::Map(AvroMap(elements))
+                    Value::Map(elements)
                 }
                 ScalarType::Record { fields, .. } => {
                     let list = datum.unwrap_list();

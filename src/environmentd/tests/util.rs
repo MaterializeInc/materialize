@@ -71,11 +71,12 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
 use std::error::Error;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -90,26 +91,32 @@ use postgres::{NoTls, Socket};
 use regex::Regex;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
-use tokio::sync::Mutex;
 use tokio_postgres::config::Host;
 use tokio_postgres::Client;
 use tower_http::cors::AllowOrigin;
 
 use mz_controller::ControllerConfig;
-use mz_environmentd::TlsMode;
+use mz_environmentd::{TlsMode, WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
 use mz_ore::task;
-use mz_ore::tracing::TracingHandle;
+use mz_ore::tracing::{
+    OpenTelemetryConfig, StderrLogConfig, StderrLogFormat, TracingConfig, TracingGuard,
+    TracingHandle,
+};
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::{PersistConfig, PersistLocation};
+use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_stash::StashFactory;
 use mz_storage_client::types::connections::ConnectionContext;
+use tracing_subscriber::filter::Targets;
+use tungstenite::stream::MaybeTlsStream;
+use tungstenite::{Message, WebSocket};
 
 pub static KAFKA_ADDRS: Lazy<String> =
     Lazy::new(|| env::var("KAFKA_ADDRS").unwrap_or_else(|_| "localhost:9092".into()));
@@ -124,9 +131,11 @@ pub struct Config {
     now: NowFn,
     seed: u32,
     storage_usage_collection_interval: Duration,
+    storage_usage_retention_period: Option<Duration>,
     default_cluster_replica_size: String,
     builtin_cluster_replica_size: String,
     propagate_crashes: bool,
+    enable_tracing: bool,
 }
 
 impl Default for Config {
@@ -140,9 +149,11 @@ impl Default for Config {
             now: SYSTEM_TIME.clone(),
             seed: rand::random(),
             storage_usage_collection_interval: Duration::from_secs(3600),
+            storage_usage_retention_period: None,
             default_cluster_replica_size: "1".to_string(),
             builtin_cluster_replica_size: "1".to_string(),
             propagate_crashes: false,
+            enable_tracing: false,
         }
     }
 }
@@ -195,6 +206,14 @@ impl Config {
         self
     }
 
+    pub fn with_storage_usage_retention_period(
+        mut self,
+        storage_usage_retention_period: Duration,
+    ) -> Self {
+        self.storage_usage_retention_period = Some(storage_usage_retention_period);
+        self
+    }
+
     pub fn with_default_cluster_replica_size(
         mut self,
         default_cluster_replica_size: String,
@@ -213,6 +232,11 @@ impl Config {
 
     pub fn with_propagate_crashes(mut self, propagate_crashes: bool) -> Self {
         self.propagate_crashes = propagate_crashes;
+        self
+    }
+
+    pub fn with_enable_tracing(mut self, enable_tracing: bool) -> Self {
+        self.enable_tracing = enable_tracing;
         self
     }
 }
@@ -272,10 +296,38 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     // with local postgres.
     persist_cfg.consensus_connection_pool_max_size = 1;
     let persist_clients = PersistClientCache::new(persist_cfg, &metrics_registry);
-    let persist_clients = Arc::new(Mutex::new(persist_clients));
+    let persist_clients = Arc::new(persist_clients);
     let postgres_factory = StashFactory::new(&metrics_registry);
     let secrets_controller = Arc::clone(&orchestrator);
     let connection_context = ConnectionContext::for_tests(orchestrator.reader());
+    let (tracing_handle, tracing_guard) = if config.enable_tracing {
+        let config = TracingConfig::<fn(&tracing::Metadata) -> sentry_tracing::EventFilter> {
+            service_name: "environmentd",
+            stderr_log: StderrLogConfig {
+                format: StderrLogFormat::Json,
+                filter: Targets::default(),
+            },
+            opentelemetry: Some(OpenTelemetryConfig {
+                endpoint: "http://fake_address_for_testing:8080".to_string(),
+                headers: http::HeaderMap::new(),
+                filter: Targets::default().with_default(tracing_core::Level::DEBUG),
+                resource: opentelemetry::sdk::resource::Resource::default(),
+                start_enabled: true,
+            }),
+            #[cfg(feature = "tokio-console")]
+            tokio_console: None,
+            sentry: None,
+            build_version: mz_environmentd::BUILD_INFO.version,
+            build_sha: mz_environmentd::BUILD_INFO.sha,
+            build_time: mz_environmentd::BUILD_INFO.time,
+        };
+        let (tracing_handle, tracing_guard) =
+            runtime.block_on(mz_ore::tracing::configure(config))?;
+        (tracing_handle, Some(tracing_guard))
+    } else {
+        (TracingHandle::disabled(), None)
+    };
+
     let inner = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
         adapter_stash_url,
         controller: ControllerConfig {
@@ -291,6 +343,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             storage_stash_url,
             now: SYSTEM_TIME.clone(),
             postgres_factory,
+            metrics_registry: metrics_registry.clone(),
         },
         secrets_controller,
         cloud_resource_controller: None,
@@ -307,15 +360,15 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         environment_id,
         cors_allowed_origin: AllowOrigin::list([]),
         cluster_replica_sizes: Default::default(),
+        default_storage_cluster_size: None,
         bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
         bootstrap_builtin_cluster_replica_size: config.builtin_cluster_replica_size,
         bootstrap_system_parameters: Default::default(),
-        storage_host_sizes: Default::default(),
-        default_storage_host_size: None,
         availability_zones: Default::default(),
         connection_context,
-        tracing_handle: TracingHandle::disabled(),
+        tracing_handle,
         storage_usage_collection_interval: config.storage_usage_collection_interval,
+        storage_usage_retention_period: config.storage_usage_retention_period,
         segment_api_key: None,
         egress_ips: vec![],
         aws_account_id: None,
@@ -329,6 +382,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         runtime,
         metrics_registry,
         _temp_dir: temp_dir,
+        _tracing_guard: tracing_guard,
     };
     Ok(server)
 }
@@ -336,8 +390,9 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
 pub struct Server {
     pub inner: mz_environmentd::Server,
     pub runtime: Arc<Runtime>,
-    _temp_dir: Option<TempDir>,
     pub metrics_registry: MetricsRegistry,
+    _temp_dir: Option<TempDir>,
+    _tracing_guard: Option<TracingGuard>,
 }
 
 impl Server {
@@ -609,4 +664,30 @@ pub fn wait_for_view_population(
         "SET transaction_isolation = '{current_isolation}'"
     ))?;
     Ok(())
+}
+
+pub fn auth_with_ws(ws: &mut WebSocket<MaybeTlsStream<TcpStream>>) {
+    ws.write_message(Message::Text(
+        serde_json::to_string(&WebSocketAuth::Basic {
+            user: "materialize".into(),
+            password: "".into(),
+        })
+        .unwrap(),
+    ))
+    .unwrap();
+    // Wait for initial ready response.
+    loop {
+        let resp = ws.read_message().unwrap();
+        match resp {
+            Message::Text(msg) => {
+                let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
+                match msg {
+                    WebSocketResponse::ReadyForQuery(_) => break,
+                    _ => {}
+                }
+            }
+            Message::Ping(_) => continue,
+            _ => panic!("unexpected response: {:?}", resp),
+        }
+    }
 }

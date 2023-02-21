@@ -82,11 +82,7 @@ where
         // See <https://docs.rs/tokio/latest/tokio/time/struct.Interval.html#method.tick>
         interval.tick().await;
 
-        let mut calc_state = {
-            // The lock MUST be dropped before we enter the main loop.
-            let mut persist_clients = persist_clients.lock().await;
-            calc.initialize_state(&mut persist_clients).await
-        };
+        let mut calc_state = calc.initialize_state(&persist_clients).await;
 
         while !upper.is_empty() {
             interval.tick().await;

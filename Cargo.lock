@@ -72,15 +72,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b46cbb362ab8752921c97e041f5e366ee6297bd428a31275b9fcf1e380f7299"
 
 [[package]]
-name = "ansi_term"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d52a9bb7ec0cf484c551830a7ce27bd20d67eac647e1befb56b0be4ee39a55d2"
-dependencies = [
- "winapi",
-]
-
-[[package]]
 name = "anyhow"
 version = "1.0.66"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -299,10 +290,11 @@ dependencies = [
 
 [[package]]
 name = "aws-config"
-version = "0.52.0"
+version = "0.53.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7688e1dfbb9f7804fab0a830820d7e827b8d973906763cf1a855ce4719292f5"
+checksum = "741327a7f70e6e639bdb5061964c66250460c70ad3f59c3fe2a3a64ac1484e33"
 dependencies = [
+ "aws-credential-types",
  "aws-http",
  "aws-sdk-sso",
  "aws-sdk-sts",
@@ -326,10 +318,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "aws-endpoint"
-version = "0.52.0"
+name = "aws-credential-types"
+version = "0.53.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "253d7cd480bfa59a5323390e9e91885a8f06a275e0517d81eeb1070b6aa7d271"
+checksum = "5f99dd587a46af58f8cf37773687ecec19d0373a5954942d7e0f405751fe2369"
+dependencies = [
+ "aws-smithy-async",
+ "aws-smithy-types",
+ "tokio",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
+name = "aws-endpoint"
+version = "0.53.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13fdfc00c57d95e10bcf83d2331c4ae9ca460ca84dc983b2cdd692de87640389"
 dependencies = [
  "aws-smithy-http",
  "aws-smithy-types",
@@ -341,10 +346,11 @@ dependencies = [
 
 [[package]]
 name = "aws-http"
-version = "0.52.0"
+version = "0.53.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cd1b83859383e46ea8fda633378f9f3f02e6e3a446fd89f0240b5c3662716c9"
+checksum = "74cdac70481d144bf7001c27884b95ee12c8f62e61db90320d59b673ae121cb8"
 dependencies = [
+ "aws-credential-types",
  "aws-smithy-http",
  "aws-smithy-types",
  "aws-types",
@@ -359,10 +365,11 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-kinesis"
-version = "0.22.0"
+version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2a3ce248ce462c3b7a013ce957980dc35dcdd9a7c93c7bc4b581d241ff9011b"
+checksum = "0d86beba79e9b24f13a6f3f2ff13ca2da332c3d60c44c2d2632bbacb87ee9ad2"
 dependencies = [
+ "aws-credential-types",
  "aws-endpoint",
  "aws-http",
  "aws-sig-auth",
@@ -375,16 +382,18 @@ dependencies = [
  "aws-types",
  "bytes",
  "http",
+ "regex",
  "tokio-stream",
  "tower",
 ]
 
 [[package]]
 name = "aws-sdk-s3"
-version = "0.22.0"
+version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4d240ff751efc65099d18f6b0fb80360b31a298cec7b392c511692bec4a6e21"
+checksum = "5ae411cb03ea6df0d4c4340a0d3c15cab7b19715d091f76c5629f31acd6403f3"
 dependencies = [
+ "aws-credential-types",
  "aws-endpoint",
  "aws-http",
  "aws-sig-auth",
@@ -395,6 +404,7 @@ dependencies = [
  "aws-smithy-eventstream",
  "aws-smithy-http",
  "aws-smithy-http-tower",
+ "aws-smithy-json",
  "aws-smithy-types",
  "aws-smithy-xml",
  "aws-types",
@@ -403,17 +413,22 @@ dependencies = [
  "fastrand",
  "http",
  "http-body",
+ "once_cell",
+ "percent-encoding",
+ "regex",
  "tokio-stream",
  "tower",
  "tracing",
+ "url",
 ]
 
 [[package]]
 name = "aws-sdk-sqs"
-version = "0.22.0"
+version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b489461c4309514f1019a924687fbdafeb88eeeac0800e8aca6fef6a66877e73"
+checksum = "ffe1f563e227905539d5d1514e93a4c4e096366e1325ab24646783a3d6fe2c45"
 dependencies = [
+ "aws-credential-types",
  "aws-endpoint",
  "aws-http",
  "aws-sig-auth",
@@ -421,22 +436,26 @@ dependencies = [
  "aws-smithy-client",
  "aws-smithy-http",
  "aws-smithy-http-tower",
+ "aws-smithy-json",
  "aws-smithy-query",
  "aws-smithy-types",
  "aws-smithy-xml",
  "aws-types",
  "bytes",
  "http",
+ "regex",
  "tokio-stream",
  "tower",
+ "url",
 ]
 
 [[package]]
 name = "aws-sdk-sso"
-version = "0.22.0"
+version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf03342c2b3f52b180f484e60586500765474f2bfc7dcd4ffe893a7a1929db1d"
+checksum = "d5d2fb56182ac693a19364cc0bde22d95aef9be3663bf9b906ffbd0ab0a7c7d1"
 dependencies = [
+ "aws-credential-types",
  "aws-endpoint",
  "aws-http",
  "aws-sig-auth",
@@ -449,16 +468,19 @@ dependencies = [
  "aws-types",
  "bytes",
  "http",
+ "regex",
  "tokio-stream",
  "tower",
+ "url",
 ]
 
 [[package]]
 name = "aws-sdk-sts"
-version = "0.22.0"
+version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa1de4e07ea87a30a317c7b563b3a40fd18a843ad794216dda81672b6e174bce"
+checksum = "a70adf3e9518c8d6d14f1239f6af04c019ffd260ab791e17deb11f1bce6a9f76"
 dependencies = [
+ "aws-credential-types",
  "aws-endpoint",
  "aws-http",
  "aws-sig-auth",
@@ -466,22 +488,26 @@ dependencies = [
  "aws-smithy-client",
  "aws-smithy-http",
  "aws-smithy-http-tower",
+ "aws-smithy-json",
  "aws-smithy-query",
  "aws-smithy-types",
  "aws-smithy-xml",
  "aws-types",
  "bytes",
  "http",
+ "regex",
  "tower",
  "tracing",
+ "url",
 ]
 
 [[package]]
 name = "aws-sig-auth"
-version = "0.52.0"
+version = "0.53.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6126c4ff918e35fb9ae1bf2de71157fad36f0cc6a2b1d0f7197ee711713700fc"
+checksum = "22af7f6515f8b51dabef87df1d901c9734e4e367791c6d0e1082f9f31528120e"
 dependencies = [
+ "aws-credential-types",
  "aws-sigv4",
  "aws-smithy-eventstream",
  "aws-smithy-http",
@@ -492,9 +518,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sigv4"
-version = "0.52.0"
+version = "0.53.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84c7f88d7395f5411c6eef5889b6cd577ce6b677af461356cbfc20176c26c160"
+checksum = "eee0d796882321e91ca7b991ab6193864e04b605be3a6c18adb9134a90d5a860"
 dependencies = [
  "aws-smithy-eventstream",
  "aws-smithy-http",
@@ -513,9 +539,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-async"
-version = "0.52.0"
+version = "0.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e6a895d68852dd1564328e63ef1583e5eb307dd2a5ebf35d862a5c402957d5e"
+checksum = "d8b9900be224962d65a626072d8777f847ae5406c07547f0dc14c60048978c4b"
 dependencies = [
  "futures-util",
  "pin-project-lite",
@@ -525,9 +551,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-checksums"
-version = "0.52.0"
+version = "0.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72b847d960abc993319d77b52e82971e2bbdce94f6192df42142e14ed5c9c917"
+checksum = "85e9e4d3c2296bcec2c03f9f769ac9b2424d972c2fe7afc0b59235447ac3a5c3"
 dependencies = [
  "aws-smithy-http",
  "aws-smithy-types",
@@ -546,9 +572,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-client"
-version = "0.52.0"
+version = "0.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f505bf793eb3e6d7c166ef1275c27b4b2cd5361173fe950ac8e2cfc08c29a7ef"
+checksum = "710ca0f8dacddda5fbcaf5c3cd9d02da7913fd463a2ee9555b617bf168bedacb"
 dependencies = [
  "aws-smithy-async",
  "aws-smithy-http",
@@ -568,9 +594,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-eventstream"
-version = "0.52.0"
+version = "0.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d751c99da757aecc1408ab6b2d65e9493220a5e7a68bcafa4f07b6fd1bc473f1"
+checksum = "8d1ff11ee22de3581114b60d4ae8e700638dacb5b5bbe6769726e251e6c3f20a"
 dependencies = [
  "aws-smithy-types",
  "bytes",
@@ -579,9 +605,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-http"
-version = "0.52.0"
+version = "0.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37e4b4304b7ea4af1af3e08535100eb7b6459d5a6264b92078bf85176d04ab85"
+checksum = "29dcab29afbea7726f5c10c7be0c38666d7eb07db551580b3b26ed7cfb5d1935"
 dependencies = [
  "aws-smithy-eventstream",
  "aws-smithy-types",
@@ -602,9 +628,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-http-tower"
-version = "0.52.0"
+version = "0.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e86072ecc4dc4faf3e2071144285cfd539263fe7102b701d54fb991eafb04af8"
+checksum = "f5856d2f1063c0f726a85f32dcd2a9f5a1d994eb27b156abccafc7260f3f471d"
 dependencies = [
  "aws-smithy-http",
  "aws-smithy-types",
@@ -618,18 +644,18 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-json"
-version = "0.52.0"
+version = "0.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e3ddd9275b167bc59e9446469eca56177ec0b51225632f90aaa2cd5f41c940e"
+checksum = "dfb33659b68480495b5f906b946c8642928440118b1d7e26a25a067303ca01a5"
 dependencies = [
  "aws-smithy-types",
 ]
 
 [[package]]
 name = "aws-smithy-query"
-version = "0.52.0"
+version = "0.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13b19d2e0b3ce20e460bad0d0d974238673100edebba6978c2c1aadd925602f7"
+checksum = "9c4b21ee0e30ff046e87c7b7e017b99d445b42a81fe52c6e5139b23b795a98ae"
 dependencies = [
  "aws-smithy-types",
  "urlencoding",
@@ -637,9 +663,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-types"
-version = "0.52.0"
+version = "0.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "987b1e37febb9bd409ca0846e82d35299e572ad8279bc404778caeb5fc05ad56"
+checksum = "2013465a070decdeb3e85ceb3370ae85ba05f56f914abfd89858d7281c4f12c3"
 dependencies = [
  "base64-simd",
  "itoa",
@@ -650,19 +676,20 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-xml"
-version = "0.52.0"
+version = "0.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37ce3791e14eec75ffac851a5a559f1ce6b31843297f42cc8bfba82714a6a5d8"
+checksum = "6d27bfaa164aa94aac721726a83aa78abe708a275e88a573e103b4961c5f0ede"
 dependencies = [
  "xmlparser",
 ]
 
 [[package]]
 name = "aws-types"
-version = "0.52.0"
+version = "0.53.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c05adca3e2bcf686dd2c47836f216ab52ed7845c177d180c84b08522c1166a3"
+checksum = "61f00f4b0cdd345686e6389f3343a3020f93232d20040802b87673ddc2d02956"
 dependencies = [
+ "aws-credential-types",
  "aws-smithy-async",
  "aws-smithy-client",
  "aws-smithy-http",
@@ -670,7 +697,6 @@ dependencies = [
  "http",
  "rustc_version",
  "tracing",
- "zeroize",
 ]
 
 [[package]]
@@ -1687,7 +1713,7 @@ checksum = "0e25ea47919b1560c4e3b7fe0aaab9becf5b84a10325ddf7db0f0ba5e1026499"
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#c2e8fefce9ddad0aef5afcac0238b4dc6ae0ddcb"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#e9e1157b7ab7d2548df699c9b95b578e0e64772a"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1764,7 +1790,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#c2e8fefce9ddad0aef5afcac0238b4dc6ae0ddcb"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#e9e1157b7ab7d2548df699c9b95b578e0e64772a"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -2477,16 +2503,6 @@ name = "http-range-header"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bfe8eed0a9285ef776bb792479ea3834e8b94e13d615c2f66d03dd50a435a29"
-
-[[package]]
-name = "http-serde"
-version = "1.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e272971f774ba29341db2f686255ff8a979365a26fb9e4277f6b6d9ec0cdd5e"
-dependencies = [
- "http",
- "serde",
-]
 
 [[package]]
 name = "httparse"
@@ -3299,16 +3315,18 @@ dependencies = [
 
 [[package]]
 name = "mz"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
  "clap",
  "dirs",
  "indicatif",
+ "mz-build-info",
  "mz-ore",
  "once_cell",
  "open",
+ "openssl-probe",
  "postgres-protocol",
  "reqwest",
  "rpassword",
@@ -3373,6 +3391,7 @@ dependencies = [
  "rand",
  "rdkafka",
  "regex",
+ "reqwest",
  "semver",
  "serde",
  "serde_json",
@@ -3445,6 +3464,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-aws-s3-util"
+version = "0.0.0"
+dependencies = [
+ "aws-sdk-s3",
+ "aws-types",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-build-id"
 version = "0.1.0"
 dependencies = [
@@ -3501,8 +3529,76 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-cluster"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytesize",
+ "clap",
+ "crossbeam-channel",
+ "dec",
+ "differential-dataflow",
+ "futures",
+ "mz-build-info",
+ "mz-cluster-client",
+ "mz-compute-client",
+ "mz-expr",
+ "mz-ore",
+ "mz-persist-client",
+ "mz-persist-types",
+ "mz-pid-file",
+ "mz-repr",
+ "mz-service",
+ "mz-storage-client",
+ "mz-timely-util",
+ "once_cell",
+ "prometheus",
+ "scopeguard",
+ "serde",
+ "smallvec",
+ "timely",
+ "tokio",
+ "tracing",
+ "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-cluster-client"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "futures",
+ "http",
+ "itertools",
+ "mz-ore",
+ "mz-proto",
+ "once_cell",
+ "prometheus",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "prost-build",
+ "protobuf-src",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-build",
+ "tracing",
+ "uuid",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-clusterd"
-version = "0.41.0-dev"
+version = "0.45.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3512,6 +3608,7 @@ dependencies = [
  "mz-alloc",
  "mz-build-info",
  "mz-cloud-resources",
+ "mz-cluster",
  "mz-compute",
  "mz-compute-client",
  "mz-http-util",
@@ -3533,7 +3630,7 @@ dependencies = [
 
 [[package]]
 name = "mz-compute"
-version = "0.38.0-dev"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3545,10 +3642,13 @@ dependencies = [
  "dogsdogsdogs",
  "futures",
  "mz-build-info",
+ "mz-cluster",
+ "mz-cluster-client",
  "mz-compute-client",
  "mz-expr",
  "mz-ore",
  "mz-persist-client",
+ "mz-persist-types",
  "mz-pid-file",
  "mz-repr",
  "mz-service",
@@ -3578,12 +3678,15 @@ dependencies = [
  "columnation",
  "differential-dataflow",
  "futures",
+ "http",
  "itertools",
  "mz-build-info",
+ "mz-cluster-client",
  "mz-expr",
  "mz-orchestrator",
  "mz-ore",
  "mz-persist",
+ "mz-persist-client",
  "mz-persist-types",
  "mz-proto",
  "mz-repr",
@@ -3595,6 +3698,7 @@ dependencies = [
  "proptest",
  "proptest-derive",
  "prost",
+ "prost-build",
  "protobuf-src",
  "regex",
  "serde",
@@ -3619,6 +3723,7 @@ dependencies = [
  "differential-dataflow",
  "futures",
  "mz-build-info",
+ "mz-cluster-client",
  "mz-compute-client",
  "mz-orchestrator",
  "mz-ore",
@@ -3628,16 +3733,20 @@ dependencies = [
  "mz-repr",
  "mz-stash",
  "mz-storage-client",
+ "once_cell",
+ "regex",
  "serde",
  "timely",
  "tokio",
+ "tokio-stream",
+ "tracing",
  "uuid",
  "workspace-hack",
 ]
 
 [[package]]
 name = "mz-environmentd"
-version = "0.41.0-dev"
+version = "0.45.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -3646,6 +3755,7 @@ dependencies = [
  "axum",
  "base64",
  "bytes",
+ "bytesize",
  "cc",
  "chrono",
  "clap",
@@ -3688,6 +3798,7 @@ dependencies = [
  "mz-segment",
  "mz-service",
  "mz-sql",
+ "mz-sql-parser",
  "mz-stash",
  "mz-storage-client",
  "nix",
@@ -3695,6 +3806,7 @@ dependencies = [
  "once_cell",
  "openssl",
  "openssl-sys",
+ "opentelemetry",
  "postgres",
  "postgres-openssl",
  "postgres-protocol",
@@ -3707,6 +3819,7 @@ dependencies = [
  "reqwest",
  "rlimit",
  "sentry",
+ "sentry-tracing",
  "serde",
  "serde_json",
  "shell-words",
@@ -3721,6 +3834,8 @@ dependencies = [
  "tokio-stream",
  "tower-http",
  "tracing",
+ "tracing-core",
+ "tracing-opentelemetry",
  "tracing-subscriber",
  "tungstenite",
  "url",
@@ -3968,7 +4083,6 @@ dependencies = [
  "derivative",
  "futures-core",
  "mz-ore",
- "mz-proto",
  "prost",
  "protobuf-src",
  "serde",
@@ -4054,7 +4168,6 @@ dependencies = [
 name = "mz-ore"
 version = "0.1.0"
 dependencies = [
- "ansi_term",
  "anyhow",
  "async-trait",
  "atty",
@@ -4090,6 +4203,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "workspace-hack",
+ "yansi",
 ]
 
 [[package]]
@@ -4098,6 +4212,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "aws-config",
+ "aws-credential-types",
  "aws-sdk-kinesis",
  "aws-types",
  "bytes",
@@ -4122,9 +4237,8 @@ dependencies = [
  "arrow2",
  "async-trait",
  "aws-config",
+ "aws-credential-types",
  "aws-sdk-s3",
- "aws-smithy-http",
- "aws-smithy-types",
  "aws-types",
  "base64",
  "bytes",
@@ -4133,6 +4247,7 @@ dependencies = [
  "fail",
  "futures-util",
  "md-5",
+ "mz-aws-s3-util",
  "mz-ore",
  "mz-persist-types",
  "mz-proto",
@@ -4140,6 +4255,7 @@ dependencies = [
  "openssl",
  "openssl-sys",
  "postgres-openssl",
+ "prometheus",
  "prost",
  "prost-build",
  "protobuf-src",
@@ -4158,7 +4274,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.41.0-dev"
+version = "0.45.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4205,6 +4321,8 @@ dependencies = [
 name = "mz-persist-types"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
+ "arrow2",
  "bytes",
  "workspace-hack",
 ]
@@ -4260,6 +4378,7 @@ dependencies = [
  "async-trait",
  "byteorder",
  "bytes",
+ "bytesize",
  "futures",
  "itertools",
  "mz-adapter",
@@ -4305,6 +4424,7 @@ dependencies = [
  "postgres-openssl",
  "proptest",
  "prost",
+ "prost-build",
  "protobuf-src",
  "serde",
  "thiserror",
@@ -4383,6 +4503,7 @@ dependencies = [
  "itertools",
  "mz-lowertest",
  "mz-ore",
+ "mz-persist",
  "mz-persist-types",
  "mz-proto",
  "num-traits",
@@ -4434,6 +4555,7 @@ dependencies = [
  "clap",
  "futures",
  "indicatif",
+ "mz-aws-s3-util",
  "mz-ore",
  "tokio",
  "tracing",
@@ -4484,6 +4606,7 @@ dependencies = [
  "mz-secrets",
  "once_cell",
  "os_info",
+ "prost",
  "semver",
  "sentry-tracing",
  "sysinfo",
@@ -4515,6 +4638,7 @@ dependencies = [
  "mz-ccsr",
  "mz-cloud-resources",
  "mz-compute-client",
+ "mz-controller",
  "mz-expr",
  "mz-expr-test-util",
  "mz-interchange",
@@ -4552,6 +4676,7 @@ name = "mz-sql-parser"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "bytesize",
  "datadriven",
  "enum-kinds",
  "itertools",
@@ -4672,7 +4797,7 @@ dependencies = [
 
 [[package]]
 name = "mz-storage"
-version = "0.38.0-dev"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -4696,9 +4821,11 @@ dependencies = [
  "itertools",
  "maplit",
  "mz-avro",
+ "mz-aws-s3-util",
  "mz-build-info",
  "mz-ccsr",
  "mz-cloud-resources",
+ "mz-cluster",
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
@@ -4746,7 +4873,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "aws-config",
- "aws-smithy-http",
+ "aws-credential-types",
  "aws-types",
  "bytes",
  "chrono",
@@ -4756,15 +4883,14 @@ dependencies = [
  "futures",
  "globset",
  "http",
- "http-serde",
  "itertools",
  "mz-build-info",
  "mz-ccsr",
  "mz-cloud-resources",
+ "mz-cluster-client",
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
- "mz-orchestrator",
  "mz-ore",
  "mz-persist",
  "mz-persist-client",
@@ -4777,9 +4903,12 @@ dependencies = [
  "mz-ssh-util",
  "mz-stash",
  "mz-timely-util",
+ "once_cell",
+ "prometheus",
  "proptest",
  "proptest-derive",
  "prost",
+ "prost-build",
  "protobuf-src",
  "rdkafka",
  "regex",
@@ -4823,11 +4952,11 @@ dependencies = [
  "async-trait",
  "atty",
  "aws-config",
+ "aws-credential-types",
  "aws-sdk-kinesis",
  "aws-sdk-s3",
  "aws-sdk-sqs",
  "aws-sdk-sts",
- "aws-smithy-http",
  "aws-types",
  "byteorder",
  "bytes",
@@ -4846,6 +4975,7 @@ dependencies = [
  "mysql_async",
  "mz-adapter",
  "mz-avro",
+ "mz-aws-s3-util",
  "mz-ccsr",
  "mz-expr",
  "mz-interchange",
@@ -4897,7 +5027,6 @@ dependencies = [
  "proptest",
  "serde",
  "timely",
- "timely_communication",
  "tokio",
  "workspace-hack",
 ]
@@ -5718,14 +5847,14 @@ checksum = "c6fa0831dd7cc608c38a5e323422a0077678fa5744aa2be4ad91c4ece8eec8d5"
 
 [[package]]
 name = "pretty_assertions"
-version = "1.0.0"
+version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec0cfe1b2403f172ba0f234e500906ee0a3e493fb81092dac23ebefe129301cc"
+checksum = "a25e9bcb20aa780fd0bb16b72403a9064d6b3f22f026946029acb941a50af755"
 dependencies = [
- "ansi_term",
  "ctor",
  "diff",
  "output_vt100",
+ "yansi",
 ]
 
 [[package]]
@@ -7173,7 +7302,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#faf5eb6457e69ac2bfbbb8a0f62deda55aa2c927"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#5b808fff9bc83be29a2091c9a5d8910e009a6b15"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7191,12 +7320,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#faf5eb6457e69ac2bfbbb8a0f62deda55aa2c927"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#5b808fff9bc83be29a2091c9a5d8910e009a6b15"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#faf5eb6457e69ac2bfbbb8a0f62deda55aa2c927"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#5b808fff9bc83be29a2091c9a5d8910e009a6b15"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7212,7 +7341,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#faf5eb6457e69ac2bfbbb8a0f62deda55aa2c927"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#5b808fff9bc83be29a2091c9a5d8910e009a6b15"
 dependencies = [
  "columnation",
  "serde",
@@ -7221,7 +7350,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#faf5eb6457e69ac2bfbbb8a0f62deda55aa2c927"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#5b808fff9bc83be29a2091c9a5d8910e009a6b15"
 
 [[package]]
 name = "tiny-keccak"
@@ -7259,9 +7388,9 @@ checksum = "cda74da7e1a664f795bb1f8a87ec406fb89a02522cf6e50620d016add6dbbf5c"
 
 [[package]]
 name = "tokio"
-version = "1.23.0"
+version = "1.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eab6d665857cc6ca78d6e80303a02cea7a7851e85dfbd77cbdc09bd129f1ef46"
+checksum = "597a12a59981d9e3c38d216785b0c37399f6e415e8d0712047620f189371b0bb"
 dependencies = [
  "autocfg",
  "bytes",
@@ -8055,11 +8184,11 @@ name = "workspace-hack"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "aws-credential-types",
  "aws-sdk-sts",
  "aws-sig-auth",
  "aws-sigv4",
  "aws-smithy-http",
- "aws-types",
  "axum",
  "base64",
  "bstr",
@@ -8087,6 +8216,7 @@ dependencies = [
  "futures-sink",
  "futures-task",
  "futures-util",
+ "getrandom",
  "globset",
  "hashbrown",
  "hyper",
@@ -8194,6 +8324,12 @@ checksum = "56c1936c4cc7a1c9ab21a1ebb602eb942ba868cbd44a99cb7cdc5892335e1c85"
 dependencies = [
  "linked-hash-map",
 ]
+
+[[package]]
+name = "yansi"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09041cd90cf85f7f8b2df60c646f853b7f535ce68f85244eb6731cf89fa498ec"
 
 [[package]]
 name = "zeroize"

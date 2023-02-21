@@ -1249,10 +1249,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
-    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+    c.up("zookeeper", "kafka", "schema-registry")
 
     c.up("materialized")
-    c.wait_for_materialized()
 
     run_test(c, args)
 
@@ -1273,16 +1272,15 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+    c.up("zookeeper", "kafka", "schema-registry")
 
     c.up("materialized")
-    c.wait_for_materialized()
 
     nodes = [
-        Clusterd(name="compute_1_1"),
-        Clusterd(name="compute_1_2"),
-        Clusterd(name="compute_2_1"),
-        Clusterd(name="compute_2_2"),
+        Clusterd(name="clusterd_1_1"),
+        Clusterd(name="clusterd_1_2"),
+        Clusterd(name="clusterd_2_1"),
+        Clusterd(name="clusterd_2_2"),
     ]
     with c.override(*nodes):
         c.up(*[n.name for n in nodes])
@@ -1291,13 +1289,17 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
             f"""
             CREATE CLUSTER cluster1 REPLICAS (
                 replica1 (
-                    REMOTE ['compute_1_1:2101', 'compute_1_2:2101'],
-                    COMPUTE ['compute_1_1:2102', 'compute_1_2:2102'],
+                    STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
+                    STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
+                    COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102'],
                     WORKERS {args.workers}
                 ),
                 replica2 (
-                    REMOTE ['compute_2_1:2101', 'compute_2_2:2101'],
-                    COMPUTE ['compute_2_1:2102', 'compute_2_2:2102'],
+                    STORAGECTL ADDRESSES ['clusterd_2_1:2100', 'clusterd_2_2:2100'],
+                    STORAGE ADDRESSES ['clusterd_2_1:2103', 'clusterd_2_2:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
+                    COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102'],
                     WORKERS {args.workers}
                 )
             )
@@ -1309,7 +1311,7 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Create multiple clusters with multiple nodes and replicas each"""
-    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+    c.up("zookeeper", "kafka", "schema-registry")
 
     parser.add_argument(
         "--workers",
@@ -1344,7 +1346,6 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
 
     c.up("testdrive", persistent=True)
     c.up("materialized")
-    c.wait_for_materialized()
 
     # Construct the requied Clusterd instances and peer them into clusters
     cluster_replicas = []
@@ -1413,9 +1414,13 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                     replica_name = f"replica_u{cluster_id}_{replica_id}"
 
                     replica_definitions.append(
-                        f"{replica_name} (REMOTE ["
+                        f"{replica_name} (STORAGECTL ADDRESSES ["
+                        + ", ".join(f"'{n}:2100'" for n in nodes)
+                        + "], STORAGE ADDRESSES ["
+                        + ", ".join(f"'{n}:2103'" for n in nodes)
+                        + "], COMPUTECTL ADDRESSES ["
                         + ", ".join(f"'{n}:2101'" for n in nodes)
-                        + "], COMPUTE ["
+                        + "], COMPUTE ADDRESSES ["
                         + ", ".join(f"'{n}:2102'" for n in nodes)
                         + f"], WORKERS {args.workers})"
                     )

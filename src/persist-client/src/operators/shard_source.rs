@@ -34,7 +34,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 use tracing::trace;
 
 use crate::cache::PersistClientCache;
@@ -67,12 +67,14 @@ use crate::{PersistLocation, ShardId};
 pub fn shard_source<K, V, D, G>(
     scope: &G,
     name: &str,
-    clients: Arc<Mutex<PersistClientCache>>,
+    clients: Arc<PersistClientCache>,
     location: PersistLocation,
     shard_id: ShardId,
     as_of: Option<Antichain<G::Timestamp>>,
     until: Antichain<G::Timestamp>,
     flow_control: Option<FlowControl<G>>,
+    key_schema: Arc<K::Schema>,
+    val_schema: Arc<V::Schema>,
 ) -> (Stream<G, FetchedPart<K, V, G::Timestamp, D>>, Rc<dyn Any>)
 where
     K: Debug + Codec,
@@ -119,8 +121,12 @@ where
         flow_control,
         consumed_part_rx,
         chosen_worker,
+        Arc::clone(&key_schema),
+        Arc::clone(&val_schema),
     );
-    let (parts, tokens) = shard_source_fetch(&descs, name, clients, location, shard_id);
+    let (parts, tokens) = shard_source_fetch(
+        &descs, name, clients, location, shard_id, key_schema, val_schema,
+    );
     shard_source_tokens(&tokens, name, consumed_part_tx, chosen_worker);
 
     let token = Rc::new(descs_shutdown.press_on_drop());
@@ -143,7 +149,7 @@ pub struct FlowControl<G: Scope> {
 pub(crate) fn shard_source_descs<K, V, D, G>(
     scope: &G,
     name: &str,
-    clients: Arc<Mutex<PersistClientCache>>,
+    clients: Arc<PersistClientCache>,
     location: PersistLocation,
     shard_id: ShardId,
     as_of: Option<Antichain<G::Timestamp>>,
@@ -151,6 +157,8 @@ pub(crate) fn shard_source_descs<K, V, D, G>(
     flow_control: Option<FlowControl<G>>,
     mut consumed_part_rx: mpsc::UnboundedReceiver<SerdeLeasedBatchPart>,
     chosen_worker: usize,
+    key_schema: Arc<K::Schema>,
+    val_schema: Arc<V::Schema>,
 ) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, ShutdownButton<()>)
 where
     K: Debug + Codec,
@@ -176,15 +184,16 @@ where
             return;
         }
 
-        let read = {
-            let mut persist_clients = clients.lock().await;
-            persist_clients.open(location).await
-        };
-        let read = read
-            .expect("location should be valid")
+        let client = clients
+            .open(location)
+            .await
+            .expect("location should be valid");
+        let read = client
             .open_leased_reader::<K, V, G::Timestamp, D>(
                 shard_id,
                 &format!("shard_source({})", name_owned),
+                key_schema,
+                val_schema,
             )
             .await
             .expect("could not open persist shard");
@@ -371,7 +380,7 @@ where
             while inflight_bytes >= max_inflight_bytes {
                 // We can never get here when flow control is disabled, as we are not tracking
                 // in-flight bytes in this case.
-                assert_eq!(flow_control_bytes, None);
+                assert!(flow_control_bytes.is_some());
 
                 // Get an upper bound until which we should produce data
                 let flow_control_upper = match flow_control_input.next().await {
@@ -405,9 +414,11 @@ where
 pub(crate) fn shard_source_fetch<K, V, T, D, G>(
     descs: &Stream<G, (usize, SerdeLeasedBatchPart)>,
     name: &str,
-    clients: Arc<Mutex<PersistClientCache>>,
+    clients: Arc<PersistClientCache>,
     location: PersistLocation,
     shard_id: ShardId,
+    key_schema: Arc<K::Schema>,
+    val_schema: Arc<V::Schema>,
 ) -> (
     Stream<G, FetchedPart<K, V, T, D>>,
     Stream<G, SerdeLeasedBatchPart>,
@@ -445,17 +456,13 @@ where
     // fully consolidated data: https://github.com/MaterializeInc/materialize/issues/16860#issuecomment-1366094925
     let _shutdown_button = builder.build(move |_capabilities| async move {
         let fetcher = {
-            let mut clients = clients.lock().await;
-
             let client = clients
                 .open(location.clone())
                 .await
                 .expect("location should be valid");
-
-            // Unlock the client cache before we do any async work.
-            std::mem::drop(clients);
-
-            client.create_batch_fetcher::<K, V, T, D>(shard_id).await
+            client
+                .create_batch_fetcher::<K, V, T, D>(shard_id, key_schema, val_schema)
+                .await
         };
 
         let mut buffer = Vec::new();

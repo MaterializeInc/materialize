@@ -11,7 +11,7 @@
 //! built-in functions (for most built-in functions, at least).
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt;
 
 use chrono::{DateTime, Utc};
@@ -339,7 +339,7 @@ pub fn sql_impl(
 
         let (mut expr, _) = names::resolve(qcx.scx.catalog, expr.clone())?;
         // Desugar the expression
-        transform_ast::transform_expr(&scx, &mut expr)?;
+        transform_ast::transform(&scx, &mut expr)?;
 
         let ecx = ExprContext {
             qcx: &qcx,
@@ -417,7 +417,7 @@ fn sql_impl_table_func_inner(
 
         let query = query.clone();
         let (mut query, _) = names::resolve(qcx.scx.catalog, query)?;
-        transform_ast::transform_query(&scx, &mut query)?;
+        transform_ast::transform(&scx, &mut query)?;
 
         query::plan_nested_query(&mut qcx, &query)
     };
@@ -1753,7 +1753,7 @@ macro_rules! builtins {
         ),+
     } => {{
 
-        let mut builtins = HashMap::new();
+        let mut builtins = BTreeMap::new();
         $(
             let impls = vec![$(impl_def!($params, $op $(,$return_type)?, $oid)),+];
             let old = builtins.insert($name, Func::$ty(impls));
@@ -1803,7 +1803,7 @@ macro_rules! catalog_name_only {
 }
 
 /// Correlates a built-in function name to its implementations.
-pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
+pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
     use ParamType::*;
     use ScalarBaseType::*;
     builtins! {
@@ -1939,6 +1939,14 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
         },
         "current_database" => Scalar {
             params!() => UnmaterializableFunc::CurrentDatabase, 861;
+        },
+        "current_setting" => Scalar {
+            params!(String) => Operation::unary(|_ecx, name| {
+                current_settings(name, HirScalarExpr::literal_false())
+            }) => ScalarType::String, 2077;
+            params!(String, Bool) => Operation::binary(|_ecx, name, missing_ok| {
+                current_settings(name, missing_ok)
+            }) => ScalarType::String, 3294;
         },
         "current_user" => Scalar {
             params!() => UnmaterializableFunc::CurrentUser, 745;
@@ -2580,10 +2588,10 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(ArrayAny) => Operation::unary(|_ecx, _e| bail_unsupported!("array_agg on arrays")) => ArrayAny, 4053;
         },
         "bool_and" => Aggregate {
-            params!(Any) => Operation::unary(|_ecx, _e| bail_unsupported!("bool_and")) => Bool, 2517;
+            params!(Bool) => Operation::nullary(|_ecx| catalog_name_only!("bool_and")) => Bool, 2517;
         },
         "bool_or" => Aggregate {
-            params!(Any) => Operation::unary(|_ecx, _e| bail_unsupported!("bool_or")) => Bool, 2518;
+            params!(Bool) => Operation::nullary(|_ecx| catalog_name_only!("bool_or")) => Bool, 2518;
         },
         "count" => Aggregate {
             params!() => Operation::nullary(|_ecx| {
@@ -2951,7 +2959,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
     }
 });
 
-pub static INFORMATION_SCHEMA_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
+pub static INFORMATION_SCHEMA_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
     use ParamType::*;
     builtins! {
         "_pg_expandarray" => Table {
@@ -2969,7 +2977,7 @@ pub static INFORMATION_SCHEMA_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy
     }
 });
 
-pub static MZ_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
+pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
     use ParamType::*;
     use ScalarType::*;
     builtins! {
@@ -3130,7 +3138,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
     }
 });
 
-pub static MZ_INTERNAL_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
+pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
     use ParamType::*;
     use ScalarType::*;
     builtins! {
@@ -3217,7 +3225,7 @@ fn array_to_string(
 }
 
 /// Correlates an operator with all of its implementations.
-static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
+static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
     use BinaryFunc::*;
     use ParamType::*;
     use ScalarBaseType::*;
@@ -3290,6 +3298,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
                 Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimeInterval)))
             }, 1849;
             params!(Numeric, Numeric) => AddNumeric, 1758;
+            params!(RangeAny, RangeAny) => RangeUnion => RangeAny, 3898;
         },
         "-" => Scalar {
             params!(Int16) => UnaryFunc::NegInt16(func::NegInt16), 559;
@@ -3318,6 +3327,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Time, Interval) => SubTimeInterval, 1801;
             params!(Jsonb, Int64) => JsonbDeleteInt64, 3286;
             params!(Jsonb, String) => JsonbDeleteString, 3285;
+            params!(RangeAny, RangeAny) => RangeDifference => RangeAny, 3899;
             // TODO(jamii) there should be corresponding overloads for
             // Array(Int64) and Array(String)
         },
@@ -3335,6 +3345,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
                 Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, MulInterval)))
             }, 1584;
             params!(Numeric, Numeric) => MulNumeric, 1760;
+            params!(RangeAny, RangeAny) => RangeIntersection => RangeAny, 3900;
         },
         "/" => Scalar {
             params!(Int16, Int16) => DivInt16, 527;
@@ -3390,6 +3401,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(UInt16, UInt32) => BitShiftLeftUInt16, oid::FUNC_SHIFT_LEFT_UINT16;
             params!(UInt32, UInt32) => BitShiftLeftUInt32, oid::FUNC_SHIFT_LEFT_UINT32;
             params!(UInt64, UInt32) => BitShiftLeftUInt64, oid::FUNC_SHIFT_LEFT_UINT64;
+            params!(RangeAny, RangeAny) => RangeBefore => Bool, 3893;
         },
         ">>" => Scalar {
             params!(Int16, Int32) => BitShiftRightInt16, 1879;
@@ -3398,6 +3410,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(UInt16, UInt32) => BitShiftRightUInt16, oid::FUNC_SHIFT_RIGHT_UINT16;
             params!(UInt32, UInt32) => BitShiftRightUInt32, oid::FUNC_SHIFT_RIGHT_UINT32;
             params!(UInt64, UInt32) => BitShiftRightUInt64, oid::FUNC_SHIFT_RIGHT_UINT64;
+            params!(RangeAny, RangeAny) => RangeAfter => Bool, 3894;
         },
 
         // ILIKE
@@ -3535,7 +3548,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(ListElementAnyCompatible, ListAnyCompatible) => ElementListConcat => ListAnyCompatible, oid::OP_CONCAT_ELEMENY_LIST_OID;
         },
 
-        //JSON and MAP
+        //JSON, MAP, RANGE
         "->" => Scalar {
             params!(Jsonb, Int64) => JsonbGetInt64 { stringify: false }, 3212;
             params!(Jsonb, String) => JsonbGetString { stringify: false }, 3211;
@@ -3569,6 +3582,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
                 let elem_type = ecx.scalar_type(&lhs).unwrap_range_element_type().clone();
                 Ok(lhs.call_binary(rhs, BinaryFunc::RangeContainsElem { elem_type, rev: false }))
             }) => Bool, 3889;
+            params!(RangeAny, RangeAny) => Operation::binary(|_ecx, lhs, rhs| {
+                Ok(lhs.call_binary(rhs, BinaryFunc::RangeContainsRange {  rev: false }))
+            }) => Bool, 3890;
         },
         "<@" => Scalar {
             params!(Jsonb, Jsonb) => Operation::binary(|_ecx, lhs, rhs| {
@@ -3594,6 +3610,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
                 let elem_type = ecx.scalar_type(&rhs).unwrap_range_element_type().clone();
                 Ok(rhs.call_binary(lhs, BinaryFunc::RangeContainsElem { elem_type, rev: true }))
             }) => Bool, 3891;
+            params!(RangeAny, RangeAny) => Operation::binary(|_ecx, lhs, rhs| {
+                Ok(rhs.call_binary(lhs, BinaryFunc::RangeContainsRange { rev: true }))
+            }) => Bool, 3892;
         },
         "?" => Scalar {
             params!(Jsonb, String) => JsonbContainsString, 3247;
@@ -3605,6 +3624,19 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
         "?|" => Scalar {
             params!(MapAny, ScalarType::Array(Box::new(ScalarType::String))) => MapContainsAnyKeys => Bool, oid::OP_CONTAINS_ANY_KEYS_MAP_OID;
         },
+        "&&" => Scalar {
+            params!(RangeAny, RangeAny) => BinaryFunc::RangeOverlaps => Bool, 3888;
+        },
+        "&<" => Scalar {
+            params!(RangeAny, RangeAny) => BinaryFunc::RangeOverleft => Bool, 3895;
+        },
+        "&>" => Scalar {
+            params!(RangeAny, RangeAny) => BinaryFunc::RangeOverright => Bool, 3896;
+        },
+        "-|-" => Scalar {
+            params!(RangeAny, RangeAny) => BinaryFunc::RangeAdjacent => Bool, 3897;
+        },
+
         // COMPARISON OPS
         "<" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::Lt, 1754;
@@ -3803,4 +3835,33 @@ pub fn resolve_op(op: &str) -> Result<&'static [FuncImpl<HirScalarExpr>], PlanEr
         // JsonApplyPathPredicate
         None => bail_unsupported!(format!("[{}]", op)),
     }
+}
+
+// Since ViewableVariables is unmaterializeable (which can't be eval'd) that
+// depend on their arguments, implement directly with Hir.
+fn current_settings(
+    name: HirScalarExpr,
+    missing_ok: HirScalarExpr,
+) -> Result<HirScalarExpr, PlanError> {
+    // MapGetValue returns Null if the key doesn't exist in the map.
+    let expr = HirScalarExpr::call_binary(
+        HirScalarExpr::CallUnmaterializable(UnmaterializableFunc::ViewableVariables),
+        HirScalarExpr::call_unary(name, UnaryFunc::Lower(func::Lower)),
+        BinaryFunc::MapGetValue,
+    );
+    let expr = HirScalarExpr::If {
+        cond: Box::new(missing_ok),
+        then: Box::new(expr.clone()),
+        els: Box::new(HirScalarExpr::CallVariadic {
+            func: VariadicFunc::ErrorIfNull,
+            exprs: vec![
+                expr,
+                HirScalarExpr::literal(
+                    Datum::String("unrecognized configuration parameter"),
+                    ScalarType::String,
+                ),
+            ],
+        }),
+    };
+    Ok(expr)
 }

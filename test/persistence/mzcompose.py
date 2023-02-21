@@ -53,7 +53,7 @@ def start_deps(
     else:
         dependencies = ["zookeeper", "kafka", "schema-registry"]
 
-    c.start_and_wait_for_tcp(services=dependencies)
+    c.up(*dependencies)
 
 
 def workflow_kafka_sources(
@@ -64,25 +64,21 @@ def workflow_kafka_sources(
     seed = round(time.time())
 
     c.up("materialized")
-    c.wait_for_materialized("materialized")
 
     c.run("testdrive", f"--seed={seed}", f"kafka-sources/*{td_test}*-before.td")
 
     c.kill("materialized")
     c.up("materialized")
-    c.wait_for_materialized("materialized")
 
     # And restart again, for extra stress
     c.kill("materialized")
     c.up("materialized")
-    c.wait_for_materialized("materialized")
 
     c.run("testdrive", f"--seed={seed}", f"kafka-sources/*{td_test}*-after.td")
 
     # Do one more restart, just in case and just confirm that Mz is able to come up
     c.kill("materialized")
     c.up("materialized")
-    c.wait_for_materialized("materialized")
 
     c.kill("materialized")
     c.rm("materialized", "testdrive", destroy_volumes=True)
@@ -97,7 +93,6 @@ def workflow_user_tables(
     seed = round(time.time())
 
     c.up("materialized")
-    c.wait_for_materialized()
 
     c.run(
         "testdrive",
@@ -142,7 +137,6 @@ def run_one_failpoint(c: Composition, failpoint: str, action: str) -> None:
     seed = round(time.time())
 
     c.up("materialized")
-    c.wait_for_materialized()
 
     c.run(
         "testdrive",
@@ -156,7 +150,6 @@ def run_one_failpoint(c: Composition, failpoint: str, action: str) -> None:
     # kill Mz if the failpoint has not killed it
     c.kill("materialized")
     c.up("materialized")
-    c.wait_for_materialized()
 
     c.run("testdrive", f"--seed={seed}", "failpoints/after.td")
 
@@ -170,7 +163,6 @@ def workflow_compaction(c: Composition) -> None:
         Materialized(options=["--metrics-scraping-interval=1s"]),
     ):
         c.up("materialized")
-        c.wait_for_materialized()
 
         c.run("testdrive", "compaction/compaction.td")
 

@@ -71,6 +71,7 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
@@ -80,6 +81,7 @@ fn main() {
     env::set_var("PROTOC", protobuf_src::protoc());
 
     prost_build::Config::new()
+        .btree_map(["."])
         .compile_protos(&["persist/src/persist.proto"], &[".."])
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"))
 }

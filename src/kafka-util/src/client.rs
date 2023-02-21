@@ -10,7 +10,7 @@
 //! Helpers for working with Kafka's client API.
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::time::Duration;
 
@@ -72,7 +72,7 @@ impl ProducerContext for MzClientContext {
 /// A client context that supports rewriting broker addresses.
 pub struct BrokerRewritingClientContext<C> {
     inner: C,
-    overrides: HashMap<BrokerAddr, BrokerAddr>,
+    overrides: BTreeMap<BrokerAddr, BrokerAddr>,
     /// Opaque tokens to cleanup resources associated with overrides.
     drop_tokens: Vec<Box<dyn Any + Send + Sync>>,
 }
@@ -82,7 +82,7 @@ impl<C> BrokerRewritingClientContext<C> {
     pub fn new(inner: C) -> BrokerRewritingClientContext<C> {
         BrokerRewritingClientContext {
             inner,
-            overrides: HashMap::new(),
+            overrides: BTreeMap::new(),
             drop_tokens: vec![],
         }
     }

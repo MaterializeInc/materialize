@@ -231,7 +231,7 @@ async def setup(
 
     done = False
     async for remaining in ui.async_timeout_loop(60, 5):
-        say(f"Waiting for instance to become ready: {remaining}s remaining")
+        say(f"Waiting for instance to become ready: {remaining:0.0f}s remaining")
         try:
             i.reload()
             if is_ready(i):
@@ -246,7 +246,7 @@ async def setup(
 
     done = False
     async for remaining in ui.async_timeout_loop(300, 5):
-        say(f"Checking whether setup has completed: {remaining}s remaining")
+        say(f"Checking whether setup has completed: {remaining:0.0f}s remaining")
         try:
             mssh(i, "[[ -f /opt/provision/done ]]")
             done = True

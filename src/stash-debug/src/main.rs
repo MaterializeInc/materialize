@@ -71,6 +71,7 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
@@ -88,7 +89,6 @@ use std::{
 
 use clap::Parser;
 use once_cell::sync::Lazy;
-use tokio::sync::mpsc;
 
 use mz_adapter::{
     catalog::{
@@ -288,9 +288,9 @@ impl Usage {
                 dump_col!(catalog::COLLECTION_CONFIG);
                 dump_col!(catalog::COLLECTION_ID_ALLOC);
                 dump_col!(catalog::COLLECTION_SYSTEM_GID_MAPPING);
-                dump_col!(catalog::COLLECTION_COMPUTE_INSTANCES);
-                dump_col!(catalog::COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX);
-                dump_col!(catalog::COLLECTION_COMPUTE_REPLICAS);
+                dump_col!(catalog::COLLECTION_CLUSTERS);
+                dump_col!(catalog::COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX);
+                dump_col!(catalog::COLLECTION_CLUSTER_REPLICAS);
                 dump_col!(catalog::COLLECTION_DATABASE);
                 dump_col!(catalog::COLLECTION_SCHEMA);
                 dump_col!(catalog::COLLECTION_ITEM);
@@ -333,7 +333,9 @@ impl Usage {
                     let key = serde_json::from_value(key)?;
                     let value = serde_json::from_value(value)?;
                     let (prev, _next) = $col
-                        .upsert_key(stash, &key, |_| Ok::<_, std::convert::Infallible>(value))
+                        .upsert_key(stash, key, move |_| {
+                            Ok::<_, std::convert::Infallible>(value)
+                        })
                         .await??;
                     return Ok(prev.map(|v| serde_json::to_value(v).unwrap()));
                 }
@@ -345,9 +347,9 @@ impl Usage {
                 edit_col!(catalog::COLLECTION_CONFIG);
                 edit_col!(catalog::COLLECTION_ID_ALLOC);
                 edit_col!(catalog::COLLECTION_SYSTEM_GID_MAPPING);
-                edit_col!(catalog::COLLECTION_COMPUTE_INSTANCES);
-                edit_col!(catalog::COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX);
-                edit_col!(catalog::COLLECTION_COMPUTE_REPLICAS);
+                edit_col!(catalog::COLLECTION_CLUSTERS);
+                edit_col!(catalog::COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX);
+                edit_col!(catalog::COLLECTION_CLUSTER_REPLICAS);
                 edit_col!(catalog::COLLECTION_DATABASE);
                 edit_col!(catalog::COLLECTION_SCHEMA);
                 edit_col!(catalog::COLLECTION_ITEM);
@@ -372,9 +374,6 @@ impl Usage {
 
         let metrics_registry = &MetricsRegistry::new();
         let now = SYSTEM_TIME.clone();
-        let (consolidations_tx, consolidations_rx) = mpsc::unbounded_channel();
-        // Leak the receiver so it's not dropped and send will work.
-        std::mem::forget(consolidations_rx);
         let storage = mz_adapter::catalog::storage::Connection::open(
             stash,
             now.clone(),
@@ -383,7 +382,6 @@ impl Usage {
                 builtin_cluster_replica_size: "1".into(),
                 default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
             },
-            consolidations_tx.clone(),
         )
         .await?;
         let secrets_reader = Arc::new(InMemorySecretsController::new());
@@ -397,8 +395,7 @@ impl Usage {
             skip_migrations: false,
             metrics_registry,
             cluster_replica_sizes: Default::default(),
-            storage_host_sizes: Default::default(),
-            default_storage_host_size: None,
+            default_storage_cluster_size: None,
             bootstrap_system_parameters: Default::default(),
             availability_zones: vec![],
             secrets_reader,
@@ -406,6 +403,7 @@ impl Usage {
             aws_principal_context: None,
             aws_privatelink_availability_zones: None,
             system_parameter_frontend: None,
+            storage_usage_retention_period: None,
         })
         .await?;
 

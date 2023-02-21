@@ -44,7 +44,8 @@ create_connection ::=
   '(' field '='? val ( ',' field '='? val )* ')'
 create_connection_kafka_brokers ::= 'BROKERS' '(' kafka_broker (',' kafka_broker)* ')'
 create_connection_kafka_broker ::=
-  "'host:port'" ('USING' ('AWS' 'PRIVATELINK' aws_connection ('(' 'PORT' number ')')? | 'SSH' 'TUNNEL' ssh_connection))?
+  "'host:port'" ('USING' ('AWS' 'PRIVATELINK' aws_connection ( '(' broker_option (',' broker_option)* ')' )? | 'SSH' 'TUNNEL' ssh_connection))?
+broker_option ::= 'PORT' number | 'AVAILABILITY ZONE' az
 create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
 create_index ::=
@@ -69,6 +70,7 @@ create_schema ::=
     'CREATE' 'SCHEMA' ('IF NOT EXISTS')? schema_name
 create_sink_kafka ::=
     'CREATE SINK' 'IF NOT EXISTS'? sink_name
+    ('IN CLUSTER' cluster_name)?
     'FROM' item_name
     'INTO' kafka_sink_connection
     ('KEY' '(' key_column ( ',' key_column )* ')')?
@@ -78,6 +80,7 @@ create_sink_kafka ::=
 create_source_kafka ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
+  ('IN CLUSTER' cluster_name)?
   'FROM' 'KAFKA' 'CONNECTION' connection_name
   '(' 'TOPIC' topic ( ( ',' connection_option )? ) ')'
   ('KEY FORMAT' format_spec 'VALUE FORMAT' format_spec | 'FORMAT' format_spec)
@@ -89,11 +92,13 @@ create_source_kafka ::=
 create_source_kinesis ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
+  ('IN CLUSTER' cluster_name)?
   'FROM' 'KINESIS ARN' arn with_options?
   'FORMAT' format_spec
   ('ENVELOPE NONE')?
 create_source_load_generator ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  ('IN CLUSTER' cluster_name)?
   'FROM LOAD GENERATOR' ('AUCTION' | 'COUNTER' | 'TPCH')
   ('(' (load_generator_option) ( ( ',' load_generator_option ) )* ')')?
   ('FOR ALL TABLES' | 'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')')
@@ -101,8 +106,10 @@ create_source_load_generator ::=
 load_generator_option ::=
     'TICK INTERVAL' interval
     | 'SCALE FACTOR' scale_factor
+    | 'MAX CARDINALITY' max_cardinality
 create_source_postgres ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  ('IN CLUSTER' cluster_name)?
   'FROM' 'POSTGRES' 'CONNECTION' connection_name
   '(' 'PUBLICATION' publication_name ( ( ',' 'TEXT COLUMNS' ('(' (column_name) ( ( ',' column_name ) )* ')')? )? ) ')'
   ('FOR ALL TABLES' | 'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')')
@@ -110,6 +117,7 @@ create_source_postgres ::=
 create_source_s3 ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
+  ('IN CLUSTER' cluster_name)?
   'FROM' 'S3' 'DISCOVER OBJECTS'
   ('MATCHING' pattern)?
   'USING' (

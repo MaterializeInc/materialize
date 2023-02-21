@@ -1,13 +1,22 @@
 # dbt-materialize Changelog
 
+## 1.4.0 - 2023-02-03
+
+* Upgrade to `dbt-postgres` v1.4.0.
+
+## 1.3.4 - 2023-01-19
+
+* Fix a bug where the adapter would fail if the pre-installed `default` cluster
+  doesn't exist in Materialize (i.e. in case it was dropped by the user).
+
 ## 1.3.3 - 2023-01-05
 
 * Remove the 63-character limitation on relation names. Materialize does not
   have this limitation, unlike PostgreSQL (see [dbt-core #2727](https://github.com/dbt-labs/dbt-core/pull/2727)).
 
 * Produce an error message when attempting to use the [`listagg`](https://docs.getdbt.com/reference/dbt-jinja-functions/cross-database-macros#listagg)
-  cross-database macro. Materialize has native support for [`list_agg()`](https://materialize.com/docs/sql/functions/list_agg/), which should be used
-  instead.
+  cross-database macro. Materialize has native support for [`list_agg()`](https://materialize.com/docs/sql/functions/list_agg/),
+  which should be used instead.
 
 * Remove the deprecated `mz_generate_name` macro.
 

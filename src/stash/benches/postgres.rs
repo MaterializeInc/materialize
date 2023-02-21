@@ -71,19 +71,18 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::iter::{repeat, repeat_with};
 use std::str::FromStr;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use once_cell::sync::Lazy;
-use timely::progress::Antichain;
 use tokio::runtime::Runtime;
 
 use mz_ore::metrics::MetricsRegistry;
-use mz_stash::{Stash, StashError, StashFactory};
+use mz_stash::{Stash, StashError, StashFactory, TypedCollection};
 
 pub static FACTORY: Lazy<StashFactory> = Lazy::new(|| StashFactory::new(&MetricsRegistry::new()));
 
@@ -104,122 +103,33 @@ fn init_bench() -> (Runtime, Stash) {
     (runtime, stash)
 }
 
-fn bench_update(c: &mut Criterion) {
-    c.bench_function("update", |b| {
-        b.iter(|| {
-            let (runtime, mut stash) = init_bench();
+pub static COLLECTION_ORDER: TypedCollection<i64, i64> = TypedCollection::new("orders");
 
-            let orders = runtime
-                .block_on(stash.collection::<String, String>("orders"))
-                .unwrap();
-            let mut ts = 1;
+fn bench_update(c: &mut Criterion) {
+    c.bench_function("upsert", |b| {
+        let (runtime, mut stash) = init_bench();
+        let mut i = 1;
+        b.iter(|| {
+            i += 1;
             runtime.block_on(async {
-                let data = ("widgets1".into(), "1".into());
-                stash.update(orders, data, ts, 1).await.unwrap();
-                ts += 1;
+                COLLECTION_ORDER.upsert(&mut stash, [(i, i)]).await.unwrap();
             })
         })
     });
 }
 
 fn bench_update_many(c: &mut Criterion) {
-    c.bench_function("update_many", |b| {
+    c.bench_function("upsert_key", |b| {
         let (runtime, mut stash) = init_bench();
-
-        let orders = runtime
-            .block_on(stash.collection::<String, String>("orders"))
-            .unwrap();
-        let mut ts = 1;
-        b.iter(|| {
+        let mut i = 1;
+        b.iter(move || {
             runtime.block_on(async {
-                let data = ("widgets2".into(), "1".into());
-                stash
-                    .update_many(orders, repeat((data, ts, 1)).take(10))
+                i += 1;
+                COLLECTION_ORDER
+                    .upsert_key(&mut stash, 1, move |_| Ok::<_, StashError>(i))
                     .await
+                    .unwrap()
                     .unwrap();
-                ts += 1;
-            })
-        })
-    });
-}
-
-fn bench_consolidation(c: &mut Criterion) {
-    c.bench_function("consolidation", |b| {
-        let (runtime, mut stash) = init_bench();
-
-        let orders = runtime
-            .block_on(stash.collection::<String, String>("orders"))
-            .unwrap();
-        let mut ts = 1;
-        b.iter(|| {
-            runtime.block_on(async {
-                let data = ("widgets3".into(), "1".into());
-                stash.update(orders, data.clone(), ts, 1).await.unwrap();
-                stash.update(orders, data, ts + 1, -1).await.unwrap();
-                let frontier = Antichain::from_elem(ts + 2);
-                stash.seal(orders, frontier.borrow()).await.unwrap();
-                stash.compact(orders, frontier.borrow()).await.unwrap();
-                stash.consolidate(orders.id).await.unwrap();
-                ts += 2;
-            })
-        })
-    });
-}
-
-fn bench_consolidation_large(c: &mut Criterion) {
-    c.bench_function("consolidation large", |b| {
-        let (runtime, mut stash) = init_bench();
-
-        let mut ts = 0;
-        let (orders, kv) = runtime.block_on(async {
-            let orders = stash.collection::<String, String>("orders").await.unwrap();
-
-            // Prepopulate the database with 100k records
-            let kv = ("widgets4".into(), "1".into());
-            stash
-                .update_many(
-                    orders,
-                    repeat_with(|| {
-                        let update = (kv.clone(), ts, 1);
-                        ts += 1;
-                        update
-                    })
-                    .take(100_000),
-                )
-                .await
-                .unwrap();
-            let frontier = Antichain::from_elem(ts);
-            stash.seal(orders, frontier.borrow()).await.unwrap();
-            (orders, kv)
-        });
-
-        let mut compact_ts = 0;
-        b.iter(|| {
-            runtime.block_on(async {
-                ts += 1;
-                // add 10k records
-                stash
-                    .update_many(
-                        orders,
-                        repeat_with(|| {
-                            let update = (kv.clone(), ts, 1);
-                            ts += 1;
-                            update
-                        })
-                        .take(10_000),
-                    )
-                    .await
-                    .unwrap();
-                let frontier = Antichain::from_elem(ts);
-                stash.seal(orders, frontier.borrow()).await.unwrap();
-                // compact + consolidate
-                compact_ts += 10_000;
-                let compact_frontier = Antichain::from_elem(compact_ts);
-                stash
-                    .compact(orders, compact_frontier.borrow())
-                    .await
-                    .unwrap();
-                stash.consolidate(orders.id).await.unwrap();
             })
         })
     });
@@ -238,7 +148,7 @@ fn bench_append(c: &mut Criterion) {
                 for i in 1..MAX {
                     orders.append_to_batch(&mut batch, &i.to_string(), &format!("_{i}"), 1);
                 }
-                stash.append(&[batch]).await?;
+                stash.append(vec![batch]).await?;
                 Result::<_, StashError>::Ok(orders)
             })
             .unwrap();
@@ -252,19 +162,12 @@ fn bench_append(c: &mut Criterion) {
                 // which is known to exist.
                 orders.append_to_batch(&mut batch, &j.to_string(), &format!("_{j}"), 1);
                 orders.append_to_batch(&mut batch, &k.to_string(), &format!("_{k}"), -1);
-                stash.append(&[batch]).await.unwrap();
+                stash.append(vec![batch]).await.unwrap();
                 i += 1;
             })
         })
     });
 }
 
-criterion_group!(
-    benches,
-    bench_append,
-    bench_update,
-    bench_update_many,
-    bench_consolidation,
-    bench_consolidation_large
-);
+criterion_group!(benches, bench_append, bench_update, bench_update_many);
 criterion_main!(benches);

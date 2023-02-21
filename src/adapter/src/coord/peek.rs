@@ -25,19 +25,21 @@ use uuid::Uuid;
 use mz_compute_client::controller::{ComputeInstanceId, ReplicaId};
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_client::types::dataflows::DataflowDescription;
-use mz_expr::explain::Indices;
-use mz_expr::{EvalError, Id, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_controller::clusters::ClusterId;
+use mz_expr::{
+    EvalError, Id, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
+};
 use mz_ore::cast::CastFrom;
-use mz_ore::str::Indent;
 use mz_ore::str::StrExt;
+use mz_ore::str::{separated, Indent};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText, ExprHumanizer};
+use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
+use mz_repr::explain::{CompactScalarSeq, ExprHumanizer, Indices};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 
 use crate::client::ConnectionId;
 use crate::coord::timestamp_selection::TimestampContext;
-use crate::explain_new::Displayable;
-use crate::util::send_immediate_rows;
+use crate::util::{send_immediate_rows, ResultExt};
 use crate::{AdapterError, AdapterNotice};
 
 use super::id_bundle::CollectionIdBundle;
@@ -45,6 +47,9 @@ use super::id_bundle::CollectionIdBundle;
 pub(crate) struct PendingPeek {
     pub(crate) sender: oneshot::Sender<PeekResponse>,
     pub(crate) conn_id: ConnectionId,
+    pub(crate) cluster_id: ClusterId,
+    /// All `GlobalId`s that the peek depend on.
+    pub(crate) depends_on: BTreeSet<GlobalId>,
 }
 
 /// The response from a `Peek`, with row multiplicities represented in unary.
@@ -67,7 +72,7 @@ pub struct PeekDataflowPlan<T = mz_repr::Timestamp> {
     thinned_arity: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum FastPathPlan {
     /// The view evaluates to a constant result that can be returned.
     ///
@@ -113,16 +118,16 @@ where
                     *ctx.as_mut() += 1;
                 }
                 if !filter.is_empty() {
-                    let predicates = separated_text(" AND ", filter.iter().map(Displayable::from));
+                    let predicates = separated(" AND ", filter);
                     writeln!(f, "{}Filter {}", ctx.as_mut(), predicates)?;
                     *ctx.as_mut() += 1;
                 }
                 if !map.is_empty() {
-                    let scalars = separated_text(", ", map.iter().map(Displayable::from));
+                    let scalars = CompactScalarSeq(&map);
                     writeln!(f, "{}Map ({})", ctx.as_mut(), scalars)?;
                     *ctx.as_mut() += 1;
                 }
-                Displayable::fmt_indexed_filter(f, ctx, id, literal_constraints.clone())?;
+                MirRelationExpr::fmt_indexed_filter(f, ctx, id, literal_constraints.clone())?;
                 ctx.as_mut().reset();
                 Ok(())
             }
@@ -139,6 +144,7 @@ pub struct PlannedPeek {
     pub conn_id: ConnectionId,
     pub source_arity: usize,
     pub id_bundle: CollectionIdBundle,
+    pub source_ids: BTreeSet<GlobalId>,
 }
 
 /// Possible ways in which the coordinator could produce the result for a goal view.
@@ -262,7 +268,7 @@ impl crate::coord::Coordinator {
         let peek_plan = fast_path_plan.map_or_else(
             // finalize the dataflow and produce a PeekPlan::SlowPath as a default
             || {
-                let mut desc = self.finalize_dataflow(dataflow, compute_instance);
+                let mut desc = self.finalize_dataflow(dataflow, compute_instance)?;
                 // We have the opportunity to name an `until` frontier that will prevent work we needn't perform.
                 // By default, `until` will be `Antichain::new()`, which prevents no updates and is safe.
                 if let Some(as_of) = desc.as_of.as_ref() {
@@ -272,17 +278,17 @@ impl crate::coord::Coordinator {
                         }
                     }
                 }
-                PeekPlan::SlowPath(PeekDataflowPlan {
+                Ok::<_, AdapterError>(PeekPlan::SlowPath(PeekDataflowPlan {
                     desc,
                     id: index_id,
                     key,
                     permutation,
                     thinned_arity,
-                })
+                }))
             },
             // produce a PeekPlan::FastPath if possible
-            PeekPlan::FastPath,
-        );
+            |plan| Ok::<_, AdapterError>(PeekPlan::FastPath(plan)),
+        )?;
         Ok(peek_plan)
     }
 
@@ -302,6 +308,7 @@ impl crate::coord::Coordinator {
             conn_id,
             source_arity,
             id_bundle: _,
+            source_ids,
         } = plan;
 
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
@@ -322,9 +329,13 @@ impl crate::coord::Coordinator {
                     )))?
                 };
                 if count > 0 {
-                    let count =
-                        usize::cast_from(u64::try_from(count).expect("known to be positive"));
-                    results.push((row, NonZeroUsize::new(count).unwrap()));
+                    let count = usize::cast_from(
+                        u64::try_from(count).expect("known to be positive from check above"),
+                    );
+                    results.push((
+                        row,
+                        NonZeroUsize::new(count).expect("known to be non-zero from check above"),
+                    ));
                 }
             }
             let results = finishing.finish(results, self.catalog.system_config().max_result_size());
@@ -367,7 +378,7 @@ impl crate::coord::Coordinator {
                 self.controller
                     .active_compute()
                     .create_dataflows(compute_instance, vec![dataflow])
-                    .unwrap();
+                    .unwrap_or_terminate("cannot fail to create dataflows");
                 self.initialize_compute_read_policies(
                     output_ids,
                     compute_instance,
@@ -422,6 +433,8 @@ impl crate::coord::Coordinator {
             PendingPeek {
                 sender: rows_tx,
                 conn_id,
+                cluster_id: compute_instance,
+                depends_on: source_ids,
             },
         );
         self.client_pending_peeks
@@ -442,7 +455,7 @@ impl crate::coord::Coordinator {
                 map_filter_project,
                 target_replica,
             )
-            .unwrap();
+            .unwrap_or_terminate("cannot fail to peek");
 
         // Prepare the receiver to return as a response.
         let max_result_size = self.catalog.system_config().max_result_size();
@@ -510,19 +523,15 @@ impl crate::coord::Coordinator {
         // peek's state in the coordinator.
         if let Some(PendingPeek {
             sender: rows_tx,
-            conn_id,
+            conn_id: _,
+            cluster_id: _,
+            depends_on: _,
         }) = self.remove_pending_peek(&uuid)
         {
             otel_ctx.attach_as_parent();
             // Peek cancellations are best effort, so we might still
             // receive a response, even though the recipient is gone.
             let _ = rows_tx.send(response);
-            if let Some(uuids) = self.client_pending_peeks.get_mut(&conn_id) {
-                uuids.remove(&uuid);
-                if uuids.is_empty() {
-                    self.client_pending_peeks.remove(&conn_id);
-                }
-            }
         }
         // Cancellation may cause us to receive responses for peeks no
         // longer in `self.pending_peeks`, so we quietly ignore them.
@@ -530,7 +539,18 @@ impl crate::coord::Coordinator {
 
     /// Clean up a peek's state.
     pub(crate) fn remove_pending_peek(&mut self, uuid: &Uuid) -> Option<PendingPeek> {
-        self.pending_peeks.remove(uuid)
+        let pending_peek = self.pending_peeks.remove(uuid);
+        if let Some(pending_peek) = &pending_peek {
+            let uuids = self
+                .client_pending_peeks
+                .get_mut(&pending_peek.conn_id)
+                .expect("coord peek state is inconsistent");
+            uuids.remove(uuid);
+            if uuids.is_empty() {
+                self.client_pending_peeks.remove(&pending_peek.conn_id);
+            }
+        }
+        pending_peek
     }
 
     /// Publishes a notice message to all sessions.
@@ -558,10 +578,9 @@ fn consolidate_constant_updates(rows: Vec<(Row, Diff)>) -> Vec<(Row, Diff)> {
 mod tests {
     use mz_expr::{func::IsNull, MapFilterProject, UnaryFunc};
     use mz_ore::str::Indent;
-    use mz_repr::{
-        explain_new::{text_string_at, DummyHumanizer, RenderingContext},
-        ColumnType, Datum, ScalarType,
-    };
+    use mz_repr::explain::text::text_string_at;
+    use mz_repr::explain::{DummyHumanizer, RenderingContext};
+    use mz_repr::{ColumnType, Datum, ScalarType};
 
     use super::*;
 
@@ -579,9 +598,9 @@ mod tests {
                 .map(Some(MirScalarExpr::column(0).or(MirScalarExpr::column(2))))
                 .project([1, 4])
                 .into_plan()
-                .unwrap()
+                .expect("invalid plan")
                 .into_nontemporal()
-                .unwrap(),
+                .expect("invalid nontemporal"),
         );
         let lookup = FastPathPlan::PeekExisting(
             GlobalId::User(11),
@@ -591,9 +610,9 @@ mod tests {
                     MirScalarExpr::column(0).call_unary(UnaryFunc::IsNull(IsNull)),
                 ))
                 .into_plan()
-                .unwrap()
+                .expect("invalid plan")
                 .into_nontemporal()
-                .unwrap(),
+                .expect("invalid nontemporal"),
         );
 
         let humanizer = DummyHumanizer;

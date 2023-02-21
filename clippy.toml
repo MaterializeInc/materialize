@@ -1,9 +1,9 @@
 disallowed-methods = [
-    { path = "std::panic::catch_unwind", reason = "use mz_ore::panic::catch_unwind instead" },
-    { path = "futures::FutureExt::catch_unwind", reason = "use mz_ore::future::FutureExt::catch_unwind instead" },
+    { path = "std::panic::catch_unwind", reason = "use `mz_ore::panic::catch_unwind` instead" },
+    { path = "futures::FutureExt::catch_unwind", reason = "use `mz_ore::future::FutureExt::catch_unwind` instead" },
 
-    { path = "futures_executor::block_on", reason = "tokio::runtime::Handle::block_on instead" },
-    { path = "futures::executor::block_on", reason = "tokio::runtime::Handle::block_on instead" },
+    { path = "futures_executor::block_on", reason = "use `tokio::runtime::Handle::block_on` instead" },
+    { path = "futures::executor::block_on", reason = "use `tokio::runtime::Handle::block_on` instead" },
 
     { path = "tokio::spawn", reason = "use the spawn wrappers in `mz_ore::task` instead" },
     { path = "tokio::task::spawn", reason = "use the spawn wrappers in `mz_ore::task` instead" },
@@ -14,8 +14,15 @@ disallowed-methods = [
     { path = "tokio::runtime::Runtime::spawn_blocking", reason = "use the spawn wrappers in `mz_ore::task` instead" },
 
     { path = "rdkafka::config::ClientConfig::new", reason = "use the `client::create_new_client_config` wrapper in `kafka_util` instead" },
+
+    { path = "aws_sdk_s3::Client::new", reason = "use the `mz_aws_s3_util::new_client` function instead" },
 ]
 
 disallowed-macros = [
-    { path = "proptest::prop_oneof", reason = "use the `proptest::strategy::Union::new` instead" },
+    { path = "proptest::prop_oneof", reason = "use `proptest::strategy::Union::new` instead" },
+]
+
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "use `std::collections::BTreeMap` or `mz_ore::collections::HashMap` instead" },
+    { path = "std::collections::HashSet", reason = "use `std::collections::BTreeSet` or `mz_ore::collections::HashSet` instead" },
 ]

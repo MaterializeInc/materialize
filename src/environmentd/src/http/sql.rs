@@ -35,7 +35,7 @@ use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, StatementKind};
 use mz_sql::plan::Plan;
 
-use crate::http::AuthedClient;
+use crate::http::{AuthedClient, MAX_REQUEST_SIZE};
 
 use super::{init_ws, WsState};
 
@@ -61,7 +61,8 @@ pub async fn handle_sql_ws(
     State(state): State<WsState>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    ws.on_upgrade(|ws| async move { run_ws(&state, ws).await })
+    ws.max_message_size(MAX_REQUEST_SIZE)
+        .on_upgrade(|ws| async move { run_ws(&state, ws).await })
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -559,11 +560,18 @@ async fn execute_request<S: ResultSender>(
         Ok(())
     }
 
+    fn parse(query: &str) -> Result<Vec<Statement<Raw>>, anyhow::Error> {
+        match mz_sql::parse::parse_with_limit(query) {
+            Ok(result) => result.map_err(|e| anyhow!(e)),
+            Err(e) => Err(anyhow!(e)),
+        }
+    }
+
     let mut stmt_groups = vec![];
 
     match request {
         SqlRequest::Simple { query } => {
-            let stmts = mz_sql::parse::parse(&query).map_err(|e| anyhow!(e))?;
+            let stmts = parse(&query)?;
             let mut stmt_group = Vec::with_capacity(stmts.len());
             for stmt in stmts {
                 check_prohibited_stmts(sender, &stmt)?;
@@ -573,7 +581,7 @@ async fn execute_request<S: ResultSender>(
         }
         SqlRequest::Extended { queries } => {
             for ExtendedRequest { query, params } in queries {
-                let mut stmts = mz_sql::parse::parse(&query).map_err(|e| anyhow!(e))?;
+                let mut stmts = parse(&query)?;
                 if stmts.len() != 1 {
                     anyhow::bail!(
                         "each query must contain exactly 1 statement, but \"{}\" contains {}",
@@ -714,8 +722,8 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::CreatedDatabase { .. }
         | ExecuteResponse::CreatedSchema { .. }
         | ExecuteResponse::CreatedRole
-        | ExecuteResponse::CreatedComputeInstance { .. }
-        | ExecuteResponse::CreatedComputeReplica { .. }
+        | ExecuteResponse::CreatedCluster { .. }
+        | ExecuteResponse::CreatedClusterReplica { .. }
         | ExecuteResponse::CreatedTable { .. }
         | ExecuteResponse::CreatedIndex { .. }
         | ExecuteResponse::CreatedSecret { .. }
@@ -732,8 +740,8 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::DroppedDatabase
         | ExecuteResponse::DroppedSchema
         | ExecuteResponse::DroppedRole
-        | ExecuteResponse::DroppedComputeInstance
-        | ExecuteResponse::DroppedComputeReplica
+        | ExecuteResponse::DroppedCluster
+        | ExecuteResponse::DroppedClusterReplica
         | ExecuteResponse::DroppedSource
         | ExecuteResponse::DroppedIndex
         | ExecuteResponse::DroppedSink

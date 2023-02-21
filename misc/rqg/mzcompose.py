@@ -68,4 +68,3 @@ def workflow_start_two_mzs(c: Composition, parser: WorkflowArgumentParser) -> No
     ):
         for mz in ["mz_this", "mz_other"]:
             c.up(mz)
-            c.wait_for_materialized(service=mz)

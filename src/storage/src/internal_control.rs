@@ -12,13 +12,12 @@ use serde::{Deserialize, Serialize};
 use timely::communication::Allocate;
 use timely::progress::Antichain;
 use timely::synchronization::Sequencer;
+use timely::worker::Worker as TimelyWorker;
 
 use mz_repr::GlobalId;
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_client::types::sources::IngestionDescription;
-
-use crate::storage_state::Worker;
 
 /// Internal commands that can be sent by individual operators/workers that will
 /// be broadcast to all workers. The worker main loop will receive those and act
@@ -26,7 +25,12 @@ use crate::storage_state::Worker;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum InternalStorageCommand {
     /// Suspend and restart the dataflow identified by the `GlobalId`.
-    SuspendAndRestart(GlobalId),
+    SuspendAndRestart {
+        /// The id of the dataflow that should be restarted.
+        id: GlobalId,
+        /// The reason for the restart request.
+        reason: String,
+    },
     /// Render an ingestion dataflow at the given resumption frontier.
     CreateIngestionDataflow {
         /// ID of the ingestion/sourve.
@@ -50,17 +54,26 @@ pub enum InternalStorageCommand {
 pub trait InternalCommandSender {
     /// Broadcasts the given command to all workers.
     fn broadcast(&mut self, internal_cmd: InternalStorageCommand);
+
+    /// Returns the next available command, if any. This returns `None` when
+    /// there are currently no commands but there might be commands again in the
+    /// future.
+    fn next(&mut self) -> Option<InternalStorageCommand>;
 }
 
 impl InternalCommandSender for Sequencer<InternalStorageCommand> {
     fn broadcast(&mut self, internal_cmd: InternalStorageCommand) {
         self.push(internal_cmd);
     }
+
+    fn next(&mut self) -> Option<InternalStorageCommand> {
+        Iterator::next(self)
+    }
 }
 
-impl<'w, A: Allocate> Worker<'w, A> {
-    pub(crate) fn setup_command_sequencer(&mut self) -> Sequencer<InternalStorageCommand> {
-        // TODO(aljoscha): Use something based on `mz_ore::NowFn`?
-        Sequencer::new(self.timely_worker, Instant::now())
-    }
+pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
+    timely_worker: &'w mut TimelyWorker<A>,
+) -> Sequencer<InternalStorageCommand> {
+    // TODO(aljoscha): Use something based on `mz_ore::NowFn`?
+    Sequencer::new(timely_worker, Instant::now())
 }

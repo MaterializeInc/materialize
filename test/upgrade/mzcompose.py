@@ -38,13 +38,11 @@ SERVICES = [
     TestCerts(),
     Zookeeper(),
     Kafka(
-        # for some reason docker-compose wants kafka to be setup
-        # with the same volumes when overriden
-        depends_on=["zookeeper", "test-certs"],
+        depends_on_extra=["test-certs"],
         volumes=["secrets:/etc/kafka/secrets"],
     ),
     SchemaRegistry(
-        depends_on=["kafka", "zookeeper", "test-certs"],
+        depends_on_extra=["test-certs"],
         volumes=[
             "secrets:/etc/schema-registry/secrets",
         ],
@@ -81,7 +79,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--min-version",
         metavar="VERSION",
         type=Version.parse,
-        default=Version.parse("0.27.0"),
+        default=Version.parse("0.39.0"),
         help="the minimum version to test from",
     )
     parser.add_argument(
@@ -156,9 +154,7 @@ def test_upgrade_from_version(
     print(">>> Version glob pattern: " + version_glob)
 
     c.down(destroy_volumes=True)
-    c.start_and_wait_for_tcp(
-        services=["zookeeper", "kafka", "schema-registry", "postgres"]
-    )
+    c.up("zookeeper", "kafka", "schema-registry", "postgres")
 
     if from_version != "current_source":
         mz_from = Materialized(
@@ -176,8 +172,6 @@ def test_upgrade_from_version(
     else:
         c.up("materialized")
 
-    c.wait_for_materialized("materialized")
-
     temp_dir = f"--temp-dir=/share/tmp/upgrade-from-{from_version}"
     seed = f"--seed={random.getrandbits(32)}"
     c.run(
@@ -193,13 +187,11 @@ def test_upgrade_from_version(
     c.rm("materialized", "testdrive")
 
     c.up("materialized")
-    c.wait_for_materialized("materialized")
 
     # Restart once more, just in case
     c.kill("materialized")
     c.rm("materialized")
     c.up("materialized")
-    c.wait_for_materialized("materialized")
 
     with c.override(
         Testdrive(
@@ -221,7 +213,7 @@ def ssl_services() -> Tuple[Kafka, SchemaRegistry, Testdrive]:
     """sets"""
 
     kafka = Kafka(
-        depends_on=["zookeeper", "test-certs"],
+        depends_on_extra=["test-certs"],
         environment=[
             # Default
             "KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181",
@@ -244,7 +236,7 @@ def ssl_services() -> Tuple[Kafka, SchemaRegistry, Testdrive]:
         volumes=["secrets:/etc/kafka/secrets"],
     )
     schema_registry = SchemaRegistry(
-        depends_on=["kafka", "zookeeper", "test-certs"],
+        depends_on_extra=["test-certs"],
         environment=[
             "SCHEMA_REGISTRY_KAFKASTORE_TIMEOUT_MS=10000",
             "SCHEMA_REGISTRY_HOST_NAME=schema-registry",

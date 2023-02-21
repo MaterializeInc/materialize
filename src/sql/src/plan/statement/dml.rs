@@ -13,13 +13,13 @@
 //! `INSERT`, `SELECT`, `SUBSCRIBE`, and `COPY`.
 
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use mz_expr::MirRelationExpr;
 use mz_ore::collections::CollectionExt;
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
-use mz_repr::explain_new::{ExplainConfig, ExplainFormat};
+use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
 
 use crate::ast::display::AstDisplay;
@@ -138,7 +138,7 @@ pub fn plan_read_then_write(
 ) -> Result<Plan, PlanError> {
     selection.bind_parameters(params)?;
     let selection = selection.optimize_and_lower(&scx.into())?;
-    let mut assignments_outer = HashMap::new();
+    let mut assignments_outer = BTreeMap::new();
     for (idx, mut set) in assignments {
         set.bind_parameters(params)?;
         let set = set.lower_uncorrelated()?;
@@ -242,6 +242,7 @@ pub fn plan_explain(
         stage,
         config_flags,
         format,
+        no_errors,
         explainee,
     }: ExplainStatement<Aug>,
     params: &Params,
@@ -274,7 +275,7 @@ pub fn plan_explain(
             };
             let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
             (
-                mz_repr::explain_new::Explainee::Dataflow(view.id()),
+                mz_repr::explain::Explainee::Dataflow(view.id()),
                 names::resolve(qcx.scx.catalog, query)?.0,
             )
         }
@@ -301,11 +302,11 @@ pub fn plan_explain(
             };
             let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
             (
-                mz_repr::explain_new::Explainee::Dataflow(mview.id()),
+                mz_repr::explain::Explainee::Dataflow(mview.id()),
                 names::resolve(qcx.scx.catalog, query)?.0,
             )
         }
-        Explainee::Query(query) => (mz_repr::explain_new::Explainee::Query, query),
+        Explainee::Query(query) => (mz_repr::explain::Explainee::Query, query),
     };
     // Previously we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
@@ -343,6 +344,7 @@ pub fn plan_explain(
         stage,
         format,
         config,
+        no_errors,
         explainee,
     }))
 }

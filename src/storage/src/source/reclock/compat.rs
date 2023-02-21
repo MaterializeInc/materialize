@@ -10,19 +10,16 @@
 //! Reclocking compatibility code until the whole ingestion pipeline is transformed to native
 //! timestamps
 
-use std::collections::HashMap;
-use std::fmt::Display;
 use std::sync::Arc;
 
 use anyhow::Context;
 use differential_dataflow::lattice::Lattice;
 use futures::{stream::LocalBoxStream, StreamExt};
-use timely::order::{PartialOrder, TotalOrder};
+use mz_persist_types::codec_impls::UnitSchema;
+use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
-use tokio::sync::Mutex;
 
-use mz_expr::PartitionId;
 use mz_ore::halt;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
@@ -32,75 +29,11 @@ use mz_persist_client::read::ListenEvent;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::PersistClient;
 use mz_persist_types::Codec64;
-use mz_repr::{Diff, GlobalId};
+use mz_repr::{Diff, GlobalId, RelationDesc};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::controller::PersistEpoch;
-use mz_storage_client::types::sources::{MzOffset, SourceData, SourceTimestamp};
-use mz_storage_client::util::antichain::OffsetAntichain;
+use mz_storage_client::types::sources::{SourceData, SourceTimestamp};
 use mz_storage_client::util::remap_handle::{RemapHandle, RemapHandleReader};
-
-use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, ReclockOperator};
-
-impl<FromTime, IntoTime> ReclockFollower<FromTime, IntoTime>
-where
-    FromTime: SourceTimestamp,
-    IntoTime: Timestamp + Lattice + TotalOrder + Display,
-{
-    pub fn reclock_compat<'a, M>(
-        &'a self,
-        batch: &'a mut HashMap<PartitionId, Vec<(M, MzOffset)>>,
-    ) -> Result<impl Iterator<Item = (M, IntoTime)> + 'a, ReclockError<FromTime>> {
-        let mut reclock_results = HashMap::with_capacity(batch.len());
-        // Eagerly compute all the reclocked times to check if we need to report an error
-        for (pid, updates) in batch.iter() {
-            let mut pid_results = Vec::with_capacity(updates.len());
-            for (_msg, offset) in updates.iter() {
-                let src_ts = FromTime::from_compat_ts(pid.clone(), *offset);
-                pid_results.push(self.reclock_time_total(&src_ts)?);
-            }
-            reclock_results.insert(pid.clone(), pid_results);
-        }
-        Ok(batch.iter_mut().flat_map(move |(pid, updates)| {
-            let results = reclock_results.remove(pid).expect("created above");
-            updates
-                .drain(..)
-                .zip(results)
-                .map(|((msg, _offset), ts)| (msg, ts))
-        }))
-    }
-}
-
-impl<FromTime, IntoTime, Clock, Handle> ReclockOperator<FromTime, IntoTime, Handle, Clock>
-where
-    FromTime: SourceTimestamp,
-    IntoTime: Timestamp + Lattice + TotalOrder,
-    Handle: RemapHandle<FromTime = FromTime, IntoTime = IntoTime>,
-    Clock: futures::Stream<Item = (IntoTime, Antichain<IntoTime>)> + Unpin,
-{
-    pub async fn mint_compat(
-        &mut self,
-        source_frontier: &OffsetAntichain,
-    ) -> ReclockBatch<FromTime, IntoTime> {
-        // The old API didn't require that each mint request is beyond the current upper but it was
-        // doing some sort of max calculation for all the partitions. This is not possible do to
-        // for generic partially order timestamps so this is what this compatibility function is
-        // trying to bridge.
-        //
-        // First, take the current source upper and converting it to an OffsetAntichain
-        let mut current_upper = FromTime::into_compat_frontier(self.source_upper.frontier());
-        for (pid, offset) in source_frontier.iter() {
-            // Then, for each offset in the frontier that we called with try to insert it into the
-            // OffsetAntichain. `maybe_insert` will only insert it if it's larger than what's
-            // already there
-            current_upper.maybe_insert(pid.clone(), *offset);
-        }
-        // Finally, convert it back to a native frontier and mint. The frontier we produce here is
-        // guaranteed to be greater than or equal to the existing source upper so the mint call
-        // will never panic
-        self.mint(FromTime::from_compat_frontier(current_upper).borrow())
-            .await
-    }
-}
 
 /// A handle to a persist shard that stores remap bindings
 pub struct PersistHandle<FromTime: SourceTimestamp, IntoTime: Timestamp + Lattice + Codec64> {
@@ -127,7 +60,7 @@ where
     IntoTime: Timestamp + Lattice + Codec64,
 {
     pub async fn new(
-        persist_clients: Arc<Mutex<PersistClientCache>>,
+        persist_clients: Arc<PersistClientCache>,
         metadata: CollectionMetadata,
         as_of: Antichain<IntoTime>,
         // additional information to improve logging
@@ -135,13 +68,18 @@ where
         operator: &str,
         worker_id: usize,
         worker_count: usize,
+        // Must match the `FromTime`. Ideally we would be able to discover this
+        // from `SourceTimestamp`, but each source would need a specific `SourceTimestamp`
+        // implementation, as they do not share remap `RelationDesc`'s (columns names
+        // are different).
+        //
+        // TODO(guswynn): use the type-system to prevent misuse here.
+        remap_relation_desc: RelationDesc,
     ) -> anyhow::Result<Self> {
-        let mut persist_clients = persist_clients.lock().await;
         let persist_client = persist_clients
             .open(metadata.persist_location.clone())
             .await
             .context("error creating persist client")?;
-        drop(persist_clients);
 
         let since_handle: SinceHandle<_, _, _, _, PersistEpoch> = persist_client
             .open_critical_since(
@@ -155,7 +93,12 @@ where
         let since = since_handle.since();
 
         let (write_handle, mut read_handle) = persist_client
-            .open(metadata.remap_shard.clone(), &format!("reclock {}", id))
+            .open(
+                metadata.remap_shard.clone(),
+                &format!("reclock {}", id),
+                Arc::new(remap_relation_desc),
+                Arc::new(UnitSchema),
+            )
             .await
             .context("error opening persist shard")?;
 

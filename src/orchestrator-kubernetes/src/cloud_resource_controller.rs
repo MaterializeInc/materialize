@@ -9,7 +9,7 @@
 
 //! Management of K8S objects, such as VpcEndpoints.
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::str::FromStr;
 
 use async_trait::async_trait;
@@ -82,7 +82,7 @@ impl CloudResourceController for KubernetesOrchestrator {
         }
     }
 
-    async fn list_vpc_endpoints(&self) -> Result<HashSet<GlobalId>, anyhow::Error> {
+    async fn list_vpc_endpoints(&self) -> Result<BTreeSet<GlobalId>, anyhow::Error> {
         Ok(self
             .vpc_endpoint_api
             .list(&ListParams::default())

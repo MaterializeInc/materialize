@@ -200,10 +200,10 @@ pub enum ExecuteResponse {
     CreatedSchema,
     /// The requested role was created.
     CreatedRole,
-    /// The requested compute instance was created.
-    CreatedComputeInstance,
-    /// The requested compute replica was created.
-    CreatedComputeReplica,
+    /// The requested cluster was created.
+    CreatedCluster,
+    /// The requested cluster replica was created.
+    CreatedClusterReplica,
     /// The requested index was created.
     CreatedIndex,
     /// The requested secret was created.
@@ -236,10 +236,10 @@ pub enum ExecuteResponse {
     DiscardedAll,
     /// The requested connection was dropped
     DroppedConnection,
-    /// The requested compute instance was dropped.
-    DroppedComputeInstance,
-    /// The requested compute replica was dropped.
-    DroppedComputeReplica,
+    /// The requested cluster was dropped.
+    DroppedCluster,
+    /// The requested cluster replica was dropped.
+    DroppedClusterReplica,
     /// The requested database was dropped.
     DroppedDatabase,
     /// The requested role was dropped.
@@ -320,8 +320,8 @@ impl ExecuteResponse {
             CreatedDatabase { .. } => Some("CREATE DATABASE".into()),
             CreatedSchema { .. } => Some("CREATE SCHEMA".into()),
             CreatedRole => Some("CREATE ROLE".into()),
-            CreatedComputeInstance { .. } => Some("CREATE CLUSTER".into()),
-            CreatedComputeReplica { .. } => Some("CREATE CLUSTER REPLICA".into()),
+            CreatedCluster { .. } => Some("CREATE CLUSTER".into()),
+            CreatedClusterReplica { .. } => Some("CREATE CLUSTER REPLICA".into()),
             CreatedIndex { .. } => Some("CREATE INDEX".into()),
             CreatedSecret { .. } => Some("CREATE SECRET".into()),
             CreatedSink { .. } => Some("CREATE SINK".into()),
@@ -338,8 +338,8 @@ impl ExecuteResponse {
             DiscardedTemp => Some("DISCARD TEMP".into()),
             DiscardedAll => Some("DISCARD ALL".into()),
             DroppedConnection => Some("DROP CONNECTION".into()),
-            DroppedComputeInstance => Some("DROP CLUSTER".into()),
-            DroppedComputeReplica => Some("DROP CLUSTER REPLICA".into()),
+            DroppedCluster => Some("DROP CLUSTER".into()),
+            DroppedClusterReplica => Some("DROP CLUSTER REPLICA".into()),
             DroppedDatabase => Some("DROP DATABASE".into()),
             DroppedRole => Some("DROP ROLE".into()),
             DroppedSchema => Some("DROP SCHEMA".into()),
@@ -400,8 +400,8 @@ impl ExecuteResponse {
             CreateDatabase => vec![CreatedDatabase],
             CreateSchema => vec![CreatedSchema],
             CreateRole => vec![CreatedRole],
-            CreateComputeInstance => vec![CreatedComputeInstance],
-            CreateComputeReplica => vec![CreatedComputeReplica],
+            CreateCluster => vec![CreatedCluster],
+            CreateClusterReplica => vec![CreatedClusterReplica],
             CreateSource => vec![CreatedSource, CreatedSources],
             CreateSecret => vec![CreatedSecret],
             CreateSink => vec![CreatedSink],
@@ -417,8 +417,8 @@ impl ExecuteResponse {
             DropDatabase => vec![DroppedDatabase],
             DropSchema => vec![DroppedSchema],
             DropRoles => vec![DroppedRole],
-            DropComputeInstances => vec![DroppedComputeInstance],
-            DropComputeReplicas => vec![DroppedComputeReplica],
+            DropClusters => vec![DroppedCluster],
+            DropClusterReplicas => vec![DroppedClusterReplica],
             DropItems => vec![
                 DroppedConnection,
                 DroppedSource,

@@ -36,7 +36,7 @@ SERVICES = [
     Minio(setup_materialize=True),
     # Those two are overriden below
     Materialized(),
-    Clusterd(name="storaged", storage_workers=4),
+    Clusterd(name="storaged"),
     Testdrive(),
 ]
 
@@ -96,7 +96,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
     scenario_class = globals()[args.scenario]
 
-    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+    c.up("zookeeper", "kafka", "schema-registry")
 
     random.seed(args.seed)
 
@@ -118,6 +118,21 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             external_cockroach=True,
         ),
     ):
+        c.up("materialized")
+        c.sql(
+            """
+            CREATE CLUSTER storaged REPLICAS (r2 (
+                STORAGECTL ADDRESSES ['storaged:2100'],
+                STORAGE ADDRESSES ['storaged:2103'],
+                COMPUTECTL ADDRESSES ['storaged:2101'],
+                COMPUTE ADDRESSES ['storaged:2102'],
+                WORKERS 4
+
+            ))
+        """
+        )
+        c.rm("materialized")
+
         c.up("testdrive", persistent=True)
 
         print("Generating test...")

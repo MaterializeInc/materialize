@@ -17,21 +17,27 @@ one
 $ kafka-ingest format=bytes topic=remote2
 one
 
+> CREATE CLUSTER storage_cluster REPLICAS (
+    r1 (
+      STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
+      STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
+      COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
+      COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
+      WORKERS 4
+    )
+  )
+
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE remote1
+  IN CLUSTER storage_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-remote1-${testdrive.seed}')
   FORMAT TEXT
-  WITH (
-    REMOTE 'storage:2100'
-  )
 > CREATE SOURCE remote2
+  IN CLUSTER storage_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-remote2-${testdrive.seed}')
   FORMAT TEXT
-  WITH (
-    REMOTE 'storage:2100'
-  )
 
 > SELECT * from remote1
 one

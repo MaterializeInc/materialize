@@ -29,7 +29,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug_span, instrument, warn, Instrument};
 use uuid::Uuid;
 
-use crate::batch::{validate_truncate_batch, Added, Batch, BatchBuilder};
+use crate::batch::{validate_truncate_batch, Added, Batch, BatchBuilder, BatchBuilderConfig};
 use crate::error::{InvalidUsage, UpperMismatch};
 use crate::internal::compact::Compactor;
 use crate::internal::encoding::SerdeWriterEnrichedHollowBatch;
@@ -524,7 +524,7 @@ where
     /// O(MB) come talk to us.
     pub fn builder(&mut self, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
         BatchBuilder::new(
-            self.cfg.clone(),
+            BatchBuilderConfig::from(&self.cfg),
             Arc::clone(&self.metrics),
             self.metrics.user.clone(),
             lower,
@@ -589,7 +589,7 @@ where
         let elapsed_since_last_heartbeat =
             Duration::from_millis(heartbeat_ts.saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
-            if elapsed_since_last_heartbeat > self.machine.cfg.writer_lease_duration {
+            if elapsed_since_last_heartbeat > self.machine.applier.cfg.writer_lease_duration {
                 warn!(
                     "writer ({}) of shard ({}) went {}s between heartbeats",
                     self.writer_id,
@@ -602,7 +602,7 @@ where
                 .machine
                 .heartbeat_writer(&self.writer_id, heartbeat_ts)
                 .await;
-            if !existed && !self.machine.state().collections.is_tombstone() {
+            if !existed && !self.machine.applier.state().collections.is_tombstone() {
                 // It's probably surprising to the caller that the shard
                 // becoming a tombstone expired this writer. Possibly the right
                 // thing to do here is pass up a bool to the caller indicating
@@ -739,7 +739,7 @@ where
         //
         // Intentionally create the span outside the task to set the parent.
         let expire_span = debug_span!("drop::expire");
-        let _ = handle.spawn_named(
+        handle.spawn_named(
             || format!("WriteHandle::expire ({})", self.writer_id),
             async move {
                 machine.expire_writer(&writer_id).await;

@@ -23,8 +23,7 @@ build apply=NonNullRequirements
   [(call_binary eq #0 #3)]
 )
 ----
-%0 =
-| Get x (u0)
-| Map null
-| FlatMap generate_series(#1)
-| Filter (#0 = #3)
+Filter (#0 = #3)
+  FlatMap generate_series(#1)
+    Map (null)
+      Get x

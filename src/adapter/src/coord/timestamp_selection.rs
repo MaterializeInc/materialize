@@ -19,7 +19,7 @@ use tracing::{event, Level};
 
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
-use mz_repr::explain_new::ExprHumanizer;
+use mz_repr::explain::ExprHumanizer;
 use mz_repr::{RowArena, ScalarType, Timestamp, TimestampManipulation};
 use mz_sql::plan::QueryWhen;
 use mz_storage_client::types::sources::Timeline;
@@ -170,7 +170,7 @@ impl Coordinator {
             {
                 let timestamp_oracle = self.get_timestamp_oracle(timeline);
                 oracle_read_ts = Some(timestamp_oracle.read_ts());
-                candidate.join_assign(&oracle_read_ts.unwrap());
+                candidate.join_assign(&oracle_read_ts.expect("known to be `Some`"));
             }
         }
 
@@ -254,13 +254,22 @@ impl Coordinator {
         {
             let storage = &self.controller.storage;
             for id in id_bundle.storage_ids.iter() {
-                since.join_assign(&storage.collection(*id).unwrap().implied_capability)
+                since.join_assign(
+                    &storage
+                        .collection(*id)
+                        .expect("id does not exist")
+                        .implied_capability,
+                )
             }
         }
         {
             for (instance, compute_ids) in &id_bundle.compute_ids {
                 for id in compute_ids.iter() {
-                    let collection = self.controller.compute.collection(*instance, *id).unwrap();
+                    let collection = self
+                        .controller
+                        .compute
+                        .collection(*instance, *id)
+                        .expect("id does not exist");
                     since.join_assign(collection.read_capability())
                 }
             }
@@ -283,7 +292,7 @@ impl Coordinator {
                     self.controller
                         .storage
                         .collection(*id)
-                        .unwrap()
+                        .expect("id does not exist")
                         .write_frontier
                         .iter()
                         .cloned(),
@@ -293,7 +302,11 @@ impl Coordinator {
         {
             for (instance, compute_ids) in &id_bundle.compute_ids {
                 for id in compute_ids.iter() {
-                    let collection = self.controller.compute.collection(*instance, *id).unwrap();
+                    let collection = self
+                        .controller
+                        .compute
+                        .collection(*instance, *id)
+                        .expect("id does not exist");
                     since.extend(collection.write_frontier().iter().cloned());
                 }
             }
@@ -376,7 +389,7 @@ impl Coordinator {
                             .controller
                             .compute
                             .collection(compute_instance, *id)
-                            .unwrap()
+                            .expect("id does not exist")
                             .read_frontier()
                             .to_owned();
                         if since.less_equal(&candidate) {
@@ -394,7 +407,7 @@ impl Coordinator {
                 .controller
                 .storage
                 .collection(*id)
-                .unwrap()
+                .expect("id does not exist")
                 .read_capabilities
                 .frontier()
                 .to_owned();

@@ -69,9 +69,9 @@ class PgCdcScenario(Scenario):
     MZ_SETUP = dedent(
         f"""
         > CREATE SOURCE mz_source
+          IN CLUSTER clusterd
           FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-          FOR ALL TABLES
-          WITH ( REMOTE 'clusterd:2100' );
+          FOR ALL TABLES;
 
         > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;
         """
@@ -114,10 +114,10 @@ class KafkaScenario(Scenario):
     SOURCE = dedent(
         """
         > CREATE SOURCE s1
+          IN CLUSTER clusterd
           FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${testdrive.seed}')
           FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-          ENVELOPE UPSERT
-          WITH ( REMOTE 'clusterd:2100' )
+          ENVELOPE UPSERT;
 
         > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM s1;
         """
@@ -363,17 +363,24 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         c.down(destroy_volumes=True)
 
-        c.start_and_wait_for_tcp(
-            services=["redpanda", "materialized", "postgres", "clusterd"]
+        c.up("redpanda", "materialized", "postgres", "clusterd")
+
+        c.sql(
+            """
+            CREATE CLUSTER clusterd REPLICAS (r1 (
+                STORAGECTL ADDRESSES ['clusterd:2100'],
+                STORAGE ADDRESSES ['clusterd:2103'],
+                COMPUTECTL ADDRESSES ['clusterd:2101'],
+                COMPUTE ADDRESSES ['clusterd:2102']
+            ))
+        """
         )
-        c.wait_for_materialized()
 
         c.up("testdrive", persistent=True)
         c.testdrive(scenario.pre_restart)
 
         # Restart Mz to confirm that re-hydration is also bounded memory
         c.kill("materialized", "clusterd")
-        c.start_and_wait_for_tcp(services=["materialized", "clusterd"])
-        c.wait_for_materialized()
+        c.up("materialized", "clusterd")
 
         c.testdrive(scenario.post_restart)

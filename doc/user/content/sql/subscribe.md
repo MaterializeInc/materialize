@@ -167,7 +167,7 @@ updates.
 
 If the `PROGRESS` option is specified via `WITH (PROGRESS)`, an additional `mz_progressed` column appears in the output.
 When the column is `false`, the rest of the row is a valid update.
-When the column is `true`m the rest of the row is not a valid update and its content should be ignored;
+When the column is `true` the rest of the row is not a valid update and its content should be ignored;
 the row exists only to communicate that timestamps have advanced.
 
 Not all timestamps that appear will have a corresponding row with `mz_progressed` set to `true`.

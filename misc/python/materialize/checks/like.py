@@ -20,8 +20,8 @@ class Like(Check):
         return Testdrive(
             dedent(
                 """
-            > CREATE TABLE like_regex_table (f1 STRING, f2 STRING);
-            > INSERT INTO like_regex_table VALUES ('abc', 'abc');
+            > CREATE TABLE like_regex_table (f1 STRING, f2 STRING, f3 STRING, f4 STRING);
+            > INSERT INTO like_regex_table VALUES ('abc', 'abc', 'a~%', '~');
             """
             )
         )
@@ -31,12 +31,12 @@ class Like(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE MATERIALIZED VIEW like_regex_view1 AS SELECT f1 LIKE f2 AS c1, f1 ILIKE f2 AS c2, f1 LIKE 'x_z' AS c3, f1 ILIKE 'a_c' AS c4 FROM like_regex_table;
-                > INSERT INTO like_regex_table VALUES ('klm', 'klm');
+                > CREATE MATERIALIZED VIEW like_regex_view1 AS SELECT f1 LIKE f2 AS c1, f1 ILIKE f2 AS c2, f1 LIKE 'x_z' AS c3, f1 ILIKE 'a_c' AS c4, f1 LIKE 'a~%' ESCAPE '~' AS c5, f1 LIKE f3 ESCAPE '~' AS c6, f1 LIKE f3 ESCAPE f4 AS c7 FROM like_regex_table;
+                > INSERT INTO like_regex_table VALUES ('klm', 'klm', 'k_m', 'k');
             """,
                 """
-                > CREATE MATERIALIZED VIEW like_regex_view2 AS SELECT f1 LIKE f2 AS c1, f1 ILIKE f2 AS c2, f1 LIKE 'x_z' AS c3, f1 ILIKE 'a_c' AS c4 FROM like_regex_table;
-                > INSERT INTO like_regex_table VALUES ('xyz', 'xyz');
+                > CREATE MATERIALIZED VIEW like_regex_view2 AS SELECT f1 LIKE f2 AS c1, f1 ILIKE f2 AS c2, f1 LIKE 'x_z' AS c3, f1 ILIKE 'a_c' AS c4, f1 LIKE 'a~%' ESCAPE '~' AS c5, f1 LIKE f3 ESCAPE '~' AS c6, f1 LIKE f3 ESCAPE f4 AS c7 FROM like_regex_table;
+                > INSERT INTO like_regex_table VALUES ('xyz', 'xyz', 'x_%', '_');
             """,
             ]
         ]
@@ -46,14 +46,14 @@ class Like(Check):
             dedent(
                 """
             > SELECT * FROM like_regex_view1;
-            true true false true
-            true true false false
-            true true true false
+            true true false true false false false
+            true true false false false true false
+            true true true false false true false
 
             > SELECT * FROM like_regex_view2;
-            true true false true
-            true true false false
-            true true true false
+            true true false true false false false
+            true true false false false true false
+            true true true false false true false
             """
             )
         )

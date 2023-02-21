@@ -11,6 +11,7 @@ use prometheus::{HistogramVec, IntCounterVec, IntGaugeVec};
 
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::stats::histogram_seconds_buckets;
 use mz_sql::ast::{AstInfo, Statement, StatementKind};
 
 use crate::session::Session;
@@ -47,6 +48,7 @@ impl Metrics {
             queue_busy_seconds: registry.register(metric!(
                 name: "mz_coord_queue_busy_seconds",
                 help: "The number of seconds the coord queue was processing before it was empty. This is a sampled metric and does not measure the full coord queue wait/idle times.",
+                buckets: histogram_seconds_buckets(0.000_128, 8.0)
             )),
             determine_timestamp: registry.register(metric!(
                 name: "mz_determine_timestamp",
@@ -61,6 +63,7 @@ impl Metrics {
             storage_usage_collection_time_seconds: registry.register(metric!(
                 name: "mz_storage_usage_collection_time_seconds",
                 help: "The number of seconds the coord spends collecting usage metrics from storage.",
+                buckets: histogram_seconds_buckets(0.000_128, 8.0)
             ))
         }
     }

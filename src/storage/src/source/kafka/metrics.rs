@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use prometheus::core::AtomicI64;
 use tracing::debug;
@@ -20,7 +20,7 @@ use crate::source::metrics::SourceBaseMetrics;
 pub(super) struct KafkaPartitionMetrics {
     labels: Vec<String>,
     base_metrics: SourceBaseMetrics,
-    partition_offset_map: HashMap<i32, DeleteOnDropGauge<'static, AtomicI64, Vec<String>>>,
+    partition_offset_map: BTreeMap<i32, DeleteOnDropGauge<'static, AtomicI64, Vec<String>>>,
 }
 
 impl KafkaPartitionMetrics {
@@ -32,7 +32,7 @@ impl KafkaPartitionMetrics {
     ) -> Self {
         let metrics = &base_metrics.partition_specific;
         Self {
-            partition_offset_map: HashMap::from_iter(ids.iter().map(|id| {
+            partition_offset_map: BTreeMap::from_iter(ids.iter().map(|id| {
                 let labels = &[topic.clone(), source_id.to_string(), format!("{}", id)];
                 (
                     *id,

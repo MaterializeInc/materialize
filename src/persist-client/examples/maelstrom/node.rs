@@ -16,7 +16,7 @@
 //! [service]: https://github.com/jepsen-io/maelstrom/blob/v0.2.1/doc/services.md
 //! [ruby examples]: https://github.com/jepsen-io/maelstrom/blob/v0.2.1/demo/ruby/node.rb
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
 use std::sync::{Arc, Mutex};
 
@@ -95,7 +95,7 @@ where
         let core = Core {
             write: Box::new(write),
             next_msg_id: MsgId(0),
-            callbacks: HashMap::new(),
+            callbacks: BTreeMap::new(),
         };
         Node {
             args,
@@ -125,7 +125,7 @@ where
             };
 
             let service = Arc::clone(&self.service);
-            let _ = mz_ore::task::spawn(|| "maelstrom::handle".to_string(), async move {
+            mz_ore::task::spawn(|| "maelstrom::handle".to_string(), async move {
                 let service = service.get().await;
                 let () = service.eval(handle, msg.src, body).await;
             });
@@ -164,7 +164,7 @@ where
                 // the AsyncInitOnceWaitable nonsense.
                 let args = self.args.clone();
                 let service_init = Arc::clone(&self.service);
-                let _ = mz_ore::task::spawn(|| "maelstrom::init".to_string(), async move {
+                mz_ore::task::spawn(|| "maelstrom::init".to_string(), async move {
                     let service = match S::init(&args, &handle).await {
                         Ok(x) => x,
                         Err(err) => {
@@ -186,7 +186,7 @@ where
 struct Core {
     write: Box<dyn Write + Send + Sync>,
     next_msg_id: MsgId,
-    callbacks: HashMap<MsgId, oneshot::Sender<Body>>,
+    callbacks: BTreeMap<MsgId, oneshot::Sender<Body>>,
 }
 
 impl std::fmt::Debug for Core {

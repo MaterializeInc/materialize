@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -25,6 +25,7 @@ use mz_repr::adt::system::Oid;
 use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
 use mz_repr::strconv;
 use mz_repr::ColumnName;
+use mz_repr::GlobalId;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::UnresolvedObjectName;
 use mz_sql_parser::parser::ParserError;
@@ -77,9 +78,10 @@ pub enum PlanError {
     UpsertSinkWithoutKey,
     InvalidNumericMaxScale(InvalidNumericMaxScaleError),
     InvalidCharLength(InvalidCharLengthError),
-    InvalidObject(ResolvedObjectName),
+    InvalidId(GlobalId),
+    InvalidObject(Box<ResolvedObjectName>),
     InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),
-    InvalidSecret(ResolvedObjectName),
+    InvalidSecret(Box<ResolvedObjectName>),
     InvalidTemporarySchema,
     Parser(ParserError),
     DropViewOnMaterializedView(String),
@@ -90,10 +92,6 @@ pub enum PlanError {
     AlterViewOnMaterializedView(String),
     ShowCreateViewOnMaterializedView(String),
     ExplainViewOnMaterializedView(String),
-    CannotModifyLinkedCluster {
-        cluster_name: String,
-        linked_object_name: String,
-    },
     UnacceptableTimelineName(String),
     UnrecognizedTypeInPostgresSource {
         cols: Vec<(String, Oid)>,
@@ -138,8 +136,9 @@ pub enum PlanError {
     },
     InvalidPrivatelinkAvailabilityZone {
         name: String,
-        supported_azs: HashSet<String>,
+        supported_azs: BTreeSet<String>,
     },
+    InvalidSchemaName,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -178,9 +177,6 @@ impl PlanError {
             }
             Self::ExplainViewOnMaterializedView(_) => {
                 Some("Use EXPLAIN [...] MATERIALIZED VIEW to explain a materialized view.".into())
-            }
-            Self::CannotModifyLinkedCluster { linked_object_name, .. } => {
-                Some(format!("This cluster is linked to {}. Use ALTER or DROP on that object instead.", linked_object_name))
             }
             Self::UnacceptableTimelineName(_) => {
                 Some("The prefix \"mz_\" is reserved for system timelines.".into())
@@ -315,6 +311,7 @@ impl fmt::Display for PlanError {
             Self::InvalidVarCharMaxLength(e) => e.fmt(f),
             Self::Parser(e) => e.fmt(f),
             Self::Unstructured(e) => write!(f, "{}", e),
+            Self::InvalidId(id) => write!(f, "invalid id {}", id),
             Self::InvalidObject(i) => write!(f, "{} is not a database object", i.full_name_str()),
             Self::InvalidSecret(i) => write!(f, "{} is not a secret", i.full_name_str()),
             Self::InvalidTemporarySchema => {
@@ -324,9 +321,6 @@ impl fmt::Display for PlanError {
             | Self::AlterViewOnMaterializedView(name)
             | Self::ShowCreateViewOnMaterializedView(name)
             | Self::ExplainViewOnMaterializedView(name) => write!(f, "{name} is not a view"),
-            Self::CannotModifyLinkedCluster { cluster_name, .. } => {
-                write!(f, "cannot modify linked cluster {}", cluster_name.quoted())
-            }
             Self::UnrecognizedTypeInPostgresSource { cols } => {
                 let mut cols = cols.to_owned();
                 cols.sort();
@@ -380,6 +374,7 @@ impl fmt::Display for PlanError {
                 })
             },
             Self::InvalidPrivatelinkAvailabilityZone { name, ..} => write!(f, "invalid AWS PrivateLink availability zone {}", name.quoted()),
+            Self::InvalidSchemaName => write!(f, "no schema has been selected to create in"),
         }
     }
 }

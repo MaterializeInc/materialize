@@ -71,8 +71,11 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
+// Disallow usage of `unwrap()`.
+#![warn(clippy::unwrap_used)]
 #![cfg_attr(nightly_doc_features, feature(doc_cfg))]
 // Without this, cargo clippy complains with:
 //     overflow evaluating the requirement `&str: std::marker::Send`
@@ -105,7 +108,7 @@ macro_rules! coord_bail {
 mod command;
 mod coord;
 mod error;
-mod explain_new;
+mod explain;
 mod notice;
 mod subscribe;
 mod util;

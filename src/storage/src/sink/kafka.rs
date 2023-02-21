@@ -9,13 +9,13 @@
 
 use std::any::Any;
 use std::cell::{Cell, RefCell};
-use std::cmp;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
 use std::future::Future;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{cmp, future};
 
 use anyhow::{anyhow, bail, Context};
 use differential_dataflow::{Collection, Hashable};
@@ -51,8 +51,9 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_ore::retry::{Retry, RetryResult};
-use mz_ore::{halt, task};
+use mz_ore::task;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_storage_client::client::SinkStatisticsUpdate;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::DataflowError;
 use mz_storage_client::types::sinks::{
@@ -61,8 +62,10 @@ use mz_storage_client::types::sinks::{
 };
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 
+use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
 use crate::render::sinks::{HealthcheckerArgs, SinkRender};
 use crate::sink::{Healthchecker, KafkaBaseMetrics, SinkStatus};
+use crate::statistics::{SinkStatisticsMetrics, StorageStatistics};
 use crate::storage_state::StorageState;
 
 // 30s is a good maximum backoff for network operations. Long enough to reduce
@@ -120,6 +123,8 @@ where
             Antichain::new()
         }));
 
+        let internal_cmd_tx = Rc::clone(&storage_state.internal_cmd_tx);
+
         let token = kafka(
             sinked_collection,
             sink_id,
@@ -128,8 +133,14 @@ where
             sink.as_of.clone(),
             Rc::clone(&shared_frontier),
             &storage_state.sink_metrics.kafka,
+            storage_state
+                .sink_statistics
+                .get(&sink_id)
+                .expect("statistics initialized")
+                .clone(),
             &storage_state.connection_context,
             healthchecker_args,
+            internal_cmd_tx,
         );
 
         storage_state
@@ -363,11 +374,12 @@ impl KafkaTxProducer {
 }
 
 struct KafkaSinkState {
+    sink_id: GlobalId,
     name: String,
     topic: String,
     metrics: Arc<SinkMetrics>,
     producer: KafkaTxProducer,
-    pending_rows: HashMap<Timestamp, Vec<EncodedRow>>,
+    pending_rows: BTreeMap<Timestamp, Vec<EncodedRow>>,
     ready_rows: VecDeque<(Timestamp, Vec<EncodedRow>)>,
     retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
 
@@ -376,6 +388,7 @@ struct KafkaSinkState {
     progress_client: Option<Arc<BaseConsumer<BrokerRewritingClientContext<SinkConsumerContext>>>>,
 
     healthchecker: Arc<Mutex<Option<Healthchecker>>>,
+    internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
     gate_ts: Rc<Cell<Option<Timestamp>>>,
 
     /// Timestamp of the latest progress record that was written out to Kafka.
@@ -419,6 +432,7 @@ impl KafkaSinkState {
         metrics: &KafkaBaseMetrics,
         connection_context: &ConnectionContext,
         gate_ts: Rc<Cell<Option<Timestamp>>>,
+        internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
     ) -> Self {
         let metrics = Arc::new(SinkMetrics::new(
             metrics,
@@ -504,17 +518,19 @@ impl KafkaSinkState {
             .expect("creating Kafka progress client for sink failed");
 
         KafkaSinkState {
+            sink_id: sink_id.clone(),
             name: sink_name,
             topic: connection.topic,
             metrics,
             producer,
-            pending_rows: HashMap::new(),
+            pending_rows: BTreeMap::new(),
             ready_rows: VecDeque::new(),
             retry_manager,
             progress_topic: connection.progress.topic,
             progress_key: format!("mz-sink-{sink_id}"),
             progress_client: Some(Arc::new(progress_client)),
             healthchecker,
+            internal_cmd_tx,
             gate_ts,
             latest_progress_ts: Timestamp::minimum(),
             write_frontier,
@@ -900,7 +916,16 @@ impl KafkaSinkState {
             Err(msg) => {
                 self.update_status(SinkStatus::Stalled(msg.to_string()))
                     .await;
-                halt!("{msg:?}")
+                self.internal_cmd_tx.borrow_mut().broadcast(
+                    InternalStorageCommand::SuspendAndRestart {
+                        id: self.sink_id.clone(),
+                        reason: msg.to_string(),
+                    },
+                );
+
+                // Make sure to never return, preventing the sink from writing
+                // out anything it might regret in the future.
+                future::pending().await
             }
         }
     }
@@ -922,8 +947,10 @@ fn kafka<G>(
     as_of: SinkAsOf,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     metrics: &KafkaBaseMetrics,
+    sink_statistics: StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>,
     connection_context: &ConnectionContext,
     healthchecker_args: HealthcheckerArgs,
+    internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
 ) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -989,8 +1016,10 @@ where
         shared_gate_ts,
         write_frontier,
         metrics,
+        sink_statistics,
         connection_context,
         healthchecker_args,
+        internal_cmd_tx,
     )
 }
 
@@ -1014,8 +1043,10 @@ pub fn produce_to_kafka<G>(
     shared_gate_ts: Rc<Cell<Option<Timestamp>>>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     metrics: &KafkaBaseMetrics,
+    sink_statistics: StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>,
     connection_context: &ConnectionContext,
     healthchecker_args: HealthcheckerArgs,
+    internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
 ) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -1032,6 +1063,7 @@ where
         metrics,
         connection_context,
         Rc::clone(&shared_gate_ts),
+        internal_cmd_tx,
     );
 
     let mut vector = Vec::new();
@@ -1159,6 +1191,9 @@ where
                         .await;
 
                         let mut repeat_counter = 0;
+
+                        let count_for_stats = u64::cast_from(rows.len());
+                        let mut total_size_for_stats = 0;
                         for encoded_row in rows {
                             let record = BaseRecord::to(&s.topic);
                             let record = match encoded_row.value.as_ref() {
@@ -1176,7 +1211,14 @@ where
                                 value: Some(&ts_bytes),
                             }));
 
+                            let size_for_stats =
+                                u64::cast_from(record.payload.as_ref().map_or(0, |p| p.len()))
+                                    + u64::cast_from(record.key.as_ref().map_or(0, |k| k.len()));
+                            total_size_for_stats += size_for_stats;
+
                             s.send(record).await;
+                            sink_statistics.inc_messages_staged_by(1);
+                            sink_statistics.inc_bytes_staged_by(size_for_stats);
 
                             // advance to the next repetition of this row, or the next row if all
                             // repetitions are exhausted
@@ -1191,6 +1233,8 @@ where
                         // sending progress records and commit transactions.
                         s.flush().await;
 
+                        // We don't count this record as part of the message count in user-facing
+                        // statistics.
                         s.send_progress_record(*ts).await;
 
                         info!("Committing transaction for {:?}", ts,);
@@ -1200,6 +1244,8 @@ where
                                 .await,
                         )
                         .await;
+                        sink_statistics.inc_messages_committed_by(count_for_stats);
+                        sink_statistics.inc_bytes_committed_by(total_size_for_stats);
 
                         s.flush().await;
 
@@ -1296,7 +1342,10 @@ where
         .scope()
         .activator_for(&builder.operator_info().address[..]);
 
-    let mut stash: HashMap<Capability<Timestamp>, Vec<_>> = HashMap::new();
+    // `Capability` does not implement `Ord`, so we cannot use a `BTreeMap`. We need to iterate
+    // through the map, so we cannot use the `mz_ore` wrapper either.
+    #[allow(clippy::disallowed_types)]
+    let mut stash = std::collections::HashMap::<Capability<Timestamp>, Vec<_>>::new();
     let mut vector = Vec::new();
     let mut encode_logic = move |input: &mut InputHandle<
         Timestamp,

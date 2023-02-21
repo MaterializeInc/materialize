@@ -44,6 +44,35 @@ class SmokeTest(unittest.TestCase):
                 ):
                     cur.execute("SELECT '{a => 1, b => 2}'::map[text => int]")
 
+    def test_arrays(self) -> None:
+        with psycopg3.connect(MATERIALIZED_URL, autocommit=True) as conn:
+            # Text roundtripping of a one-dimensional integer array is supported...
+            with conn.cursor() as cur:
+                cur.execute("SELECT %t", ([1, 2, 3],))
+                row = cur.fetchone()
+                self.assertEqual(row, ([1, 2, 3],))
+
+            # ...but binary roundtripping is not.
+            with conn.cursor(binary=True) as cur:
+                with self.assertRaisesRegex(
+                    psycopg3.errors.InvalidParameterValue,
+                    "input of array types is not implemented",
+                ):
+                    cur.execute("SELECT %b", ([1, 2, 3],))
+                    row = cur.fetchone()
+                    self.assertEqual(row, ([1, 2, 3],))
+
+            # Text roundtripping of a two-dimensional integer array is
+            # not supported.
+            with conn.cursor() as cur:
+                with self.assertRaisesRegex(
+                    psycopg3.errors.InvalidParameterValue,
+                    "parsing multi-dimensional arrays is not supported",
+                ):
+                    cur.execute("SELECT %t", ([[1], [2], [3]],))
+                    row = cur.fetchone()
+                    self.assertEqual(row, ([[1], [2], [3]],))
+
     def test_sqlalchemy(self) -> None:
         engine = sqlalchemy.engine.create_engine(MATERIALIZED_URL)
         results = [[c1, c2] for c1, c2 in engine.execute("VALUES (1, 2), (3, 4)")]

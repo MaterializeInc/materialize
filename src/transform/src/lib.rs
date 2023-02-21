@@ -71,6 +71,7 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
@@ -111,6 +112,7 @@ pub mod literal_lifting;
 pub mod monotonic;
 pub mod nonnull_requirements;
 pub mod nonnullable;
+pub mod normalize;
 pub mod normalize_lets;
 pub mod predicate_pushdown;
 pub mod projection_extraction;
@@ -273,12 +275,12 @@ impl Transform for Fixpoint {
                             )?;
                         }
                     }
-                    mz_repr::explain_new::trace_plan(relation);
+                    mz_repr::explain::trace_plan(relation);
                     Ok(())
                 })?;
 
                 if *relation == original {
-                    mz_repr::explain_new::trace_plan(relation);
+                    mz_repr::explain::trace_plan(relation);
                     return Ok(());
                 }
             }
@@ -322,16 +324,12 @@ impl Default for FuseAndCollapse {
             transforms: vec![
                 Box::new(crate::projection_extraction::ProjectionExtraction),
                 Box::new(crate::projection_lifting::ProjectionLifting::default()),
-                Box::new(crate::fusion::map::Map),
-                Box::new(crate::fusion::negate::Negate),
-                Box::new(crate::fusion::filter::Filter),
+                Box::new(crate::fusion::Fusion),
                 Box::new(crate::fusion::flatmap_to_map::FlatMapToMap),
-                Box::new(crate::fusion::project::Project),
                 Box::new(crate::fusion::join::Join),
-                Box::new(crate::fusion::top_k::TopK),
                 Box::new(crate::normalize_lets::NormalizeLets::new(false)),
                 Box::new(crate::fusion::reduce::Reduce),
-                Box::new(crate::fusion::union::Union),
+                Box::new(crate::fusion::union::UnionNegate),
                 // This goes after union fusion so we can cancel out
                 // more branches at a time.
                 Box::new(crate::union_cancel::UnionBranchCancellation),
@@ -377,7 +375,7 @@ impl Transform for FuseAndCollapse {
                 },
             )?;
         }
-        mz_repr::explain_new::trace_plan(&*relation);
+        mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }
 }
@@ -400,6 +398,7 @@ impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
     pub fn logical_optimizer() -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
+            Box::new(crate::normalize::Normalize::new()),
             // 1. Structure-agnostic cleanup
             Box::new(crate::topk_elision::TopKElision),
             Box::new(crate::nonnull_requirements::NonNullRequirements::default()),
@@ -507,7 +506,7 @@ impl Optimizer {
     pub fn logical_cleanup_pass() -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
             // Delete unnecessary maps.
-            Box::new(crate::fusion::map::Map),
+            Box::new(crate::fusion::Fusion),
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![
@@ -518,8 +517,8 @@ impl Optimizer {
                     Box::new(crate::fusion::join::Join),
                     Box::new(crate::redundant_join::RedundantJoin::default()),
                     // Redundant join produces projects that need to be fused.
-                    Box::new(crate::fusion::project::Project),
-                    Box::new(crate::fusion::union::Union),
+                    Box::new(crate::fusion::Fusion),
+                    Box::new(crate::fusion::union::UnionNegate),
                     // This goes after union fusion so we can cancel out
                     // more branches at a time.
                     Box::new(crate::union_cancel::UnionBranchCancellation),
@@ -553,7 +552,7 @@ impl Optimizer {
         let transform_result = self.transform(&mut relation, &EmptyIndexOracle);
         match transform_result {
             Ok(_) => {
-                mz_repr::explain_new::trace_plan(&relation);
+                mz_repr::explain::trace_plan(&relation);
                 Ok(mz_expr::OptimizedMirRelationExpr(relation))
             }
             Err(e) => {

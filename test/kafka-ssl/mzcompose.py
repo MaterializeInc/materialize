@@ -21,7 +21,7 @@ SERVICES = [
     TestCerts(),
     Zookeeper(),
     Kafka(
-        depends_on=["zookeeper", "test-certs"],
+        depends_on_extra=["test-certs"],
         environment=[
             # Default
             "KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181",
@@ -44,7 +44,7 @@ SERVICES = [
         volumes=["secrets:/etc/kafka/secrets"],
     ),
     SchemaRegistry(
-        depends_on=["kafka", "zookeeper", "test-certs"],
+        depends_on_extra=["test-certs"],
         environment=[
             "SCHEMA_REGISTRY_KAFKASTORE_TIMEOUT_MS=10000",
             "SCHEMA_REGISTRY_HOST_NAME=schema-registry",
@@ -116,12 +116,5 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="run against the specified files",
     )
     args = parser.parse_args()
-    c.start_and_wait_for_tcp(
-        services=[
-            "zookeeper",
-            "kafka",
-            "schema-registry",
-            "materialized",
-        ]
-    )
+    c.up("zookeeper", "kafka", "schema-registry", "materialized")
     c.run("testdrive", *args.files)

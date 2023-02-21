@@ -10,7 +10,6 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -25,14 +24,15 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::PartialOrder;
-use tokio::sync::Mutex;
 use tracing::trace;
 
 use mz_compute_client::types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::HashMap;
 use mz_persist_client::batch::Batch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriterEnrichedHollowBatch;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::errors::DataflowError;
@@ -153,7 +153,7 @@ fn install_desired_into_persist<G>(
     persist_collection: Collection<G, Result<Row, DataflowError>, Diff>,
     as_of: Antichain<Timestamp>,
     compute_state: &mut crate::compute_state::ComputeState,
-    mut probes: Vec<probe::Handle<Timestamp>>,
+    probes: Vec<probe::Handle<Timestamp>>,
 ) -> Option<Rc<dyn Any>>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -215,9 +215,7 @@ where
 
     append_frontier_stream.connect_loop(persist_feedback_handle);
 
-    for handle in &mut probes {
-        append_frontier_stream.probe_notify_with(handle);
-    }
+    append_frontier_stream.probe_notify_with(probes);
 
     let token = Rc::new((mint_token, write_token, append_token));
 
@@ -242,7 +240,7 @@ fn mint_batch_descriptions<G>(
     desired_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     persist_feedback_stream: &Stream<G, ()>,
     as_of: Antichain<Timestamp>,
-    persist_clients: Arc<Mutex<PersistClientCache>>,
+    persist_clients: Arc<PersistClientCache>,
     compute_state: &mut crate::compute_state::ComputeState,
 ) -> (
     Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
@@ -259,6 +257,7 @@ where
 
     let persist_location = target.persist_location.clone();
     let shard_id = target.data_shard;
+    let target_relation_desc = target.relation_desc.clone();
 
     // Only one worker is responsible for determining batch descriptions. All
     // workers must write batches with the same description, to ensure that they
@@ -299,8 +298,6 @@ where
         // TODO(aljoscha): We need to figure out what to do with error
         // results from these calls.
         let persist_client = persist_clients
-            .lock()
-            .await
             .open(persist_location)
             .await
             .expect("could not open persist client");
@@ -309,6 +306,8 @@ where
             .open_writer::<SourceData, (), Timestamp, Diff>(
                 shard_id,
                 &format!("compute::persist_sink::mint_batch_descriptions {}", sink_id),
+                Arc::new(target_relation_desc),
+                Arc::new(UnitSchema),
             )
             .await
             .expect("could not open persist shard");
@@ -504,13 +503,14 @@ fn write_batches<G>(
     batch_descriptions: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
     desired_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     persist_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
-    persist_clients: Arc<Mutex<PersistClientCache>>,
+    persist_clients: Arc<PersistClientCache>,
 ) -> (Stream<G, WriterEnrichedHollowBatch<Timestamp>>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
     let persist_location = target.persist_location.clone();
     let shard_id = target.data_shard;
+    let target_relation_desc = target.relation_desc.clone();
 
     let scope = desired_stream.scope();
     let worker_index = scope.index();
@@ -559,15 +559,17 @@ where
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
         // determines batch descriptions for all writers.
-        let mut in_flight_batches: HashMap<
+        //
+        // `Antichain` does not implement `Ord`, so we cannot use a `BTreeMap`. We need to search
+        // through the map, so we cannot use the `mz_ore` wrapper either.
+        #[allow(clippy::disallowed_types)]
+        let mut in_flight_batches = std::collections::HashMap::<
             (Antichain<Timestamp>, Antichain<Timestamp>),
             Capability<Timestamp>,
-        > = HashMap::new();
+        >::new();
 
         // TODO(aljoscha): We need to figure out what to do with error results from these calls.
         let persist_client = persist_clients
-            .lock()
-            .await
             .open(persist_location)
             .await
             .expect("could not open persist client");
@@ -576,6 +578,8 @@ where
             .open_writer::<SourceData, (), Timestamp, Diff>(
                 shard_id,
                 &format!("compute::persist_sink::write_batches {}", sink_id),
+                Arc::new(target_relation_desc),
+                Arc::new(UnitSchema),
             )
             .await
             .expect("could not open persist shard");
@@ -741,6 +745,20 @@ where
                     // spend a lot of time "consolidating" the same updates
                     // over and over again, with no changes.
                     consolidate_updates(&mut correction);
+
+                    // `correction` starts large as it diffs the initial snapshots,
+                    // but in steady state contains substantially fewer updates.
+                    // We should regularly shrink it to an appropriate size.
+                    // We use a 4x threshold here to ensure that we cannot enter
+                    // a resizing cycle without a linear-in-`correction.len()`
+                    // number of updates. E.g. a 2x threshold could result in
+                    // an allocation that must soon after be re-doubled back to
+                    // the current size, then halved, then doubled. We want that
+                    // pattern to require a linear number of updates rather than
+                    // a constant number.
+                    if correction.len() < correction.capacity() / 4 {
+                        correction.shrink_to_fit();
+                    }
                 }
 
                 for batch_description in ready_batches.into_iter() {
@@ -820,7 +838,7 @@ fn append_batches<G>(
     target: &CollectionMetadata,
     batch_descriptions: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
     batches: &Stream<G, WriterEnrichedHollowBatch<Timestamp>>,
-    persist_clients: Arc<Mutex<PersistClientCache>>,
+    persist_clients: Arc<PersistClientCache>,
 ) -> (Stream<G, ()>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
@@ -829,6 +847,7 @@ where
 
     let persist_location = target.persist_location.clone();
     let shard_id = target.data_shard;
+    let target_relation_desc = target.relation_desc.clone();
 
     let operator_name = format!("{} append_batches", operator_name);
     let mut append_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
@@ -875,18 +894,21 @@ where
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
         // determines batch descriptions for all writers.
-        let mut in_flight_descriptions: HashSet<(Antichain<Timestamp>, Antichain<Timestamp>)> =
-            HashSet::new();
+        //
+        // `Antichain` does not implement `Ord`, so we cannot use a `BTreeSet`. We need to search
+        // through the set, so we cannot use the `mz_ore` wrapper either.
+        #[allow(clippy::disallowed_types)]
+        let mut in_flight_descriptions = std::collections::HashSet::<
+            (Antichain<Timestamp>, Antichain<Timestamp>)
+        >::new();
 
-        let mut in_flight_batches: HashMap<
+        let mut in_flight_batches = HashMap::<
             (Antichain<Timestamp>, Antichain<Timestamp>),
             Vec<Batch<_, _, _, _>>,
-        > = HashMap::new();
+        >::new();
 
         // TODO(aljoscha): We need to figure out what to do with error results from these calls.
         let persist_client = persist_clients
-            .lock()
-            .await
             .open(persist_location)
             .await
             .expect("could not open persist client");
@@ -895,6 +917,8 @@ where
             .open_writer::<SourceData, (), Timestamp, Diff>(
                 shard_id,
                 &format!("persist_sink::append_batches {}", sink_id),
+                Arc::new(target_relation_desc),
+                Arc::new(UnitSchema)
             )
             .await
             .expect("could not open persist shard");

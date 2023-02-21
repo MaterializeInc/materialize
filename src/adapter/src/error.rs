@@ -19,7 +19,7 @@ use mz_compute_client::controller::error as compute_error;
 use mz_expr::{EvalError, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
-use mz_repr::explain_new::ExplainError;
+use mz_repr::explain::ExplainError;
 use mz_repr::NotNullViolation;
 use mz_sql::plan::PlanError;
 use mz_storage_client::controller::StorageError;
@@ -36,6 +36,10 @@ pub enum AdapterError {
         as_of: mz_repr::Timestamp,
         up_to: mz_repr::Timestamp,
     },
+    /// Attempted to use a potentially ambiguous column reference expression with a system table.
+    // We don't allow this until https://github.com/MaterializeInc/materialize/issues/16650 is
+    // resolved because it prevents us from adding columns to system tables.
+    AmbiguousSystemColumnReference,
     /// An error occurred in a catalog operation.
     Catalog(catalog::Error),
     /// The cached plan or descriptor changed.
@@ -87,15 +91,26 @@ pub enum AdapterError {
         expected: Vec<String>,
     },
     /// No such storage instance size has been configured.
-    InvalidStorageHostSize {
+    InvalidStorageClusterSize {
         size: String,
         expected: Vec<String>,
     },
-    StorageHostSizeRequired {
+    /// Creating a source or sink without specifying its size is forbidden.
+    SourceOrSinkSizeRequired {
         expected: Vec<String>,
     },
     /// The selection value for a table mutation operation refers to an invalid object.
     InvalidTableMutationSelection,
+    /// An operation attempted to modify a linked cluster.
+    ModifyLinkedCluster {
+        cluster_name: String,
+        linked_object_name: String,
+    },
+    /// An operation attempted to create an illegal item in a
+    /// storage-only cluster
+    BadItemInStorageCluster {
+        cluster_name: String,
+    },
     /// Expression violated a column's constraint
     ConstraintViolation(NotNullViolation),
     /// Target cluster has no replicas to service query.
@@ -108,6 +123,8 @@ pub enum AdapterError {
     PlanError(PlanError),
     /// The named prepared statement already exists.
     PreparedStatementExists(String),
+    /// Wrapper around parsing error
+    ParseError(mz_sql_parser::parser::ParserError),
     /// The transaction is in read-only mode.
     ReadOnlyTransaction,
     /// The specified session parameter is read-only.
@@ -164,6 +181,8 @@ pub enum AdapterError {
         cluster_name: String,
         replica_name: String,
     },
+    /// The named setting does not exist.
+    UnrecognizedConfigurationParam(String),
     /// A generic error occurred.
     //
     // TODO(benesch): convert all those errors to structured errors.
@@ -179,10 +198,6 @@ pub enum AdapterError {
     },
     /// Attempted to read from log sources without selecting a target replica.
     UntargetedLogRead {
-        log_names: Vec<String>,
-    },
-    /// Attempted to subscribe to a log source.
-    TargetedSubscribe {
         log_names: Vec<String>,
     },
     /// The transaction is in write-only mode.
@@ -201,6 +216,10 @@ impl AdapterError {
     /// Reports additional details about the error, if any are available.
     pub fn detail(&self) -> Option<String> {
         match self {
+            AdapterError::AmbiguousSystemColumnReference => {
+                Some("This is a limitation in Materialize that will be lifted in a future release. \
+                See https://github.com/MaterializeInc/materialize/issues/16650 for details.".to_string())
+            },
             AdapterError::Catalog(c) => c.detail(),
             AdapterError::Eval(e) => e.detail(),
             AdapterError::RelationOutsideTimeDomain { relations, names } => Some(format!(
@@ -228,8 +247,7 @@ impl AdapterError {
                     .into(),
             ),
             AdapterError::IntrospectionDisabled { log_names }
-            | AdapterError::UntargetedLogRead { log_names }
-            | AdapterError::TargetedSubscribe { log_names } => Some(format!(
+            | AdapterError::UntargetedLogRead { log_names } => Some(format!(
                 "The query references the following log sources:\n    {}",
                 log_names.join("\n    "),
             )),
@@ -252,6 +270,11 @@ impl AdapterError {
     /// Reports a hint for the user about how the error could be fixed.
     pub fn hint(&self) -> Option<String> {
         match self {
+            AdapterError::AmbiguousSystemColumnReference => Some(
+                "Rewrite the view to refer to all columns by name. Expand all wildcards and \
+                convert all NATURAL JOINs to USING joins."
+                    .to_string(),
+            ),
             AdapterError::Catalog(c) => c.hint(),
             AdapterError::ConstrainedParameter {
                 valid_values: Some(valid_values),
@@ -279,10 +302,10 @@ impl AdapterError {
                 "Valid cluster replica sizes are: {}",
                 expected.join(", ")
             )),
-            AdapterError::InvalidStorageHostSize { expected, .. } => {
+            AdapterError::InvalidStorageClusterSize { expected, .. } => {
                 Some(format!("Valid sizes are: {}", expected.join(", ")))
             }
-            Self::StorageHostSizeRequired { expected } => Some(format!(
+            AdapterError::SourceOrSinkSizeRequired { expected } => Some(format!(
                 "Try choosing one of the smaller sizes to start. Available sizes: {}",
                 expected.join(", ")
             )),
@@ -294,9 +317,15 @@ impl AdapterError {
             }
             AdapterError::UntargetedLogRead { .. } => Some(
                 "Use `SET cluster_replica = <replica-name>` to target a specific replica in the \
-                 active cluster. Note that subsequent `SELECT` queries will only be answered by \
+                 active cluster. Note that subsequent queries will only be answered by \
                  the selected replica, which might reduce availability. To undo the replica \
                  selection, use `RESET cluster_replica`."
+                    .into(),
+            ),
+            AdapterError::StatementTimeout => Some(
+                "Consider increasing the maximum allowed statement duration for this session by \
+                 setting the statement_timeout session variable. For example, `SET \
+                 statement_timeout = '60s'`."
                     .into(),
             ),
             AdapterError::PlanError(e) => e.hint(),
@@ -315,6 +344,16 @@ impl fmt::Display for AdapterError {
                     r#"subscription lower ("as of") bound is beyond its upper ("up to") bound: {} < {}"#,
                     up_to, as_of
                 )
+            }
+            AdapterError::AmbiguousSystemColumnReference => {
+                write!(
+                    f,
+                    "cannot use wildcard expansions or NATURAL JOINs in a view that depends on \
+                    system objects"
+                )
+            }
+            AdapterError::ModifyLinkedCluster { cluster_name, .. } => {
+                write!(f, "cannot modify linked cluster {}", cluster_name.quoted())
             }
             AdapterError::ChangedPlan => f.write_str("cached plan must not change result type"),
             AdapterError::Catalog(e) => e.fmt(f),
@@ -352,6 +391,9 @@ impl fmt::Display for AdapterError {
                 p.name().quoted(),
                 p.type_name().quoted()
             ),
+            AdapterError::BadItemInStorageCluster { .. } => f.write_str(
+                "cannot create this kind of item in a cluster that contains sources or sinks",
+            ),
             AdapterError::InvalidParameterValue {
                 parameter,
                 value,
@@ -369,10 +411,10 @@ impl fmt::Display for AdapterError {
             AdapterError::InvalidClusterReplicaSize { size, expected: _ } => {
                 write!(f, "unknown cluster replica size {size}",)
             }
-            AdapterError::InvalidStorageHostSize { size, .. } => {
+            AdapterError::InvalidStorageClusterSize { size, .. } => {
                 write!(f, "unknown source size {size}")
             }
-            Self::StorageHostSizeRequired { .. } => {
+            AdapterError::SourceOrSinkSizeRequired { .. } => {
                 write!(f, "size option is required")
             }
             AdapterError::InvalidTableMutationSelection => {
@@ -394,6 +436,7 @@ impl fmt::Display for AdapterError {
             AdapterError::OperationRequiresTransaction(op) => {
                 write!(f, "{} can only be used in transaction blocks", op)
             }
+            AdapterError::ParseError(e) => e.fmt(f),
             AdapterError::PlanError(e) => e.fmt(f),
             AdapterError::PreparedStatementExists(name) => {
                 write!(f, "prepared statement {} already exists", name.quoted())
@@ -475,14 +518,16 @@ impl fmt::Display for AdapterError {
                 f,
                 "cluster replica '{cluster_name}.{replica_name}' does not exist"
             ),
+            AdapterError::UnrecognizedConfigurationParam(setting_name) => write!(
+                f,
+                "unrecognized configuration parameter {}",
+                setting_name.quoted()
+            ),
             AdapterError::UnstableDependency { object_type, .. } => {
                 write!(f, "cannot create {object_type} with unstable dependencies")
             }
             AdapterError::UntargetedLogRead { .. } => {
                 f.write_str("log source reads must target a replica")
-            }
-            AdapterError::TargetedSubscribe { .. } => {
-                f.write_str("SUBSCRIBE cannot reference a log source")
             }
             AdapterError::MultiTableWriteTransaction => {
                 f.write_str("write transactions only support writes to a single table")
@@ -588,6 +633,12 @@ impl From<TimestampError> for AdapterError {
     fn from(e: TimestampError) -> Self {
         let e: EvalError = e.into();
         e.into()
+    }
+}
+
+impl From<mz_sql_parser::parser::ParserError> for AdapterError {
+    fn from(e: mz_sql_parser::parser::ParserError) -> Self {
+        AdapterError::ParseError(e)
     }
 }
 

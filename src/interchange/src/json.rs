@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde_json::{json, Map};
@@ -78,7 +78,7 @@ impl fmt::Debug for JsonEncoder {
                 "schema",
                 &format!(
                     "{:?}",
-                    build_row_schema_json(&self.value_columns, "schema", &HashMap::new())
+                    build_row_schema_json(&self.value_columns, "schema", &BTreeMap::new())
                 ),
             )
             .finish()
@@ -223,7 +223,7 @@ impl ToJson for TypedDatum<'_> {
 
 fn build_row_schema_field(
     type_namer: &mut Namer,
-    custom_names: &HashMap<GlobalId, String>,
+    custom_names: &BTreeMap<GlobalId, String>,
     typ: &ColumnType,
 ) -> serde_json::Value {
     let mut field_type = match &typ.scalar_type {
@@ -342,7 +342,7 @@ fn build_row_schema_field(
 fn build_row_schema_fields(
     columns: &[(ColumnName, ColumnType)],
     type_namer: &mut Namer,
-    custom_names: &HashMap<GlobalId, String>,
+    custom_names: &BTreeMap<GlobalId, String>,
 ) -> Vec<serde_json::Value> {
     let mut fields = Vec::new();
     let mut field_namer = Namer::default();
@@ -361,7 +361,7 @@ fn build_row_schema_fields(
 pub fn build_row_schema_json(
     columns: &[(ColumnName, ColumnType)],
     name: &str,
-    custom_names: &HashMap<GlobalId, String>,
+    custom_names: &BTreeMap<GlobalId, String>,
 ) -> Result<serde_json::Value, anyhow::Error> {
     let fields = build_row_schema_fields(columns, &mut Namer::default(), custom_names);
     let _ = mz_avro::schema::Name::parse_simple(name)?;
@@ -377,9 +377,9 @@ pub fn build_row_schema_json(
 struct Namer {
     record_index: usize,
     seen_interval: bool,
-    seen_unsigneds: HashSet<usize>,
-    seen_names: HashMap<String, String>,
-    valid_names_count: HashMap<String, usize>,
+    seen_unsigneds: BTreeSet<usize>,
+    seen_names: BTreeMap<String, String>,
+    valid_names_count: BTreeMap<String, usize>,
 }
 
 impl Namer {

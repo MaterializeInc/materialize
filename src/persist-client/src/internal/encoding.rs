@@ -12,6 +12,7 @@ use std::marker::PhantomData;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_persist::location::{SeqNo, VersionedData};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use prost::Message;
@@ -19,19 +20,22 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use tracing::debug;
 use uuid::Uuid;
 
 use mz_ore::halt;
 
 use crate::critical::CriticalReaderId;
-use crate::error::CodecMismatch;
+use crate::error::{CodecMismatch, CodecMismatchT};
+use crate::internal::metrics::Metrics;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::state::{
-    CriticalReaderState, HandleDebugState, HollowBatch, HollowBatchPart, IdempotencyToken,
-    LeasedReaderState, OpaqueState, ProtoCriticalReaderState, ProtoHandleDebugState,
-    ProtoHollowBatch, ProtoHollowBatchPart, ProtoLeasedReaderState, ProtoStateDiff,
-    ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoStateRollup, ProtoTrace,
-    ProtoU64Antichain, ProtoU64Description, ProtoWriterState, State, StateCollections, WriterState,
+    CriticalReaderState, HandleDebugState, HollowBatch, HollowBatchPart, HollowRollup,
+    IdempotencyToken, LeasedReaderState, OpaqueState, ProtoCriticalReaderState,
+    ProtoHandleDebugState, ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowRollup,
+    ProtoLeasedReaderState, ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType,
+    ProtoStateFieldDiffs, ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description,
+    ProtoWriterState, State, StateCollections, TypedState, WriterState,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, StateDiff, StateFieldDiff, StateFieldValDiff,
@@ -320,12 +324,30 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
                         |()| Ok(()),
                         |v| v.into_rust(),
                     )?,
-                    ProtoStateField::Rollups => field_diff_into_rust::<u64, String, _, _, _, _>(
-                        diff,
-                        &mut state_diff.rollups,
-                        |k| k.into_rust(),
-                        |v| v.into_rust(),
-                    )?,
+                    ProtoStateField::Rollups => {
+                        field_diff_into_rust::<u64, ProtoHollowRollup, _, _, _, _>(
+                            diff,
+                            &mut state_diff.rollups,
+                            |k| k.into_rust(),
+                            |v| v.into_rust(),
+                        )?
+                    }
+                    // MIGRATION: We previously stored rollups as a `SeqNo ->
+                    // string Key` map, but now the value is a `struct
+                    // HollowRollup`.
+                    ProtoStateField::DeprecatedRollups => {
+                        field_diff_into_rust::<u64, String, _, _, _, _>(
+                            diff,
+                            &mut state_diff.rollups,
+                            |k| k.into_rust(),
+                            |v| {
+                                Ok(HollowRollup {
+                                    key: v.into_rust()?,
+                                    encoded_size_bytes: None,
+                                })
+                            },
+                        )?
+                    }
                     ProtoStateField::LeasedReaders => {
                         field_diff_into_rust::<String, ProtoLeasedReaderState, _, _, _, _>(
                             diff,
@@ -464,7 +486,7 @@ where
     Ok(())
 }
 
-impl<K, V, T, D> State<K, V, T, D>
+impl<K, V, T, D> TypedState<K, V, T, D>
 where
     K: Codec,
     V: Codec,
@@ -480,37 +502,32 @@ where
             .expect("no required fields means no initialization errors");
     }
 
-    pub fn decode(build_version: &Version, buf: &[u8]) -> Result<Self, Box<CodecMismatch>> {
-        let proto = ProtoStateRollup::decode(buf)
-            // We received a State that we couldn't decode. This could happen if
-            // persist messes up backward/forward compatibility, if the durable
-            // data was corrupted, or if operations messes up deployment. In any
-            // case, fail loudly.
-            .expect("internal error: invalid encoded state");
-        let state = Self::try_from(proto).expect("internal error: invalid encoded state")?;
-        check_applier_version(build_version, &state.applier_version);
-        Ok(state)
+    pub(crate) fn into_proto(&self) -> ProtoStateRollup {
+        self.state
+            .into_proto(K::codec_name(), V::codec_name(), D::codec_name())
     }
 }
 
-impl<K, V, T, D> RustType<ProtoStateRollup> for State<K, V, T, D>
+impl<T> State<T>
 where
-    K: Codec,
-    V: Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Codec64,
 {
-    fn into_proto(&self) -> ProtoStateRollup {
+    pub(crate) fn into_proto(
+        &self,
+        key_codec: String,
+        val_codec: String,
+        diff_codec: String,
+    ) -> ProtoStateRollup {
         ProtoStateRollup {
             applier_version: self.applier_version.to_string(),
             shard_id: self.shard_id.into_proto(),
             seqno: self.seqno.into_proto(),
             walltime_ms: self.walltime_ms.into_proto(),
             hostname: self.hostname.into_proto(),
-            key_codec: K::codec_name(),
-            val_codec: V::codec_name(),
+            key_codec,
+            val_codec,
             ts_codec: T::codec_name(),
-            diff_codec: D::codec_name(),
+            diff_codec,
             last_gc_req: self.collections.last_gc_req.into_proto(),
             rollups: self
                 .collections
@@ -518,6 +535,7 @@ where
                 .iter()
                 .map(|(seqno, key)| (seqno.into_proto(), key.into_proto()))
                 .collect(),
+            deprecated_rollups: Default::default(),
             leased_readers: self
                 .collections
                 .leased_readers
@@ -539,40 +557,118 @@ where
             trace: Some(self.collections.trace.into_proto()),
         }
     }
-
-    fn from_proto(proto: ProtoStateRollup) -> Result<Self, TryFromProtoError> {
-        match State::try_from(proto) {
-            Ok(Ok(x)) => Ok(x),
-            Ok(Err(err)) => Err(TryFromProtoError::CodecMismatch(err.to_string())),
-            Err(err) => Err(err),
-        }
-    }
 }
 
-impl<K, V, T, D> State<K, V, T, D>
-where
-    K: Codec,
-    V: Codec,
-    T: Timestamp + Lattice + Codec64,
-    D: Codec64,
-{
-    fn try_from(x: ProtoStateRollup) -> Result<Result<Self, CodecMismatch>, TryFromProtoError> {
-        if K::codec_name() != x.key_codec
-            || V::codec_name() != x.val_codec
-            || T::codec_name() != x.ts_codec
-            || D::codec_name() != x.diff_codec
+/// A decoded version of [ProtoStateRollup] for which we have not yet checked
+/// that codecs match the ones in durable state.
+#[derive(Debug)]
+pub struct UntypedState<T> {
+    pub(crate) key_codec: String,
+    pub(crate) val_codec: String,
+    pub(crate) ts_codec: String,
+    pub(crate) diff_codec: String,
+
+    // Important! This T has not been validated, so we can't expose anything in
+    // State that references T until one of the check methods have been called.
+    // Any field on State that doesn't reference T is fair game.
+    state: State<T>,
+}
+
+impl<T: Timestamp + Lattice + Codec64> UntypedState<T> {
+    pub fn seqno(&self) -> SeqNo {
+        self.state.seqno
+    }
+
+    pub fn rollups(&self) -> &BTreeMap<SeqNo, HollowRollup> {
+        &self.state.collections.rollups
+    }
+
+    pub fn apply_encoded_diffs<'a, I: IntoIterator<Item = &'a VersionedData>>(
+        &mut self,
+        cfg: &PersistConfig,
+        metrics: &Metrics,
+        diffs: I,
+    ) {
+        // The apply_encoded_diffs might panic if T is not correct. Making this
+        // a silent no-op is far too subtle for my taste, but it's not clear
+        // what else we could do instead.
+        if T::codec_name() != self.ts_codec {
+            return;
+        }
+        self.state.apply_encoded_diffs(cfg, metrics, diffs);
+    }
+
+    pub fn check_codecs<K: Codec, V: Codec, D: Codec64>(
+        self,
+        shard_id: &ShardId,
+    ) -> Result<TypedState<K, V, T, D>, Box<CodecMismatch>> {
+        // Also defensively check that the shard_id on the state we fetched
+        // matches the shard_id we were trying to fetch.
+        assert_eq!(shard_id, &self.state.shard_id);
+        if K::codec_name() != self.key_codec
+            || V::codec_name() != self.val_codec
+            || T::codec_name() != self.ts_codec
+            || D::codec_name() != self.diff_codec
         {
-            return Ok(Err(CodecMismatch {
+            return Err(Box::new(CodecMismatch {
                 requested: (
                     K::codec_name(),
                     V::codec_name(),
                     T::codec_name(),
                     D::codec_name(),
+                    None,
                 ),
-                actual: (x.key_codec, x.val_codec, x.ts_codec, x.diff_codec),
+                actual: (
+                    self.key_codec,
+                    self.val_codec,
+                    self.ts_codec,
+                    self.diff_codec,
+                    None,
+                ),
             }));
         }
+        Ok(TypedState {
+            state: self.state,
+            _phantom: PhantomData,
+        })
+    }
 
+    pub(crate) fn check_ts_codec(self, shard_id: &ShardId) -> Result<State<T>, CodecMismatchT> {
+        // Also defensively check that the shard_id on the state we fetched
+        // matches the shard_id we were trying to fetch.
+        assert_eq!(shard_id, &self.state.shard_id);
+        if T::codec_name() != self.ts_codec {
+            return Err(CodecMismatchT {
+                requested: T::codec_name(),
+                actual: self.ts_codec,
+            });
+        }
+        Ok(self.state)
+    }
+
+    pub fn decode(build_version: &Version, buf: &[u8]) -> Self {
+        let proto = ProtoStateRollup::decode(buf)
+            // We received a State that we couldn't decode. This could happen if
+            // persist messes up backward/forward compatibility, if the durable
+            // data was corrupted, or if operations messes up deployment. In any
+            // case, fail loudly.
+            .expect("internal error: invalid encoded state");
+        let state = Self::from_proto(proto).expect("internal error: invalid encoded state");
+        check_applier_version(build_version, &state.state.applier_version);
+        state
+    }
+}
+
+impl<T: Timestamp + Lattice + Codec64> RustType<ProtoStateRollup> for UntypedState<T> {
+    fn into_proto(&self) -> ProtoStateRollup {
+        self.state.into_proto(
+            self.key_codec.clone(),
+            self.val_codec.clone(),
+            self.diff_codec.clone(),
+        )
+    }
+
+    fn from_proto(x: ProtoStateRollup) -> Result<Self, TryFromProtoError> {
         let applier_version = if x.applier_version.is_empty() {
             // Backward compatibility with versions of ProtoState before we set
             // this field: if it's missing (empty), assume an infinitely old
@@ -588,8 +684,17 @@ where
         };
 
         let mut rollups = BTreeMap::new();
-        for (seqno, key) in x.rollups {
-            rollups.insert(seqno.into_rust()?, key.into_rust()?);
+        for (seqno, rollup) in x.rollups {
+            rollups.insert(seqno.into_rust()?, rollup.into_rust()?);
+        }
+        for (seqno, key) in x.deprecated_rollups {
+            rollups.insert(
+                seqno.into_rust()?,
+                HollowRollup {
+                    key: key.into_rust()?,
+                    encoded_size_bytes: None,
+                },
+            );
         }
         let mut leased_readers = BTreeMap::new();
         for (id, state) in x.leased_readers {
@@ -611,15 +716,21 @@ where
             writers,
             trace: x.trace.into_rust_if_some("trace")?,
         };
-        Ok(Ok(State {
+        let state = State {
             applier_version,
             shard_id: x.shard_id.into_rust()?,
             seqno: x.seqno.into_rust()?,
             walltime_ms: x.walltime_ms,
             hostname: x.hostname,
             collections,
-            _phantom: PhantomData,
-        }))
+        };
+        Ok(UntypedState {
+            state,
+            key_codec: x.key_codec.into_rust()?,
+            val_codec: x.val_codec.into_rust()?,
+            ts_codec: x.ts_codec.into_rust()?,
+            diff_codec: x.diff_codec.into_rust()?,
+        })
     }
 }
 
@@ -638,6 +749,7 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoTrace> for Trace<T> {
     fn from_proto(proto: ProtoTrace) -> Result<Self, TryFromProtoError> {
         let mut ret = Trace::default();
         ret.downgrade_since(&proto.since.into_rust_if_some("since")?);
+        let mut batches_pushed = 0;
         for batch in proto.spine.into_iter() {
             let batch: HollowBatch<T> = batch.into_rust()?;
             if PartialOrder::less_than(ret.since(), batch.desc.since()) {
@@ -657,6 +769,13 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoTrace> for Trace<T> {
             // Ignore merge_reqs because whichever process generated this diff is
             // assigned the work.
             let _merge_reqs = ret.push_batch(batch);
+
+            batches_pushed += 1;
+            if batches_pushed % 1000 == 0 {
+                let mut batch_count = 0;
+                ret.map_batches(|_| batch_count += 1);
+                debug!("Decoded and pushed {batches_pushed} batches; trace size {batch_count}");
+            }
         }
         Ok(ret)
     }
@@ -828,6 +947,22 @@ impl RustType<ProtoHollowBatchPart> for HollowBatchPart {
     }
 }
 
+impl RustType<ProtoHollowRollup> for HollowRollup {
+    fn into_proto(&self) -> ProtoHollowRollup {
+        ProtoHollowRollup {
+            key: self.key.into_proto(),
+            encoded_size_bytes: self.encoded_size_bytes.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoHollowRollup) -> Result<Self, TryFromProtoError> {
+        Ok(HollowRollup {
+            key: proto.key.into_rust()?,
+            encoded_size_bytes: proto.encoded_size_bytes.into_rust()?,
+        })
+    }
+}
+
 impl<T: Timestamp + Codec64> RustType<ProtoU64Description> for Description<T> {
     fn into_proto(&self) -> ProtoU64Description {
         ProtoU64Description {
@@ -900,11 +1035,13 @@ impl<T: Timestamp + Codec64> From<SerdeWriterEnrichedHollowBatch> for WriterEnri
 mod tests {
     use std::sync::atomic::Ordering;
 
+    use mz_build_info::DUMMY_BUILD_INFO;
     use mz_persist::location::SeqNo;
 
     use crate::internal::paths::PartialRollupKey;
-    use crate::internal::state::{HandleDebugState, State};
+    use crate::internal::state::HandleDebugState;
     use crate::internal::state_diff::StateDiff;
+    use crate::tests::new_test_client_cache;
     use crate::ShardId;
 
     use super::*;
@@ -916,19 +1053,30 @@ mod tests {
         let v3 = semver::Version::new(3, 0, 0);
 
         // Code version v2 evaluates and writes out some State.
-        let state = State::<(), (), u64, i64>::new(v2.clone(), ShardId::new(), "".to_owned(), 0);
+        let shard_id = ShardId::new();
+        let state = TypedState::<(), (), u64, i64>::new(v2.clone(), shard_id, "".to_owned(), 0);
         let mut buf = Vec::new();
         state.encode(&mut buf);
 
         // We can read it back using persist code v2 and v3.
-        assert_eq!(State::decode(&v2, &buf).as_ref(), Ok(&state));
-        assert_eq!(State::decode(&v3, &buf).as_ref(), Ok(&state));
+        assert_eq!(
+            UntypedState::<u64>::decode(&v2, &buf)
+                .check_codecs(&shard_id)
+                .as_ref(),
+            Ok(&state)
+        );
+        assert_eq!(
+            UntypedState::<u64>::decode(&v3, &buf)
+                .check_codecs(&shard_id)
+                .as_ref(),
+            Ok(&state)
+        );
 
         // But we can't read it back using v1 because v1 might corrupt it by
         // losing or misinterpreting something written out by a future version
         // of code.
         mz_ore::process::PANIC_ON_HALT.store(true, Ordering::SeqCst);
-        let v1_res = mz_ore::panic::catch_unwind(|| State::<(), (), u64, i64>::decode(&v1, &buf));
+        let v1_res = mz_ore::panic::catch_unwind(|| UntypedState::<u64>::decode(&v1, &buf));
         assert!(v1_res.is_err());
     }
 
@@ -1041,5 +1189,130 @@ mod tests {
             },
         };
         assert_eq!(<WriterState<u64>>::from_proto(proto).unwrap(), expected);
+    }
+
+    #[test]
+    fn state_migration_rollups() {
+        let r1 = HollowRollup {
+            key: PartialRollupKey("foo".to_owned()),
+            encoded_size_bytes: None,
+        };
+        let r2 = HollowRollup {
+            key: PartialRollupKey("bar".to_owned()),
+            encoded_size_bytes: Some(2),
+        };
+        let shard_id = ShardId::new();
+        let mut state = TypedState::<(), (), u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            shard_id,
+            "host".to_owned(),
+            0,
+        );
+        state.state.collections.rollups.insert(SeqNo(2), r2.clone());
+        let mut proto = state.into_proto();
+
+        // Manually add the old rollup encoding.
+        proto.deprecated_rollups.insert(1, r1.key.0.clone());
+
+        let state = UntypedState::<u64>::from_proto(proto).unwrap();
+        let state = state.check_codecs::<(), (), i64>(&shard_id).unwrap();
+        let expected = vec![(SeqNo(1), r1), (SeqNo(2), r2)];
+        assert_eq!(
+            state
+                .state
+                .collections
+                .rollups
+                .into_iter()
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    #[test]
+    fn state_diff_migration_rollups() {
+        let r1_rollup = HollowRollup {
+            key: PartialRollupKey("foo".to_owned()),
+            encoded_size_bytes: None,
+        };
+        let r1 = StateFieldDiff {
+            key: SeqNo(1),
+            val: StateFieldValDiff::Insert(r1_rollup.clone()),
+        };
+        let r2_rollup = HollowRollup {
+            key: PartialRollupKey("bar".to_owned()),
+            encoded_size_bytes: Some(2),
+        };
+        let r2 = StateFieldDiff {
+            key: SeqNo(2),
+            val: StateFieldValDiff::Insert(r2_rollup.clone()),
+        };
+        let r3_rollup = HollowRollup {
+            key: PartialRollupKey("baz".to_owned()),
+            encoded_size_bytes: None,
+        };
+        let r3 = StateFieldDiff {
+            key: SeqNo(3),
+            val: StateFieldValDiff::Delete(r3_rollup.clone()),
+        };
+        let mut diff = StateDiff::<u64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            SeqNo(4),
+            SeqNo(5),
+            0,
+            PartialRollupKey("ignored".to_owned()),
+        );
+        diff.rollups.push(r2.clone());
+        diff.rollups.push(r3.clone());
+        let mut diff_proto = diff.into_proto();
+
+        // Manually add the old rollup encoding.
+        field_diffs_into_proto(
+            ProtoStateField::DeprecatedRollups,
+            &[StateFieldDiff {
+                key: r1.key,
+                val: StateFieldValDiff::Insert(r1_rollup.key.clone()),
+            }],
+            diff_proto.field_diffs.as_mut().unwrap(),
+            |k| k.into_proto().encode_to_vec(),
+            |v| v.into_proto().encode_to_vec(),
+        );
+
+        let diff = StateDiff::<u64>::from_proto(diff_proto.clone()).unwrap();
+        assert_eq!(
+            diff.rollups.into_iter().collect::<Vec<_>>(),
+            vec![r2, r3, r1]
+        );
+
+        // Also make sure that a rollup delete in a diff applies cleanly to a
+        // state that had it in the deprecated field.
+        let shard_id = ShardId::new();
+        let mut state = TypedState::<(), (), u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            shard_id,
+            "host".to_owned(),
+            0,
+        );
+        state.state.seqno = SeqNo(4);
+        let mut state_proto = state.into_proto();
+        state_proto
+            .deprecated_rollups
+            .insert(3, r3_rollup.key.into_proto());
+        let state = UntypedState::<u64>::from_proto(state_proto).unwrap();
+        let mut state = state.check_codecs::<(), (), i64>(&shard_id).unwrap();
+        let cache = new_test_client_cache();
+        let encoded_diff = VersionedData {
+            seqno: SeqNo(5),
+            data: diff_proto.encode_to_vec().into(),
+        };
+        state.apply_encoded_diffs(cache.cfg(), &cache.metrics, std::iter::once(&encoded_diff));
+        assert_eq!(
+            state
+                .state
+                .collections
+                .rollups
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec![(SeqNo(1), r1_rollup), (SeqNo(2), r2_rollup)]
+        );
     }
 }

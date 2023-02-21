@@ -9,7 +9,7 @@
 
 //! Benchmarks for different persistent Write implementations.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -17,6 +17,7 @@ use bytes::Bytes;
 use criterion::{Bencher, BenchmarkId, Criterion, Throughput};
 use differential_dataflow::trace::Description;
 use futures::stream::{FuturesUnordered, StreamExt};
+use mz_persist_client::internals_bench::trace_push_batch_one_iter;
 use timely::progress::Antichain;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -83,7 +84,7 @@ fn bench_consensus_compare_and_set_all_iters(
                 || format!("bench_compare_and_set-{}", idx),
                 async move {
                     // Keep track of the current SeqNo per shard ID.
-                    let mut current: HashMap<usize, Option<SeqNo>> = HashMap::new();
+                    let mut current: BTreeMap<usize, Option<SeqNo>> = BTreeMap::new();
 
                     for _iter in 0..iters {
                         let futs = FuturesUnordered::new();
@@ -208,5 +209,20 @@ pub fn bench_encode_batch(name: &str, throughput: bool, c: &mut Criterion, data:
             let mut buf = Vec::new();
             trace.encode(&mut buf);
         })
+    });
+}
+
+pub fn bench_trace_push_batch(c: &mut Criterion) {
+    let mut g = c.benchmark_group("trace");
+    // The larger number is a nice one when compiling with release optimizations
+    // and no debug_assertions, but it takes too long with cargo test
+    // --all-targets.
+    let num_batches = if cfg!(debug_assertions) {
+        1_000
+    } else {
+        20_000
+    };
+    g.bench_function(BenchmarkId::new("push_batch", num_batches), |b| {
+        b.iter(|| trace_push_batch_one_iter(num_batches));
     });
 }

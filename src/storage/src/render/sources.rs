@@ -60,7 +60,8 @@ enum SourceType<Delimited, ByteStream, RowSource> {
 ///
 /// This function is intended to implement the recipe described here:
 /// <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/platform/architecture-storage.md#source-ingestion>
-pub fn render_source<G>(
+pub fn render_source<RootG, G>(
+    root_scope: &mut RootG,
     scope: &mut G,
     dataflow_debug_name: &String,
     id: GlobalId,
@@ -72,6 +73,7 @@ pub fn render_source<G>(
     Rc<dyn Any>,
 )
 where
+    RootG: Scope<Timestamp = ()>,
     G: Scope<Timestamp = Timestamp>,
 {
     // Tokens that we should return from the method.
@@ -88,8 +90,8 @@ where
     let base_source_config = RawSourceCreationConfig {
         name: source_name,
         id,
-        num_outputs: description.desc.num_outputs(),
-        timestamp_interval: description.desc.timestamp_interval.clone(),
+        num_outputs: description.desc.connection.num_outputs(),
+        timestamp_interval: description.desc.timestamp_interval,
         worker_id: scope.index(),
         worker_count: scope.peers(),
         encoding: description.desc.encoding.clone(),
@@ -110,18 +112,14 @@ where
     // a million fields
     let resumption_calculator = description.clone();
 
-    let internal_cmd_tx = Rc::clone(
-        storage_state
-            .internal_cmd_tx
-            .as_ref()
-            .expect("missing internal command sender"),
-    );
+    let internal_cmd_tx = Rc::clone(&storage_state.internal_cmd_tx);
 
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
     let ((ok_sources, err_source), capability) = match connection {
         GenericSourceConnection::Kafka(connection) => {
             let ((oks, err), cap) = source::create_raw_source(
+                root_scope,
                 scope,
                 base_source_config,
                 connection,
@@ -134,6 +132,7 @@ where
         }
         GenericSourceConnection::Kinesis(connection) => {
             let ((oks, err), cap) = source::create_raw_source(
+                root_scope,
                 scope,
                 base_source_config,
                 DelimitedValueSourceConnection(connection),
@@ -146,6 +145,7 @@ where
         }
         GenericSourceConnection::S3(connection) => {
             let ((oks, err), cap) = source::create_raw_source(
+                root_scope,
                 scope,
                 base_source_config,
                 connection,
@@ -158,6 +158,7 @@ where
         }
         GenericSourceConnection::Postgres(connection) => {
             let ((oks, err), cap) = source::create_raw_source(
+                root_scope,
                 scope,
                 base_source_config,
                 connection,
@@ -170,6 +171,7 @@ where
         }
         GenericSourceConnection::LoadGenerator(connection) => {
             let ((oks, err), cap) = source::create_raw_source(
+                root_scope,
                 scope,
                 base_source_config,
                 connection,
@@ -182,6 +184,7 @@ where
         }
         GenericSourceConnection::TestScript(connection) => {
             let ((oks, err), cap) = source::create_raw_source(
+                root_scope,
                 scope,
                 base_source_config,
                 connection,
@@ -204,7 +207,7 @@ where
         // whose contents will be concatenated and inserted along the collection.
         // All subsources include the non-definite errors of the ingestion
         let error_collections = vec![err_source
-            .map(DataflowError::SourceError)
+            .map(DataflowError::from)
             .pass_through("source-errors", 1)
             .as_collection()];
 
@@ -630,7 +633,7 @@ fn raise_key_value_errors(
         (Some(Err(e)), _) => Some(Err(e.into())),
         (None, None) => None,
         // TODO(petrosagg): these errors would be better grouped under an EnvelopeError enum
-        _ => Some(Err(DataflowError::EnvelopeError(EnvelopeError::Flat(
+        _ => Some(Err(DataflowError::from(EnvelopeError::Flat(
             "Value not present for message".to_string(),
         )))),
     }

@@ -71,6 +71,7 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
@@ -168,7 +169,7 @@ async fn run() -> anyhow::Result<()> {
         .collect::<String>();
 
     let config = aws_config::load_from_env().await;
-    let client = aws_sdk_s3::Client::new(&config);
+    let client = mz_aws_s3_util::new_client(&config);
 
     let first_object_key = format!("{}{:>05}", args.key_prefix, 0);
 

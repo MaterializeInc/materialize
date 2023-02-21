@@ -17,6 +17,7 @@ use async_stream::stream;
 use async_trait::async_trait;
 use futures::future;
 use futures::stream::{Stream, StreamExt, TryStreamExt};
+use http::uri::PathAndQuery;
 use once_cell::sync::Lazy;
 use semver::Version;
 use tokio::net::UnixStream;
@@ -29,7 +30,7 @@ use tonic::codegen::InterceptedService;
 use tonic::metadata::{AsciiMetadataKey, AsciiMetadataValue};
 use tonic::service::Interceptor;
 use tonic::transport::{Body, Channel, Endpoint, NamedService, Server};
-use tonic::{Request, Response, Status, Streaming};
+use tonic::{IntoStreamingRequest, Request, Response, Status, Streaming};
 use tower::Service;
 use tracing::{debug, error, info};
 
@@ -37,10 +38,19 @@ use mz_ore::netio::{Listener, SocketAddr, SocketAddrType};
 use mz_proto::{ProtoType, RustType};
 
 use crate::client::{GenericClient, Partitionable, Partitioned};
+use crate::codec::{StatCodec, StatsCollector};
 
 pub type ResponseStream<PR> = Pin<Box<dyn Stream<Item = Result<PR, Status>> + Send>>;
 
 pub type ClientTransport = InterceptedService<Channel, VersionAttachInterceptor>;
+
+/// Types that we send and receive over a service endpoint.
+pub trait ProtoServiceTypes: Debug + Clone + Send {
+    type PC: prost::Message + Clone + 'static;
+    type PR: prost::Message + Clone + Default + 'static;
+    type STATS: StatsCollector<Self::PC, Self::PR> + 'static;
+    const URL: &'static str;
+}
 
 /// A client to a remote dataflow server using gRPC and protobuf based
 /// communication.
@@ -59,7 +69,7 @@ pub type ClientTransport = InterceptedService<Channel, VersionAttachInterceptor>
 #[derive(Debug)]
 pub struct GrpcClient<G>
 where
-    G: BidiProtoClient,
+    G: ProtoServiceTypes,
 {
     /// The sender for commands.
     tx: UnboundedSender<G::PC>,
@@ -69,11 +79,15 @@ where
 
 impl<G> GrpcClient<G>
 where
-    G: BidiProtoClient,
+    G: ProtoServiceTypes,
 {
     /// Connects to the server at the given address, announcing the specified
     /// client version.
-    pub async fn connect(addr: String, version: Version) -> Result<Self, anyhow::Error> {
+    pub async fn connect(
+        addr: String,
+        version: Version,
+        metrics: G::STATS,
+    ) -> Result<Self, anyhow::Error> {
         debug!("GrpcClient {}: Attempt to connect", addr);
 
         let channel = match SocketAddrType::guess(&addr) {
@@ -88,7 +102,7 @@ where
             }
         };
         let service = InterceptedService::new(channel, VersionAttachInterceptor::new(version));
-        let mut client = G::new(service);
+        let mut client = BidiProtoClient::new(service, G::URL, metrics);
         let (tx, rx) = mpsc::unbounded_channel();
         let rx = client
             .establish_bidi_stream(UnboundedReceiverStream::new(rx))
@@ -100,16 +114,16 @@ where
 
     /// Like [`GrpcClient::connect`], but for multiple partitioned servers.
     pub async fn connect_partitioned<C, R>(
-        addrs: Vec<String>,
+        dests: Vec<(String, G::STATS)>,
         version: Version,
     ) -> Result<Partitioned<Self, C, R>, anyhow::Error>
     where
         (C, R): Partitionable<C, R>,
     {
         let clients = future::try_join_all(
-            addrs
+            dests
                 .into_iter()
-                .map(|addr| Self::connect(addr, version.clone())),
+                .map(|(addr, metrics)| Self::connect(addr, version.clone(), metrics)),
         )
         .await?;
         Ok(Partitioned::new(clients))
@@ -121,7 +135,7 @@ impl<G, C, R> GenericClient<C, R> for GrpcClient<G>
 where
     C: RustType<G::PC> + Send + Sync + 'static,
     R: RustType<G::PR> + Send + Sync + 'static,
-    G: BidiProtoClient,
+    G: ProtoServiceTypes,
 {
     async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
         self.tx.send(cmd.into_proto())?;
@@ -139,23 +153,51 @@ where
 /// Encapsulates the core functionality of a tonic gRPC client for a service
 /// that exposes a single bidirectional RPC stream.
 ///
+/// The client calls back into the StatsCollector on each command send and
+/// response receive.
+///
 /// See the documentation on [`GrpcClient`] for details.
-//
-// TODO(guswynn): if tonic ever presents the client API as a trait, use it
-// instead of requiring an implementation of this trait.
-#[async_trait]
-pub trait BidiProtoClient: Debug + Send {
-    type PC: Debug + Send + Sync + 'static;
-    type PR: Debug + Send + Sync + 'static;
+pub struct BidiProtoClient<PC, PR, S>
+where
+    PC: prost::Message + 'static,
+    PR: Default + prost::Message + 'static,
+    S: StatsCollector<PC, PR>,
+{
+    inner: tonic::client::Grpc<ClientTransport>,
+    path: &'static str,
+    codec: StatCodec<PC, PR, S>,
+}
 
-    fn new(inner: ClientTransport) -> Self
+impl<PC, PR, S> BidiProtoClient<PC, PR, S>
+where
+    PC: Clone + prost::Message + 'static,
+    PR: Clone + Default + prost::Message + 'static,
+    S: StatsCollector<PC, PR> + 'static,
+{
+    fn new(inner: ClientTransport, path: &'static str, stats_collector: S) -> Self
     where
-        Self: Sized;
+        Self: Sized,
+    {
+        let inner = tonic::client::Grpc::new(inner);
+        let codec = StatCodec::new(stats_collector);
+        BidiProtoClient { inner, path, codec }
+    }
 
     async fn establish_bidi_stream(
         &mut self,
-        rx: UnboundedReceiverStream<Self::PC>,
-    ) -> Result<Response<Streaming<Self::PR>>, Status>;
+        rx: UnboundedReceiverStream<PC>,
+    ) -> Result<Response<Streaming<PR>>, Status> {
+        self.inner.ready().await.map_err(|e| {
+            tonic::Status::new(
+                tonic::Code::Unknown,
+                format!("Service was not ready: {}", e),
+            )
+        })?;
+        let path = PathAndQuery::from_static(self.path);
+        self.inner
+            .streaming(rx.into_streaming_request(), path, self.codec.clone())
+            .await
+    }
 }
 
 /// A gRPC server that stitches a gRPC service with a single bidirectional

@@ -25,6 +25,7 @@
 
 Access
 Acks
+Addresses
 All
 Alter
 And
@@ -46,11 +47,13 @@ Bigint
 Boolean
 Both
 Bpchar
+Broken
 Broker
 Brokers
 Bucket
 By
 Bytes
+Cardinality
 Cascade
 Case
 Cast
@@ -72,6 +75,7 @@ Committed
 Compaction
 Compression
 Compute
+Computectl
 Confluent
 Connection
 Connections
@@ -123,6 +127,7 @@ Execute
 Exists
 Expected
 Explain
+Expose
 Extract
 Factor
 False
@@ -269,7 +274,6 @@ Refresh
 Regex
 Region
 Registry
-Remote
 Rename
 Repeatable
 Replace
@@ -320,6 +324,8 @@ Ssl
 Start
 Stdin
 Stdout
+Storage
+Storagectl
 Strategy
 String
 Subscribe

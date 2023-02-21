@@ -17,26 +17,23 @@ ok
 build
 (get x)
 ----
-%0 =
-| Get x (u0)
+Get x
 
 # Can build nested expressions.
 build
 (filter (get x) [#0])
 ----
-%0 =
-| Get x (u0)
-| Filter #0
+Filter #0
+  Get x
 
 build
 (filter
   (map (get x) [true])
   [#0 #1])
 ----
-%0 =
-| Get x (u0)
-| Map true
-| Filter #0, #1
+Filter #0 AND #1
+  Map (true)
+    Get x
 
 # If the `apply` flag is passed to build with the name of a transform, that
 # transform will be applied (once).
@@ -45,10 +42,9 @@ build apply=PredicatePushdown
   (map (get x) [true])
   [#0 #1])
 ----
-%0 =
-| Get x (u0)
-| Filter #0, #1
-| Map true
+Map (true)
+  Filter #0 AND #1
+    Get x
 
 # If `opt` is used instead of `build`, the full optimizer is run on the IR.
 opt
@@ -56,31 +52,21 @@ opt
   (map (get x) [#0 #1])
   [#3])
 ----
-%0 =
-| Get x (u0)
-| Project (#1)
+Project (#1)
+  Get x
 
 build
 (join
   [(get x) (get x)]
   [[#0 #2] [#1 #3]])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Get x (u0)
-
-%2 =
-| Join %0 %1 (= #0 #2) (= #1 #3)
-| | implementation = Unimplemented
-----
-----
+Join on=(#0 = #2 AND #1 = #3)
+  Get x
+  Get x
 
 build
 (negate (constant [[1]] [int64]))
 ----
-%0 =
-| Constant (1)
-| Negate
+Negate
+  Constant
+    - (1)

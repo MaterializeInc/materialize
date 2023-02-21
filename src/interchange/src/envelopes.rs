@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::iter;
 use std::rc::Rc;
 
@@ -18,12 +18,11 @@ use differential_dataflow::{
 };
 use differential_dataflow::{AsCollection, Collection};
 use itertools::{EitherOrBoth, Itertools};
-use maplit::hashmap;
+use maplit::btreemap;
 use once_cell::sync::Lazy;
 use timely::dataflow::{channels::pact::Pipeline, operators::Operator, Scope, Stream};
 
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::CollectionExt;
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, Row, RowPacker, ScalarType};
 
 use crate::avro::DiffPair;
@@ -126,8 +125,8 @@ where
 pub(crate) const TRANSACTION_TYPE_ID: GlobalId = GlobalId::Transient(1);
 pub(crate) const DBZ_ROW_TYPE_ID: GlobalId = GlobalId::Transient(2);
 
-pub static ENVELOPE_CUSTOM_NAMES: Lazy<HashMap<GlobalId, String>> = Lazy::new(|| {
-    hashmap! {
+pub static ENVELOPE_CUSTOM_NAMES: Lazy<BTreeMap<GlobalId, String>> = Lazy::new(|| {
+    btreemap! {
         TRANSACTION_TYPE_ID => "transaction".into(),
         DBZ_ROW_TYPE_ID => "row".into(),
     }
@@ -157,15 +156,4 @@ pub fn dbz_format(rp: &mut RowPacker, dp: DiffPair<Row>) {
     } else {
         rp.push(Datum::Null);
     }
-}
-
-pub fn upsert_format(dps: Vec<DiffPair<Row>>, sink_id: GlobalId, from: GlobalId) -> Option<Row> {
-    let dp = dps.expect_element(|| {
-        format!(
-            "primary key error: expected at most one update per key and timestamp \
-          This can happen when the configured sink key is not a primary key of \
-          the sinked relation: sink {sink_id} created from {from}."
-        )
-    });
-    dp.after
 }

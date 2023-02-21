@@ -14,62 +14,67 @@ cat
 ----
 ok
 
-build format=types
+build
 (get x)
 ----
-%0 =
-| Get x (u0)
-| | types = (List { element_type: Bool, custom_id: None }, Array(String)?, Float32?)
-| | keys = ((#0), (#1))
+----
+Get u0
+
+----
+----
 
 cat
 (defsource y ([int32 (interval false) (float32 true) ((bytes) false)] [[0 1] [2]]))
 ----
 ok
 
-build format=types
+build
 (get y)
 ----
-%0 =
-| Get y (u1)
-| | types = (Int32?, Interval, Float32?, Bytes)
-| | keys = ((#0, #1), (#2))
+----
+Get u1
+
+----
+----
 
 cat
 (defsource source ([] [[]]))
 ----
 ok
 
-build format=types
+build
 (get source)
 ----
-%0 =
-| Get source (u2)
-| | types = ()
-| | keys = (())
+----
+Get u2
+
+----
+----
 
 cat
 (defsource word [time])
 ----
 ok
 
-build format=types
+build
 (get word)
 ----
-%0 =
-| Get word (u3)
-| | types = (Time?)
-| | keys = ()
+----
+Get u3
+
+----
+----
 
 cat
 (defsource some_thing ([timestamp date] [[1]]))
 ----
 ok
 
-build format=types
+build
 (get some_thing)
 ----
-%0 =
-| Get some_thing (u4)
-| | types = (Timestamp?, Date?)
-| | keys = ((#1))
+----
+Get u4
+
+----
+----

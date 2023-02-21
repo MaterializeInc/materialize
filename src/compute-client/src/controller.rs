@@ -29,17 +29,12 @@
 //! from compacting beyond the allowed compaction of each of its outputs, ensuring that we can
 //! recover each dataflow to its current state in case of failure or other reconfiguration.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::fmt;
-use std::num::{NonZeroI64, NonZeroUsize};
-use std::str::FromStr;
-use std::sync::Arc;
+use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroI64;
 use std::time::Duration;
 
-use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
-use futures::stream::BoxStream;
 use futures::{future, FutureExt};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
@@ -48,14 +43,17 @@ use tracing::warn;
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
+use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_expr::RowSetFinishing;
-use mz_orchestrator::{CpuLimit, MemoryLimit, NamespacedOrchestrator, ServiceProcessMetrics};
-use mz_ore::halt;
+use mz_orchestrator::ServiceProcessMetrics;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
+use mz_storage_client::types::instances::StorageInstanceId;
 
 use crate::logging::{LogVariant, LogView, LoggingConfig};
+use crate::metrics::ComputeControllerMetrics;
 use crate::protocol::command::ComputeParameters;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
@@ -63,84 +61,22 @@ use crate::types::dataflows::DataflowDescription;
 
 use self::error::{
     CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
-    InstanceExists, InstanceMissing, PeekError, RemoveOrphansError, ReplicaCreationError,
-    ReplicaDropError,
+    InstanceExists, InstanceMissing, PeekError, ReplicaCreationError, ReplicaDropError,
+    SubscribeTargetError,
 };
 use self::instance::{ActiveInstance, Instance};
-use self::orchestrator::ComputeOrchestrator;
-use self::replica::{ReplicaConfig, ReplicaResponse};
+use self::replica::ReplicaConfig;
 
 mod instance;
-mod orchestrator;
 mod replica;
 
 pub mod error;
 
-pub use mz_orchestrator::ServiceStatus as ComputeInstanceStatus;
+/// Identifer of a compute instance.
+pub type ComputeInstanceId = StorageInstanceId;
 
-/// Identifier of a compute instance.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub enum ComputeInstanceId {
-    System(u64),
-    User(u64),
-}
-
-impl ComputeInstanceId {
-    pub fn inner_id(&self) -> u64 {
-        match self {
-            ComputeInstanceId::System(id) | ComputeInstanceId::User(id) => *id,
-        }
-    }
-
-    pub fn is_user(&self) -> bool {
-        matches!(self, Self::User(_))
-    }
-
-    pub fn is_system(&self) -> bool {
-        matches!(self, Self::System(_))
-    }
-}
-
-impl FromStr for ComputeInstanceId {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() < 2 {
-            return Err(anyhow!("couldn't parse compute instance id {}", s));
-        }
-        let val: u64 = s[1..].parse()?;
-        match s.chars().next().unwrap() {
-            's' => Ok(Self::System(val)),
-            'u' => Ok(Self::User(val)),
-            _ => Err(anyhow!("couldn't parse compute instance id {}", s)),
-        }
-    }
-}
-
-impl fmt::Display for ComputeInstanceId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::System(id) => write!(f, "s{}", id),
-            Self::User(id) => write!(f, "u{}", id),
-        }
-    }
-}
-
-/// Identifier of a replicas.
+/// Identifier of a replica.
 pub type ReplicaId = u64;
-
-/// Identifier of a process within a replica.
-pub type ProcessId = u64;
-
-/// An event describing a change in status of a compute process.
-#[derive(Debug, Clone, Serialize)]
-pub struct ComputeInstanceEvent {
-    pub instance_id: ComputeInstanceId,
-    pub replica_id: ReplicaId,
-    pub process_id: ProcessId,
-    pub status: ComputeInstanceStatus,
-    pub time: DateTime<Utc>,
-}
 
 /// Responses from the compute controller.
 #[derive(Debug)]
@@ -161,76 +97,11 @@ pub enum ComputeControllerResponse<T> {
 /// Replica configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComputeReplicaConfig {
-    pub location: ComputeReplicaLocation,
     pub logging: ComputeReplicaLogging,
     /// The amount of effort to be spent on arrangement compaction during idle times.
     ///
     /// See [`differential_dataflow::Config::idle_merge_effort`].
     pub idle_arrangement_merge_effort: Option<u32>,
-}
-
-/// Size or location of a replica
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ComputeReplicaLocation {
-    /// Out-of-process replica
-    Remote {
-        /// The network addresses of the processes in the replica.
-        addrs: BTreeSet<String>,
-        /// The network addresses of the Timely endpoints of the processes in the replica.
-        compute_addrs: BTreeSet<String>,
-        /// The workers per process in the replica.
-        workers: NonZeroUsize,
-    },
-    /// Out-of-process replica
-    /// A remote but managed replica
-    Managed {
-        /// The resource allocation for the replica.
-        allocation: ComputeReplicaAllocation,
-        /// SQL size parameter used for allocation
-        size: String,
-        /// The replica's availability zone
-        availability_zone: String,
-        /// `true` if the AZ was specified by the user and must be respected;
-        /// `false` if it was picked arbitrarily by Materialize.
-        az_user_specified: bool,
-    },
-}
-
-impl ComputeReplicaLocation {
-    pub fn num_processes(&self) -> usize {
-        match self {
-            ComputeReplicaLocation::Remote { addrs, .. } => addrs.len(),
-            ComputeReplicaLocation::Managed { allocation, .. } => allocation.scale.get(),
-        }
-    }
-
-    pub fn get_az(&self) -> Option<&str> {
-        match self {
-            ComputeReplicaLocation::Remote { .. } => None,
-            ComputeReplicaLocation::Managed {
-                availability_zone, ..
-            } => Some(availability_zone),
-        }
-    }
-}
-
-/// Resource allocations for a replica of a compute instance.
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct ComputeReplicaAllocation {
-    /// The memory limit for each process in the replica.
-    pub memory_limit: Option<MemoryLimit>,
-    /// The CPU limit for each process in the replica.
-    pub cpu_limit: Option<CpuLimit>,
-    /// The number of processes in the replica.
-    pub scale: NonZeroUsize,
-    /// The number of worker threads in the replica.
-    pub workers: NonZeroUsize,
-}
-
-impl ComputeReplicaAllocation {
-    pub fn workers(&self) -> NonZeroUsize {
-        self.workers
-    }
 }
 
 /// The default logging interval for [`ComputeReplicaLogging`], in number
@@ -278,7 +149,6 @@ impl ComputeReplicaLogging {
 pub struct ComputeController<T> {
     instances: BTreeMap<ComputeInstanceId, Instance<T>>,
     build_info: &'static BuildInfo,
-    orchestrator: ComputeOrchestrator,
     /// Set to `true` once `initialization_complete` has been called.
     initialized: bool,
     /// Compute configuration to apply to new instances.
@@ -294,16 +164,16 @@ pub struct ComputeController<T> {
     stats_update_ticker: tokio::time::Interval,
     /// Set to `true` if `process` should produce a `ReplicaWriteFrontiers` next.
     stats_update_pending: bool,
+    /// The compute controller metrics
+    metrics: ComputeControllerMetrics,
 }
 
 impl<T> ComputeController<T> {
     /// Construct a new [`ComputeController`].
     pub fn new(
         build_info: &'static BuildInfo,
-        orchestrator: Arc<dyn NamespacedOrchestrator>,
-        clusterd_image: String,
-        init_container_image: Option<String>,
         envd_epoch: NonZeroI64,
+        metrics_registry: MetricsRegistry,
     ) -> Self {
         let mut stats_update_ticker = tokio::time::interval(Duration::from_secs(1));
         stats_update_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -311,11 +181,6 @@ impl<T> ComputeController<T> {
         Self {
             instances: BTreeMap::new(),
             build_info,
-            orchestrator: ComputeOrchestrator::new(
-                orchestrator,
-                clusterd_image,
-                init_container_image,
-            ),
             initialized: false,
             config: Default::default(),
             stashed_response: None,
@@ -324,6 +189,7 @@ impl<T> ComputeController<T> {
             envd_epoch,
             stats_update_ticker,
             stats_update_pending: false,
+            metrics: ComputeControllerMetrics::new(metrics_registry),
         }
     }
 
@@ -372,39 +238,6 @@ impl<T> ComputeController<T> {
             storage,
         }
     }
-
-    /// Remove orphaned compute replicas from the orchestrator. These are replicas that the
-    /// orchestrator is aware of, but not the controller.
-    pub async fn remove_orphans(
-        &self,
-        next_replica_id: ReplicaId,
-    ) -> Result<(), RemoveOrphansError> {
-        let keep: HashSet<_> = self
-            .instances
-            .iter()
-            .flat_map(|(_, inst)| inst.replica_ids())
-            .collect();
-
-        let current: HashSet<_> = self.orchestrator.list_replicas().await?.collect();
-
-        for (inst_id, replica_id) in current.into_iter() {
-            if replica_id >= next_replica_id {
-                // Found a replica in kubernetes with a higher replica id than what we are aware
-                // of. This must have been created by an environmentd with higher epoch number.
-                halt!(
-                    "Found replica id ({}) in orchestrator >= next id ({})",
-                    replica_id,
-                    next_replica_id
-                );
-            }
-
-            if !keep.contains(&replica_id) {
-                self.orchestrator.drop_replica(inst_id, replica_id).await?;
-            }
-        }
-
-        Ok(())
-    }
 }
 
 impl<T> ComputeController<T>
@@ -425,11 +258,10 @@ where
         self.instances.insert(
             id,
             Instance::new(
-                id,
                 self.build_info,
                 arranged_logs,
-                self.orchestrator.clone(),
                 self.envd_epoch,
+                self.metrics.for_instance(id),
             ),
         );
 
@@ -513,19 +345,9 @@ where
         tokio::select! {
             ((instance_id, result), _index, _remaining) = future::select_all(receives) => {
                 match result {
-                    Ok((replica_id, ReplicaResponse::ComputeResponse(resp))) => {
+                    Ok((replica_id, resp)) => {
                         self.replica_heartbeats.insert(replica_id, Utc::now());
                         self.stashed_response = Some((instance_id, replica_id, resp));
-                    }
-                    Ok((replica_id, ReplicaResponse::MetricsUpdate(result))) => {
-                        let metrics = match result {
-                            Ok(metrics) => metrics,
-                            Err(e) => {
-                                warn!("failed to get metrics for replica {replica_id}: {e}");
-                                return;
-                            }
-                        };
-                        self.replica_metrics.insert(replica_id, metrics);
                     }
                     Err(_) => {
                         // There is nothing to do here. `recv` has already added the failed replica to
@@ -538,9 +360,19 @@ where
         }
     }
 
-    /// Listen for changes to compute services reported by the orchestrator.
-    pub fn watch_services(&self) -> BoxStream<'static, ComputeInstanceEvent> {
-        self.orchestrator.watch_services()
+    /// Assign a target replica to the identified subscribe.
+    ///
+    /// If a subscribe has a target replica assigned, only subscribe responses
+    /// sent by that replica are considered.
+    pub fn set_subscribe_target_replica(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        subscribe_id: GlobalId,
+        target_replica: ReplicaId,
+    ) -> Result<(), SubscribeTargetError> {
+        self.instance_mut(instance_id)?
+            .set_subscribe_target_replica(subscribe_id, target_replica)?;
+        Ok(())
     }
 }
 
@@ -586,6 +418,7 @@ where
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
+        location: ClusterReplicaLocation,
         config: ComputeReplicaConfig,
     ) -> Result<(), ReplicaCreationError> {
         let (enable_logging, interval) = match config.logging.interval {
@@ -609,7 +442,7 @@ where
             .unwrap_or(DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT);
 
         let replica_config = ReplicaConfig {
-            location: config.location,
+            location,
             logging: LoggingConfig {
                 interval,
                 enable_logging,
@@ -818,7 +651,10 @@ impl<T> ComputeInstanceRef<'_, T> {
     }
 }
 
-/// State maintained about individual collections.
+/// State maintained about individual compute collections.
+///
+/// A compute collection is either an index, or a storage sink, or a subscribe, exported by a
+/// compute dataflow.
 #[derive(Debug)]
 pub struct CollectionState<T> {
     /// Whether this collection is a log collection.

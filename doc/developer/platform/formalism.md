@@ -421,7 +421,7 @@ This allows us to fold updates to the same data together after sliding updates
 forward to the same time. Where `diff1 + diff2 = 0`, we can discard `u1` and
 `u2` altogether.
 
-In summary: `compact(ptvc, since') advances `ptvc`'s `since` to `since'`,
+In summary: `compact(ptvc, since')` advances `ptvc`'s `since` to `since'`,
 slides some of `ptvc`'s updates forward to new times (when doing so would not
 affect the computes states at or after `since`), and merges some those updates
 together by summing `diff`s for the same `data` and `time`. The resulting pTVC
@@ -436,7 +436,7 @@ representation of every TVC. As new information about the TVC becomes
 available, Materialize appends those updates using `append(ptvc, upper',
 new-updates)`. To reclaim storage space, Materialize compacts ptvcs using
 `compact(ptvc, since')`. Since both `append` and `compact` preserve pTVC
-correctness, Materializ always allows us to query a range of times (those
+correctness, Materialize always allows us to query a range of times (those
 between the current `since` and `upper`), and obtain the same results as would
 be observed in the "real" TVC.
 

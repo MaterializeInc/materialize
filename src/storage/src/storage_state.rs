@@ -68,29 +68,31 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::thread;
 
 use crossbeam_channel::TryRecvError;
 use differential_dataflow::lattice::Lattice;
+use mz_persist_types::codec_impls::UnitSchema;
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp as _;
 use timely::worker::Worker as TimelyWorker;
-use tokio::sync::{mpsc, watch, Mutex};
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration, Instant};
-use tracing::info;
+use tracing::{info, trace};
 
 use mz_ore::halt;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ReadHandle;
-use mz_persist_client::{PersistLocation, ShardId};
+use mz_persist_client::ShardId;
 use mz_repr::{Diff, GlobalId, Timestamp};
+use mz_storage_client::client::{SinkStatisticsUpdate, SourceStatisticsUpdate};
 use mz_storage_client::client::{StorageCommand, StorageResponse};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::connections::ConnectionContext;
@@ -98,10 +100,10 @@ use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_client::types::sources::{IngestionDescription, SourceData};
 
 use crate::decode::metrics::DecodeMetrics;
-use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
+use crate::internal_control::{self, InternalCommandSender, InternalStorageCommand};
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
-use crate::source::statistics::SourceStatistics;
+use crate::statistics::{SinkStatisticsMetrics, SourceStatisticsMetrics, StorageStatistics};
 use crate::storage_state::async_storage_worker::{AsyncStorageWorker, AsyncStorageWorkerResponse};
 
 pub mod async_storage_worker;
@@ -115,12 +117,112 @@ type ResponseSender = mpsc::UnboundedSender<StorageResponse>;
 /// holding state that persists across function calls.
 pub struct Worker<'w, A: Allocate> {
     /// The underlying Timely worker.
+    ///
+    /// NOTE: This is `pub` for testing.
     pub timely_worker: &'w mut TimelyWorker<A>,
     /// The channel over which communication handles for newly connected clients
     /// are delivered.
-    pub client_rx: crossbeam_channel::Receiver<(CommandReceiver, ResponseSender)>,
+    pub client_rx: crossbeam_channel::Receiver<(
+        CommandReceiver,
+        ResponseSender,
+        crossbeam_channel::Sender<std::thread::Thread>,
+    )>,
     /// The state associated with collection ingress and egress.
     pub storage_state: StorageState,
+}
+
+impl<'w, A: Allocate> Worker<'w, A> {
+    /// Creates new `Worker` state from the given components.
+    pub fn new(
+        timely_worker: &'w mut TimelyWorker<A>,
+        client_rx: crossbeam_channel::Receiver<(
+            CommandReceiver,
+            ResponseSender,
+            crossbeam_channel::Sender<std::thread::Thread>,
+        )>,
+        decode_metrics: DecodeMetrics,
+        source_metrics: SourceBaseMetrics,
+        sink_metrics: SinkBaseMetrics,
+        now: NowFn,
+        connection_context: ConnectionContext,
+        persist_clients: Arc<PersistClientCache>,
+    ) -> Self {
+        // It is very important that we only create the internal control
+        // flow/command sequencer once because a) the worker state is re-used
+        // when a new client connects and b) dataflows that have already been
+        // rendered into the timely worker are reused as well.
+        //
+        // If we created a new sequencer every time we get a new client (likely
+        // because the controller re-started and re-connected), dataflows that
+        // were rendered before would still hold a handle to the old sequencer
+        // but we would not read their commands anymore.
+        let command_sequencer = internal_control::setup_command_sequencer(timely_worker);
+        let command_sequencer = Rc::new(RefCell::new(command_sequencer));
+
+        // Similar to the internal command sequencer, it is very important that
+        // we only create the async worker once because a) the worker state is
+        // re-used when a new client connects and b) commands that have already
+        // been sent and might yield a response will be lost if a new iteration
+        // of `run_client` creates a new async worker.
+        //
+        // If we created a new async worker every time we get a new client
+        // (likely because the controller re-started and re-connected), we can
+        // get into an inconsistent state where we think that a dataflow has
+        // been rendered, for example because there is an entry in
+        // `StorageState::ingestions`, while there is not yet a dataflow. This
+        // happens because the dataflow only gets rendered once we get a
+        // response from the async worker and send off an internal command.
+        //
+        // The core idea is that both the sequencer and the async worker are
+        // part of the per-worker state, and must be treated as such, meaning
+        // they must survive between invocations of `run_client`.
+
+        // TODO(aljoscha): This `Activatable` business seems brittle, but that's
+        // also how the command channel works currently. We can wrap it inside a
+        // struct that holds both a channel and an `Activatable`, but I don't
+        // think that would help too much.
+        let async_worker = async_storage_worker::AsyncStorageWorker::new(
+            thread::current(),
+            Arc::clone(&persist_clients),
+        );
+        let async_worker = Rc::new(RefCell::new(async_worker));
+
+        let storage_state = StorageState {
+            source_uppers: BTreeMap::new(),
+            source_tokens: BTreeMap::new(),
+            decode_metrics,
+            reported_frontiers: BTreeMap::new(),
+            ingestions: BTreeMap::new(),
+            exports: BTreeMap::new(),
+            now,
+            source_metrics,
+            sink_metrics,
+            timely_worker_index: timely_worker.index(),
+            timely_worker_peers: timely_worker.peers(),
+            connection_context,
+            persist_clients,
+            sink_tokens: BTreeMap::new(),
+            sink_write_frontiers: BTreeMap::new(),
+            sink_handles: BTreeMap::new(),
+            dropped_ids: Vec::new(),
+            source_statistics: BTreeMap::new(),
+            sink_statistics: BTreeMap::new(),
+            internal_cmd_tx: command_sequencer,
+            async_worker,
+        };
+
+        // TODO(aljoscha): We might want `async_worker` and `internal_cmd_tx` to
+        // be fields of `Worker` instead of `StorageState`, but at least for the
+        // command flow sources and sinks need access to that. We can refactor
+        // this once we have a clearer boundary between what sources/sinks need
+        // and the full "power" of the internal command flow, which should stay
+        // internal to the worker/not be exposed to source/sink implementations.
+        Self {
+            timely_worker,
+            client_rx,
+            storage_state,
+        }
+    }
 }
 
 /// Worker-local state related to the ingress or egress of collections of data.
@@ -131,17 +233,17 @@ pub struct StorageState {
     /// frontier even as other instances are created and dropped. Ideally, the Storage
     /// module would eventually provide one source of truth on this rather than multiple,
     /// and we should aim for that but are not there yet.
-    pub source_uppers: HashMap<GlobalId, Rc<RefCell<Antichain<mz_repr::Timestamp>>>>,
+    pub source_uppers: BTreeMap<GlobalId, Rc<RefCell<Antichain<mz_repr::Timestamp>>>>,
     /// Handles to created sources, keyed by ID
-    pub source_tokens: HashMap<GlobalId, Rc<dyn Any>>,
+    pub source_tokens: BTreeMap<GlobalId, Rc<dyn Any>>,
     /// Decoding metrics reported by all dataflows.
     pub decode_metrics: DecodeMetrics,
     /// Tracks the conditional write frontiers we have reported.
-    pub reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
+    pub reported_frontiers: BTreeMap<GlobalId, Antichain<Timestamp>>,
     /// Descriptions of each installed ingestion.
-    pub ingestions: HashMap<GlobalId, IngestionDescription<CollectionMetadata>>,
+    pub ingestions: BTreeMap<GlobalId, IngestionDescription<CollectionMetadata>>,
     /// Descriptions of each installed export.
-    pub exports: HashMap<GlobalId, StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>>,
+    pub exports: BTreeMap<GlobalId, StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>>,
     /// Undocumented
     pub now: NowFn,
     /// Metrics for the source-specific side of dataflows.
@@ -156,26 +258,35 @@ pub struct StorageState {
     pub connection_context: ConnectionContext,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
-    pub persist_clients: Arc<Mutex<PersistClientCache>>,
+    pub persist_clients: Arc<PersistClientCache>,
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.
-    pub sink_tokens: HashMap<GlobalId, SinkToken>,
+    pub sink_tokens: BTreeMap<GlobalId, SinkToken>,
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
-    pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
+    pub sink_write_frontiers: BTreeMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
     /// See: [SinkHandle]
-    pub sink_handles: HashMap<GlobalId, SinkHandle>,
+    pub sink_handles: BTreeMap<GlobalId, SinkHandle>,
     /// Collection ids that have been dropped but not yet reported as dropped
     pub dropped_ids: Vec<GlobalId>,
+
     /// Stats objects shared with operators to allow them to update the metrics
     /// we report in `StatisticsUpdates` responses.
-    pub source_statistics: HashMap<GlobalId, SourceStatistics>,
+    pub source_statistics:
+        BTreeMap<GlobalId, StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics>>,
+    /// The same as `source_statistics`, but for sinks.
+    pub sink_statistics:
+        BTreeMap<GlobalId, StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>>,
 
     /// Sender for cluster-internal storage commands. These can be sent from
     /// within workers/operators and will be distributed to all workers. For
     /// example, for shutting down an entire dataflow from within a
     /// operator/worker.
-    pub internal_cmd_tx: Option<Rc<RefCell<dyn InternalCommandSender>>>,
+    pub internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
+
+    /// Async worker companion, used for running code that requires async, which
+    /// the timely main loop cannot do.
+    pub async_worker: Rc<RefCell<AsyncStorageWorker<mz_repr::Timestamp>>>,
 }
 
 /// This maintains an additional read hold on the source data for a sink, alongside
@@ -195,22 +306,28 @@ impl SinkHandle {
     /// A new handle.
     pub fn new(
         sink_id: GlobalId,
-        persist_location: PersistLocation,
+        from_metadata: &CollectionMetadata,
         shard_id: ShardId,
-        persist_clients: Arc<Mutex<PersistClientCache>>,
+        persist_clients: Arc<PersistClientCache>,
     ) -> SinkHandle {
         let (downgrade_tx, mut rx) = watch::channel(Antichain::from_elem(Timestamp::minimum()));
 
+        let persist_location = from_metadata.persist_location.clone();
+        let from_relation_desc = from_metadata.relation_desc.clone();
+
         let _handle = mz_ore::task::spawn(|| "Sink handle advancement", async move {
             let client = persist_clients
-                .lock()
-                .await
                 .open(persist_location)
                 .await
                 .expect("opening persist client");
 
             let mut read_handle: ReadHandle<SourceData, (), Timestamp, Diff> = client
-                .open_leased_reader(shard_id, &format!("sink::since {}", sink_id))
+                .open_leased_reader(
+                    shard_id,
+                    &format!("sink::since {}", sink_id),
+                    Arc::new(from_relation_desc),
+                    Arc::new(UnitSchema),
+                )
                 .await
                 .expect("opening reader for shard");
 
@@ -270,8 +387,15 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let mut shutdown = false;
         while !shutdown {
             match self.client_rx.recv() {
-                Ok((rx, tx)) => self.run_client(rx, tx),
-                Err(_) => shutdown = true,
+                Ok((rx, tx, activator_tx)) => {
+                    activator_tx
+                        .send(std::thread::current())
+                        .expect("activator_tx working");
+                    self.run_client(rx, tx)
+                }
+                Err(_) => {
+                    shutdown = true;
+                }
             }
         }
     }
@@ -283,24 +407,15 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// workers responsibilities, how it communicates with the other workers and
     /// how commands flow from the controller and through the workers.
     fn run_client(&mut self, command_rx: CommandReceiver, response_tx: ResponseSender) {
-        let command_sequencer = self.setup_command_sequencer();
-        let command_sequencer = Rc::new(RefCell::new(command_sequencer));
+        // There can only ever be one timely main loop/thread that sends
+        // commands to the async worker, so we borrow it for the whole lifetime
+        // of the loop below.
+        let async_worker = Rc::clone(&self.storage_state.async_worker);
+        let mut async_worker = async_worker.borrow_mut();
 
-        // TODO(aljoscha): We can refactor when `StorageState` is being created,
-        // to get around this being an `Option`.
-        let command_sequencer_clone = Rc::clone(&command_sequencer);
-        self.storage_state
-            .internal_cmd_tx
-            .replace(command_sequencer_clone);
-
-        // TODO(aljoscha): This `Activatable` business seems brittle, but that's
-        // also how the command channel works currently. We can wrap it inside a
-        // struct that holds both a channel and an `Activatable`, but I don't
-        // think that would help too much.
-        let mut async_worker = async_storage_worker::AsyncStorageWorker::new(
-            thread::current(),
-            Arc::clone(&self.storage_state.persist_clients),
-        );
+        // We need this to get around having to borrow the sequencer but also
+        // passing around references to `self.storage_state`.
+        let command_sequencer = Rc::clone(&self.storage_state.internal_cmd_tx);
 
         // At this point, all workers are still reading from the command flow.
         {
@@ -352,7 +467,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             if last_stats_time.is_none()
                 || last_stats_time.as_ref().unwrap().elapsed() >= Duration::from_secs(10)
             {
-                self.report_source_statistics(&response_tx);
+                self.report_storage_statistics(&response_tx);
                 last_stats_time = Some(Instant::now());
             }
 
@@ -400,7 +515,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
             {
                 let mut command_sequencer = command_sequencer.borrow_mut();
                 while let Some(internal_cmd) = command_sequencer.next() {
-                    self.handle_internal_storage_command(&mut async_worker, internal_cmd);
+                    self.handle_internal_storage_command(
+                        &mut *command_sequencer,
+                        &mut async_worker,
+                        internal_cmd,
+                    );
                 }
             }
         }
@@ -437,13 +556,19 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// Entry point for applying an internal storage command.
     pub fn handle_internal_storage_command(
         &mut self,
+        internal_cmd_tx: &mut dyn InternalCommandSender,
         async_worker: &mut AsyncStorageWorker<mz_repr::Timestamp>,
         internal_cmd: InternalStorageCommand,
     ) {
         match internal_cmd {
-            InternalStorageCommand::SuspendAndRestart(id) => {
-                let maybe_ingestion = self.storage_state.ingestions.get(&id).cloned();
+            InternalStorageCommand::SuspendAndRestart { id, reason } => {
+                info!(
+                    "worker {}/{} initiating suspend-and-restart for {id} because of: {reason}",
+                    self.timely_worker.index(),
+                    self.timely_worker.peers(),
+                );
 
+                let maybe_ingestion = self.storage_state.ingestions.get(&id).cloned();
                 if let Some(ingestion_description) = maybe_ingestion {
                     // Yank the token of the previously existing source
                     // dataflow.
@@ -475,7 +600,33 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     return;
                 }
 
-                panic!("got InternalStorageCommand::SuspendAndRestart for something that is not a source: {id}");
+                let maybe_sink = self.storage_state.exports.get(&id).cloned();
+                if let Some(sink_description) = maybe_sink {
+                    // Yank the token of the previously existing sink
+                    // dataflow.
+                    let maybe_token = self.storage_state.sink_tokens.remove(&id);
+
+                    if maybe_token.is_none() {
+                        // Something has dropped the sink. Make sure we don't
+                        // accidentally re-create it.
+                        return;
+                    }
+
+                    // This needs to be broadcast by one worker and go through
+                    // the internal command fabric, to ensure consistent
+                    // ordering of dataflow rendering across all workers.
+                    if self.timely_worker.index() == 0 {
+                        internal_cmd_tx.broadcast(InternalStorageCommand::CreateSinkDataflow(
+                            id,
+                            sink_description,
+                        ));
+                    }
+
+                    // Continue with other commands.
+                    return;
+                }
+
+                panic!("got InternalStorageCommand::SuspendAndRestart for something that is not a source or sink: {id}");
             }
             InternalStorageCommand::CreateIngestionDataflow {
                 id: ingestion_id,
@@ -489,41 +640,58 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     resumption_frontier
                 );
 
+                // An empty resume upper means that we can never write down any
+                // more data for this ingestion. We therefore don't render a
+                // dataflow for it.
+                let is_closed = resumption_frontier.is_empty();
+
                 for (export_id, export) in ingestion_description.source_exports.iter() {
+                    // This is a separate line cause rustfmt :(
+                    let stats =
+                        StorageStatistics::<SourceStatisticsUpdate, SourceStatisticsMetrics>::new(
+                            *export_id,
+                            self.storage_state.timely_worker_index,
+                            &self.storage_state.source_metrics,
+                            ingestion_id,
+                            &export.storage_metadata.data_shard,
+                        );
                     self.storage_state
                         .source_statistics
-                        .entry(*export_id)
-                        .or_insert_with(|| {
-                            SourceStatistics::new(
-                                *export_id,
-                                self.storage_state.timely_worker_index,
-                                &self.storage_state.source_metrics,
-                                ingestion_id,
-                                &export.storage_metadata.data_shard,
-                            )
-                        });
+                        .insert(*export_id, stats);
+                }
 
+                for id in ingestion_description.subsource_ids() {
                     // If there is already a shared upper, we re-use it, to make
                     // sure that parties that are already using the shared upper
                     // can continue doing so.
-                    let source_upper = self
-                        .storage_state
-                        .source_uppers
-                        .entry(export_id.clone())
-                        .or_insert_with(|| Rc::new(RefCell::new(Antichain::new())));
+                    let source_upper =
+                        self.storage_state
+                            .source_uppers
+                            .entry(id)
+                            .or_insert_with(|| {
+                                Rc::new(RefCell::new(if is_closed {
+                                    Antichain::new()
+                                } else {
+                                    Antichain::from_elem(mz_repr::Timestamp::minimum())
+                                }))
+                            });
 
                     let mut source_upper = source_upper.borrow_mut();
-                    source_upper.clear();
-                    source_upper.insert(mz_repr::Timestamp::minimum());
+                    if !source_upper.is_empty() {
+                        source_upper.clear();
+                        source_upper.insert(mz_repr::Timestamp::minimum());
+                    }
                 }
 
-                crate::render::build_ingestion_dataflow(
-                    self.timely_worker,
-                    &mut self.storage_state,
-                    ingestion_id,
-                    ingestion_description,
-                    resumption_frontier,
-                );
+                if !is_closed {
+                    crate::render::build_ingestion_dataflow(
+                        self.timely_worker,
+                        &mut self.storage_state,
+                        ingestion_id,
+                        ingestion_description,
+                        resumption_frontier,
+                    );
+                }
             }
             InternalStorageCommand::CreateSinkDataflow(sink_id, sink_description) => {
                 info!(
@@ -546,6 +714,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     sink_write_frontier.clear();
                     sink_write_frontier.insert(mz_repr::Timestamp::minimum());
                 }
+                // This is a separate line cause rustfmt :(
+                let stats = StorageStatistics::<SinkStatisticsUpdate, SinkStatisticsMetrics>::new(
+                    sink_id,
+                    self.storage_state.timely_worker_index,
+                    &self.storage_state.sink_metrics,
+                );
+                self.storage_state.sink_statistics.insert(sink_id, stats);
 
                 crate::render::build_export_dataflow(
                     self.timely_worker,
@@ -555,16 +730,34 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 );
             }
             InternalStorageCommand::DropDataflow(id) => {
-                // Clean up per-source / per-sink state.
-                self.storage_state.source_uppers.remove(&id);
-                self.storage_state.source_tokens.remove(&id);
-                self.storage_state.source_statistics.remove(&id);
+                let ids: BTreeSet<GlobalId> = match self.storage_state.ingestions.get(&id) {
+                    // Without the source dataflow running, all source exports
+                    // should also be considered dropped. n.b. `source_exports`
+                    // includes `id`
+                    Some(IngestionDescription { source_exports, .. }) => {
+                        source_exports.keys().cloned().collect()
+                    }
+                    None => {
+                        let mut ids = BTreeSet::new();
+                        ids.insert(id);
+                        ids
+                    }
+                };
 
-                self.storage_state.sink_tokens.remove(&id);
+                mz_ore::soft_assert!(ids.contains(&id));
+
+                for id in &ids {
+                    // Clean up per-source / per-sink state.
+                    self.storage_state.source_uppers.remove(id);
+                    self.storage_state.source_tokens.remove(id);
+                    self.storage_state.source_statistics.remove(id);
+
+                    self.storage_state.sink_tokens.remove(id);
+                }
 
                 // Report the dataflow as dropped once we went through the whole
                 // control flow from external command to this internal command.
-                self.storage_state.dropped_ids.push(id);
+                self.storage_state.dropped_ids.extend(ids);
             }
         }
     }
@@ -621,17 +814,26 @@ impl<'w, A: Allocate> Worker<'w, A> {
     }
 
     /// Report source statistics back to the controller.
-    pub fn report_source_statistics(&mut self, response_tx: &ResponseSender) {
+    pub fn report_storage_statistics(&mut self, response_tx: &ResponseSender) {
         // Check if any observed frontier should advance the reported frontiers.
-        let mut to_send = vec![];
+        let mut source_stats = vec![];
+        let mut sink_stats = vec![];
         for (_, stats) in self.storage_state.source_statistics.iter() {
             if let Some(snapshot) = stats.snapshot() {
-                to_send.push(snapshot);
+                source_stats.push(snapshot);
+            }
+        }
+        for (_, stats) in self.storage_state.sink_statistics.iter() {
+            if let Some(snapshot) = stats.snapshot() {
+                sink_stats.push(snapshot);
             }
         }
 
-        if !to_send.is_empty() {
-            self.send_storage_response(response_tx, StorageResponse::StatisticsUpdates(to_send));
+        if !source_stats.is_empty() || !sink_stats.is_empty() {
+            self.send_storage_response(
+                response_tx,
+                StorageResponse::StatisticsUpdates(source_stats, sink_stats),
+            );
         }
     }
 
@@ -686,13 +888,27 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
         // Elide any ingestions we're already aware of while determining what
         // ingestions no longer exist.
-        let mut stale_ingestions = self.storage_state.ingestions.keys().collect::<HashSet<_>>();
-        let mut stale_exports = self.storage_state.exports.keys().collect::<HashSet<_>>();
+        let mut stale_ingestions = self
+            .storage_state
+            .ingestions
+            .keys()
+            .collect::<BTreeSet<_>>();
+        let mut stale_exports = self.storage_state.exports.keys().collect::<BTreeSet<_>>();
         for command in &mut commands {
             match command {
+                StorageCommand::CreateTimely { .. } => {
+                    panic!("CreateTimely must be captured before")
+                }
                 StorageCommand::CreateSources(ingestions) => {
                     ingestions.retain_mut(|ingestion| {
+
                         if let Some(existing) = self.storage_state.ingestions.get(&ingestion.id) {
+                            trace!(
+                                worker_id = self.timely_worker.index(),
+                                has_token = self.storage_state.source_tokens.contains_key(&ingestion.id),
+                                "reconciliation, existing ingestion: {}", ingestion.id
+                            );
+
                             stale_ingestions.remove(&ingestion.id);
                             // If we've been asked to create an ingestion that is
                             // already installed, the descriptions must match
@@ -735,6 +951,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
             }
         }
 
+        trace!(
+            worker_id = self.timely_worker.index(),
+            "reconciliation, stale ingestions: {:?}",
+            stale_ingestions
+        );
+
         // Synthesize a drop command to remove stale ingestions and exports
         commands.push(StorageCommand::AllowCompaction(
             stale_ingestions
@@ -776,12 +998,11 @@ impl StorageState {
         cmd: StorageCommand,
     ) {
         match cmd {
+            StorageCommand::CreateTimely { .. } => panic!("CreateTimely must be captured before"),
             StorageCommand::InitializationComplete => (),
             StorageCommand::UpdateConfiguration(params) => {
                 tracing::info!("Applying configuration update: {params:?}");
-
-                // TODO(#16753): apply config to `self.storage_state.persist_clients`
-                let _ = params.persist;
+                params.persist.apply(self.persist_clients.cfg());
             }
             StorageCommand::CreateSources(ingestions) => {
                 for ingestion in ingestions {
@@ -791,11 +1012,9 @@ impl StorageState {
                         .insert(ingestion.id, ingestion.description.clone());
 
                     // Initialize shared frontier reporting.
-                    for (export_id, _export) in ingestion.description.source_exports.iter() {
-                        self.reported_frontiers.insert(
-                            *export_id,
-                            Antichain::from_elem(mz_repr::Timestamp::minimum()),
-                        );
+                    for id in ingestion.description.subsource_ids() {
+                        self.reported_frontiers
+                            .insert(id, Antichain::from_elem(mz_repr::Timestamp::minimum()));
                     }
 
                     // This needs to be done by one worker, which will
@@ -826,11 +1045,7 @@ impl StorageState {
                         export.id,
                         SinkHandle::new(
                             export.id,
-                            export
-                                .description
-                                .from_storage_metadata
-                                .persist_location
-                                .clone(),
+                            &export.description.from_storage_metadata,
                             export.description.from_storage_metadata.data_shard,
                             Arc::clone(&self.persist_clients),
                         ),

@@ -12,8 +12,8 @@
 use std::future::Future;
 
 use differential_dataflow::difference::{Multiply, Semigroup};
-use differential_dataflow::AsCollection;
-use differential_dataflow::Collection;
+use differential_dataflow::lattice::Lattice;
+use differential_dataflow::{AsCollection, Collection};
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
@@ -25,6 +25,7 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
 
+use crate::buffer::ConsolidateBuffer;
 use crate::builder_async::{AsyncInputHandle, OperatorBuilder as OperatorBuilderAsync};
 
 /// Extension methods for timely [`Stream`]s.
@@ -189,10 +190,11 @@ where
     /// and move the data into the difference component. This will allow differential dataflow to update in-place.
     fn explode_one<D2, R2, L>(&self, logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
     where
-        D2: Data + Ord,
+        D2: differential_dataflow::Data,
         R2: Semigroup + Multiply<R>,
         <R2 as Multiply<R>>::Output: Data + Semigroup,
-        L: FnMut(D1) -> (D2, R2) + 'static;
+        L: FnMut(D1) -> (D2, R2) + 'static,
+        G::Timestamp: Lattice;
 }
 
 impl<G, D1> StreamExt<G, D1> for Stream<G, D1>
@@ -411,28 +413,26 @@ where
 
     fn explode_one<D2, R2, L>(&self, mut logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
     where
-        D2: Data + Ord,
+        D2: differential_dataflow::Data,
         R2: Semigroup + Multiply<R>,
         <R2 as Multiply<R>>::Output: Data + Semigroup,
         L: FnMut(D1) -> (D2, R2) + 'static,
+        G::Timestamp: Lattice,
     {
-        let mut buffer = Vec::new();
-        let mut out = Vec::new();
         self.inner
             .unary(Pipeline, "ExplodeOne", move |_, _| {
+                let mut buffer = Vec::new();
                 move |input, output| {
+                    let mut out = ConsolidateBuffer::new(output, 0);
                     input.for_each(|time, data| {
                         data.swap(&mut buffer);
-                        out.extend(buffer.drain(..).map(|(x, t, d)| {
-                            let (x, d2) = logic(x);
-                            (x, t, d2.multiply(&d))
-                        }));
-                        differential_dataflow::consolidation::consolidate_updates(&mut out);
-                        if out.len() < out.capacity() / 2 {
-                            output.session(&time).give_iterator(out.drain(..));
-                        } else {
-                            output.session(&time).give_container(&mut out);
-                        }
+                        out.give_iterator(
+                            &time,
+                            buffer.drain(..).map(|(x, t, d)| {
+                                let (x, d2) = logic(x);
+                                (x, t, d2.multiply(&d))
+                            }),
+                        );
                     });
                 }
             })

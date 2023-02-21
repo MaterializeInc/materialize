@@ -34,26 +34,23 @@ SERVICES = [
 def restart_mz(c: Composition) -> None:
     c.kill("materialized")
     c.up("materialized")
-    c.wait_for_materialized()
 
 
 # restart the bastion, wiping its keys in the process
 def restart_bastion(c: Composition) -> None:
     c.kill("ssh-bastion-host")
     c.rm("ssh-bastion-host")
-    c.start_and_wait_for_tcp(services=["ssh-bastion-host"])
+    c.up("ssh-bastion-host")
 
 
 def workflow_basic_ssh_features(c: Composition) -> None:
-    c.start_and_wait_for_tcp(services=["materialized", "ssh-bastion-host", "postgres"])
-    c.wait_for_materialized("materialized")
+    c.up("materialized", "ssh-bastion-host", "postgres")
 
     c.run("testdrive", "ssh-connections.td")
 
 
 def workflow_pg_via_ssh_tunnel(c: Composition) -> None:
-    c.start_and_wait_for_tcp(services=["materialized", "ssh-bastion-host", "postgres"])
-    c.wait_for_materialized("materialized")
+    c.up("materialized", "ssh-bastion-host", "postgres")
 
     c.run("testdrive", "setup.td")
 
@@ -68,22 +65,11 @@ def workflow_pg_via_ssh_tunnel(c: Composition) -> None:
         f"echo '{public_key}' > /etc/authorized_keys/mz",
     )
 
-    c.wait_for_postgres()
-
     c.run("testdrive", "--no-reset", "pg-source.td")
 
 
 def workflow_kafka_csr_via_ssh_tunnel(c: Composition) -> None:
-    c.start_and_wait_for_tcp(
-        services=[
-            "zookeeper",
-            "kafka",
-            "schema-registry",
-            "materialized",
-            "ssh-bastion-host",
-        ]
-    )
-    c.wait_for_materialized("materialized")
+    c.up("zookeeper", "kafka", "schema-registry", "materialized", "ssh-bastion-host")
 
     c.run("testdrive", "setup.td")
 
@@ -104,8 +90,7 @@ def workflow_kafka_csr_via_ssh_tunnel(c: Composition) -> None:
 # Test that if we restart the bastion AND change its server keys(s), we can
 # still reconnect in the replication stream.
 def workflow_pg_restart_bastion(c: Composition) -> None:
-    c.start_and_wait_for_tcp(services=["materialized", "ssh-bastion-host", "postgres"])
-    c.wait_for_materialized("materialized")
+    c.up("materialized", "ssh-bastion-host", "postgres")
 
     c.run("testdrive", "setup.td")
 
@@ -125,8 +110,6 @@ def workflow_pg_restart_bastion(c: Composition) -> None:
         f"cat /etc/ssh/keys/ssh_host_ed25519_key.pub",
         capture=True,
     ).stdout.strip()
-
-    c.wait_for_postgres()
 
     c.run("testdrive", "--no-reset", "pg-source.td")
 
@@ -157,8 +140,7 @@ def workflow_pg_restart_bastion(c: Composition) -> None:
 
 
 def workflow_pg_via_ssh_tunnel_with_ssl(c: Composition) -> None:
-    c.start_and_wait_for_tcp(services=["materialized", "ssh-bastion-host", "postgres"])
-    c.wait_for_materialized("materialized")
+    c.up("materialized", "ssh-bastion-host", "postgres")
 
     c.run("testdrive", "setup.td")
 
@@ -173,14 +155,11 @@ def workflow_pg_via_ssh_tunnel_with_ssl(c: Composition) -> None:
         f"echo '{public_key}' > /etc/authorized_keys/mz",
     )
 
-    c.wait_for_postgres()
-
     c.run("testdrive", "--no-reset", "pg-source-ssl.td")
 
 
 def workflow_ssh_key_after_restart(c: Composition) -> None:
-    c.start_and_wait_for_tcp(services=["materialized"])
-    c.wait_for_materialized("materialized")
+    c.up("materialized")
 
     c.run("testdrive", "setup.td")
 
@@ -212,8 +191,7 @@ def workflow_ssh_key_after_restart(c: Composition) -> None:
 
 
 def workflow_rotated_ssh_key_after_restart(c: Composition) -> None:
-    c.start_and_wait_for_tcp(services=["materialized"])
-    c.wait_for_materialized("materialized")
+    c.up("materialized")
 
     c.run("testdrive", "setup.td")
 

@@ -71,12 +71,12 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -88,11 +88,7 @@ use futures_core::stream::BoxStream;
 use serde::de::Unexpected;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use mz_ore::cast;
 use mz_ore::cast::CastFrom;
-use mz_proto::{RustType, TryFromProtoError};
-
-include!(concat!(env!("OUT_DIR"), "/mz_orchestrator.rs"));
 
 /// An orchestrator manages services.
 ///
@@ -248,7 +244,7 @@ pub struct ServiceConfig<'a> {
     /// An optional limit on the CPU that the service can use.
     pub cpu_limit: Option<CpuLimit>,
     /// The number of copies of this service to run.
-    pub scale: NonZeroUsize,
+    pub scale: u16,
     /// Arbitrary key–value pairs to attach to the service in the orchestrator
     /// backend.
     ///
@@ -308,18 +304,6 @@ impl Serialize for MemoryLimit {
         S: serde::Serializer,
     {
         <String as Serialize>::serialize(&self.0.to_string(), serializer)
-    }
-}
-
-impl RustType<ProtoMemoryLimit> for MemoryLimit {
-    fn into_proto(&self) -> ProtoMemoryLimit {
-        ProtoMemoryLimit {
-            inner: self.0.as_u64(),
-        }
-    }
-
-    fn from_proto(proto: ProtoMemoryLimit) -> Result<Self, TryFromProtoError> {
-        Ok(MemoryLimit(ByteSize(proto.inner)))
     }
 }
 
@@ -394,19 +378,5 @@ impl Serialize for CpuLimit {
         S: serde::Serializer,
     {
         <f64 as Serialize>::serialize(&(self.millicpus as f64 / 1000.0), serializer)
-    }
-}
-
-impl RustType<ProtoCpuLimit> for CpuLimit {
-    fn into_proto(&self) -> ProtoCpuLimit {
-        ProtoCpuLimit {
-            millicpus: cast::usize_to_u64(self.millicpus),
-        }
-    }
-
-    fn from_proto(proto: ProtoCpuLimit) -> Result<Self, TryFromProtoError> {
-        Ok(CpuLimit {
-            millicpus: cast::u64_to_usize(proto.millicpus),
-        })
     }
 }

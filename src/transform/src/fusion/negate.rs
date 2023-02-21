@@ -29,15 +29,15 @@ impl crate::Transform for Negate {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        let result = relation.try_visit_mut_pre(&mut |e| Ok(self.action(e)));
-        mz_repr::explain_new::trace_plan(&*relation);
-        result
+        relation.visit_mut_pre(&mut Self::action)?;
+        mz_repr::explain::trace_plan(&*relation);
+        Ok(())
     }
 }
 
 impl Negate {
     /// Fuses a sequence of `Negate` operators into one or zero `Negate` operators.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+    pub fn action(relation: &mut MirRelationExpr) {
         if let MirRelationExpr::Negate { input } = relation {
             let mut require_negate = true;
             while let MirRelationExpr::Negate { input: inner_input } = &mut **input {

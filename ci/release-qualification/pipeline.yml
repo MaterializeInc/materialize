@@ -21,6 +21,7 @@ steps:
           - { value: zippy-dataflows-large }
           - { value: zippy-pg-cdc-large }
           - { value: zippy-cluster-replicas-large }
+          - { value: zippy-no-killing }
         multiple: true
         required: false
     if: build.source == "ui"
@@ -82,3 +83,13 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: zippy
           args: [--scenario=ClusterReplicas, --actions=100000]
+
+  - id: zippy-no-killing
+    label: "Long Zippy scenario with no killing"
+    timeout_in_minutes: 2880
+    agents:
+      queue: linux-x86_64-large
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: zippy
+          args: [--scenario=NoKilling, --actions=100000]

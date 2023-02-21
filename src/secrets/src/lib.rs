@@ -71,12 +71,13 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
 //! Abstractions for secure management of user secrets.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 
@@ -94,6 +95,10 @@ pub trait SecretsController: Debug + Send + Sync {
 
     /// Deletes the specified secret.
     async fn delete(&self, id: GlobalId) -> Result<(), anyhow::Error>;
+
+    /// Lists known secrets. Unrecognized secret objects do not produce an error
+    /// and are ignored.
+    async fn list(&self) -> Result<Vec<GlobalId>, anyhow::Error>;
 
     /// Returns a reader for the secrets managed by this controller.
     fn reader(&self) -> Arc<dyn SecretsReader>;
@@ -118,13 +123,13 @@ pub trait SecretsReader: Debug + Send + Sync {
 
 #[derive(Debug)]
 pub struct InMemorySecretsController {
-    data: Arc<Mutex<HashMap<GlobalId, Vec<u8>>>>,
+    data: Arc<Mutex<BTreeMap<GlobalId, Vec<u8>>>>,
 }
 
 impl InMemorySecretsController {
     pub fn new() -> Self {
         Self {
-            data: Arc::new(Mutex::new(HashMap::new())),
+            data: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 }
@@ -139,6 +144,10 @@ impl SecretsController for InMemorySecretsController {
     async fn delete(&self, id: GlobalId) -> Result<(), anyhow::Error> {
         self.data.lock().unwrap().remove(&id);
         Ok(())
+    }
+
+    async fn list(&self) -> Result<Vec<GlobalId>, anyhow::Error> {
+        Ok(self.data.lock().unwrap().keys().cloned().collect())
     }
 
     fn reader(&self) -> Arc<dyn SecretsReader> {

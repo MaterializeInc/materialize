@@ -71,6 +71,7 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
@@ -79,7 +80,7 @@
 //! The `Controller` provides the ability to create and manipulate storage and compute instances.
 //! Each of Storage and Compute provide their own controllers, accessed through the `storage()`
 //! and `compute(instance_id)` methods. It is an error to access a compute instance before it has
-//! been created; a single storage instance is always available.
+//! been created.
 //!
 //! The controller also provides a `recv()` method that returns responses from the storage and
 //! compute layers, which may remain of value to the interested user. With time, these responses
@@ -96,10 +97,12 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
+use futures::stream::{Peekable, StreamExt};
 use serde::{Deserialize, Serialize};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
-use tokio::sync::Mutex;
+use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
@@ -108,8 +111,10 @@ use mz_compute_client::controller::{
 };
 use mz_compute_client::protocol::response::{PeekResponse, SubscribeResponse};
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
-use mz_orchestrator::{Orchestrator, ServiceProcessMetrics};
+use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, ServiceProcessMetrics};
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::task::AbortOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
@@ -121,6 +126,8 @@ use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
 use mz_storage_client::controller::StorageController;
+
+pub mod clusters;
 
 /// Configures a controller.
 #[derive(Debug, Clone)]
@@ -134,7 +141,7 @@ pub struct ControllerConfig {
     /// A process-global cache of (blob_uri, consensus_uri) ->
     /// PersistClient.
     /// This is intentionally shared between workers.
-    pub persist_clients: Arc<Mutex<PersistClientCache>>,
+    pub persist_clients: Arc<PersistClientCache>,
     /// The stash URL for the storage controller.
     pub storage_stash_url: String,
     /// The clusterd image to use when starting new cluster processes.
@@ -145,6 +152,8 @@ pub struct ControllerConfig {
     pub now: NowFn,
     /// The postgres stash factory.
     pub postgres_factory: StashFactory,
+    /// The metrics registry.
+    pub metrics_registry: MetricsRegistry,
 }
 
 /// Responses that [`Controller`] can produce.
@@ -200,29 +209,33 @@ enum Readiness {
     Storage,
     /// The compute controller is ready.
     Compute,
+    /// The metrics channel is ready.
+    Metrics,
 }
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
 pub struct Controller<T = mz_repr::Timestamp> {
     pub storage: Box<dyn StorageController<Timestamp = T>>,
     pub compute: ComputeController<T>,
+    /// The clusterd image to use when starting new cluster processes.
+    clusterd_image: String,
+    /// The init container image to use for clusterd.
+    init_container_image: Option<String>,
+    /// The cluster orchestrator.
+    orchestrator: Arc<dyn NamespacedOrchestrator>,
+    /// Tracks the readiness of the underlying controllers.
     readiness: Readiness,
+    /// Tasks for collecting replica metrics.
+    metrics_tasks: BTreeMap<ReplicaId, AbortOnDropHandle<()>>,
+    /// Sender for the channel over which replica metrics are sent.
+    metrics_tx: UnboundedSender<(ReplicaId, Vec<ServiceProcessMetrics>)>,
+    /// Receiver for the channel over which replica metrics are sent.
+    metrics_rx: Peekable<UnboundedReceiverStream<(ReplicaId, Vec<ServiceProcessMetrics>)>>,
 }
 
 impl<T> Controller<T> {
     pub fn active_compute(&mut self) -> ActiveComputeController<T> {
         self.compute.activate(&mut *self.storage)
-    }
-
-    /// Remove orphaned services from the orchestrator.
-    pub async fn remove_orphans(
-        &mut self,
-        next_replica_id: ReplicaId,
-        next_storage_host_id: GlobalId,
-    ) -> Result<(), anyhow::Error> {
-        self.compute.remove_orphans(next_replica_id).await?;
-        self.storage.remove_orphans(next_storage_host_id).await?;
-        Ok(())
     }
 }
 
@@ -260,6 +273,9 @@ where
                 () = self.compute.ready() => {
                     self.readiness = Readiness::Compute;
                 }
+                _ = Pin::new(&mut self.metrics_rx).peek() => {
+                    self.readiness = Readiness::Metrics;
+                }
             }
         }
     }
@@ -282,6 +298,11 @@ where
                 let response = self.active_compute().process();
                 Ok(response.map(Into::into))
             }
+            Readiness::Metrics => Ok(self
+                .metrics_rx
+                .next()
+                .await
+                .map(|(id, metrics)| ControllerResponse::ComputeReplicaMetrics(id, metrics))),
         }
     }
 
@@ -322,27 +343,30 @@ where
             config.storage_stash_url,
             config.persist_location,
             config.persist_clients,
-            config.orchestrator.namespace("storage"),
-            config.clusterd_image.clone(),
-            config.init_container_image.clone(),
             config.now,
             &config.postgres_factory,
             envd_epoch,
+            config.metrics_registry.clone(),
         )
         .await;
 
         let compute_controller = ComputeController::new(
             config.build_info,
-            config.orchestrator.namespace("compute"),
-            config.clusterd_image,
-            config.init_container_image,
             envd_epoch,
+            config.metrics_registry.clone(),
         );
+        let (metrics_tx, metrics_rx) = mpsc::unbounded_channel();
 
         Self {
             storage: Box::new(storage_controller),
             compute: compute_controller,
+            clusterd_image: config.clusterd_image,
+            init_container_image: config.init_container_image,
+            orchestrator: config.orchestrator.namespace("cluster"),
             readiness: Readiness::NotReady,
+            metrics_tasks: BTreeMap::new(),
+            metrics_tx,
+            metrics_rx: UnboundedReceiverStream::new(metrics_rx).peekable(),
         }
     }
 }

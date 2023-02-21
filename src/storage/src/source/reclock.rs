@@ -120,8 +120,6 @@ where
     ///
     /// This method is most efficient when the to be reclocked iterator presents data in contiguous
     /// runs with the same `FromTime`.
-    // This is dead code until we get rid of the compatibility layer
-    #[allow(dead_code)]
     pub fn reclock<'a, M: 'a>(
         &'a self,
         batch: impl IntoIterator<Item = (M, FromTime)> + 'a,
@@ -143,7 +141,7 @@ where
     }
 
     /// Reclocks a single `FromTime` timestamp into the `IntoTime` time domain.
-    fn reclock_time(
+    pub fn reclock_time(
         &self,
         src_ts: &FromTime,
     ) -> Result<Antichain<IntoTime>, ReclockError<FromTime>> {
@@ -267,7 +265,7 @@ where
     }
 
     /// Reclocks a single `FromTime` timestamp into a totally ordered `IntoTime` time domain.
-    fn reclock_time_total(&self, src_ts: &FromTime) -> Result<IntoTime, ReclockError<FromTime>>
+    pub fn reclock_time_total(&self, src_ts: &FromTime) -> Result<IntoTime, ReclockError<FromTime>>
     where
         IntoTime: TotalOrder,
     {
@@ -375,6 +373,10 @@ where
         }
         // And then consolidate
         consolidation::consolidate_updates(&mut inner.remap_trace);
+    }
+
+    pub fn since(&self) -> AntichainRef<'_, IntoTime> {
+        self.since.borrow()
     }
 
     pub fn share(&self) -> Self {
@@ -540,7 +542,7 @@ where
         };
 
         while PartialOrder::less_than(&self.source_upper.frontier(), &new_source_upper) {
-            let (ts, upper) = self
+            let (ts, mut upper) = self
                 .clock_stream
                 .by_ref()
                 .skip_while(|(_ts, upper)| {
@@ -552,6 +554,11 @@ where
                 .next()
                 .await
                 .expect("clock stream ended without reaching the empty frontier");
+
+            // If source is closed, close remap shard as well.
+            if new_source_upper.is_empty() {
+                upper = Antichain::new();
+            }
 
             let mut updates = vec![];
             for src_ts in self.source_upper.frontier().iter().cloned() {
@@ -606,7 +613,7 @@ where
 mod tests {
     use super::*;
 
-    use std::collections::HashSet;
+    use std::collections::BTreeSet;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -614,14 +621,15 @@ mod tests {
     use itertools::Itertools;
     use once_cell::sync::Lazy;
     use timely::progress::Timestamp as _;
-    use tokio::sync::Mutex;
 
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::cache::PersistClientCache;
-    use mz_persist_client::{PersistConfig, PersistLocation, ShardId};
-    use mz_repr::{GlobalId, Timestamp};
+    use mz_persist_client::cfg::PersistConfig;
+    use mz_persist_client::{PersistLocation, ShardId};
+    use mz_persist_types::codec_impls::UnitSchema;
+    use mz_repr::{GlobalId, RelationDesc, ScalarType, Timestamp};
     use mz_storage_client::controller::CollectionMetadata;
     use mz_storage_client::types::sources::{MzOffset, SourceData};
     use mz_storage_client::util::remap_handle::RemapHandle;
@@ -630,14 +638,22 @@ mod tests {
     // 15 minutes
     static PERSIST_READER_LEASE_TIMEOUT_MS: Duration = Duration::from_secs(60 * 15);
 
-    static PERSIST_CACHE: Lazy<Arc<Mutex<PersistClientCache>>> = Lazy::new(|| {
+    static PERSIST_CACHE: Lazy<Arc<PersistClientCache>> = Lazy::new(|| {
         let mut persistcfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
         persistcfg.reader_lease_duration = PERSIST_READER_LEASE_TIMEOUT_MS;
+        Arc::new(PersistClientCache::new(persistcfg, &MetricsRegistry::new()))
+    });
 
-        Arc::new(Mutex::new(PersistClientCache::new(
-            persistcfg,
-            &MetricsRegistry::new(),
-        )))
+    static PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+        RelationDesc::empty()
+            .with_column(
+                "partition",
+                ScalarType::Range {
+                    element_type: Box::new(ScalarType::Int32),
+                }
+                .nullable(false),
+            )
+            .with_column("offset", ScalarType::UInt64.nullable(true))
     });
 
     async fn make_test_operator(
@@ -660,6 +676,7 @@ mod tests {
             remap_shard: shard,
             data_shard: ShardId::new(),
             status_shard: None,
+            relation_desc: RelationDesc::empty(),
         };
 
         let clock_stream = futures::stream::iter((0..).map(|seconds| {
@@ -676,6 +693,7 @@ mod tests {
             "unittest",
             0,
             1,
+            PROGRESS_DESC.clone(),
         )
         .await
         .unwrap();
@@ -789,11 +807,11 @@ mod tests {
                 .await,
         );
 
-        let mut remap_trace = HashSet::new();
+        let mut remap_trace = BTreeSet::new();
         remap_trace.extend(follower.inner.borrow().remap_trace.clone());
         assert_eq!(
             remap_trace,
-            HashSet::from_iter([
+            BTreeSet::from_iter([
                 // Initial state
                 (
                     Partitioned::with_range(None, None, MzOffset::from(0)),
@@ -1337,15 +1355,18 @@ mod tests {
             consensus_uri: "mem://".to_owned(),
         };
 
-        let mut persist_clients = PERSIST_CACHE.lock().await;
-        let persist_client = persist_clients
+        let persist_client = PERSIST_CACHE
             .open(persist_location)
             .await
             .expect("error creating persist client");
-        drop(persist_clients);
 
         let read_handle = persist_client
-            .open_leased_reader::<SourceData, (), Timestamp, Diff>(binding_shard, "test_since_hold")
+            .open_leased_reader::<SourceData, (), Timestamp, Diff>(
+                binding_shard,
+                "test_since_hold",
+                Arc::new(PROGRESS_DESC.clone()),
+                Arc::new(UnitSchema),
+            )
             .await
             .expect("error opening persist shard");
 

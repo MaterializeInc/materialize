@@ -15,11 +15,11 @@ publish = false
 ### BEGIN HAKARI SECTION
 [dependencies]
 anyhow = { version = "1.0.66", features = ["backtrace"] }
-aws-sdk-sts = { version = "0.22.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sig-auth = { version = "0.52.0", default-features = false, features = ["sign-eventstream"] }
-aws-sigv4 = { version = "0.52.0", features = ["sign-eventstream"] }
-aws-smithy-http = { version = "0.52.0", default-features = false, features = ["event-stream", "rt-tokio"] }
-aws-types = { version = "0.52.0", default-features = false, features = ["hardcoded-credentials"] }
+aws-credential-types = { version = "0.53.0", default-features = false, features = ["hardcoded-credentials"] }
+aws-sdk-sts = { version = "0.23.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sig-auth = { version = "0.53.0", default-features = false, features = ["sign-eventstream"] }
+aws-sigv4 = { version = "0.53.0", features = ["sign-eventstream"] }
+aws-smithy-http = { version = "0.53.1", default-features = false, features = ["event-stream", "rt-tokio"] }
 axum = { git = "https://github.com/tokio-rs/axum.git", features = ["headers", "ws"] }
 base64 = { version = "0.13.1", features = ["alloc"] }
 bstr = { version = "0.2.14", features = ["serde1"] }
@@ -95,7 +95,7 @@ socket2 = { version = "0.4.7", default-features = false, features = ["all"] }
 syn = { version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
 textwrap = { version = "0.15.0", default-features = false, features = ["terminal_size"] }
 time = { version = "0.3.17", features = ["macros", "quickcheck", "serde-well-known"] }
-tokio = { version = "1.23.0", features = ["full", "test-util", "tracing"] }
+tokio = { version = "1.24.2", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.11", features = ["net", "sync"] }
 tokio-util = { version = "0.7.4", features = ["codec", "compat", "io", "time"] }
@@ -112,11 +112,11 @@ zeroize = { version = "1.5.7", features = ["serde"] }
 
 [build-dependencies]
 anyhow = { version = "1.0.66", features = ["backtrace"] }
-aws-sdk-sts = { version = "0.22.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sig-auth = { version = "0.52.0", default-features = false, features = ["sign-eventstream"] }
-aws-sigv4 = { version = "0.52.0", features = ["sign-eventstream"] }
-aws-smithy-http = { version = "0.52.0", default-features = false, features = ["event-stream", "rt-tokio"] }
-aws-types = { version = "0.52.0", default-features = false, features = ["hardcoded-credentials"] }
+aws-credential-types = { version = "0.53.0", default-features = false, features = ["hardcoded-credentials"] }
+aws-sdk-sts = { version = "0.23.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sig-auth = { version = "0.53.0", default-features = false, features = ["sign-eventstream"] }
+aws-sigv4 = { version = "0.53.0", features = ["sign-eventstream"] }
+aws-smithy-http = { version = "0.53.1", default-features = false, features = ["event-stream", "rt-tokio"] }
 axum = { git = "https://github.com/tokio-rs/axum.git", features = ["headers", "ws"] }
 base64 = { version = "0.13.1", features = ["alloc"] }
 bstr = { version = "0.2.14", features = ["serde1"] }
@@ -194,7 +194,7 @@ syn = { version = "1.0.107", features = ["extra-traits", "full", "visit", "visit
 textwrap = { version = "0.15.0", default-features = false, features = ["terminal_size"] }
 time = { version = "0.3.17", features = ["macros", "quickcheck", "serde-well-known"] }
 time-macros = { version = "0.2.6", default-features = false, features = ["formatting", "parsing", "serde"] }
-tokio = { version = "1.23.0", features = ["full", "test-util", "tracing"] }
+tokio = { version = "1.24.2", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.11", features = ["net", "sync"] }
 tokio-util = { version = "0.7.4", features = ["codec", "compat", "io", "time"] }
@@ -211,22 +211,26 @@ zeroize = { version = "1.5.7", features = ["serde"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
 byteorder = { version = "1.4.3", default-features = false, features = ["i128"] }
+getrandom = { version = "0.2.7", default-features = false, features = ["std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.16.0", features = ["unstable"] }
 tikv-jemalloc-sys = { version = "0.5.2", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 byteorder = { version = "1.4.3", default-features = false, features = ["i128"] }
+getrandom = { version = "0.2.7", default-features = false, features = ["std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.16.0", features = ["unstable"] }
 tikv-jemalloc-sys = { version = "0.5.2", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 
 [target.x86_64-apple-darwin.dependencies]
+getrandom = { version = "0.2.7", default-features = false, features = ["std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.16.0", features = ["unstable"] }
 security-framework = { version = "2.7.0", features = ["alpn"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
+getrandom = { version = "0.2.7", default-features = false, features = ["std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.16.0", features = ["unstable"] }
 security-framework = { version = "2.7.0", features = ["alpn"] }

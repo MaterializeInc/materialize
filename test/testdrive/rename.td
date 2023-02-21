@@ -64,7 +64,8 @@ mz_view_primary_idx mz_view     <VARIABLE_OUTPUT>   {a,b}
     ';
 
 > CREATE VIEW public_objects AS
-    SELECT mz_objects.* FROM mz_objects
+    SELECT mz_objects.id, mz_objects.oid, mz_objects.schema_id, mz_objects.name, mz_objects.type
+    FROM mz_objects
     JOIN mz_schemas ON mz_objects.schema_id = mz_schemas.id
     WHERE mz_schemas.name = 'public';
 

@@ -29,7 +29,7 @@ use crate::ast::{AstInfo, Ident, OrderByExpr, Query, UnresolvedObjectName, Value
 /// The parser does not distinguish between expressions of different types
 /// (e.g. boolean vs string), so the caller must handle expressions of
 /// inappropriate type, like `WHERE 1` or `SELECT 1=1`, as necessary.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Expr<T: AstInfo> {
     /// Identifier e.g. table name or column name
     Identifier(Vec<Ident>),
@@ -578,6 +578,13 @@ impl<T: AstInfo> Expr<T> {
         self.binop(Op::bare("/"), right)
     }
 
+    pub fn cast(self, data_type: T::DataType) -> Expr<T> {
+        Expr::Cast {
+            expr: Box::new(self),
+            data_type,
+        }
+    }
+
     pub fn call(name: Vec<&str>, args: Vec<Expr<T>>) -> Expr<T> {
         Expr::Function(Function {
             name: UnresolvedObjectName(name.into_iter().map(Into::into).collect()),
@@ -602,7 +609,7 @@ impl<T: AstInfo> Expr<T> {
 }
 
 /// A reference to an operator.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Op {
     /// Any namespaces that preceded the operator.
     pub namespace: Vec<Ident>,
@@ -640,7 +647,7 @@ impl Op {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum HomogenizingFunction {
     Coalesce,
     Greatest,
@@ -658,7 +665,7 @@ impl AstDisplay for HomogenizingFunction {
 }
 impl_display!(HomogenizingFunction);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SubscriptPosition<T: AstInfo> {
     pub start: Option<Expr<T>>,
     pub end: Option<Expr<T>>,
@@ -682,7 +689,7 @@ impl<T: AstInfo> AstDisplay for SubscriptPosition<T> {
 impl_display_t!(SubscriptPosition);
 
 /// A window specification (i.e. `OVER (PARTITION BY .. ORDER BY .. etc.)`)
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WindowSpec<T: AstInfo> {
     pub partition_by: Vec<Expr<T>>,
     pub order_by: Vec<OrderByExpr<T>>,
@@ -727,7 +734,7 @@ impl_display_t!(WindowSpec);
 ///
 /// Note: The parser does not validate the specified bounds; the caller should
 /// reject invalid bounds like `ROWS UNBOUNDED FOLLOWING` before execution.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WindowFrame {
     pub units: WindowFrameUnits,
     pub start_bound: WindowFrameBound,
@@ -738,7 +745,7 @@ pub struct WindowFrame {
     // TBD: EXCLUDE
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum WindowFrameUnits {
     Rows,
     Range,
@@ -757,7 +764,7 @@ impl AstDisplay for WindowFrameUnits {
 impl_display!(WindowFrameUnits);
 
 /// Specifies [WindowFrame]'s `start_bound` and `end_bound`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum WindowFrameBound {
     /// `CURRENT ROW`
     CurrentRow,
@@ -787,7 +794,7 @@ impl AstDisplay for WindowFrameBound {
 impl_display!(WindowFrameBound);
 
 /// A function call
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Function<T: AstInfo> {
     pub name: UnresolvedObjectName,
     pub args: FunctionArgs<T>,
@@ -822,7 +829,7 @@ impl<T: AstInfo> AstDisplay for Function<T> {
 impl_display_t!(Function);
 
 /// Arguments for a function call.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum FunctionArgs<T: AstInfo> {
     /// The special star argument, as in `count(*)`.
     Star,
@@ -858,7 +865,7 @@ impl<T: AstInfo> AstDisplay for FunctionArgs<T> {
 }
 impl_display_t!(FunctionArgs);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum IsExprConstruct {
     Null,
     True,

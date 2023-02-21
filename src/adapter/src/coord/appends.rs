@@ -9,7 +9,7 @@
 
 //! Logic and types for all appends executed by the [`Coordinator`].
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -27,7 +27,7 @@ use crate::catalog::BuiltinTableUpdate;
 use crate::coord::timeline::WriteTimestamp;
 use crate::coord::{Coordinator, Message, PendingTxn};
 use crate::session::{Session, WriteOp};
-use crate::util::{ClientTransmitter, CompletedClientTransmitter};
+use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
 use crate::ExecuteResponse;
 
 /// An operation that is deferred while waiting for a lock.
@@ -230,8 +230,7 @@ impl Coordinator {
             timestamp,
             advance_to,
         } = self.get_local_write_ts().await;
-        let mut appends: HashMap<GlobalId, Vec<(Row, Diff)>> =
-            HashMap::with_capacity(self.pending_writes.len());
+        let mut appends: BTreeMap<GlobalId, Vec<(Row, Diff)>> = BTreeMap::new();
         let mut responses = Vec::with_capacity(self.pending_writes.len());
         let should_block = pending_writes.iter().any(|write| write.should_block());
         for pending_write_txn in pending_writes {
@@ -309,14 +308,14 @@ impl Coordinator {
             append_fut
                 .await
                 .expect("One-shot dropped while waiting synchronously")
-                .unwrap();
+                .unwrap_or_terminate("cannot fail to apply appends");
             self.group_commit_apply(timestamp, responses, write_lock_guard)
                 .await;
         } else {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
             task::spawn(|| "group_commit_apply", async move {
                 if let Ok(response) = append_fut.await {
-                    response.unwrap();
+                    response.unwrap_or_terminate("cannot fail to apply appends");
                     if let Err(e) = internal_cmd_tx.send(Message::GroupCommitApply(
                         timestamp,
                         responses,

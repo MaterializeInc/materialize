@@ -10,18 +10,17 @@
 //! Implementation of the persist state machine.
 
 use std::fmt::Debug;
-use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
+use std::ops::{ControlFlow, ControlFlow::Continue};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use mz_ore::cast::CastFrom;
 use mz_ore::task::spawn;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::task::JoinHandle;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
@@ -31,17 +30,15 @@ use mz_persist_types::{Codec, Codec64, Opaque};
 
 use crate::critical::CriticalReaderId;
 use crate::error::{CodecMismatch, InvalidUsage};
+use crate::internal::apply::Applier;
 use crate::internal::compact::CompactReq;
-use crate::internal::maintenance::{LeaseExpiration, RoutineMaintenance, WriterMaintenance};
-use crate::internal::metrics::{
-    CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics, ShardMetrics,
-};
+use crate::internal::maintenance::{RoutineMaintenance, WriterMaintenance};
+use crate::internal::metrics::{CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics};
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
-    CompareAndAppendBreak, CriticalReaderState, HollowBatch, IdempotencyToken, LeasedReaderState,
-    NoOpStateTransition, Since, State, StateCollections, Upper, WriterState,
+    CompareAndAppendBreak, CriticalReaderState, HollowBatch, HollowRollup, IdempotencyToken,
+    LeasedReaderState, NoOpStateTransition, Since, StateCollections, Upper, WriterState,
 };
-use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::read::LeasedReaderId;
@@ -50,26 +47,14 @@ use crate::{PersistConfig, ShardId};
 
 #[derive(Debug)]
 pub struct Machine<K, V, T, D> {
-    pub(crate) cfg: PersistConfig,
-    pub(crate) metrics: Arc<Metrics>,
-    pub(crate) shard_metrics: Arc<ShardMetrics>,
-    pub(crate) state_versions: Arc<StateVersions>,
-
-    state: State<K, V, T, D>,
+    pub(crate) applier: Applier<K, V, T, D>,
 }
 
 // Impl Clone regardless of the type params.
 impl<K, V, T: Clone, D> Clone for Machine<K, V, T, D> {
     fn clone(&self) -> Self {
         Self {
-            cfg: self.cfg.clone(),
-            metrics: Arc::clone(&self.metrics),
-            shard_metrics: Arc::clone(&self.shard_metrics),
-            state_versions: Arc::clone(&self.state_versions),
-            state: self.state.clone(
-                self.state.applier_version.clone(),
-                self.state.hostname.clone(),
-            ),
+            applier: self.applier.clone(),
         }
     }
 }
@@ -87,79 +72,56 @@ where
         metrics: Arc<Metrics>,
         state_versions: Arc<StateVersions>,
     ) -> Result<Self, Box<CodecMismatch>> {
-        let shard_metrics = metrics.shards.shard(&shard_id);
-        let state = metrics
-            .cmds
-            .init_state
-            .run_cmd(&shard_metrics, |_cas_mismatch_metric| {
-                // No cas_mismatch retries because we just use the returned
-                // state on a mismatch.
-                state_versions.maybe_init_shard(&shard_metrics)
-            })
-            .await?;
-        Ok(Machine {
-            cfg,
-            metrics,
-            shard_metrics,
-            state_versions,
-            state,
-        })
+        let applier = Applier::new(cfg, shard_id, metrics, state_versions).await?;
+        Ok(Machine { applier })
     }
 
     pub fn shard_id(&self) -> ShardId {
-        self.state.shard_id()
+        self.applier.state().shard_id()
     }
 
     pub async fn fetch_upper(&mut self) -> &Antichain<T> {
-        self.fetch_and_update_state().await;
-        self.state.upper()
+        self.applier.fetch_and_update_state().await;
+        self.upper()
     }
 
     pub fn upper(&self) -> &Antichain<T> {
-        self.state.upper()
+        self.applier.state().upper()
     }
 
     pub fn seqno(&self) -> SeqNo {
-        self.state.seqno()
-    }
-
-    pub(crate) fn state(&self) -> &State<K, V, T, D> {
-        &self.state
+        self.applier.state().seqno()
     }
 
     #[cfg(test)]
     pub fn seqno_since(&self) -> SeqNo {
-        self.state.seqno_since()
+        self.applier.state().seqno_since()
     }
 
     pub async fn add_rollup_for_current_seqno(&mut self) {
-        let rollup_seqno = self.state.seqno;
-        let rollup_key = PartialRollupKey::new(rollup_seqno, &RollupId::new());
-        let () = self
-            .state_versions
-            .write_rollup_blob(&self.shard_metrics, &self.state, &rollup_key)
-            .await;
+        let rollup = self.applier.write_rollup_blob(&RollupId::new()).await;
         let applied = self
-            .add_and_remove_rollups((rollup_seqno, &rollup_key), &[])
+            .add_and_remove_rollups((rollup.seqno, &rollup.to_hollow()), &[])
             .await;
         if !applied {
             // Someone else already wrote a rollup at this seqno, so ours didn't
             // get added. Delete it.
-            self.state_versions
-                .delete_rollup(&self.state.shard_id, &rollup_key)
+            self.applier
+                .state_versions
+                .delete_rollup(&rollup.shard_id, &rollup.key)
                 .await;
         }
     }
 
     pub async fn add_and_remove_rollups(
         &mut self,
-        add_rollup: (SeqNo, &PartialRollupKey),
+        add_rollup: (SeqNo, &HollowRollup),
         remove_rollups: &[(SeqNo, PartialRollupKey)],
     ) -> bool {
         // See the big SUBTLE comment in [Self::merge_res] for what's going on
         // here.
         let mut applied_ever_true = false;
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, _applied, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.add_and_remove_rollups, |_, _, state| {
                 let ret = state.add_and_remove_rollups(add_rollup, remove_rollups);
@@ -179,7 +141,7 @@ where
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> LeasedReaderState<T> {
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, reader_state, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |seqno, cfg, state| {
                 state.register_leased_reader(
@@ -192,6 +154,18 @@ where
                 )
             })
             .await;
+
+        if !self.applier.state().collections.is_tombstone()
+            && !self
+                .applier
+                .state()
+                .collections
+                .leased_readers
+                .contains_key(reader_id)
+        {
+            error!("Reader {reader_id} was registered at timestamp {heartbeat_timestamp_ms} but immediately expired.\
+                    This implies {lease_duration:?} passed between the call and its completion, which should be rare.");
+        }
         // Usually, the reader gets an initial seqno hold of the seqno at which
         // it was registered. However, on a tombstone shard the seqno hold
         // happens to get computed as the tombstone seqno + 1
@@ -201,10 +175,10 @@ where
         // hold is >= the seqno_since, so validate that instead of anything more
         // specific.
         debug_assert!(
-            reader_state.seqno >= self.state.seqno_since(),
+            reader_state.seqno >= self.applier.state().seqno_since(),
             "{} vs {}",
             reader_state.seqno,
-            self.state.seqno_since()
+            self.applier.state().seqno_since()
         );
         reader_state
     }
@@ -214,7 +188,7 @@ where
         reader_id: &CriticalReaderId,
         purpose: &str,
     ) -> CriticalReaderState<T> {
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, state, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, cfg, state| {
                 state.register_critical_reader::<O>(&cfg.hostname, reader_id, purpose)
@@ -230,7 +204,7 @@ where
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> (Upper<T>, WriterState<T>) {
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, (shard_upper, writer_state), _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, cfg, state| {
                 state.register_writer(
@@ -242,6 +216,17 @@ where
                 )
             })
             .await;
+        if !self.applier.state().collections.is_tombstone()
+            && !self
+                .applier
+                .state()
+                .collections
+                .writers
+                .contains_key(writer_id)
+        {
+            error!("Writer {writer_id} was registered at timestamp {heartbeat_timestamp_ms} but immediately expired.\
+                    This implies {lease_duration:?} passed between the call and its completion, which should be rare.");
+        }
         (shard_upper, writer_state)
     }
 
@@ -271,7 +256,7 @@ where
                     // side-channel that didn't update our local cache of the
                     // machine state. So, fetch the latest state and try again
                     // if we indeed get something different.
-                    self.fetch_and_update_state().await;
+                    self.applier.fetch_and_update_state().await;
                     let current_upper = self.upper();
 
                     // We tried to to a compare_and_append with the wrong
@@ -298,7 +283,7 @@ where
         // error on the first attempt in tests.
         mut indeterminate: Option<Indeterminate>,
     ) -> Result<Result<(SeqNo, WriterMaintenance<T>), InvalidUsage<T>>, Upper<T>> {
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         // SUBTLE: Retries of compare_and_append with Indeterminate errors are
         // tricky (more discussion of this in #12797):
         //
@@ -382,12 +367,14 @@ where
         // then commit to it and remove the Indeterminate from
         // [WriteHandle::compare_and_append_batch].
         let mut retry = self
+            .applier
             .metrics
             .retries
             .compare_and_append_idempotent
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         loop {
             let cmd_res = self
+                .applier
                 .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |_, _, state| {
                     state.compare_and_append(
                         batch,
@@ -423,7 +410,7 @@ where
                         let req = CompactReq {
                             shard_id: self.shard_id(),
                             desc: req.desc,
-                            inputs: req.inputs,
+                            inputs: req.inputs.iter().map(|b| b.as_ref().clone()).collect(),
                         };
                         compact_reqs.push(req);
                     }
@@ -444,7 +431,7 @@ where
                     // Indeterminate error but was successful. Sanity check this
                     // and pass along the good news.
                     assert!(indeterminate.is_some());
-                    self.metrics.cmds.compare_and_append_noop.inc();
+                    self.applier.metrics.cmds.compare_and_append_noop.inc();
                     return Ok(Ok((seqno, WriterMaintenance::default())));
                 }
                 Err(CompareAndAppendBreak::InvalidUsage(err)) => {
@@ -503,7 +490,7 @@ where
     }
 
     pub async fn merge_res(&mut self, res: &FueledMergeRes<T>) -> ApplyMergeResult {
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
 
         // SUBTLE! If Machine::merge_res returns false, the blobs referenced in
         // compaction output are deleted so we don't leak them. Naively passing
@@ -562,7 +549,7 @@ where
         new_since: &Antichain<T>,
         heartbeat_timestamp_ms: u64,
     ) -> (SeqNo, Since<T>, RoutineMaintenance) {
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         self.apply_unbatched_idempotent_cmd(&metrics.cmds.downgrade_since, |seqno, _cfg, state| {
             state.downgrade_since(
                 reader_id,
@@ -581,7 +568,7 @@ where
         expected_opaque: &O,
         (new_opaque, new_since): (&O, &Antichain<T>),
     ) -> (Result<Since<T>, (O, Since<T>)>, RoutineMaintenance) {
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, res, maintenance) = self
             .apply_unbatched_idempotent_cmd(
                 &metrics.cmds.compare_and_downgrade_since,
@@ -606,7 +593,7 @@ where
         reader_id: &LeasedReaderId,
         heartbeat_timestamp_ms: u64,
     ) -> (SeqNo, bool, RoutineMaintenance) {
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         let (seqno, existed, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.heartbeat_reader, |_, _, state| {
                 state.heartbeat_leased_reader(reader_id, heartbeat_timestamp_ms)
@@ -618,7 +605,7 @@ where
     pub async fn start_reader_heartbeat_task(self, reader_id: LeasedReaderId) -> JoinHandle<()> {
         let mut machine = self;
         spawn(|| "persist::heartbeat_read", async move {
-            let sleep_duration = machine.cfg.reader_lease_duration / 2;
+            let sleep_duration = machine.applier.cfg.reader_lease_duration / 2;
             loop {
                 let before_sleep = Instant::now();
                 tokio::time::sleep(sleep_duration).await;
@@ -635,7 +622,7 @@ where
 
                 let before_heartbeat = Instant::now();
                 let (_seqno, existed, _maintenance) = machine
-                    .heartbeat_leased_reader(&reader_id, (machine.cfg.now)())
+                    .heartbeat_leased_reader(&reader_id, (machine.applier.cfg.now)())
                     .await;
 
                 let elapsed_since_heartbeat = before_heartbeat.elapsed();
@@ -660,7 +647,7 @@ where
         writer_id: &WriterId,
         heartbeat_timestamp_ms: u64,
     ) -> (SeqNo, bool, RoutineMaintenance) {
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         let (seqno, existed, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.heartbeat_writer, |_, _, state| {
                 state.heartbeat_writer(writer_id, heartbeat_timestamp_ms)
@@ -672,7 +659,7 @@ where
     pub async fn start_writer_heartbeat_task(self, writer_id: WriterId) -> JoinHandle<()> {
         let mut machine = self;
         spawn(|| "persist::heartbeat_write", async move {
-            let sleep_duration = machine.cfg.writer_lease_duration / 4;
+            let sleep_duration = machine.applier.cfg.writer_lease_duration / 4;
             loop {
                 let before_sleep = Instant::now();
                 tokio::time::sleep(sleep_duration).await;
@@ -689,7 +676,7 @@ where
 
                 let before_heartbeat = Instant::now();
                 let (_seqno, existed, _maintenance) = machine
-                    .heartbeat_writer(&writer_id, (machine.cfg.now)())
+                    .heartbeat_writer(&writer_id, (machine.applier.cfg.now)())
                     .await;
 
                 let elapsed_since_heartbeat = before_heartbeat.elapsed();
@@ -710,7 +697,7 @@ where
     }
 
     pub async fn expire_leased_reader(&mut self, reader_id: &LeasedReaderId) -> SeqNo {
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         let (seqno, _existed, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_reader, |_, _, state| {
                 state.expire_leased_reader(reader_id)
@@ -720,7 +707,7 @@ where
     }
 
     pub async fn expire_critical_reader(&mut self, reader_id: &CriticalReaderId) -> SeqNo {
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         let (seqno, _existed, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_reader, |_, _, state| {
                 state.expire_critical_reader(reader_id)
@@ -730,7 +717,7 @@ where
     }
 
     pub async fn expire_writer(&mut self, writer_id: &WriterId) -> SeqNo {
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         let (seqno, _existed, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_writer, |_, _, state| {
                 state.expire_writer(writer_id)
@@ -740,18 +727,20 @@ where
     }
 
     pub async fn maybe_become_tombstone(&mut self) -> Option<RoutineMaintenance> {
-        if !self.state.upper().is_empty() || !self.state.since().is_empty() {
+        if !self.applier.state().upper().is_empty() || !self.applier.state().since().is_empty() {
             return None;
         }
 
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         let mut retry = self
+            .applier
             .metrics
             .retries
             .idempotent_cmd
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         loop {
             let res = self
+                .applier
                 .apply_unbatched_cmd(&metrics.cmds.become_tombstone, |_, _, state| {
                     state.become_tombstone()
                 })
@@ -783,7 +772,7 @@ where
     ) -> Result<Vec<HollowBatch<T>>, Since<T>> {
         let mut retry: Option<MetricsRetryStream> = None;
         loop {
-            let upper = match self.state.snapshot(as_of) {
+            let upper = match self.applier.snapshot(as_of) {
                 Ok(Ok(x)) => return Ok(x),
                 Ok(Err(Upper(upper))) => {
                     // The upper isn't ready yet, fall through and try again.
@@ -795,6 +784,7 @@ where
             // maybe our state was just out of date.
             retry = Some(match retry.take() {
                 None => self
+                    .applier
                     .metrics
                     .retries
                     .snapshot
@@ -823,13 +813,13 @@ where
                     retry.sleep().await
                 }
             });
-            self.fetch_and_update_state().await;
+            self.applier.fetch_and_update_state().await;
         }
     }
 
     // NB: Unlike the other methods here, this one is read-only.
     pub fn verify_listen(&self, as_of: &Antichain<T>) -> Result<(), Since<T>> {
-        match self.state.verify_listen(as_of) {
+        match self.applier.verify_listen(as_of) {
             Ok(Ok(())) => Ok(()),
             Ok(Err(Upper(_))) => {
                 // The upper may not be ready yet (maybe it would be ready if we
@@ -844,7 +834,7 @@ where
     }
 
     pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Option<HollowBatch<T>> {
-        self.state.next_listen_batch(frontier)
+        self.applier.next_listen_batch(frontier)
     }
 
     async fn apply_unbatched_idempotent_cmd<
@@ -860,12 +850,13 @@ where
         mut work_fn: WorkFn,
     ) -> (SeqNo, R, RoutineMaintenance) {
         let mut retry = self
+            .applier
             .metrics
             .retries
             .idempotent_cmd
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         loop {
-            match self.apply_unbatched_cmd(cmd, &mut work_fn).await {
+            match self.applier.apply_unbatched_cmd(cmd, &mut work_fn).await {
                 Ok((seqno, x, mut maintenance)) => match x {
                     Ok(x) => {
                         if let Some(tombstone_maintenance) = self.maybe_become_tombstone().await {
@@ -888,201 +879,6 @@ where
                 }
             }
         }
-    }
-
-    async fn apply_unbatched_cmd<
-        R,
-        E,
-        WorkFn: FnMut(SeqNo, &PersistConfig, &mut StateCollections<T>) -> ControlFlow<E, R>,
-    >(
-        &mut self,
-        cmd: &CmdMetrics,
-        mut work_fn: WorkFn,
-    ) -> Result<(SeqNo, Result<R, E>, RoutineMaintenance), Indeterminate> {
-        let is_write = cmd.name == self.metrics.cmds.compare_and_append.name;
-        let is_rollup = cmd.name == self.metrics.cmds.add_and_remove_rollups.name;
-        let shard_metrics = Arc::clone(&self.shard_metrics);
-        cmd.run_cmd(&shard_metrics, |cas_mismatch_metric| async move {
-            let mut garbage_collection;
-
-            loop {
-                let was_tombstone_before = self.state.collections.is_tombstone();
-
-                let (work_ret, mut new_state) = match self
-                    .state
-                    .clone_apply(&self.cfg, &mut work_fn)
-                {
-                    Continue(x) => x,
-                    Break(err) => {
-                        return Ok((self.state.seqno(), Err(err), RoutineMaintenance::default()))
-                    }
-                };
-
-                // Sanity check that all state transitions have special case for
-                // being a tombstone. The ones that do will return a Break and
-                // return out of this method above. The one exception is adding
-                // a rollup, because we want to be able to add a rollup for the
-                // tombstone state.
-                //
-                // TODO: Even better would be to write the rollup in the
-                // tombstone transition so it's a single terminal state
-                // transition, but it'll be tricky to get right.
-                if was_tombstone_before && !is_rollup {
-                    panic!(
-                        "cmd {} unexpectedly tried to commit a new state on a tombstone: {:?}",
-                        cmd.name, self.state
-                    );
-                }
-
-                // Find out if this command has been selected to perform gc, so
-                // that it will fire off a background request to the
-                // GarbageCollector to delete eligible blobs and truncate the
-                // state history. This is dependant both on `maybe_gc` returning
-                // Some _and_ on this state being successfully compare_and_set.
-                //
-                // NB: Make sure this overwrites `garbage_collection` on every
-                // run though the loop (i.e. no `if let Some` here). When we
-                // lose a CaS race, we might discover that the winner got
-                // assigned the gc.
-                garbage_collection = new_state.maybe_gc(is_write);
-
-                // NB: Make sure this is the very last thing before the
-                // `try_compare_and_set_current` call. (In particular, it needs
-                // to come after anything that might modify new_state, such as
-                // `maybe_gc`.)
-                let diff = StateDiff::from_diff(&self.state, &new_state);
-                // Sanity check that our diff logic roundtrips and adds back up
-                // correctly.
-                #[cfg(any(test, debug_assertions))]
-                {
-                    if let Err(err) =
-                        StateDiff::validate_roundtrip(&self.metrics, &self.state, &diff, &new_state)
-                    {
-                        panic!("validate_roundtrips failed: {}", err);
-                    }
-                }
-
-                // SUBTLE! Unlike the other consensus and blob uses, we can't
-                // automatically retry indeterminate ExternalErrors here. However,
-                // if the state change itself is _idempotent_, then we're free to
-                // retry even indeterminate errors. See
-                // [Self::apply_unbatched_idempotent_cmd].
-                let expected = self.state.seqno();
-                let cas_res = self
-                    .state_versions
-                    .try_compare_and_set_current(
-                        &cmd.name,
-                        &self.shard_metrics,
-                        Some(expected),
-                        &new_state,
-                        &diff,
-                    )
-                    .await?;
-                match cas_res {
-                    Ok(()) => {
-                        assert!(
-                            self.state.seqno <= new_state.seqno,
-                            "state seqno regressed: {} vs {}",
-                            self.state.seqno,
-                            new_state.seqno
-                        );
-                        self.state = new_state;
-
-                        let (expired_readers, expired_writers) =
-                            self.state.handles_needing_expiration((self.cfg.now)());
-                        self.metrics
-                            .lease
-                            .timeout_read
-                            .inc_by(u64::cast_from(expired_readers.len()));
-                        let lease_expiration = Some(LeaseExpiration {
-                            readers: expired_readers,
-                            writers: expired_writers,
-                        });
-
-                        if let Some(gc) = garbage_collection.as_ref() {
-                            debug!("Assigned gc request: {:?}", gc);
-                        }
-
-                        let maintenance = RoutineMaintenance {
-                            garbage_collection,
-                            lease_expiration: lease_expiration.unwrap_or_default(),
-                            write_rollup: self.state.need_rollup(),
-                        };
-
-                        return Ok((self.state.seqno(), Ok(work_ret), maintenance));
-                    }
-                    Err(diffs_to_current) => {
-                        cas_mismatch_metric.0.inc();
-
-                        let seqno_before = self.state.seqno;
-                        let diffs_apply = diffs_to_current
-                            .first()
-                            .map_or(true, |x| x.seqno == seqno_before.next());
-                        if diffs_apply {
-                            self.metrics.state.update_state_fast_path.inc();
-                            self.state.apply_encoded_diffs(
-                                &self.cfg,
-                                &self.metrics,
-                                &diffs_to_current,
-                            )
-                        } else {
-                            // Otherwise, we've gc'd the diffs we'd need to
-                            // advance self.state to where diffs_to_current
-                            // starts so we need a new rollup.
-                            self.metrics.state.update_state_slow_path.inc();
-                            debug!(
-                                "update_state didn't hit update_state fast path {} {:?}",
-                                self.state.seqno,
-                                diffs_to_current.first().map(|x| x.seqno),
-                            );
-
-                            // SUBTLE: Consensus::compare_and_set guarantees
-                            // that we get back everything in
-                            // `[max(expected.next(),earliest),current]` on
-                            // expectation mismatch. If `diffs_apply` is false
-                            // (this branch), then we know `earliest >
-                            // expected.next()` and so `diffs_to_current` is
-                            // already the full set of all live diffs. Sanity
-                            // check this deduction with an assert and then use
-                            // it to `fetch_current_state`.
-                            assert!(
-                                diffs_to_current
-                                    .first()
-                                    .map_or(false, |x| x.seqno > expected.next()),
-                                "{:?} vs {}",
-                                diffs_to_current.first(),
-                                expected.next()
-                            );
-                            let all_live_diffs = diffs_to_current;
-                            self.state = self
-                                .state_versions
-                                .fetch_current_state(&self.state.shard_id, all_live_diffs)
-                                .await
-                                .expect("shard codecs should not change");
-                        }
-
-                        // Intentionally don't backoff here. It would only make
-                        // starvation issues even worse.
-                        continue;
-                    }
-                }
-            }
-        })
-        .await
-    }
-
-    pub async fn fetch_and_update_state(&mut self) {
-        let seqno_before = self.state.seqno;
-        self.state_versions
-            .fetch_and_update_to_current(&mut self.state)
-            .await
-            .expect("shard codecs should not change");
-        assert!(
-            seqno_before <= self.state.seqno,
-            "state seqno regressed: {} vs {}",
-            seqno_before,
-            self.state.seqno
-        );
     }
 }
 
@@ -1172,17 +968,17 @@ where
 
 #[cfg(test)]
 pub mod datadriven {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
     use std::sync::Arc;
 
     use anyhow::anyhow;
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::trace::Description;
-    use mz_build_info::DUMMY_BUILD_INFO;
+    use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 
-    use crate::batch::{validate_truncate_batch, BatchBuilder};
+    use crate::batch::{validate_truncate_batch, BatchBuilder, BatchBuilderConfig};
     use crate::fetch::fetch_batch_part;
-    use crate::internal::compact::{CompactReq, Compactor};
+    use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
     use crate::internal::datadriven::DirectiveArgs;
     use crate::internal::gc::GcReq;
     use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
@@ -1200,19 +996,21 @@ pub mod datadriven {
         pub state_versions: Arc<StateVersions>,
         pub machine: Machine<String, (), u64, i64>,
         pub gc: GarbageCollector<String, (), u64, i64>,
-        pub batches: HashMap<String, HollowBatch<u64>>,
-        pub listens: HashMap<String, Listen<String, (), u64, i64>>,
+        pub batches: BTreeMap<String, HollowBatch<u64>>,
+        pub listens: BTreeMap<String, Listen<String, (), u64, i64>>,
         pub routine: Vec<RoutineMaintenance>,
     }
 
     impl MachineState {
         pub async fn new() -> Self {
             let shard_id = ShardId::new();
-            let mut client = new_test_client().await;
+            let client = new_test_client().await;
             // Reset blob_target_size. Individual batch writes and compactions
             // can override it with an arg.
-            client.cfg.blob_target_size =
-                PersistConfig::new(&DUMMY_BUILD_INFO, client.cfg.now.clone()).blob_target_size;
+            client
+                .cfg
+                .dynamic
+                .set_blob_target_size(PersistConfig::DEFAULT_BLOB_TARGET_SIZE);
             let state_versions = Arc::new(StateVersions::new(
                 client.cfg.clone(),
                 Arc::clone(&client.consensus),
@@ -1234,8 +1032,8 @@ pub mod datadriven {
                 state_versions,
                 machine,
                 gc,
-                batches: HashMap::default(),
-                listens: HashMap::default(),
+                batches: BTreeMap::default(),
+                listens: BTreeMap::default(),
                 routine: Vec::new(),
             }
         }
@@ -1251,11 +1049,12 @@ pub mod datadriven {
 
         let mut states = datadriven
             .state_versions
-            .fetch_all_live_states::<String, (), u64, i64>(&datadriven.shard_id)
+            .fetch_all_live_states::<u64>(datadriven.shard_id)
             .await
+            .check_ts_codec()
             .expect("shard codecs should not change");
         let mut s = String::new();
-        while let Some(x) = states.next() {
+        while let Some(x) = states.next(|_| {}) {
             if x.seqno < from {
                 continue;
             }
@@ -1303,8 +1102,8 @@ pub mod datadriven {
     ) -> Result<String, anyhow::Error> {
         Ok(format!(
             "since={:?} upper={:?}\n",
-            datadriven.machine.state.since().elements(),
-            datadriven.machine.state.upper().elements()
+            datadriven.machine.applier.state().since().elements(),
+            datadriven.machine.applier.state().upper().elements()
         ))
     }
 
@@ -1316,7 +1115,12 @@ pub mod datadriven {
         let reader_id = args.expect("reader_id");
         let (_, since, routine) = datadriven
             .machine
-            .downgrade_since(&reader_id, None, &since, (datadriven.machine.cfg.now)())
+            .downgrade_since(
+                &reader_id,
+                None,
+                &since,
+                (datadriven.machine.applier.cfg.now)(),
+            )
             .await;
         datadriven.routine.push(routine);
         Ok(format!(
@@ -1365,7 +1169,7 @@ pub mod datadriven {
         let consolidate = args.optional("consolidate").unwrap_or(true);
         let updates = args.input.split('\n').flat_map(DirectiveArgs::parse_update);
 
-        let mut cfg = datadriven.client.cfg.clone();
+        let mut cfg = BatchBuilderConfig::from(&datadriven.client.cfg);
         if let Some(target_size) = target_size {
             cfg.blob_target_size = target_size;
         };
@@ -1513,12 +1317,12 @@ pub mod datadriven {
             );
         }
 
-        let mut cfg = datadriven.client.cfg.clone();
+        let cfg = datadriven.client.cfg.clone();
         if let Some(target_size) = target_size {
-            cfg.blob_target_size = target_size;
+            cfg.dynamic.set_blob_target_size(target_size);
         };
         if let Some(memory_bound) = memory_bound {
-            cfg.compaction_memory_bound_bytes = memory_bound;
+            cfg.dynamic.set_compaction_memory_bound_bytes(memory_bound);
         }
         let req = CompactReq {
             shard_id: datadriven.shard_id,
@@ -1527,7 +1331,7 @@ pub mod datadriven {
         };
         let writer_id = writer_id.unwrap_or_else(WriterId::new);
         let res = Compactor::<String, (), u64, i64>::compact(
-            cfg,
+            CompactConfig::from(&cfg),
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.metrics),
             Arc::clone(&datadriven.client.cpu_heavy_runtime),
@@ -1608,7 +1412,12 @@ pub mod datadriven {
         let as_of = args.expect_antichain("as_of");
         let read = datadriven
             .client
-            .open_leased_reader::<String, (), u64, i64>(datadriven.shard_id, "")
+            .open_leased_reader::<String, (), u64, i64>(
+                datadriven.shard_id,
+                "",
+                Arc::new(StringSchema),
+                Arc::new(UnitSchema),
+            )
             .await
             .expect("invalid shard types");
         let listen = read
@@ -1818,7 +1627,7 @@ pub mod datadriven {
             let () = maintenance
                 .perform(&datadriven.machine, &datadriven.gc)
                 .await;
-            let () = datadriven.machine.fetch_and_update_state().await;
+            let () = datadriven.machine.applier.fetch_and_update_state().await;
             write!(s, "{} ok\n", datadriven.machine.seqno());
         }
         Ok(s)
@@ -1871,6 +1680,7 @@ pub mod tests {
         }
         let live_diffs = write
             .machine
+            .applier
             .state_versions
             .fetch_all_live_diffs(&write.machine.shard_id())
             .await;

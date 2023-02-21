@@ -71,6 +71,7 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
@@ -95,6 +96,7 @@ mod metrics;
 mod protocol;
 mod server;
 
+pub use codec::MAX_REQUEST_SIZE;
 pub use message::Severity;
 pub use metrics::MetricsConfig;
 pub use protocol::match_handshake;

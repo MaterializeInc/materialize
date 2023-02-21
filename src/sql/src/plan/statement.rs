@@ -16,24 +16,24 @@ use std::collections::BTreeMap;
 
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
-    RawObjectName, ShowStatement, UnresolvedDatabaseName, UnresolvedSchemaName,
+    ColumnDef, RawObjectName, ShowStatement, TableConstraint, UnresolvedDatabaseName,
+    UnresolvedSchemaName,
 };
 use mz_storage_client::types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
 
 use crate::ast::{Ident, ObjectType, Statement, UnresolvedObjectName};
 use crate::catalog::{
-    CatalogComputeInstance, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema,
-    SessionCatalog,
+    CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, SessionCatalog,
 };
 use crate::names::{
     self, Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName,
     QualifiedObjectName, RawDatabaseSpecifier, ResolvedDataType, ResolvedDatabaseSpecifier,
     ResolvedObjectName, ResolvedSchemaName, SchemaSpecifier,
 };
+use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::{query, with_options};
 use crate::plan::{Params, Plan, PlanContext, PlanKind};
-use crate::{normalize, DEFAULT_SCHEMA};
 
 pub(crate) mod ddl;
 mod dml;
@@ -105,6 +105,7 @@ pub fn describe(
         pcx: Some(pcx),
         catalog,
         param_types: RefCell::new(param_types),
+        ambiguous_columns: RefCell::new(false),
     };
 
     let desc = match stmt {
@@ -224,6 +225,7 @@ pub fn describe(
 /// The returned plan is tied to the state of the provided catalog. If the state
 /// of the catalog changes after planning, the validity of the plan is not
 /// guaranteed.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn plan(
     pcx: Option<&PlanContext>,
     catalog: &dyn SessionCatalog,
@@ -243,6 +245,7 @@ pub fn plan(
         pcx,
         catalog,
         param_types: RefCell::new(param_types),
+        ambiguous_columns: RefCell::new(false),
     };
 
     let plan = match stmt {
@@ -403,6 +406,9 @@ pub struct StatementContext<'a> {
     /// The types of the parameters in the query. This is filled in as planning
     /// occurs.
     pub param_types: RefCell<BTreeMap<usize, ScalarType>>,
+    /// Whether the statement contains an expression that can make the exact column list
+    /// ambiguous. For example `NATURAL JOIN` or `SELECT *`. This is filled in as planning occurs.
+    pub ambiguous_columns: RefCell<bool>,
 }
 
 impl<'a> StatementContext<'a> {
@@ -414,7 +420,19 @@ impl<'a> StatementContext<'a> {
             pcx,
             catalog,
             param_types: Default::default(),
+            ambiguous_columns: RefCell::new(false),
         }
+    }
+
+    /// Returns the schemas in order of search_path that exist in the catalog.
+    pub fn current_schemas(&self) -> &[(ResolvedDatabaseSpecifier, SchemaSpecifier)] {
+        self.catalog.search_path()
+    }
+
+    /// Returns the first schema from the search_path that exist in the catalog,
+    /// or None if there are none.
+    pub fn current_schema(&self) -> Option<&(ResolvedDatabaseSpecifier, SchemaSpecifier)> {
+        self.current_schemas().into_iter().next()
     }
 
     pub fn pcx(&self) -> Result<&PlanContext, PlanError> {
@@ -422,16 +440,39 @@ impl<'a> StatementContext<'a> {
     }
 
     pub fn allocate_full_name(&self, name: PartialObjectName) -> Result<FullObjectName, PlanError> {
-        let schema = name.schema.unwrap_or_else(|| DEFAULT_SCHEMA.into());
-        let database = match name.database {
-            Some(name) => RawDatabaseSpecifier::Name(name),
-            None if self.catalog.is_system_schema(&schema) => RawDatabaseSpecifier::Ambient,
-            None => match self.catalog.active_database_name() {
-                Some(name) => RawDatabaseSpecifier::Name(name.to_string()),
-                None => {
-                    sql_bail!("no database specified for non-system schema and no active database")
+        let (database, schema): (RawDatabaseSpecifier, String) = match (name.database, name.schema)
+        {
+            (None, None) => {
+                let Some((database, schema)) = self.current_schema() else {
+                    return Err(PlanError::InvalidSchemaName);
+                };
+                let schema = self.get_schema(database, schema);
+                let database = match schema.database() {
+                    ResolvedDatabaseSpecifier::Ambient => RawDatabaseSpecifier::Ambient,
+                    ResolvedDatabaseSpecifier::Id(id) => {
+                        RawDatabaseSpecifier::Name(self.catalog.get_database(id).name().to_string())
+                    }
+                };
+                (database, schema.name().schema.clone())
+            }
+            (None, Some(schema)) => {
+                if self.catalog.is_system_schema(&schema) {
+                    (RawDatabaseSpecifier::Ambient, schema)
+                } else {
+                    match self.catalog.active_database_name() {
+                        Some(name) => (RawDatabaseSpecifier::Name(name.to_string()), schema),
+                        None => {
+                            sql_bail!("no database specified for non-system schema and no active database")
+                        }
+                    }
                 }
-            },
+            }
+            (Some(_database), None) => {
+                // This shouldn't be possible. Refactor the datastructure to
+                // make it not exist.
+                sql_bail!("unreachable: specified the database but no schema")
+            }
+            (Some(database), Some(schema)) => (RawDatabaseSpecifier::Name(database), schema),
         };
         let item = name.item;
         Ok(FullObjectName {
@@ -501,6 +542,24 @@ impl<'a> StatementContext<'a> {
         })
     }
 
+    // Creates a `ResolvedObjectName::Object` from a `GlobalId` and an
+    // `UnresolvedObjectName`.
+    pub fn allocate_resolved_object_name(
+        &self,
+        id: GlobalId,
+        name: UnresolvedObjectName,
+    ) -> Result<ResolvedObjectName, PlanError> {
+        let partial = normalize::unresolved_object_name(name)?;
+        let qualified = self.allocate_qualified_name(partial.clone())?;
+        let full_name = self.allocate_full_name(partial)?;
+        Ok(ResolvedObjectName::Object {
+            id,
+            qualifiers: qualified.qualifiers,
+            full_name,
+            print_id: true,
+        })
+    }
+
     pub fn active_database(&self) -> Option<&DatabaseId> {
         self.catalog.active_database()
     }
@@ -519,7 +578,10 @@ impl<'a> StatementContext<'a> {
     }
 
     pub fn resolve_active_schema(&self) -> Result<&SchemaSpecifier, PlanError> {
-        Ok(self.catalog.resolve_schema(None, DEFAULT_SCHEMA)?.id())
+        match self.current_schema() {
+            Some((_db, schema)) => Ok(schema),
+            None => Err(PlanError::InvalidSchemaName),
+        }
     }
 
     pub fn resolve_database(
@@ -603,12 +665,9 @@ impl<'a> StatementContext<'a> {
         Ok(self.catalog.resolve_function(&name)?)
     }
 
-    pub fn resolve_compute_instance(
-        &self,
-        name: Option<&Ident>,
-    ) -> Result<&dyn CatalogComputeInstance, PlanError> {
+    pub fn resolve_cluster(&self, name: Option<&Ident>) -> Result<&dyn CatalogCluster, PlanError> {
         let name = name.map(|name| name.as_str());
-        Ok(self.catalog.resolve_compute_instance(name)?)
+        Ok(self.catalog.resolve_cluster(name)?)
     }
 
     pub fn resolve_type(&self, mut ty: mz_pgrepr::Type) -> Result<ResolvedDataType, PlanError> {
@@ -710,5 +769,49 @@ impl<'a> StatementContext<'a> {
                 sql_bail!("cannot specify both SSH TUNNEL and AWS PRIVATELINK");
             }
         }
+    }
+
+    pub fn relation_desc_into_table_defs(
+        &self,
+        desc: &RelationDesc,
+    ) -> Result<(Vec<ColumnDef<Aug>>, Vec<TableConstraint<Aug>>), PlanError> {
+        let mut columns = vec![];
+        for (column_name, column_type) in desc.iter() {
+            let name = Ident::new(column_name.as_str().to_owned());
+
+            let ty = mz_pgrepr::Type::from(&column_type.scalar_type);
+            let data_type = self.resolve_type(ty)?;
+
+            let options = if !column_type.nullable {
+                vec![mz_sql_parser::ast::ColumnOptionDef {
+                    name: None,
+                    option: mz_sql_parser::ast::ColumnOption::NotNull,
+                }]
+            } else {
+                vec![]
+            };
+
+            columns.push(ColumnDef {
+                name,
+                data_type,
+                collation: None,
+                options,
+            });
+        }
+
+        let mut table_constraints = vec![];
+        for key in desc.typ().keys.iter() {
+            let mut col_names = vec![];
+            for col_idx in key {
+                col_names.push(columns[*col_idx].name.clone());
+            }
+            table_constraints.push(TableConstraint::Unique {
+                name: None,
+                columns: col_names,
+                is_primary: false,
+            });
+        }
+
+        Ok((columns, table_constraints))
     }
 }

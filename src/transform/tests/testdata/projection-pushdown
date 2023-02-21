@@ -10,9 +10,10 @@
 build apply=ProjectionPushdown
 (project (constant [[1 3 4] [2 5 6]] [int32 int32 int32]) [2 1 0])
 ----
-%0 =
-| Constant (1, 3, 4) (2, 5, 6)
-| Project (#2, #1, #0)
+Project (#2, #1, #0)
+  Constant
+    - (1, 3, 4)
+    - (2, 5, 6)
 
 # Project around a project
 
@@ -23,11 +24,12 @@ build apply=ProjectionPushdown
         [0 2 1])
     [2 1 1 0])
 ----
-%0 =
-| Constant (1, 3, 4) (2, 5, 6)
-| Map
-| Project (#0, #2, #1)
-| Project (#2, #1, #1, #0)
+Project (#2, #1, #1, #0)
+  Project (#0, #2, #1)
+    Map ()
+      Constant
+        - (1, 3, 4)
+        - (2, 5, 6)
 
 # Project around a filter
 
@@ -40,12 +42,13 @@ build apply=ProjectionPushdown
     [2 2]
 )
 ----
-%0 =
-| Constant (1, 3, 4) (2, 5, 6)
-| Project (#0, #2)
-| Filter (#0 = #1)
-| Project (#1)
-| Project (#0, #0)
+Project (#0, #0)
+  Project (#1)
+    Filter (#0 = #1)
+      Project (#0, #2)
+        Constant
+          - (1, 3, 4)
+          - (2, 5, 6)
 
 build apply=ProjectionPushdown
 (project
@@ -56,11 +59,12 @@ build apply=ProjectionPushdown
     [#1]
 )
 ----
-%0 =
-| Constant (1, 3, 4) (2, 5, 6)
-| Project (#1, #2)
-| Filter (#1) IS NULL
-| Project (#0)
+Project (#0)
+  Filter (#1) IS NULL
+    Project (#1, #2)
+      Constant
+        - (1, 3, 4)
+        - (2, 5, 6)
 
 # Project around a map
 build apply=ProjectionPushdown
@@ -70,11 +74,12 @@ build apply=ProjectionPushdown
         [(call_binary add_int32 #1 #0) 7])
     [3])
 ----
-%0 =
-| Constant (1, 3, 4) (2, 5, 6)
-| Project (#0, #1)
-| Map (#1 + #0)
-| Project (#2)
+Project (#2)
+  Map ((#1 + #0))
+    Project (#0, #1)
+      Constant
+        - (1, 3, 4)
+        - (2, 5, 6)
 
 # Project around a column where a scalar refers to another fellow member of `scalars`
 build apply=ProjectionPushdown
@@ -84,12 +89,13 @@ build apply=ProjectionPushdown
         [(call_binary add_int32 #1 #0) 7 (call_binary add_int32 #4 7)])
     [3 5 5 5 3])
 ----
-%0 =
-| Constant (1, 3, 4) (2, 5, 6)
-| Project (#0, #1)
-| Map (#1 + #0), 7, (#3 + 7)
-| Project (#2, #4)
-| Project (#0, #1, #1, #1, #0)
+Project (#0, #1, #1, #1, #0)
+  Project (#2, #4)
+    Map ((#1 + #0), 7, (#3 + 7))
+      Project (#0, #1)
+        Constant
+          - (1, 3, 4)
+          - (2, 5, 6)
 
 # Projection pushdown causes elimination of unnecessary map scalars
 
@@ -102,12 +108,13 @@ build apply=ProjectionPushdown
         [(call_binary gte #2 #1)])
     [3])
 ----
-%0 =
-| Constant (1, 3, 4) (2, 5, 6)
-| Project (#1, #2)
-| Map (#0 + #1)
-| Filter (#1 >= #0)
-| Project (#2)
+Project (#2)
+  Filter (#1 >= #0)
+    Map ((#0 + #1))
+      Project (#1, #2)
+        Constant
+          - (1, 3, 4)
+          - (2, 5, 6)
 
 build apply=ProjectionPushdown
 (project
@@ -119,13 +126,13 @@ build apply=ProjectionPushdown
         ["dummy"])
     [#2 #1 #0])
 ----
-%0 =
-| Constant (1, 3, 4) (2, 5, 6)
-| Project (#0, #1)
-| Reduce group=(#0)
-| | agg sum(#1)
-| Map "dummy"
-| Project (#2, #1, #0)
+Project (#2, #1, #0)
+  Map ("dummy")
+    Reduce group_by=[#0] aggregates=[sum(#1)]
+      Project (#0, #1)
+        Constant
+          - (1, 3, 4)
+          - (2, 5, 6)
 
 cat
 (defsource x [int32 int32 int32])
@@ -147,81 +154,56 @@ build apply=ProjectionPushdown
         [[#0 #5]])
     [3])
 ----
-----
-%0 =
-| Constant (1, 3, 4) (2, 5, 6)
-| Map (#1 + #2)
-| Filter (#2 >= #1)
-| Project (#0, #3)
-
-%1 =
-| Get x (u0)
-| Project (#0)
-
-%2 =
-| Join %0 %1 (= #0 #2)
-| | implementation = Unimplemented
-| Project (#1)
-----
-----
+Project (#1)
+  Join on=(#0 = #2)
+    Project (#0, #3)
+      Filter (#2 >= #1)
+        Map ((#1 + #2))
+          Constant
+            - (1, 3, 4)
+            - (2, 5, 6)
+    Project (#0)
+      Get x
 
 # Query not using the columns newly created by FlatMap
 
 build apply=ProjectionPushdown
 (project (flat_map (get x) generate_series_int32 [#0 #2 1]) [#1])
 ----
-%0 =
-| Get x (u0)
-| FlatMap generate_series(#0, #2, 1)
-| Project (#1)
+Project (#1)
+  FlatMap generate_series(#0, #2, 1)
+    Get x
 
 #Query using the columns newly created by FlatMap
 
 build apply=ProjectionPushdown
 (project (flat_map (get x) generate_series_int32 [#0 #2 1]) [#3])
 ----
-%0 =
-| Get x (u0)
-| Project (#0, #2)
-| FlatMap generate_series(#0, #1, 1)
-| Project (#2)
+Project (#2)
+  FlatMap generate_series(#0, #1, 1)
+    Project (#0, #2)
+      Get x
 
 # Project around a union
 
 build apply=ProjectionPushdown
 (project (union [(get x) (get y)]) [#1 #0])
 ----
-----
-%0 =
-| Get x (u0)
-| Project (#1, #0)
-
-%1 =
-| Get y (u1)
-| Project (#1, #0)
-
-%2 =
-| Union %0 %1
-----
-----
+Union
+  Project (#1, #0)
+    Get x
+  Project (#1, #0)
+    Get y
 
 build apply=ProjectionPushdown
 (project (union [(get x) (get y)]) [#1 #1])
 ----
-----
-%0 =
-| Get x (u0)
-| Project (#1)
-
-%1 =
-| Get y (u1)
-| Project (#1)
-
-%2 =
-| Union %0 %1
-| Project (#0, #0)
-----
-----
+Project (#0, #0)
+  Union
+    Project (#1)
+      Get x
+    Project (#1)
+      Get y
 
 # Project around a negate
 
@@ -234,47 +216,36 @@ build apply=ProjectionPushdown
     [#0 #2]
 )
 ----
-----
-%0 =
-| Get x (u0)
-| Project (#0, #2)
-
-%1 =
-| Get x (u0)
-| Filter (#1 = 1)
-| Project (#0, #2)
-| Negate
-
-%2 =
-| Union %0 %1
-----
-----
+Union
+  Project (#0, #2)
+    Get x
+  Negate
+    Project (#0, #2)
+      Filter (#1 = 1)
+        Get x
 
 # Project around an ArrangeBy
 
 build apply=ProjectionPushdown
 (project (arrange_by (get x) [[#0] [#1]]) [#2])
 ----
-%0 =
-| Get x (u0)
-| ArrangeBy (#0) (#1)
-| Project (#2)
+Project (#2)
+  ArrangeBy keys=[[#0], [#1]]
+    Get x
 
 build apply=ProjectionPushdown
 (project (arrange_by (get x) [[#0] [#1]]) [#1])
 ----
-%0 =
-| Get x (u0)
-| ArrangeBy (#0) (#1)
-| Project (#1)
+Project (#1)
+  ArrangeBy keys=[[#0], [#1]]
+    Get x
 
 build apply=ProjectionPushdown
 (project (arrange_by (get x) [[#0] [#1]]) [#1 #0])
 ----
-%0 =
-| Get x (u0)
-| ArrangeBy (#0) (#1)
-| Project (#1, #0)
+Project (#1, #0)
+  ArrangeBy keys=[[#0], [#1]]
+    Get x
 
 # Project around a Reduce
 
@@ -287,11 +258,10 @@ build apply=ProjectionPushdown
         )
     [])
 ----
-%0 =
-| Get x (u0)
-| Project (#0, #2)
-| Distinct group=((#0 + #1))
-| Project ()
+Project ()
+  Distinct group_by=[(#0 + #1)]
+    Project (#0, #2)
+      Get x
 
 build apply=ProjectionPushdown
 (project
@@ -302,12 +272,10 @@ build apply=ProjectionPushdown
         )
     [#1])
 ----
-%0 =
-| Get x (u0)
-| Project (#0, #2)
-| Reduce group=(#0)
-| | agg sum((#0 * #1))
-| Project (#1)
+Project (#1)
+  Reduce group_by=[#0] aggregates=[sum((#0 * #1))]
+    Project (#0, #2)
+      Get x
 
 build apply=ProjectionPushdown
 (project
@@ -318,12 +286,10 @@ build apply=ProjectionPushdown
         )
     [#1 #0])
 ----
-%0 =
-| Get x (u0)
-| Project (#0, #2)
-| Reduce group=(#0)
-| | agg sum((#0 * #1))
-| Project (#1, #0)
+Project (#1, #0)
+  Reduce group_by=[#0] aggregates=[sum((#0 * #1))]
+    Project (#0, #2)
+      Get x
 
 # Project around a TopK
 
@@ -336,11 +302,10 @@ build apply=ProjectionPushdown
         )
     [#2 #2 #2])
 ----
-%0 =
-| Get x (u0)
-| TopK group=(#0) order=(#1 asc nulls_first, #2 asc nulls_first) offset=0
-| Project (#2)
-| Project (#0, #0, #0)
+Project (#0, #0, #0)
+  Project (#2)
+    TopK group_by=[#0] order_by=[#1 asc nulls_first, #2 asc nulls_first] monotonic=false
+      Get x
 
 build apply=ProjectionPushdown
 (project
@@ -351,12 +316,11 @@ build apply=ProjectionPushdown
         )
     [#2 #2])
 ----
-%0 =
-| Get x (u0)
-| Project (#1, #2)
-| TopK group=() order=(#0 asc nulls_first) offset=0
-| Project (#1)
-| Project (#0, #0)
+Project (#0, #0)
+  Project (#1)
+    TopK order_by=[#0 asc nulls_first] monotonic=false
+      Project (#1, #2)
+        Get x
 
 build apply=ProjectionPushdown
 (project
@@ -367,10 +331,9 @@ build apply=ProjectionPushdown
         )
     [#2 #1])
 ----
-%0 =
-| Get x (u0)
-| Project (#2, #1)
-| TopK group=(#0) order=(#1 asc nulls_first) offset=0
+TopK group_by=[#0] order_by=[#1 asc nulls_first] monotonic=false
+  Project (#2, #1)
+    Get x
 
 # Project in a Let
 
@@ -386,34 +349,21 @@ build apply=ProjectionPushdown
     )
 )
 ----
-----
-%0 =
-| Get x (u0)
-| Project (#0, #2)
-
-%1 =
-| Get y (u1)
-| Project (#0, #2)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #2)
-| | implementation = Unimplemented
-| Project (#0, #1, #3)
-
-%3 =
-| Get %2 (l0)
-| Project (#0, #2)
-
-%4 =
-| Get %2 (l0)
-| Project (#1)
-
-%5 =
-| Join %3 %4 (= #0 #2)
-| | implementation = Unimplemented
-| Project (#1)
-----
-----
+Return
+  Project (#1)
+    Join on=(#0 = #2)
+      Project (#0, #2)
+        Get l0
+      Project (#1)
+        Get l0
+With
+  cte l0 =
+    Project (#0, #1, #3)
+      Join on=(#0 = #2)
+        Project (#0, #2)
+          Get x
+        Project (#0, #2)
+          Get y
 
 build apply=ProjectionPushdown
 (let z
@@ -427,30 +377,20 @@ build apply=ProjectionPushdown
     )
 )
 ----
-----
-%0 =
-| Get x (u0)
-| Project (#0, #2)
-
-%1 =
-| Get y (u1)
-| Project (#0)
-
-%2 = Let l0 =
-| Join %0 %1 (= #0 #2)
-| | implementation = Unimplemented
-| Project (#0, #1)
-
-%3 =
-| Get %2 (l0)
-| Project (#1)
-
-%4 =
-| Join %2 %3 (= #0 #2)
-| | implementation = Unimplemented
-| Project (#1)
-----
-----
+Return
+  Project (#1)
+    Join on=(#0 = #2)
+      Get l0
+      Project (#1)
+        Get l0
+With
+  cte l0 =
+    Project (#0, #1)
+      Join on=(#0 = #2)
+        Project (#0, #2)
+          Get x
+        Project (#0)
+          Get y
 
 build apply=ProjectionPushdown
 (let z
@@ -463,28 +403,16 @@ build apply=ProjectionPushdown
     )
 )
 ----
-----
-%0 = Let l0 =
-| Get x (u0)
-| Project (#0, #1)
-| Map 1
-
-%1 =
-| Get %0 (l0)
-| Project (#0)
-
-%2 =
-| Get y (u1)
-
-%3 =
-| Join %1 %2 (= #0 #1)
-| | implementation = Unimplemented
-
-%4 =
-| Get %0 (l0)
-| Project (#0, #1, #0, #2)
-
-%5 =
-| Union %3 %4
-----
-----
+Return
+  Union
+    Join on=(#0 = #1)
+      Project (#0)
+        Get l0
+      Get y
+    Project (#0, #1, #0, #2)
+      Get l0
+With
+  cte l0 =
+    Map (1)
+      Project (#0, #1)
+        Get x

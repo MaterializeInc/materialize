@@ -17,8 +17,12 @@
 
 use std::collections::btree_map::Entry as BEntry;
 use std::collections::hash_map::Entry as HEntry;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fmt::{Debug, Display};
+
+mod hash;
+
+pub use self::hash::{HashMap, HashSet};
 
 /// Extension methods for collections.
 pub trait CollectionExt<T>: Sized

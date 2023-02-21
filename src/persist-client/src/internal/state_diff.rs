@@ -24,8 +24,9 @@ use tracing::debug;
 use crate::critical::CriticalReaderId;
 use crate::internal::paths::PartialRollupKey;
 use crate::internal::state::{
-    CriticalReaderState, HollowBatch, LeasedReaderState, ProtoStateField, ProtoStateFieldDiffType,
-    ProtoStateFieldDiffs, State, StateCollections, WriterState,
+    CriticalReaderState, HollowBatch, HollowBlobRef, HollowRollup, LeasedReaderState,
+    ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, State, StateCollections,
+    WriterState,
 };
 use crate::internal::trace::{FueledMergeRes, Trace};
 use crate::read::LeasedReaderId;
@@ -68,7 +69,7 @@ pub struct StateDiff<T> {
     pub(crate) seqno_to: SeqNo,
     pub(crate) walltime_ms: u64,
     pub(crate) latest_rollup_key: PartialRollupKey,
-    pub(crate) rollups: Vec<StateFieldDiff<SeqNo, PartialRollupKey>>,
+    pub(crate) rollups: Vec<StateFieldDiff<SeqNo, HollowRollup>>,
     pub(crate) hostname: Vec<StateFieldDiff<(), String>>,
     pub(crate) last_gc_req: Vec<StateFieldDiff<(), SeqNo>>,
     pub(crate) leased_readers: Vec<StateFieldDiff<LeasedReaderId, LeasedReaderState<T>>>,
@@ -105,7 +106,7 @@ impl<T: Timestamp + Codec64> StateDiff<T> {
 }
 
 impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
-    pub fn from_diff<K, V, D>(from: &State<K, V, T, D>, to: &State<K, V, T, D>) -> Self {
+    pub fn from_diff(from: &State<T>, to: &State<T>) -> Self {
         // Deconstruct from and to so we get a compile failure if new
         // fields are added.
         let State {
@@ -123,7 +124,6 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                     writers: from_writers,
                     trace: from_trace,
                 },
-            _phantom: _,
         } = from;
         let State {
             applier_version: to_applier_version,
@@ -140,17 +140,16 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                     writers: to_writers,
                     trace: to_trace,
                 },
-            _phantom: _,
         } = to;
         assert_eq!(from_shard_id, to_shard_id);
 
-        let (_, latest_rollup_key) = to.latest_rollup();
+        let (_, latest_rollup) = to.latest_rollup();
         let mut diffs = Self::new(
             to_applier_version.clone(),
             *from_seqno,
             *to_seqno,
             *to_walltime_ms,
-            latest_rollup_key.clone(),
+            latest_rollup.key.clone(),
         );
         diff_field_single(from_hostname, to_hostname, &mut diffs.hostname);
         diff_field_single(from_last_gc_req, to_last_gc_req, &mut diffs.last_gc_req);
@@ -171,13 +170,37 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         diffs
     }
 
+    pub(crate) fn map_blob_inserts<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
+        for spine_diff in self.spine.iter() {
+            match &spine_diff.val {
+                StateFieldValDiff::Insert(()) => {
+                    f(HollowBlobRef::Batch(&spine_diff.key));
+                }
+                StateFieldValDiff::Update((), ()) => {
+                    // No-op. Logically, we've removed and reinserted the same
+                    // key. We don't see this in practice, so it could also
+                    // easily be a panic, if necessary.
+                }
+                StateFieldValDiff::Delete(()) => {} // No-op
+            }
+        }
+        for rollups_diff in self.rollups.iter() {
+            match &rollups_diff.val {
+                StateFieldValDiff::Insert(x) | StateFieldValDiff::Update(_, x) => {
+                    f(HollowBlobRef::Rollup(x));
+                }
+                StateFieldValDiff::Delete(_) => {} // No-op
+            }
+        }
+    }
+
     #[cfg(any(test, debug_assertions))]
     #[allow(dead_code)]
     pub fn validate_roundtrip<K, V, D>(
         metrics: &Metrics,
-        from_state: &State<K, V, T, D>,
+        from_state: &crate::internal::state::TypedState<K, V, T, D>,
         diff: &Self,
-        to_state: &State<K, V, T, D>,
+        to_state: &crate::internal::state::TypedState<K, V, T, D>,
     ) -> Result<(), String>
     where
         K: mz_persist_types::Codec + std::fmt::Debug,
@@ -218,7 +241,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
     }
 }
 
-impl<K, V, T: Timestamp + Lattice + Codec64, D> State<K, V, T, D> {
+impl<T: Timestamp + Lattice + Codec64> State<T> {
     pub fn apply_encoded_diffs<'a, I: IntoIterator<Item = &'a VersionedData>>(
         &mut self,
         cfg: &PersistConfig,
@@ -243,7 +266,7 @@ impl<K, V, T: Timestamp + Lattice + Codec64, D> State<K, V, T, D> {
     }
 }
 
-impl<K, V, T: Timestamp + Lattice, D> State<K, V, T, D> {
+impl<T: Timestamp + Lattice> State<T> {
     pub fn apply_diffs<I: IntoIterator<Item = StateDiff<T>>>(
         &mut self,
         metrics: &Metrics,
@@ -977,6 +1000,7 @@ mod tests {
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::now::SYSTEM_TIME;
 
+    use crate::internal::state::TypedState;
     use crate::ShardId;
 
     use super::*;
@@ -1049,7 +1073,7 @@ mod tests {
         ];
 
         let cfg = PersistConfig::new_for_tests();
-        let state = State::<(), (), u64, i64>::new(
+        let state = TypedState::<(), (), u64, i64>::new(
             cfg.build_version.clone(),
             ShardId([0u8; 16]),
             cfg.hostname.clone(),

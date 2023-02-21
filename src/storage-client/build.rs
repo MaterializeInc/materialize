@@ -71,6 +71,7 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
@@ -78,6 +79,9 @@ use std::env;
 
 fn main() {
     env::set_var("PROTOC", protobuf_src::protoc());
+
+    let mut config = prost_build::Config::new();
+    config.btree_map(["."]);
 
     tonic_build::configure()
         // Enabling `emit_rerun_if_changed` will rerun the build script when
@@ -98,17 +102,20 @@ fn main() {
         .extern_path(".mz_repr.antichain", "::mz_repr::antichain")
         .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
         .extern_path(".mz_orchestrator", "::mz_orchestrator")
+        .extern_path(".mz_persist_client", "::mz_persist_client")
         .extern_path(".mz_proto", "::mz_proto")
         .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
         .extern_path(".mz_repr.row", "::mz_repr")
         .extern_path(".mz_repr.url", "::mz_repr::url")
-        .compile(
+        .extern_path(".mz_cluster_client", "::mz_cluster_client")
+        .compile_with_config(
+            config,
             &[
                 "storage-client/src/controller.proto",
                 "storage-client/src/client.proto",
                 "storage-client/src/types/errors.proto",
                 "storage-client/src/types/connections/aws.proto",
-                "storage-client/src/types/hosts.proto",
+                "storage-client/src/types/instances.proto",
                 "storage-client/src/types/parameters.proto",
                 "storage-client/src/types/sinks.proto",
                 "storage-client/src/types/sources.proto",
@@ -116,5 +123,5 @@ fn main() {
             ],
             &[".."],
         )
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"))
 }

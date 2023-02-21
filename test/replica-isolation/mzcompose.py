@@ -252,8 +252,10 @@ def drop_create_replica(c: Composition) -> None:
             """
             > DROP CLUSTER REPLICA cluster1.replica1
             > CREATE CLUSTER REPLICA cluster1.replica3
-              REMOTE ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
-              COMPUTE ['clusterd_1_1:2102', 'clusterd_1_2:2102']
+              STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
+              STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
+              COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
+              COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
             """
         )
     )
@@ -264,8 +266,10 @@ def create_invalid_replica(c: Composition) -> None:
         dedent(
             """
             > CREATE CLUSTER REPLICA cluster1.replica3
-              REMOTE ['no_such_host:2101'],
-              COMPUTE ['no_such_host:2102']
+              STORAGECTL ADDRESSES ['no_such_host:2100'],
+              STORAGE ADDRESSES ['no_such_host:2103'],
+              COMPUTECTL ADDRESSES ['no_such_host:2101'],
+              COMPUTE ADDRESSES ['no_such_host:2102']
             """
         )
     )
@@ -422,9 +426,7 @@ def workflow_default(c: Composition) -> None:
     and then making sure that the cluster continues to operate properly
     """
 
-    c.start_and_wait_for_tcp(
-        services=["zookeeper", "kafka", "schema-registry", "localstack"]
-    )
+    c.up("zookeeper", "kafka", "schema-registry", "localstack")
     for id, disruption in enumerate(disruptions):
         run_test(c, disruption, id)
 
@@ -444,19 +446,22 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
 
     with c.override(*nodes):
         c.up("materialized", *[n.name for n in nodes])
-        c.wait_for_materialized()
 
         c.sql(
             """
             CREATE CLUSTER cluster1 REPLICAS (
                 replica1 (
-                    REMOTE ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
-                    COMPUTE ['clusterd_1_1:2102', 'clusterd_1_2:2102']
-                    ),
+                    STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
+                    STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
+                    COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
+                ),
                 replica2 (
-                    REMOTE ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
-                    COMPUTE ['clusterd_2_1:2102', 'clusterd_2_2:2102']
-                    )
+                    STORAGECTL ADDRESSES ['clusterd_2_1:2100', 'clusterd_2_2:2100'],
+                    STORAGE ADDRESSES ['clusterd_2_1:2103', 'clusterd_2_2:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
+                    COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102']
+                )
             )
             """
         )

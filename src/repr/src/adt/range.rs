@@ -19,7 +19,6 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
-use mz_ore::soft_assert;
 use mz_proto::{RustType, TryFromProtoError};
 
 use crate::scalar::DatumKind;
@@ -113,15 +112,7 @@ where
 {
     /// Increment `self` one step forward, if applicable. Return `None` if
     /// overflows.
-    ///
-    /// Types that do not have discrete steps should never call this function,
-    /// but we handle this with a soft assert because there's nothing inherently
-    /// wrong with it.
     fn step(self) -> Option<Self> {
-        soft_assert!(
-            false,
-            "default implementation viable only for continuous value types, which should never be called"
-        );
         Some(self)
     }
 
@@ -206,11 +197,11 @@ impl<D> Range<D> {
 }
 
 /// Range implementations meant to work with `Range<Datum>` and `Range<DatumNested>`.
-impl<'a, B: Copy> Range<B>
+impl<'a, B: Copy + Ord + PartialOrd + Display + Debug> Range<B>
 where
     Datum<'a>: From<B>,
 {
-    pub fn contains<T: RangeOps<'a>>(&self, elem: &T) -> bool
+    pub fn contains_elem<T: RangeOps<'a>>(&self, elem: &T) -> bool
     where
         <T as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
     {
@@ -218,6 +209,190 @@ where
             None => false,
             Some(inner) => inner.lower.satisfied_by(elem) && inner.upper.satisfied_by(elem),
         }
+    }
+
+    pub fn contains_range(&self, other: &Range<B>) -> bool {
+        match (self.inner, other.inner) {
+            (None, None) | (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (Some(i), Some(j)) => i.lower <= j.lower && j.upper <= i.upper,
+        }
+    }
+
+    pub fn overlaps(&self, other: &Range<B>) -> bool {
+        match (self.inner, other.inner) {
+            (Some(s), Some(o)) => {
+                let r = match s.cmp(&o) {
+                    Ordering::Equal => Ordering::Equal,
+                    Ordering::Less => s.upper.range_bound_cmp(&o.lower),
+                    Ordering::Greater => o.upper.range_bound_cmp(&s.lower),
+                };
+
+                // If smaller upper is >= larger lower, elements overlap.
+                matches!(r, Ordering::Greater | Ordering::Equal)
+            }
+            _ => false,
+        }
+    }
+
+    pub fn before(&self, other: &Range<B>) -> bool {
+        match (self.inner, other.inner) {
+            (Some(s), Some(o)) => {
+                matches!(s.upper.range_bound_cmp(&o.lower), Ordering::Less)
+            }
+            _ => false,
+        }
+    }
+
+    pub fn after(&self, other: &Range<B>) -> bool {
+        match (self.inner, other.inner) {
+            (Some(s), Some(o)) => {
+                matches!(s.lower.range_bound_cmp(&o.upper), Ordering::Greater)
+            }
+            _ => false,
+        }
+    }
+
+    pub fn overleft(&self, other: &Range<B>) -> bool {
+        match (self.inner, other.inner) {
+            (Some(s), Some(o)) => {
+                matches!(
+                    s.upper.range_bound_cmp(&o.upper),
+                    Ordering::Less | Ordering::Equal
+                )
+            }
+            _ => false,
+        }
+    }
+
+    pub fn overright(&self, other: &Range<B>) -> bool {
+        match (self.inner, other.inner) {
+            (Some(s), Some(o)) => {
+                matches!(
+                    s.lower.range_bound_cmp(&o.lower),
+                    Ordering::Greater | Ordering::Equal
+                )
+            }
+            _ => false,
+        }
+    }
+
+    pub fn adjacent(&self, other: &Range<B>) -> bool {
+        match (self.inner, other.inner) {
+            (Some(s), Some(o)) => {
+                // Look at each (lower, upper) pair.
+                for (lower, upper) in [(s.lower, o.upper), (o.lower, s.upper)] {
+                    if let (Some(l), Some(u)) = (lower.bound, upper.bound) {
+                        // If ..x](x.. or ..x)[x.., adjacent
+                        if lower.inclusive ^ upper.inclusive && l == u {
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    pub fn union(&self, other: &Range<B>) -> Result<Range<B>, InvalidRangeError> {
+        // Handle self or other being empty
+        let (s, o) = match (self.inner, other.inner) {
+            (None, None) => return Ok(Range { inner: None }),
+            (inner @ Some(_), None) | (None, inner @ Some(_)) => return Ok(Range { inner }),
+            (Some(s), Some(o)) => {
+                // if not overlapping or adjacent, then result would not present continuity, so error.
+                if !(self.overlaps(other) || self.adjacent(other)) {
+                    return Err(InvalidRangeError::DiscontiguousUnion);
+                }
+                (s, o)
+            }
+        };
+
+        let lower = std::cmp::min(s.lower, o.lower);
+        let upper = std::cmp::max(s.upper, o.upper);
+
+        Ok(Range {
+            inner: Some(RangeInner { lower, upper }),
+        })
+    }
+
+    pub fn intersection(&self, other: &Range<B>) -> Range<B> {
+        // Handle self or other being empty
+        let (s, o) = match (self.inner, other.inner) {
+            (Some(s), Some(o)) => {
+                if !self.overlaps(other) {
+                    return Range { inner: None };
+                }
+
+                (s, o)
+            }
+            _ => return Range { inner: None },
+        };
+
+        let lower = std::cmp::max(s.lower, o.lower);
+        let upper = std::cmp::min(s.upper, o.upper);
+
+        Range {
+            inner: Some(RangeInner { lower, upper }),
+        }
+    }
+
+    // Function requires canonicalization so must be taken into `Range<Datum>`,
+    // which can be taken back into `Range<DatumNested>` by the caller if need
+    // be.
+    pub fn difference(&self, other: &Range<B>) -> Result<Range<Datum<'a>>, InvalidRangeError> {
+        use std::cmp::Ordering::*;
+
+        // Difference op does nothing if no overlap.
+        if !self.overlaps(other) {
+            return Ok(self.into_bounds(Datum::from));
+        }
+
+        let (s, o) = match (self.inner, other.inner) {
+            (None, _) | (_, None) => unreachable!("already returned from overlap check"),
+            (Some(s), Some(o)) => (s, o),
+        };
+
+        let ll = s.lower.cmp(&o.lower);
+        let uu = s.upper.cmp(&o.upper);
+
+        let r = match (ll, uu) {
+            // `self` totally contains `other`
+            (Less, Greater) => return Err(InvalidRangeError::DiscontiguousDifference),
+            // `other` totally contains `self`
+            (Greater | Equal, Less | Equal) => Range { inner: None },
+            (Greater | Equal, Greater) => {
+                let lower = RangeBound {
+                    inclusive: !o.upper.inclusive,
+                    bound: o.upper.bound,
+                };
+                Range {
+                    inner: Some(RangeInner {
+                        lower,
+                        upper: s.upper,
+                    }),
+                }
+            }
+            (Less, Less | Equal) => {
+                let upper = RangeBound {
+                    inclusive: !o.lower.inclusive,
+                    bound: o.lower.bound,
+                };
+                Range {
+                    inner: Some(RangeInner {
+                        lower: s.lower,
+                        upper,
+                    }),
+                }
+            }
+        };
+
+        let mut r = r.into_bounds(Datum::from);
+
+        r.canonicalize()?;
+
+        Ok(r)
     }
 }
 
@@ -358,7 +533,7 @@ pub type RangeUpperBound<B> = RangeBound<B, true>;
 
 // Generic RangeBound implementations meant to work over `RangeBound<Datum,..>`
 // and `RangeBound<DatumNested,..>`.
-impl<'a, const UPPER: bool, B: Copy> RangeBound<B, UPPER>
+impl<'a, const UPPER: bool, B: Copy + Ord + PartialOrd + Display + Debug> RangeBound<B, UPPER>
 where
     Datum<'a>: From<B>,
 {
@@ -391,6 +566,41 @@ where
             // Lower satisfied with values greater than itself
             Ordering::Less => !UPPER,
         }
+    }
+
+    // Compares two `RangeBound`, which do not need to both be of the same
+    // `UPPER`.
+    fn range_bound_cmp<const OTHER_UPPER: bool>(
+        &self,
+        other: &RangeBound<B, OTHER_UPPER>,
+    ) -> Ordering {
+        if UPPER == OTHER_UPPER {
+            return self.cmp(&RangeBound {
+                inclusive: other.inclusive,
+                bound: other.bound,
+            });
+        }
+
+        // Handle cases where either are infinite bounds, which have special
+        // semantics.
+        if self.bound.is_none() || other.bound.is_none() {
+            return if UPPER {
+                Ordering::Greater
+            } else {
+                Ordering::Less
+            };
+        }
+        // 1. Sort by bounds
+        let cmp = self.bound.cmp(&other.bound);
+        // 2. Tie break by sorting by inclusivity, which is inverted between
+        //    lowers and uppers.
+        cmp.then(if self.inclusive && other.inclusive {
+            Ordering::Equal
+        } else if UPPER {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        })
     }
 }
 
@@ -461,6 +671,8 @@ pub enum InvalidRangeError {
     MisorderedRangeBounds,
     CanonicalizationOverflow(String),
     InvalidRangeBoundFlags,
+    DiscontiguousUnion,
+    DiscontiguousDifference,
 }
 
 impl Display for InvalidRangeError {
@@ -473,6 +685,12 @@ impl Display for InvalidRangeError {
                 write!(f, "{} out of range", t)
             }
             InvalidRangeError::InvalidRangeBoundFlags => f.write_str("invalid range bound flags"),
+            InvalidRangeError::DiscontiguousUnion => {
+                f.write_str("result of range union would not be contiguous")
+            }
+            InvalidRangeError::DiscontiguousDifference => {
+                f.write_str("result of range difference would not be contiguous")
+            }
         }
     }
 }
@@ -498,6 +716,8 @@ impl RustType<ProtoInvalidRangeError> for InvalidRangeError {
             InvalidRangeError::MisorderedRangeBounds => MisorderedRangeBounds(()),
             InvalidRangeError::CanonicalizationOverflow(s) => CanonicalizationOverflow(s.clone()),
             InvalidRangeError::InvalidRangeBoundFlags => InvalidRangeBoundFlags(()),
+            InvalidRangeError::DiscontiguousUnion => DiscontiguousUnion(()),
+            InvalidRangeError::DiscontiguousDifference => DiscontiguousDifference(()),
         };
         ProtoInvalidRangeError { kind: Some(kind) }
     }
@@ -509,6 +729,8 @@ impl RustType<ProtoInvalidRangeError> for InvalidRangeError {
                 MisorderedRangeBounds(()) => InvalidRangeError::MisorderedRangeBounds,
                 CanonicalizationOverflow(s) => InvalidRangeError::CanonicalizationOverflow(s),
                 InvalidRangeBoundFlags(()) => InvalidRangeError::InvalidRangeBoundFlags,
+                DiscontiguousUnion(()) => InvalidRangeError::DiscontiguousUnion,
+                DiscontiguousDifference(()) => InvalidRangeError::DiscontiguousDifference,
             }),
             None => Err(TryFromProtoError::missing_field(
                 "`ProtoInvalidRangeError::kind`",

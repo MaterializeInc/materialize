@@ -11,7 +11,7 @@
 
 mod healthcheck;
 mod kafka;
-mod metrics;
+pub mod metrics;
 
 pub use healthcheck::{Healthchecker, SinkStatus};
 pub(crate) use metrics::KafkaBaseMetrics;

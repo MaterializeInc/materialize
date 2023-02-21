@@ -71,6 +71,7 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
@@ -91,16 +92,17 @@ use std::time::Duration;
 
 use anyhow::{bail, Context};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 use tower_http::cors::AllowOrigin;
 
 use mz_adapter::catalog::storage::BootstrapArgs;
-use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageHostSizeMap};
+use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_adapter::config::{system_parameter_sync, SystemParameterBackend, SystemParameterFrontend};
 use mz_build_info::{build_info, BuildInfo};
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::FronteggAuthentication;
+use mz_orchestrator::NamespacedOrchestrator;
 use mz_ore::future::OreFutureExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -114,7 +116,7 @@ use mz_storage_client::types::connections::ConnectionContext;
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
 use crate::server::ListenerHandle;
 
-mod http;
+pub mod http;
 mod server;
 mod telemetry;
 
@@ -175,6 +177,9 @@ pub struct Config {
     pub availability_zones: Vec<String>,
     /// A map from size name to resource allocations for cluster replicas.
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
+    /// The size of the cluster to create for a source or sink if no size is
+    /// given.
+    pub default_storage_cluster_size: Option<String>,
     /// The size of the default cluster replica if bootstrapping.
     pub bootstrap_default_cluster_replica_size: String,
     /// The size of the builtin cluster replicas if bootstrapping.
@@ -182,12 +187,10 @@ pub struct Config {
     /// Values to set for system parameters, if those system parameters have not
     /// already been set by the system user.
     pub bootstrap_system_parameters: BTreeMap<String, String>,
-    /// A map from size name to resource allocations for storage hosts.
-    pub storage_host_sizes: StorageHostSizeMap,
-    /// Default storage host size, should be a key from storage_host_sizes.
-    pub default_storage_host_size: Option<String>,
     /// The interval at which to collect storage usage information.
     pub storage_usage_collection_interval: Duration,
+    /// How long to retain storage usage records for.
+    pub storage_usage_retention_period: Option<Duration>,
     /// An API key for Segment. Enables export of audit events to Segment.
     pub segment_api_key: Option<String>,
     /// IP Addresses which will be used for egress.
@@ -236,6 +239,7 @@ pub enum TlsMode {
 }
 
 /// Start an `environmentd` server.
+#[tracing::instrument(name = "environmentd::serve", level = "info", skip_all)]
 pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(
         &config.adapter_stash_url,
@@ -305,8 +309,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         server::serve(internal_http_conns, internal_http_server)
     });
 
-    let (consolidations_tx, consolidations_rx) = mpsc::unbounded_channel();
-
     // Load the adapter catalog from disk.
     if !config
         .cluster_replica_sizes
@@ -333,17 +335,24 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                 .cloned()
                 .unwrap_or_else(|| mz_adapter::DUMMY_AVAILABILITY_ZONE.into()),
         },
-        consolidations_tx.clone(),
     )
     .await?;
 
     // Initialize storage usage client.
     let storage_usage_client = StorageUsageClient::open(
-        config.controller.persist_location.blob_uri.clone(),
-        &mut *config.controller.persist_clients.lock().await,
-    )
-    .await
-    .context("opening storage usage client")?;
+        config
+            .controller
+            .persist_clients
+            .open(config.controller.persist_location.clone())
+            .await
+            .context("opening storage usage client")?,
+    );
+
+    // TODO(teskje): Remove this migration in v0.42, since v0.41+ will only create orchestrator
+    // resources in the "cluster" namespace.
+    tracing::info!("SPECIAL MIGRATION: removing legacy orchestrator services");
+    remove_orchestrator_services(config.controller.orchestrator.namespace("compute")).await?;
+    remove_orchestrator_services(config.controller.orchestrator.namespace("storage")).await?;
 
     // Initialize controller.
     let controller = mz_controller::Controller::new(config.controller, envd_epoch).await;
@@ -388,18 +397,16 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         secrets_controller: config.secrets_controller,
         cloud_resource_controller: config.cloud_resource_controller,
         cluster_replica_sizes: config.cluster_replica_sizes,
-        storage_host_sizes: config.storage_host_sizes,
-        default_storage_host_size: config.default_storage_host_size,
+        default_storage_cluster_size: config.default_storage_cluster_size,
         availability_zones: config.availability_zones,
         bootstrap_system_parameters: config.bootstrap_system_parameters,
         connection_context: config.connection_context,
         storage_usage_client,
         storage_usage_collection_interval: config.storage_usage_collection_interval,
+        storage_usage_retention_period: config.storage_usage_retention_period,
         segment_client: segment_client.clone(),
         egress_ips: config.egress_ips,
         system_parameter_frontend: system_parameter_frontend.clone(),
-        consolidations_tx,
-        consolidations_rx,
         aws_account_id: config.aws_account_id,
         aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
     })
@@ -505,4 +512,13 @@ impl Server {
     pub fn internal_http_local_addr(&self) -> SocketAddr {
         self.internal_http_listener.local_addr()
     }
+}
+
+async fn remove_orchestrator_services(
+    orchestrator: Arc<dyn NamespacedOrchestrator>,
+) -> Result<(), anyhow::Error> {
+    for name in orchestrator.list_services().await? {
+        orchestrator.drop_service(&name).await?;
+    }
+    Ok(())
 }

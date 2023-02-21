@@ -66,7 +66,7 @@
 //! ```
 //!
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
 use std::ops::Neg;
@@ -76,18 +76,19 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
+use fail::fail_point;
 use futures::StreamExt;
 use itertools::Itertools;
 use rand::seq::SliceRandom;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tracing::{info, span, warn, Level};
+use tracing::{info, span, warn, Instrument, Level};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
-use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId, ReplicaId};
+use mz_controller::clusters::{ClusterConfig, ClusterEvent, ClusterId, ReplicaId};
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
@@ -98,20 +99,18 @@ use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{stack, task};
-use mz_persist_client::usage::StorageUsageClient;
-use mz_persist_client::ShardId;
-use mz_repr::explain_new::ExplainFormat;
+use mz_persist_client::usage::{ShardsUsage, StorageUsageClient};
+use mz_repr::explain::ExplainFormat;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::Aug;
-use mz_sql::plan::{self, CopyFormat, MutationKind, Params, QueryWhen};
+use mz_sql::plan::{CopyFormat, MutationKind, Params, QueryWhen};
 use mz_storage_client::controller::{
     CollectionDescription, CreateExportToken, DataSource, StorageError,
 };
 use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::hosts::StorageHostConfig;
 use mz_storage_client::types::sinks::StorageSinkConnection;
 use mz_storage_client::types::sources::{IngestionDescription, SourceExport, Timeline};
 use mz_transform::Optimizer;
@@ -119,8 +118,7 @@ use mz_transform::Optimizer;
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
     self, storage, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog,
-    CatalogItem, ClusterReplicaSizeMap, DataSourceDesc, StorageHostSizeMap,
-    StorageSinkConnectionState,
+    CatalogItem, ClusterReplicaSizeMap, DataSourceDesc, Source, StorageSinkConnectionState,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
@@ -134,8 +132,8 @@ use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, Session};
-use crate::subscribe::PendingSubscribe;
-use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId};
+use crate::subscribe::ActiveSubscribe;
+use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
 use crate::AdapterNotice;
 
 pub(crate) mod id_bundle;
@@ -153,9 +151,13 @@ mod read_policy;
 mod sequencer;
 mod sql;
 
-// TODO: We can have only two consts here, instead of three,
-// once there exists a `const` way to convert between a `Timestamp`
-// and a `Duration`
+// TODO: We can have only two consts here, instead of three, once there exists a `const` way to
+// convert between a `Timestamp` and a `Duration`, and unwrap a result in const contexts. Currently
+// unstable compiler features that would allow this are:
+// * `const_option`: https://github.com/rust-lang/rust/issues/67441
+// * `const_result`: https://github.com/rust-lang/rust/issues/82814
+// * `const_num_from_num`: https://github.com/rust-lang/rust/issues/87852
+// * `const_precise_live_drops`: https://github.com/rust-lang/rust/issues/73255
 
 /// `DEFAULT_LOGICAL_COMPACTION_WINDOW`, in milliseconds.
 /// The default is set to a second to track the default timestamp frequency for sources.
@@ -193,14 +195,13 @@ pub enum Message<T = mz_repr::Timestamp> {
         Option<OwnedMutexGuard<()>>,
     ),
     AdvanceTimelines,
-    ComputeInstanceStatus(ComputeInstanceEvent),
+    ClusterEvent(ClusterEvent),
     RemovePendingPeeks {
         conn_id: ConnectionId,
     },
     LinearizeReads(Vec<PendingReadTxn>),
     StorageUsageFetch,
-    StorageUsageUpdate(HashMap<Option<ShardId>, u64>),
-    Consolidate(Vec<mz_stash::Id>),
+    StorageUsageUpdate(ShardsUsage),
     RealTimeRecencyTimestamp {
         conn_id: ConnectionId,
         transient_revision: u64,
@@ -256,7 +257,7 @@ pub enum RealTimeRecencyContext {
         tx: ClientTransmitter<ExecuteResponse>,
         session: Session,
         format: ExplainFormat,
-        compute_instance: ComputeInstanceId,
+        cluster_id: ClusterId,
         optimized_plan: OptimizedMirRelationExpr,
         id_bundle: CollectionIdBundle,
     },
@@ -266,7 +267,7 @@ pub enum RealTimeRecencyContext {
         copy_to: Option<CopyFormat>,
         source: MirRelationExpr,
         session: Session,
-        compute_instance: ComputeInstanceId,
+        cluster_id: ClusterId,
         when: QueryWhen,
         target_replica: Option<ReplicaId>,
         view_id: GlobalId,
@@ -301,17 +302,15 @@ pub struct Config {
     pub cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
     pub availability_zones: Vec<String>,
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
-    pub storage_host_sizes: StorageHostSizeMap,
-    pub default_storage_host_size: Option<String>,
+    pub default_storage_cluster_size: Option<String>,
     pub bootstrap_system_parameters: BTreeMap<String, String>,
     pub connection_context: ConnectionContext,
     pub storage_usage_client: StorageUsageClient,
     pub storage_usage_collection_interval: Duration,
+    pub storage_usage_retention_period: Option<Duration>,
     pub segment_client: Option<mz_segment::Client>,
     pub egress_ips: Vec<Ipv4Addr>,
     pub system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
-    pub consolidations_tx: mpsc::UnboundedSender<Vec<mz_stash::Id>>,
-    pub consolidations_rx: mpsc::UnboundedReceiver<Vec<mz_stash::Id>>,
     pub aws_account_id: Option<String>,
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
 }
@@ -432,9 +431,6 @@ pub struct Coordinator {
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<PendingReadTxn>,
 
-    /// Channel for catalog stash consolidations.
-    consolidations_tx: mpsc::UnboundedSender<Vec<mz_stash::Id>>,
-
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
     global_timelines: BTreeMap<Timeline, TimelineState<Timestamp>>,
@@ -442,7 +438,7 @@ pub struct Coordinator {
     transient_id_counter: u64,
     /// A map from connection ID to metadata about that connection for all
     /// active connections.
-    active_conns: HashMap<ConnectionId, ConnMeta>,
+    active_conns: BTreeMap<ConnectionId, ConnMeta>,
 
     /// For each identifier in STORAGE, its read policy and any read holds on time.
     ///
@@ -452,7 +448,7 @@ pub struct Coordinator {
     /// to the controller for it to have an effect.
     ///
     /// Access to this field should be restricted to methods in the [`read_policy`] API.
-    storage_read_capabilities: HashMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
+    storage_read_capabilities: BTreeMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
     /// For each identifier in COMPUTE, its read policy and any read holds on time.
     ///
     /// Transactions should introduce and remove constraints through the methods
@@ -461,27 +457,27 @@ pub struct Coordinator {
     /// to the controller for it to have an effect.
     ///
     /// Access to this field should be restricted to methods in the [`read_policy`] API.
-    compute_read_capabilities: HashMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
+    compute_read_capabilities: BTreeMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
 
     /// For each transaction, the pinned storage and compute identifiers and time at
     /// which they are pinned.
     ///
     /// Upon completing a transaction, this timestamp should be removed from the holds
     /// in `self.read_capability[id]`, using the `release_read_holds` method.
-    txn_reads: HashMap<ConnectionId, crate::coord::read_policy::ReadHolds<mz_repr::Timestamp>>,
+    txn_reads: BTreeMap<ConnectionId, crate::coord::read_policy::ReadHolds<mz_repr::Timestamp>>,
 
     /// Access to the peek fields should be restricted to methods in the [`peek`] API.
     /// A map from pending peek ids to the queue into which responses are sent, and
     /// the connection id of the client that initiated the peek.
-    pending_peeks: HashMap<Uuid, PendingPeek>,
+    pending_peeks: BTreeMap<Uuid, PendingPeek>,
     /// A map from client connection ids to a set of all pending peeks for that client.
-    client_pending_peeks: HashMap<ConnectionId, BTreeMap<Uuid, ComputeInstanceId>>,
+    client_pending_peeks: BTreeMap<ConnectionId, BTreeMap<Uuid, ClusterId>>,
 
     /// A map from client connection ids to a pending real time recency timestamps.
-    pending_real_time_recency_timestamp: HashMap<ConnectionId, RealTimeRecencyContext>,
+    pending_real_time_recency_timestamp: BTreeMap<ConnectionId, RealTimeRecencyContext>,
 
-    /// A map from pending subscribes to the subscribe description.
-    pending_subscribes: HashMap<GlobalId, PendingSubscribe>,
+    /// A map from active subscribes to the subscribe description.
+    active_subscribes: BTreeMap<GlobalId, ActiveSubscribe>,
 
     /// Serializes accesses to write critical sections.
     write_lock: Arc<tokio::sync::Mutex<()>>,
@@ -506,7 +502,7 @@ pub struct Coordinator {
     ///
     /// `None` is used as a tombstone value for replicas that have been
     /// dropped and for which no further updates should be recorded.
-    transient_replica_metadata: HashMap<ReplicaId, Option<ReplicaMetadata>>,
+    transient_replica_metadata: BTreeMap<ReplicaId, Option<ReplicaMetadata>>,
 
     /// Persist client for fetching storage metadata such as size metrics.
     storage_usage_client: StorageUsageClient,
@@ -524,7 +520,7 @@ impl Coordinator {
     /// Initializes coordinator state based on the contained catalog. Must be
     /// called after creating the coordinator and before calling the
     /// `Coordinator::serve` method.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[tracing::instrument(level = "info", skip_all)]
     pub(crate) async fn bootstrap(
         &mut self,
         builtin_migration_metadata: BuiltinMigrationMetadata,
@@ -550,23 +546,18 @@ impl Coordinator {
         policies_to_set.insert(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS, Default::default());
 
         info!("coordinator init: creating compute replicas");
-        for instance in self.catalog.compute_instances() {
-            // Linked clusters are presently a fiction maintained by the
-            // catalog. They should not yet result in the creation of actual
-            // compute instances.
-            //
-            // TODO(benesch): turn linked clusters into real clusters. See
-            // MaterializeInc/cloud#4929.
-            if instance.linked_object_id.is_some() {
-                continue;
-            }
-
-            self.controller
-                .compute
-                .create_instance(instance.id, instance.log_indexes.clone())?;
+        let mut replicas_to_start = vec![];
+        for instance in self.catalog.clusters() {
+            self.controller.create_cluster(
+                instance.id,
+                ClusterConfig {
+                    arranged_logs: instance.log_indexes.clone(),
+                },
+            )?;
             for (replica_id, replica) in instance.replicas_by_id.clone() {
                 let introspection_collections = replica
                     .config
+                    .compute
                     .logging
                     .sources
                     .iter()
@@ -579,7 +570,7 @@ impl Coordinator {
                     .storage
                     .create_collections(introspection_collections)
                     .await
-                    .unwrap();
+                    .unwrap_or_terminate("cannot fail to create collections");
 
                 // TODO - Should these windows be configurable?
                 policies_to_set
@@ -590,27 +581,27 @@ impl Coordinator {
                     .compute_ids
                     .entry(instance.id)
                     .or_insert_with(BTreeSet::new)
-                    .extend(replica.config.logging.source_ids());
+                    .extend(replica.config.compute.logging.source_ids());
                 policies_to_set
                     .get_mut(&DEFAULT_LOGICAL_COMPACTION_WINDOW_TS)
                     .expect(
                         "Default policy map was inserted just after `policies_to_set` was created.",
                     )
                     .storage_ids
-                    .extend(replica.config.logging.source_ids());
+                    .extend(replica.config.compute.logging.source_ids());
 
-                self.controller
-                    .active_compute()
-                    .add_replica_to_instance(instance.id, replica_id, replica.config)
-                    .unwrap();
+                let role = instance.role();
+                replicas_to_start.push((instance.id, replica_id, role, replica.config));
             }
         }
+        self.controller.create_replicas(replicas_to_start).await?;
 
         info!("coordinator init: migrating builtin objects");
         // Migrate builtin objects.
         self.controller
             .storage
             .drop_sources_unvalidated(builtin_migration_metadata.previous_materialized_view_ids);
+
         self.controller
             .storage
             .drop_sources_unvalidated(builtin_migration_metadata.previous_source_ids);
@@ -618,20 +609,50 @@ impl Coordinator {
             .storage
             .drop_sinks_unvalidated(builtin_migration_metadata.previous_sink_ids);
 
-        let mut entries: Vec<_> = self.catalog.entries().cloned().collect();
-        // Topologically sort entries based on the used_by relationship
-        entries.sort_unstable_by(|a, b| {
-            use std::cmp::Ordering;
-            if a.used_by().contains(&b.id()) {
-                Ordering::Less
-            } else if b.used_by().contains(&a.id()) {
-                Ordering::Greater
-            } else {
-                Ordering::Equal
-            }
-        });
+        // Load catalog entries based on topological dependency sorting. We do
+        // this to reinforce that `GlobalId`'s `Ord` implementation does not
+        // express the entries' dependency graph.
+        let mut entries_awaiting_dependencies: BTreeMap<
+            GlobalId,
+            Vec<(catalog::CatalogEntry, Vec<GlobalId>)>,
+        > = BTreeMap::new();
+        let mut loaded_items = BTreeSet::new();
+        let mut unsorted_entries: VecDeque<_> = self
+            .catalog
+            .entries()
+            .cloned()
+            .map(|entry| {
+                let remaining_deps = entry.uses().to_vec();
+                (entry, remaining_deps)
+            })
+            .collect();
+        let mut entries = Vec::with_capacity(unsorted_entries.len());
 
-        let logs: HashSet<_> = BUILTINS::logs()
+        while let Some((entry, mut remaining_deps)) = unsorted_entries.pop_front() {
+            remaining_deps.retain(|dep| !loaded_items.contains(dep));
+            // While you cannot assume anything about the ordering of
+            // dependencies based on their GlobalId, it is not secret knowledge
+            // that the most likely final dependency is that with the greatest
+            // ID.
+            match remaining_deps.last() {
+                Some(dep) => {
+                    entries_awaiting_dependencies
+                        .entry(*dep)
+                        .or_default()
+                        .push((entry, remaining_deps));
+                }
+                None => {
+                    let id = entry.id();
+                    if let Some(waiting_on_this_dep) = entries_awaiting_dependencies.remove(&id) {
+                        unsorted_entries.extend(waiting_on_this_dep);
+                    }
+                    loaded_items.insert(id);
+                    entries.push(entry);
+                }
+            }
+        }
+
+        let logs: BTreeSet<_> = BUILTINS::logs()
             .map(|log| self.catalog.resolve_builtin_log(log))
             .collect();
 
@@ -642,8 +663,92 @@ impl Coordinator {
             &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
         ));
 
+        let mut collections_to_create = Vec::new();
+
+        fn source_desc<T>(
+            id: GlobalId,
+            source_status_collection_id: Option<GlobalId>,
+            source: &Source,
+        ) -> CollectionDescription<T> {
+            let (data_source, status_collection_id) = match &source.data_source {
+                // Re-announce the source description.
+                DataSourceDesc::Ingestion(ingestion) => {
+                    let mut source_imports = BTreeMap::new();
+                    for source_import in &ingestion.source_imports {
+                        source_imports.insert(*source_import, ());
+                    }
+
+                    let mut source_exports = BTreeMap::new();
+                    // By convention the first output corresponds to the main source object
+                    let main_export = SourceExport {
+                        output_index: 0,
+                        storage_metadata: (),
+                    };
+                    source_exports.insert(id, main_export);
+                    for (subsource, output_index) in ingestion.subsource_exports.clone() {
+                        let export = SourceExport {
+                            output_index,
+                            storage_metadata: (),
+                        };
+                        source_exports.insert(subsource, export);
+                    }
+                    (
+                        DataSource::Ingestion(IngestionDescription {
+                            desc: ingestion.desc.clone(),
+                            ingestion_metadata: (),
+                            source_imports,
+                            source_exports,
+                            instance_id: ingestion.cluster_id,
+                        }),
+                        source_status_collection_id,
+                    )
+                }
+                DataSourceDesc::Source => (DataSource::Other, None),
+                DataSourceDesc::Introspection(introspection) => {
+                    (DataSource::Introspection(*introspection), None)
+                }
+            };
+            CollectionDescription {
+                desc: source.desc.clone(),
+                data_source,
+                since: None,
+                status_collection_id,
+            }
+        }
+
+        // Do a first pass looking for collections to create so we can call
+        // create_collections only once with a large batch. This batches only
+        // tables and system sources. Replicas above, user sources, and
+        // materialized views below could be added here, but they take some
+        // additional work due to their dependencies.
+        for entry in &entries {
+            match entry.item() {
+                CatalogItem::Table(table) => {
+                    let collection_desc = table.desc.clone().into();
+                    collections_to_create.push((entry.id(), collection_desc));
+                }
+                // User sources can have dependencies, so do avoid them in the
+                // batch.
+                CatalogItem::Source(source) if entry.id().is_system() => {
+                    collections_to_create.push((
+                        entry.id(),
+                        source_desc(entry.id(), source_status_collection_id, source),
+                    ));
+                }
+                _ => {
+                    // No collections to create.
+                }
+            }
+        }
+
+        self.controller
+            .storage
+            .create_collections(collections_to_create)
+            .await
+            .unwrap_or_terminate("cannot fail to create collections");
+
         info!("coordinator init: installing existing objects in catalog");
-        let mut privatelink_connections = HashMap::new();
+        let mut privatelink_connections = BTreeMap::new();
         for entry in &entries {
             info!(
                 "coordinator init: installing {} {}",
@@ -667,73 +772,23 @@ impl Coordinator {
                 // using a single dataflow, we have to make sure the rebuild process re-runs
                 // the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
-                    let (data_source, status_collection_id) = match &source.data_source {
-                        // Re-announce the source description.
-                        DataSourceDesc::Ingestion(ingestion) => {
-                            let mut source_imports = BTreeMap::new();
-                            for source_import in &ingestion.source_imports {
-                                source_imports.insert(*source_import, ());
-                            }
-
-                            let mut source_exports = BTreeMap::new();
-                            // By convention the first output corresponds to the main source object
-                            let main_export = SourceExport {
-                                output_index: 0,
-                                storage_metadata: (),
-                            };
-                            source_exports.insert(entry.id(), main_export);
-                            for (subsource, output_index) in ingestion.subsource_exports.clone() {
-                                let export = SourceExport {
-                                    output_index,
-                                    storage_metadata: (),
-                                };
-                                source_exports.insert(subsource, export);
-                            }
-
-                            (
-                                DataSource::Ingestion(IngestionDescription {
-                                    desc: ingestion.desc.clone(),
-                                    ingestion_metadata: (),
-                                    source_imports,
-                                    source_exports,
-                                    host_config: ingestion.host_config.clone(),
-                                }),
-                                source_status_collection_id,
-                            )
-                        }
-                        DataSourceDesc::Source => (DataSource::Other, None),
-                        DataSourceDesc::Introspection(introspection) => {
-                            (DataSource::Introspection(*introspection), None)
-                        }
-                    };
-
-                    self.controller
-                        .storage
-                        .create_collections(vec![(
-                            entry.id(),
-                            CollectionDescription {
-                                desc: source.desc.clone(),
-                                data_source,
-                                since: None,
-                                status_collection_id,
-                            },
-                        )])
-                        .await
-                        .unwrap();
+                    // System sources were created above, add others here.
+                    if !entry.id().is_system() {
+                        let source_desc =
+                            source_desc(entry.id(), source_status_collection_id, source);
+                        self.controller
+                            .storage
+                            .create_collections(vec![(entry.id(), source_desc)])
+                            .await
+                            .unwrap_or_terminate("cannot fail to create collections");
+                    }
                     policies_to_set
                         .entry(policy.expect("sources have a compaction window"))
                         .or_insert_with(Default::default)
                         .storage_ids
                         .insert(entry.id());
                 }
-                CatalogItem::Table(table) => {
-                    let collection_desc = table.desc.clone().into();
-                    self.controller
-                        .storage
-                        .create_collections(vec![(entry.id(), collection_desc)])
-                        .await
-                        .unwrap();
-
+                CatalogItem::Table(_) => {
                     policies_to_set
                         .entry(policy.expect("tables have a compaction window"))
                         .or_insert_with(Default::default)
@@ -741,29 +796,6 @@ impl Coordinator {
                         .insert(entry.id());
                 }
                 CatalogItem::Index(idx) => {
-                    // Linked clusters are presently a fiction maintained by the
-                    // catalog. They do not yet result in the creation of actual
-                    // compute instances, and so we must suppress the creation
-                    // of indexes on those clusters. (Users cannot create
-                    // indexes on linked clusters, but the indexes for the
-                    // built-in logging sources must be suppressed.)
-                    //
-                    // TODO(benesch): turn linked clusters into real clusters.
-                    // See MaterializeInc/cloud#4929.
-                    if self
-                        .catalog
-                        .try_get_compute_instance(idx.compute_instance)
-                        .expect("index on missing compute instance")
-                        .linked_object_id
-                        .is_some()
-                    {
-                        assert!(
-                            logs.contains(&idx.on),
-                            "non introspection source indexes in linked clusters are impossible"
-                        );
-                        continue;
-                    }
-
                     let policy_entry = policies_to_set
                         .entry(policy.expect("indexes have a compaction window"))
                         .or_insert_with(Default::default);
@@ -771,26 +803,26 @@ impl Coordinator {
                     if logs.contains(&idx.on) {
                         policy_entry
                             .compute_ids
-                            .entry(idx.compute_instance)
+                            .entry(idx.cluster_id)
                             .or_insert_with(BTreeSet::new)
                             .insert(entry.id());
                     } else {
                         let dataflow = self
-                            .dataflow_builder(idx.compute_instance)
+                            .dataflow_builder(idx.cluster_id)
                             .build_index_dataflow(entry.id())?;
-                        // What follows is morally equivalent to `self.ship_dataflow(df, idx.compute_instance)`,
+                        // What follows is morally equivalent to `self.ship_dataflow(df, idx.cluster_id)`,
                         // but we cannot call that as it will also downgrade the read hold on the index.
                         policy_entry
                             .compute_ids
-                            .entry(idx.compute_instance)
+                            .entry(idx.cluster_id)
                             .or_insert_with(Default::default)
                             .extend(dataflow.export_ids());
                         let dataflow_plan =
-                            vec![self.finalize_dataflow(dataflow, idx.compute_instance)];
+                            vec![self.must_finalize_dataflow(dataflow, idx.cluster_id)];
                         self.controller
                             .active_compute()
-                            .create_dataflows(idx.compute_instance, dataflow_plan)
-                            .unwrap();
+                            .create_dataflows(idx.cluster_id, dataflow_plan)
+                            .unwrap_or_terminate("cannot fail to create dataflows");
                     }
                 }
                 CatalogItem::View(_) => (),
@@ -801,7 +833,7 @@ impl Coordinator {
                         .storage
                         .create_collections(vec![(entry.id(), collection_desc)])
                         .await
-                        .unwrap();
+                        .unwrap_or_terminate("cannot fail to create collections");
 
                     policies_to_set
                         .entry(policy.expect("materialized views have a compaction window"))
@@ -811,14 +843,14 @@ impl Coordinator {
 
                     // Re-create the sink on the compute instance.
                     let id_bundle = self
-                        .index_oracle(mview.compute_instance)
+                        .index_oracle(mview.cluster_id)
                         .sufficient_collections(&mview.depends_on);
                     let as_of = self.least_valid_read(&id_bundle);
                     let internal_view_id = self.allocate_transient_id()?;
                     let df = self
-                        .dataflow_builder(mview.compute_instance)
+                        .dataflow_builder(mview.cluster_id)
                         .build_materialized_view_dataflow(entry.id(), as_of, internal_view_id)?;
-                    self.ship_dataflow(df, mview.compute_instance).await;
+                    self.must_ship_dataflow(df, mview.cluster_id).await;
                 }
                 CatalogItem::Sink(sink) => {
                     // Re-create the sink.
@@ -839,7 +871,7 @@ impl Coordinator {
                         .controller
                         .storage
                         .prepare_export(id, sink.from)
-                        .unwrap();
+                        .unwrap_or_terminate("cannot fail to prepare export");
 
                     task::spawn(
                         || format!("sink_connection_ready:{}", sink.from),
@@ -960,8 +992,9 @@ impl Coordinator {
             builtin_table_updates.extend(
                 log.variant.foreign_keys().into_iter().enumerate().flat_map(
                     |(index, (parent, pairs))| {
-                        let parent_log =
-                            BUILTINS::logs().find(|src| src.variant == parent).unwrap();
+                        let parent_log = BUILTINS::logs()
+                            .find(|src| src.variant == parent)
+                            .expect("log foreign key variant is invalid");
                         let parent_id = self.catalog.resolve_builtin_log(parent_log).to_string();
                         pairs.into_iter().map(move |(c, p)| {
                             let row = Row::pack_slice(&[
@@ -984,7 +1017,6 @@ impl Coordinator {
 
         // Expose mapping from T-shirt sizes to actual sizes
         builtin_table_updates.extend(self.catalog.state().pack_all_replica_size_updates());
-        builtin_table_updates.extend(self.catalog.state().pack_all_storage_host_size_updates());
 
         // Advance all tables to the current timestamp
         info!("coordinator init: advancing all tables to current timestamp");
@@ -1003,7 +1035,7 @@ impl Coordinator {
             .expect("invalid updates")
             .await
             .expect("One-shot shouldn't be dropped during bootstrap")
-            .unwrap();
+            .unwrap_or_terminate("cannot fail to append");
 
         // Add builtin table updates the clear the contents of all system tables
         info!("coordinator init: resetting system tables");
@@ -1022,7 +1054,7 @@ impl Coordinator {
                 .storage
                 .snapshot(system_table.id(), read_ts)
                 .await
-                .unwrap();
+                .unwrap_or_terminate("cannot fail to fetch snapshot");
             info!("coordinator init: table size {}", current_contents.len());
             let retractions = current_contents
                 .into_iter()
@@ -1038,48 +1070,30 @@ impl Coordinator {
         self.send_builtin_table_updates(builtin_table_updates, BuiltinTableUpdateSource::DDL)
             .await;
 
-        // TODO(benesch): remove this migration in v0.40, since all sources and
-        // sinks created in v0.39+ will be created with linked clusters if
-        // appropriate.
-        info!("coordinator init: SPECIAL MIGRATION: ensuring all sources and sinks have linked clusters");
-        let mut linked_cluster_ops = vec![];
-        for entry in &entries {
-            // Only sources with ingestions need linked clusters.
-            let host_config = match entry.item() {
-                CatalogItem::Source(source) => match &source.data_source {
-                    DataSourceDesc::Ingestion(ingestion) => &ingestion.host_config,
-                    _ => continue,
-                },
-                CatalogItem::Sink(sink) => &sink.host_config,
-                _ => continue,
-            };
+        // Signal to the storage controller that it is now free to reconcile its
+        // state with what it has learned from the adapter.
+        self.controller.storage.reconcile_state().await;
 
-            // Don't create linked clusters if one already exists.
-            if self.catalog.get_linked_cluster(entry.id()).is_some() {
-                continue;
+        // Cleanup orphaned secrets. Errors during list() or delete() do not
+        // need to prevent bootstrap from succeeding; we will retry next
+        // startup.
+        if let Ok(controller_secrets) = self.secrets_controller.list().await {
+            // Fetch all IDs from the catalog to future-proof against other
+            // things using secrets. Today, SECRET and CONNECTION objects use
+            // secrets_controller.ensure, but more things could in the future
+            // that would be easy to miss adding here.
+            let catalog_ids: BTreeSet<GlobalId> =
+                self.catalog.entries().map(|entry| entry.id()).collect();
+            let controller_secrets: BTreeSet<GlobalId> = controller_secrets.into_iter().collect();
+            let orphaned = controller_secrets.difference(&catalog_ids);
+            for id in orphaned {
+                info!("coordinator init: deleting orphaned secret {id}");
+                fail_point!("orphan_secrets");
+                if let Err(e) = self.secrets_controller.delete(*id).await {
+                    warn!("Dropping orphaned secret has encountered an error: {}", e);
+                }
             }
-
-            // Convert resolved host config back to the host config we would
-            // have gotten from the SQL layer.
-            let host_config = match host_config {
-                StorageHostConfig::Managed { size, .. } => {
-                    plan::StorageHostConfig::Managed { size: size.into() }
-                }
-                StorageHostConfig::Remote { addr } => {
-                    plan::StorageHostConfig::Remote { addr: addr.into() }
-                }
-            };
-
-            info!("adding linked cluster for {}", entry.id());
-            linked_cluster_ops.extend(
-                self.create_linked_cluster_ops(entry.id(), entry.name(), &host_config)
-                    .await?,
-            );
         }
-        // Dummy session is appropriate for system migrations, as it will
-        // present as user `mz_system` in the audit log.
-        self.catalog_transact(Some(&Session::dummy()), linked_cluster_ops)
-            .await?;
 
         info!("coordinator init: bootstrap complete");
         Ok(())
@@ -1094,7 +1108,6 @@ impl Coordinator {
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingReadTxn>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
-        mut consolidations_rx: mpsc::UnboundedReceiver<Vec<mz_stash::Id>>,
     ) {
         // For the realtime timeline, an explicit SELECT or INSERT on a table will bump the
         // table's timestamps, but there are cases where timestamps are not bumped but
@@ -1107,8 +1120,8 @@ impl Coordinator {
         // it manually.
         let mut advance_timelines_interval =
             tokio::time::interval(self.catalog.config().timestamp_interval);
-        // Watcher that listens for and reports compute service status changes.
-        let mut compute_events = self.controller.compute.watch_services();
+        // // Watcher that listens for and reports cluster service status changes.
+        let mut cluster_events = self.controller.events_stream();
         let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
         let idle_metric = self.metrics.queue_busy_seconds.with_label_values(&[]);
         spawn(|| "coord idle metric", async move {
@@ -1141,7 +1154,7 @@ impl Coordinator {
                 Some(m) = internal_cmd_rx.recv() => m,
                 // `next()` on any stream is cancel-safe:
                 // https://docs.rs/tokio-stream/0.1.9/tokio_stream/trait.StreamExt.html#cancel-safety
-                Some(event) = compute_events.next() => Message::ComputeInstanceStatus(event),
+                Some(event) = cluster_events.next() => Message::ClusterEvent(event),
                 // See [`mz_controller::Controller::Controller::ready`] for notes
                 // on why this is cancel-safe.
                 () = self.controller.ready() => {
@@ -1165,15 +1178,6 @@ impl Coordinator {
                 // `tick()` on `Interval` is cancel-safe:
                 // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                 _ = advance_timelines_interval.tick() => Message::GroupCommitInitiate,
-                // `recv()` on `UnboundedReceiver` is cancellation safe:
-                // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
-                Some(collections) = consolidations_rx.recv() => {
-                    let mut ids:HashSet<mz_stash::Id> = HashSet::from_iter(collections);
-                    while let Ok(collections) = consolidations_rx.try_recv() {
-                        ids.extend(collections);
-                    }
-                    Message::Consolidate(ids.into_iter().collect())
-                }
 
                 // Process the idle metric at the lowest priority to sample queue non-idle time.
                 // `recv()` on `Receiver` is cancellation safe:
@@ -1201,6 +1205,10 @@ impl Coordinator {
 ///
 /// Returns a handle to the coordinator and a client to communicate with the
 /// coordinator.
+// TODO: This causes stack overflows during tests which can be fixed by setting
+// RUST_MIN_STACK=8388608, but we'd like to come up with a better solution, so
+// don't enable serve tracing for now.
+//#[tracing::instrument(name = "coord::serve", level = "info", skip_all)]
 pub async fn serve(
     Config {
         dataflow_client,
@@ -1214,17 +1222,15 @@ pub async fn serve(
         secrets_controller,
         cloud_resource_controller,
         cluster_replica_sizes,
-        storage_host_sizes,
-        default_storage_host_size,
+        default_storage_cluster_size,
         bootstrap_system_parameters,
         mut availability_zones,
         connection_context,
         storage_usage_client,
         storage_usage_collection_interval,
+        storage_usage_retention_period,
         segment_client,
         egress_ips,
-        consolidations_tx,
-        consolidations_rx,
         aws_account_id,
         aws_privatelink_availability_zones,
         system_parameter_frontend,
@@ -1250,18 +1256,22 @@ pub async fn serve(
     // Coordinator::sequence_create_compute_replica.
     availability_zones.shuffle(&mut rand::thread_rng());
 
-    let aws_principal_context =
-        if aws_account_id.is_some() && connection_context.aws_external_id_prefix.is_some() {
-            Some(AwsPrincipalContext {
-                aws_account_id: aws_account_id.unwrap(),
-                aws_external_id_prefix: connection_context.aws_external_id_prefix.clone().unwrap(),
-            })
-        } else {
-            None
-        };
+    let aws_principal_context = if aws_account_id.is_some()
+        && connection_context.aws_external_id_prefix.is_some()
+    {
+        Some(AwsPrincipalContext {
+            aws_account_id: aws_account_id.expect("known to be `Some` from `is_some()` call above"),
+            aws_external_id_prefix: connection_context
+                .aws_external_id_prefix
+                .clone()
+                .expect("known to be `Some` from `is_some()` call above"),
+        })
+    } else {
+        None
+    };
 
     let aws_privatelink_availability_zones = aws_privatelink_availability_zones
-        .map(|azs_vec| HashSet::from_iter(azs_vec.iter().cloned()));
+        .map(|azs_vec| BTreeSet::from_iter(azs_vec.iter().cloned()));
 
     info!("coordinator init: opening catalog");
     let (mut catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
@@ -1275,8 +1285,7 @@ pub async fn serve(
             skip_migrations: false,
             metrics_registry: &metrics_registry,
             cluster_replica_sizes,
-            storage_host_sizes,
-            default_storage_host_size,
+            default_storage_cluster_size,
             bootstrap_system_parameters,
             availability_zones,
             secrets_reader: secrets_controller.reader(),
@@ -1284,6 +1293,7 @@ pub async fn serve(
             aws_principal_context,
             aws_privatelink_availability_zones,
             system_parameter_frontend,
+            storage_usage_retention_period,
         })
         .await?;
     let session_id = catalog.config().session_id;
@@ -1298,6 +1308,7 @@ pub async fn serve(
     let initial_timestamps = catalog.get_all_persisted_timestamps().await?;
     let metrics = Metrics::register_into(&metrics_registry);
     let metrics_clone = metrics.clone();
+    let span = tracing::Span::current();
     let thread = thread::Builder::new()
         // The Coordinator thread tends to keep a lot of data on its stack. To
         // prevent a stack overflow we allocate a stack twice as big as the default
@@ -1322,24 +1333,23 @@ pub async fn serve(
                 catalog,
                 internal_cmd_tx,
                 strict_serializable_reads_tx,
-                consolidations_tx,
                 global_timelines: timestamp_oracles,
                 transient_id_counter: 1,
-                active_conns: HashMap::new(),
+                active_conns: BTreeMap::new(),
                 storage_read_capabilities: Default::default(),
                 compute_read_capabilities: Default::default(),
                 txn_reads: Default::default(),
-                pending_peeks: HashMap::new(),
-                client_pending_peeks: HashMap::new(),
-                pending_real_time_recency_timestamp: HashMap::new(),
-                pending_subscribes: HashMap::new(),
+                pending_peeks: BTreeMap::new(),
+                client_pending_peeks: BTreeMap::new(),
+                pending_real_time_recency_timestamp: BTreeMap::new(),
+                active_subscribes: BTreeMap::new(),
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
                 pending_writes: Vec::new(),
                 secrets_controller,
                 cloud_resource_controller,
                 connection_context,
-                transient_replica_metadata: HashMap::new(),
+                transient_replica_metadata: BTreeMap::new(),
                 storage_usage_client,
                 storage_usage_collection_interval,
                 segment_client,
@@ -1348,30 +1358,28 @@ pub async fn serve(
             let bootstrap = handle.block_on(async {
                 coord
                     .bootstrap(builtin_migration_metadata, builtin_table_updates)
+                    .instrument(span)
                     .await?;
                 coord
                     .controller
-                    .remove_orphans(
-                        coord.catalog.get_next_replica_id().await?,
-                        coord.catalog.get_next_user_global_id().await?,
-                    )
+                    .remove_orphaned_replicas(coord.catalog.get_next_replica_id().await?)
                     .await
                     .map_err(AdapterError::Orchestrator)?;
                 Ok(())
             });
             let ok = bootstrap.is_ok();
-            bootstrap_tx.send(bootstrap).unwrap();
+            bootstrap_tx
+                .send(bootstrap)
+                .expect("bootstrap_rx is not dropped until it receives this message");
             if ok {
-                handle.block_on(coord.serve(
-                    internal_cmd_rx,
-                    strict_serializable_reads_rx,
-                    cmd_rx,
-                    consolidations_rx,
-                ));
+                handle.block_on(coord.serve(internal_cmd_rx, strict_serializable_reads_rx, cmd_rx));
             }
         })
-        .unwrap();
-    match bootstrap_rx.await.unwrap() {
+        .expect("failed to create coordinator thread");
+    match bootstrap_rx
+        .await
+        .expect("bootstrap_tx always sends a message or panics/halts")
+    {
         Ok(()) => {
             info!("coordinator init: complete");
             let handle = Handle {

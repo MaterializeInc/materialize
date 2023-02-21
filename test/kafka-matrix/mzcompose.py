@@ -40,7 +40,7 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    c.start_and_wait_for_tcp(services=["localstack"])
+    c.up("localstack")
 
     for version in CONFLUENT_PLATFORM_VERSIONS:
         print(f"==> Testing Confluent Platform {version}")
@@ -50,10 +50,7 @@ def workflow_default(c: Composition) -> None:
             SchemaRegistry(tag=version),
         ]
         with c.override(*confluent_platform_services):
-            c.start_and_wait_for_tcp(
-                services=["zookeeper", "kafka", "schema-registry", "materialized"]
-            )
-            c.wait_for_materialized()
+            c.up("zookeeper", "kafka", "schema-registry", "materialized")
             c.run("testdrive", "testdrive/kafka-*.td")
             c.kill(
                 "zookeeper",

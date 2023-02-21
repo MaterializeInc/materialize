@@ -25,7 +25,7 @@
 //!       compare to expected results
 //!       if wrong, record the error
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::env;
 use std::error::Error;
 use std::fmt;
@@ -50,7 +50,7 @@ use postgres_protocol::types;
 use regex::Regex;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::oneshot;
 use tokio_postgres::types::FromSql;
 use tokio_postgres::types::Kind as PgKind;
 use tokio_postgres::types::Type as PgType;
@@ -69,7 +69,8 @@ use mz_ore::task;
 use mz_ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::{PersistConfig, PersistLocation};
+use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::PersistLocation;
 use mz_pgrepr::{oid, Interval, Jsonb, Numeric, UInt2, UInt4, UInt8, Value};
 use mz_repr::adt::date::Date;
 use mz_repr::adt::numeric;
@@ -341,7 +342,7 @@ pub struct RunnerInner {
     internal_server_addr: SocketAddr,
     // Drop order matters for these fields.
     client: tokio_postgres::Client,
-    clients: HashMap<String, tokio_postgres::Client>,
+    clients: BTreeMap<String, tokio_postgres::Client>,
     auto_index_tables: bool,
     _shutdown_trigger: oneshot::Sender<()>,
     _server_thread: JoinOnDropHandle<()>,
@@ -748,7 +749,7 @@ impl<'a> Runner<'a> {
         }
 
         inner.client = connect(inner.server_addr, None).await;
-        inner.clients = HashMap::new();
+        inner.clients = BTreeMap::new();
 
         Ok(())
     }
@@ -813,7 +814,7 @@ impl RunnerInner {
             PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone()),
             &metrics_registry,
         );
-        let persist_clients = Arc::new(Mutex::new(persist_clients));
+        let persist_clients = Arc::new(persist_clients);
         let postgres_factory = StashFactory::new(&metrics_registry);
         let secrets_controller = Arc::clone(&orchestrator);
         let connection_context = ConnectionContext::for_tests(orchestrator.reader());
@@ -832,6 +833,7 @@ impl RunnerInner {
                 storage_stash_url,
                 now: SYSTEM_TIME.clone(),
                 postgres_factory: postgres_factory.clone(),
+                metrics_registry: metrics_registry.clone(),
             },
             secrets_controller,
             cloud_resource_controller: None,
@@ -853,12 +855,12 @@ impl RunnerInner {
             bootstrap_default_cluster_replica_size: "1".into(),
             bootstrap_builtin_cluster_replica_size: "1".into(),
             bootstrap_system_parameters: Default::default(),
-            storage_host_sizes: Default::default(),
-            default_storage_host_size: None,
+            default_storage_cluster_size: None,
             availability_zones: Default::default(),
             connection_context,
             tracing_handle: TracingHandle::disabled(),
             storage_usage_collection_interval: Duration::from_secs(3600),
+            storage_usage_retention_period: None,
             segment_api_key: None,
             egress_ips: vec![],
             aws_account_id: None,
@@ -924,7 +926,7 @@ impl RunnerInner {
             _server_thread: server_thread.join_on_drop(),
             _temp_dir: temp_dir,
             client,
-            clients: HashMap::new(),
+            clients: BTreeMap::new(),
             auto_index_tables: config.auto_index_tables,
         })
     }

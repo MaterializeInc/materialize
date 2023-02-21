@@ -34,6 +34,7 @@ use mz_sql::catalog::{
     CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, TypeReference,
 };
 use mz_storage_client::controller::IntrospectionType;
+use mz_storage_client::healthcheck::{MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC};
 
 use crate::catalog::{DEFAULT_CLUSTER_REPLICA_NAME, INTROSPECTION_USER, SYSTEM_USER};
 
@@ -160,19 +161,19 @@ pub struct BuiltinRole {
 }
 
 #[derive(Clone, Debug)]
-pub struct BuiltinComputeInstance {
-    /// Name of the compute instance.
+pub struct BuiltinCluster {
+    /// Name of the cluster.
     ///
     /// IMPORTANT: Must start with a prefix from [`BUILTIN_PREFIXES`].
     pub name: &'static str,
 }
 
 #[derive(Clone, Debug)]
-pub struct BuiltinComputeReplica {
+pub struct BuiltinClusterReplica {
     /// Name of the compute replica.
     pub name: &'static str,
-    /// Name of the compute instance that this replica belongs to.
-    pub compute_instance_name: &'static str,
+    /// Name of the cluster that this replica belongs to.
+    pub cluster_name: &'static str,
 }
 
 /// Uniquely identifies the definition of a builtin object.
@@ -1200,7 +1201,7 @@ pub const MZ_WORKER_COMPUTE_FRONTIERS: BuiltinLog = BuiltinLog {
 pub const MZ_WORKER_COMPUTE_IMPORT_FRONTIERS: BuiltinLog = BuiltinLog {
     name: "mz_worker_compute_import_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
-    variant: LogVariant::Compute(ComputeLog::SourceFrontierCurrent),
+    variant: LogVariant::Compute(ComputeLog::ImportFrontierCurrent),
 };
 
 pub const MZ_RAW_WORKER_COMPUTE_DELAYS: BuiltinLog = BuiltinLog {
@@ -1287,6 +1288,14 @@ pub static MZ_KAFKA_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable 
             ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
         )
         .with_column("sink_progress_topic", ScalarType::String.nullable(false)),
+    is_retained_metrics_relation: false,
+});
+pub static MZ_POSTGRES_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_postgres_sources",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("replication_slot", ScalarType::String.nullable(false)),
     is_retained_metrics_relation: false,
 });
 pub static MZ_OBJECT_DEPENDENCIES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1392,7 +1401,8 @@ pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("type", ScalarType::String.nullable(false))
         .with_column("connection_id", ScalarType::String.nullable(true))
         .with_column("size", ScalarType::String.nullable(true))
-        .with_column("envelope_type", ScalarType::String.nullable(true)),
+        .with_column("envelope_type", ScalarType::String.nullable(true))
+        .with_column("cluster_id", ScalarType::String.nullable(true)),
     is_retained_metrics_relation: true,
 });
 pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1405,7 +1415,9 @@ pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("type", ScalarType::String.nullable(false))
         .with_column("connection_id", ScalarType::String.nullable(true))
-        .with_column("size", ScalarType::String.nullable(true)),
+        .with_column("size", ScalarType::String.nullable(true))
+        .with_column("envelope_type", ScalarType::String.nullable(true))
+        .with_column("cluster_id", ScalarType::String.nullable(false)),
     is_retained_metrics_relation: true,
 });
 pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1571,17 +1583,6 @@ pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTa
     is_retained_metrics_relation: true,
 });
 
-pub static MZ_STORAGE_HOST_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
-    name: "mz_storage_host_sizes",
-    schema: MZ_INTERNAL_SCHEMA,
-    desc: RelationDesc::empty()
-        .with_column("size", ScalarType::String.nullable(false))
-        .with_column("workers", ScalarType::UInt64.nullable(false))
-        .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(false))
-        .with_column("memory_bytes", ScalarType::UInt64.nullable(false)),
-    is_retained_metrics_relation: true,
-});
-
 pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_cluster_replica_heartbeats",
     schema: MZ_INTERNAL_SCHEMA,
@@ -1608,12 +1609,7 @@ pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinS
     name: "mz_source_status_history",
     schema: MZ_INTERNAL_SCHEMA,
     data_source: Some(IntrospectionType::SourceStatusHistory),
-    desc: RelationDesc::empty()
-        .with_column("occurred_at", ScalarType::TimestampTz.nullable(false))
-        .with_column("source_id", ScalarType::String.nullable(false))
-        .with_column("status", ScalarType::String.nullable(false))
-        .with_column("error", ScalarType::String.nullable(true))
-        .with_column("details", ScalarType::Jsonb.nullable(true)),
+    desc: MZ_SOURCE_STATUS_HISTORY_DESC.clone(),
     is_retained_metrics_relation: false,
 });
 
@@ -1622,7 +1618,7 @@ pub const MZ_SOURCE_STATUSES: BuiltinView = BuiltinView {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_source_statuses AS
 WITH latest_events AS (
-    SELECT DISTINCT ON(source_id) *
+    SELECT DISTINCT ON(source_id) occurred_at, source_id, status, error, details
     FROM mz_internal.mz_source_status_history
     ORDER BY source_id, occurred_at DESC
 )
@@ -1645,12 +1641,7 @@ pub static MZ_SINK_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSou
     name: "mz_sink_status_history",
     schema: MZ_INTERNAL_SCHEMA,
     data_source: Some(IntrospectionType::SinkStatusHistory),
-    desc: RelationDesc::empty()
-        .with_column("occurred_at", ScalarType::TimestampTz.nullable(false))
-        .with_column("sink_id", ScalarType::String.nullable(false))
-        .with_column("status", ScalarType::String.nullable(false))
-        .with_column("error", ScalarType::String.nullable(true))
-        .with_column("details", ScalarType::Jsonb.nullable(true)),
+    desc: MZ_SINK_STATUS_HISTORY_DESC.clone(),
     is_retained_metrics_relation: false,
 });
 
@@ -1659,7 +1650,7 @@ pub const MZ_SINK_STATUSES: BuiltinView = BuiltinView {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_sink_statuses AS
 WITH latest_events AS (
-    SELECT DISTINCT ON(sink_id) *
+    SELECT DISTINCT ON(sink_id) occurred_at, sink_id, status, error, details
     FROM mz_internal.mz_sink_status_history
     ORDER BY sink_id, occurred_at DESC
 )
@@ -1731,25 +1722,7 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS: Lazy<BuiltinTable> = Lazy::new(|| Built
     is_retained_metrics_relation: false,
 });
 
-pub static MZ_STORAGE_HOST_METRICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
-    name: "mz_storage_host_metrics",
-    // TODO[btv] - make this public once we work out whether and how to fuse it with
-    // the corresponding Compute tables.
-    schema: MZ_INTERNAL_SCHEMA,
-    data_source: Some(IntrospectionType::StorageHostMetrics),
-    desc: RelationDesc::empty()
-        // Right now (in production) each storage host is running exactly one
-        // source or sink, so we identify the hosts by the source/sink id. We
-        // have to change this once we allow multiple storage objects to share a
-        // "cluster".
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("process_id", ScalarType::UInt64.nullable(false))
-        .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(true))
-        .with_column("memory_bytes", ScalarType::UInt64.nullable(true)),
-    is_retained_metrics_relation: true,
-});
-
-// This will be replaced with per-replica tables once source/sink multiplexing on
+// These will be replaced with per-replica tables once source/sink multiplexing on
 // a single cluster is supported.
 pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_source_statistics",
@@ -1763,6 +1736,19 @@ pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSourc
         .with_column("updates_staged", ScalarType::UInt64.nullable(false))
         .with_column("updates_committed", ScalarType::UInt64.nullable(false))
         .with_column("bytes_received", ScalarType::UInt64.nullable(false)),
+    is_retained_metrics_relation: true,
+});
+pub static MZ_SINK_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_sink_statistics",
+    schema: MZ_INTERNAL_SCHEMA,
+    data_source: Some(IntrospectionType::StorageSinkStatistics),
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("worker_id", ScalarType::UInt64.nullable(false))
+        .with_column("messages_staged", ScalarType::UInt64.nullable(false))
+        .with_column("messages_committed", ScalarType::UInt64.nullable(false))
+        .with_column("bytes_staged", ScalarType::UInt64.nullable(false))
+        .with_column("bytes_committed", ScalarType::UInt64.nullable(false)),
     is_retained_metrics_relation: true,
 });
 
@@ -1966,7 +1952,7 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     0::pg_catalog.oid AS reltablespace,
     -- MZ doesn't use TOAST tables so reltoastrelid is filled with 0
     0::pg_catalog.oid AS reltoastrelid,
-    EXISTS (SELECT * FROM mz_catalog.mz_indexes where mz_indexes.on_id = class_objects.id) AS relhasindex,
+    EXISTS (SELECT id, oid, name, on_id, cluster_id FROM mz_catalog.mz_indexes where mz_indexes.on_id = class_objects.id) AS relhasindex,
     -- MZ doesn't have unlogged tables and because of (https://github.com/MaterializeInc/materialize/issues/8805)
     -- temporary objects don't show up here, so relpersistence is filled with 'p' for permanent.
     -- TODO(jkosh44): update this column when issue is resolved.
@@ -2233,7 +2219,7 @@ pub const PG_SETTINGS: BuiltinView = BuiltinView {
     name: "pg_settings",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_catalog.pg_settings AS SELECT
-    *
+    name, setting
 FROM (VALUES
     ('max_index_keys'::pg_catalog.text, '1000'::pg_catalog.text)
 ) AS _ (name, setting)",
@@ -2407,42 +2393,11 @@ SELECT
     r.id AS replica_id,
     m.process_id,
     m.cpu_nano_cores::float8 / s.cpu_nano_cores * 100 AS cpu_percent,
-    m.cpu_nano_cores::float8 / (s.workers * 10000000) AS cpu_percent_normalized,
     m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent
 FROM
     mz_cluster_replicas AS r
         JOIN mz_internal.mz_cluster_replica_sizes AS s ON r.size = s.size
         JOIN mz_internal.mz_cluster_replica_metrics AS m ON m.replica_id = r.id",
-};
-
-pub const MZ_SOURCE_UTILIZATION: BuiltinView = BuiltinView {
-    name: "mz_source_utilization",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_source_utilization AS
-SELECT
-    sources.id AS source_id,
-    m.cpu_nano_cores::float8 / s.cpu_nano_cores * 100 AS cpu_percent,
-    m.cpu_nano_cores::float8 / (s.workers * 10000000) AS cpu_percent_normalized,
-    m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent
-FROM
-    mz_sources AS sources
-        JOIN mz_internal.mz_storage_host_sizes AS s ON sources.size = s.size
-        JOIN mz_internal.mz_storage_host_metrics AS m ON m.id = sources.id",
-};
-
-pub const MZ_SINK_UTILIZATION: BuiltinView = BuiltinView {
-    name: "mz_sink_utilization",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_sink_utilization AS
-SELECT
-    sinks.id AS sink_id,
-    m.cpu_nano_cores::float8 / s.cpu_nano_cores * 100 AS cpu_percent,
-    m.cpu_nano_cores::float8 / (s.workers * 10000000) AS cpu_percent_normalized,
-    m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent
-FROM
-    mz_sinks AS sinks
-        JOIN mz_internal.mz_storage_host_sizes AS s ON sinks.size = s.size
-        JOIN mz_internal.mz_storage_host_metrics AS m ON m.id = sinks.id",
 };
 
 // NOTE: If you add real data to this implementation, then please update
@@ -2867,26 +2822,24 @@ pub static MZ_INTROSPECTION_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*INTROSPECTION_USER.name,
 });
 
-pub static MZ_SYSTEM_COMPUTE_INSTANCE: Lazy<BuiltinComputeInstance> =
-    Lazy::new(|| BuiltinComputeInstance {
-        name: &*SYSTEM_USER.name,
-    });
+pub static MZ_SYSTEM_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| BuiltinCluster {
+    name: &*SYSTEM_USER.name,
+});
 
-pub static MZ_SYSTEM_COMPUTE_REPLICA: Lazy<BuiltinComputeReplica> =
-    Lazy::new(|| BuiltinComputeReplica {
+pub static MZ_SYSTEM_CLUSTER_REPLICA: Lazy<BuiltinClusterReplica> =
+    Lazy::new(|| BuiltinClusterReplica {
         name: DEFAULT_CLUSTER_REPLICA_NAME,
-        compute_instance_name: MZ_SYSTEM_COMPUTE_INSTANCE.name,
+        cluster_name: MZ_SYSTEM_CLUSTER.name,
     });
 
-pub static MZ_INTROSPECTION_COMPUTE_INSTANCE: Lazy<BuiltinComputeInstance> =
-    Lazy::new(|| BuiltinComputeInstance {
-        name: &*INTROSPECTION_USER.name,
-    });
+pub static MZ_INTROSPECTION_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| BuiltinCluster {
+    name: &*INTROSPECTION_USER.name,
+});
 
-pub static MZ_INTROSPECTION_COMPUTE_REPLICA: Lazy<BuiltinComputeReplica> =
-    Lazy::new(|| BuiltinComputeReplica {
+pub static MZ_INTROSPECTION_CLUSTER_REPLICA: Lazy<BuiltinClusterReplica> =
+    Lazy::new(|| BuiltinClusterReplica {
         name: DEFAULT_CLUSTER_REPLICA_NAME,
-        compute_instance_name: MZ_INTROSPECTION_COMPUTE_INSTANCE.name,
+        cluster_name: MZ_INTROSPECTION_CLUSTER.name,
     });
 
 /// List of all builtin objects sorted topologically by dependency.
@@ -3021,6 +2974,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_INDEX_COLUMNS),
         Builtin::Table(&MZ_TABLES),
         Builtin::Table(&MZ_SOURCES),
+        Builtin::Table(&MZ_POSTGRES_SOURCES),
         Builtin::Table(&MZ_SINKS),
         Builtin::Table(&MZ_VIEWS),
         Builtin::Table(&MZ_MATERIALIZED_VIEWS),
@@ -3099,12 +3053,9 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),
         Builtin::View(&MZ_SOURCE_STATUSES),
         Builtin::Source(&MZ_STORAGE_SHARDS),
-        Builtin::Source(&MZ_STORAGE_HOST_METRICS),
         Builtin::Source(&MZ_SOURCE_STATISTICS),
+        Builtin::Source(&MZ_SINK_STATISTICS),
         Builtin::View(&MZ_STORAGE_USAGE),
-        Builtin::Table(&MZ_STORAGE_HOST_SIZES),
-        Builtin::View(&MZ_SOURCE_UTILIZATION),
-        Builtin::View(&MZ_SINK_UTILIZATION),
         Builtin::Index(&MZ_SHOW_DATABASES_IND),
         Builtin::Index(&MZ_SHOW_SCHEMAS_IND),
         Builtin::Index(&MZ_SHOW_CONNECTIONS_IND),
@@ -3126,16 +3077,12 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
 });
 pub static BUILTIN_ROLES: Lazy<Vec<&BuiltinRole>> =
     Lazy::new(|| vec![&*MZ_SYSTEM_ROLE, &*MZ_INTROSPECTION_ROLE]);
-pub static BUILTIN_COMPUTE_INSTANCES: Lazy<Vec<&BuiltinComputeInstance>> = Lazy::new(|| {
+pub static BUILTIN_CLUSTERS: Lazy<Vec<&BuiltinCluster>> =
+    Lazy::new(|| vec![&*MZ_SYSTEM_CLUSTER, &*MZ_INTROSPECTION_CLUSTER]);
+pub static BUILTIN_CLUSTER_REPLICAS: Lazy<Vec<&BuiltinClusterReplica>> = Lazy::new(|| {
     vec![
-        &*MZ_SYSTEM_COMPUTE_INSTANCE,
-        &*MZ_INTROSPECTION_COMPUTE_INSTANCE,
-    ]
-});
-pub static BUILTIN_COMPUTE_REPLICAS: Lazy<Vec<&BuiltinComputeReplica>> = Lazy::new(|| {
-    vec![
-        &*MZ_SYSTEM_COMPUTE_REPLICA,
-        &*MZ_INTROSPECTION_COMPUTE_REPLICA,
+        &*MZ_SYSTEM_CLUSTER_REPLICA,
+        &*MZ_INTROSPECTION_CLUSTER_REPLICA,
     ]
 });
 
@@ -3148,16 +3095,6 @@ pub mod BUILTINS {
             Builtin::Log(log) => Some(*log),
             _ => None,
         })
-    }
-
-    // TODO(lh): Once we remove legacy logs, this function should not be needed anymore
-    pub fn variant_to_builtin(variant: LogVariant) -> Option<&'static BuiltinLog> {
-        for x in logs() {
-            if x.variant == variant {
-                return Some(x);
-            }
-        }
-        None
     }
 
     pub fn types() -> impl Iterator<Item = &'static BuiltinType<NameReference>> {
@@ -3181,7 +3118,7 @@ pub mod BUILTINS {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::{BTreeMap, BTreeSet};
     use std::env;
 
     use tokio_postgres::NoTls;
@@ -3211,7 +3148,7 @@ mod tests {
                 NoTls,
             )
             .await
-            .unwrap();
+            .expect("failed to connect to Postgres");
 
             task::spawn(|| "compare_builtin_postgres", async move {
                 if let Err(e) = connection.await {
@@ -3234,7 +3171,7 @@ mod tests {
                 array: u32,
             }
 
-            let pg_proc: HashMap<_, _> = client
+            let pg_proc: BTreeMap<_, _> = client
                 .query(
                     "SELECT
                     p.oid,
@@ -3248,7 +3185,7 @@ mod tests {
                     &[],
                 )
                 .await
-                .unwrap()
+                .expect("pg query failed")
                 .into_iter()
                 .map(|row| {
                     let oid: u32 = row.get("oid");
@@ -3263,18 +3200,18 @@ mod tests {
                 })
                 .collect();
 
-            let pg_proc_by_name: HashMap<_, _> = pg_proc
+            let pg_proc_by_name: BTreeMap<_, _> = pg_proc
                 .iter()
                 .map(|(_, proc)| ((&*proc.schema, &*proc.name), proc))
                 .collect();
 
-            let pg_type: HashMap<_, _> = client
+            let pg_type: BTreeMap<_, _> = client
                 .query(
                     "SELECT oid, typname, typtype::text, typelem, typarray FROM pg_type",
                     &[],
                 )
                 .await
-                .unwrap()
+                .expect("pg query failed")
                 .into_iter()
                 .map(|row| {
                     let oid: u32 = row.get("oid");
@@ -3298,12 +3235,12 @@ mod tests {
                         schema: Some(PG_CATALOG_SCHEMA.into()),
                         item: item.to_string(),
                     })
-                    .unwrap()
+                    .expect("unable to resolve type")
                     .oid()
             };
 
-            let mut proc_oids = HashSet::new();
-            let mut type_oids = HashSet::new();
+            let mut proc_oids = BTreeSet::new();
+            let mut type_oids = BTreeSet::new();
 
             for builtin in BUILTINS::iter() {
                 match builtin {
@@ -3388,7 +3325,7 @@ mod tests {
                                 ty.schema,
                                 SYSTEM_CONN_ID,
                             )
-                            .unwrap();
+                            .expect("unable to resolve schema");
                         let allocated_type = catalog
                             .resolve_entry(
                                 None,
@@ -3400,7 +3337,7 @@ mod tests {
                                 },
                                 SYSTEM_CONN_ID,
                             )
-                            .unwrap();
+                            .expect("unable to resolve type");
                         let ty = if let CatalogItem::Type(ty) = &allocated_type.item {
                             ty
                         } else {
@@ -3516,9 +3453,13 @@ mod tests {
                         schema: Some(view.schema.to_string()),
                         item: view.name.to_string(),
                     })
-                    .unwrap();
+                    .expect("unable to resolve view");
                 let full_name = conn_catalog.resolve_full_name(item.name());
-                for col_type in item.desc(&full_name).unwrap().iter_types() {
+                for col_type in item
+                    .desc(&full_name)
+                    .expect("invalid item type")
+                    .iter_types()
+                {
                     match &col_type.scalar_type {
                         typ @ ScalarType::UInt16
                         | typ @ ScalarType::UInt32

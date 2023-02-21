@@ -9,7 +9,7 @@
 
 //! An implementation of the Maelstrom txn-list-append workload using persist
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -20,6 +20,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::metrics::Metrics;
+use mz_persist_types::codec_impls::TodoSchema;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -30,9 +31,10 @@ use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHandle};
 use mz_persist_client::async_runtime::CpuHeavyRuntime;
+use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::read::{Listen, ListenEvent};
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{PersistClient, PersistConfig, ShardId};
+use mz_persist_client::{PersistClient, ShardId};
 
 use crate::maelstrom::api::{Body, ErrorCode, MaelstromError, NodeId, ReqTxnOp, ResTxnOp};
 use crate::maelstrom::node::{Handle, Service};
@@ -133,7 +135,14 @@ impl Transactor {
             .parse::<u64>()
             .expect("maelstrom node_id should be n followed by an integer");
 
-        let (mut write, mut read) = client.open(shard_id, "maelstrom long-lived").await?;
+        let (mut write, mut read) = client
+            .open(
+                shard_id,
+                "maelstrom long-lived",
+                Arc::new(TodoSchema::<MaelstromKey>::default()),
+                Arc::new(TodoSchema::<MaelstromVal>::default()),
+            )
+            .await?;
         // Use the CONTROLLER_CRITICAL_SINCE id for all nodes so we get coverage
         // of contending traffic.
         let since = client
@@ -257,7 +266,12 @@ impl Transactor {
             // state and exercise some more code paths.
             let mut read = self
                 .client
-                .open_leased_reader(self.shard_id, "maelstrom short-lived")
+                .open_leased_reader(
+                    self.shard_id,
+                    "maelstrom short-lived",
+                    Arc::new(TodoSchema::<MaelstromKey>::default()),
+                    Arc::new(TodoSchema::<MaelstromVal>::default()),
+                )
                 .await
                 .expect("codecs should match");
 
@@ -352,7 +366,7 @@ impl Transactor {
         }
     }
 
-    async fn read(&mut self) -> Result<HashMap<MaelstromKey, MaelstromVal>, MaelstromError> {
+    async fn read(&mut self) -> Result<BTreeMap<MaelstromKey, MaelstromVal>, MaelstromError> {
         let (updates, as_of) = self.read_short_lived().await?;
 
         let long_lived = self.read_long_lived(&as_of).await;
@@ -437,8 +451,8 @@ impl Transactor {
             u64,
             i64,
         )>,
-    ) -> Result<HashMap<MaelstromKey, MaelstromVal>, MaelstromError> {
-        let mut ret = HashMap::new();
+    ) -> Result<BTreeMap<MaelstromKey, MaelstromVal>, MaelstromError> {
+        let mut ret = BTreeMap::new();
         for ((k, v), _, d) in updates {
             if d != 1 {
                 return Err(MaelstromError {
@@ -466,12 +480,12 @@ impl Transactor {
     }
 
     fn eval_txn(
-        state: &HashMap<MaelstromKey, MaelstromVal>,
+        state: &BTreeMap<MaelstromKey, MaelstromVal>,
         req_ops: &[ReqTxnOp],
     ) -> (Vec<(MaelstromKey, MaelstromVal, i64)>, Vec<ResTxnOp>) {
         let mut res_ops = Vec::new();
         let mut updates = Vec::new();
-        let mut txn_state = HashMap::new();
+        let mut txn_state = BTreeMap::new();
 
         for req_op in req_ops.iter() {
             match req_op {
@@ -594,12 +608,19 @@ impl Service for TransactorService {
         // should_timeout to for blobs, so use the same handle for both.
         let unreliable = UnreliableHandle::new(seed, should_happen, should_timeout);
 
+        let mut config = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
+        let metrics = Arc::new(Metrics::new(&config, &MetricsRegistry::new()));
+
         // Construct requested Blob.
         let blob = match &args.blob_uri {
             Some(blob_uri) => {
-                let cfg = BlobConfig::try_from(blob_uri)
-                    .await
-                    .expect("blob_uri should be valid");
+                let cfg = BlobConfig::try_from(
+                    blob_uri,
+                    Box::new(config.clone()),
+                    metrics.s3_blob.clone(),
+                )
+                .await
+                .expect("blob_uri should be valid");
                 loop {
                     match cfg.clone().open().await {
                         Ok(x) => break x,
@@ -621,15 +642,11 @@ impl Service for TransactorService {
         // unreliable would cause more retries than are interesting, and the
         // Lamport diagrams that Maelstrom generates would be noisy.
         let blob = CachingBlob::new(blob);
-
-        // Construct requested Consensus.
-        let mut config = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
         // to simplify some downstream logic (+ a bit more stress testing),
         // always downgrade the since of critical handles when asked
         config.critical_downgrade_interval = Duration::from_secs(0);
         // set a live diff scan limit such that we'll explore both the fast and slow paths
-        config.state_versions_recent_live_diffs_limit = 5;
-        let metrics = Arc::new(Metrics::new(&config, &MetricsRegistry::new()));
+        config.set_state_versions_recent_live_diffs_limit(5);
         let consensus = match &args.consensus_uri {
             Some(consensus_uri) => {
                 let cfg = ConsensusConfig::try_from(
@@ -686,11 +703,14 @@ impl Service for TransactorService {
 }
 
 mod codec_impls {
+    use mz_persist_types::codec_impls::TodoSchema;
     use mz_persist_types::Codec;
 
     use crate::maelstrom::txn::{MaelstromKey, MaelstromVal};
 
     impl Codec for MaelstromKey {
+        type Schema = TodoSchema<MaelstromKey>;
+
         fn codec_name() -> String {
             "MaelstromKey".into()
         }
@@ -711,6 +731,8 @@ mod codec_impls {
     }
 
     impl Codec for MaelstromVal {
+        type Schema = TodoSchema<MaelstromVal>;
+
         fn codec_name() -> String {
             "MaelstromVal".into()
         }

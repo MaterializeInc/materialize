@@ -47,9 +47,13 @@ class StartMz(MzcomposeAction):
         with c.override(mz):
             c.up("materialized")
 
-        c.wait_for_materialized()
-
-        for config_param in ["max_tables", "max_sources"]:
+        for config_param in [
+            "max_tables",
+            "max_sinks",
+            "max_sources",
+            "max_materialized_views",
+            "max_secrets",
+        ]:
             c.sql(
                 f"ALTER SYSTEM SET {config_param} TO 1000",
                 user="mz_system",
@@ -71,8 +75,10 @@ class UseClusterdCompute(MzcomposeAction):
             """
             DROP CLUSTER REPLICA default.r1;
             CREATE CLUSTER REPLICA default.r1
-                REMOTE ['clusterd_compute_1:2101'],
-                COMPUTE ['clusterd_compute_1:2102'],
+                STORAGECTL ADDRESSES ['clusterd_compute_1:2100'],
+                STORAGE ADDRESSES ['clusterd_compute_1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd_compute_1:2101'],
+                COMPUTE ADDRESSES ['clusterd_compute_1:2102'],
                 WORKERS 1;
         """
         )
@@ -104,7 +110,6 @@ class StartClusterdCompute(MzcomposeAction):
                         "--secrets-reader=process",
                         "--secrets-reader-process-dir=/mzdata/secrets",
                     ],
-                    storage_workers=None,
                 )
             else:
                 clusterd = Clusterd(
@@ -114,7 +119,7 @@ class StartClusterdCompute(MzcomposeAction):
         print(f"Starting Compute using image {clusterd.config.get('image')}")
 
         with c.override(clusterd):
-            c.start_and_wait_for_tcp(services=["clusterd_compute_1"])
+            c.up("clusterd_compute_1")
 
 
 class RestartRedpandaDebezium(MzcomposeAction):
@@ -125,7 +130,7 @@ class RestartRedpandaDebezium(MzcomposeAction):
 
         for service in ["redpanda", "debezium"]:
             c.kill(service)
-            c.start_and_wait_for_tcp(services=[service])
+            c.up(service)
 
 
 class RestartCockroach(MzcomposeAction):
@@ -142,7 +147,6 @@ class RestartSourcePostgres(MzcomposeAction):
 
         c.kill("postgres")
         c.up("postgres")
-        c.wait_for_postgres(service="postgres")
 
 
 class KillClusterdStorage(MzcomposeAction):

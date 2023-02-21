@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::future::Future;
@@ -15,13 +15,12 @@ use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use ::http::Uri;
 use anyhow::{anyhow, bail, Context};
 use async_trait::async_trait;
+use aws_credential_types::provider::ProvideCredentials;
 use aws_sdk_kinesis::Client as KinesisClient;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sqs::Client as SqsClient;
-use aws_types::credentials::ProvideCredentials;
 use aws_types::SdkConfig;
 use futures::future::FutureExt;
 use itertools::Itertools;
@@ -148,7 +147,7 @@ pub struct Config {
 pub struct State {
     // === Testdrive state. ===
     arg_vars: BTreeMap<String, String>,
-    cmd_vars: HashMap<String, String>,
+    cmd_vars: BTreeMap<String, String>,
     seed: u32,
     temp_path: PathBuf,
     _tempfile: Option<tempfile::TempDir>,
@@ -178,7 +177,7 @@ pub struct State {
     kafka_config: ClientConfig,
     kafka_default_partitions: usize,
     kafka_producer: rdkafka::producer::FutureProducer<MzClientContext>,
-    kafka_topics: HashMap<String, usize>,
+    kafka_topics: BTreeMap<String, usize>,
 
     // === AWS state. ===
     aws_account: String,
@@ -191,10 +190,10 @@ pub struct State {
     sqs_queues_created: BTreeSet<String>,
 
     // === Database driver state. ===
-    mysql_clients: HashMap<String, mysql_async::Conn>,
-    postgres_clients: HashMap<String, tokio_postgres::Client>,
+    mysql_clients: BTreeMap<String, mysql_async::Conn>,
+    postgres_clients: BTreeMap<String, tokio_postgres::Client>,
     sql_server_clients:
-        HashMap<String, tiberius::Client<tokio_util::compat::Compat<tokio::net::TcpStream>>>,
+        BTreeMap<String, tiberius::Client<tokio_util::compat::Compat<tokio::net::TcpStream>>>,
 }
 
 impl State {
@@ -223,75 +222,7 @@ impl State {
         self.cmd_vars
             .insert("testdrive.aws-region".into(), self.aws_region().into());
         self.cmd_vars
-            .insert("testdrive.aws-endpoint".into(), self.aws_endpoint());
-        self.cmd_vars
-            .insert("testdrive.aws-account".into(), self.aws_account.clone());
-        {
-            let aws_credentials = self
-                .aws_config
-                .credentials_provider()
-                .ok_or_else(|| anyhow!("no AWS credentials provider configured"))?
-                .provide_credentials()
-                .await
-                .context("fetching AWS credentials")?;
-            self.cmd_vars.insert(
-                "testdrive.aws-access-key-id".into(),
-                aws_credentials.access_key_id().to_owned(),
-            );
-            self.cmd_vars.insert(
-                "testdrive.aws-secret-access-key".into(),
-                aws_credentials.secret_access_key().to_owned(),
-            );
-            self.cmd_vars.insert(
-                "testdrive.aws-token".into(),
-                aws_credentials
-                    .session_token()
-                    .map(|token| token.to_owned())
-                    .unwrap_or_else(String::new),
-            );
-        }
-        self.cmd_vars.insert(
-            "testdrive.materialize-sql-addr".into(),
-            self.materialize_sql_addr.clone(),
-        );
-        self.cmd_vars.insert(
-            "testdrive.materialize-internal-sql-addr".into(),
-            self.materialize_internal_sql_addr.clone(),
-        );
-        self.cmd_vars.insert(
-            "testdrive.materialize-user".into(),
-            self.materialize_user.clone(),
-        );
-
-        for (key, value) in env::vars() {
-            self.cmd_vars.insert(format!("env.{}", key), value);
-        }
-
-        self.cmd_vars
-            .insert("testdrive.kafka-addr".into(), self.kafka_addr.clone());
-        self.cmd_vars.insert(
-            "testdrive.kafka-addr-resolved".into(),
-            self.kafka_addr
-                .to_socket_addrs()
-                .ok()
-                .and_then(|mut addrs| addrs.next())
-                .map(|addr| addr.to_string())
-                .unwrap_or_else(|| "#RESOLUTION-FAILURE#".into()),
-        );
-        self.cmd_vars.insert(
-            "testdrive.schema-registry-url".into(),
-            self.schema_registry_url.to_string(),
-        );
-        self.cmd_vars
-            .insert("testdrive.seed".into(), self.seed.to_string());
-        self.cmd_vars.insert(
-            "testdrive.temp-dir".into(),
-            self.temp_path.display().to_string(),
-        );
-        self.cmd_vars
-            .insert("testdrive.aws-region".into(), self.aws_region().into());
-        self.cmd_vars
-            .insert("testdrive.aws-endpoint".into(), self.aws_endpoint());
+            .insert("testdrive.aws-endpoint".into(), self.aws_endpoint().into());
         self.cmd_vars
             .insert("testdrive.aws-account".into(), self.aws_account.clone());
         {
@@ -363,22 +294,8 @@ impl State {
         }
     }
 
-    pub fn aws_endpoint(&self) -> String {
-        match (
-            self.aws_config.endpoint_resolver(),
-            self.aws_config.region(),
-        ) {
-            (Some(endpoint_resolver), Some(region)) => {
-                let endpoint = match endpoint_resolver.resolve_endpoint(region) {
-                    Ok(endpoint) => endpoint,
-                    Err(_) => return String::new(),
-                };
-                let mut uri = Uri::builder().build().unwrap();
-                endpoint.set_endpoint(&mut uri, None).unwrap();
-                uri.to_string()
-            }
-            _ => String::new(),
-        }
+    pub fn aws_endpoint(&self) -> &str {
+        self.aws_config.endpoint_url().unwrap_or("")
     }
 
     pub fn aws_region(&self) -> &str {
@@ -404,7 +321,7 @@ impl State {
         {
             let db_name: String = row.get(0);
             let query = format!("DROP DATABASE {}", db_name);
-            sql::print_query(&query);
+            sql::print_query(&query, None);
             self.pgclient.batch_execute(&query).await.context(format!(
                 "resetting materialize state: DROP DATABASE {}",
                 db_name,
@@ -425,7 +342,7 @@ impl State {
                     continue;
                 }
                 let query = format!("DROP ROLE {}", role_name);
-                sql::print_query(&query);
+                sql::print_query(&query, None);
                 self.pgclient.batch_execute(&query).await.context(format!(
                     "resetting materialize state: DROP ROLE {}",
                     role_name,
@@ -659,10 +576,10 @@ impl Run for PosCommand {
             Command::Builtin(builtin) => Some(builtin.name.clone()),
             _ => None,
         };
-        let subst = |msg: &str, vars: &HashMap<String, String>| {
+        let subst = |msg: &str, vars: &BTreeMap<String, String>| {
             substitute_vars(msg, vars, &ignore_prefix, false).map_err(wrap_err)
         };
-        let subst_re = |msg: &str, vars: &HashMap<String, String>| {
+        let subst_re = |msg: &str, vars: &BTreeMap<String, String>| {
             substitute_vars(msg, vars, &ignore_prefix, true).map_err(wrap_err)
         };
 
@@ -766,7 +683,7 @@ impl Run for PosCommand {
 /// Substituted `${}`-delimited variables from `vars` into `msg`
 fn substitute_vars(
     msg: &str,
-    vars: &HashMap<String, String>,
+    vars: &BTreeMap<String, String>,
     ignore_prefix: &Option<String>,
     regex_escape: bool,
 ) -> Result<String, anyhow::Error> {
@@ -941,7 +858,7 @@ pub async fn create_state(
             .create_with_context(MzClientContext)
             .with_context(|| format!("opening Kafka producer connection: {}", config.kafka_addr))?;
 
-        let topics = HashMap::new();
+        let topics = BTreeMap::new();
 
         (
             config.kafka_addr.to_owned(),
@@ -954,13 +871,13 @@ pub async fn create_state(
     };
 
     let kinesis_client = aws_sdk_kinesis::Client::new(&config.aws_config);
-    let s3_client = aws_sdk_s3::Client::new(&config.aws_config);
+    let s3_client = mz_aws_s3_util::new_client(&config.aws_config);
     let sqs_client = aws_sdk_sqs::Client::new(&config.aws_config);
 
     let mut state = State {
         // === Testdrive state. ===
         arg_vars: config.arg_vars.clone(),
-        cmd_vars: HashMap::new(),
+        cmd_vars: BTreeMap::new(),
         seed,
         temp_path,
         _tempfile,
@@ -1003,9 +920,9 @@ pub async fn create_state(
         sqs_queues_created: BTreeSet::new(),
 
         // === Database driver state. ===
-        mysql_clients: HashMap::new(),
-        postgres_clients: HashMap::new(),
-        sql_server_clients: HashMap::new(),
+        mysql_clients: BTreeMap::new(),
+        postgres_clients: BTreeMap::new(),
+        sql_server_clients: BTreeMap::new(),
     };
     state.initialize_cmd_vars().await?;
     Ok((state, pgconn_task))

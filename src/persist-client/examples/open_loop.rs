@@ -28,7 +28,8 @@ use tracing::{debug, error, info, info_span, trace, Instrument};
 
 use mz_ore::cast::CastFrom;
 use mz_persist::workload::DataGenerator;
-use mz_persist_client::{PersistConfig, PersistLocation, ShardId};
+use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::{PersistLocation, ShardId};
 
 use crate::open_loop::api::{BenchmarkReader, BenchmarkWriter};
 use crate::BUILD_INFO;
@@ -106,7 +107,7 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
     {
         let metrics_registry = metrics_registry.clone();
         info!(
-            "serving internal HTTP server on {}",
+            "serving internal HTTP server on http://{}/metrics",
             args.internal_http_listen_addr
         );
         mz_ore::task::spawn(
@@ -472,7 +473,10 @@ mod api {
 }
 
 mod raw_persist_benchmark {
+    use std::sync::Arc;
+
     use async_trait::async_trait;
+    use mz_persist_types::codec_impls::VecU8Schema;
     use timely::progress::Antichain;
     use tokio::sync::mpsc::Sender;
 
@@ -508,7 +512,12 @@ mod raw_persist_benchmark {
         let mut readers = vec![];
         for _ in 0..num_readers {
             let (_writer, reader) = persist
-                .open::<Vec<u8>, Vec<u8>, u64, i64>(id, "open loop")
+                .open::<Vec<u8>, Vec<u8>, u64, i64>(
+                    id,
+                    "open loop",
+                    Arc::new(VecU8Schema),
+                    Arc::new(VecU8Schema),
+                )
                 .await?;
 
             let listen = reader
@@ -538,7 +547,12 @@ mod raw_persist_benchmark {
             let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel(10);
 
             let mut write = persist
-                .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(id, "open loop")
+                .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(
+                    id,
+                    "open loop",
+                    Arc::new(VecU8Schema),
+                    Arc::new(VecU8Schema),
+                )
                 .await?;
 
             // Intentionally create the span outside the task to set the parent.
@@ -582,7 +596,12 @@ mod raw_persist_benchmark {
             handles.push(handle);
 
             let mut write = persist
-                .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(id, "open loop")
+                .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(
+                    id,
+                    "open loop",
+                    Arc::new(VecU8Schema),
+                    Arc::new(VecU8Schema),
+                )
                 .await?;
 
             // Intentionally create the span outside the task to set the parent.

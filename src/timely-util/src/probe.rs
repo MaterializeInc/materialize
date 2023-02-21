@@ -18,39 +18,38 @@ use std::convert::Infallible;
 use std::rc::Rc;
 
 use timely::dataflow::operators::{CapabilitySet, InspectCore};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::Timestamp;
-use timely::{Data, PartialOrder};
+use timely::{Container, PartialOrder};
 use tokio::sync::Notify;
 
 use crate::builder_async::OperatorBuilder as AsyncOperatorBuilder;
 
 /// Monitors progress at a `Stream`.
-pub trait ProbeNotify<G: Scope, D: Data> {
-    /// Constructs a progress probe which indicates which timestamps have elapsed at the operator.
-    fn probe_notify(&self) -> Handle<G::Timestamp>;
-
-    /// Inserts a progress probe in a stream.
-    fn probe_notify_with(&self, handle: &mut Handle<G::Timestamp>) -> Stream<G, D>;
+pub trait ProbeNotify<G: Scope> {
+    /// Inserts a collection of progress probe in a stream.
+    fn probe_notify_with(&self, handles: Vec<Handle<G::Timestamp>>) -> Self;
 }
 
-impl<G: Scope, D: Data> ProbeNotify<G, D> for Stream<G, D> {
-    fn probe_notify(&self) -> Handle<G::Timestamp> {
-        let mut handle = Handle::default();
-        self.probe_notify_with(&mut handle);
-        handle
-    }
-
-    fn probe_notify_with(&self, handle: &mut Handle<G::Timestamp>) -> Stream<G, D> {
-        let mut handle = handle.clone();
+impl<G: Scope, C: Container> ProbeNotify<G> for StreamCore<G, C> {
+    fn probe_notify_with(&self, mut handles: Vec<Handle<G::Timestamp>>) -> Self {
+        if handles.is_empty() {
+            return self.clone();
+        }
         // We need to reset the handle's frontier from the empty one to the minimal one, to enable
         // downgrading.
-        handle.update_frontier(&[Timestamp::minimum()]);
+        for handle in &mut handles {
+            handle.update_frontier(&[Timestamp::minimum()]);
+        }
 
+        // TODO: This operator observes but doesn't consume data.
+        // Instead, it should only observe progress statements.
         self.inspect_container(move |update| {
             if let Err(frontier) = update {
-                handle.update_frontier(frontier);
+                for handle in &mut handles {
+                    handle.update_frontier(frontier);
+                }
             }
         })
     }

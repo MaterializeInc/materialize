@@ -1,0 +1,153 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for replica-targeted queries (SELECTs and SUBSCRIBEs).
+
+mode cockroach
+
+statement ok
+CREATE TABLE test (a TEXT, b TEXT)
+
+statement ok
+INSERT INTO test VALUES('a', 'b')
+
+statement ok
+CREATE CLUSTER test
+  REPLICAS (
+    replica_a (SIZE '1', INTROSPECTION INTERVAL '50 milliseconds'),
+    replica_b (SIZE '2', INTROSPECTION INTERVAL '50 milliseconds')
+  )
+
+statement ok
+SET cluster = test
+
+statement ok
+SET cluster_replica = replica_a
+
+# Verify that simple queries work.
+
+query TT
+SELECT * FROM test
+----
+a b
+
+simple
+DECLARE s CURSOR FOR SUBSCRIBE test;
+FETCH 0 s;
+----
+COMPLETE 0
+COMPLETE 0
+
+# Verify that queries on introspection sources work.
+
+statement ok
+SELECT * FROM mz_internal.mz_compute_exports
+
+simple
+DECLARE s CURSOR FOR SUBSCRIBE mz_internal.mz_compute_exports;
+FETCH 0 s;
+----
+COMPLETE 0
+COMPLETE 0
+
+# Verify that targeting an unknown replica fails.
+
+statement ok
+SET cluster_replica = unknown
+
+query error cluster replica 'test.unknown' does not exist
+SELECT * FROM test
+
+# Verify that untargeted introspection queries are disallowed.
+
+statement ok
+RESET cluster_replica
+
+query error log source reads must target a replica
+SELECT * FROM mz_internal.mz_compute_exports
+
+statement error log source reads must target a replica
+SUBSCRIBE mz_internal.mz_compute_exports
+
+# Verify that the logic does not apply to persisted logs
+
+statement ok
+SELECT * FROM mz_internal.mz_compute_exports_1
+
+simple
+DECLARE s CURSOR FOR SUBSCRIBE mz_internal.mz_compute_exports_1;
+FETCH 0 s;
+----
+COMPLETE 0
+COMPLETE 0
+
+# Verify that untargeted introspection queries on unreplicated clusters are
+# allowed.
+
+statement ok
+DROP CLUSTER REPLICA test.replica_b;
+
+statement ok
+SELECT * FROM mz_internal.mz_compute_exports
+
+simple
+DECLARE s CURSOR FOR SUBSCRIBE mz_internal.mz_compute_exports;
+FETCH 0 s;
+----
+COMPLETE 0
+COMPLETE 0
+
+# Verify that querying introspection data is disallowed on replicas with
+# introspection disabled, but allowed on introspection-enabled replicas
+# in the same cluster.
+
+statement ok
+DROP CLUSTER test CASCADE
+
+statement ok
+CREATE CLUSTER test
+  REPLICAS (
+    replica_a (SIZE '1', INTROSPECTION INTERVAL 0),
+    replica_b (SIZE '1', INTROSPECTION INTERVAL 1)
+  )
+
+statement ok
+SET cluster_replica = replica_a
+
+query error cannot read log sources of replica with disabled introspection
+SELECT * FROM mz_internal.mz_compute_exports
+
+statement error cannot read log sources of replica with disabled introspection
+SUBSCRIBE mz_internal.mz_compute_exports
+
+statement ok
+SET cluster_replica = replica_b
+
+statement ok
+SELECT * FROM mz_internal.mz_compute_exports
+
+simple
+DECLARE s CURSOR FOR SUBSCRIBE mz_internal.mz_compute_exports;
+FETCH 0 s;
+----
+COMPLETE 0
+COMPLETE 0
+
+# A query that has introspection views in its time domain but does not
+# specifically reference those introspection views should work even on a replica
+# with introspection disabled. This query would crash in v0.27.0-alpha.24.
+query I
+SELECT 1 FROM mz_sources LIMIT 1
+----
+1
+
+# Clean up.
+
+statement ok
+DROP CLUSTER test CASCADE

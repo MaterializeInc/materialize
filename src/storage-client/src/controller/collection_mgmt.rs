@@ -10,7 +10,7 @@
 //! A tokio task (and support machinery) for maintaining storage-managed
 //! collections.
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
@@ -32,7 +32,7 @@ use super::persist_handles;
 pub struct CollectionManager {
     // TODO(guswynn): this should be a sync mutex, as it protects
     // normal data.
-    collections: Arc<Mutex<HashSet<GlobalId>>>,
+    collections: Arc<Mutex<BTreeSet<GlobalId>>>,
     tx: mpsc::Sender<(GlobalId, Vec<(Row, Diff)>)>,
 }
 
@@ -52,7 +52,7 @@ impl CollectionManager {
         write_handle: persist_handles::PersistWriteWorker<T>,
         now: NowFn,
     ) -> CollectionManager {
-        let collections = Arc::new(Mutex::new(HashSet::new()));
+        let collections = Arc::new(Mutex::new(BTreeSet::new()));
         let collections_outer = Arc::clone(&collections);
         let (tx, mut rx) = mpsc::channel::<(GlobalId, Vec<(Row, Diff)>)>(1);
 
@@ -134,6 +134,8 @@ impl CollectionManager {
     ///   `id`.
     /// - If the collection closed.
     pub(super) async fn append_to_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
-        self.tx.send((id, updates)).await.expect("rx hung up");
+        if !updates.is_empty() {
+            self.tx.send((id, updates)).await.expect("rx hung up");
+        }
     }
 }

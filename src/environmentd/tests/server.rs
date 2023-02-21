@@ -71,23 +71,28 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
 //! Integration tests for Materialize server.
 
 use std::fmt::Write;
-use std::thread;
 use std::time::Duration;
+use std::{iter, thread};
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
+use http::StatusCode;
+use itertools::Itertools;
 use reqwest::blocking::Client;
 use reqwest::Url;
+use tokio_postgres::error::SqlState;
 use tracing::info;
-use tungstenite::Message;
+use tungstenite::error::ProtocolError;
+use tungstenite::{Error, Message};
 
-use mz_environmentd::{WebSocketAuth, WebSocketResponse};
+use mz_environmentd::WebSocketResponse;
 use mz_ore::retry::Retry;
 use mz_pgrepr::UInt8;
 
@@ -255,30 +260,7 @@ fn test_http_sql() {
         ))
         .unwrap();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
-
-        ws.write_message(Message::Text(
-            serde_json::to_string(&WebSocketAuth::Basic {
-                user: "materialize".into(),
-                password: "".into(),
-            })
-            .unwrap(),
-        ))
-        .unwrap();
-        // Wait for initial ready response.
-        loop {
-            let resp = ws.read_message().unwrap();
-            match resp {
-                Message::Text(msg) => {
-                    let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
-                    match msg {
-                        WebSocketResponse::ReadyForQuery(_) => break,
-                        _ => {}
-                    }
-                }
-                Message::Ping(_) => continue,
-                _ => panic!("unexpected response: {:?}", resp),
-            }
-        }
+        util::auth_with_ws(&mut ws);
 
         f.run(|tc| {
             let msg = match tc.directive.as_str() {
@@ -623,7 +605,7 @@ fn test_storage_usage_updates_between_restarts() {
 #[test]
 fn test_storage_usage_doesnt_update_between_restarts() {
     let data_dir = tempfile::tempdir().unwrap();
-    let storage_usage_collection_interval = Duration::from_secs(60);
+    let storage_usage_collection_interval = Duration::from_secs(10);
     let config = util::Config::default()
         .with_storage_usage_collection_interval(storage_usage_collection_interval)
         .data_directory(data_dir.path());
@@ -645,10 +627,12 @@ fn test_storage_usage_doesnt_update_between_restarts() {
         }).unwrap()
     };
 
-    std::thread::sleep(Duration::from_secs(2));
-
     // Another storage usage collection should not be scheduled immediately.
     {
+        // Give plenty of time so we don't accidentally do another collection if this test is slow.
+        let storage_usage_collection_interval = Duration::from_secs(60 * 10);
+        let config =
+            config.with_storage_usage_collection_interval(storage_usage_collection_interval);
         let server = util::start_server(config).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -686,6 +670,80 @@ fn test_storage_usage_collection_interval_timestamps() {
 }
 
 #[test]
+fn test_old_storage_usage_records_are_reaped_on_restart() {
+    mz_ore::test::init_logging();
+
+    let data_dir = tempfile::tempdir().unwrap();
+    let collection_interval = Duration::from_secs(1);
+    let retention_period = Duration::from_millis(1100);
+    let config = util::Config::default()
+        .with_storage_usage_collection_interval(collection_interval)
+        .with_storage_usage_retention_period(retention_period)
+        .data_directory(data_dir.path());
+
+    {
+        let server = util::start_server(config.clone()).unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        // Create a table with no data, which should have some overhead and therefore some storage usage
+        client
+            .batch_execute("CREATE TABLE usage_test (a int)")
+            .unwrap();
+
+        // Wait for initial storage usage collection, to be sure records are present.
+        let initial_timestamp = Retry::default().max_duration(Duration::from_secs(5)).retry(|_| {
+            client
+                    .query_one(
+                        "SELECT EXTRACT(EPOCH FROM MAX(collection_timestamp))::integer FROM mz_internal.mz_storage_usage_by_shard;",
+                        &[],
+                    )
+                    .map_err(|e| e.to_string()).unwrap()
+                    .try_get::<_, i32>(0)
+                    .map_err(|e| e.to_string())
+        }).expect("Could not fetch initial timestamp");
+
+        let initial_server_usage_records = client
+            .query_one(
+                "SELECT COUNT(*)::integer AS number
+                     FROM mz_internal.mz_storage_usage_by_shard",
+                &[],
+            )
+            .unwrap()
+            .try_get::<_, i32>(0)
+            .expect("Could not get initial count of records");
+
+        info!(%initial_timestamp, %initial_server_usage_records);
+        assert!(
+            initial_server_usage_records >= 1,
+            "No initial server usage records!"
+        );
+    };
+
+    // Wait, start a new server, and assert that the previous storage records have been reaped
+    std::thread::sleep(retention_period);
+
+    {
+        let server = util::start_server(config).unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+
+        let subsequent_server_usage_records = client
+            .query_one(
+                "SELECT COUNT(*)::integer AS number
+                     FROM mz_internal.mz_storage_usage_by_shard",
+                &[],
+            )
+            .unwrap()
+            .try_get::<_, i32>(0)
+            .expect("Could not get subsequent count of records");
+
+        info!(%subsequent_server_usage_records);
+        assert_eq!(
+            subsequent_server_usage_records, 0,
+            "Records were not reaped!"
+        );
+    };
+}
+
+#[test]
 fn test_default_cluster_sizes() {
     let config = util::Config::default()
         .with_builtin_cluster_replica_size("1".to_string())
@@ -714,4 +772,142 @@ fn test_default_cluster_sizes() {
         .unwrap()
         .get(0);
     assert_eq!(builtin_size, "2");
+}
+
+#[test]
+fn test_max_request_size() {
+    let statement = "SELECT $1::text";
+    let statement_size = statement.bytes().count();
+    let server = util::start_server(util::Config::default()).unwrap();
+
+    // pgwire
+    {
+        let param_size = mz_pgwire::MAX_REQUEST_SIZE - statement_size + 1;
+        let param = std::iter::repeat("1").take(param_size).join("");
+        let mut client = server.connect(postgres::NoTls).unwrap();
+
+        // The specific error isn't forwarded to the client, the connection is just closed.
+        assert!(client.query(statement, &[&param]).is_err());
+        assert!(client.is_valid(Duration::from_secs(2)).is_err());
+    }
+
+    // http
+    {
+        let param_size = mz_environmentd::http::MAX_REQUEST_SIZE - statement_size + 1;
+        let param = std::iter::repeat("1").take(param_size).join("");
+        let http_url = Url::parse(&format!(
+            "http://{}/api/sql",
+            server.inner.http_local_addr()
+        ))
+        .unwrap();
+        let json = format!("{{\"queries\":[{{\"query\":\"{statement}\",\"params\":[{param}]}}]}}");
+        let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let res = Client::new().post(http_url).json(&json).send().unwrap();
+        assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    // ws
+    {
+        let param_size = mz_environmentd::http::MAX_REQUEST_SIZE - statement_size + 1;
+        let param = std::iter::repeat("1").take(param_size).join("");
+        let ws_url = Url::parse(&format!(
+            "ws://{}/api/experimental/sql",
+            server.inner.http_local_addr()
+        ))
+        .unwrap();
+        let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
+        util::auth_with_ws(&mut ws);
+        let json =
+            format!("{{\"queries\":[{{\"query\":\"{statement}\",\"params\":[\"{param}\"]}}]}}");
+        let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+        ws.write_message(Message::Text(json.to_string())).unwrap();
+
+        // The specific error isn't forwarded to the client, the connection is just closed.
+        let err = ws.read_message().unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Protocol(ProtocolError::ResetWithoutClosingHandshake)
+        ));
+    }
+}
+
+#[test]
+fn test_max_statement_batch_size() {
+    let statement = "SELECT 1;";
+    let statement_size = statement.bytes().count();
+    let max_statement_size = mz_sql_parser::parser::MAX_STATEMENT_BATCH_SIZE;
+    let max_statement_count = max_statement_size / statement_size + 1;
+    let statements = iter::repeat(statement).take(max_statement_count).join("");
+    let server = util::start_server(util::Config::default()).unwrap();
+
+    // pgwire
+    {
+        let mut client = server.connect(postgres::NoTls).unwrap();
+
+        let err = client
+            .batch_execute(&statements)
+            .expect_err("statement should be too large")
+            .unwrap_db_error();
+        assert_eq!(&SqlState::PROGRAM_LIMIT_EXCEEDED, err.code());
+        assert!(
+            err.message().contains("statement batch size cannot exceed"),
+            "error should indicate that the statement was too large: {}",
+            err.message()
+        );
+    }
+
+    // http
+    {
+        let http_url = Url::parse(&format!(
+            "http://{}/api/sql",
+            server.inner.http_local_addr()
+        ))
+        .unwrap();
+        let json = format!("{{\"query\":\"{statements}\"}}");
+        let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        let res = Client::new().post(http_url).json(&json).send().unwrap();
+        assert!(
+            res.status().is_client_error(),
+            "statement should result in an error: {res:?}"
+        );
+        let text = res.text().unwrap();
+        assert!(
+            text.contains("statement batch size cannot exceed"),
+            "error should indicate that the statement was too large: {}",
+            text
+        );
+    }
+
+    // ws
+    {
+        let ws_url = Url::parse(&format!(
+            "ws://{}/api/experimental/sql",
+            server.inner.http_local_addr()
+        ))
+        .unwrap();
+        let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
+        util::auth_with_ws(&mut ws);
+        let json = format!("{{\"query\":\"{statements}\"}}");
+        let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+        ws.write_message(Message::Text(json.to_string())).unwrap();
+
+        let msg = ws.read_message().unwrap();
+        let msg = msg.into_text().expect("response should be text");
+        let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
+        match msg {
+            WebSocketResponse::Error(err) => assert!(
+                err.contains("statement batch size cannot exceed"),
+                "error should indicate that the statement was too large: {}",
+                err
+            ),
+            msg @ WebSocketResponse::ReadyForQuery(_)
+            | msg @ WebSocketResponse::Notice(_)
+            | msg @ WebSocketResponse::Rows(_)
+            | msg @ WebSocketResponse::Row(_)
+            | msg @ WebSocketResponse::CommandComplete(_) => {
+                panic!("response should be error: {msg:?}")
+            }
+        }
+    }
 }

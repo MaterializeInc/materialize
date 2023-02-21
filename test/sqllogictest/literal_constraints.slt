@@ -162,7 +162,7 @@ Explained Query:
               arrangements[0]={ key=[], permutation=id, thinning=(#0) }
           Constant
             - ()
-  Where
+  With
     cte l0 =
       Reduce::Accumulable
         simple_aggrs[0]=(0, 0, count(*))

@@ -71,13 +71,14 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
 //! Generated protobuf code and companion impls.
 
 use proptest::prelude::Strategy;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::{char::CharTryFromError, num::TryFromIntError};
 use uuid::Uuid;
 
@@ -290,25 +291,6 @@ pub trait RustType<Proto>: Sized {
 pub trait ProtoMapEntry<K, V> {
     fn from_rust<'a>(entry: (&'a K, &'a V)) -> Self;
     fn into_rust(self) -> Result<(K, V), TryFromProtoError>;
-}
-
-/// Blanket implementation for `HashMap<K, V>` where there exists `T` such
-/// that `T` implements `ProtoMapEntry<K, V>`.
-impl<K, V, T> RustType<Vec<T>> for HashMap<K, V>
-where
-    K: std::cmp::Eq + std::hash::Hash,
-    T: ProtoMapEntry<K, V>,
-{
-    fn into_proto(&self) -> Vec<T> {
-        self.iter().map(T::from_rust).collect()
-    }
-
-    fn from_proto(proto: Vec<T>) -> Result<Self, TryFromProtoError> {
-        proto
-            .into_iter()
-            .map(T::into_rust)
-            .collect::<Result<HashMap<_, _>, _>>()
-    }
 }
 
 macro_rules! rust_type_id(

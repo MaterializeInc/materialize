@@ -26,12 +26,14 @@ tests.
 Field | Use
 ------|-----
 _src_name_  | The name for the source.
+**IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this source. If not specified, the `SIZE` option must be specified.
 **COUNTER** | Use the [counter](#counter) load generator.
 **AUCTION** | Use the [auction](#auction) load generator.
 **TPCH**    | Use the [tpch](#tpch) load generator.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists.
 **TICK INTERVAL**  | The interval at which the next datum should be emitted. Defaults to one second.
 **SCALE FACTOR**   | The scale factor for the `TPCH` generator. Defaults to `0.01` (~ 10MB).
+**MAX CARDINALITY** | Valid for the `COUNTER` generator. Causes the generator to delete old values to keep the collection at most a given size. Defaults to unlimited.
 **FOR ALL TABLES** | Creates subsources for all tables in the load generator.
 **FOR TABLES (** _table_list_ **)** | Creates subsources for specific tables in the load generator.
 
@@ -39,7 +41,7 @@ _src_name_  | The name for the source.
 
 Field                                | Value     | Description
 -------------------------------------|-----------|-------------------------------------
-`SIZE`                               | `text`    | **Required.** The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`, `xlarge`.
+`SIZE`                               | `text`    | The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`, `xlarge`. Required if the `IN CLUSTER` option is not specified.
 
 ## Description
 
@@ -254,6 +256,7 @@ To provision a specific amount of CPU and memory to a source on creation, use th
 ```sql
 CREATE SOURCE auction_load
   FROM LOAD GENERATOR AUCTION
+  FOR ALL TABLES
   WITH (SIZE = '3xsmall');
 ```
 

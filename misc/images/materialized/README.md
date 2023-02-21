@@ -3,15 +3,15 @@
 This directory builds an all-in-one Docker image of Materialize for our internal
 development and testing.
 
-> ⚠️ **WARNING** ⚠️
+> **Warning**
 >
-> This Docker image is not officially supported by Materialize. We do not
-> offer support for this Docker image. Do not run production deployments using
-> this Docker image.
-
-> ⚠️ **WARNING** ⚠️
+> You **should not** run production deployments using this Docker image.
 >
-> The performance characteristics of this Docker image are not representative
+> This Docker image is **not** supported by Materialize.
+>
+> This Docker image does **not** support version upgrades.
+>
+> The performance characteristics of this Docker image are **not** representative
 > of the performance characteristics of our hosted offering. This image bundles
 > several services into the same container, while in our hosted offering we
 > run these services scaled across many machines.

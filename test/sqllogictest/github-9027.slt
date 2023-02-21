@@ -109,7 +109,7 @@ Explained Query:
             Get::Collection materialize.public.orders
               filter=((#0) IS NOT NULL)
               raw=true
-  Where
+  With
     cte l0 =
       Join::Linear
         linear_stage[0]

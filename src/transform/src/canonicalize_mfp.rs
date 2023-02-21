@@ -47,7 +47,7 @@ impl crate::Transform for CanonicalizeMfp {
         args: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         let result = self.action(relation, args.indexes);
-        mz_repr::explain_new::trace_plan(&*relation);
+        mz_repr::explain::trace_plan(&*relation);
         result
     }
 }
@@ -75,7 +75,7 @@ impl CanonicalizeMfp {
             }
             if !filter.is_empty() {
                 *relation = relation.take_dangerous().filter(filter);
-                crate::fusion::filter::Filter.action(relation);
+                crate::fusion::filter::Filter::action(relation);
             }
             if project.len() != total_arity || !project.iter().enumerate().all(|(i, o)| i == *o) {
                 *relation = relation.take_dangerous().project(project);

@@ -10,19 +10,19 @@
 //! Logic for processing [`Coordinator`] messages. The [`Coordinator`] receives
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
-use anyhow::anyhow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
+use anyhow::anyhow;
 use chrono::DurationRound;
+use mz_persist_client::usage::ShardsUsage;
 use rand::{rngs, Rng, SeedableRng};
 use tracing::{event, warn, Level};
 
-use mz_compute_client::controller::ComputeInstanceEvent;
+use mz_controller::clusters::ClusterEvent;
 use mz_controller::ControllerResponse;
 use mz_ore::now::EpochMillis;
 use mz_ore::task;
-use mz_persist_client::ShardId;
 use mz_sql::ast::Statement;
 use mz_sql::plan::{Plan, SendDiffsPlan};
 use mz_storage_client::controller::CollectionMetadata;
@@ -43,7 +43,12 @@ impl Coordinator {
         match msg {
             Message::Command(cmd) => self.message_command(cmd).await,
             Message::ControllerReady => {
-                if let Some(m) = self.controller.process().await.unwrap() {
+                if let Some(m) = self
+                    .controller
+                    .process()
+                    .await
+                    .expect("`process` never returns an error")
+                {
                     self.message_controller(m).await
                 }
             }
@@ -65,9 +70,7 @@ impl Coordinator {
             Message::AdvanceTimelines => {
                 self.advance_timelines().await;
             }
-            Message::ComputeInstanceStatus(status) => {
-                self.message_compute_instance_status(status).await
-            }
+            Message::ClusterEvent(event) => self.message_cluster_event(event).await,
             // Processing this message DOES NOT send a response to the client;
             // in any situation where you use it, you must also have a code
             // path that responds to the client (e.g. reporting an error).
@@ -82,9 +85,6 @@ impl Coordinator {
             }
             Message::StorageUsageUpdate(sizes) => {
                 self.storage_usage_update(sizes).await;
-            }
-            Message::Consolidate(collections) => {
-                self.consolidate(&collections).await;
             }
             Message::RealTimeRecencyTimestamp {
                 conn_id,
@@ -102,19 +102,12 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn consolidate(&mut self, collections: &[mz_stash::Id]) {
-        if let Err(err) = self.catalog.consolidate(collections).await {
-            warn!("consolidation error: {:?}", err);
-        }
-    }
-
-    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn storage_usage_fetch(&mut self) {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let client = self.storage_usage_client.clone();
 
         // Record the currently live shards.
-        let live_shards: HashSet<_> = self
+        let live_shards: BTreeSet<_> = self
             .controller
             .storage
             .collections()
@@ -134,6 +127,7 @@ impl Coordinator {
                     // return it below, so that its usage is recorded in the
                     // `mz_storage_usage_by_shard` table.
                     persist_location: _,
+                    relation_desc: _,
                 } = &collection.collection_metadata;
                 [*data_shard, *remap_shard].into_iter().chain(*status_shard)
             })
@@ -148,17 +142,16 @@ impl Coordinator {
         // requires a slow scan of the underlying storage engine.
         task::spawn(|| "storage_usage_fetch", async move {
             let collection_metric_timer = collection_metric.start_timer();
-            let mut shard_sizes = client.shard_sizes().await;
+            let mut shard_sizes = client.shards_usage().await;
 
             // Don't record usage for shards that are no longer live.
             // Technically the storage is in use, but we never free it, and
             // we don't want to bill the customer for it.
             //
             // See: https://github.com/MaterializeInc/materialize/issues/8185
-            shard_sizes.retain(|shard_id, _| match shard_id {
-                None => true,
-                Some(shard_id) => live_shards.contains(shard_id),
-            });
+            shard_sizes
+                .by_shard
+                .retain(|shard_id, _| live_shards.contains(shard_id));
             collection_metric_timer.observe_duration();
 
             // It is not an error for shard sizes to become ready after
@@ -170,7 +163,7 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn storage_usage_update(&mut self, shard_sizes: HashMap<Option<ShardId>, u64>) {
+    async fn storage_usage_update(&mut self, shards_usage: ShardsUsage) {
         // Similar to audit events, use the oracle ts so this is guaranteed to
         // increase. This is intentionally the timestamp of when collection
         // finished, not when it started, so that we don't write data with a
@@ -178,10 +171,17 @@ impl Coordinator {
         let collection_timestamp: EpochMillis = self.get_local_write_ts().await.timestamp.into();
 
         let mut ops = vec![];
-        for (shard_id, size_bytes) in shard_sizes {
+        for (shard_id, shard_usage) in shards_usage.by_shard {
             ops.push(catalog::Op::UpdateStorageUsage {
-                shard_id: shard_id.map(|shard_id| shard_id.to_string()),
-                size_bytes,
+                shard_id: Some(shard_id.to_string()),
+                size_bytes: shard_usage.referenced_bytes(),
+                collection_timestamp,
+            });
+        }
+        if shards_usage.unattributable_bytes > 0 {
+            ops.push(catalog::Op::UpdateStorageUsage {
+                shard_id: None,
+                size_bytes: shards_usage.unattributable_bytes,
                 collection_timestamp,
             });
         }
@@ -259,14 +259,10 @@ impl Coordinator {
                 // We use an `if let` here because the peek could have been canceled already.
                 // We can also potentially receive multiple `Complete` responses, followed by
                 // a `Dropped` response.
-                if let Some(pending_subscribe) = self.pending_subscribes.get_mut(&sink_id) {
-                    let remove = pending_subscribe.process_response(response);
+                if let Some(active_subscribe) = self.active_subscribes.get_mut(&sink_id) {
+                    let remove = active_subscribe.process_response(response);
                     if remove {
-                        self.metrics
-                            .active_subscribes
-                            .with_label_values(&[pending_subscribe.session_type])
-                            .dec();
-                        self.pending_subscribes.remove(&sink_id);
+                        self.remove_active_subscribe(&sink_id);
                     }
                 }
             }
@@ -413,7 +409,7 @@ impl Coordinator {
         };
 
         let mut plans = vec![];
-        let mut id_allocation = HashMap::new();
+        let mut id_allocation = BTreeMap::new();
 
         // First we'll allocate global ids for each subsource and plan them
         for (transient_id, subsource_stmt) in subsource_stmts {
@@ -592,15 +588,15 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn message_compute_instance_status(&mut self, event: ComputeInstanceEvent) {
+    async fn message_cluster_event(&mut self, event: ClusterEvent) {
         event!(Level::TRACE, event = format!("{:?}", event));
 
         // It is possible that we receive a status update for a replica that has
         // already been dropped from the catalog. Just ignore these events.
-        let Some(instance) = self.catalog.try_get_compute_instance(event.instance_id) else {
+        let Some(cluster) = self.catalog.try_get_cluster(event.cluster_id) else {
             return;
         };
-        let Some(replica) = instance.replicas_by_id.get(&event.replica_id) else {
+        let Some(replica) = cluster.replicas_by_id.get(&event.replica_id) else {
             return;
         };
 
@@ -609,23 +605,20 @@ impl Coordinator {
 
             self.catalog_transact(
                 None,
-                vec![catalog::Op::UpdateComputeReplicaStatus {
+                vec![catalog::Op::UpdateClusterReplicaStatus {
                     event: event.clone(),
                 }],
             )
             .await
-            .unwrap_or_terminate("updating compute instance status cannot fail");
+            .unwrap_or_terminate("updating cluster status cannot fail");
 
-            let instance = self
-                .catalog
-                .try_get_compute_instance(event.instance_id)
-                .expect("instance known to exist");
-            let replica = &instance.replicas_by_id[&event.replica_id];
+            let cluster = self.catalog.get_cluster(event.cluster_id);
+            let replica = &cluster.replicas_by_id[&event.replica_id];
             let new_status = replica.status();
 
             if old_status != new_status {
                 self.broadcast_notice(AdapterNotice::ClusterReplicaStatusChanged {
-                    cluster: instance.name.clone(),
+                    cluster: cluster.name.clone(),
                     replica: replica.name.clone(),
                     status: new_status,
                     time: event.time,
@@ -716,14 +709,14 @@ impl Coordinator {
                 tx,
                 session,
                 format,
-                compute_instance,
+                cluster_id,
                 optimized_plan,
                 id_bundle,
             } => tx.send(
                 self.sequence_explain_timestamp_finish(
                     &session,
                     format,
-                    compute_instance,
+                    cluster_id,
                     optimized_plan,
                     id_bundle,
                     Some(real_time_recency_ts),
@@ -736,7 +729,7 @@ impl Coordinator {
                 copy_to,
                 source,
                 mut session,
-                compute_instance,
+                cluster_id,
                 when,
                 target_replica,
                 view_id,
@@ -752,7 +745,7 @@ impl Coordinator {
                         copy_to,
                         source,
                         &mut session,
-                        compute_instance,
+                        cluster_id,
                         when,
                         target_replica,
                         view_id,

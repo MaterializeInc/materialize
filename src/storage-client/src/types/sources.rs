@@ -9,10 +9,11 @@
 
 //! Types and traits related to the introduction of changing collections into `dataflow`.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::{Add, AddAssign, Deref, DerefMut};
 use std::rc::Rc;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
@@ -37,6 +38,8 @@ use mz_expr::{MirScalarExpr, PartitionId};
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriteHandle;
+use mz_persist_types::codec_impls::{TodoSchema, UnitSchema};
+use mz_persist_types::columnar::Schema;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
@@ -47,7 +50,7 @@ use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use crate::types::connections::aws::AwsConfig;
 use crate::types::connections::{KafkaConnection, PostgresConnection};
 use crate::types::errors::DataflowError;
-use crate::types::hosts::StorageHostConfig;
+use crate::types::instances::StorageInstanceId;
 use crate::util::antichain::OffsetAntichain;
 
 use self::encoding::{DataEncoding, DataEncodingInner, SourceDataEncoding};
@@ -63,17 +66,34 @@ include!(concat!(
 
 /// A description of a source ingestion
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct IngestionDescription<S = ()> {
+pub struct IngestionDescription<S = (), C = GenericSourceConnection> {
     /// The source description
-    pub desc: SourceDesc,
+    pub desc: SourceDesc<C>,
     /// Source collections made available to this ingestion.
     pub source_imports: BTreeMap<GlobalId, S>,
     /// Additional storage controller metadata needed to ingest this source
     pub ingestion_metadata: S,
     /// Collections to be exported by this ingestion.
     pub source_exports: BTreeMap<GlobalId, SourceExport<S>>,
-    /// The address of a `clusterd` process on which to install the source.
-    pub host_config: StorageHostConfig,
+    /// The ID of the instance in which to install the source.
+    pub instance_id: StorageInstanceId,
+}
+
+impl<S> IngestionDescription<S> {
+    /// Return an iterator over the `GlobalId`s of `self`'s subsources.
+    pub fn subsource_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        // Expand self so that any new fields added generate a compiler error to
+        // increase the likelihood of developers seeing this function.
+        let IngestionDescription {
+            desc: _,
+            source_imports: _,
+            ingestion_metadata: _,
+            source_exports,
+            instance_id: _,
+        } = &self;
+
+        source_exports.keys().copied()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -92,7 +112,7 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
     // have to specialize this some more.
     type State = Vec<WriteHandle<SourceData, (), T, Diff>>;
 
-    async fn initialize_state(&self, client_cache: &mut PersistClientCache) -> Self::State {
+    async fn initialize_state(&self, client_cache: &PersistClientCache) -> Self::State {
         let mut handles = vec![];
         for (id, export) in self.source_exports.iter() {
             // Explicit destructuring to force a compile error when the metadata change
@@ -102,6 +122,7 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
                 data_shard,
                 // The status shard only contains non-definite status updates
                 status_shard: _,
+                relation_desc,
             } = &export.storage_metadata;
             let handle = client_cache
                 .open(persist_location.clone())
@@ -110,11 +131,15 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
                 .open_writer::<SourceData, (), T, Diff>(
                     *data_shard,
                     &format!("resumption data {}", id),
+                    Arc::new(relation_desc.clone()),
+                    Arc::new(UnitSchema),
                 )
                 .await
                 .unwrap();
             handles.push(handle);
         }
+
+        let remap_relation_desc = self.desc.connection.timestamp_desc();
 
         let CollectionMetadata {
             persist_location,
@@ -122,13 +147,19 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
             data_shard: _,
             // The status shard only contains non-definite status updates
             status_shard: _,
+            relation_desc: _,
         } = &self.ingestion_metadata;
         let remap_handle = client_cache
             .open(persist_location.clone())
             .await
             .expect("error creating persist client")
             // TODO: Any way to plumb the GlobalId to this?
-            .open_writer::<SourceData, (), T, Diff>(*remap_shard, "resumption remap")
+            .open_writer::<SourceData, (), T, Diff>(
+                *remap_shard,
+                "resumption remap",
+                Arc::new(remap_relation_desc),
+                Arc::new(UnitSchema),
+            )
             .await
             .unwrap();
         handles.push(remap_handle);
@@ -180,15 +211,15 @@ where
             proptest::collection::btree_map(any::<GlobalId>(), any::<SourceExport<S>>(), 1..4)
                 .boxed(),
             any::<S>().boxed(),
-            any::<StorageHostConfig>().boxed(),
+            any::<StorageInstanceId>().boxed(),
         )
             .prop_map(
-                |(desc, source_imports, source_exports, ingestion_metadata, host_config)| Self {
+                |(desc, source_imports, source_exports, ingestion_metadata, instance_id)| Self {
                     desc,
                     source_imports,
                     source_exports,
                     ingestion_metadata,
-                    host_config,
+                    instance_id,
                 },
             )
             .boxed()
@@ -202,7 +233,7 @@ impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMeta
             source_exports: self.source_exports.into_proto(),
             ingestion_metadata: Some(self.ingestion_metadata.into_proto()),
             desc: Some(self.desc.into_proto()),
-            host_config: Some(self.host_config.into_proto()),
+            instance_id: Some(self.instance_id.into_proto()),
         }
     }
 
@@ -216,9 +247,9 @@ impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMeta
             ingestion_metadata: proto
                 .ingestion_metadata
                 .into_rust_if_some("ProtoIngestionDescription::ingestion_metadata")?,
-            host_config: proto
-                .host_config
-                .into_rust_if_some("ProtoIngestionDescription::host_config")?,
+            instance_id: proto
+                .instance_id
+                .into_rust_if_some("ProtoIngestionDescription::instance_id")?,
         })
     }
 }
@@ -281,6 +312,7 @@ where
 
 pub trait SourceTimestamp: timely::progress::Timestamp + Refines<()> + std::fmt::Display {
     fn from_compat_ts(pid: PartitionId, offset: MzOffset) -> Self;
+    fn try_into_compat_ts(&self) -> Option<(PartitionId, MzOffset)>;
     fn from_compat_frontier(frontier: OffsetAntichain) -> Antichain<Self>;
     fn into_compat_frontier(frontier: AntichainRef<'_, Self>) -> OffsetAntichain;
     fn encode_row(&self) -> Row;
@@ -295,6 +327,10 @@ impl SourceTimestamp for MzOffset {
             "invalid non-partitioned partition {pid}"
         );
         offset
+    }
+
+    fn try_into_compat_ts(&self) -> Option<(PartitionId, MzOffset)> {
+        Some((PartitionId::None, *self))
     }
 
     fn from_compat_frontier(frontier: OffsetAntichain) -> Antichain<Self> {
@@ -335,6 +371,11 @@ impl SourceTimestamp for Partitioned<i32, MzOffset> {
             PartitionId::Kafka(pid) => Partitioned::with_partition(pid, offset),
             PartitionId::None => panic!("invalid partitioned partition {pid}"),
         }
+    }
+
+    fn try_into_compat_ts(&self) -> Option<(PartitionId, MzOffset)> {
+        let pid = self.partition()?;
+        Some((PartitionId::Kafka(*pid), *self.timestamp()))
     }
 
     fn from_compat_frontier(frontier: OffsetAntichain) -> Antichain<Self> {
@@ -1322,8 +1363,33 @@ impl UnplannedSourceEnvelope {
     }
 }
 
+/// A connection to an external system
 pub trait SourceConnection: Clone {
+    /// The name of the external system (e.g kafka, postgres, s3, etc).
     fn name(&self) -> &'static str;
+
+    /// The name of the resource in the external system (e.g kafka topic) if any
+    fn upstream_name(&self) -> Option<&str>;
+
+    /// The schema of this connection's timestamp type. This will also be the schema of the
+    /// progress relation.
+    fn timestamp_desc(&self) -> RelationDesc;
+
+    /// The number of outputs. This will be 1 for sources with no subsources or 1 + num_subsources
+    /// otherwise.
+    fn num_outputs(&self) -> usize;
+
+    /// The id of the connection object (i.e the one obtained from running `CREATE CONNECTION`) in
+    /// the catalog, if any.
+    fn connection_id(&self) -> Option<GlobalId>;
+
+    /// Returns available metadata columns that this connection offers in (name, type) pairs in the
+    /// order specified by the user.
+    fn metadata_columns(&self) -> Vec<(&str, ColumnType)>;
+
+    /// The available metadata columns in the order specified by the user. This only identifies the
+    /// kinds of columns that this source offers without any further information.
+    fn metadata_column_types(&self) -> Vec<IncludedColumnSource>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1332,7 +1398,7 @@ pub struct KafkaSourceConnection {
     pub connection_id: GlobalId,
     pub topic: String,
     // Map from partition -> starting offset
-    pub start_offsets: HashMap<i32, i64>,
+    pub start_offsets: BTreeMap<i32, i64>,
     pub group_id_prefix: Option<String>,
     pub environment_id: String,
     /// If present, include the timestamp as an output column of the source with the given name
@@ -1350,6 +1416,92 @@ impl SourceConnection for KafkaSourceConnection {
     fn name(&self) -> &'static str {
         "kafka"
     }
+
+    fn upstream_name(&self) -> Option<&str> {
+        Some(self.topic.as_str())
+    }
+
+    fn timestamp_desc(&self) -> RelationDesc {
+        RelationDesc::empty()
+            .with_column(
+                "partition",
+                ScalarType::Range {
+                    element_type: Box::new(ScalarType::Int32),
+                }
+                .nullable(false),
+            )
+            .with_column("offset", ScalarType::UInt64.nullable(true))
+    }
+
+    fn num_outputs(&self) -> usize {
+        1
+    }
+
+    fn connection_id(&self) -> Option<GlobalId> {
+        Some(self.connection_id)
+    }
+
+    fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
+        let mut items = BTreeMap::new();
+        let header_typ = ScalarType::List {
+            element_type: Box::new(ScalarType::Record {
+                fields: vec![
+                    (
+                        "key".into(),
+                        ColumnType {
+                            nullable: false,
+                            scalar_type: ScalarType::String,
+                        },
+                    ),
+                    (
+                        "value".into(),
+                        ColumnType {
+                            nullable: false,
+                            scalar_type: ScalarType::Bytes,
+                        },
+                    ),
+                ],
+                custom_id: None,
+            }),
+            custom_id: None,
+        };
+        let metadata_columns = [
+            (&self.include_offset, ScalarType::UInt64),
+            (&self.include_partition, ScalarType::Int32),
+            (&self.include_timestamp, ScalarType::Timestamp),
+            (&self.include_topic, ScalarType::String),
+            (&self.include_headers, header_typ),
+        ];
+
+        for (include, ty) in metadata_columns {
+            if let Some(include) = include {
+                items.insert(include.pos + 1, (&*include.name, ty.nullable(false)));
+            }
+        }
+
+        items.into_values().collect()
+    }
+
+    fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
+        // create a sorted list of column types based on the order they were declared in sql
+        // TODO: should key be included in the sorted list? Breaking change, and it's
+        // already special (it commonly multiple columns embedded in it).
+        let mut items = BTreeMap::new();
+        let metadata_columns = [
+            (&self.include_offset, IncludedColumnSource::Offset),
+            (&self.include_partition, IncludedColumnSource::Partition),
+            (&self.include_timestamp, IncludedColumnSource::Timestamp),
+            (&self.include_topic, IncludedColumnSource::Topic),
+            (&self.include_headers, IncludedColumnSource::Headers),
+        ];
+        for (include, ty) in metadata_columns {
+            if let Some(include) = include {
+                items.insert(include.pos, ty);
+            }
+        }
+
+        items.into_values().collect()
+    }
 }
 
 impl Arbitrary for KafkaSourceConnection {
@@ -1361,7 +1513,7 @@ impl Arbitrary for KafkaSourceConnection {
             any::<KafkaConnection>(),
             any::<GlobalId>(),
             any::<String>(),
-            proptest::collection::hash_map(any::<i32>(), any::<i64>(), 1..4),
+            proptest::collection::btree_map(any::<i32>(), any::<i64>(), 1..4),
             any::<Option<String>>(),
             any::<String>(),
             any::<Option<IncludedColumnPos>>(),
@@ -1480,15 +1632,15 @@ impl RustType<ProtoCompression> for Compression {
 
 /// An external source of updates for a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct SourceDesc {
-    pub connection: GenericSourceConnection,
+pub struct SourceDesc<C = GenericSourceConnection> {
+    pub connection: C,
     pub encoding: encoding::SourceDataEncoding,
     pub envelope: SourceEnvelope,
     pub metadata_columns: Vec<IncludedColumnSource>,
     pub timestamp_interval: Duration,
 }
 
-impl Arbitrary for SourceDesc {
+impl Arbitrary for SourceDesc<GenericSourceConnection> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -1513,7 +1665,7 @@ impl Arbitrary for SourceDesc {
     }
 }
 
-impl RustType<ProtoSourceDesc> for SourceDesc {
+impl RustType<ProtoSourceDesc> for SourceDesc<GenericSourceConnection> {
     fn into_proto(&self) -> ProtoSourceDesc {
         ProtoSourceDesc {
             connection: Some(self.connection.into_proto()),
@@ -1543,7 +1695,7 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
     }
 }
 
-impl SourceDesc {
+impl SourceDesc<GenericSourceConnection> {
     /// Returns `true` if this connection yields data that is
     /// append-only/monotonic. Append-monly means the source
     /// never produces retractions.
@@ -1581,28 +1733,6 @@ impl SourceDesc {
         }
     }
 
-    /// The number of outputs this source will produce
-    pub fn num_outputs(&self) -> usize {
-        let subsources = match &self.connection {
-            GenericSourceConnection::Kafka(_)
-            | GenericSourceConnection::Kinesis(_)
-            | GenericSourceConnection::S3(_)
-            | GenericSourceConnection::TestScript(_) => 0,
-            GenericSourceConnection::LoadGenerator(connection) => {
-                connection.load_generator.views().len()
-            }
-            GenericSourceConnection::Postgres(connection) => {
-                connection.publication_details.tables.len()
-            }
-        };
-        // Every ingestion produces a main stream plus subsource streams
-        subsources + 1
-    }
-
-    pub fn name(&self) -> &'static str {
-        self.connection.name()
-    }
-
     pub fn envelope(&self) -> &SourceEnvelope {
         &self.envelope
     }
@@ -1618,15 +1748,117 @@ pub enum GenericSourceConnection {
     TestScript(TestScriptSourceConnection),
 }
 
-impl GenericSourceConnection {
-    pub fn connection_id(&self) -> Option<GlobalId> {
-        use GenericSourceConnection::*;
+impl From<KafkaSourceConnection> for GenericSourceConnection {
+    fn from(conn: KafkaSourceConnection) -> Self {
+        Self::Kafka(conn)
+    }
+}
+
+impl From<KinesisSourceConnection> for GenericSourceConnection {
+    fn from(conn: KinesisSourceConnection) -> Self {
+        Self::Kinesis(conn)
+    }
+}
+
+impl From<S3SourceConnection> for GenericSourceConnection {
+    fn from(conn: S3SourceConnection) -> Self {
+        Self::S3(conn)
+    }
+}
+
+impl From<PostgresSourceConnection> for GenericSourceConnection {
+    fn from(conn: PostgresSourceConnection) -> Self {
+        Self::Postgres(conn)
+    }
+}
+
+impl From<LoadGeneratorSourceConnection> for GenericSourceConnection {
+    fn from(conn: LoadGeneratorSourceConnection) -> Self {
+        Self::LoadGenerator(conn)
+    }
+}
+
+impl From<TestScriptSourceConnection> for GenericSourceConnection {
+    fn from(conn: TestScriptSourceConnection) -> Self {
+        Self::TestScript(conn)
+    }
+}
+
+impl SourceConnection for GenericSourceConnection {
+    fn name(&self) -> &'static str {
         match self {
-            Kafka(KafkaSourceConnection { connection_id, .. })
-            | Kinesis(KinesisSourceConnection { connection_id, .. })
-            | S3(S3SourceConnection { connection_id, .. })
-            | Postgres(PostgresSourceConnection { connection_id, .. }) => Some(*connection_id),
-            LoadGenerator(_) | TestScript(_) => None,
+            Self::Kafka(conn) => conn.name(),
+            Self::Kinesis(conn) => conn.name(),
+            Self::S3(conn) => conn.name(),
+            Self::Postgres(conn) => conn.name(),
+            Self::LoadGenerator(conn) => conn.name(),
+            Self::TestScript(conn) => conn.name(),
+        }
+    }
+
+    fn upstream_name(&self) -> Option<&str> {
+        match self {
+            Self::Kafka(conn) => conn.upstream_name(),
+            Self::Kinesis(conn) => conn.upstream_name(),
+            Self::S3(conn) => conn.upstream_name(),
+            Self::Postgres(conn) => conn.upstream_name(),
+            Self::LoadGenerator(conn) => conn.upstream_name(),
+            Self::TestScript(conn) => conn.upstream_name(),
+        }
+    }
+
+    fn timestamp_desc(&self) -> RelationDesc {
+        match self {
+            Self::Kafka(conn) => conn.timestamp_desc(),
+            Self::Kinesis(conn) => conn.timestamp_desc(),
+            Self::S3(conn) => conn.timestamp_desc(),
+            Self::Postgres(conn) => conn.timestamp_desc(),
+            Self::LoadGenerator(conn) => conn.timestamp_desc(),
+            Self::TestScript(conn) => conn.timestamp_desc(),
+        }
+    }
+
+    fn num_outputs(&self) -> usize {
+        match self {
+            Self::Kafka(conn) => conn.num_outputs(),
+            Self::Kinesis(conn) => conn.num_outputs(),
+            Self::S3(conn) => conn.num_outputs(),
+            Self::Postgres(conn) => conn.num_outputs(),
+            Self::LoadGenerator(conn) => conn.num_outputs(),
+            Self::TestScript(conn) => conn.num_outputs(),
+        }
+    }
+
+    fn connection_id(&self) -> Option<GlobalId> {
+        match self {
+            Self::Kafka(conn) => conn.connection_id(),
+            Self::Kinesis(conn) => conn.connection_id(),
+            Self::S3(conn) => conn.connection_id(),
+            Self::Postgres(conn) => conn.connection_id(),
+            Self::LoadGenerator(conn) => conn.connection_id(),
+            Self::TestScript(conn) => conn.connection_id(),
+        }
+    }
+
+    fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
+        match self {
+            Self::Kafka(conn) => conn.metadata_columns(),
+            Self::Kinesis(conn) => conn.metadata_columns(),
+            Self::S3(conn) => conn.metadata_columns(),
+            Self::Postgres(conn) => conn.metadata_columns(),
+            Self::LoadGenerator(conn) => conn.metadata_columns(),
+            Self::TestScript(conn) => conn.metadata_columns(),
+        }
+    }
+
+    fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
+        match self {
+            Self::Kafka(conn) => conn.metadata_column_types(),
+            Self::Kinesis(conn) => conn.metadata_column_types(),
+            Self::S3(conn) => conn.metadata_column_types(),
+            Self::Postgres(conn) => conn.metadata_column_types(),
+            Self::LoadGenerator(conn) => conn.metadata_column_types(),
+            Self::TestScript(conn) => conn.metadata_column_types(),
         }
     }
 }
@@ -1670,141 +1902,6 @@ impl RustType<ProtoSourceConnection> for GenericSourceConnection {
     }
 }
 
-impl GenericSourceConnection {
-    /// Returns the name and type of each additional metadata column that
-    /// Materialize will automatically append to the source's inherent columns.
-    ///
-    /// Presently, each source type exposes precisely one metadata column that
-    /// corresponds to some source-specific record counter. For example, file
-    /// sources use a line number, while Kafka sources use a topic offset.
-    ///
-    /// The columns declared here must be kept in sync with the actual source
-    /// implementations that produce these columns.
-    pub fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
-        match self {
-            Self::Kafka(KafkaSourceConnection {
-                include_partition: part,
-                include_timestamp: time,
-                include_topic: topic,
-                include_offset: offset,
-                include_headers: headers,
-                ..
-            }) => {
-                let mut items = BTreeMap::new();
-                for (include, ty) in [
-                    (offset, ScalarType::UInt64),
-                    (part, ScalarType::Int32),
-                    (time, ScalarType::Timestamp),
-                    (topic, ScalarType::String),
-                    (
-                        headers,
-                        ScalarType::List {
-                            element_type: Box::new(ScalarType::Record {
-                                fields: vec![
-                                    (
-                                        "key".into(),
-                                        ColumnType {
-                                            nullable: false,
-                                            scalar_type: ScalarType::String,
-                                        },
-                                    ),
-                                    (
-                                        "value".into(),
-                                        ColumnType {
-                                            nullable: false,
-                                            scalar_type: ScalarType::Bytes,
-                                        },
-                                    ),
-                                ],
-                                custom_id: None,
-                            }),
-                            custom_id: None,
-                        },
-                    ),
-                ] {
-                    if let Some(include) = include {
-                        items.insert(include.pos + 1, (&*include.name, ty.nullable(false)));
-                    }
-                }
-
-                items.into_values().collect()
-            }
-            Self::Kinesis(_) => vec![],
-            Self::S3(_) => vec![],
-            Self::Postgres(_) => vec![],
-            Self::LoadGenerator(_) => vec![],
-            Self::TestScript(_) => vec![],
-        }
-    }
-
-    pub fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
-        match self {
-            GenericSourceConnection::Kafka(KafkaSourceConnection {
-                include_partition: part,
-                include_timestamp: time,
-                include_topic: topic,
-                include_offset: offset,
-                include_headers: headers,
-                ..
-            }) => {
-                // create a sorted list of column types based on the order they were declared in sql
-                // TODO: should key be included in the sorted list? Breaking change, and it's
-                // already special (it commonly multiple columns embedded in it).
-                let mut items = BTreeMap::new();
-                for (include, ty) in [
-                    (offset, IncludedColumnSource::Offset),
-                    (part, IncludedColumnSource::Partition),
-                    (time, IncludedColumnSource::Timestamp),
-                    (topic, IncludedColumnSource::Topic),
-                    (headers, IncludedColumnSource::Headers),
-                ] {
-                    if let Some(include) = include {
-                        items.insert(include.pos, ty);
-                    }
-                }
-
-                items.into_values().collect()
-            }
-
-            GenericSourceConnection::Kinesis(_)
-            | GenericSourceConnection::S3(_)
-            | GenericSourceConnection::Postgres(_)
-            | GenericSourceConnection::LoadGenerator(_)
-            | GenericSourceConnection::TestScript(_) => Vec::new(),
-        }
-    }
-
-    /// Returns the name of the external source connection.
-    pub fn name(&self) -> &'static str {
-        match self {
-            GenericSourceConnection::Kafka(c) => c.name(),
-            GenericSourceConnection::Kinesis(c) => c.name(),
-            GenericSourceConnection::S3(c) => c.name(),
-            GenericSourceConnection::Postgres(c) => c.name(),
-            GenericSourceConnection::LoadGenerator(c) => c.name(),
-            GenericSourceConnection::TestScript(c) => c.name(),
-        }
-    }
-
-    /// Optionally returns the name of the upstream resource this source corresponds to.
-    /// (Currently only implemented for Kafka and Kinesis, to match old-style behavior
-    ///  TODO: decide whether we want file paths and other upstream names to show up in metrics too.
-    pub fn upstream_name(&self) -> Option<&str> {
-        match self {
-            GenericSourceConnection::Kafka(KafkaSourceConnection { topic, .. }) => {
-                Some(topic.as_str())
-            }
-            GenericSourceConnection::Kinesis(KinesisSourceConnection { stream_name, .. }) => {
-                Some(stream_name.as_str())
-            }
-            GenericSourceConnection::S3(_) => None,
-            GenericSourceConnection::Postgres(_) => None,
-            GenericSourceConnection::LoadGenerator(_) => None,
-            GenericSourceConnection::TestScript(_) => None,
-        }
-    }
-}
-
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KinesisSourceConnection {
     pub connection_id: GlobalId,
@@ -1815,6 +1912,34 @@ pub struct KinesisSourceConnection {
 impl SourceConnection for KinesisSourceConnection {
     fn name(&self) -> &'static str {
         "kinesis"
+    }
+
+    fn upstream_name(&self) -> Option<&str> {
+        Some(self.stream_name.as_str())
+    }
+
+    fn timestamp_desc(&self) -> RelationDesc {
+        //  In the future, kinesis will have a more complex ts
+        // RelationDesc::empty()
+        //     .with_column("shard_id", ScalarType::Int32.nullable(false))
+        //     .with_column("sequence_number", ScalarType::UInt64.nullable(true))
+        RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true))
+    }
+
+    fn num_outputs(&self) -> usize {
+        1
+    }
+
+    fn connection_id(&self) -> Option<GlobalId> {
+        Some(self.connection_id)
+    }
+
+    fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
+        vec![]
+    }
+
+    fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
+        vec![]
     }
 }
 
@@ -1846,7 +1971,7 @@ pub struct PostgresSourceConnection {
     pub connection: PostgresConnection,
     /// The cast expressions to convert the incoming string encoded rows to
     /// their target types, keyed by their position in the source.
-    pub table_casts: HashMap<usize, Vec<MirScalarExpr>>,
+    pub table_casts: BTreeMap<usize, Vec<MirScalarExpr>>,
     pub publication: String,
     pub publication_details: PostgresSourcePublicationDetails,
 }
@@ -1859,7 +1984,7 @@ impl Arbitrary for PostgresSourceConnection {
         (
             any::<PostgresConnection>(),
             any::<GlobalId>(),
-            proptest::collection::hash_map(
+            proptest::collection::btree_map(
                 any::<usize>(),
                 proptest::collection::vec(any::<MirScalarExpr>(), 1..4),
                 1..4,
@@ -1883,6 +2008,30 @@ impl Arbitrary for PostgresSourceConnection {
 impl SourceConnection for PostgresSourceConnection {
     fn name(&self) -> &'static str {
         "postgres"
+    }
+
+    fn upstream_name(&self) -> Option<&str> {
+        None
+    }
+
+    fn timestamp_desc(&self) -> RelationDesc {
+        RelationDesc::empty().with_column("lsn", ScalarType::UInt64.nullable(true))
+    }
+
+    fn num_outputs(&self) -> usize {
+        self.publication_details.tables.len() + 1
+    }
+
+    fn connection_id(&self) -> Option<GlobalId> {
+        Some(self.connection_id)
+    }
+
+    fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
+        vec![]
+    }
+
+    fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
+        vec![]
     }
 }
 
@@ -1926,7 +2075,7 @@ impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
                 .collect()
         };
 
-        let mut table_casts = HashMap::new();
+        let mut table_casts = BTreeMap::new();
         for (pos, cast) in table_cast_pos
             .into_iter()
             .zip_eq(proto.table_casts.into_iter())
@@ -1990,11 +2139,44 @@ impl SourceConnection for LoadGeneratorSourceConnection {
     fn name(&self) -> &'static str {
         "load-generator"
     }
+
+    fn upstream_name(&self) -> Option<&str> {
+        None
+    }
+
+    fn timestamp_desc(&self) -> RelationDesc {
+        RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true))
+    }
+
+    fn num_outputs(&self) -> usize {
+        self.load_generator.views().len() + 1
+    }
+
+    fn connection_id(&self) -> Option<GlobalId> {
+        None
+    }
+
+    fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
+        vec![]
+    }
+
+    fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
+        vec![]
+    }
 }
+
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum LoadGenerator {
     Auction,
-    Counter,
+    Counter {
+        /// How many values will be emitted
+        /// before old ones are retracted, or `None` for
+        /// an append-only collection.
+        ///
+        /// This is verified by the planner to be nonnegative. We encode it as
+        /// an `i64` to make the code in `Counter::by_seed` simpler.
+        max_cardinality: Option<i64>,
+    },
     Datums,
     Tpch {
         count_supplier: i64,
@@ -2013,7 +2195,7 @@ impl LoadGenerator {
                 let mut desc =
                     RelationDesc::empty().with_column("rowid", ScalarType::Int64.nullable(false));
                 let typs = ScalarType::enumerate();
-                let mut names = HashSet::new();
+                let mut names = BTreeSet::new();
                 for typ in typs {
                     // Cut out variant information from the debug print.
                     let mut name = format!("_{:?}", typ)
@@ -2031,7 +2213,7 @@ impl LoadGenerator {
                 }
                 DataEncodingInner::RowCodec(desc)
             }
-            LoadGenerator::Counter => DataEncodingInner::RowCodec(
+            LoadGenerator::Counter { .. } => DataEncodingInner::RowCodec(
                 RelationDesc::empty().with_column("counter", ScalarType::Int64.nullable(false)),
             ),
             LoadGenerator::Tpch { .. } => DataEncodingInner::RowCodec(RelationDesc::empty()),
@@ -2089,7 +2271,7 @@ impl LoadGenerator {
                         .with_key(vec![0]),
                 ),
             ],
-            LoadGenerator::Counter => vec![],
+            LoadGenerator::Counter { max_cardinality: _ } => vec![],
             LoadGenerator::Datums => vec![],
             LoadGenerator::Tpch { .. } => {
                 let identifier = ScalarType::Int64.nullable(false);
@@ -2225,7 +2407,11 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
         ProtoLoadGeneratorSourceConnection {
             generator: Some(match &self.load_generator {
                 LoadGenerator::Auction => ProtoGenerator::Auction(()),
-                LoadGenerator::Counter => ProtoGenerator::Counter(()),
+                LoadGenerator::Counter { max_cardinality } => {
+                    ProtoGenerator::Counter(ProtoCounterLoadGenerator {
+                        max_cardinality: *max_cardinality,
+                    })
+                }
                 LoadGenerator::Tpch {
                     count_supplier,
                     count_part,
@@ -2252,7 +2438,9 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
         Ok(LoadGeneratorSourceConnection {
             load_generator: match generator {
                 ProtoGenerator::Auction(()) => LoadGenerator::Auction,
-                ProtoGenerator::Counter(()) => LoadGenerator::Counter,
+                ProtoGenerator::Counter(ProtoCounterLoadGenerator { max_cardinality }) => {
+                    LoadGenerator::Counter { max_cardinality }
+                }
                 ProtoGenerator::Tpch(ProtoTpchLoadGenerator {
                     count_supplier,
                     count_part,
@@ -2282,6 +2470,30 @@ impl SourceConnection for TestScriptSourceConnection {
     fn name(&self) -> &'static str {
         "testscript"
     }
+
+    fn upstream_name(&self) -> Option<&str> {
+        None
+    }
+
+    fn timestamp_desc(&self) -> RelationDesc {
+        RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true))
+    }
+
+    fn num_outputs(&self) -> usize {
+        1
+    }
+
+    fn connection_id(&self) -> Option<GlobalId> {
+        None
+    }
+
+    fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
+        vec![]
+    }
+
+    fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
+        vec![]
+    }
 }
 
 impl RustType<ProtoTestScriptSourceConnection> for TestScriptSourceConnection {
@@ -2310,6 +2522,30 @@ pub struct S3SourceConnection {
 impl SourceConnection for S3SourceConnection {
     fn name(&self) -> &'static str {
         "s3"
+    }
+
+    fn upstream_name(&self) -> Option<&str> {
+        None
+    }
+
+    fn timestamp_desc(&self) -> RelationDesc {
+        RelationDesc::empty().with_column("byte_offset", ScalarType::UInt64.nullable(true))
+    }
+
+    fn num_outputs(&self) -> usize {
+        1
+    }
+
+    fn connection_id(&self) -> Option<GlobalId> {
+        Some(self.connection_id)
+    }
+
+    fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
+        vec![]
+    }
+
+    fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
+        vec![]
     }
 }
 
@@ -2462,6 +2698,8 @@ impl RustType<ProtoSourceData> for SourceData {
 }
 
 impl Codec for SourceData {
+    type Schema = RelationDesc;
+
     fn codec_name() -> String {
         "protobuf[SourceData]".into()
     }
@@ -2475,6 +2713,30 @@ impl Codec for SourceData {
     fn decode(buf: &[u8]) -> Result<Self, String> {
         let proto = ProtoSourceData::decode(buf).map_err(|err| err.to_string())?;
         proto.into_rust().map_err(|err| err.to_string())
+    }
+}
+
+impl Schema<SourceData> for RelationDesc {
+    type Encoder<'a> = TodoSchema<SourceData>;
+
+    type Decoder<'a> = TodoSchema<SourceData>;
+
+    fn columns(&self) -> Vec<(String, mz_persist_types::columnar::DataType)> {
+        panic!("TODO")
+    }
+
+    fn decoder<'a>(
+        &self,
+        _cols: mz_persist_types::part::ColumnsRef<'a>,
+    ) -> Result<Self::Decoder<'a>, String> {
+        panic!("TODO")
+    }
+
+    fn encoder<'a>(
+        &self,
+        _cols: mz_persist_types::part::ColumnsMut<'a>,
+    ) -> Result<Self::Encoder<'a>, String> {
+        panic!("TODO")
     }
 }
 

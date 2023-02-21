@@ -458,7 +458,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=DropCreateDefaultReplica]
+          args: [--scenario=DropCreateDefaultReplica, "--seed=$BUILDKITE_JOB_ID"]
 
   - id: checks-restart-clusterd-compute
     label: "Checks + restart clusterd compute"
@@ -470,7 +470,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=RestartClusterdCompute]
+          args: [--scenario=RestartClusterdCompute, "--seed=$BUILDKITE_JOB_ID"]
 
   - id: checks-restart-entire-mz
     label: "Checks + restart of the entire Mz"
@@ -482,7 +482,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=RestartEntireMz]
+          args: [--scenario=RestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
   - id: checks-restart-environmentd-clusterd-storage
     label: "Checks + restart of environmentd & storage clusterd"
@@ -494,7 +494,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=RestartEnvironmentdClusterdStorage]
+          args: [--scenario=RestartEnvironmentdClusterdStorage, "--seed=$BUILDKITE_JOB_ID"]
 
   - id: checks-kill-clusterd-storage
     label: "Checks + kill storage clusterd"
@@ -506,7 +506,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=KillClusterdStorage]
+          args: [--scenario=KillClusterdStorage, "--seed=$BUILDKITE_JOB_ID"]
 
   - id: checks-restart-cockroach
     label: "Checks + restart Cockroach"
@@ -518,7 +518,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=RestartCockroach]
+          args: [--scenario=RestartCockroach, "--seed=$BUILDKITE_JOB_ID"]
 
   - id: checks-restart-source-postgres
     label: "Checks + restart source Postgres"
@@ -553,7 +553,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=RestartRedpandaDebezium]
+          args: [--scenario=RestartRedpandaDebezium, "--seed=$BUILDKITE_JOB_ID"]
 
   - id: source-sink-errors
     label: "Source/Sink Error Reporting"

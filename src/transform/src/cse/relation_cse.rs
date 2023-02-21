@@ -57,7 +57,7 @@ impl crate::Transform for RelationCSE {
         bindings.intern_expression(relation)?;
         bindings.populate_expression(relation);
         self.normalize_lets.transform_without_trace(relation)?;
-        mz_repr::explain_new::trace_plan(&*relation);
+        mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }
 }

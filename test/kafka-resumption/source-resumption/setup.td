@@ -14,15 +14,23 @@ one
 two
 three
 
+> CREATE CLUSTER clusterd REPLICAS (
+    r1 (
+      STORAGECTL ADDRESSES ['clusterd:2100'],
+      STORAGE ADDRESSES ['clusterd:2103'],
+      COMPUTECTL ADDRESSES ['clusterd:2101'],
+      COMPUTE ADDRESSES ['clusterd:2102'],
+      WORKERS 4
+    )
+  )
+
 > CREATE CONNECTION conn TO KAFKA (BROKER '${testdrive.kafka-addr}')
 
 > CREATE SOURCE topic
+  IN CLUSTER clusterd
   FROM KAFKA CONNECTION conn (
     TOPIC 'testdrive-topic-${testdrive.seed}'
   )
   FORMAT BYTES
   INCLUDE OFFSET
   ENVELOPE NONE
-  WITH (
-    REMOTE = 'clusterd:2100'
-  )

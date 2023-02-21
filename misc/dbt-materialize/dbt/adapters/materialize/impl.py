@@ -42,9 +42,9 @@ class MaterializeIndexConfig(dbtClassMixin):
             return cls.from_dict(raw_index)
         except ValidationError as exc:
             msg = dbt.exceptions.validator_error_message(exc)
-            dbt.exceptions.raise_compiler_error(f"Could not parse index config: {msg}")
+            dbt.exceptions.CompilationError(f"Could not parse index config: {msg}")
         except TypeError:
-            dbt.exceptions.raise_compiler_error(
+            dbt.exceptions.CompilationError(
                 f"Invalid index config:\n"
                 f"  Got: {raw_index}\n"
                 f'  Expected a dictionary with at minimum a "columns" key'

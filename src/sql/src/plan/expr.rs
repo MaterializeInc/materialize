@@ -28,7 +28,6 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::stack;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::numeric::NumericMaxScale;
-use mz_repr::explain_new::DummyHumanizer;
 use mz_repr::*;
 
 use crate::plan::error::PlanError;
@@ -41,8 +40,6 @@ pub use mz_expr::{
     BinaryFunc, ColumnOrder, TableFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc, WindowFrame,
     WindowFrameBound, WindowFrameUnits,
 };
-
-use super::Explanation;
 
 #[allow(missing_debug_implementations)]
 pub struct Hir;
@@ -93,7 +90,7 @@ impl AlgExcept for Hir {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 /// Just like MirRelationExpr, except where otherwise noted below.
 pub enum HirRelationExpr {
     Constant {
@@ -183,7 +180,7 @@ pub enum HirRelationExpr {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 /// Just like mz_expr::MirScalarExpr, except where otherwise noted below.
 pub enum HirScalarExpr {
     /// Unlike mz_expr::MirScalarExpr, we can nest HirRelationExprs via eg Exists. This means that a
@@ -226,7 +223,7 @@ pub enum HirScalarExpr {
     Windowing(WindowExpr),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 /// Represents the invocation of a window function over a partition with an optional
 /// order.
 pub struct WindowExpr {
@@ -325,7 +322,7 @@ impl VisitChildren<HirScalarExpr> for WindowExpr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 /// A window function with its parameters.
 ///
 /// There are three types of window functions:
@@ -427,7 +424,7 @@ impl VisitChildren<HirScalarExpr> for WindowExprType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ScalarWindowExpr {
     pub func: ScalarWindowFunc,
     pub order_by: Vec<ColumnOrder>,
@@ -479,7 +476,7 @@ impl ScalarWindowExpr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 /// Scalar Window functions
 pub enum ScalarWindowFunc {
     RowNumber,
@@ -495,7 +492,7 @@ impl ScalarWindowFunc {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ValueWindowExpr {
     pub func: ValueWindowFunc,
     pub expr: Box<HirScalarExpr>,
@@ -584,7 +581,7 @@ impl VisitChildren<HirScalarExpr> for ValueWindowExpr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 /// Value Window functions
 pub enum ValueWindowFunc {
     Lag,
@@ -775,7 +772,7 @@ pub struct ColumnRef {
     pub column: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum JoinKind {
     Inner,
     LeftOuter,
@@ -807,7 +804,7 @@ impl JoinKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct AggregateExpr {
     pub func: AggregateFunc,
     pub expr: Box<HirScalarExpr>,
@@ -821,7 +818,7 @@ pub struct AggregateExpr {
 /// here than in `expr`, as these aggregates may be applied over empty
 /// result sets and should be null in those cases, whereas `expr` variants
 /// only return null values when supplied nulls as input.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum AggregateFunc {
     MaxNumeric,
     MaxInt16,
@@ -1132,11 +1129,6 @@ impl HirRelationExpr {
                 ..
             } => group_key.len() + aggregates.len(),
         }
-    }
-
-    /// Pretty-print this HirRelationExpr to a string.
-    pub fn pretty(&self) -> String {
-        Explanation::new(self, &DummyHumanizer).to_string()
     }
 
     /// Reports whether this expression contains a column reference to its

@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use once_cell::sync::Lazy;
+use proptest::prelude::{any, prop, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -30,7 +31,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_client.logging.rs"));
 // `sink_logs` empty. Unfortunately, we have to always provide `index_logs`, because we must
 // install the logging dataflows even on replicas that have logging disabled. See #15799.
 // TODO(teskje): Clean this up once we remove the arranged introspection sources.
-#[derive(Arbitrary, Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoggingConfig {
     /// The logging interval
     pub interval: Duration,
@@ -42,6 +43,35 @@ pub struct LoggingConfig {
     pub index_logs: BTreeMap<LogVariant, GlobalId>,
     /// Logs to be written to persist
     pub sink_logs: BTreeMap<LogVariant, (GlobalId, CollectionMetadata)>,
+}
+
+impl Arbitrary for LoggingConfig {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<Duration>(),
+            any::<bool>(),
+            any::<bool>(),
+            prop::collection::btree_map(any::<LogVariant>(), any::<GlobalId>(), 0..2),
+            prop::collection::btree_map(
+                any::<LogVariant>(),
+                any::<(GlobalId, CollectionMetadata)>(),
+                0..2,
+            ),
+        )
+            .prop_map(
+                |(interval, enable_logging, log_logging, index_logs, sink_logs)| LoggingConfig {
+                    interval,
+                    enable_logging,
+                    log_logging,
+                    index_logs,
+                    sink_logs,
+                },
+            )
+            .boxed()
+    }
 }
 
 impl LoggingConfig {
@@ -236,7 +266,7 @@ pub enum ComputeLog {
     PeekCurrent,
     PeekDuration,
     FrontierDelay,
-    SourceFrontierCurrent,
+    ImportFrontierCurrent,
 }
 
 impl RustType<ProtoComputeLog> for ComputeLog {
@@ -250,7 +280,7 @@ impl RustType<ProtoComputeLog> for ComputeLog {
                 ComputeLog::PeekCurrent => PeekCurrent(()),
                 ComputeLog::PeekDuration => PeekDuration(()),
                 ComputeLog::FrontierDelay => FrontierDelay(()),
-                ComputeLog::SourceFrontierCurrent => SourceFrontierCurrent(()),
+                ComputeLog::ImportFrontierCurrent => ImportFrontierCurrent(()),
             }),
         }
     }
@@ -264,7 +294,7 @@ impl RustType<ProtoComputeLog> for ComputeLog {
             Some(PeekCurrent(())) => Ok(ComputeLog::PeekCurrent),
             Some(PeekDuration(())) => Ok(ComputeLog::PeekDuration),
             Some(FrontierDelay(())) => Ok(ComputeLog::FrontierDelay),
-            Some(SourceFrontierCurrent(())) => Ok(ComputeLog::SourceFrontierCurrent),
+            Some(ImportFrontierCurrent(())) => Ok(ComputeLog::ImportFrontierCurrent),
             None => Err(TryFromProtoError::missing_field("ProtoComputeLog::kind")),
         }
     }
@@ -287,7 +317,7 @@ pub static DEFAULT_LOG_VARIANTS: Lazy<Vec<LogVariant>> = Lazy::new(|| {
         LogVariant::Compute(ComputeLog::DataflowCurrent),
         LogVariant::Compute(ComputeLog::DataflowDependency),
         LogVariant::Compute(ComputeLog::FrontierCurrent),
-        LogVariant::Compute(ComputeLog::SourceFrontierCurrent),
+        LogVariant::Compute(ComputeLog::ImportFrontierCurrent),
         LogVariant::Compute(ComputeLog::FrontierDelay),
         LogVariant::Compute(ComputeLog::PeekCurrent),
         LogVariant::Compute(ComputeLog::PeekDuration),
@@ -711,7 +741,7 @@ impl LogVariant {
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("time", ScalarType::MzTimestamp.nullable(false)),
 
-            LogVariant::Compute(ComputeLog::SourceFrontierCurrent) => RelationDesc::empty()
+            LogVariant::Compute(ComputeLog::ImportFrontierCurrent) => RelationDesc::empty()
                 .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("import_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
@@ -723,6 +753,7 @@ impl LogVariant {
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("delay_ns", ScalarType::UInt64.nullable(false))
                 .with_column("count", ScalarType::Int64.nullable(false))
+                .with_column("sum", ScalarType::UInt64.nullable(true))
                 .with_key(vec![0, 1, 2, 3]),
 
             LogVariant::Compute(ComputeLog::PeekCurrent) => RelationDesc::empty()
@@ -736,6 +767,7 @@ impl LogVariant {
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("duration_ns", ScalarType::UInt64.nullable(false))
                 .with_column("count", ScalarType::UInt64.nullable(false))
+                .with_column("sum", ScalarType::UInt64.nullable(true))
                 .with_key(vec![0, 1]),
         }
     }
@@ -782,7 +814,7 @@ impl LogVariant {
             LogVariant::Compute(ComputeLog::DataflowCurrent) => vec![],
             LogVariant::Compute(ComputeLog::DataflowDependency) => vec![],
             LogVariant::Compute(ComputeLog::FrontierCurrent) => vec![],
-            LogVariant::Compute(ComputeLog::SourceFrontierCurrent) => vec![],
+            LogVariant::Compute(ComputeLog::ImportFrontierCurrent) => vec![],
             LogVariant::Compute(ComputeLog::FrontierDelay) => vec![],
             LogVariant::Compute(ComputeLog::PeekCurrent) => vec![],
             LogVariant::Compute(ComputeLog::PeekDuration) => vec![],

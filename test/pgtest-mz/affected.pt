@@ -1,6 +1,20 @@
 # Test affected row counts.
 
 send
+Query {"query": "DROP TABLE IF EXISTS t"}
+Query {"query": "DROP TABLE IF EXISTS u"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
 Query {"query": "CREATE TABLE t (i int)"}
 Query {"query": "INSERT INTO t VALUES (1), (1)"}
 Query {"query": "INSERT INTO t SELECT * FROM generate_series(1, 10)"}

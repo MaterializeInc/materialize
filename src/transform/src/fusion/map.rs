@@ -39,16 +39,16 @@ impl crate::Transform for Map {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        let result = relation.try_visit_mut_pre(&mut |e| Ok(self.action(e)));
-        mz_repr::explain_new::trace_plan(&*relation);
-        result
+        relation.visit_mut_pre(&mut Self::action)?;
+        mz_repr::explain::trace_plan(&*relation);
+        Ok(())
     }
 }
 
 impl Map {
     /// Fuses a sequence of `Map` operators into one `Map` operator.
     /// Remove the map operator if it is empty.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+    pub fn action(relation: &mut MirRelationExpr) {
         if let MirRelationExpr::Map { input, scalars } = relation {
             while let MirRelationExpr::Map {
                 input: inner_input,

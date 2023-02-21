@@ -7,36 +7,34 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::marker::PhantomData;
+use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write;
 use std::num::NonZeroI64;
 use std::sync::{Arc, Mutex};
-use std::{cmp, time::Duration};
+use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
-use futures::future::{self, try_join3, try_join_all, BoxFuture};
-use futures::future::{try_join, TryFutureExt};
+use futures::future::{self, BoxFuture};
+use futures::future::{FutureExt, TryFutureExt};
 use futures::{Future, StreamExt};
 use postgres_openssl::MakeTlsConnector;
 use prometheus::{IntCounter, IntCounterVec};
 use rand::Rng;
-use serde_json::Value;
-use timely::progress::frontier::AntichainRef;
+
 use timely::progress::Antichain;
-use timely::PartialOrder;
 use tokio::sync::mpsc;
+use tokio::time::Interval;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Statement};
 use tracing::{error, event, info, warn, Level};
 
-use mz_ore::collections::CollectionExt;
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::retry::Retry;
 
 use crate::{
-    consolidate_updates_kv, AntichainFormatter, AppendBatch, Data, Diff, Id, InternalStashError,
-    StashCollection, StashError, Timestamp,
+    AppendBatch, Data, Diff, Id, InternalStashError, StashCollection, StashError, Timestamp,
 };
 
 // TODO: Change the indexes on data to be more applicable to the current
@@ -78,6 +76,10 @@ CREATE TABLE uppers (
 );
 ";
 
+// Force reconnection every few minutes to allow cockroach to rebalance
+// connections after it restarts during maintenance or upgrades.
+const RECONNECT_INTERVAL: Duration = Duration::from_secs(300);
+
 struct PreparedStatements {
     select_epoch: Statement,
     iter_key: Statement,
@@ -87,7 +89,7 @@ struct PreparedStatements {
     iter: Statement,
     seal: Statement,
     compact: Statement,
-    update_many: Statement,
+    update_many: Arc<tokio::sync::Mutex<BTreeMap<usize, Statement>>>,
 }
 
 impl PreparedStatements {
@@ -120,12 +122,6 @@ impl PreparedStatements {
         let compact = client
             .prepare("UPDATE sinces SET since = $1 WHERE collection_id = $2")
             .await?;
-        let update_many = client
-            .prepare(
-                "INSERT INTO data (collection_id, key, value, time, diff)
-             VALUES ($1, $2, $3, $4, $5)",
-            )
-            .await?;
         Ok(PreparedStatements {
             select_epoch,
             iter_key,
@@ -135,18 +131,18 @@ impl PreparedStatements {
             iter,
             seal,
             compact,
-            update_many,
+            update_many: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
         })
     }
 }
 
 // Track statement execution counts.
-struct CountedStatements<'a> {
+pub(crate) struct CountedStatements<'a> {
     stmts: &'a PreparedStatements,
     // Due to our use of try_join and futures, this needs to be an Arc Mutex.
     // Use a BTreeMap for deterministic debug printing. Use an Option to avoid
     // allocating an Arc when unused.
-    counts: Option<Arc<Mutex<BTreeMap<&'static str, usize>>>>,
+    counts: Option<Arc<Mutex<BTreeMap<String, usize>>>>,
 }
 
 impl<'a> CountedStatements<'a> {
@@ -161,49 +157,76 @@ impl<'a> CountedStatements<'a> {
         }
     }
 
-    fn inc(&self, name: &'static str) {
+    pub fn inc<S: Into<String>>(&self, name: S) {
         if let Some(counts) = &self.counts {
             let mut map = counts.lock().unwrap();
-            *map.entry(name).or_default() += 1;
-            *map.entry("_total").or_default() += 1;
+            *map.entry(name.into()).or_default() += 1;
+            *map.entry("_total".into()).or_default() += 1;
         }
     }
 
-    fn select_epoch(&self) -> &Statement {
+    pub fn select_epoch(&self) -> &Statement {
         self.inc("select_epoch");
         &self.stmts.select_epoch
     }
-    fn iter_key(&self) -> &Statement {
+    pub fn iter_key(&self) -> &Statement {
         self.inc("iter_key");
         &self.stmts.iter_key
     }
-    fn since(&self) -> &Statement {
+    pub fn since(&self) -> &Statement {
         self.inc("since");
         &self.stmts.since
     }
-    fn upper(&self) -> &Statement {
+    pub fn upper(&self) -> &Statement {
         self.inc("upper");
         &self.stmts.upper
     }
-    fn collection(&self) -> &Statement {
+    pub fn collection(&self) -> &Statement {
         self.inc("collection");
         &self.stmts.collection
     }
-    fn iter(&self) -> &Statement {
+    pub fn iter(&self) -> &Statement {
         self.inc("iter");
         &self.stmts.iter
     }
-    fn seal(&self) -> &Statement {
+    pub fn seal(&self) -> &Statement {
         self.inc("seal");
         &self.stmts.seal
     }
-    fn compact(&self) -> &Statement {
+    pub fn compact(&self) -> &Statement {
         self.inc("compact");
         &self.stmts.compact
     }
-    fn update_many(&self) -> &Statement {
-        self.inc("update_many");
-        &self.stmts.update_many
+    /// Returns a ToStatement to INSERT a specified number of rows. First
+    /// statement parameter is collection_id. Then key, value, time, diff as
+    /// sets of 4 for each row.
+    pub async fn update(&self, client: &Client, rows: usize) -> Result<Statement, StashError> {
+        self.inc(format!("update[{rows}]"));
+
+        match self.stmts.update_many.lock().await.entry(rows) {
+            Entry::Occupied(entry) => Ok(entry.get().clone()),
+            Entry::Vacant(entry) => {
+                let mut stmt =
+                    String::from("INSERT INTO data (collection_id, key, value, time, diff) VALUES");
+                let mut sep = ' ';
+                for i in 0..rows {
+                    let idx = 1 + i * 4;
+                    write!(
+                        &mut stmt,
+                        "{}($1, ${}, ${}, ${}, ${})",
+                        sep,
+                        idx + 1,
+                        idx + 2,
+                        idx + 3,
+                        idx + 4
+                    )
+                    .unwrap();
+                    sep = ',';
+                }
+                let stmt = client.prepare(&stmt).await?;
+                Ok(entry.insert(stmt).clone())
+            }
+        }
     }
 }
 
@@ -280,6 +303,7 @@ impl StashFactory {
             schema,
             tls: tls.clone(),
             client: None,
+            reconnect: tokio::time::interval(RECONNECT_INTERVAL),
             statements: None,
             epoch: None,
             // The call to rand::random here assumes that the seed source is from a secure
@@ -288,6 +312,7 @@ impl StashFactory {
             nonce: rand::random(),
             sinces_tx,
             metrics: Arc::clone(&self.metrics),
+            collections: BTreeMap::new(),
         };
         // Do the initial connection once here so we don't get stuck in
         // transact's retry loop if the url is bad.
@@ -375,10 +400,13 @@ pub struct Stash {
     schema: Option<String>,
     tls: MakeTlsConnector,
     client: Option<Client>,
+    reconnect: Interval,
+
     statements: Option<PreparedStatements>,
     epoch: Option<NonZeroI64>,
     nonce: [u8; 16],
-    sinces_tx: mpsc::UnboundedSender<(Id, Antichain<Timestamp>)>,
+    pub(crate) sinces_tx: mpsc::UnboundedSender<(Id, Antichain<Timestamp>)>,
+    pub(crate) collections: BTreeMap<String, Id>,
     metrics: Arc<Metrics>,
 }
 
@@ -424,32 +452,9 @@ impl Stash {
         F: FnOnce(Stash) -> Fut,
         Fut: Future<Output = T>,
     {
-        let url =
-            std::env::var("COCKROACH_URL").expect("COCKROACH_URL environment variable is not set");
-        let rng: usize = rand::thread_rng().gen();
-        let schema = format!("schema_{rng}");
-        let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new()).unwrap();
-
-        let (client, connection) = tokio_postgres::connect(&url, tls.clone()).await?;
-        mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
-            if let Err(e) = connection.await {
-                tracing::error!("postgres stash connection error: {}", e);
-            }
-        });
-        client
-            .batch_execute(&format!("CREATE SCHEMA {schema}"))
-            .await?;
-
-        let factory = StashFactory::new(&MetricsRegistry::new());
-        let stash = factory.open(url, Some(schema.clone()), tls).await?;
-        let res = f(stash).await;
-
-        // Ignore errors when dropping, better to return `res`.
-        let _ = client
-            .batch_execute(&format!("DROP SCHEMA {schema} CASCADE"))
-            .await;
-
-        Ok(res)
+        let factory = DebugStashFactory::try_new().await?;
+        let stash = factory.try_open_debug().await?;
+        Ok(f(stash).await)
     }
 
     /// Verifies stash invariants. Should only be called by tests.
@@ -462,7 +467,8 @@ impl Stash {
             .retry_async(|_| async {
                 let count: i64 = client
                     .query_one("SELECT count(*) FROM data WHERE diff < 0", &[])
-                    .await?
+                    .await
+                    .expect("verify select count failed")
                     .get(0);
                 if count > 0 {
                     Err(format!("found {count} data rows with negative diff").into())
@@ -586,12 +592,13 @@ impl Stash {
     ///     .await
     //  }
     /// ```
-    #[tracing::instrument(level = "debug", skip_all)]
-    async fn transact<F, T>(&mut self, f: F) -> Result<T, StashError>
+    #[tracing::instrument(name = "stash::transact", level = "debug", skip_all)]
+    pub(crate) async fn transact<F, T>(&mut self, f: F) -> Result<T, StashError>
     where
         F: for<'a> Fn(
             &'a CountedStatements<'a>,
             &'a Client,
+            &'a BTreeMap<String, Id>,
         ) -> BoxFuture<'a, Result<T, StashError>>,
     {
         self.metrics.transactions.inc();
@@ -600,6 +607,12 @@ impl Stash {
             .into_retry_stream();
         let mut retry = Box::pin(retry);
         let mut attempt: u64 = 0;
+
+        // Actively reconnect to allow cockroach to rebalanace.
+        if self.reconnect.tick().now_or_never().is_some() {
+            self.client = None;
+        }
+
         loop {
             // Execute the operation in a transaction or savepoint.
             match self.transact_inner(&f).await {
@@ -647,12 +660,13 @@ impl Stash {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[tracing::instrument(name = "stash::transact_inner", level = "debug", skip_all)]
     async fn transact_inner<F, T>(&mut self, f: &F) -> Result<T, StashError>
     where
         F: for<'a> Fn(
             &'a CountedStatements<'a>,
             &'a Client,
+            &'a BTreeMap<String, Id>,
         ) -> BoxFuture<'a, Result<T, StashError>>,
     {
         let reconnect = match &self.client {
@@ -677,7 +691,7 @@ impl Stash {
         let epoch_fut = client
             .query_one(stmts.select_epoch(), &[])
             .map_err(|err| err.into());
-        let f_fut = f(&stmts, client);
+        let f_fut = f(&stmts, client, &self.collections);
         let (row, res) = future::try_join(epoch_fut, f_fut).await?;
         let current_epoch = NonZeroI64::new(row.get(0)).unwrap();
         if Some(current_epoch) != self.epoch {
@@ -700,178 +714,6 @@ impl Stash {
         client.batch_execute(tx_end).await?;
         Ok(res)
     }
-
-    async fn since_tx(
-        stmts: &CountedStatements<'_>,
-        tx: &Client,
-        collection_id: Id,
-    ) -> Result<Antichain<Timestamp>, StashError> {
-        let since: Option<Timestamp> = tx
-            .query_one(stmts.since(), &[&collection_id])
-            .await?
-            .get("since");
-        Ok(Antichain::from_iter(since))
-    }
-
-    async fn upper_tx(
-        stmts: &CountedStatements<'_>,
-        tx: &Client,
-        collection_id: Id,
-    ) -> Result<Antichain<Timestamp>, StashError> {
-        let upper: Option<Timestamp> = tx
-            .query_one(stmts.upper(), &[&collection_id])
-            .await?
-            .get("upper");
-        Ok(Antichain::from_iter(upper))
-    }
-
-    /// `seals` has tuples of `(collection id, new upper, Option<current upper>)`. The
-    /// current upper can be `Some` if it is already known.
-    async fn seal_batch_tx<'a, I>(
-        stmts: &CountedStatements<'_>,
-        tx: &Client,
-        seals: I,
-    ) -> Result<(), StashError>
-    where
-        I: Iterator<Item = (Id, &'a Antichain<Timestamp>, Option<Antichain<Timestamp>>)>,
-    {
-        let futures = seals.map(|(collection_id, new_upper, upper)| {
-            try_join(
-                async move {
-                    let upper = match upper {
-                        Some(upper) => upper,
-                        None => Self::upper_tx(stmts, tx, collection_id).await?,
-                    };
-                    if PartialOrder::less_than(new_upper, &upper) {
-                        return Err(StashError::from(format!(
-                            "seal request {} is less than the current upper frontier {}",
-                            AntichainFormatter(new_upper),
-                            AntichainFormatter(&upper),
-                        )));
-                    }
-                    Ok(())
-                },
-                async move {
-                    tx.execute(stmts.seal(), &[&new_upper.as_option(), &collection_id])
-                        .map_err(StashError::from)
-                        .await
-                },
-            )
-        });
-        try_join_all(futures).await?;
-        Ok(())
-    }
-
-    /// `upper` can be `Some` if the collection's upper is already known.
-    async fn update_many_tx(
-        stmts: &CountedStatements<'_>,
-        tx: &Client,
-        collection_id: Id,
-        entries: &[((Value, Value), Timestamp, Diff)],
-        upper: Option<Antichain<Timestamp>>,
-    ) -> Result<(), StashError> {
-        let mut futures = Vec::with_capacity(entries.len());
-        for ((key, value), time, diff) in entries {
-            futures.push(async move {
-                tx.execute(
-                    stmts.update_many(),
-                    &[&collection_id, &key, &value, &time, &diff],
-                )
-                .map_err(|err| err.into())
-                .await
-            });
-        }
-        // Check the upper in a separate future so we can issue the updates without
-        // waiting for it first.
-        try_join(
-            async {
-                let upper = match upper {
-                    Some(upper) => upper,
-                    None => Self::upper_tx(stmts, tx, collection_id).await?,
-                };
-                for ((_key, _value), time, _diff) in entries {
-                    if !upper.less_equal(time) {
-                        return Err(StashError::from(format!(
-                            "entry time {} is less than the current upper frontier {}",
-                            time,
-                            AntichainFormatter(&upper)
-                        )));
-                    }
-                }
-                Ok(upper)
-            },
-            try_join_all(futures),
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// `compactions` has tuples of `(collection id, new since, Option<current
-    /// upper>)`. The current upper can be `Some` if it is already known.
-    async fn compact_batch_tx<'a, I>(
-        stmts: &CountedStatements<'_>,
-        tx: &Client,
-        compactions: I,
-    ) -> Result<(), StashError>
-    where
-        I: Iterator<Item = (Id, &'a Antichain<Timestamp>, Option<Antichain<Timestamp>>)>,
-    {
-        let futures = compactions.map(|(collection_id, new_since, upper)| {
-            try_join3(
-                async move {
-                    let since = Self::since_tx(stmts, tx, collection_id).await?;
-                    if PartialOrder::less_than(new_since, &since) {
-                        return Err(StashError::from(format!(
-                            "compact request {} is less than the current since frontier {}",
-                            AntichainFormatter(new_since),
-                            AntichainFormatter(&since)
-                        )));
-                    }
-                    Ok(())
-                },
-                async move {
-                    let upper = match upper {
-                        Some(upper) => upper,
-                        None => Self::upper_tx(stmts, tx, collection_id).await?,
-                    };
-                    if PartialOrder::less_than(&upper, new_since) {
-                        return Err(StashError::from(format!(
-                            "compact request {} is greater than the current upper frontier {}",
-                            AntichainFormatter(new_since),
-                            AntichainFormatter(&upper)
-                        )));
-                    }
-                    Ok(())
-                },
-                async move {
-                    tx.execute(stmts.compact(), &[&new_since.as_option(), &collection_id])
-                        .map_err(StashError::from)
-                        .await
-                },
-            )
-        });
-        try_join_all(futures).await?;
-        Ok(())
-    }
-
-    /// Returns sinces for the requested collections.
-    async fn sinces_batch_tx(
-        stmts: &CountedStatements<'_>,
-        tx: &Client,
-        collections: &[Id],
-    ) -> Result<HashMap<Id, Antichain<Timestamp>>, StashError> {
-        let mut futures = Vec::with_capacity(collections.len());
-        for collection_id in collections {
-            futures.push(async move {
-                let since = Self::since_tx(stmts, tx, *collection_id).await?;
-                // Without this type assertion, we get a "type inside `async fn` body must be
-                // known in this context" error.
-                Result::<_, StashError>::Ok((*collection_id, since))
-            });
-        }
-        let sinces = HashMap::from_iter(try_join_all(futures).await?);
-        Ok(sinces)
-    }
 }
 
 impl Stash {
@@ -884,266 +726,13 @@ impl Stash {
         V: Data,
     {
         let name = name.to_string();
-        self.transact(move |stmts, tx| {
-            let name = name.clone();
-            Box::pin(async move {
-                let collection_id_opt: Option<_> = tx
-                    .query_one(stmts.collection(), &[&name])
-                    .await
-                    .map(|row| row.get("collection_id"))
-                    .ok();
-
-                let collection_id = match collection_id_opt {
-                    Some(id) => id,
-                    None => {
-                        let collection_id = tx
-                        .query_one(
-                            "INSERT INTO collections (name) VALUES ($1) RETURNING collection_id",
-                            &[&name],
-                        )
-                        .await?
-                        .get("collection_id");
-                        tx.execute(
-                            "INSERT INTO sinces (collection_id, since) VALUES ($1, $2)",
-                            &[&collection_id, &Timestamp::MIN],
-                        )
-                        .await?;
-                        tx.execute(
-                            "INSERT INTO uppers (collection_id, upper) VALUES ($1, $2)",
-                            &[&collection_id, &Timestamp::MIN],
-                        )
-                        .await?;
-                        collection_id
-                    }
-                };
-
-                Ok(StashCollection {
-                    id: collection_id,
-                    _kv: PhantomData,
-                })
-            })
-        })
-        .await
-    }
-
-    pub async fn collections(&mut self) -> Result<BTreeSet<String>, StashError> {
-        let names = self
-            .transact(move |_stmts, tx| {
-                Box::pin(async move {
-                    let rows = tx.query("SELECT name FROM collections", &[]).await?;
-                    Ok(rows.into_iter().map(|row| row.get(0)))
-                })
-            })
-            .await?;
-        Ok(BTreeSet::from_iter(names))
-    }
-
-    pub async fn iter<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<Vec<((K, V), Timestamp, Diff)>, StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        self.transact(move |stmts, tx| {
-            Box::pin(async move {
-                let since = match Self::since_tx(stmts, tx, collection.id)
-                    .await?
-                    .into_option()
-                {
-                    Some(since) => since,
-                    None => {
-                        return Err(StashError::from(
-                            "cannot iterate collection with empty since frontier",
-                        ));
-                    }
-                };
-                let rows = tx
-                    .query(stmts.iter(), &[&collection.id])
-                    .await?
-                    .into_iter()
-                    .map(|row| {
-                        let key: Value = row.try_get("key")?;
-                        let value: Value = row.try_get("value")?;
-                        let time = row.try_get("time")?;
-                        let diff: Diff = row.try_get("diff")?;
-                        Ok::<_, StashError>(((key, value), cmp::max(time, since), diff))
-                    })
-                    // The collect here isn't needed, we just want the short circuit return
-                    // behavior of ?. Is there a way to achieve that without allocating a Vec?
-                    .collect::<Result<Vec<_>, _>>()?;
-                let rows = consolidate_updates_kv(rows).collect();
-                Ok(rows)
-            })
-        })
-        .await
-    }
-
-    #[tracing::instrument(level = "trace", skip_all)]
-    pub async fn iter_key<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-        key: &K,
-    ) -> Result<Vec<(V, Timestamp, Diff)>, StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        let key = serde_json::to_vec(key).expect("must serialize");
-        let key: Value = serde_json::from_slice(&key)?;
-        self.transact(move |stmts, tx| {
-            let key = key.clone();
-            Box::pin(async move {
-                let (since, rows) = future::try_join(
-                    Self::since_tx(stmts, tx, collection.id),
-                    tx.query(stmts.iter_key(), &[&collection.id, &key])
-                        .map_err(|err| err.into()),
-                )
-                .await?;
-                let since = match since.into_option() {
-                    Some(since) => since,
-                    None => {
-                        return Err(StashError::from(
-                            "cannot iterate collection with empty since frontier",
-                        ));
-                    }
-                };
-                let mut rows = rows
-                    .into_iter()
-                    .map(|row| {
-                        let value: Value = row.try_get("value")?;
-                        let value: V = serde_json::from_value(value)?;
-                        let time = row.try_get("time")?;
-                        let diff = row.try_get("diff")?;
-                        Ok::<_, StashError>((value, cmp::max(time, since), diff))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                differential_dataflow::consolidation::consolidate_updates(&mut rows);
-                Ok(rows)
-            })
-        })
-        .await
-    }
-
-    /// Atomically adds a single entry to the arrangement.
-    ///
-    /// The entry's time must be greater than or equal to the upper frontier.
-    ///
-    /// If this method returns `Ok`, the entry has been made durable.
-    pub async fn update<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-        data: (K, V),
-        time: Timestamp,
-        diff: Diff,
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        self.update_many(collection, [(data, time, diff)]).await
-    }
-
-    pub async fn update_many<K, V, I>(
-        &mut self,
-        collection: StashCollection<K, V>,
-        entries: I,
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-        I: IntoIterator<Item = ((K, V), Timestamp, Diff)> + Send,
-        I::IntoIter: Send,
-    {
-        let entries = entries
-            .into_iter()
-            .map(|((key, value), time, diff)| {
-                let key = serde_json::to_value(&key).expect("must serialize");
-                let value = serde_json::to_value(&value).expect("must serialize");
-                ((key, value), time, diff)
-            })
-            .collect::<Vec<_>>();
-        self.transact(move |stmts, tx| {
-            let entries = entries.clone();
-            Box::pin(async move {
-                Self::update_many_tx(stmts, tx, collection.id, &entries, None).await?;
-                Ok(())
-            })
-        })
-        .await
-    }
-
-    pub async fn seal<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-        new_upper: AntichainRef<'_, Timestamp>,
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        self.seal_batch(&[(collection, new_upper.to_owned())]).await
-    }
-
-    pub async fn seal_batch<K, V>(
-        &mut self,
-        seals: &[(StashCollection<K, V>, Antichain<Timestamp>)],
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        let seals = seals
-            .iter()
-            .map(|(collection, frontier)| (collection.id, frontier.clone()))
-            .collect::<Vec<_>>();
-        self.transact(move |stmts, tx| {
-            let seals = seals.clone();
-            Box::pin(async move {
-                Self::seal_batch_tx(stmts, tx, seals.iter().map(|d| (d.0, &d.1, None))).await
-            })
-        })
-        .await
-    }
-
-    pub async fn compact<'a, K, V>(
-        &'a mut self,
-        collection: StashCollection<K, V>,
-        new_since: AntichainRef<'a, Timestamp>,
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        self.compact_batch(&[(collection, new_since.to_owned())])
+        self.with_transaction(move |tx| Box::pin(async move { tx.collection(&name).await }))
             .await
     }
 
-    pub async fn compact_batch<K, V>(
-        &mut self,
-        compactions: &[(StashCollection<K, V>, Antichain<Timestamp>)],
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        let compactions = compactions
-            .iter()
-            .map(|(collection, since)| (collection.id, since.clone()))
-            .collect::<Vec<_>>();
-        self.transact(|stmts, tx| {
-            let compactions = compactions.clone();
-            Box::pin(async move {
-                Self::compact_batch_tx(
-                    stmts,
-                    tx,
-                    compactions.iter().map(|(id, since)| (*id, since, None)),
-                )
-                .await
-            })
-        })
-        .await
+    pub async fn collections(&mut self) -> Result<BTreeSet<String>, StashError> {
+        self.with_transaction(move |tx| Box::pin(async move { tx.collections().await }))
+            .await
     }
 
     pub async fn consolidate(&mut self, collection: Id) -> Result<(), StashError> {
@@ -1153,9 +742,8 @@ impl Stash {
     pub async fn consolidate_batch(&mut self, collections: &[Id]) -> Result<(), StashError> {
         let collections = collections.to_vec();
         let sinces = self
-            .transact(|stmts, tx| {
-                let collections = collections.clone();
-                Box::pin(async move { Self::sinces_batch_tx(stmts, tx, &collections).await })
+            .with_transaction(move |tx| {
+                Box::pin(async move { tx.sinces_batch(&collections).await })
             })
             .await?;
         // On successful transact, send consolidation sinces to the
@@ -1168,36 +756,8 @@ impl Stash {
         Ok(())
     }
 
-    /// Reports the current since frontier.
-    #[tracing::instrument(level = "trace", skip_all)]
-    pub async fn since<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<Antichain<Timestamp>, StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        self.transact(|stmts, tx| Box::pin(Self::since_tx(stmts, tx, collection.id)))
-            .await
-    }
-
-    /// Reports the current upper frontier.
-    #[tracing::instrument(level = "trace", skip_all)]
-    pub async fn upper<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<Antichain<Timestamp>, StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        self.transact(|stmts, tx| Box::pin(Self::upper_tx(stmts, tx, collection.id)))
-            .await
-    }
-
     pub async fn confirm_leadership(&mut self) -> Result<(), StashError> {
-        self.transact(|_, _| Box::pin(async { Ok(()) })).await
+        self.with_transaction(|_| Box::pin(async { Ok(()) })).await
     }
 
     pub fn is_readonly(&self) -> bool {
@@ -1218,206 +778,19 @@ impl From<tokio_postgres::Error> for StashError {
 }
 
 impl Stash {
-    /// Returns the most recent timestamp at which sealed entries can be read.
-    pub async fn peek_timestamp<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<Timestamp, StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        let since = self.since(collection).await?;
-        let upper = self.upper(collection).await?;
-        if PartialOrder::less_equal(&upper, &since) {
-            return Err(StashError {
-                inner: InternalStashError::PeekSinceUpper(format!(
-                    "collection {} since {} is not less than upper {}",
-                    collection.id,
-                    AntichainFormatter(&since),
-                    AntichainFormatter(&upper)
-                )),
-            });
-        }
-        match upper.as_option() {
-            Some(ts) => match ts.checked_sub(1) {
-                Some(ts) => Ok(ts),
-                None => Err("could not determine peek timestamp".into()),
-            },
-            None => Ok(Timestamp::MAX),
-        }
-    }
-
-    /// Returns the current value of sealed entries.
-    ///
-    /// Entries are iterated in `(key, value)` order and are guaranteed to be
-    /// consolidated.
-    ///
-    /// Sealed entries are those with timestamps less than the collection's upper
-    /// frontier.
-    pub async fn peek<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<Vec<(K, V, Diff)>, StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        let timestamp = self.peek_timestamp(collection).await?;
-        let mut rows: Vec<_> = self
-            .iter(collection)
-            .await?
-            .into_iter()
-            .filter_map(|((k, v), data_ts, diff)| {
-                if data_ts.less_equal(&timestamp) {
-                    Some((k, v, diff))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        differential_dataflow::consolidation::consolidate_updates(&mut rows);
-        Ok(rows)
-    }
-
-    /// Returns the current k,v pairs of sealed entries, erroring if there is more
-    /// than one entry for a given key or the multiplicity is not 1 for each key.
-    ///
-    /// Sealed entries are those with timestamps less than the collection's upper
-    /// frontier.
-    pub async fn peek_one<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<BTreeMap<K, V>, StashError>
-    where
-        K: Data + std::hash::Hash,
-        V: Data,
-    {
-        let rows = self.peek(collection).await?;
-        let mut res = BTreeMap::new();
-        for (k, v, diff) in rows {
-            if diff != 1 {
-                return Err("unexpected peek multiplicity".into());
-            }
-            if res.insert(k, v).is_some() {
-                return Err(format!("duplicate peek keys for collection {}", collection.id).into());
-            }
-        }
-        Ok(res)
-    }
-
-    /// Returns the current sealed value for the given key, erroring if there is
-    /// more than one entry for the key or its multiplicity is not 1.
-    ///
-    /// Sealed entries are those with timestamps less than the collection's upper
-    /// frontier.
-    #[tracing::instrument(level = "trace", skip_all)]
-    pub async fn peek_key_one<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-        key: &K,
-    ) -> Result<Option<V>, StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        let timestamp = self.peek_timestamp(collection).await?;
-        let mut rows: Vec<_> = self
-            .iter_key(collection, key)
-            .await?
-            .into_iter()
-            .filter_map(|(v, data_ts, diff)| {
-                if data_ts.less_equal(&timestamp) {
-                    Some((v, diff))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        differential_dataflow::consolidation::consolidate(&mut rows);
-        let v = match rows.len() {
-            1 => {
-                let (v, diff) = rows.into_element();
-                match diff {
-                    1 => Some(v),
-                    0 => None,
-                    _ => return Err("multiple values unexpected".into()),
-                }
-            }
-            0 => None,
-            _ => return Err("multiple values unexpected".into()),
-        };
-        Ok(v)
-    }
-}
-
-impl Stash {
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn append_batch(&mut self, batches: &[AppendBatch]) -> Result<(), StashError> {
+    /// Like `append` but doesn't consolidate.
+    pub async fn append_batch(&mut self, batches: Vec<AppendBatch>) -> Result<(), StashError> {
         if batches.is_empty() {
             return Ok(());
         }
-        let batches = batches.to_vec();
-        self.transact(move |stmts, tx| {
-            let batches = batches.clone();
+        self.with_transaction(move |tx| {
             Box::pin(async move {
-                let futures = batches.into_iter().map(
-                    |AppendBatch {
-                         collection_id,
-                         lower,
-                         upper,
-                         compact,
-                         entries,
-                         ..
-                     }| {
-                        // Clone to appease rust async.
-                        let lower1 = lower.clone();
-                        let lower2 = lower.clone();
-                        let upper1 = upper.clone();
-                        try_join3(
-                            async move {
-                                // Verify the previous upper before compaction.
-                                let current_upper =
-                                    Self::upper_tx(stmts, tx, collection_id).await?;
-                                if current_upper != lower1 {
-                                    return Err(StashError::from(format!(
-                                        "unexpected lower, got {:?}, expected {:?}",
-                                        current_upper, lower1
-                                    )));
-                                }
-                                Self::compact_batch_tx(
-                                    stmts,
-                                    tx,
-                                    std::iter::once((collection_id, &compact, Some(upper))),
-                                )
-                                .await
-                            },
-                            async move {
-                                Self::update_many_tx(
-                                    stmts,
-                                    tx,
-                                    collection_id,
-                                    &entries,
-                                    Some(lower2),
-                                )
-                                .await
-                            },
-                            async move {
-                                Self::seal_batch_tx(
-                                    stmts,
-                                    tx,
-                                    std::iter::once((collection_id, &upper1, Some(lower))),
-                                )
-                                .await
-                            },
-                        )
-                    },
-                );
-                try_join_all(futures).await
+                let batches = batches.clone();
+                tx.append(batches).await
             })
         })
-        .await?;
-        Ok(())
+        .await
     }
 
     /// Atomically adds entries, seals, compacts, and consolidates multiple
@@ -1429,12 +802,12 @@ impl Stash {
     ///
     /// If this method returns `Ok`, the entries have been made durable and uppers
     /// advanced, otherwise no changes were committed.
-    pub async fn append(&mut self, batches: &[AppendBatch]) -> Result<(), StashError> {
+    pub async fn append(&mut self, batches: Vec<AppendBatch>) -> Result<(), StashError> {
         if batches.is_empty() {
             return Ok(());
         }
-        self.append_batch(batches).await?;
         let ids: Vec<_> = batches.iter().map(|batch| batch.collection_id).collect();
+        self.append_batch(batches).await?;
         self.consolidate_batch(&ids).await?;
         Ok(())
     }
@@ -1450,9 +823,10 @@ struct Consolidator {
     url: String,
     tls: MakeTlsConnector,
     sinces_rx: mpsc::UnboundedReceiver<(Id, Antichain<Timestamp>)>,
-    consolidations: HashMap<Id, Antichain<Timestamp>>,
+    consolidations: BTreeMap<Id, Antichain<Timestamp>>,
 
     client: Option<Client>,
+    reconnect: Interval,
     stmt_candidates: Option<Statement>,
     stmt_insert: Option<Statement>,
     stmt_delete: Option<Statement>,
@@ -1469,10 +843,11 @@ impl Consolidator {
             tls,
             sinces_rx,
             client: None,
+            reconnect: tokio::time::interval(RECONNECT_INTERVAL),
             stmt_candidates: None,
             stmt_insert: None,
             stmt_delete: None,
-            consolidations: HashMap::new(),
+            consolidations: BTreeMap::new(),
         };
         cons.spawn();
     }
@@ -1485,6 +860,10 @@ impl Consolidator {
             // Wait for the next consolidation request.
             while let Some((id, ts)) = self.sinces_rx.recv().await {
                 self.insert(id, ts);
+
+                if self.reconnect.tick().now_or_never().is_some() {
+                    self.client = None;
+                }
 
                 while !self.consolidations.is_empty() {
                     // Accumulate any pending requests that have come in during
@@ -1635,5 +1014,115 @@ impl Consolidator {
         );
         self.client = Some(client);
         Ok(())
+    }
+}
+
+/// Stash factory to use for tests that uses a random schema for a stash, which is re-used on all
+/// stash openings. The schema is dropped when this factory is dropped.
+pub struct DebugStashFactory {
+    url: String,
+    schema: String,
+    tls: MakeTlsConnector,
+    stash_factory: StashFactory,
+}
+
+impl DebugStashFactory {
+    /// Returns a new factory that will generate a random schema one time, then use it on any
+    /// opened Stash.
+    pub async fn try_new() -> Result<DebugStashFactory, StashError> {
+        let url =
+            std::env::var("COCKROACH_URL").expect("COCKROACH_URL environment variable is not set");
+        let rng: usize = rand::thread_rng().gen();
+        let schema = format!("schema_{rng}");
+        let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new()).unwrap();
+
+        let (client, connection) = tokio_postgres::connect(&url, tls.clone()).await?;
+        mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
+            if let Err(e) = connection.await {
+                tracing::error!("postgres stash connection error: {e}");
+            }
+        });
+        client
+            .batch_execute(&format!("CREATE SCHEMA {schema}"))
+            .await?;
+
+        let stash_factory = StashFactory::new(&MetricsRegistry::new());
+
+        Ok(DebugStashFactory {
+            url,
+            schema,
+            tls,
+            stash_factory,
+        })
+    }
+
+    /// Returns a new factory that will generate a random schema one time, then use it on any
+    /// opened Stash.
+    ///
+    /// # Panics
+    /// Panics if it is unable to create a new factory.
+    pub async fn new() -> DebugStashFactory {
+        DebugStashFactory::try_new()
+            .await
+            .expect("unable to create debug stash factory")
+    }
+
+    /// Returns a new Stash.
+    pub async fn try_open_debug(&self) -> Result<Stash, StashError> {
+        self.stash_factory
+            .open(
+                self.url.clone(),
+                Some(self.schema.clone()),
+                self.tls.clone(),
+            )
+            .await
+    }
+
+    /// Returns a new Stash.
+    ///
+    /// # Panics
+    /// Panics if it is unable to create a new stash.
+    pub async fn open_debug(&self) -> Stash {
+        self.try_open_debug()
+            .await
+            .expect("unable to open debug stash")
+    }
+}
+
+impl Drop for DebugStashFactory {
+    fn drop(&mut self) {
+        let url = self.url.clone();
+        let schema = self.schema.clone();
+        let tls = self.tls.clone();
+        let result = std::thread::spawn(move || {
+            let async_runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            async_runtime.block_on(async {
+                let (client, connection) = tokio_postgres::connect(&url, tls).await?;
+                mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
+                    if let Err(e) = connection.await {
+                        std::panic::resume_unwind(Box::new(e));
+                    }
+                });
+                client
+                    .batch_execute(&format!("DROP SCHEMA {} CASCADE", &schema))
+                    .await?;
+                Ok::<_, StashError>(())
+            })
+        })
+        // Note that we are joining on a tokio task here, which blocks the current runtime from making other progress on the current worker thread.
+        // Because this only happens on shutdown and is only used in tests, we have determined that its okay
+        .join();
+
+        match result {
+            Ok(result) => {
+                if let Err(e) = result {
+                    std::panic::resume_unwind(Box::new(e));
+                }
+            }
+
+            Err(e) => std::panic::resume_unwind(e),
+        }
     }
 }

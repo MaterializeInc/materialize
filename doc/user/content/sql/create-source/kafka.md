@@ -58,7 +58,7 @@ Field                                | Value     | Description
 
 Field                                | Value     | Description
 -------------------------------------|-----------|-------------------------------------
-`SIZE`                               | `text`    | **Required.** The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`, `xlarge`.
+`SIZE`                               | `text`    | The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`, `xlarge`. Required if the `IN CLUSTER` option is not specified.
 
 ## Supported formats
 
@@ -443,11 +443,11 @@ CREATE SOURCE json_source
 
 
 ```sql
-CREATE VIEW jsonified_kafka_source AS
+CREATE MATERIALIZED VIEW typed_kafka_source AS
   SELECT
-    data->>'field1' AS field_1,
-    data->>'field2' AS field_2,
-    data->>'field3' AS field_3
+    (data->>'field1')::boolean AS field_1,
+    (data->>'field2')::int AS field_2,
+    (data->>'field3')::float AS field_3
   FROM (SELECT CONVERT_FROM(data, 'utf8')::jsonb AS data FROM json_source);
 ```
 

@@ -5,10 +5,13 @@ members = [
     "src/audit-log",
     "src/avro",
     "src/avro-derive",
+    "src/aws-s3-util",
     "src/build-id",
     "src/build-info",
     "src/ccsr",
+    "src/cluster",
     "src/clusterd",
+    "src/cluster-client",
     "src/compute",
     "src/compute-client",
     "src/controller",
@@ -73,7 +76,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.66.0"
+rust-version = "1.67.0"
 
 [profile.dev]
 # TODO(gusywnn|benesch): remove this when incremental ice's are improved

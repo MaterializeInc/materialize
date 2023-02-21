@@ -11,6 +11,8 @@
 
 syntax = "proto3";
 
+import "repr/src/relation_and_scalar.proto";
+
 package mz_storage_client.controller;
 
 message ProtoCollectionMetadata {
@@ -19,6 +21,8 @@ message ProtoCollectionMetadata {
     string data_shard = 3;
     string remap_shard = 4;
     optional string status_shard = 5;
+
+    mz_repr.relation_and_scalar.ProtoRelationDesc relation_desc = 6;
 }
 
 message ProtoDurableCollectionMetadata {

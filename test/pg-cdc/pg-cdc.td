@@ -253,6 +253,13 @@ types_table           subsource <null>
 utf<NUMBER>_table     subsource <null>
 таблица               subsource <null>
 
+$ set-regex match=[0-9]+|_[a-f0-9]+ replacement=<SUPPRESSED>
+
+> SELECT * FROM mz_internal.mz_postgres_sources
+id             replication_slot
+---------------------------------------
+u<SUPPRESSED>  materialize<SUPPRESSED>
+
 $ unset-regex
 
 # Cannot drop subsources independent of primary source

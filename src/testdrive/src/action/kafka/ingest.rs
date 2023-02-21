@@ -14,7 +14,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context};
 use byteorder::{NetworkEndian, WriteBytesExt};
 use futures::stream::{FuturesUnordered, StreamExt};
-use maplit::hashmap;
+use maplit::btreemap;
 use prost::Message;
 use prost_reflect::{DescriptorPool, DynamicMessage, MessageDescriptor};
 use rdkafka::message::{Header, OwnedHeaders};
@@ -332,7 +332,7 @@ pub async fn run_ingest(
         for row in iter {
             let row = action::substitute_vars(
                 row,
-                &hashmap! { "kafka-ingest.iteration".into() => iteration.to_string() },
+                &btreemap! { "kafka-ingest.iteration".into() => iteration.to_string() },
                 &None,
                 false,
             )?;

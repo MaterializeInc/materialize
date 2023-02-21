@@ -9,7 +9,7 @@
 
 //! Configuration for [crate::location] implementations.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,7 +20,7 @@ use url::Url;
 use crate::file::{FileBlob, FileBlobConfig};
 use crate::location::{Blob, Consensus, ExternalError};
 use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
-use crate::metrics::PostgresConsensusMetrics;
+use crate::metrics::{PostgresConsensusMetrics, S3BlobMetrics};
 use crate::postgres::{PostgresConsensus, PostgresConsensusConfig};
 use crate::s3::{S3Blob, S3BlobConfig};
 
@@ -36,6 +36,18 @@ pub enum BlobConfig {
     Mem,
 }
 
+/// Configuration knobs for [Blob].
+pub trait BlobKnobs: std::fmt::Debug + Send + Sync {
+    /// Maximum time allowed for a network call, including retry attempts.
+    fn operation_timeout(&self) -> Duration;
+    /// Maximum time allowed for a single network call.
+    fn operation_attempt_timeout(&self) -> Duration;
+    /// Maximum time to wait for a socket connection to be made.
+    fn connect_timeout(&self) -> Duration;
+    /// Maximum time to wait to read the first byte of a response, including connection time.
+    fn read_timeout(&self) -> Duration;
+}
+
 impl BlobConfig {
     /// Opens the associated implementation of [Blob].
     pub async fn open(self) -> Result<Arc<dyn Blob + Send + Sync>, ExternalError> {
@@ -47,10 +59,14 @@ impl BlobConfig {
     }
 
     /// Parses a [Blob] config from a uri string.
-    pub async fn try_from(value: &str) -> Result<Self, ExternalError> {
+    pub async fn try_from(
+        value: &str,
+        knobs: Box<dyn BlobKnobs>,
+        metrics: S3BlobMetrics,
+    ) -> Result<Self, ExternalError> {
         let url = Url::parse(value)
             .map_err(|err| anyhow!("failed to parse blob location {} as a url: {}", &value, err))?;
-        let mut query_params = url.query_pairs().collect::<HashMap<_, _>>();
+        let mut query_params = url.query_pairs().collect::<BTreeMap<_, _>>();
 
         let config = match url.scheme() {
             "file" => {
@@ -76,9 +92,17 @@ impl BlobConfig {
                     Some(password) => Some((url.username().to_string(), password.to_string())),
                 };
 
-                let config =
-                    S3BlobConfig::new(bucket, prefix, role_arn, endpoint, region, credentials)
-                        .await?;
+                let config = S3BlobConfig::new(
+                    bucket,
+                    prefix,
+                    role_arn,
+                    endpoint,
+                    region,
+                    credentials,
+                    knobs,
+                    metrics,
+                )
+                .await?;
 
                 Ok(BlobConfig::S3(config))
             }

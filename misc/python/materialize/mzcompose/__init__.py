@@ -29,6 +29,7 @@ import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass
 from inspect import getmembers, isfunction
+from ssl import SSLContext
 from tempfile import TemporaryFile
 from typing import (
     Any,
@@ -440,14 +441,6 @@ class Composition:
             cursor.execute(sql)
             return cursor.fetchall()
 
-    def start_and_wait_for_tcp(self, services: List[str]) -> None:
-        """Sequentially start the named services, waiting for eaach to become
-        available via TCP before moving on to the next."""
-        for service in services:
-            self.up(service)
-            for port in self.compose["services"][service].get("ports", []):
-                self.wait_for_tcp(host=service, port=port)
-
     def run(
         self,
         service: str,
@@ -673,119 +666,6 @@ class Composition:
         """Sleep for the specified duration in seconds."""
         print(f"Sleeping for {duration} seconds...")
         time.sleep(duration)
-
-    # TODO(benesch): replace with Docker health checks.
-    def wait_for_tcp(
-        self,
-        *,
-        host: str = "localhost",
-        port: Union[int, str],
-        timeout_secs: int = 240,
-    ) -> None:
-        if isinstance(port, str):
-            port = int(port.split(":")[0])
-        ui.progress(f"waiting for {host}:{port}", "C")
-        cmd = f"docker run --rm -t --network {self.name}_default ubuntu:focal-20210723".split()
-        try:
-            _check_tcp(cmd[:], host, port, timeout_secs)
-        except subprocess.CalledProcessError:
-            ui.progress(" error!", finish=True)
-            raise UIError(f"unable to connect to {host}:{port}")
-        else:
-            ui.progress(" success!", finish=True)
-
-    # TODO(benesch): replace with Docker health checks.
-    def wait_for_postgres(
-        self,
-        *,
-        dbname: str = "postgres",
-        port: Optional[int] = None,
-        host: str = "localhost",
-        timeout_secs: int = 120,
-        query: str = "SELECT 1",
-        user: str = "postgres",
-        password: str = "postgres",
-        expected: Union[Iterable[Any], Literal["any"]] = [[1]],
-        print_result: bool = False,
-        service: str = "postgres",
-    ) -> None:
-        """Wait for a PostgreSQL service to start.
-
-        Args:
-            dbname: the name of the database to wait for
-            host: the host postgres is listening on
-            port: the port postgres is listening on
-            timeout_secs: How long to wait for postgres to be up before failing (Default: 30)
-            query: The query to execute to ensure that it is running (Default: "Select 1")
-            user: The chosen user (this is only relevant for postgres)
-            service: The service that postgres is running as (Default: postgres)
-        """
-        _wait_for_pg(
-            dbname=dbname,
-            host=host,
-            port=self.port(service, port) if port else self.default_port(service),
-            timeout_secs=timeout_secs,
-            query=query,
-            user=user,
-            password=password,
-            expected=expected,
-            print_result=print_result,
-        )
-
-    # TODO(benesch): replace with Docker health checks.
-    def wait_for_cockroach(
-        self,
-        *,
-        dbname: str = "defaultdb",
-        port: Optional[int] = None,
-        host: str = "localhost",
-        timeout_secs: int = 120,
-        query: str = "SELECT 1",
-        user: str = "root",
-        password: Optional[str] = None,
-        expected: Union[Iterable[Any], Literal["any"]] = [[1]],
-        print_result: bool = False,
-        service: str = "cockroach",
-    ) -> None:
-        """Wait for a CockroachDB service to start."""
-        _wait_for_pg(
-            dbname=dbname,
-            host=host,
-            port=self.port(service, port) if port else self.default_port(service),
-            timeout_secs=timeout_secs,
-            query=query,
-            user=user,
-            password=password,
-            expected=expected,
-            print_result=print_result,
-        )
-
-    # TODO(benesch): replace with Docker health checks.
-    def wait_for_materialized(
-        self,
-        service: str = "materialized",
-        *,
-        user: str = "materialize",
-        dbname: str = "materialize",
-        host: str = "localhost",
-        port: Optional[int] = None,
-        timeout_secs: int = 60,
-        query: str = "SELECT 1",
-        expected: Union[Iterable[Any], Literal["any"]] = [[1]],
-        print_result: bool = False,
-    ) -> None:
-        """Like `Workflow.wait_for_postgres`, but with Materialize defaults."""
-        self.wait_for_postgres(
-            user=user,
-            dbname=dbname,
-            host=host,
-            port=port,
-            timeout_secs=timeout_secs,
-            query=query,
-            expected=expected,
-            print_result=print_result,
-            service=service,
-        )
 
     def testdrive(
         self,
@@ -1017,12 +897,14 @@ def _wait_for_pg(
     password: Optional[str],
     expected: Union[Iterable[Any], Literal["any"]],
     print_result: bool = False,
+    ssl_context: Optional[SSLContext] = None,
 ) -> None:
     """Wait for a pg-compatible database (includes materialized)"""
-    args = f"dbname={dbname} host={host} port={port} user={user} password={password}"
+    obfuscated_password = password[0:1] if password is not None else ""
+    args = f"dbname={dbname} host={host} port={port} user={user} password='{obfuscated_password}...'"
     ui.progress(f"waiting for {args} to handle {query!r}", "C")
     error = None
-    for remaining in ui.timeout_loop(timeout_secs, tick=0.1):
+    for remaining in ui.timeout_loop(timeout_secs, tick=0.5):
         try:
             conn = pg8000.connect(
                 database=dbname,
@@ -1031,6 +913,7 @@ def _wait_for_pg(
                 user=user,
                 password=password,
                 timeout=1,
+                ssl_context=ssl_context,
             )
             # The default (autocommit = false) wraps everything in a transaction.
             conn.autocommit = True

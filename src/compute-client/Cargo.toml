@@ -15,12 +15,15 @@ columnation = { git = "https://github.com/frankmcsherry/columnation" }
 chrono = { version = "0.4.23", default-features = false, features = ["std"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3.25"
+http = "0.2.8"
 itertools = "0.10.5"
 mz-build-info = { path = "../build-info" }
+mz-cluster-client = { path = "../cluster-client" }
 mz-expr = { path = "../expr" }
 mz-orchestrator = { path = "../orchestrator" }
 mz-ore = { path = "../ore", features = ["tracing_"] }
 mz-persist = { path = "../persist" }
+mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr", features = ["tracing_"] }
@@ -37,7 +40,7 @@ serde = { version = "1.0.152", features = ["derive"] }
 serde_json = "1.0.89"
 thiserror = "1.0.37"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = "1.23.0"
+tokio = "1.24.2"
 tokio-stream = "0.1.11"
 tonic = "0.8.2"
 tracing = "0.1.37"
@@ -45,6 +48,7 @@ uuid = { version = "1.2.2", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [build-dependencies]
+prost-build = "0.11.2"
 protobuf-src = "1.1.0"
 tonic-build = "0.8.2"
 

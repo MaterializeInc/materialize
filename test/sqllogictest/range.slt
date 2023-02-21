@@ -534,6 +534,31 @@ SELECT a::text AS t FROM int4range_values EXCEPT SELECT column1::text FROM (VALU
 ----
 NULL
 
+#
+# int4range upper, lower
+query TT
+SELECT DISTINCT lower(a), upper(a) FROM int4range_values;
+----
+NULL
+NULL
+NULL
+1
+NULL
+2
+1
+NULL
+2
+NULL
+0
+1
+0
+2
+-1
+1
+-1
+2
+
+
 # test that lower and upper roundtrip through range constructor function
 query T
 SELECT
@@ -643,74 +668,549 @@ select '(,)'::int4range <= 'empty'::int4range;
 ----
 false
 
-# Results from PG
-# (,) true true true
-# [0,1) false true false
-# [0,2) false true true
-# (,1) true true false
-# [1,) false false true
-# [-1,1) true true false
-# [-1,2) true true true
-# (,2) true true true
-# [2,) false false false
-# empty false false false
-# Note that the predicate also ensures equality between @> and <@
-query TTTT
-SELECT
-	DISTINCT
-	a::STRING,
-	a @> -1 AS contains_neg_1,
-	a @> 0 AS contains_0,
-	a @> 1 AS contains_1
-FROM
-	int4range_values
-WHERE
-	(a @> -1 = -1 <@ a)
-	AND (a @> 0 = 0 <@ a)
-	AND (a @> 1 = 1 <@ a)
-ORDER BY
-	a;
+statement ok
+CREATE TABLE int4range_test_values (v int4range);
+
+statement ok
+INSERT INTO int4range_test_values VALUES ('empty'),
+('(,)'),
+('(,1)'),
+('(-1,)'),
+('[-1,1)'),
+('[-99,-50)'),
+('[50,99)');
+
+#
+# int4range contains
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM int4range_values WHERE a IS NOT NULL
+) int4range_values(a), int4range_test_values WHERE a @> v GROUP BY a ORDER BY a;
+----
+empty
+{empty}
+(,1)
+{empty,"(,1)","[-99,-50)","[-1,1)"}
+(,2)
+{empty,"(,1)","[-99,-50)","[-1,1)"}
+(,)
+{empty,"(,1)","(,)","[-99,-50)","[-1,1)","[0,)","[50,99)"}
+[-1,1)
+{empty,"[-1,1)"}
+[-1,2)
+{empty,"[-1,1)"}
+[0,1)
+{empty}
+[0,2)
+{empty}
+[1,)
+{empty,"[50,99)"}
+[2,)
+{empty,"[50,99)"}
+
+#
+# int4range contained by
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM int4range_values WHERE a IS NOT NULL
+) int4range_values(a), int4range_test_values WHERE a <@ v GROUP BY a ORDER BY a;
+----
+empty
+{empty,"(,1)","(,)","[-99,-50)","[-1,1)","[0,)","[50,99)"}
+(,1)
+{"(,1)","(,)"}
+(,2)
+{"(,)"}
+(,)
+{"(,)"}
+[-1,1)
+{"(,1)","(,)","[-1,1)"}
+[-1,2)
+{"(,)"}
+[0,1)
+{"(,1)","(,)","[-1,1)","[0,)"}
+[0,2)
+{"(,)","[0,)"}
+[1,)
+{"(,)","[0,)"}
+[2,)
+{"(,)","[0,)"}
+
+#
+# int4range contained overlaps
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM int4range_values WHERE a IS NOT NULL
+) int4range_values(a), int4range_test_values WHERE a && v GROUP BY a ORDER BY a;
+----
+(,1)
+{"(,1)","(,)","[-99,-50)","[-1,1)","[0,)"}
+(,2)
+{"(,1)","(,)","[-99,-50)","[-1,1)","[0,)"}
+(,)
+{"(,1)","(,)","[-99,-50)","[-1,1)","[0,)","[50,99)"}
+[-1,1)
+{"(,1)","(,)","[-1,1)","[0,)"}
+[-1,2)
+{"(,1)","(,)","[-1,1)","[0,)"}
+[0,1)
+{"(,1)","(,)","[-1,1)","[0,)"}
+[0,2)
+{"(,1)","(,)","[-1,1)","[0,)"}
+[1,)
+{"(,)","[0,)","[50,99)"}
+[2,)
+{"(,)","[0,)","[50,99)"}
+
+#
+# int4range before
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM int4range_values WHERE a IS NOT NULL
+) int4range_values(a), int4range_test_values WHERE a << v GROUP BY a ORDER BY a;
+----
+(,1)
+{"[50,99)"}
+(,2)
+{"[50,99)"}
+[-1,1)
+{"[50,99)"}
+[-1,2)
+{"[50,99)"}
+[0,1)
+{"[50,99)"}
+[0,2)
+{"[50,99)"}
+
+#
+# int4range after
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM int4range_values WHERE a IS NOT NULL
+) int4range_values(a), int4range_test_values WHERE a >> v GROUP BY a ORDER BY a;
+----
+[-1,1)
+{"[-99,-50)"}
+[-1,2)
+{"[-99,-50)"}
+[0,1)
+{"[-99,-50)"}
+[0,2)
+{"[-99,-50)"}
+[1,)
+{"(,1)","[-99,-50)","[-1,1)"}
+[2,)
+{"(,1)","[-99,-50)","[-1,1)"}
+
+#
+# int4range overleft
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM int4range_values WHERE a IS NOT NULL
+) int4range_values(a), int4range_test_values WHERE a &< v GROUP BY a ORDER BY a;
+----
+(,1)
+{"(,1)","(,)","[-1,1)","[0,)","[50,99)"}
+(,2)
+{"(,)","[0,)","[50,99)"}
+(,)
+{"(,)","[0,)"}
+[-1,1)
+{"(,1)","(,)","[-1,1)","[0,)","[50,99)"}
+[-1,2)
+{"(,)","[0,)","[50,99)"}
+[0,1)
+{"(,1)","(,)","[-1,1)","[0,)","[50,99)"}
+[0,2)
+{"(,)","[0,)","[50,99)"}
+[1,)
+{"(,)","[0,)"}
+[2,)
+{"(,)","[0,)"}
+
+#
+# int4range overright
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM int4range_values WHERE a IS NOT NULL
+) int4range_values(a), int4range_test_values WHERE a &> v GROUP BY a ORDER BY a;
+----
+(,1)
+{"(,1)","(,)"}
+(,2)
+{"(,1)","(,)"}
+(,)
+{"(,1)","(,)"}
+[-1,1)
+{"(,1)","(,)","[-99,-50)","[-1,1)"}
+[-1,2)
+{"(,1)","(,)","[-99,-50)","[-1,1)"}
+[0,1)
+{"(,1)","(,)","[-99,-50)","[-1,1)","[0,)"}
+[0,2)
+{"(,1)","(,)","[-99,-50)","[-1,1)","[0,)"}
+[1,)
+{"(,1)","(,)","[-99,-50)","[-1,1)","[0,)"}
+[2,)
+{"(,1)","(,)","[-99,-50)","[-1,1)","[0,)"}
+
+#
+# int4range adjacent
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM int4range_values WHERE a IS NOT NULL
+) int4range_values(a), int4range_test_values WHERE a -|- v GROUP BY a ORDER BY a;
+----
+[1,)
+{"(,1)","[-1,1)"}
+
+#
+# int4range union
+
+query T
+SELECT (null + 'empty'::int4range)::text
+----
+NULL
+
+query T
+SELECT ('empty'::int4range + 'empty'::int4range)::text
+----
+empty
+
+query T
+SELECT ('empty'::int4range + '(,-1)'::int4range)::text
+----
+(,-1)
+
+query T
+SELECT ('(,-1)'::int4range + 'empty'::int4range)::text
+----
+(,-1)
+
+query T
+SELECT ('(,-1)'::int4range + '(,-1)'::int4range)::text
+----
+(,-1)
+
+query T
+SELECT ('empty'::int4range + '[-2,2)'::int4range)::text
+----
+[-2,2)
+
+query T
+SELECT ('empty'::int4range + '[1,)'::int4range)::text
+----
+[1,)
+
+query T
+SELECT ('empty'::int4range + '(,)'::int4range)::text
 ----
 (,)
-true
-true
-true
-(,1)
-true
-true
-false
+
+query T
+SELECT ('(,-1)'::int4range + '[-2,2)'::int4range)::text
+----
 (,2)
-true
-true
-true
-[-1,1)
-true
-true
-false
-[-1,2)
-true
-true
-true
-[0,1)
-false
-true
-false
-[0,2)
-false
-true
-true
+
+query error result of range union would not be contiguous
+SELECT ('(,-1)'::int4range + '[1,)'::int4range)::text
+
+query T
+SELECT ('(,-1)'::int4range + '(,)'::int4range)::text
+----
+(,)
+
+query T
+SELECT ('[-2,2)'::int4range + 'empty'::int4range)::text
+----
+[-2,2)
+
+query T
+SELECT ('[-2,2)'::int4range + '(,-1)'::int4range)::text
+----
+(,2)
+
+query T
+SELECT ('[-2,2)'::int4range + '[1,)'::int4range)::text
+----
+[-2,)
+
+query T
+SELECT ('[-2,2)'::int4range + '(,)'::int4range)::text
+----
+(,)
+
+query T
+SELECT ('[1,)'::int4range + 'empty'::int4range)::text
+----
 [1,)
-false
-false
-true
-[2,)
-false
-false
-false
+
+query error result of range union would not be contiguous
+SELECT ('[1,)'::int4range + '(,-1)'::int4range)::text
+
+query T
+SELECT ('[1,)'::int4range + '[-2,2)'::int4range)::text
+----
+[-2,)
+
+query T
+SELECT ('[1,)'::int4range + '(,)'::int4range)::text
+----
+(,)
+
+query T
+SELECT ('(,)'::int4range + 'empty'::int4range)::text
+----
+(,)
+
+query T
+SELECT ('(,)'::int4range + '(,-1)'::int4range)::text
+----
+(,)
+
+query T
+SELECT ('(,)'::int4range + '[-2,2)'::int4range)::text
+----
+(,)
+
+query T
+SELECT ('(,)'::int4range + '[1,)'::int4range)::text
+----
+(,)
+
+#
+# int4range intersection
+
+query T
+SELECT (null * 'empty'::int4range)::text
+----
+NULL
+
+query T
+SELECT ('empty'::int4range * 'empty'::int4range)::text
+----
 empty
-false
-false
-false
+
+query T
+SELECT ('empty'::int4range * '(,-1)'::int4range)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::int4range * 'empty'::int4range)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::int4range * '(,-1)'::int4range)::text
+----
+(,-1)
+
+query T
+SELECT ('empty'::int4range * '[-2,2)'::int4range)::text
+----
+empty
+
+query T
+SELECT ('empty'::int4range * '[1,)'::int4range)::text
+----
+empty
+
+query T
+SELECT ('empty'::int4range * '(,)'::int4range)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::int4range * '[-2,2)'::int4range)::text
+----
+[-2,-1)
+
+query T
+SELECT ('(,-1)'::int4range * '[1,)'::int4range)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::int4range * '(,)'::int4range)::text
+----
+(,-1)
+
+query T
+SELECT ('[-2,2)'::int4range * 'empty'::int4range)::text
+----
+empty
+
+query T
+SELECT ('[-2,2)'::int4range * '(,-1)'::int4range)::text
+----
+[-2,-1)
+
+query T
+SELECT ('[-2,2)'::int4range * '[1,)'::int4range)::text
+----
+[1,2)
+
+query T
+SELECT ('[-2,2)'::int4range * '(,)'::int4range)::text
+----
+[-2,2)
+
+query T
+SELECT ('[1,)'::int4range * 'empty'::int4range)::text
+----
+empty
+
+query T
+SELECT ('[1,)'::int4range * '(,-1)'::int4range)::text
+----
+empty
+
+query T
+SELECT ('[1,)'::int4range * '[-2,2)'::int4range)::text
+----
+[1,2)
+
+query T
+SELECT ('[1,)'::int4range * '(,)'::int4range)::text
+----
+[1,)
+
+query T
+SELECT ('(,)'::int4range * 'empty'::int4range)::text
+----
+empty
+
+query T
+SELECT ('(,)'::int4range * '(,-1)'::int4range)::text
+----
+(,-1)
+
+query T
+SELECT ('(,)'::int4range * '[-2,2)'::int4range)::text
+----
+[-2,2)
+
+query T
+SELECT ('(,)'::int4range * '[1,)'::int4range)::text
+----
+[1,)
+
+#
+# int4range difference
+
+query T
+SELECT (null - 'empty'::int4range)::text
+----
+NULL
+
+query T
+SELECT ('empty'::int4range - 'empty'::int4range)::text
+----
+empty
+
+query T
+SELECT ('empty'::int4range - '(,-1)'::int4range)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::int4range - 'empty'::int4range)::text
+----
+(,-1)
+
+query T
+SELECT ('(,-1)'::int4range - '(,-1)'::int4range)::text
+----
+empty
+
+query T
+SELECT ('empty'::int4range - '[-2,2)'::int4range)::text
+----
+empty
+
+query T
+SELECT ('empty'::int4range - '[1,)'::int4range)::text
+----
+empty
+
+query T
+SELECT ('empty'::int4range - '(,)'::int4range)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::int4range - '[-2,2)'::int4range)::text
+----
+(,-2)
+
+query T
+SELECT ('(,-1)'::int4range - '[1,)'::int4range)::text
+----
+(,-1)
+
+query T
+SELECT ('(,-1)'::int4range - '(,)'::int4range)::text
+----
+empty
+
+query T
+SELECT ('[-2,2)'::int4range - 'empty'::int4range)::text
+----
+[-2,2)
+
+query T
+SELECT ('[-2,2)'::int4range - '(,-1)'::int4range)::text
+----
+[-1,2)
+
+query T
+SELECT ('[-2,2)'::int4range - '[1,)'::int4range)::text
+----
+[-2,1)
+
+query T
+SELECT ('[-2,2)'::int4range - '(,)'::int4range)::text
+----
+empty
+
+query T
+SELECT ('[1,)'::int4range - 'empty'::int4range)::text
+----
+[1,)
+
+query T
+SELECT ('[1,)'::int4range - '(,-1)'::int4range)::text
+----
+[1,)
+
+query T
+SELECT ('[1,)'::int4range - '[-2,2)'::int4range)::text
+----
+[2,)
+
+query T
+SELECT ('[1,)'::int4range - '(,)'::int4range)::text
+----
+empty
+
+query T
+SELECT ('(,)'::int4range - 'empty'::int4range)::text
+----
+(,)
+
+query T
+SELECT ('(,)'::int4range - '(,-1)'::int4range)::text
+----
+[-1,)
+
+query error result of range difference would not be contiguous
+SELECT ('(,)'::int4range - '[-2,2)'::int4range)::text
+
+query T
+SELECT ('(,)'::int4range - '[1,)'::int4range)::text
+----
+(,1)
 
 #
 # int8range
@@ -1201,6 +1701,31 @@ SELECT a::text AS t FROM int8range_values EXCEPT SELECT column1::text FROM (VALU
 ----
 NULL
 
+#
+# int8range upper, lower
+query TT
+SELECT DISTINCT lower(a), upper(a) FROM int8range_values;
+----
+NULL
+NULL
+NULL
+1
+NULL
+2
+1
+NULL
+2
+NULL
+0
+1
+0
+2
+-1
+1
+-1
+2
+
+
 # test that lower and upper roundtrip through range constructor function
 query T
 SELECT
@@ -1283,74 +1808,549 @@ select '(,)'::int8range <= 'empty'::int8range;
 ----
 false
 
-# Results from PG
-# (,) true true true
-# [0,1) false true false
-# [0,2) false true true
-# (,1) true true false
-# [1,) false false true
-# [-1,1) true true false
-# [-1,2) true true true
-# (,2) true true true
-# [2,) false false false
-# empty false false false
-# Note that the predicate also ensures equality between @> and <@
-query TTTT
-SELECT
-	DISTINCT
-	a::STRING,
-	-1 <@ a AS contains_neg_1,
-	a @> 0 AS contains_0,
-	a @> 1 AS contains_1
-FROM
-	int8range_values
-WHERE
-	(a @> -1 = -1 <@ a)
-	AND (a @> 0 = 0 <@ a)
-	AND (a @> 1 = 1 <@ a)
-ORDER BY
-	a;
+statement ok
+CREATE TABLE int8range_test_values (v int8range);
+
+statement ok
+INSERT INTO int8range_test_values VALUES ('empty'),
+('(,)'),
+('(,1)'),
+('(-1,)'),
+('[-1,1)'),
+('[-99,-50)'),
+('[50,99)');
+
+#
+# int8range contains
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM int8range_values WHERE a IS NOT NULL
+) int8range_values(a), int8range_test_values WHERE a @> v GROUP BY a ORDER BY a;
+----
+empty
+{empty}
+(,1)
+{empty,"(,1)","[-99,-50)","[-1,1)"}
+(,2)
+{empty,"(,1)","[-99,-50)","[-1,1)"}
+(,)
+{empty,"(,1)","(,)","[-99,-50)","[-1,1)","[0,)","[50,99)"}
+[-1,1)
+{empty,"[-1,1)"}
+[-1,2)
+{empty,"[-1,1)"}
+[0,1)
+{empty}
+[0,2)
+{empty}
+[1,)
+{empty,"[50,99)"}
+[2,)
+{empty,"[50,99)"}
+
+#
+# int8range contained by
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM int8range_values WHERE a IS NOT NULL
+) int8range_values(a), int8range_test_values WHERE a <@ v GROUP BY a ORDER BY a;
+----
+empty
+{empty,"(,1)","(,)","[-99,-50)","[-1,1)","[0,)","[50,99)"}
+(,1)
+{"(,1)","(,)"}
+(,2)
+{"(,)"}
+(,)
+{"(,)"}
+[-1,1)
+{"(,1)","(,)","[-1,1)"}
+[-1,2)
+{"(,)"}
+[0,1)
+{"(,1)","(,)","[-1,1)","[0,)"}
+[0,2)
+{"(,)","[0,)"}
+[1,)
+{"(,)","[0,)"}
+[2,)
+{"(,)","[0,)"}
+
+#
+# int8range overlaps
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM int8range_values WHERE a IS NOT NULL
+) int8range_values(a), int8range_test_values WHERE a && v GROUP BY a ORDER BY a;
+----
+(,1)
+{"(,1)","(,)","[-99,-50)","[-1,1)","[0,)"}
+(,2)
+{"(,1)","(,)","[-99,-50)","[-1,1)","[0,)"}
+(,)
+{"(,1)","(,)","[-99,-50)","[-1,1)","[0,)","[50,99)"}
+[-1,1)
+{"(,1)","(,)","[-1,1)","[0,)"}
+[-1,2)
+{"(,1)","(,)","[-1,1)","[0,)"}
+[0,1)
+{"(,1)","(,)","[-1,1)","[0,)"}
+[0,2)
+{"(,1)","(,)","[-1,1)","[0,)"}
+[1,)
+{"(,)","[0,)","[50,99)"}
+[2,)
+{"(,)","[0,)","[50,99)"}
+
+#
+# int8range before
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM int8range_values WHERE a IS NOT NULL
+) int8range_values(a), int8range_test_values WHERE a << v GROUP BY a ORDER BY a;
+----
+(,1)
+{"[50,99)"}
+(,2)
+{"[50,99)"}
+[-1,1)
+{"[50,99)"}
+[-1,2)
+{"[50,99)"}
+[0,1)
+{"[50,99)"}
+[0,2)
+{"[50,99)"}
+
+#
+# int8range after
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM int8range_values WHERE a IS NOT NULL
+) int8range_values(a), int8range_test_values WHERE a >> v GROUP BY a ORDER BY a;
+----
+[-1,1)
+{"[-99,-50)"}
+[-1,2)
+{"[-99,-50)"}
+[0,1)
+{"[-99,-50)"}
+[0,2)
+{"[-99,-50)"}
+[1,)
+{"(,1)","[-99,-50)","[-1,1)"}
+[2,)
+{"(,1)","[-99,-50)","[-1,1)"}
+
+#
+# int8range overleft
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM int8range_values WHERE a IS NOT NULL
+) int8range_values(a), int8range_test_values WHERE a &< v GROUP BY a ORDER BY a;
+----
+(,1)
+{"(,1)","(,)","[-1,1)","[0,)","[50,99)"}
+(,2)
+{"(,)","[0,)","[50,99)"}
+(,)
+{"(,)","[0,)"}
+[-1,1)
+{"(,1)","(,)","[-1,1)","[0,)","[50,99)"}
+[-1,2)
+{"(,)","[0,)","[50,99)"}
+[0,1)
+{"(,1)","(,)","[-1,1)","[0,)","[50,99)"}
+[0,2)
+{"(,)","[0,)","[50,99)"}
+[1,)
+{"(,)","[0,)"}
+[2,)
+{"(,)","[0,)"}
+
+#
+# int8range overright
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM int8range_values WHERE a IS NOT NULL
+) int8range_values(a), int8range_test_values WHERE a &> v GROUP BY a ORDER BY a;
+----
+(,1)
+{"(,1)","(,)"}
+(,2)
+{"(,1)","(,)"}
+(,)
+{"(,1)","(,)"}
+[-1,1)
+{"(,1)","(,)","[-99,-50)","[-1,1)"}
+[-1,2)
+{"(,1)","(,)","[-99,-50)","[-1,1)"}
+[0,1)
+{"(,1)","(,)","[-99,-50)","[-1,1)","[0,)"}
+[0,2)
+{"(,1)","(,)","[-99,-50)","[-1,1)","[0,)"}
+[1,)
+{"(,1)","(,)","[-99,-50)","[-1,1)","[0,)"}
+[2,)
+{"(,1)","(,)","[-99,-50)","[-1,1)","[0,)"}
+
+#
+# int8range adjacent
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM int8range_values WHERE a IS NOT NULL
+) int8range_values(a), int8range_test_values WHERE a -|- v GROUP BY a ORDER BY a;
+----
+[1,)
+{"(,1)","[-1,1)"}
+
+#
+# int8range union
+
+query T
+SELECT (null + 'empty'::int8range)::text
+----
+NULL
+
+query T
+SELECT ('empty'::int8range + 'empty'::int8range)::text
+----
+empty
+
+query T
+SELECT ('empty'::int8range + '(,-1)'::int8range)::text
+----
+(,-1)
+
+query T
+SELECT ('(,-1)'::int8range + 'empty'::int8range)::text
+----
+(,-1)
+
+query T
+SELECT ('(,-1)'::int8range + '(,-1)'::int8range)::text
+----
+(,-1)
+
+query T
+SELECT ('empty'::int8range + '[-2,2)'::int8range)::text
+----
+[-2,2)
+
+query T
+SELECT ('empty'::int8range + '[1,)'::int8range)::text
+----
+[1,)
+
+query T
+SELECT ('empty'::int8range + '(,)'::int8range)::text
 ----
 (,)
-true
-true
-true
-(,1)
-true
-true
-false
+
+query T
+SELECT ('(,-1)'::int8range + '[-2,2)'::int8range)::text
+----
 (,2)
-true
-true
-true
-[-1,1)
-true
-true
-false
-[-1,2)
-true
-true
-true
-[0,1)
-false
-true
-false
-[0,2)
-false
-true
-true
+
+query error result of range union would not be contiguous
+SELECT ('(,-1)'::int8range + '[1,)'::int8range)::text
+
+query T
+SELECT ('(,-1)'::int8range + '(,)'::int8range)::text
+----
+(,)
+
+query T
+SELECT ('[-2,2)'::int8range + 'empty'::int8range)::text
+----
+[-2,2)
+
+query T
+SELECT ('[-2,2)'::int8range + '(,-1)'::int8range)::text
+----
+(,2)
+
+query T
+SELECT ('[-2,2)'::int8range + '[1,)'::int8range)::text
+----
+[-2,)
+
+query T
+SELECT ('[-2,2)'::int8range + '(,)'::int8range)::text
+----
+(,)
+
+query T
+SELECT ('[1,)'::int8range + 'empty'::int8range)::text
+----
 [1,)
-false
-false
-true
-[2,)
-false
-false
-false
+
+query error result of range union would not be contiguous
+SELECT ('[1,)'::int8range + '(,-1)'::int8range)::text
+
+query T
+SELECT ('[1,)'::int8range + '[-2,2)'::int8range)::text
+----
+[-2,)
+
+query T
+SELECT ('[1,)'::int8range + '(,)'::int8range)::text
+----
+(,)
+
+query T
+SELECT ('(,)'::int8range + 'empty'::int8range)::text
+----
+(,)
+
+query T
+SELECT ('(,)'::int8range + '(,-1)'::int8range)::text
+----
+(,)
+
+query T
+SELECT ('(,)'::int8range + '[-2,2)'::int8range)::text
+----
+(,)
+
+query T
+SELECT ('(,)'::int8range + '[1,)'::int8range)::text
+----
+(,)
+
+#
+# int8range intersection
+
+query T
+SELECT (null * 'empty'::int8range)::text
+----
+NULL
+
+query T
+SELECT ('empty'::int8range * 'empty'::int8range)::text
+----
 empty
-false
-false
-false
+
+query T
+SELECT ('empty'::int8range * '(,-1)'::int8range)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::int8range * 'empty'::int8range)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::int8range * '(,-1)'::int8range)::text
+----
+(,-1)
+
+query T
+SELECT ('empty'::int8range * '[-2,2)'::int8range)::text
+----
+empty
+
+query T
+SELECT ('empty'::int8range * '[1,)'::int8range)::text
+----
+empty
+
+query T
+SELECT ('empty'::int8range * '(,)'::int8range)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::int8range * '[-2,2)'::int8range)::text
+----
+[-2,-1)
+
+query T
+SELECT ('(,-1)'::int8range * '[1,)'::int8range)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::int8range * '(,)'::int8range)::text
+----
+(,-1)
+
+query T
+SELECT ('[-2,2)'::int8range * 'empty'::int8range)::text
+----
+empty
+
+query T
+SELECT ('[-2,2)'::int8range * '(,-1)'::int8range)::text
+----
+[-2,-1)
+
+query T
+SELECT ('[-2,2)'::int8range * '[1,)'::int8range)::text
+----
+[1,2)
+
+query T
+SELECT ('[-2,2)'::int8range * '(,)'::int8range)::text
+----
+[-2,2)
+
+query T
+SELECT ('[1,)'::int8range * 'empty'::int8range)::text
+----
+empty
+
+query T
+SELECT ('[1,)'::int8range * '(,-1)'::int8range)::text
+----
+empty
+
+query T
+SELECT ('[1,)'::int8range * '[-2,2)'::int8range)::text
+----
+[1,2)
+
+query T
+SELECT ('[1,)'::int8range * '(,)'::int8range)::text
+----
+[1,)
+
+query T
+SELECT ('(,)'::int8range * 'empty'::int8range)::text
+----
+empty
+
+query T
+SELECT ('(,)'::int8range * '(,-1)'::int8range)::text
+----
+(,-1)
+
+query T
+SELECT ('(,)'::int8range * '[-2,2)'::int8range)::text
+----
+[-2,2)
+
+query T
+SELECT ('(,)'::int8range * '[1,)'::int8range)::text
+----
+[1,)
+
+#
+# int8range difference
+
+query T
+SELECT (null - 'empty'::int8range)::text
+----
+NULL
+
+query T
+SELECT ('empty'::int8range - 'empty'::int8range)::text
+----
+empty
+
+query T
+SELECT ('empty'::int8range - '(,-1)'::int8range)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::int8range - 'empty'::int8range)::text
+----
+(,-1)
+
+query T
+SELECT ('(,-1)'::int8range - '(,-1)'::int8range)::text
+----
+empty
+
+query T
+SELECT ('empty'::int8range - '[-2,2)'::int8range)::text
+----
+empty
+
+query T
+SELECT ('empty'::int8range - '[1,)'::int8range)::text
+----
+empty
+
+query T
+SELECT ('empty'::int8range - '(,)'::int8range)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::int8range - '[-2,2)'::int8range)::text
+----
+(,-2)
+
+query T
+SELECT ('(,-1)'::int8range - '[1,)'::int8range)::text
+----
+(,-1)
+
+query T
+SELECT ('(,-1)'::int8range - '(,)'::int8range)::text
+----
+empty
+
+query T
+SELECT ('[-2,2)'::int8range - 'empty'::int8range)::text
+----
+[-2,2)
+
+query T
+SELECT ('[-2,2)'::int8range - '(,-1)'::int8range)::text
+----
+[-1,2)
+
+query T
+SELECT ('[-2,2)'::int8range - '[1,)'::int8range)::text
+----
+[-2,1)
+
+query T
+SELECT ('[-2,2)'::int8range - '(,)'::int8range)::text
+----
+empty
+
+query T
+SELECT ('[1,)'::int8range - 'empty'::int8range)::text
+----
+[1,)
+
+query T
+SELECT ('[1,)'::int8range - '(,-1)'::int8range)::text
+----
+[1,)
+
+query T
+SELECT ('[1,)'::int8range - '[-2,2)'::int8range)::text
+----
+[2,)
+
+query T
+SELECT ('[1,)'::int8range - '(,)'::int8range)::text
+----
+empty
+
+query T
+SELECT ('(,)'::int8range - 'empty'::int8range)::text
+----
+(,)
+
+query T
+SELECT ('(,)'::int8range - '(,-1)'::int8range)::text
+----
+[-1,)
+
+query error result of range difference would not be contiguous
+SELECT ('(,)'::int8range - '[-2,2)'::int8range)::text
+
+query T
+SELECT ('(,)'::int8range - '[1,)'::int8range)::text
+----
+(,1)
 
 #
 # daterange
@@ -1695,7 +2695,7 @@ FROM
 			('[  1970-01-01,)'),
 			('[1970-01-01  ,)'),
 			('[  1970-01-01  ,)'),
-            ('[1970-01-01,  1970-01-01)'),
+('[1970-01-01,  1970-01-01)'),
 			('[1970-01-01,1970-01-01  )'),
 			('[1970-01-01,  1970-01-01  )'),
 			('[1970-01-01,)  '),
@@ -1761,6 +2761,28 @@ empty
 [1970-01-02,)
 [1970-01-02,)
 NULL
+
+#
+# daterange upper, lower
+query TT
+SELECT DISTINCT lower(a), upper(a) FROM daterange_values;
+----
+NULL
+NULL
+NULL
+1970-01-01
+NULL
+1970-01-02
+1970-01-01
+NULL
+1970-01-02
+NULL
+1969-12-31
+1970-01-01
+1969-12-31
+1970-01-02
+1970-01-01
+1970-01-02
 
 # test that lower and upper roundtrip through range constructor function
 query T
@@ -1867,69 +2889,525 @@ select '(,)'::daterange <= 'empty'::daterange;
 ----
 false
 
-# Results from PG
-# (,)|t|t|t
-# [1969-12-31,1970-01-01)|t|f|f
-# [1969-12-31,1970-01-02)|t|t|f
-# (,1970-01-01)|t|f|f
-# [1970-01-01,)|f|t|t
-# [1970-01-01,1970-01-02)|f|t|f
-# (,1970-01-02)|t|t|f
-# [1970-01-02,)|f|f|t
-# empty|f|f|f
-# Note that the predicate also ensures equality between @> and <@
-query TTTT
-SELECT
-	DISTINCT
-	a::text,
-	a @> DATE '1969-12-31' AS contains_neg_1,
-	a @> DATE '1970-01-01' AS contains_0,
-	a @> DATE '1970-01-02' AS contains_1
-FROM
-	daterange_values
-WHERE
-	(a @> DATE '1969-12-31' = DATE '1969-12-31' <@ a)
-	AND (a @> DATE '1970-01-01' = DATE '1970-01-01' <@ a)
-	AND (a @> DATE '1970-01-02' = DATE '1970-01-02' <@ a)
-ORDER BY
-	a;
+statement ok
+CREATE TABLE daterange_test_values (v daterange);
+
+statement ok
+INSERT INTO daterange_test_values VALUES ('empty'),
+('(,)'),
+('(,1970-01-02)'),
+('(1969-12-31,)'),
+('[1969-12-31,1970-01-02)'),
+('[1969-01-01,1969-01-02)'),
+('[1971-01-01,1971-01-02)');
+
+#
+# daterange contains
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM daterange_values WHERE a IS NOT NULL
+) daterange_values(a), daterange_test_values WHERE a @> v GROUP BY a ORDER BY a;
+----
+empty
+{empty}
+(,1970-01-01)
+{empty,"[1969-01-01,1969-01-02)"}
+(,1970-01-02)
+{empty,"(,1970-01-02)","[1969-01-01,1969-01-02)","[1969-12-31,1970-01-02)"}
+(,)
+{empty,"(,1970-01-02)","(,)","[1969-01-01,1969-01-02)","[1969-12-31,1970-01-02)","[1970-01-01,)","[1971-01-01,1971-01-02)"}
+[1969-12-31,1970-01-01)
+{empty}
+[1969-12-31,1970-01-02)
+{empty,"[1969-12-31,1970-01-02)"}
+[1970-01-01,1970-01-02)
+{empty}
+[1970-01-01,)
+{empty,"[1970-01-01,)","[1971-01-01,1971-01-02)"}
+[1970-01-02,)
+{empty,"[1971-01-01,1971-01-02)"}
+
+#
+# daterange contained by
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM daterange_values WHERE a IS NOT NULL
+) daterange_values(a), daterange_test_values WHERE a <@ v GROUP BY a ORDER BY a;
+----
+empty
+{empty,"(,1970-01-02)","(,)","[1969-01-01,1969-01-02)","[1969-12-31,1970-01-02)","[1970-01-01,)","[1971-01-01,1971-01-02)"}
+(,1970-01-01)
+{"(,1970-01-02)","(,)"}
+(,1970-01-02)
+{"(,1970-01-02)","(,)"}
+(,)
+{"(,)"}
+[1969-12-31,1970-01-01)
+{"(,1970-01-02)","(,)","[1969-12-31,1970-01-02)"}
+[1969-12-31,1970-01-02)
+{"(,1970-01-02)","(,)","[1969-12-31,1970-01-02)"}
+[1970-01-01,1970-01-02)
+{"(,1970-01-02)","(,)","[1969-12-31,1970-01-02)","[1970-01-01,)"}
+[1970-01-01,)
+{"(,)","[1970-01-01,)"}
+[1970-01-02,)
+{"(,)","[1970-01-01,)"}
+
+#
+# daterange overlaps
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM daterange_values WHERE a IS NOT NULL
+) daterange_values(a), daterange_test_values WHERE a && v GROUP BY a ORDER BY a;
+----
+(,1970-01-01)
+{"(,1970-01-02)","(,)","[1969-01-01,1969-01-02)","[1969-12-31,1970-01-02)"}
+(,1970-01-02)
+{"(,1970-01-02)","(,)","[1969-01-01,1969-01-02)","[1969-12-31,1970-01-02)","[1970-01-01,)"}
+(,)
+{"(,1970-01-02)","(,)","[1969-01-01,1969-01-02)","[1969-12-31,1970-01-02)","[1970-01-01,)","[1971-01-01,1971-01-02)"}
+[1969-12-31,1970-01-01)
+{"(,1970-01-02)","(,)","[1969-12-31,1970-01-02)"}
+[1969-12-31,1970-01-02)
+{"(,1970-01-02)","(,)","[1969-12-31,1970-01-02)","[1970-01-01,)"}
+[1970-01-01,1970-01-02)
+{"(,1970-01-02)","(,)","[1969-12-31,1970-01-02)","[1970-01-01,)"}
+[1970-01-01,)
+{"(,1970-01-02)","(,)","[1969-12-31,1970-01-02)","[1970-01-01,)","[1971-01-01,1971-01-02)"}
+[1970-01-02,)
+{"(,)","[1970-01-01,)","[1971-01-01,1971-01-02)"}
+
+#
+# daterange before
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM daterange_values WHERE a IS NOT NULL
+) daterange_values(a), daterange_test_values WHERE a << v GROUP BY a ORDER BY a;
+----
+(,1970-01-01)
+{"[1970-01-01,)","[1971-01-01,1971-01-02)"}
+(,1970-01-02)
+{"[1971-01-01,1971-01-02)"}
+[1969-12-31,1970-01-01)
+{"[1970-01-01,)","[1971-01-01,1971-01-02)"}
+[1969-12-31,1970-01-02)
+{"[1971-01-01,1971-01-02)"}
+[1970-01-01,1970-01-02)
+{"[1971-01-01,1971-01-02)"}
+
+#
+# daterange after
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM daterange_values WHERE a IS NOT NULL
+) daterange_values(a), daterange_test_values WHERE a >> v GROUP BY a ORDER BY a;
+----
+[1969-12-31,1970-01-01)
+{"[1969-01-01,1969-01-02)"}
+[1969-12-31,1970-01-02)
+{"[1969-01-01,1969-01-02)"}
+[1970-01-01,1970-01-02)
+{"[1969-01-01,1969-01-02)"}
+[1970-01-01,)
+{"[1969-01-01,1969-01-02)"}
+[1970-01-02,)
+{"(,1970-01-02)","[1969-01-01,1969-01-02)","[1969-12-31,1970-01-02)"}
+
+#
+# daterange overleft
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM daterange_values WHERE a IS NOT NULL
+) daterange_values(a), daterange_test_values WHERE a &< v GROUP BY a ORDER BY a;
+----
+(,1970-01-01)
+{"(,1970-01-02)","(,)","[1969-12-31,1970-01-02)","[1970-01-01,)","[1971-01-01,1971-01-02)"}
+(,1970-01-02)
+{"(,1970-01-02)","(,)","[1969-12-31,1970-01-02)","[1970-01-01,)","[1971-01-01,1971-01-02)"}
+(,)
+{"(,)","[1970-01-01,)"}
+[1969-12-31,1970-01-01)
+{"(,1970-01-02)","(,)","[1969-12-31,1970-01-02)","[1970-01-01,)","[1971-01-01,1971-01-02)"}
+[1969-12-31,1970-01-02)
+{"(,1970-01-02)","(,)","[1969-12-31,1970-01-02)","[1970-01-01,)","[1971-01-01,1971-01-02)"}
+[1970-01-01,1970-01-02)
+{"(,1970-01-02)","(,)","[1969-12-31,1970-01-02)","[1970-01-01,)","[1971-01-01,1971-01-02)"}
+[1970-01-01,)
+{"(,)","[1970-01-01,)"}
+[1970-01-02,)
+{"(,)","[1970-01-01,)"}
+
+#
+# daterange overright
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM daterange_values WHERE a IS NOT NULL
+) daterange_values(a), daterange_test_values WHERE a &> v GROUP BY a ORDER BY a;
+----
+(,1970-01-01)
+{"(,1970-01-02)","(,)"}
+(,1970-01-02)
+{"(,1970-01-02)","(,)"}
+(,)
+{"(,1970-01-02)","(,)"}
+[1969-12-31,1970-01-01)
+{"(,1970-01-02)","(,)","[1969-01-01,1969-01-02)","[1969-12-31,1970-01-02)"}
+[1969-12-31,1970-01-02)
+{"(,1970-01-02)","(,)","[1969-01-01,1969-01-02)","[1969-12-31,1970-01-02)"}
+[1970-01-01,1970-01-02)
+{"(,1970-01-02)","(,)","[1969-01-01,1969-01-02)","[1969-12-31,1970-01-02)","[1970-01-01,)"}
+[1970-01-01,)
+{"(,1970-01-02)","(,)","[1969-01-01,1969-01-02)","[1969-12-31,1970-01-02)","[1970-01-01,)"}
+[1970-01-02,)
+{"(,1970-01-02)","(,)","[1969-01-01,1969-01-02)","[1969-12-31,1970-01-02)","[1970-01-01,)"}
+
+#
+# daterange adjacent
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM daterange_values WHERE a IS NOT NULL
+) daterange_values(a), daterange_test_values WHERE a -|- v GROUP BY a ORDER BY a;
+----
+(,1970-01-01)
+{"[1970-01-01,)"}
+[1969-12-31,1970-01-01)
+{"[1970-01-01,)"}
+[1970-01-02,)
+{"(,1970-01-02)","[1969-12-31,1970-01-02)"}
+
+#
+# daterange union
+query T
+SELECT ('empty'::daterange + 'empty'::daterange)::text
+----
+empty
+
+query T
+SELECT ('empty'::daterange + '(,1969-12-31)'::daterange)::text
+----
+(,1969-12-31)
+
+query T
+SELECT ('(,1969-12-31)'::daterange + 'empty'::daterange)::text
+----
+(,1969-12-31)
+
+query T
+SELECT ('(,1969-12-31)'::daterange + '(,1969-12-31)'::daterange)::text
+----
+(,1969-12-31)
+
+query T
+SELECT ('empty'::daterange + '[1969-12-30,1970-01-03)'::daterange)::text
+----
+[1969-12-30,1970-01-03)
+
+query T
+SELECT ('empty'::daterange + '[1970-01-02,)'::daterange)::text
+----
+[1970-01-02,)
+
+query T
+SELECT ('empty'::daterange + '(,)'::daterange)::text
 ----
 (,)
-true
-true
-true
-(,1970-01-01)
-true
-false
-false
-(,1970-01-02)
-true
-true
-false
-[1969-12-31,1970-01-01)
-true
-false
-false
-[1969-12-31,1970-01-02)
-true
-true
-false
-[1970-01-01,)
-false
-true
-true
-[1970-01-01,1970-01-02)
-false
-true
-false
+
+query T
+SELECT ('(,1969-12-31)'::daterange + '[1969-12-30,1970-01-03)'::daterange)::text
+----
+(,1970-01-03)
+
+query error result of range union would not be contiguous
+SELECT ('(,1969-12-31)'::daterange + '[1970-01-02,)'::daterange)::text
+
+query T
+SELECT ('(,1969-12-31)'::daterange + '(,)'::daterange)::text
+----
+(,)
+
+query T
+SELECT ('[1969-12-30,1970-01-03)'::daterange + 'empty'::daterange)::text
+----
+[1969-12-30,1970-01-03)
+
+query T
+SELECT ('[1969-12-30,1970-01-03)'::daterange + '(,1969-12-31)'::daterange)::text
+----
+(,1970-01-03)
+
+query T
+SELECT ('[1969-12-30,1970-01-03)'::daterange + '[1970-01-02,)'::daterange)::text
+----
+[1969-12-30,)
+
+query T
+SELECT ('[1969-12-30,1970-01-03)'::daterange + '(,)'::daterange)::text
+----
+(,)
+
+query T
+SELECT ('[1970-01-02,)'::daterange + 'empty'::daterange)::text
+----
 [1970-01-02,)
-false
-false
-true
+
+query error result of range union would not be contiguous
+SELECT ('[1970-01-02,)'::daterange + '(,1969-12-31)'::daterange)::text
+
+query T
+SELECT ('[1970-01-02,)'::daterange + '[1969-12-30,1970-01-03)'::daterange)::text
+----
+[1969-12-30,)
+
+query T
+SELECT ('[1970-01-02,)'::daterange + '(,)'::daterange)::text
+----
+(,)
+
+query T
+SELECT ('(,)'::daterange + 'empty'::daterange)::text
+----
+(,)
+
+query T
+SELECT ('(,)'::daterange + '(,1969-12-31)'::daterange)::text
+----
+(,)
+
+query T
+SELECT ('(,)'::daterange + '[1969-12-30,1970-01-03)'::daterange)::text
+----
+(,)
+
+query T
+SELECT ('(,)'::daterange + '[1970-01-02,)'::daterange)::text
+----
+(,)
+
+#
+# daterange intersection
+
+query T
+SELECT ('empty'::daterange * 'empty'::daterange)::text
+----
 empty
-false
-false
-false
+
+query T
+SELECT ('empty'::daterange * '(,1969-12-31)'::daterange)::text
+----
+empty
+
+query T
+SELECT ('(,1969-12-31)'::daterange * 'empty'::daterange)::text
+----
+empty
+
+query T
+SELECT ('(,1969-12-31)'::daterange * '(,1969-12-31)'::daterange)::text
+----
+(,1969-12-31)
+
+query T
+SELECT ('empty'::daterange * '[1969-12-30,1970-01-03)'::daterange)::text
+----
+empty
+
+query T
+SELECT ('empty'::daterange * '[1970-01-02,)'::daterange)::text
+----
+empty
+
+query T
+SELECT ('empty'::daterange * '(,)'::daterange)::text
+----
+empty
+
+query T
+SELECT ('(,1969-12-31)'::daterange * '[1969-12-30,1970-01-03)'::daterange)::text
+----
+[1969-12-30,1969-12-31)
+
+query T
+SELECT ('(,1969-12-31)'::daterange * '[1970-01-02,)'::daterange)::text
+----
+empty
+
+query T
+SELECT ('(,1969-12-31)'::daterange * '(,)'::daterange)::text
+----
+(,1969-12-31)
+
+query T
+SELECT ('[1969-12-30,1970-01-03)'::daterange * 'empty'::daterange)::text
+----
+empty
+
+query T
+SELECT ('[1969-12-30,1970-01-03)'::daterange * '(,1969-12-31)'::daterange)::text
+----
+[1969-12-30,1969-12-31)
+
+query T
+SELECT ('[1969-12-30,1970-01-03)'::daterange * '[1970-01-02,)'::daterange)::text
+----
+[1970-01-02,1970-01-03)
+
+query T
+SELECT ('[1969-12-30,1970-01-03)'::daterange * '(,)'::daterange)::text
+----
+[1969-12-30,1970-01-03)
+
+query T
+SELECT ('[1970-01-02,)'::daterange * 'empty'::daterange)::text
+----
+empty
+
+query T
+SELECT ('[1970-01-02,)'::daterange * '(,1969-12-31)'::daterange)::text
+----
+empty
+
+query T
+SELECT ('[1970-01-02,)'::daterange * '[1969-12-30,1970-01-03)'::daterange)::text
+----
+[1970-01-02,1970-01-03)
+
+query T
+SELECT ('[1970-01-02,)'::daterange * '(,)'::daterange)::text
+----
+[1970-01-02,)
+
+query T
+SELECT ('(,)'::daterange * 'empty'::daterange)::text
+----
+empty
+
+query T
+SELECT ('(,)'::daterange * '(,1969-12-31)'::daterange)::text
+----
+(,1969-12-31)
+
+query T
+SELECT ('(,)'::daterange * '[1969-12-30,1970-01-03)'::daterange)::text
+----
+[1969-12-30,1970-01-03)
+
+query T
+SELECT ('(,)'::daterange * '[1970-01-02,)'::daterange)::text
+----
+[1970-01-02,)
+
+#
+# daterange difference
+
+query T
+SELECT ('empty'::daterange - 'empty'::daterange)::text
+----
+empty
+
+query T
+SELECT ('empty'::daterange - '(,1969-12-31)'::daterange)::text
+----
+empty
+
+query T
+SELECT ('(,1969-12-31)'::daterange - 'empty'::daterange)::text
+----
+(,1969-12-31)
+
+query T
+SELECT ('(,1969-12-31)'::daterange - '(,1969-12-31)'::daterange)::text
+----
+empty
+
+query T
+SELECT ('empty'::daterange - '[1969-12-30,1970-01-03)'::daterange)::text
+----
+empty
+
+query T
+SELECT ('empty'::daterange - '[1970-01-02,)'::daterange)::text
+----
+empty
+
+query T
+SELECT ('empty'::daterange - '(,)'::daterange)::text
+----
+empty
+
+query T
+SELECT ('(,1969-12-31)'::daterange - '[1969-12-30,1970-01-03)'::daterange)::text
+----
+(,1969-12-30)
+
+query T
+SELECT ('(,1969-12-31)'::daterange - '[1970-01-02,)'::daterange)::text
+----
+(,1969-12-31)
+
+query T
+SELECT ('(,1969-12-31)'::daterange - '(,)'::daterange)::text
+----
+empty
+
+query T
+SELECT ('[1969-12-30,1970-01-03)'::daterange - 'empty'::daterange)::text
+----
+[1969-12-30,1970-01-03)
+
+query T
+SELECT ('[1969-12-30,1970-01-03)'::daterange - '(,1969-12-31)'::daterange)::text
+----
+[1969-12-31,1970-01-03)
+
+query T
+SELECT ('[1969-12-30,1970-01-03)'::daterange - '[1970-01-02,)'::daterange)::text
+----
+[1969-12-30,1970-01-02)
+
+query T
+SELECT ('[1969-12-30,1970-01-03)'::daterange - '(,)'::daterange)::text
+----
+empty
+
+query T
+SELECT ('[1970-01-02,)'::daterange - 'empty'::daterange)::text
+----
+[1970-01-02,)
+
+query T
+SELECT ('[1970-01-02,)'::daterange - '(,1969-12-31)'::daterange)::text
+----
+[1970-01-02,)
+
+query T
+SELECT ('[1970-01-02,)'::daterange - '[1969-12-30,1970-01-03)'::daterange)::text
+----
+[1970-01-03,)
+
+query T
+SELECT ('[1970-01-02,)'::daterange - '(,)'::daterange)::text
+----
+empty
+
+query T
+SELECT ('(,)'::daterange - 'empty'::daterange)::text
+----
+(,)
+
+query T
+SELECT ('(,)'::daterange - '(,1969-12-31)'::daterange)::text
+----
+[1969-12-31,)
+
+query error Expected right square bracket, found operator "\-"
+SELECT ('(,)'::daterange - '[1969-12-30,1970-01-03)'::daterange)::text
+----
+[1969-12-30,1970-01-03)
+
+query T
+SELECT ('(,)'::daterange - '[1970-01-02,)'::daterange)::text
+----
+(,1970-01-02)
 
 #
 # numrange
@@ -2274,7 +3752,7 @@ FROM
 			('[  1,)'),
 			('[1  ,)'),
 			('[  1  ,)'),
-            ('[1,  2)'),
+('[1,  2)'),
 			('[1,2  )'),
 			('[1,  2  )'),
 			('[1,)  '),
@@ -2442,6 +3920,22 @@ SELECT a::text AS t FROM numrange_values EXCEPT SELECT column1::text FROM (VALUE
 ----
 NULL
 
+#
+# numrange upper, lower
+query TT
+SELECT DISTINCT lower(a), upper(a) FROM numrange_values;
+----
+NULL
+NULL
+NULL
+1
+1
+NULL
+0
+0
+-1
+1
+
 # test that lower and upper roundtrip through range constructor function
 query T
 SELECT
@@ -2551,79 +4045,217 @@ select '(,)'::numrange <= 'empty'::numrange;
 ----
 false
 
-# Results from PG
-# (,)|t|t|t
-# [0,0]|f|t|f
-# (,1)|t|t|f
-# (,1]|t|t|t
-# (1,)|f|f|f
-# [1,)|f|f|t
-# (-1,1)|f|t|f
-# (-1,1]|f|t|t
-# [-1,1)|t|t|f
-# [-1,1]|t|t|t
-# empty|f|f|f
-# Note that the predicate also ensures equality between @> and <@
-query TTTT
-SELECT
-	DISTINCT
-	a::TEXT,
-	a @> -1::numeric AS contains_neg_1,
-	a @> 0::numeric AS contains_0,
-	a @> 1::numeric AS contains_1
-FROM
-	numrange_values
-WHERE
-	(a @> -1::numeric = -1::numeric <@ a)
-	AND (a @> 0::numeric = 0::numeric <@ a)
-	AND (a @> 1::numeric = 1::numeric <@ a)
-ORDER BY
-	a;
+statement ok
+CREATE TABLE numrange_test_values (v numrange);
+
+statement ok
+INSERT INTO numrange_test_values VALUES
+('empty'),
+('(,)'),
+('(,1)'),
+('(-1,)'),
+('[-1,1)'),
+('[-99,-50)'),
+('[50,99)');
+
+#
+# numrange contains
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM numrange_values WHERE a IS NOT NULL
+) numrange_values(a), numrange_test_values WHERE a @> v GROUP BY a ORDER BY a;
 ----
-(,)
-true
-true
-true
-(,1)
-true
-true
-false
-(,1]
-true
-true
-true
-(-1,1)
-false
-true
-false
-(-1,1]
-false
-true
-true
-(1,)
-false
-false
-false
-[-1,1)
-true
-true
-false
-[-1,1]
-true
-true
-true
-[0,0]
-false
-true
-false
-[1,)
-false
-false
-true
 empty
-false
-false
-false
+{empty}
+(,1)
+{empty,"(,1)","[-99,-50)","[-1,1)"}
+(,1]
+{empty,"(,1)","[-99,-50)","[-1,1)"}
+(,)
+{empty,"(,1)","(,)","[-99,-50)","[-1,1)","(-1,)","[50,99)"}
+[-1,1)
+{empty,"[-1,1)"}
+[-1,1]
+{empty,"[-1,1)"}
+(-1,1)
+{empty}
+(-1,1]
+{empty}
+[0,0]
+{empty}
+[1,)
+{empty,"[50,99)"}
+(1,)
+{empty,"[50,99)"}
+
+#
+# numrange contained by
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM numrange_values WHERE a IS NOT NULL
+) numrange_values(a), numrange_test_values WHERE a <@ v GROUP BY a ORDER BY a;
+----
+empty
+{empty,"(,1)","(,)","[-99,-50)","[-1,1)","(-1,)","[50,99)"}
+(,1)
+{"(,1)","(,)"}
+(,1]
+{"(,)"}
+(,)
+{"(,)"}
+[-1,1)
+{"(,1)","(,)","[-1,1)"}
+[-1,1]
+{"(,)"}
+(-1,1)
+{"(,1)","(,)","[-1,1)","(-1,)"}
+(-1,1]
+{"(,)","(-1,)"}
+[0,0]
+{"(,1)","(,)","[-1,1)","(-1,)"}
+[1,)
+{"(,)","(-1,)"}
+(1,)
+{"(,)","(-1,)"}
+
+#
+# numrange overlaps
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM numrange_values WHERE a IS NOT NULL
+) numrange_values(a), numrange_test_values WHERE a && v GROUP BY a ORDER BY a;
+----
+(,1)
+{"(,1)","(,)","[-99,-50)","[-1,1)","(-1,)"}
+(,1]
+{"(,1)","(,)","[-99,-50)","[-1,1)","(-1,)"}
+(,)
+{"(,1)","(,)","[-99,-50)","[-1,1)","(-1,)","[50,99)"}
+[-1,1)
+{"(,1)","(,)","[-1,1)","(-1,)"}
+[-1,1]
+{"(,1)","(,)","[-1,1)","(-1,)"}
+(-1,1)
+{"(,1)","(,)","[-1,1)","(-1,)"}
+(-1,1]
+{"(,1)","(,)","[-1,1)","(-1,)"}
+[0,0]
+{"(,1)","(,)","[-1,1)","(-1,)"}
+[1,)
+{"(,)","(-1,)","[50,99)"}
+(1,)
+{"(,)","(-1,)","[50,99)"}
+
+#
+# numrange before
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM numrange_values WHERE a IS NOT NULL
+) numrange_values(a), numrange_test_values WHERE a << v GROUP BY a ORDER BY a;
+----
+(,1)
+{"[50,99)"}
+(,1]
+{"[50,99)"}
+[-1,1)
+{"[50,99)"}
+[-1,1]
+{"[50,99)"}
+(-1,1)
+{"[50,99)"}
+(-1,1]
+{"[50,99)"}
+[0,0]
+{"[50,99)"}
+
+#
+# numrange after
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM numrange_values WHERE a IS NOT NULL
+) numrange_values(a), numrange_test_values WHERE a >> v GROUP BY a ORDER BY a;
+----
+[-1,1)
+{"[-99,-50)"}
+[-1,1]
+{"[-99,-50)"}
+(-1,1)
+{"[-99,-50)"}
+(-1,1]
+{"[-99,-50)"}
+[0,0]
+{"[-99,-50)"}
+[1,)
+{"(,1)","[-99,-50)","[-1,1)"}
+(1,)
+{"(,1)","[-99,-50)","[-1,1)"}
+
+#
+# numrange overleft
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM numrange_values WHERE a IS NOT NULL
+) numrange_values(a), numrange_test_values WHERE a &< v GROUP BY a ORDER BY a;
+----
+(,1)
+{"(,1)","(,)","[-1,1)","(-1,)","[50,99)"}
+(,1]
+{"(,)","(-1,)","[50,99)"}
+(,)
+{"(,)","(-1,)"}
+[-1,1)
+{"(,1)","(,)","[-1,1)","(-1,)","[50,99)"}
+[-1,1]
+{"(,)","(-1,)","[50,99)"}
+(-1,1)
+{"(,1)","(,)","[-1,1)","(-1,)","[50,99)"}
+(-1,1]
+{"(,)","(-1,)","[50,99)"}
+[0,0]
+{"(,1)","(,)","[-1,1)","(-1,)","[50,99)"}
+[1,)
+{"(,)","(-1,)"}
+(1,)
+{"(,)","(-1,)"}
+
+#
+# numrange overright
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM numrange_values WHERE a IS NOT NULL
+) numrange_values(a), numrange_test_values WHERE a &> v GROUP BY a ORDER BY a;
+----
+(,1)
+{"(,1)","(,)"}
+(,1]
+{"(,1)","(,)"}
+(,)
+{"(,1)","(,)"}
+[-1,1)
+{"(,1)","(,)","[-99,-50)","[-1,1)"}
+[-1,1]
+{"(,1)","(,)","[-99,-50)","[-1,1)"}
+(-1,1)
+{"(,1)","(,)","[-99,-50)","[-1,1)","(-1,)"}
+(-1,1]
+{"(,1)","(,)","[-99,-50)","[-1,1)","(-1,)"}
+[0,0]
+{"(,1)","(,)","[-99,-50)","[-1,1)","(-1,)"}
+[1,)
+{"(,1)","(,)","[-99,-50)","[-1,1)","(-1,)"}
+(1,)
+{"(,1)","(,)","[-99,-50)","[-1,1)","(-1,)"}
+
+#
+# numrange adjacent
+query TT
+SELECT a::text t, array_agg(v::text ORDER BY v) FROM (
+    SELECT DISTINCT a FROM numrange_values WHERE a IS NOT NULL
+) numrange_values(a), numrange_test_values WHERE a -|- v GROUP BY a ORDER BY a;
+----
+[1,)
+{"(,1)","[-1,1)"}
+
 
 query T
 SELECT '[1.1,1.1]'::numrange::text;
@@ -2662,3 +4294,859 @@ SELECT numrange(-1.1::numeric(38,0),1.2::numeric(38,10))::text;
 
 query error range lower bound must be less than or equal to range upper bound
 SELECT numrange(1.1::numeric(38,2),1.2::numeric(38,0))::text;
+
+#
+# numrange union
+query T
+SELECT ('empty'::numrange + 'empty'::numrange)::text
+----
+empty
+
+query T
+SELECT ('empty'::numrange + '(,-1]'::numrange)::text
+----
+(,-1]
+
+query T
+SELECT ('(,-1]'::numrange + '(,-1]'::numrange)::text
+----
+(,-1]
+
+query T
+SELECT ('empty'::numrange + '(,-1)'::numrange)::text
+----
+(,-1)
+
+query T
+SELECT ('empty'::numrange + '(-2,2)'::numrange)::text
+----
+(-2,2)
+
+query T
+SELECT ('empty'::numrange + '[-2,2]'::numrange)::text
+----
+[-2,2]
+
+query T
+SELECT ('empty'::numrange + '[1,)'::numrange)::text
+----
+[1,)
+
+query T
+SELECT ('empty'::numrange + '(1,)'::numrange)::text
+----
+(1,)
+
+query T
+SELECT ('empty'::numrange + '(,)'::numrange)::text
+----
+(,)
+
+query T
+SELECT ('(,-1]'::numrange + 'empty'::numrange)::text
+----
+(,-1]
+
+query T
+SELECT ('(,-1]'::numrange + '(,-1)'::numrange)::text
+----
+(,-1]
+
+query T
+SELECT ('(,-1]'::numrange + '(-2,2)'::numrange)::text
+----
+(,2)
+
+query T
+SELECT ('(,-1]'::numrange + '[-2,2]'::numrange)::text
+----
+(,2]
+
+query error result of range union would not be contiguous
+SELECT ('(,-1]'::numrange + '[1,)'::numrange)::text
+
+query error result of range union would not be contiguous
+SELECT ('(,-1]'::numrange + '(1,)'::numrange)::text
+
+query T
+SELECT ('(,-1]'::numrange + '(,)'::numrange)::text
+----
+(,)
+
+query T
+SELECT ('(,-1)'::numrange + 'empty'::numrange)::text
+----
+(,-1)
+
+query T
+SELECT ('(,-1)'::numrange + '(,-1]'::numrange)::text
+----
+(,-1]
+
+query T
+SELECT ('(,-1)'::numrange + '(-2,2)'::numrange)::text
+----
+(,2)
+
+query T
+SELECT ('(,-1)'::numrange + '[-2,2]'::numrange)::text
+----
+(,2]
+
+query error result of range union would not be contiguous
+SELECT ('(,-1)'::numrange + '[1,)'::numrange)::text
+
+query error result of range union would not be contiguous
+SELECT ('(,-1)'::numrange + '(1,)'::numrange)::text
+
+query T
+SELECT ('(,-1)'::numrange + '(,)'::numrange)::text
+----
+(,)
+
+query T
+SELECT ('(-2,2)'::numrange + 'empty'::numrange)::text
+----
+(-2,2)
+
+query T
+SELECT ('(-2,2)'::numrange + '(,-1]'::numrange)::text
+----
+(,2)
+
+query T
+SELECT ('(-2,2)'::numrange + '(,-1)'::numrange)::text
+----
+(,2)
+
+query T
+SELECT ('(-2,2)'::numrange + '[-2,2]'::numrange)::text
+----
+[-2,2]
+
+query T
+SELECT ('(-2,2)'::numrange + '[1,)'::numrange)::text
+----
+(-2,)
+
+query T
+SELECT ('(-2,2)'::numrange + '(1,)'::numrange)::text
+----
+(-2,)
+
+query T
+SELECT ('(-2,2)'::numrange + '(,)'::numrange)::text
+----
+(,)
+
+query T
+SELECT ('[-2,2]'::numrange + 'empty'::numrange)::text
+----
+[-2,2]
+
+query T
+SELECT ('[-2,2]'::numrange + '(,-1]'::numrange)::text
+----
+(,2]
+
+query T
+SELECT ('[-2,2]'::numrange + '(,-1)'::numrange)::text
+----
+(,2]
+
+query T
+SELECT ('[-2,2]'::numrange + '(-2,2)'::numrange)::text
+----
+[-2,2]
+
+query T
+SELECT ('[-2,2]'::numrange + '[1,)'::numrange)::text
+----
+[-2,)
+
+query T
+SELECT ('[-2,2]'::numrange + '(1,)'::numrange)::text
+----
+[-2,)
+
+query T
+SELECT ('[-2,2]'::numrange + '(,)'::numrange)::text
+----
+(,)
+
+query T
+SELECT ('[1,)'::numrange + 'empty'::numrange)::text
+----
+[1,)
+
+query error result of range union would not be contiguous
+SELECT ('[1,)'::numrange + '(,-1]'::numrange)::text
+
+query error result of range union would not be contiguous
+SELECT ('[1,)'::numrange + '(,-1)'::numrange)::text
+
+query T
+SELECT ('[1,)'::numrange + '(-2,2)'::numrange)::text
+----
+(-2,)
+
+query T
+SELECT ('[1,)'::numrange + '[-2,2]'::numrange)::text
+----
+[-2,)
+
+query T
+SELECT ('[1,)'::numrange + '(1,)'::numrange)::text
+----
+[1,)
+
+query T
+SELECT ('[1,)'::numrange + '(,)'::numrange)::text
+----
+(,)
+
+query T
+SELECT ('(1,)'::numrange + 'empty'::numrange)::text
+----
+(1,)
+
+query error result of range union would not be contiguous
+SELECT ('(1,)'::numrange + '(,-1]'::numrange)::text
+
+query error result of range union would not be contiguous
+SELECT ('(1,)'::numrange + '(,-1)'::numrange)::text
+
+query T
+SELECT ('(1,)'::numrange + '(-2,2)'::numrange)::text
+----
+(-2,)
+
+query T
+SELECT ('(1,)'::numrange + '[-2,2]'::numrange)::text
+----
+[-2,)
+
+query T
+SELECT ('(1,)'::numrange + '[1,)'::numrange)::text
+----
+[1,)
+
+query T
+SELECT ('(1,)'::numrange + '(,)'::numrange)::text
+----
+(,)
+
+query T
+SELECT ('(,)'::numrange + 'empty'::numrange)::text
+----
+(,)
+
+query T
+SELECT ('(,)'::numrange + '(,-1]'::numrange)::text
+----
+(,)
+
+query T
+SELECT ('(,)'::numrange + '(,-1)'::numrange)::text
+----
+(,)
+
+query T
+SELECT ('(,)'::numrange + '(-2,2)'::numrange)::text
+----
+(,)
+
+query T
+SELECT ('(,)'::numrange + '[-2,2]'::numrange)::text
+----
+(,)
+
+query T
+SELECT ('(,)'::numrange + '[1,)'::numrange)::text
+----
+(,)
+
+query T
+SELECT ('(,)'::numrange + '(1,)'::numrange)::text
+----
+(,)
+
+#
+# numrange intersection
+
+query T
+SELECT ('empty'::numrange * 'empty'::numrange)::text
+----
+empty
+
+query T
+SELECT ('empty'::numrange * '(,-1]'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(,-1]'::numrange * 'empty'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(,-1]'::numrange * '(,-1]'::numrange)::text
+----
+(,-1]
+
+query T
+SELECT ('empty'::numrange * '(,-1)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('empty'::numrange * '(-2,2)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('empty'::numrange * '[-2,2]'::numrange)::text
+----
+empty
+
+query T
+SELECT ('empty'::numrange * '[1,)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('empty'::numrange * '(1,)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('empty'::numrange * '(,)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(,-1]'::numrange * '(,-1)'::numrange)::text
+----
+(,-1)
+
+query T
+SELECT ('(,-1]'::numrange * '(-2,2)'::numrange)::text
+----
+(-2,-1]
+
+query T
+SELECT ('(,-1]'::numrange * '[-2,2]'::numrange)::text
+----
+[-2,-1]
+
+query T
+SELECT ('(,-1]'::numrange * '[1,)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(,-1]'::numrange * '(1,)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(,-1]'::numrange * '(,)'::numrange)::text
+----
+(,-1]
+
+query T
+SELECT ('(,-1)'::numrange * 'empty'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::numrange * '(,-1]'::numrange)::text
+----
+(,-1)
+
+query T
+SELECT ('(,-1)'::numrange * '(-2,2)'::numrange)::text
+----
+(-2,-1)
+
+query T
+SELECT ('(,-1)'::numrange * '[-2,2]'::numrange)::text
+----
+[-2,-1)
+
+query T
+SELECT ('(,-1)'::numrange * '[1,)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::numrange * '(1,)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::numrange * '(,)'::numrange)::text
+----
+(,-1)
+
+query T
+SELECT ('(-2,2)'::numrange * 'empty'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(-2,2)'::numrange * '(,-1]'::numrange)::text
+----
+(-2,-1]
+
+query T
+SELECT ('(-2,2)'::numrange * '(,-1)'::numrange)::text
+----
+(-2,-1)
+
+query T
+SELECT ('(-2,2)'::numrange * '[-2,2]'::numrange)::text
+----
+(-2,2)
+
+query T
+SELECT ('(-2,2)'::numrange * '[1,)'::numrange)::text
+----
+[1,2)
+
+query T
+SELECT ('(-2,2)'::numrange * '(1,)'::numrange)::text
+----
+(1,2)
+
+query T
+SELECT ('(-2,2)'::numrange * '(,)'::numrange)::text
+----
+(-2,2)
+
+query T
+SELECT ('[-2,2]'::numrange * 'empty'::numrange)::text
+----
+empty
+
+query T
+SELECT ('[-2,2]'::numrange * '(,-1]'::numrange)::text
+----
+[-2,-1]
+
+query T
+SELECT ('[-2,2]'::numrange * '(,-1)'::numrange)::text
+----
+[-2,-1)
+
+query T
+SELECT ('[-2,2]'::numrange * '(-2,2)'::numrange)::text
+----
+(-2,2)
+
+query T
+SELECT ('[-2,2]'::numrange * '[1,)'::numrange)::text
+----
+[1,2]
+
+query T
+SELECT ('[-2,2]'::numrange * '(1,)'::numrange)::text
+----
+(1,2]
+
+query T
+SELECT ('[-2,2]'::numrange * '(,)'::numrange)::text
+----
+[-2,2]
+
+query T
+SELECT ('[1,)'::numrange * 'empty'::numrange)::text
+----
+empty
+
+query T
+SELECT ('[1,)'::numrange * '(,-1]'::numrange)::text
+----
+empty
+
+query T
+SELECT ('[1,)'::numrange * '(,-1)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('[1,)'::numrange * '(-2,2)'::numrange)::text
+----
+[1,2)
+
+query T
+SELECT ('[1,)'::numrange * '[-2,2]'::numrange)::text
+----
+[1,2]
+
+query T
+SELECT ('[1,)'::numrange * '(1,)'::numrange)::text
+----
+(1,)
+
+query T
+SELECT ('[1,)'::numrange * '(,)'::numrange)::text
+----
+[1,)
+
+query T
+SELECT ('(1,)'::numrange * 'empty'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(1,)'::numrange * '(,-1]'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(1,)'::numrange * '(,-1)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(1,)'::numrange * '(-2,2)'::numrange)::text
+----
+(1,2)
+
+query T
+SELECT ('(1,)'::numrange * '[-2,2]'::numrange)::text
+----
+(1,2]
+
+query T
+SELECT ('(1,)'::numrange * '[1,)'::numrange)::text
+----
+(1,)
+
+query T
+SELECT ('(1,)'::numrange * '(,)'::numrange)::text
+----
+(1,)
+
+query T
+SELECT ('(,)'::numrange * 'empty'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(,)'::numrange * '(,-1]'::numrange)::text
+----
+(,-1]
+
+query T
+SELECT ('(,)'::numrange * '(,-1)'::numrange)::text
+----
+(,-1)
+
+query T
+SELECT ('(,)'::numrange * '(-2,2)'::numrange)::text
+----
+(-2,2)
+
+query T
+SELECT ('(,)'::numrange * '[-2,2]'::numrange)::text
+----
+[-2,2]
+
+query T
+SELECT ('(,)'::numrange * '[1,)'::numrange)::text
+----
+[1,)
+
+query T
+SELECT ('(,)'::numrange * '(1,)'::numrange)::text
+----
+(1,)
+
+#
+# numrange difference
+
+query T
+SELECT ('empty'::numrange - 'empty'::numrange)::text
+----
+empty
+
+query T
+SELECT ('empty'::numrange - '(,-1]'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(,-1]'::numrange - '(,-1]'::numrange)::text
+----
+empty
+
+query T
+SELECT ('empty'::numrange - '(,-1)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('empty'::numrange - '(-2,2)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('empty'::numrange - '[-2,2]'::numrange)::text
+----
+empty
+
+query T
+SELECT ('empty'::numrange - '[1,)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('empty'::numrange - '(1,)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('empty'::numrange - '(,)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(,-1]'::numrange - 'empty'::numrange)::text
+----
+(,-1]
+
+query T
+SELECT ('(,-1]'::numrange - '(,-1)'::numrange)::text
+----
+[-1,-1]
+
+query T
+SELECT ('(,-1]'::numrange - '(-2,2)'::numrange)::text
+----
+(,-2]
+
+query T
+SELECT ('(,-1]'::numrange - '[-2,2]'::numrange)::text
+----
+(,-2)
+
+query T
+SELECT ('(,-1]'::numrange - '[1,)'::numrange)::text
+----
+(,-1]
+
+query T
+SELECT ('(,-1]'::numrange - '(1,)'::numrange)::text
+----
+(,-1]
+
+query T
+SELECT ('(,-1]'::numrange - '(,)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::numrange - 'empty'::numrange)::text
+----
+(,-1)
+
+query T
+SELECT ('(,-1)'::numrange - '(,-1]'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::numrange - '(-2,2)'::numrange)::text
+----
+(,-2]
+
+query T
+SELECT ('(,-1)'::numrange - '[-2,2]'::numrange)::text
+----
+(,-2)
+
+query T
+SELECT ('(,-1)'::numrange - '[1,)'::numrange)::text
+----
+(,-1)
+
+query T
+SELECT ('(,-1)'::numrange - '(1,)'::numrange)::text
+----
+(,-1)
+
+query T
+SELECT ('(,-1)'::numrange - '(,)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(-2,2)'::numrange - 'empty'::numrange)::text
+----
+(-2,2)
+
+query T
+SELECT ('(-2,2)'::numrange - '(,-1]'::numrange)::text
+----
+(-1,2)
+
+query T
+SELECT ('(-2,2)'::numrange - '(,-1)'::numrange)::text
+----
+[-1,2)
+
+query T
+SELECT ('(-2,2)'::numrange - '[-2,2]'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(-2,2)'::numrange - '[1,)'::numrange)::text
+----
+(-2,1)
+
+query T
+SELECT ('(-2,2)'::numrange - '(1,)'::numrange)::text
+----
+(-2,1]
+
+query T
+SELECT ('(-2,2)'::numrange - '(,)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('[-2,2]'::numrange - 'empty'::numrange)::text
+----
+[-2,2]
+
+query T
+SELECT ('[-2,2]'::numrange - '(,-1]'::numrange)::text
+----
+(-1,2]
+
+query T
+SELECT ('[-2,2]'::numrange - '(,-1)'::numrange)::text
+----
+[-1,2]
+
+query error result of range difference would not be contiguous
+SELECT ('[-2,2]'::numrange - '(-2,2)'::numrange)::text
+
+query T
+SELECT ('[-2,2]'::numrange - '[1,)'::numrange)::text
+----
+[-2,1)
+
+query T
+SELECT ('[-2,2]'::numrange - '(1,)'::numrange)::text
+----
+[-2,1]
+
+query T
+SELECT ('[-2,2]'::numrange - '(,)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('[1,)'::numrange - 'empty'::numrange)::text
+----
+[1,)
+
+query T
+SELECT ('[1,)'::numrange - '(,-1]'::numrange)::text
+----
+[1,)
+
+query T
+SELECT ('[1,)'::numrange - '(,-1)'::numrange)::text
+----
+[1,)
+
+query T
+SELECT ('[1,)'::numrange - '(-2,2)'::numrange)::text
+----
+[2,)
+
+query T
+SELECT ('[1,)'::numrange - '[-2,2]'::numrange)::text
+----
+(2,)
+
+query T
+SELECT ('[1,)'::numrange - '(1,)'::numrange)::text
+----
+[1,1]
+
+query T
+SELECT ('[1,)'::numrange - '(,)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(1,)'::numrange - 'empty'::numrange)::text
+----
+(1,)
+
+query T
+SELECT ('(1,)'::numrange - '(,-1]'::numrange)::text
+----
+(1,)
+
+query T
+SELECT ('(1,)'::numrange - '(,-1)'::numrange)::text
+----
+(1,)
+
+query T
+SELECT ('(1,)'::numrange - '(-2,2)'::numrange)::text
+----
+[2,)
+
+query T
+SELECT ('(1,)'::numrange - '[-2,2]'::numrange)::text
+----
+(2,)
+
+query T
+SELECT ('(1,)'::numrange - '[1,)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(1,)'::numrange - '(,)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(,)'::numrange - 'empty'::numrange)::text
+----
+(,)
+
+query T
+SELECT ('(,)'::numrange - '(,-1]'::numrange)::text
+----
+(-1,)
+
+query T
+SELECT ('(,)'::numrange - '(,-1)'::numrange)::text
+----
+[-1,)
+
+query error result of range difference would not be contiguous
+SELECT ('(,)'::numrange - '(-2,2)'::numrange)::text
+
+query error result of range difference would not be contiguous
+SELECT ('(,)'::numrange - '[-2,2]'::numrange)::text
+
+query T
+SELECT ('(,)'::numrange - '[1,)'::numrange)::text
+----
+(,1)
+
+query T
+SELECT ('(,)'::numrange - '(1,)'::numrange)::text
+----
+(,1]

@@ -77,6 +77,7 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
@@ -111,10 +112,10 @@
 /// (2) The running binary must be in ELF format and running on Linux.
 #[cfg(target_os = "linux")]
 pub unsafe fn all_build_ids(
-) -> Result<std::collections::HashMap<std::path::PathBuf, Vec<u8>>, anyhow::Error> {
+) -> Result<std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>, anyhow::Error> {
     // local imports to avoid polluting the namespace for macOS builds
-    use std::collections::hash_map::Entry;
-    use std::collections::HashMap;
+    use std::collections::btree_map::Entry;
+    use std::collections::BTreeMap;
     use std::ffi::{c_int, CStr, OsStr};
     use std::os::unix::ffi::OsStrExt;
     use std::path::{Path, PathBuf};
@@ -126,7 +127,7 @@ pub unsafe fn all_build_ids(
     use mz_ore::cast::CastFrom;
 
     struct CallbackState {
-        map: HashMap<PathBuf, Vec<u8>>,
+        map: BTreeMap<PathBuf, Vec<u8>>,
         is_first: bool,
         fatal_error: Option<anyhow::Error>,
     }
@@ -244,7 +245,7 @@ pub unsafe fn all_build_ids(
         0
     }
     let mut state = CallbackState {
-        map: HashMap::new(),
+        map: BTreeMap::new(),
         is_first: true,
         fatal_error: None,
     };

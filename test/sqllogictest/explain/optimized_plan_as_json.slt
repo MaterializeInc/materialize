@@ -55,13 +55,13 @@ SELECT 1 / 0
 {
   "plans": [
     {
-      "id": "Explained Query",
+      "id": "Explained Query (fast path)",
       "plan": {
-        "Constant": {
-          "rows": {
+        "Constant": [
+          {
             "Err": "DivisionByZero"
           },
-          "typ": {
+          {
             "column_types": [
               {
                 "scalar_type": "Int32",
@@ -70,7 +70,7 @@ SELECT 1 / 0
             ],
             "keys": []
           }
-        }
+        ]
       }
     }
   ],
@@ -86,10 +86,10 @@ EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
 {
   "plans": [
     {
-      "id": "Explained Query",
+      "id": "Explained Query (fast path)",
       "plan": {
-        "Constant": {
-          "rows": {
+        "Constant": [
+          {
             "Ok": [
               [
                 {
@@ -127,7 +127,7 @@ EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
               ]
             ]
           },
-          "typ": {
+          {
             "column_types": [
               {
                 "scalar_type": "Int32",
@@ -140,7 +140,7 @@ EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
             ],
             "keys": []
           }
-        }
+        ]
       }
     }
   ],
@@ -156,159 +156,147 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
 {
   "plans": [
     {
-      "id": "Explained Query",
+      "id": "Explained Query (fast path)",
       "plan": {
-        "Project": {
-          "input": {
-            "Filter": {
-              "input": {
-                "Map": {
-                  "input": {
-                    "Get": {
-                      "id": {
-                        "Global": {
-                          "User": 1
-                        }
-                      },
-                      "typ": {
-                        "column_types": [
-                          {
-                            "scalar_type": "Int32",
-                            "nullable": true
-                          },
-                          {
-                            "scalar_type": "Int32",
-                            "nullable": true
-                          }
-                        ],
-                        "keys": []
-                      }
-                    }
-                  },
-                  "scalars": [
-                    {
-                      "CallBinary": {
-                        "func": "AddInt32",
-                        "expr1": {
-                          "Column": 0
-                        },
-                        "expr2": {
-                          "Column": 1
-                        }
-                      }
-                    },
-                    {
-                      "Literal": [
-                        {
-                          "Ok": {
-                            "data": [
-                              4,
-                              1,
-                              0,
-                              0,
-                              0
-                            ]
-                          }
-                        },
-                        {
-                          "scalar_type": "Int32",
-                          "nullable": false
-                        }
-                      ]
-                    }
-                  ]
-                }
-              },
-              "predicates": [
+        "PeekExisting": [
+          {
+            "User": 4
+          },
+          null,
+          {
+            "mfp": {
+              "expressions": [
                 {
                   "CallBinary": {
-                    "func": "Lt",
-                    "expr1": {
-                      "Column": 1
-                    },
-                    "expr2": {
-                      "Literal": [
-                        {
-                          "Ok": {
-                            "data": [
-                              4,
-                              0,
-                              0,
-                              0,
-                              0
-                            ]
-                          }
-                        },
-                        {
-                          "scalar_type": "Int32",
-                          "nullable": false
-                        }
-                      ]
-                    }
-                  }
-                },
-                {
-                  "CallBinary": {
-                    "func": "Gt",
+                    "func": "AddInt32",
                     "expr1": {
                       "Column": 0
                     },
                     "expr2": {
-                      "Literal": [
-                        {
-                          "Ok": {
-                            "data": [
-                              4,
-                              0,
-                              0,
-                              0,
-                              0
-                            ]
-                          }
-                        },
-                        {
-                          "scalar_type": "Int32",
-                          "nullable": false
-                        }
-                      ]
+                      "Column": 1
                     }
                   }
                 },
                 {
-                  "CallBinary": {
-                    "func": "Gt",
-                    "expr1": {
-                      "Column": 2
+                  "Literal": [
+                    {
+                      "Ok": {
+                        "data": [
+                          4,
+                          1,
+                          0,
+                          0,
+                          0
+                        ]
+                      }
                     },
-                    "expr2": {
-                      "Literal": [
-                        {
-                          "Ok": {
-                            "data": [
-                              4,
-                              0,
-                              0,
-                              0,
-                              0
-                            ]
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": false
+                    }
+                  ]
+                }
+              ],
+              "predicates": [
+                [
+                  1,
+                  {
+                    "CallBinary": {
+                      "func": "Gt",
+                      "expr1": {
+                        "Column": 0
+                      },
+                      "expr2": {
+                        "Literal": [
+                          {
+                            "Ok": {
+                              "data": [
+                                4,
+                                0,
+                                0,
+                                0,
+                                0
+                              ]
+                            }
+                          },
+                          {
+                            "scalar_type": "Int32",
+                            "nullable": false
                           }
-                        },
-                        {
-                          "scalar_type": "Int32",
-                          "nullable": false
-                        }
-                      ]
+                        ]
+                      }
                     }
                   }
-                }
-              ]
+                ],
+                [
+                  2,
+                  {
+                    "CallBinary": {
+                      "func": "Lt",
+                      "expr1": {
+                        "Column": 1
+                      },
+                      "expr2": {
+                        "Literal": [
+                          {
+                            "Ok": {
+                              "data": [
+                                4,
+                                0,
+                                0,
+                                0,
+                                0
+                              ]
+                            }
+                          },
+                          {
+                            "scalar_type": "Int32",
+                            "nullable": false
+                          }
+                        ]
+                      }
+                    }
+                  }
+                ],
+                [
+                  3,
+                  {
+                    "CallBinary": {
+                      "func": "Gt",
+                      "expr1": {
+                        "Column": 2
+                      },
+                      "expr2": {
+                        "Literal": [
+                          {
+                            "Ok": {
+                              "data": [
+                                4,
+                                0,
+                                0,
+                                0,
+                                0
+                              ]
+                            }
+                          },
+                          {
+                            "scalar_type": "Int32",
+                            "nullable": false
+                          }
+                        ]
+                      }
+                    }
+                  }
+                ]
+              ],
+              "projection": [
+                3,
+                2
+              ],
+              "input_arity": 2
             }
-          },
-          "outputs": [
-            3,
-            2
-          ]
-        }
+          }
+        ]
       }
     }
   ],
@@ -878,7 +866,7 @@ VIEW ov
 {
   "plans": [
     {
-      "id": "Explained Query",
+      "id": "materialize.public.ov",
       "plan": {
         "TopK": {
           "input": {
@@ -935,28 +923,25 @@ SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
 {
   "plans": [
     {
-      "id": "Explained Query",
+      "id": "Explained Query (fast path)",
       "plan": {
-        "Get": {
-          "id": {
-            "Global": {
-              "User": 1
-            }
+        "PeekExisting": [
+          {
+            "User": 4
           },
-          "typ": {
-            "column_types": [
-              {
-                "scalar_type": "Int32",
-                "nullable": true
-              },
-              {
-                "scalar_type": "Int32",
-                "nullable": true
-              }
-            ],
-            "keys": []
+          null,
+          {
+            "mfp": {
+              "expressions": [],
+              "predicates": [],
+              "projection": [
+                0,
+                1
+              ],
+              "input_arity": 2
+            }
           }
-        }
+        ]
       }
     }
   ],

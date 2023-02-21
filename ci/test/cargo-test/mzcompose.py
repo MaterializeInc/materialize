@@ -40,9 +40,7 @@ SERVICES = [
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("args", nargs="*")
     args = parser.parse_args()
-    c.start_and_wait_for_tcp(
-        ["zookeeper", "kafka", "schema-registry", "postgres", "cockroach"]
-    )
+    c.up("zookeeper", "kafka", "schema-registry", "postgres", "cockroach")
     # Heads up: this intentionally runs on the host rather than in a Docker
     # image. See #13010.
     postgres_url = (

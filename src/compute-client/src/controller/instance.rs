@@ -9,7 +9,7 @@
 
 //! A controller for a compute instance.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::num::NonZeroI64;
 
 use differential_dataflow::lattice::Lattice;
@@ -21,13 +21,15 @@ use timely::PartialOrder;
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
+use mz_cluster_client::client::ClusterStartupEpoch;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 
 use crate::logging::LogVariant;
-use crate::protocol::command::{ComputeCommand, ComputeParameters, ComputeStartupEpoch, Peek};
+use crate::metrics::InstanceMetrics;
+use crate::protocol::command::{ComputeCommand, ComputeParameters, Peek};
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
@@ -36,12 +38,8 @@ use crate::types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkCon
 use crate::types::sources::SourceInstanceDesc;
 
 use super::error::CollectionMissing;
-use super::orchestrator::ComputeOrchestrator;
-use super::replica::{Replica, ReplicaConfig, ReplicaResponse};
-use super::{
-    CollectionState, ComputeControllerResponse, ComputeInstanceId, ComputeReplicaLocation,
-    ReplicaId,
-};
+use super::replica::{Replica, ReplicaConfig};
+use super::{CollectionState, ComputeControllerResponse, ReplicaId};
 
 #[derive(Error, Debug)]
 #[error("replica exists already: {0}")]
@@ -71,6 +69,8 @@ impl From<CollectionMissing> for DataflowCreationError {
 pub(super) enum PeekError {
     #[error("collection does not exist: {0}")]
     CollectionMissing(GlobalId),
+    #[error("replica does not exist: {0}")]
+    ReplicaMissing(ReplicaId),
     #[error("peek timestamp is not beyond the since of collection: {0}")]
     SinceViolation(GlobalId),
 }
@@ -81,35 +81,77 @@ impl From<CollectionMissing> for PeekError {
     }
 }
 
+#[derive(Error, Debug)]
+pub(super) enum SubscribeTargetError {
+    #[error("subscribe does not exist: {0}")]
+    SubscribeMissing(GlobalId),
+    #[error("replica does not exist: {0}")]
+    ReplicaMissing(ReplicaId),
+    #[error("subscribe has already produced output")]
+    SubscribeAlreadyStarted,
+}
+
 /// The state we keep for a compute instance.
 #[derive(Debug)]
 pub(super) struct Instance<T> {
-    /// ID of this instance
-    instance_id: ComputeInstanceId,
     /// Build info for spawning replicas
     build_info: &'static BuildInfo,
+    /// Whether instance initialization has been completed.
+    initialized: bool,
     /// The replicas of this compute instance.
-    replicas: HashMap<ReplicaId, Replica<T>>,
-    /// Tracks expressed `since` and received `upper` frontiers for indexes and sinks.
+    replicas: BTreeMap<ReplicaId, Replica<T>>,
+    /// Currently installed compute collections.
+    ///
+    /// New entries are added for all collections exported from dataflows created through
+    /// [`ActiveInstance::create_dataflows`].
+    ///
+    /// Entries are removed when two conditions are fulfilled:
+    ///
+    ///  * The collection's read frontier has advanced to the empty frontier, implying that
+    ///    [`ActiveInstance::drop_collections`] was called.
+    ///  * All replicas have reported the empty frontier for the collection, implying that they
+    ///    have stopped reading from the collection's inputs.
+    ///
+    /// Only if both these conditions hold is dropping a collection's state, and the associated
+    /// read holds on its inputs, sound.
     collections: BTreeMap<GlobalId, CollectionState<T>>,
     /// IDs of arranged log sources maintained by this compute instance.
     arranged_logs: BTreeMap<LogVariant, GlobalId>,
     /// Currently outstanding peeks.
-    peeks: HashMap<Uuid, PendingPeek<T>>,
-    /// Frontiers of in-progress subscribes.
-    subscribes: BTreeMap<GlobalId, Antichain<T>>,
+    ///
+    /// New entries are added for all peeks initiated through [`ActiveInstance::peek`].
+    ///
+    /// The entry for a peek is only removed once all replicas have responded to the peek. This is
+    /// currently required to ensure all replicas have stopped reading from the peeked collection's
+    /// inputs before we allow them to compact. #16641 tracks changing this so we only have to wait
+    /// for the first peek response.
+    peeks: BTreeMap<Uuid, PendingPeek<T>>,
+    /// Currently in-progress subscribes.
+    ///
+    /// New entries are added for all subscribes exported from dataflows created through
+    /// [`ActiveInstance::create_dataflows`].
+    ///
+    /// The entry for a subscribe is removed once at least one replica has reported the subscribe
+    /// to have advanced to the empty frontier or to have been dropped, implying that no further
+    /// updates will be emitted for this subscribe.
+    ///
+    /// Note that subscribes are tracked both in `collections` and `subscribes`. `collections`
+    /// keeps track of the subscribe's upper and since frontiers and ensures appropriate read holds
+    /// on the subscribe's input. `subscribes` is only used to track which updates have been
+    /// emitted, to decide if new ones should be emitted or suppressed.
+    subscribes: BTreeMap<GlobalId, ActiveSubscribe<T>>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
     history: ComputeCommandHistory<T>,
     /// IDs of replicas that have failed and require rehydration.
     failed_replicas: BTreeSet<ReplicaId>,
     /// Ready compute controller responses to be delivered.
     pub ready_responses: VecDeque<ComputeControllerResponse<T>>,
-    /// Orchestrator for managing replicas
-    orchestrator: ComputeOrchestrator,
     /// A number that increases with each restart of `environmentd`.
     envd_epoch: NonZeroI64,
     /// Numbers that increase with each restart of a replica.
-    replica_epochs: HashMap<ReplicaId, u64>,
+    replica_epochs: BTreeMap<ReplicaId, u64>,
+    /// The registry the controller uses to report metrics.
+    metrics: InstanceMetrics,
 }
 
 impl<T> Instance<T> {
@@ -149,9 +191,22 @@ impl<T> Instance<T> {
         || !self.ready_responses.is_empty()
     }
 
-    /// Returns the ids of all replicas of this instance
-    pub fn replica_ids(&self) -> impl Iterator<Item = &ReplicaId> {
-        self.replicas.keys()
+    /// Returns whether the identified replica exists.
+    pub fn replica_exists(&self, id: ReplicaId) -> bool {
+        self.replicas.contains_key(&id)
+    }
+
+    /// Returns the ids of all replicas of this instance.
+    pub fn replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
+        self.replicas.keys().copied()
+    }
+
+    /// Return the IDs of in-progress subscribes targeting the specified replica.
+    fn subscribes_targeting(&self, replica_id: ReplicaId) -> impl Iterator<Item = GlobalId> + '_ {
+        self.subscribes.iter().filter_map(move |(id, subscribe)| {
+            let targeting = subscribe.target_replica == Some(replica_id);
+            targeting.then_some(*id)
+        })
     }
 }
 
@@ -161,11 +216,10 @@ where
     ComputeGrpcClient: ComputeClient<T>,
 {
     pub fn new(
-        instance_id: ComputeInstanceId,
         build_info: &'static BuildInfo,
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
-        orchestrator: ComputeOrchestrator,
         envd_epoch: NonZeroI64,
+        metrics: InstanceMetrics,
     ) -> Self {
         let collections = arranged_logs
             .iter()
@@ -176,8 +230,8 @@ where
             .collect();
 
         let mut instance = Self {
-            instance_id,
             build_info,
+            initialized: false,
             replicas: Default::default(),
             collections,
             arranged_logs,
@@ -186,14 +240,14 @@ where
             history: Default::default(),
             failed_replicas: Default::default(),
             ready_responses: Default::default(),
-            orchestrator,
             envd_epoch,
             replica_epochs: Default::default(),
+            metrics,
         };
 
         instance.send(ComputeCommand::CreateTimely {
             config: Default::default(),
-            epoch: ComputeStartupEpoch::new(envd_epoch, 0),
+            epoch: ClusterStartupEpoch::new(envd_epoch, 0),
         });
 
         let dummy_logging_config = Default::default();
@@ -209,9 +263,14 @@ where
 
     /// Marks the end of any initialization commands.
     ///
-    /// Intended to be called by `Controller`, rather than by other code (to avoid repeated calls).
+    /// Intended to be called by `Controller`, rather than by other code.
+    /// Calling this method repeatedly has no effect.
     pub fn initialization_complete(&mut self) {
-        self.send(ComputeCommand::InitializationComplete);
+        // The compute protocol requires that `InitializationComplete` is sent only once.
+        if !self.initialized {
+            self.send(ComputeCommand::InitializationComplete);
+            self.initialized = true;
+        }
     }
 
     /// Drop this compute instance.
@@ -247,7 +306,7 @@ where
     /// rehydration.
     ///
     /// This method is cancellation safe.
-    pub async fn recv(&mut self) -> Result<(ReplicaId, ReplicaResponse<T>), ReplicaId> {
+    pub async fn recv(&mut self) -> Result<(ReplicaId, ComputeResponse<T>), ReplicaId> {
         // Receive responses from any of the replicas, and take appropriate
         // action.
         let response = self
@@ -275,6 +334,33 @@ where
             }
         }
     }
+
+    /// Assign a target replica to the identified subscribe.
+    ///
+    /// If a subscribe has a target replica assigned, only subscribe responses
+    /// sent by that replica are considered.
+    pub fn set_subscribe_target_replica(
+        &mut self,
+        id: GlobalId,
+        target_replica: ReplicaId,
+    ) -> Result<(), SubscribeTargetError> {
+        if !self.replica_exists(target_replica) {
+            return Err(SubscribeTargetError::ReplicaMissing(target_replica));
+        }
+
+        let Some(subscribe) = self.subscribes.get_mut(&id) else {
+            return Err(SubscribeTargetError::SubscribeMissing(id));
+        };
+
+        // For sanity reasons, we don't allow re-targeting a subscribe for which we have already
+        // produced output.
+        if !subscribe.frontier.less_equal(&T::minimum()) {
+            return Err(SubscribeTargetError::SubscribeAlreadyStarted);
+        }
+
+        subscribe.target_replica = Some(target_replica);
+        Ok(())
+    }
 }
 
 /// A wrapper around [`Instance`] with a live storage controller.
@@ -295,7 +381,7 @@ where
         id: ReplicaId,
         mut config: ReplicaConfig,
     ) -> Result<(), ReplicaExists> {
-        if self.compute.replicas.contains_key(&id) {
+        if self.compute.replica_exists(id) {
             return Err(ReplicaExists(id));
         }
 
@@ -327,11 +413,10 @@ where
         *replica_epoch += 1;
         let replica = Replica::spawn(
             id,
-            self.compute.instance_id,
             self.compute.build_info,
             config,
-            self.compute.orchestrator.clone(),
-            ComputeStartupEpoch::new(self.compute.envd_epoch, *replica_epoch),
+            ClusterStartupEpoch::new(self.compute.envd_epoch, *replica_epoch),
+            self.compute.metrics.for_replica(id),
         );
 
         // Take this opportunity to clean up the history we should present.
@@ -357,58 +442,14 @@ where
     }
 
     /// Remove an existing instance replica, by ID.
-    ///
-    /// This method removes the replica from the orchestrator and should only be called if the
-    /// replica should be permanently removed.
     pub fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ReplicaMissing> {
-        let replica = self
-            .compute
+        self.compute
             .replicas
-            .get_mut(&id)
+            .remove(&id)
             .ok_or(ReplicaMissing(id))?;
 
-        // If the replica is managed we have to remove it from the orchestrator. We spawn
-        // a background task that waits until the termination of the message handler task and
-        // then removes it from the orchestrator.
-        if matches!(
-            replica.config.location,
-            ComputeReplicaLocation::Managed { .. }
-        ) {
-            let replica_task = replica.replica_task.take().unwrap();
-            let instance_id = self.compute.instance_id;
-            let orchestrator = self.compute.orchestrator.clone();
-            mz_ore::task::spawn(|| format!("drop-replica-{id}"), async move {
-                // Ensure the active-replication-replica task is terminated before removing the service
-                // from the orchestrator. This await guarantees the ensure call has happened before
-                // we remove the replica from the orchestrator.
-                replica_task.abort();
-                let join_result = replica_task.await;
-                tracing::debug!("Replica task joined: {:?}", join_result);
+        self.compute.failed_replicas.remove(&id);
 
-                match orchestrator.drop_replica(instance_id, id).await {
-                    Ok(_) => {
-                        tracing::debug!("Removed replica from orchestrator")
-                    }
-                    Err(e) => {
-                        tracing::warn!("Could not drop replica {:?}: {}", &id, &e)
-                    }
-                }
-            });
-        }
-
-        self.remove_replica_state(id);
-        Ok(())
-    }
-
-    /// Remove all state related to a replica.
-    ///
-    /// This method does not cause an orchestrator removal of the replica, so it is suitable for
-    /// removing the replica temporarily, e.g., during rehydration.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the specified replica does not exist in the compute state.
-    fn remove_replica_state(&mut self, id: ReplicaId) {
         // Remove frontier tracking for this replica.
         self.remove_write_frontiers(id);
 
@@ -422,20 +463,34 @@ where
         }
         self.remove_peeks(&peeks_to_remove);
 
-        self.compute
-            .replicas
-            .remove(&id)
-            .expect("replica not found");
+        // Subscribes targeting this replica either won't be served anymore (if the replica is
+        // dropped) or might produce inconsistent output (if the target collection is an
+        // introspection index). We produce an error to inform upstream.
+        let to_drop: Vec<_> = self.compute.subscribes_targeting(id).collect();
+        for subscribe_id in to_drop {
+            let subscribe = self.compute.subscribes.remove(&subscribe_id).unwrap();
+            let response = ComputeControllerResponse::SubscribeResponse(
+                subscribe_id,
+                SubscribeResponse::Batch(SubscribeBatch {
+                    lower: subscribe.frontier.clone(),
+                    upper: subscribe.frontier,
+                    updates: Err("target replica failed or was dropped".into()),
+                }),
+            );
+            self.compute.ready_responses.push_back(response);
+        }
 
-        // In case the replica crashes and we receive a drop replica request
-        // at the same time, the cleanup request will race with the rehydration.
-        // Hence we also have to stop a pending rehydration request.
-        self.compute.failed_replicas.remove(&id);
+        Ok(())
     }
 
+    /// Rehydrate the given instance replica.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the specified replica does not exist.
     fn rehydrate_replica(&mut self, id: ReplicaId) {
         let config = self.compute.replicas[&id].config.clone();
-        self.remove_replica_state(id);
+        self.remove_replica(id).expect("replica must exist");
         let result = self.add_replica(id, config);
 
         match result {
@@ -540,16 +595,23 @@ where
                 updates.push((export_id, as_of.clone()));
             }
             // Initialize tracking of replica frontiers.
-            let replica_ids: Vec<_> = self.compute.replicas.keys().copied().collect();
+            let replica_ids: Vec<_> = self.compute.replica_ids().collect();
             for replica_id in replica_ids {
                 self.update_write_frontiers(replica_id, &updates);
             }
 
             // Initialize tracking of subscribes.
             for subscribe_id in dataflow.subscribe_ids() {
+                // Creating subscribes during initialization is known to be defunct (#16247).
+                // We still do our best to handle this scenario gracefully, so we only log an error
+                // here.
+                if !self.compute.initialized {
+                    tracing::error!("creating subscribes during initialization is not supported");
+                }
+
                 self.compute
                     .subscribes
-                    .insert(subscribe_id, Antichain::from_elem(Timestamp::minimum()));
+                    .insert(subscribe_id, ActiveSubscribe::new());
             }
         }
 
@@ -645,9 +707,14 @@ where
         target_replica: Option<ReplicaId>,
     ) -> Result<(), PeekError> {
         let since = self.compute.collection(id)?.read_capabilities.frontier();
-
         if !since.less_equal(&timestamp) {
             Err(PeekError::SinceViolation(id))?;
+        }
+
+        if let Some(target) = target_replica {
+            if !self.compute.replica_exists(target) {
+                return Err(PeekError::ReplicaMissing(target));
+            }
         }
 
         // Install a compaction hold on `id` at `timestamp`.
@@ -655,7 +722,7 @@ where
         updates.insert(id, ChangeBatch::new_from(timestamp.clone(), 1));
         self.update_read_capabilities(&mut updates);
 
-        let unfinished = self.compute.replicas.keys().copied().collect();
+        let unfinished = self.compute.replica_ids().collect();
         let otel_ctx = OpenTelemetryContext::obtain();
         self.compute.peeks.insert(
             uuid,
@@ -764,6 +831,7 @@ where
     /// # Panics
     ///
     /// Panics if any of the `updates` references an absent collection.
+    /// Panics if any of the `updates` regresses an existing write frontier.
     #[tracing::instrument(level = "debug", skip(self))]
     fn update_write_frontiers(
         &mut self,
@@ -788,6 +856,15 @@ where
             let old_upper = collection
                 .replica_write_frontiers
                 .insert(replica_id, new_upper.clone());
+
+            // Safety check against frontier regressions.
+            if let Some(old) = &old_upper {
+                assert!(
+                    PartialOrder::less_equal(old, new_upper),
+                    "Frontier regression: {old:?} -> {new_upper:?}, \
+                     collection={id}, replica={replica_id}",
+                );
+            }
 
             if new_upper.is_empty() {
                 dropped_collection_ids.push(*id);
@@ -1009,14 +1086,34 @@ where
         list: Vec<(GlobalId, Antichain<T>)>,
         replica_id: ReplicaId,
     ) {
-        // We should not receive updates for collections we don't track. It is possible that we
-        // currently do due to a bug where replicas send `FrontierUppers` for collections they drop
-        // during reconciliation.
-        // TODO(teskje): Revisit this after #16247 is resolved.
-        let updates: Vec<_> = list
-            .into_iter()
-            .filter(|(id, _)| self.compute.collections.contains_key(id))
-            .collect();
+        // According to the compute protocol, replicas are not allowed to send `FrontierUppers`
+        // that regress frontiers they have reported previously. We still perform a check here,
+        // rather than risking the controller becoming confused trying to handle regressions.
+        let mut updates = Vec::with_capacity(list.len());
+        for (id, new_frontier) in list {
+            let Ok(coll) = self.compute.collection(id) else {
+                // We should not receive updates for collections we don't track. It is possible
+                // that we currently do due to a bug where replicas send `FrontierUppers` for
+                // collections they drop during reconciliation.
+                // TODO(teskje): Revisit this after #16247 is resolved.
+                continue;
+            };
+
+            if let Some(old_frontier) = coll.replica_write_frontiers.get(&replica_id) {
+                if !PartialOrder::less_equal(old_frontier, &new_frontier) {
+                    tracing::warn!(
+                        ?replica_id,
+                        "Frontier of collection {id} regressed: {:?} -> {:?}",
+                        old_frontier.elements(),
+                        new_frontier.elements(),
+                    );
+                    tracing::error!("Replica reported a regressed collection frontier");
+                    continue;
+                }
+            }
+
+            updates.push((id, new_frontier));
+        }
 
         self.update_write_frontiers(replica_id, &updates);
     }
@@ -1074,67 +1171,73 @@ where
         response: SubscribeResponse<T>,
         replica_id: ReplicaId,
     ) -> Option<ComputeControllerResponse<T>> {
-        let mut frontier_updates = Vec::new();
-        let controller_response = match response {
-            SubscribeResponse::Batch(SubscribeBatch {
-                lower: _,
-                upper,
-                mut updates,
-            }) => {
-                frontier_updates.push((subscribe_id, upper.clone()));
+        // We should not receive updates for collections we don't track. It is possible that we
+        // currently do due to a bug where replicas send `DroppedAt` responses for subscribes they
+        // drop during reconciliation.
+        // TODO(teskje): Revisit this after #16247 is resolved.
+        if !self.compute.collections.contains_key(&subscribe_id) {
+            return None;
+        }
+
+        // Always apply write frontier updates. Even if the subscribe is not tracked anymore, there
+        // might still be replicas reading from its inputs, so we need to track the frontiers until
+        // all replicas have advanced to the empty one.
+        let write_frontier = match &response {
+            SubscribeResponse::Batch(batch) => batch.upper.clone(),
+            SubscribeResponse::DroppedAt(_) => Antichain::new(),
+        };
+        self.update_write_frontiers(replica_id, &[(subscribe_id, write_frontier)]);
+
+        // If the subscribe is not tracked, or targets a different replica, there is nothing to do.
+        let mut subscribe = self.compute.subscribes.get(&subscribe_id)?.clone();
+        let replica_targeted = subscribe.target_replica.unwrap_or(replica_id) == replica_id;
+        if !replica_targeted {
+            return None;
+        }
+
+        match response {
+            SubscribeResponse::Batch(batch) => {
+                let upper = batch.upper;
+                let mut updates = batch.updates;
 
                 // If this batch advances the subscribe's frontier, we emit all updates at times
                 // greater or equal to the last frontier (to avoid emitting duplicate updates).
-                // let old_upper_bound = entry.bounds.upper.clone();
-                let prev_frontier = self
-                    .compute
-                    .subscribes
-                    .remove(&subscribe_id)
-                    .unwrap_or_else(Antichain::new);
+                if PartialOrder::less_than(&subscribe.frontier, &upper) {
+                    let lower = std::mem::replace(&mut subscribe.frontier, upper.clone());
 
-                if PartialOrder::less_than(&prev_frontier, &upper) {
-                    if !upper.is_empty() {
-                        // This subscribe can produce more data. Keep tracking it.
-                        self.compute.subscribes.insert(subscribe_id, upper.clone());
+                    if upper.is_empty() {
+                        // This subscribe cannot produce more data. Stop tracking it.
+                        self.compute.subscribes.remove(&subscribe_id);
+                    } else {
+                        // This subscribe can produce more data. Update our tracking of it.
+                        self.compute.subscribes.insert(subscribe_id, subscribe);
                     }
 
                     if let Ok(updates) = updates.as_mut() {
-                        updates.retain(|(time, _data, _diff)| prev_frontier.less_equal(time));
+                        updates.retain(|(time, _data, _diff)| lower.less_equal(time));
                     }
                     Some(ComputeControllerResponse::SubscribeResponse(
                         subscribe_id,
                         SubscribeResponse::Batch(SubscribeBatch {
-                            lower: prev_frontier,
+                            lower,
                             upper,
                             updates,
                         }),
                     ))
                 } else {
-                    if !prev_frontier.is_empty() {
-                        // This subscribe can produce more data. Keep tracking it.
-                        self.compute.subscribes.insert(subscribe_id, prev_frontier);
-                    }
                     None
                 }
             }
             SubscribeResponse::DroppedAt(_) => {
-                frontier_updates.push((subscribe_id, Antichain::new()));
+                // This subscribe cannot produce more data. Stop tracking it.
+                self.compute.subscribes.remove(&subscribe_id);
 
-                // If this subscribe is still in progress, forward the `DroppedAt` response.
-                // Otherwise ignore it.
-                if let Some(frontier) = self.compute.subscribes.remove(&subscribe_id) {
-                    Some(ComputeControllerResponse::SubscribeResponse(
-                        subscribe_id,
-                        SubscribeResponse::DroppedAt(frontier),
-                    ))
-                } else {
-                    None
-                }
+                Some(ComputeControllerResponse::SubscribeResponse(
+                    subscribe_id,
+                    SubscribeResponse::DroppedAt(subscribe.frontier),
+                ))
             }
-        };
-
-        self.update_write_frontiers(replica_id, &frontier_updates);
-        controller_response
+        }
     }
 }
 
@@ -1165,5 +1268,24 @@ impl<T> PendingPeek<T> {
         // has no replicas or all replicas have been temporarily removed for re-hydration. In this
         // case, we wait for new replicas to be added to eventually serve the peek.
         self.otel_ctx.is_none() && self.unfinished.is_empty()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ActiveSubscribe<T> {
+    /// Current upper frontier of this subscribe.
+    frontier: Antichain<T>,
+    /// For replica-targeted subscribes, this specifies the replica whose responses we should pass on.
+    ///
+    /// If this value is `None`, we pass on the first response for each time slice.
+    target_replica: Option<ReplicaId>,
+}
+
+impl<T: Timestamp> ActiveSubscribe<T> {
+    fn new() -> Self {
+        Self {
+            frontier: Antichain::from_elem(Timestamp::minimum()),
+            target_replica: None,
+        }
     }
 }

@@ -71,14 +71,22 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
 use std::cmp::Ordering;
+use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
+use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
+use mz_persist_types::codec_impls::UnitSchema;
+use mz_persist_types::columnar::{PartDecoder, PartEncoder, Schema};
+use mz_persist_types::part::{Part, PartBuilder};
+use mz_persist_types::Codec;
 use mz_repr::adt::date::Date;
-use mz_repr::{Datum, Row};
+use mz_repr::{ColumnType, Datum, RelationDesc, Row, ScalarType};
+use rand::distributions::{Alphanumeric, DistString};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -307,5 +315,117 @@ fn bench_filter(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_sort, bench_pack, bench_filter);
+fn encode_legacy(rows: &[Row]) -> ColumnarRecords {
+    let mut buf = ColumnarRecordsBuilder::default();
+    let mut key_buf = Vec::new();
+    for row in rows.iter() {
+        key_buf.clear();
+        row.encode(&mut key_buf);
+        assert!(buf.push(((&key_buf, &[]), 1i64.to_le_bytes(), 1i64.to_le_bytes())));
+    }
+    buf.finish()
+}
+
+fn decode_legacy(part: &ColumnarRecords) -> Vec<Row> {
+    let mut rows = Vec::new();
+    for ((key, _val), _ts, _diff) in part.iter() {
+        rows.push(Row::decode(key).unwrap());
+    }
+    rows
+}
+
+fn encode_structured(schema: &RelationDesc, rows: &[Row]) -> Part {
+    let mut part = PartBuilder::new(schema, &UnitSchema);
+    let mut encoder = schema.encoder(part.key_mut()).unwrap();
+    for row in rows.iter() {
+        encoder.encode(row);
+    }
+    drop(encoder);
+    for _ in rows.iter() {
+        part.push_ts_diff(1, 1);
+    }
+    part.finish().unwrap()
+}
+
+fn decode_structured(schema: &RelationDesc, part: &Part, len: usize) -> Row {
+    let decoder = schema.decoder(part.key_ref()).unwrap();
+    let mut row = Row::default();
+    for idx in 0..len {
+        decoder.decode(idx, &mut row);
+        black_box(&row);
+    }
+    row
+}
+
+fn bench_roundtrip(c: &mut Criterion) {
+    let num_rows = 10_000;
+    let mut rng = seeded_rng();
+    let rows = (0..num_rows)
+        .map(|_| {
+            let str_len = rng.gen_range(0..10);
+            Row::pack(vec![
+                Datum::from(rng.gen::<bool>()),
+                Datum::from(rng.gen::<Option<bool>>()),
+                Datum::from(Alphanumeric.sample_string(&mut rng, str_len).as_str()),
+                Datum::from(
+                    Some(Alphanumeric.sample_string(&mut rng, str_len).as_str())
+                        .filter(|_| rng.gen::<bool>()),
+                ),
+            ])
+        })
+        .collect::<Vec<_>>();
+    let schema = RelationDesc::from_names_and_types(vec![
+        (
+            "a",
+            ColumnType {
+                nullable: false,
+                scalar_type: ScalarType::Bool,
+            },
+        ),
+        (
+            "b",
+            ColumnType {
+                nullable: true,
+                scalar_type: ScalarType::Bool,
+            },
+        ),
+        (
+            "c",
+            ColumnType {
+                nullable: false,
+                scalar_type: ScalarType::String,
+            },
+        ),
+        (
+            "d",
+            ColumnType {
+                nullable: true,
+                scalar_type: ScalarType::String,
+            },
+        ),
+    ]);
+
+    c.bench_function("roundtrip_encode_legacy", |b| {
+        b.iter(|| std::hint::black_box(encode_legacy(&rows)));
+    });
+    c.bench_function("roundtrip_encode_structured", |b| {
+        b.iter(|| std::hint::black_box(encode_structured(&schema, &rows)));
+    });
+    let legacy = encode_legacy(&rows);
+    let structured = encode_structured(&schema, &rows);
+    c.bench_function("roundtrip_decode_legacy", |b| {
+        b.iter(|| std::hint::black_box(decode_legacy(&legacy)));
+    });
+    c.bench_function("roundtrip_decode_structured", |b| {
+        b.iter(|| std::hint::black_box(decode_structured(&schema, &structured, rows.len())));
+    });
+}
+
+criterion_group!(
+    benches,
+    bench_sort,
+    bench_pack,
+    bench_filter,
+    bench_roundtrip
+);
 criterion_main!(benches);

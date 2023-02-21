@@ -346,12 +346,16 @@ impl Display for SourceErrorDetails {
 
 /// An error that's destined to be presented to the user in a differential dataflow collection.
 /// For example, a divide by zero will be visible in the error collection for a particular row.
+///
+/// All of the variants are boxed to minimize the memory size of `DataflowError`. This type is
+/// likely to appear in `Result<Row, DataflowError>`s on high-throughput code paths, so keeping its
+/// size less than or equal to that of `Row` is important to ensure we are not wasting memory.
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash)]
 pub enum DataflowError {
-    DecodeError(DecodeError),
-    EvalError(EvalError),
-    SourceError(SourceError),
-    EnvelopeError(EnvelopeError),
+    DecodeError(Box<DecodeError>),
+    EvalError(Box<EvalError>),
+    SourceError(Box<SourceError>),
+    EnvelopeError(Box<EnvelopeError>),
 }
 
 impl Error for DataflowError {}
@@ -361,10 +365,10 @@ impl RustType<ProtoDataflowError> for DataflowError {
         use proto_dataflow_error::Kind::*;
         ProtoDataflowError {
             kind: Some(match self {
-                DataflowError::DecodeError(err) => DecodeError(err.into_proto()),
-                DataflowError::EvalError(err) => EvalError(err.into_proto()),
-                DataflowError::SourceError(err) => SourceError(err.into_proto()),
-                DataflowError::EnvelopeError(err) => EnvelopeErrorV1(Box::new(err.into_proto())),
+                DataflowError::DecodeError(err) => DecodeError(*err.into_proto()),
+                DataflowError::EvalError(err) => EvalError(*err.into_proto()),
+                DataflowError::SourceError(err) => SourceError(*err.into_proto()),
+                DataflowError::EnvelopeError(err) => EnvelopeErrorV1(err.into_proto()),
             }),
         }
     }
@@ -373,10 +377,10 @@ impl RustType<ProtoDataflowError> for DataflowError {
         use proto_dataflow_error::Kind::*;
         match proto.kind {
             Some(kind) => match kind {
-                DecodeError(err) => Ok(DataflowError::DecodeError(err.into_rust()?)),
-                EvalError(err) => Ok(DataflowError::EvalError(err.into_rust()?)),
-                SourceError(err) => Ok(DataflowError::SourceError(err.into_rust()?)),
-                EnvelopeErrorV1(err) => Ok(DataflowError::EnvelopeError((*err).into_rust()?)),
+                DecodeError(err) => Ok(DataflowError::DecodeError(Box::new(err.into_rust()?))),
+                EvalError(err) => Ok(DataflowError::EvalError(Box::new(err.into_rust()?))),
+                SourceError(err) => Ok(DataflowError::SourceError(Box::new(err.into_rust()?))),
+                EnvelopeErrorV1(err) => Ok(DataflowError::EnvelopeError(err.into_rust()?)),
             },
             None => Err(TryFromProtoError::missing_field("ProtoDataflowError::kind")),
         }
@@ -396,25 +400,25 @@ impl Display for DataflowError {
 
 impl From<DecodeError> for DataflowError {
     fn from(e: DecodeError) -> Self {
-        Self::DecodeError(e)
+        Self::DecodeError(Box::new(e))
     }
 }
 
 impl From<EvalError> for DataflowError {
     fn from(e: EvalError) -> Self {
-        Self::EvalError(e)
+        Self::EvalError(Box::new(e))
     }
 }
 
 impl From<SourceError> for DataflowError {
     fn from(e: SourceError) -> Self {
-        Self::SourceError(e)
+        Self::SourceError(Box::new(e))
     }
 }
 
 impl From<EnvelopeError> for DataflowError {
     fn from(e: EnvelopeError) -> Self {
-        Self::EnvelopeError(e)
+        Self::EnvelopeError(Box::new(e))
     }
 }
 

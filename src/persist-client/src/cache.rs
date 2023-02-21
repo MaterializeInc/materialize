@@ -9,13 +9,18 @@
 
 //! A cache of [PersistClient]s indexed by [PersistLocation]s.
 
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::btree_map::Entry;
+use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
-use mz_persist::location::{Blob, Consensus, ExternalError};
+use mz_persist::location::{
+    Blob, Consensus, ExternalError, BLOB_GET_LIVENESS_KEY, CONSENSUS_HEAD_LIVENESS_KEY,
+};
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tracing::instrument;
 
 use crate::async_runtime::CpuHeavyRuntime;
@@ -31,13 +36,22 @@ use crate::{PersistClient, PersistConfig, PersistLocation};
 /// This is because, in production, persist is heavily limited by the number of
 /// server-side Postgres/Aurora connections. This cache allows PersistClients to
 /// share, for example, these Postgres connections.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PersistClientCache {
     pub(crate) cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
-    blob_by_uri: HashMap<String, Arc<dyn Blob + Send + Sync>>,
-    consensus_by_uri: HashMap<String, Arc<dyn Consensus + Send + Sync>>,
+    blob_by_uri: Mutex<BTreeMap<String, (RttLatencyTask, Arc<dyn Blob + Send + Sync>)>>,
+    consensus_by_uri: Mutex<BTreeMap<String, (RttLatencyTask, Arc<dyn Consensus + Send + Sync>)>>,
     cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+}
+
+#[derive(Debug)]
+struct RttLatencyTask(JoinHandle<()>);
+
+impl Drop for RttLatencyTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 impl PersistClientCache {
@@ -47,8 +61,8 @@ impl PersistClientCache {
         PersistClientCache {
             cfg,
             metrics: Arc::new(metrics),
-            blob_by_uri: HashMap::new(),
-            consensus_by_uri: HashMap::new(),
+            blob_by_uri: Mutex::new(BTreeMap::new()),
+            consensus_by_uri: Mutex::new(BTreeMap::new()),
             cpu_heavy_runtime: Arc::new(CpuHeavyRuntime::new()),
         }
     }
@@ -60,18 +74,38 @@ impl PersistClientCache {
         Self::new(PersistConfig::new_for_tests(), &MetricsRegistry::new())
     }
 
+    /// Returns the [PersistConfig] being used by this cache.
+    pub fn cfg(&self) -> &PersistConfig {
+        &self.cfg
+    }
+
     /// Returns a new [PersistClient] for interfacing with persist shards made
     /// durable to the given [PersistLocation].
     ///
     /// The same `location` may be used concurrently from multiple processes.
     #[instrument(level = "debug", skip_all)]
-    pub async fn open(
-        &mut self,
-        location: PersistLocation,
-    ) -> Result<PersistClient, ExternalError> {
+    pub async fn open(&self, location: PersistLocation) -> Result<PersistClient, ExternalError> {
         let blob = self.open_blob(location.blob_uri).await?;
-        let consensus = match self.consensus_by_uri.entry(location.consensus_uri) {
-            Entry::Occupied(x) => Arc::clone(x.get()),
+        let consensus = self.open_consensus(location.consensus_uri).await?;
+        PersistClient::new(
+            self.cfg.clone(),
+            blob,
+            consensus,
+            Arc::clone(&self.metrics),
+            Arc::clone(&self.cpu_heavy_runtime),
+        )
+    }
+
+    // No sense in measuring rtt latencies more often than this.
+    const PROMETHEUS_SCRAPE_INTERVAL: Duration = Duration::from_secs(60);
+
+    async fn open_consensus(
+        &self,
+        consensus_uri: String,
+    ) -> Result<Arc<dyn Consensus + Send + Sync>, ExternalError> {
+        let mut consensus_by_uri = self.consensus_by_uri.lock().await;
+        let consensus = match consensus_by_uri.entry(consensus_uri) {
+            Entry::Occupied(x) => Arc::clone(&x.get().1),
             Entry::Vacant(x) => {
                 // Intentionally hold the lock, so we don't double connect under
                 // concurrency.
@@ -85,39 +119,135 @@ impl PersistClientCache {
                         consensus.clone().open()
                     })
                     .await;
-                Arc::clone(x.insert(consensus))
+                let consensus =
+                    Arc::new(MetricsConsensus::new(consensus, Arc::clone(&self.metrics)));
+                let task = consensus_rtt_latency_task(
+                    Arc::clone(&consensus),
+                    Arc::clone(&self.metrics),
+                    Self::PROMETHEUS_SCRAPE_INTERVAL,
+                )
+                .await;
+                Arc::clone(&x.insert((RttLatencyTask(task), consensus)).1)
             }
         };
-        let consensus: Arc<dyn Consensus + Send + Sync> =
-            Arc::new(MetricsConsensus::new(consensus, Arc::clone(&self.metrics)));
-        PersistClient::new(
-            self.cfg.clone(),
-            blob,
-            consensus,
-            Arc::clone(&self.metrics),
-            Arc::clone(&self.cpu_heavy_runtime),
-        )
+        Ok(consensus)
     }
 
-    pub(crate) async fn open_blob(
-        &mut self,
+    async fn open_blob(
+        &self,
         blob_uri: String,
     ) -> Result<Arc<dyn Blob + Send + Sync>, ExternalError> {
-        let blob = match self.blob_by_uri.entry(blob_uri) {
-            Entry::Occupied(x) => Arc::clone(x.get()),
+        let mut blob_by_uri = self.blob_by_uri.lock().await;
+        let blob = match blob_by_uri.entry(blob_uri) {
+            Entry::Occupied(x) => Arc::clone(&x.get().1),
             Entry::Vacant(x) => {
                 // Intentionally hold the lock, so we don't double connect under
                 // concurrency.
-                let blob = BlobConfig::try_from(x.key()).await?;
+                let blob = BlobConfig::try_from(
+                    x.key(),
+                    Box::new(self.cfg.clone()),
+                    self.metrics.s3_blob.clone(),
+                )
+                .await?;
                 let blob = retry_external(&self.metrics.retries.external.blob_open, || {
                     blob.clone().open()
                 })
                 .await;
-                Arc::clone(x.insert(blob))
+                let blob = Arc::new(MetricsBlob::new(blob, Arc::clone(&self.metrics)));
+                let task = blob_rtt_latency_task(
+                    Arc::clone(&blob),
+                    Arc::clone(&self.metrics),
+                    Self::PROMETHEUS_SCRAPE_INTERVAL,
+                )
+                .await;
+                Arc::clone(&x.insert((RttLatencyTask(task), blob)).1)
             }
         };
-        Ok(Arc::new(MetricsBlob::new(blob, Arc::clone(&self.metrics))))
+        Ok(blob)
     }
+}
+
+/// Starts a task to periodically measure the persist-observed latency to
+/// consensus.
+///
+/// This is a task, rather than something like looking at the latencies of prod
+/// traffic, so that we minimize any issues around Futures not being polled
+/// promptly (as can and does happen with the Timely-polled Futures).
+///
+/// The caller is responsible for shutdown via [JoinHandle::abort].
+///
+/// No matter whether we wrap MetricsConsensus before or after we start up the
+/// rtt latency task, there's the possibility for it being confusing at some
+/// point. Err on the side of more data (including the latency measurements) to
+/// start.
+async fn blob_rtt_latency_task(
+    blob: Arc<MetricsBlob>,
+    metrics: Arc<Metrics>,
+    measurement_interval: Duration,
+) -> JoinHandle<()> {
+    mz_ore::task::spawn(|| "persist::blob_rtt_latency", async move {
+        // Use the tokio Instant for next_measurement because the reclock tests
+        // mess with the tokio sleep clock.
+        let mut next_measurement = tokio::time::Instant::now();
+        loop {
+            tokio::time::sleep_until(next_measurement).await;
+            let start = Instant::now();
+            match blob.get(BLOB_GET_LIVENESS_KEY).await {
+                Ok(_) => {
+                    metrics.blob.rtt_latency.set(start.elapsed().as_secs_f64());
+                }
+                Err(_) => {
+                    // Don't spam retries if this returns an error. We're
+                    // guaranteed by the method signature that we've already got
+                    // metrics coverage of these, so we'll count the errors.
+                }
+            }
+            next_measurement = tokio::time::Instant::now() + measurement_interval;
+        }
+    })
+}
+
+/// Starts a task to periodically measure the persist-observed latency to
+/// consensus.
+///
+/// This is a task, rather than something like looking at the latencies of prod
+/// traffic, so that we minimize any issues around Futures not being polled
+/// promptly (as can and does happen with the Timely-polled Futures).
+///
+/// The caller is responsible for shutdown via [JoinHandle::abort].
+///
+/// No matter whether we wrap MetricsConsensus before or after we start up the
+/// rtt latency task, there's the possibility for it being confusing at some
+/// point. Err on the side of more data (including the latency measurements) to
+/// start.
+async fn consensus_rtt_latency_task(
+    consensus: Arc<MetricsConsensus>,
+    metrics: Arc<Metrics>,
+    measurement_interval: Duration,
+) -> JoinHandle<()> {
+    mz_ore::task::spawn(|| "persist::blob_rtt_latency", async move {
+        // Use the tokio Instant for next_measurement because the reclock tests
+        // mess with the tokio sleep clock.
+        let mut next_measurement = tokio::time::Instant::now();
+        loop {
+            tokio::time::sleep_until(next_measurement).await;
+            let start = Instant::now();
+            match consensus.head(CONSENSUS_HEAD_LIVENESS_KEY).await {
+                Ok(_) => {
+                    metrics
+                        .consensus
+                        .rtt_latency
+                        .set(start.elapsed().as_secs_f64());
+                }
+                Err(_) => {
+                    // Don't spam retries if this returns an error. We're
+                    // guaranteed by the method signature that we've already got
+                    // metrics coverage of these, so we'll count the errors.
+                }
+            }
+            next_measurement = tokio::time::Instant::now() + measurement_interval;
+        }
+    })
 }
 
 #[cfg(test)]
@@ -129,12 +259,12 @@ mod tests {
 
     #[tokio::test]
     async fn client_cache() {
-        let mut cache = PersistClientCache::new(
+        let cache = PersistClientCache::new(
             PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
             &MetricsRegistry::new(),
         );
-        assert_eq!(cache.blob_by_uri.len(), 0);
-        assert_eq!(cache.consensus_by_uri.len(), 0);
+        assert_eq!(cache.blob_by_uri.lock().await.len(), 0);
+        assert_eq!(cache.consensus_by_uri.lock().await.len(), 0);
 
         // Opening a location on an empty cache saves the results.
         let _ = cache
@@ -144,8 +274,8 @@ mod tests {
             })
             .await
             .expect("failed to open location");
-        assert_eq!(cache.blob_by_uri.len(), 1);
-        assert_eq!(cache.consensus_by_uri.len(), 1);
+        assert_eq!(cache.blob_by_uri.lock().await.len(), 1);
+        assert_eq!(cache.consensus_by_uri.lock().await.len(), 1);
 
         // Opening a location with an already opened consensus reuses it, even
         // if the blob is different.
@@ -156,8 +286,8 @@ mod tests {
             })
             .await
             .expect("failed to open location");
-        assert_eq!(cache.blob_by_uri.len(), 2);
-        assert_eq!(cache.consensus_by_uri.len(), 1);
+        assert_eq!(cache.blob_by_uri.lock().await.len(), 2);
+        assert_eq!(cache.consensus_by_uri.lock().await.len(), 1);
 
         // Ditto the other way.
         let _ = cache
@@ -167,8 +297,8 @@ mod tests {
             })
             .await
             .expect("failed to open location");
-        assert_eq!(cache.blob_by_uri.len(), 2);
-        assert_eq!(cache.consensus_by_uri.len(), 2);
+        assert_eq!(cache.blob_by_uri.lock().await.len(), 2);
+        assert_eq!(cache.consensus_by_uri.lock().await.len(), 2);
 
         // Query params and path matter, so we get new instances.
         let _ = cache
@@ -178,8 +308,8 @@ mod tests {
             })
             .await
             .expect("failed to open location");
-        assert_eq!(cache.blob_by_uri.len(), 3);
-        assert_eq!(cache.consensus_by_uri.len(), 3);
+        assert_eq!(cache.blob_by_uri.lock().await.len(), 3);
+        assert_eq!(cache.consensus_by_uri.lock().await.len(), 3);
 
         // User info and port also matter, so we get new instances.
         let _ = cache
@@ -189,7 +319,7 @@ mod tests {
             })
             .await
             .expect("failed to open location");
-        assert_eq!(cache.blob_by_uri.len(), 4);
-        assert_eq!(cache.consensus_by_uri.len(), 4);
+        assert_eq!(cache.blob_by_uri.lock().await.len(), 4);
+        assert_eq!(cache.consensus_by_uri.lock().await.len(), 4);
     }
 }

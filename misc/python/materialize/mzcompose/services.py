@@ -9,7 +9,10 @@
 
 import os
 import random
+import tempfile
 from typing import Dict, List, Optional, Tuple, Union
+
+import toml
 
 from materialize import ROOT
 from materialize.mzcompose import Service, ServiceConfig, ServiceDependency, loader
@@ -143,6 +146,12 @@ class Materialized(Service):
                 "environment": environment,
                 "volumes": [*DEFAULT_MZ_VOLUMES, *volumes_extra],
                 "tmpfs": ["/tmp"],
+                "healthcheck": {
+                    "test": ["CMD", "curl", "-f", "localhost:6878/api/readyz"],
+                    "interval": "1s",
+                    # A fully loaded Materialize can take a long time to start.
+                    "start_period": "300s",
+                },
             }
         )
 
@@ -157,7 +166,6 @@ class Clusterd(Service):
         environment_extra: List[str] = [],
         memory: Optional[str] = None,
         options: List[str] = [],
-        storage_workers: Optional[int] = Materialized.Size.DEFAULT_SIZE,
     ) -> None:
         environment = [
             "CLUSTERD_LOG_FILTER",
@@ -166,9 +174,6 @@ class Clusterd(Service):
         ]
 
         command = []
-
-        if storage_workers:
-            command += [f"--storage-workers={storage_workers}"]
 
         command += options
 
@@ -214,6 +219,11 @@ class Zookeeper(Service):
                 "ports": [port],
                 "volumes": volumes,
                 "environment": environment,
+                "healthcheck": {
+                    "test": ["CMD", "nc", "-z", "localhost", "2181"],
+                    "interval": "1s",
+                    "start_period": "120s",
+                },
             },
         )
 
@@ -240,7 +250,7 @@ class Kafka(Service):
             "KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=100",
         ],
         extra_environment: List[str] = [],
-        depends_on: List[str] = ["zookeeper"],
+        depends_on_extra: List[str] = [],
         volumes: List[str] = [],
         listener_type: str = "PLAINTEXT",
     ) -> None:
@@ -259,7 +269,15 @@ class Kafka(Service):
                 f"KAFKA_AUTO_CREATE_TOPICS_ENABLE={auto_create_topics}",
                 f"KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR={offsets_topic_replication_factor}",
             ],
-            "depends_on": depends_on,
+            "depends_on": {
+                "zookeeper": {"condition": "service_healthy"},
+                **{s: {"condition": "service_started"} for s in depends_on_extra},
+            },
+            "healthcheck": {
+                "test": ["CMD", "nc", "-z", "localhost", "9092"],
+                "interval": "1s",
+                "start_period": "120s",
+            },
             "volumes": volumes,
         }
         super().__init__(name=name, config=config)
@@ -269,7 +287,7 @@ class Redpanda(Service):
     def __init__(
         self,
         name: str = "redpanda",
-        version: str = "v22.3.8",
+        version: str = "v22.3.13",
         auto_create_topics: bool = False,
         image: Optional[str] = None,
         aliases: Optional[List[str]] = None,
@@ -315,6 +333,11 @@ class Redpanda(Service):
             "ports": ports,
             "command": command_list,
             "networks": {"default": {"aliases": aliases}},
+            "healthcheck": {
+                "test": ["CMD", "curl", "-f", "localhost:9644/v1/status/ready"],
+                "interval": "1s",
+                "start_period": "120s",
+            },
         }
 
         super().__init__(name=name, config=config)
@@ -335,7 +358,7 @@ class SchemaRegistry(Service):
             "SCHEMA_REGISTRY_KAFKASTORE_TIMEOUT_MS=10000",
             "SCHEMA_REGISTRY_HOST_NAME=localhost",
         ],
-        depends_on: Optional[List[str]] = None,
+        depends_on_extra: List[str] = [],
         volumes: List[str] = [],
     ) -> None:
         bootstrap_servers = ",".join(
@@ -345,25 +368,37 @@ class SchemaRegistry(Service):
             *environment,
             f"SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS={bootstrap_servers}",
         ]
-        kafka_hosts = [kafka for kafka, _ in kafka_servers]
         super().__init__(
             name=name,
             config={
                 "image": f"{image}:{tag}",
                 "ports": [port],
                 "environment": environment,
-                "depends_on": depends_on or [*kafka_hosts, "zookeeper"],
+                "depends_on": {
+                    **{
+                        host: {"condition": "service_healthy"}
+                        for host, _ in kafka_servers
+                    },
+                    **{s: {"condition": "service_started"} for s in depends_on_extra},
+                },
+                "healthcheck": {
+                    "test": ["CMD", "curl", "-f", "localhost:8081"],
+                    "interval": "1s",
+                    "start_period": "120s",
+                },
                 "volumes": volumes,
             },
         )
 
 
 class MySql(Service):
+    DEFAULT_ROOT_PASSWORD = "p@ssw0rd"
+
     def __init__(
         self,
-        mysql_root_password: str,
+        root_password: str = DEFAULT_ROOT_PASSWORD,
         name: str = "mysql",
-        image: str = "mysql:8.0.27",
+        image: str = "mysql:8.0.32",
         port: int = 3306,
         volumes: list[str] = ["mydata:/var/lib/mysql-files"],
     ) -> None:
@@ -371,23 +406,32 @@ class MySql(Service):
             name=name,
             config={
                 "image": image,
+                "init": True,
                 "ports": [port],
                 "environment": [
-                    f"MYSQL_ROOT_PASSWORD={mysql_root_password}",
+                    f"MYSQL_ROOT_PASSWORD={root_password}",
                 ],
                 "command": [
                     "--default-authentication-plugin=mysql_native_password",
                     "--secure-file-priv=/var/lib/mysql-files",
                 ],
+                "healthcheck": {
+                    "test": [
+                        "CMD",
+                        "mysqladmin",
+                        "ping",
+                        f"--password={root_password}",
+                    ],
+                    "interval": "1s",
+                    "start_period": "60s",
+                },
                 "volumes": volumes,
             },
         )
 
-        self.mysql_root_password = mysql_root_password
-
 
 class Cockroach(Service):
-    DEFAULT_COCKROACH_TAG = "v22.2.0"
+    DEFAULT_COCKROACH_TAG = "v22.2.3"
 
     def __init__(
         self,
@@ -451,30 +495,40 @@ class Postgres(Service):
                 "command": command,
                 "ports": [port],
                 "environment": environment,
+                "healthcheck": {
+                    "test": ["CMD", "pg_isready"],
+                    "interval": "1s",
+                    "start_period": "30s",
+                },
             }
         )
         super().__init__(name=name, config=config)
 
 
 class SqlServer(Service):
+    DEFAULT_SA_PASSWORD = "RPSsql12345"
+
     def __init__(
         self,
-        sa_password: str,  # At least 8 characters including uppercase, lowercase letters, base-10 digits and/or non-alphanumeric symbols.
+        # The password must be at least 8 characters including uppercase,
+        # lowercase letters, base-10 digits and/or non-alphanumeric symbols.
+        sa_password: str = DEFAULT_SA_PASSWORD,
         name: str = "sql-server",
         image: str = "mcr.microsoft.com/mssql/server",
-        environment: List[str] = [
-            "ACCEPT_EULA=Y",
-            "MSSQL_PID=Developer",
-            "MSSQL_AGENT_ENABLED=True",
-        ],
+        environment_extra: List[str] = [],
     ) -> None:
-        environment.append(f"SA_PASSWORD={sa_password}")
         super().__init__(
             name=name,
             config={
                 "image": image,
                 "ports": [1433],
-                "environment": environment,
+                "environment": [
+                    "ACCEPT_EULA=Y",
+                    "MSSQL_PID=Developer",
+                    "MSSQL_AGENT_ENABLED=True",
+                    f"SA_PASSWORD={sa_password}",
+                    *environment_extra,
+                ],
             },
         )
         self.sa_password = sa_password
@@ -486,6 +540,7 @@ class Debezium(Service):
         name: str = "debezium",
         image: str = f"debezium/connect:{DEFAULT_DEBEZIUM_VERSION}",
         port: int = 8083,
+        redpanda: bool = False,
         environment: List[str] = [
             "BOOTSTRAP_SERVERS=kafka:9092",
             "CONFIG_STORAGE_TOPIC=connect_configs",
@@ -502,12 +557,25 @@ class Debezium(Service):
             "CONNECT_ERRORS_RETRY_DELAY_MAX_MS=1000",
         ],
     ) -> None:
+        depends_on: Dict[str, ServiceDependency] = {
+            "kafka": {"condition": "service_healthy"},
+            "schema-registry": {"condition": "service_healthy"},
+        }
+        if redpanda:
+            depends_on = {"redpanda": {"condition": "service_healthy"}}
         super().__init__(
             name=name,
             config={
                 "image": image,
+                "init": True,
                 "ports": [port],
                 "environment": environment,
+                "depends_on": depends_on,
+                "healthcheck": {
+                    "test": ["CMD", "curl", "-f", "localhost:8083"],
+                    "interval": "1s",
+                    "start_period": "120s",
+                },
             },
         )
 
@@ -524,6 +592,11 @@ class Toxiproxy(Service):
             config={
                 "image": image,
                 "ports": [port],
+                "healthcheck": {
+                    "test": ["CMD", "nc", "-z", "localhost", "8474"],
+                    "interval": "1s",
+                    "start_period": "30s",
+                },
             },
         )
 
@@ -560,9 +633,15 @@ class Localstack(Service):
             name=name,
             config={
                 "image": image,
+                "init": True,
                 "ports": [port],
                 "environment": environment,
                 "volumes": volumes,
+                "healthcheck": {
+                    "test": ["CMD", "curl", "-f", "localhost:4566/health"],
+                    "interval": "1s",
+                    "start_period": "120s",
+                },
             },
         )
 
@@ -612,6 +691,8 @@ class Testdrive(Service):
         materialize_params: Dict[str, str] = {},
         kafka_url: str = "kafka:9092",
         kafka_default_partitions: Optional[int] = None,
+        kafka_args: Optional[str] = None,
+        schema_registry_url: str = "http://schema-registry:8081",
         no_reset: bool = False,
         default_timeout: str = "120s",
         seed: Optional[int] = None,
@@ -654,7 +735,7 @@ class Testdrive(Service):
             entrypoint = [
                 "testdrive",
                 f"--kafka-addr={kafka_url}",
-                "--schema-registry-url=http://schema-registry:8081",
+                f"--schema-registry-url={schema_registry_url}",
                 f"--materialize-url={materialize_url}",
                 f"--materialize-internal-url={materialize_url_internal}",
             ]
@@ -722,6 +803,7 @@ class TestCerts(Service):
                 # Container must stay alive indefinitely to be considered
                 # healthy by `docker compose up --wait`.
                 "command": ["sleep", "infinity"],
+                "init": True,
                 "mzbuild": "test-certs",
                 "volumes": ["secrets:/secrets"],
             },
@@ -784,6 +866,11 @@ class Metabase(Service):
             config={
                 "image": "metabase/metabase:v0.41.4",
                 "ports": ["3000"],
+                "healthcheck": {
+                    "test": ["CMD", "curl", "-f", "localhost:3000/api/health"],
+                    "interval": "1s",
+                    "start_period": "300s",
+                },
             },
         )
 
@@ -799,5 +886,50 @@ class SshBastionHost(Service):
                     "SSH_USERS=mz:1000:1000",
                     "TCP_FORWARDING=true",
                 ],
+            },
+        )
+
+
+class Mz(Service):
+    def __init__(
+        self,
+        *,
+        name: str = "mz",
+        region: str = "aws/us-east-1",
+        environment: str = "staging",
+        username: str,
+        app_password: str,
+    ) -> None:
+        # We must create the temporary config file in a location
+        # that is accessible on the same path in both the ci-builder
+        # container and the host that runs the docker daemon
+        # $TMP does not guarantee that, but loader.composition_path does.
+        config = tempfile.NamedTemporaryFile(
+            dir=loader.composition_path,
+            prefix="tmp_",
+            suffix=".toml",
+            mode="w",
+            delete=False,
+        )
+        toml.dump(
+            {
+                "current_profile": "default",
+                "profiles": {
+                    "default": {
+                        "email": username,
+                        "app-password": app_password,
+                        "region": region,
+                        "endpoint": f"https://{environment}.cloud.materialize.com/",
+                    },
+                },
+            },
+            config,
+        )
+        config.close()
+        super().__init__(
+            name=name,
+            config={
+                "mzbuild": "mz",
+                "volumes": [f"{config.name}:/root/.config/mz/profiles.toml"],
             },
         )

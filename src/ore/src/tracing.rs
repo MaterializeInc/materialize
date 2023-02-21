@@ -19,7 +19,7 @@
 //!  * The **[`OpenTelemetryContext`]** type, which carries a tracing span
 //!    across thread or task boundaries within a process.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -88,7 +88,7 @@ pub struct SentryConfig<F> {
     /// `SENTRY_ENVIRONMENT` environment variable.
     pub environment: Option<String>,
     /// Additional tags to include on each Sentry event/exception.
-    pub tags: HashMap<String, String>,
+    pub tags: BTreeMap<String, String>,
     /// A filter that classifies events before sending them to Sentry.
     pub event_filter: F,
 }
@@ -197,6 +197,7 @@ impl std::fmt::Debug for TracingHandle {
 /// A guard for the tracing infrastructure configured with [`configure`].
 ///
 /// This guard should be kept alive for the lifetime of the program.
+#[must_use = "Must hold for the lifetime of the program, otherwise tracing will be shutdown"]
 pub struct TracingGuard {
     _sentry_guard: Option<sentry::ClientInitGuard>,
 }
@@ -461,19 +462,11 @@ where
         match &self.prefix {
             None => self.inner.format_event(ctx, writer, event)?,
             Some(prefix) => {
-                let style = ansi_term::Style::new();
-                let target_style = if writer.has_ansi_escapes() {
-                    style.bold()
-                } else {
-                    style
-                };
-                write!(
-                    writer,
-                    "{}{}:{} ",
-                    target_style.prefix(),
-                    prefix,
-                    target_style.infix(style)
-                )?;
+                let mut prefix = yansi::Paint::new(prefix);
+                if writer.has_ansi_escapes() {
+                    prefix = prefix.bold();
+                }
+                write!(writer, "{}: ", prefix)?;
                 self.inner.format_event(ctx, writer, event)?;
             }
         }
@@ -486,7 +479,7 @@ where
 /// Allows associating [`tracing`] spans across task or thread boundaries.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct OpenTelemetryContext {
-    inner: HashMap<String, String>,
+    inner: BTreeMap<String, String>,
 }
 
 impl OpenTelemetryContext {
@@ -497,51 +490,52 @@ impl OpenTelemetryContext {
     /// to create a context, then the current thread's `Context` is used
     /// defaulting to the default `Context`.
     pub fn attach_as_parent(&self) {
-        let parent_cx = global::get_text_map_propagator(|prop| prop.extract(&self.inner));
+        let parent_cx = global::get_text_map_propagator(|prop| prop.extract(self));
         tracing::Span::current().set_parent(parent_cx);
     }
 
     /// Obtains a `Context` from the current [`tracing`] span.
     pub fn obtain() -> Self {
-        let mut map = std::collections::HashMap::new();
+        let mut context = Self::empty();
         global::get_text_map_propagator(|propagator| {
-            propagator.inject_context(&tracing::Span::current().context(), &mut map)
+            propagator.inject_context(&tracing::Span::current().context(), &mut context)
         });
 
-        Self { inner: map }
+        context
     }
 
     /// Obtains an empty `Context`.
     pub fn empty() -> Self {
         Self {
-            inner: HashMap::new(),
+            inner: BTreeMap::new(),
         }
     }
 }
 
 impl Extractor for OpenTelemetryContext {
     fn get(&self, key: &str) -> Option<&str> {
-        Extractor::get(&self.inner, key)
+        self.inner.get(&key.to_lowercase()).map(|v| v.as_str())
     }
+
     fn keys(&self) -> Vec<&str> {
-        Extractor::keys(&self.inner)
+        self.inner.keys().map(|k| k.as_str()).collect::<Vec<_>>()
     }
 }
 
 impl Injector for OpenTelemetryContext {
     fn set(&mut self, key: &str, value: String) {
-        Injector::set(&mut self.inner, key, value)
+        self.inner.insert(key.to_lowercase(), value);
     }
 }
 
-impl From<OpenTelemetryContext> for HashMap<String, String> {
+impl From<OpenTelemetryContext> for BTreeMap<String, String> {
     fn from(ctx: OpenTelemetryContext) -> Self {
         ctx.inner
     }
 }
 
-impl From<HashMap<String, String>> for OpenTelemetryContext {
-    fn from(map: HashMap<String, String>) -> Self {
+impl From<BTreeMap<String, String>> for OpenTelemetryContext {
+    fn from(map: BTreeMap<String, String>) -> Self {
         Self { inner: map }
     }
 }

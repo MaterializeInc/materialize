@@ -85,17 +85,17 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
 //! Port of tests from:
 //!     - https://github.com/apache/avro/blob/master/lang/py/avro/test/test_schema.py
 //!     - https://github.com/apache/avro/tree/master/lang/c/tests/schema_tests
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use chrono::NaiveDateTime;
-use mz_avro::types::AvroMap;
 use mz_avro::{types::DecimalValue, types::Value, Schema};
 use once_cell::sync::Lazy;
 
@@ -225,12 +225,12 @@ static VALID_SCHEMAS: Lazy<Vec<(&'static str, Value)>> = Lazy::new(|| {
         // Map examples
         (
             r#"{"type": "map", "values": "long"}"#,
-            Value::Map(AvroMap(HashMap::new())),
+            Value::Map(BTreeMap::new()),
         ),
         (
             r#"{"type": "map",
              "values": {"type": "enum", "name": "Test", "symbols": ["A", "B"]}}"#,
-            Value::Map(AvroMap(HashMap::new())),
+            Value::Map(BTreeMap::new()),
         ),
         // Union examples
         (
@@ -309,7 +309,7 @@ static VALID_SCHEMAS: Lazy<Vec<(&'static str, Value)>> = Lazy::new(|| {
                 ("bytesField".into(), Value::Bytes(vec![0])),
                 ("nullField".into(), Value::Null),
                 ("arrayField".into(), Value::Array(vec![Value::Double(0.0)])),
-                ("mapField".into(), Value::Map(AvroMap(HashMap::new()))),
+                ("mapField".into(), Value::Map(BTreeMap::new())),
                 (
                     "unionField".into(),
                     Value::Union {

@@ -13,9 +13,9 @@ use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
-use mz_compute_client::controller::{
-    ComputeInstanceId, ComputeInstanceStatus, ComputeReplicaAllocation, ComputeReplicaLocation,
-    ProcessId, ReplicaId,
+use mz_controller::clusters::{
+    ClusterId, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaAllocation, ReplicaId,
+    ReplicaLocation,
 };
 use mz_expr::MirScalarExpr;
 use mz_orchestrator::{CpuLimit, MemoryLimit, ServiceProcessMetrics};
@@ -29,8 +29,8 @@ use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::types::connections::KafkaConnection;
-use mz_storage_client::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 use mz_storage_client::types::sinks::{KafkaSinkConnection, StorageSinkConnection};
+use mz_storage_client::types::sources::{GenericSourceConnection, PostgresSourceConnection};
 
 use crate::catalog::builtin::{
     MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_LINKS,
@@ -38,18 +38,16 @@ use crate::catalog::builtin::{
     MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS,
     MZ_DATABASES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS,
     MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES,
-    MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES,
+    MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES,
     MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
-    CatalogItem, CatalogState, Connection, Database, Error, ErrorKind, Func, Index,
+    CatalogItem, CatalogState, Connection, DataSourceDesc, Database, Error, ErrorKind, Func, Index,
     MaterializedView, Role, Sink, StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
 
-use super::builtin::{
-    MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_CLUSTER_REPLICA_SIZES, MZ_STORAGE_HOST_SIZES,
-};
-use super::{AwsPrincipalContext, DataSourceDesc, Ingestion};
+use super::builtin::{MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_CLUSTER_REPLICA_SIZES};
+use super::AwsPrincipalContext;
 
 /// An update to a built-in table.
 #[derive(Debug)]
@@ -63,7 +61,7 @@ pub struct BuiltinTableUpdate {
 }
 
 impl CatalogState {
-    pub(super) fn pack_depends_update(
+    pub fn pack_depends_update(
         &self,
         depender: GlobalId,
         dependee: GlobalId,
@@ -132,12 +130,8 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_compute_instance_update(
-        &self,
-        name: &str,
-        diff: Diff,
-    ) -> BuiltinTableUpdate {
-        let id = self.compute_instances_by_name[name];
+    pub(super) fn pack_cluster_update(&self, name: &str, diff: Diff) -> BuiltinTableUpdate {
+        let id = self.clusters_by_name[name];
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTERS),
             row: Row::pack_slice(&[Datum::String(&id.to_string()), Datum::String(name)]),
@@ -145,24 +139,24 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_compute_replica_update(
+    pub(super) fn pack_cluster_replica_update(
         &self,
-        compute_instance_id: ComputeInstanceId,
+        cluster_id: ClusterId,
         name: &str,
         diff: Diff,
     ) -> BuiltinTableUpdate {
-        let instance = &self.compute_instances_by_id[&compute_instance_id];
-        let id = instance.replica_id_by_name[name];
-        let replica = &instance.replicas_by_id[&id];
+        let cluster = &self.clusters_by_id[&cluster_id];
+        let id = cluster.replica_id_by_name[name];
+        let replica = &cluster.replicas_by_id[&id];
 
         let (size, az) = match &replica.config.location {
-            ComputeReplicaLocation::Managed {
+            ReplicaLocation::Managed(ManagedReplicaLocation {
                 size,
                 availability_zone,
                 az_user_specified: _,
                 allocation: _,
-            } => (Some(&**size), Some(availability_zone.as_str())),
-            ComputeReplicaLocation::Remote { .. } => (None, None),
+            }) => (Some(&**size), Some(availability_zone.as_str())),
+            ReplicaLocation::Unmanaged(_) => (None, None),
         };
 
         BuiltinTableUpdate {
@@ -170,7 +164,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::UInt64(id),
                 Datum::String(name),
-                Datum::String(&compute_instance_id.to_string()),
+                Datum::String(&cluster_id.to_string()),
                 Datum::from(size),
                 Datum::from(az),
             ]),
@@ -184,7 +178,7 @@ impl CatalogState {
         object_id: GlobalId,
         diff: Diff,
     ) -> BuiltinTableUpdate {
-        let cluster_id = self.compute_instances_by_name[cluster_name];
+        let cluster_id = self.clusters_by_name[cluster_name];
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_LINKS),
             row: Row::pack_slice(&[
@@ -195,17 +189,17 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_compute_replica_status_update(
+    pub(super) fn pack_cluster_replica_status_update(
         &self,
-        compute_instance_id: ComputeInstanceId,
+        cluster_id: ClusterId,
         replica_id: ReplicaId,
         process_id: ProcessId,
         diff: Diff,
     ) -> BuiltinTableUpdate {
-        let event = self.get_compute_instance_status(compute_instance_id, replica_id, process_id);
+        let event = self.get_cluster_status(cluster_id, replica_id, process_id);
         let status = match event.status {
-            ComputeInstanceStatus::Ready => "ready",
-            ComputeInstanceStatus::NotReady => "not-ready",
+            ClusterStatus::Ready => "ready",
+            ClusterStatus::NotReady => "not-ready",
         };
 
         BuiltinTableUpdate {
@@ -234,33 +228,41 @@ impl CatalogState {
             .id;
         let name = &entry.name().item;
         let mut updates = match entry.item() {
-            CatalogItem::Log(_) => {
-                self.pack_source_update(id, oid, schema_id, name, "log", None, None, None, diff)
-            }
+            CatalogItem::Log(_) => self.pack_source_update(
+                id, oid, schema_id, name, "log", None, None, None, None, diff,
+            ),
             CatalogItem::Index(index) => self.pack_index_update(id, oid, name, index, diff),
             CatalogItem::Table(_) => self.pack_table_update(id, oid, schema_id, name, diff),
             CatalogItem::Source(source) => {
                 let source_type = source.source_type();
                 let connection_id = source.connection_id();
                 let envelope = source.envelope();
+                let cluster_id = entry.item().cluster_id().map(|id| id.to_string());
 
-                self.pack_source_update(
+                let mut updates = self.pack_source_update(
                     id,
                     oid,
                     schema_id,
                     name,
                     source_type,
                     connection_id,
-                    match &source.data_source {
-                        DataSourceDesc::Ingestion(Ingestion {
-                            host_config: StorageHostConfig::Managed { size, .. },
-                            ..
-                        }) => Some(size.as_str()),
-                        _ => None,
-                    },
+                    self.get_storage_object_size(id),
                     envelope,
+                    cluster_id.as_deref(),
                     diff,
-                )
+                );
+
+                updates.extend(match &source.data_source {
+                    DataSourceDesc::Ingestion(ingestion) => match &ingestion.desc.connection {
+                        GenericSourceConnection::Postgres(postgres) => {
+                            self.pack_postgres_source_update(id, postgres, diff)
+                        }
+                        _ => vec![],
+                    },
+                    _ => vec![],
+                });
+
+                updates
             }
             CatalogItem::View(view) => self.pack_view_update(id, oid, schema_id, name, view, diff),
             CatalogItem::MaterializedView(mview) => {
@@ -274,6 +276,13 @@ impl CatalogState {
                 self.pack_connection_update(id, oid, schema_id, name, connection, diff)
             }
         };
+
+        if !entry.item().is_temporary() {
+            // Populate or clean up the `mz_object_dependencies` table.
+            for dependee in entry.item().uses() {
+                updates.push(self.pack_depends_update(id, *dependee, diff))
+            }
+        }
 
         if let Ok(desc) = entry.desc(&self.resolve_full_name(entry.name(), entry.conn_id())) {
             let defaults = match entry.item() {
@@ -336,6 +345,7 @@ impl CatalogState {
         connection_id: Option<GlobalId>,
         size: Option<&str>,
         envelope: Option<&str>,
+        cluster_id: Option<&str>,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
@@ -349,6 +359,23 @@ impl CatalogState {
                 Datum::from(connection_id.map(|id| id.to_string()).as_deref()),
                 Datum::from(size),
                 Datum::from(envelope),
+                Datum::from(cluster_id),
+            ]),
+            diff,
+        }]
+    }
+
+    fn pack_postgres_source_update(
+        &self,
+        id: GlobalId,
+        postgres: &PostgresSourceConnection,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate> {
+        vec![BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_POSTGRES_SOURCES),
+            row: Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::String(&postgres.publication_details.slot),
             ]),
             diff,
         }]
@@ -463,7 +490,7 @@ impl CatalogState {
                     .iter()
                     .map(|broker| Datum::String(&broker.address)),
             )
-            .unwrap();
+            .expect("kafka.brokers is 1 dimensional, and it's length is used for the array length");
         let brokers = row.unpack_first();
         vec![BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_KAFKA_CONNECTIONS),
@@ -550,7 +577,7 @@ impl CatalogState {
                 Datum::UInt32(oid),
                 Datum::UInt64(schema_id.into()),
                 Datum::String(name),
-                Datum::String(&mview.compute_instance.to_string()),
+                Datum::String(&mview.cluster_id.to_string()),
                 Datum::String(&query_string),
             ]),
             diff,
@@ -584,6 +611,9 @@ impl CatalogState {
                     });
                 }
             };
+
+            let envelope = sink.envelope();
+
             updates.push(BuiltinTableUpdate {
                 id: self.resolve_builtin_table(&MZ_SINKS),
                 row: Row::pack_slice(&[
@@ -593,7 +623,9 @@ impl CatalogState {
                     Datum::String(name),
                     Datum::String(connection.name()),
                     Datum::from(sink.connection_id().map(|id| id.to_string()).as_deref()),
-                    Datum::from(sink.host_config.size()),
+                    Datum::from(self.get_storage_object_size(id)),
+                    Datum::from(envelope),
+                    Datum::String(&sink.cluster_id.to_string()),
                 ]),
                 diff,
             });
@@ -615,7 +647,9 @@ impl CatalogState {
             .expect("create_sql cannot be invalid")
             .into_element()
         {
-            Statement::CreateIndex(CreateIndexStatement { key_parts, .. }) => key_parts.unwrap(),
+            Statement::CreateIndex(CreateIndexStatement { key_parts, .. }) => {
+                key_parts.expect("key_parts is filled in during planning")
+            }
             _ => unreachable!(),
         };
 
@@ -626,7 +660,7 @@ impl CatalogState {
                 Datum::UInt32(oid),
                 Datum::String(name),
                 Datum::String(&index.on.to_string()),
-                Datum::String(&index.compute_instance.to_string()),
+                Datum::String(&index.cluster_id.to_string()),
             ]),
             diff,
         });
@@ -637,7 +671,7 @@ impl CatalogState {
                 .typ(
                     &on_entry
                         .desc(&self.resolve_full_name(on_entry.name(), on_entry.conn_id()))
-                        .unwrap()
+                        .expect("can only create indexes on items with a valid description")
                         .typ()
                         .column_types,
                 )
@@ -749,11 +783,13 @@ impl CatalogState {
                 .push_array(
                     &[ArrayDimension {
                         lower_bound: 1,
-                        length: func_impl_details.arg_typs.len(),
+                        length: arg_type_ids.len(),
                     }],
                     arg_type_ids.iter().map(|id| Datum::String(id)),
                 )
-                .unwrap();
+                .expect(
+                    "arg_type_ids is 1 dimensional, and it's length is used for the array length",
+                );
             let arg_type_ids = row.unpack_first();
 
             updates.push(BuiltinTableUpdate {
@@ -829,7 +865,10 @@ impl CatalogState {
                 )))
             })?
             .into_row();
-        let details = details.iter().next().unwrap();
+        let details = details
+            .iter()
+            .next()
+            .expect("details created above with a single jsonb column");
         let dt = mz_ore::now::to_datetime(occurred_at).naive_utc();
         let id = event.sortable_id();
         Ok(BuiltinTableUpdate {
@@ -929,7 +968,7 @@ impl CatalogState {
             .map(
                 |(
                     size,
-                    ComputeReplicaAllocation {
+                    ReplicaAllocation {
                         memory_limit,
                         cpu_limit,
                         scale,
@@ -943,41 +982,8 @@ impl CatalogState {
                         (*memory_limit).unwrap_or(MemoryLimit::MAX);
                     let row = Row::pack_slice(&[
                         size.as_str().into(),
-                        u64::cast_from(scale.get()).into(),
-                        u64::cast_from(workers.get()).into(),
-                        cpu_limit.as_nanocpus().into(),
-                        memory_bytes.into(),
-                    ]);
-                    BuiltinTableUpdate { id, row, diff: 1 }
-                },
-            )
-            .collect();
-        updates
-    }
-
-    pub fn pack_all_storage_host_size_updates(&self) -> Vec<BuiltinTableUpdate> {
-        let id = self.resolve_builtin_table(&MZ_STORAGE_HOST_SIZES);
-        let updates = self
-            .storage_host_sizes
-            .0
-            .iter()
-            .map(
-                |(
-                    size,
-                    StorageHostResourceAllocation {
-                        memory_limit,
-                        cpu_limit,
-                        workers,
-                    },
-                )| {
-                    // Just invent something when the limits are `None`,
-                    // which only happens in non-prod environments (tests, process orchestrator, etc.)
-                    let cpu_limit = cpu_limit.unwrap_or(CpuLimit::MAX);
-                    let MemoryLimit(ByteSize(memory_bytes)) =
-                        (*memory_limit).unwrap_or(MemoryLimit::MAX);
-                    let row = Row::pack_slice(&[
-                        size.as_str().into(),
-                        u64::cast_from(workers.get()).into(),
+                        u64::from(*scale).into(),
+                        u64::cast_from(*workers).into(),
                         cpu_limit.as_nanocpus().into(),
                         memory_bytes.into(),
                     ]);

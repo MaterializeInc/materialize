@@ -14,52 +14,45 @@ ok
 
 # Redundant IS NOT NULL predicate
 
-build apply=FilterFusion
+build apply=Fusion
 (filter (get x) [(call_unary not (call_unary is_null #0)) (call_binary eq #0 1)])
 ----
-%0 =
-| Get x (u0)
-| Filter (#0 = 1)
+Filter (#0 = 1)
+  Get x
 
-build apply=FilterFusion
+build apply=Fusion
 (filter (get x) [(call_unary not (call_unary is_null #1)) (call_binary eq #0 #1)])
 ----
-%0 =
-| Get x (u0)
-| Filter (#0 = #1)
+Filter (#0 = #1)
+  Get x
 
-build apply=FilterFusion
+build apply=Fusion
 (filter (filter (get x) [(call_unary not (call_unary is_null #0))]) [(call_binary eq #0 1)])
 ----
-%0 =
-| Get x (u0)
-| Filter (#0 = 1)
+Filter (#0 = 1)
+  Get x
 
 # Impossible condition detection
 
-build apply=FilterFusion
+build apply=Fusion
 (filter (filter (get x) [(call_unary is_null #0)]) [(call_binary eq #0 1)])
 ----
-%0 =
-| Get x (u0)
-| Filter false
+Filter false
+  Get x
 
-build apply=(FilterFusion,FoldConstants)
+build apply=(Fusion,FoldConstants)
 (filter (filter (get x) [(call_unary is_null #0)]) [(call_binary eq #0 1)])
 ----
-%0 =
-| Constant
+Constant <empty>
 
-build apply=FilterFusion
+build apply=Fusion
 (filter (filter (get x) [(call_unary is_null #1)]) [(call_binary eq #0 #1)])
 ----
-%0 =
-| Get x (u0)
-| Filter false
+Filter false
+  Get x
 
-build apply=FilterFusion
+build apply=Fusion
 (filter (filter (get x) [(call_unary is_null #0)]) [(call_unary not (call_unary is_null #0))])
 ----
-%0 =
-| Get x (u0)
-| Filter false
+Filter false
+  Get x

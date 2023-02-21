@@ -11,11 +11,12 @@ use std::fmt;
 
 use chrono::{DateTime, Utc};
 
-use crate::session::vars::IsolationLevel;
-use mz_compute_client::controller::ComputeInstanceStatus;
+use mz_controller::clusters::ClusterStatus;
 use mz_ore::str::StrExt;
 use mz_repr::strconv;
 use mz_sql::ast::NoticeSeverity;
+
+use crate::session::vars::IsolationLevel;
 
 /// Notices that can occur in the adapter layer.
 ///
@@ -50,7 +51,7 @@ pub enum AdapterNotice {
     ClusterReplicaStatusChanged {
         cluster: String,
         replica: String,
-        status: ComputeInstanceStatus,
+        status: ClusterStatus,
         time: DateTime<Utc>,
     },
     DroppedActiveDatabase {
@@ -71,6 +72,9 @@ pub enum AdapterNotice {
     UnimplementedIsolationLevel {
         isolation_level: String,
     },
+    DroppedSubscribe {
+        dropped_name: String,
+    },
 }
 
 impl AdapterNotice {
@@ -86,7 +90,7 @@ impl AdapterNotice {
             AdapterNotice::ClusterDoesNotExist { name: _ } => Some("Create the cluster with CREATE CLUSTER or pick an extant cluster with SET CLUSTER = name. List available clusters with SHOW CLUSTERS.".into()),
             AdapterNotice::DroppedActiveDatabase { name: _ } => Some("Choose a new active database by executing SET DATABASE = <name>.".into()),
             AdapterNotice::DroppedActiveCluster { name: _ } => Some("Choose a new active cluster by executing SET CLUSTER = <name>.".into()),
-            AdapterNotice::ClusterReplicaStatusChanged { status, .. } if *status == ComputeInstanceStatus::NotReady => Some("The cluster replica may be restarting or going offline.".into()),
+            AdapterNotice::ClusterReplicaStatusChanged { status, .. } if *status == ClusterStatus::NotReady => Some("The cluster replica may be restarting or going offline.".into()),
             _ => None
         }
     }
@@ -160,6 +164,12 @@ impl fmt::Display for AdapterNotice {
                     f,
                     "transaction isolation level {isolation_level} is unimplemented, the session will be upgraded to {}",
                     IsolationLevel::Serializable.as_str()
+                )
+            }
+            AdapterNotice::DroppedSubscribe { dropped_name } => {
+                write!(
+                    f,
+                "subscribe has been terminated because underlying relation {dropped_name} was dropped"
                 )
             }
         }

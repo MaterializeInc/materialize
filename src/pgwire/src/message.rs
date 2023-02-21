@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use itertools::Itertools;
 use postgres::error::SqlState;
@@ -18,6 +18,7 @@ use mz_adapter::{AdapterError, AdapterNotice, StartupMessage};
 use mz_expr::EvalError;
 use mz_repr::{ColumnName, NotNullViolation, RelationDesc};
 use mz_sql::ast::NoticeSeverity;
+use mz_sql::plan::PlanError;
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the
@@ -55,7 +56,7 @@ pub enum FrontendStartupMessage {
     /// Begin a connection.
     Startup {
         version: i32,
-        params: HashMap<String, String>,
+        params: BTreeMap<String, String>,
     },
 
     /// Request SSL encryption for the connection.
@@ -314,9 +315,12 @@ impl ErrorResponse {
             // DATA_EXCEPTION to match what Postgres returns for degenerate
             // range bounds
             AdapterError::AbsurdSubscribeBounds { .. } => SqlState::DATA_EXCEPTION,
+            AdapterError::AmbiguousSystemColumnReference => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::BadItemInStorageCluster { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Catalog(_) => SqlState::INTERNAL_ERROR,
             AdapterError::ChangedPlan => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::ConstrainedParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,
+            AdapterError::ModifyLinkedCluster { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::DuplicateCursor(_) => SqlState::DUPLICATE_CURSOR,
             AdapterError::Eval(EvalError::CharacterNotValidForEncoding(_)) => {
                 SqlState::PROGRAM_LIMIT_EXCEEDED
@@ -338,13 +342,15 @@ impl ErrorResponse {
             AdapterError::InvalidParameterValue { .. } => SqlState::INVALID_PARAMETER_VALUE,
             AdapterError::InvalidClusterReplicaAz { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidClusterReplicaSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
-            AdapterError::InvalidStorageHostSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
-            AdapterError::StorageHostSizeRequired { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::InvalidStorageClusterSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::SourceOrSinkSizeRequired { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidTableMutationSelection => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::ConstraintViolation(NotNullViolation(_)) => SqlState::NOT_NULL_VIOLATION,
             AdapterError::NoClusterReplicasAvailable(_) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
+            AdapterError::ParseError(_) => SqlState::SYNTAX_ERROR,
+            AdapterError::PlanError(PlanError::InvalidSchemaName) => SqlState::INVALID_SCHEMA_NAME,
             AdapterError::PlanError(_) => SqlState::INTERNAL_ERROR,
             AdapterError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,
             AdapterError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
@@ -370,11 +376,11 @@ impl ErrorResponse {
             AdapterError::UnknownLoginRole(_) => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
             AdapterError::UnknownClusterReplica { .. } => SqlState::UNDEFINED_OBJECT,
             AdapterError::UnmaterializableFunction(_) => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::UnrecognizedConfigurationParam(_) => SqlState::UNDEFINED_OBJECT,
             AdapterError::UnstableDependency { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Unsupported(..) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Unstructured(_) => SqlState::INTERNAL_ERROR,
             AdapterError::UntargetedLogRead { .. } => SqlState::FEATURE_NOT_SUPPORTED,
-            AdapterError::TargetedSubscribe { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             // It's not immediately clear which error code to use here because a
             // "write-only transaction" and "single table write transaction" are
             // not things in Postgres. This error code is the generic "bad txn thing"
@@ -415,6 +421,7 @@ impl ErrorResponse {
             AdapterNotice::EqualSubscribeBounds { .. } => SqlState::WARNING,
             AdapterNotice::QueryTrace { .. } => SqlState::WARNING,
             AdapterNotice::UnimplementedIsolationLevel { .. } => SqlState::WARNING,
+            AdapterNotice::DroppedSubscribe { .. } => SqlState::WARNING,
         };
         ErrorResponse {
             severity: Severity::for_adapter_notice(&notice),
@@ -570,6 +577,7 @@ impl Severity {
             AdapterNotice::EqualSubscribeBounds { .. } => Severity::Notice,
             AdapterNotice::QueryTrace { .. } => Severity::Notice,
             AdapterNotice::UnimplementedIsolationLevel { .. } => Severity::Notice,
+            AdapterNotice::DroppedSubscribe { .. } => Severity::Notice,
         }
     }
 }

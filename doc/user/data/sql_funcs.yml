@@ -30,6 +30,12 @@
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
       same type as `x`.
 
+  - signature: 'bool_and(x: T) -> T'
+    description: _NULL_ if all values of `x` are _NULL_, otherwise true if all values of `x` are true, otherwise false.
+
+  - signature: 'bool_or(x: T) -> T'
+    description: _NULL_ if all values of `x` are _NULL_, otherwise true if any values of `x` are true, otherwise false.
+
   - signature: 'count(x: T) -> int'
     description: Number of non-_NULL_ inputs.
 
@@ -72,8 +78,8 @@
   - signature: 'sum(x: T) -> U'
     description: Sum of `T`'s values
       <br><br>
-      Returns `bigint` if `x` is `int`, `numeric` if `x` is `bigint`, else returns
-      same type as `x`.
+      Returns `bigint` if `x` is `int` or `smallint`, `numeric` if `x` is `bigint` or `uint8`,
+      `uint8` if `x` is `uint4` or `uint2`, else returns same type as `x`.
 
   - signature: 'variance(x: T) -> U'
     description: Historical alias for `variance_samp`. *(imprecise)*
@@ -355,7 +361,7 @@
     description: Substring starting at `start_pos` of length `l`
     url: substring
 
-  - signature: "trim([BOTH | LEADING | TRAILING]? 'c'? FROM 's') -> str"
+  - signature: "trim([BOTH | LEADING | TRAILING]? ['c'? FROM]? 's') -> str"
     description: "Trims any character in `c` from `s` on the specified side.<br/><br/>Defaults:<br/>
       &bull; Side: `BOTH`<br/>
       &bull; `'c'`: `' '` (space)"
@@ -705,6 +711,11 @@
       Returns the names of the schemas on the search path.
       The `include_implicit` parameter controls whether implicit schemas like
       `mz_catalog` and `pg_catalog` are included in the output.
+    unmaterializable: true
+  - signature: 'current_setting(setting_name: text[, missing_ok: bool]) -> text'
+    description: >-
+      Returns the value of the named setting or error if it does not exist.
+      If `missing_ok` is true, return NULL if it does not exist.
     unmaterializable: true
   - signature: 'obj_description(oid: oid, catalog: text) -> text'
     description: PostgreSQL compatibility shim. Currently always returns `NULL`.

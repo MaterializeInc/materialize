@@ -782,7 +782,7 @@ where
         let elapsed_since_last_heartbeat =
             Duration::from_millis(heartbeat_ts.saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
-            if elapsed_since_last_heartbeat > self.machine.cfg.reader_lease_duration {
+            if elapsed_since_last_heartbeat > self.machine.applier.cfg.reader_lease_duration {
                 warn!(
                     "reader ({}) of shard ({}) went {}s between heartbeats",
                     self.reader_id,
@@ -795,7 +795,7 @@ where
                 .machine
                 .heartbeat_leased_reader(&self.reader_id, heartbeat_ts)
                 .await;
-            if !existed && !self.machine.state().collections.is_tombstone() {
+            if !existed && !self.machine.applier.state().collections.is_tombstone() {
                 // It's probably surprising to the caller that the shard
                 // becoming a tombstone expired this reader. Possibly the right
                 // thing to do here is pass up a bool to the caller indicating
@@ -864,7 +864,7 @@ where
                     retry
                 }
             });
-            self.machine.fetch_and_update_state().await;
+            self.machine.applier.fetch_and_update_state().await;
         }
     }
 
@@ -933,7 +933,7 @@ where
         //
         // Intentionally create the span outside the task to set the parent.
         let expire_span = debug_span!("drop::expire");
-        let _ = handle.spawn_named(
+        handle.spawn_named(
             || format!("ReadHandle::expire ({})", self.reader_id),
             async move {
                 machine.expire_leased_reader(&reader_id).await;

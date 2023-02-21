@@ -82,10 +82,13 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
+use itertools::Itertools;
 use std::error::Error;
+use std::iter;
 
 use unicode_width::UnicodeWidthStr;
 
@@ -95,7 +98,9 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{AstInfo, Expr, Ident, Raw, RawDataType, RawObjectName};
-use mz_sql_parser::parser::{self, ParserError};
+use mz_sql_parser::parser::{
+    self, parse_statements, parse_statements_with_limit, ParserError, MAX_STATEMENT_BATCH_SIZE,
+};
 
 #[test]
 fn datadriven() {
@@ -348,4 +353,18 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
     assert_eq!(visitor.seen_idents, expected);
 
     Ok(())
+}
+
+#[test]
+fn test_max_statement_batch_size() {
+    let statement = "SELECT 1;";
+    let size = statement.bytes().count();
+    let max_statement_count = MAX_STATEMENT_BATCH_SIZE / size;
+    let statements = iter::repeat(statement).take(max_statement_count).join("");
+
+    assert!(parse_statements_with_limit(&statements).is_ok());
+    let statements = format!("{statements}{statement}");
+    let err = parse_statements_with_limit(&statements).expect_err("statements should be too big");
+    assert!(err.contains("statement batch size cannot exceed "));
+    assert!(parse_statements(&statements).is_ok());
 }

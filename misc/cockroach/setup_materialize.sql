@@ -11,8 +11,6 @@
 
 -- See: https://github.com/cockroachdb/cockroach/issues/93892
 -- See: https://github.com/MaterializeInc/materialize/issues/16726
--- TODO: remove this workaround before upgrading to CockroachDB 22.2 in
--- production.
 SET CLUSTER SETTING sql.stats.forecasts.enabled = false;
 
 CREATE SCHEMA IF NOT EXISTS consensus;

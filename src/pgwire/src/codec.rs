@@ -14,7 +14,7 @@
 //!
 //! [1]: https://www.postgresql.org/docs/11/protocol-message-formats.html
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::str;
@@ -22,13 +22,14 @@ use std::str;
 use async_trait::async_trait;
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{Buf, BufMut, BytesMut};
+use bytesize::ByteSize;
 use futures::{sink, SinkExt, TryStreamExt};
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, Interest, Ready};
 use tokio::time::{self, Duration};
 use tokio_util::codec::{Decoder, Encoder, Framed};
 use tracing::trace;
 
-use mz_ore::cast::CastFrom;
+use mz_ore::cast::{u64_to_usize, CastFrom};
 use mz_ore::future::OreSinkExt;
 use mz_ore::netio::{self, AsyncReady};
 
@@ -40,6 +41,9 @@ use crate::server::Conn;
 
 pub const REJECT_ENCRYPTION: u8 = b'N';
 pub const ACCEPT_SSL_ENCRYPTION: u8 = b'S';
+
+/// Maximum allowed size for a request.
+pub const MAX_REQUEST_SIZE: usize = u64_to_usize(2 * bytesize::MB);
 
 #[derive(Debug)]
 enum CodecError {
@@ -463,7 +467,7 @@ where
         VERSION_SSL => FrontendStartupMessage::SslRequest,
         VERSION_GSSENC => FrontendStartupMessage::GssEncRequest,
         _ => {
-            let mut params = HashMap::new();
+            let mut params = BTreeMap::new();
             while buf.peek_byte()? != 0 {
                 let name = buf.read_cstr()?.to_owned();
                 let value = buf.read_cstr()?.to_owned();
@@ -502,6 +506,15 @@ impl Decoder for Codec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<FrontendMessage>, io::Error> {
+        if src.len() > MAX_REQUEST_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "request larger than {}",
+                    ByteSize::b(u64::cast_from(MAX_REQUEST_SIZE))
+                ),
+            ));
+        }
         loop {
             match self.decode_state {
                 DecodeState::Head => {

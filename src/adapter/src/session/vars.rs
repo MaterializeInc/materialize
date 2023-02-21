@@ -18,7 +18,7 @@ use uncased::UncasedStr;
 
 use mz_build_info::BuildInfo;
 use mz_ore::cast;
-use mz_persist_client::PersistConfig;
+use mz_persist_client::cfg::PersistConfig;
 use mz_sql::ast::{Ident, SetVariableValue, Value as AstValue};
 use mz_sql::DEFAULT_SCHEMA;
 use mz_sql_parser::ast::TransactionIsolationLevel;
@@ -50,6 +50,7 @@ const APPLICATION_NAME: ServerVar<str> = ServerVar {
     value: "",
     description: "Sets the application name to be reported in statistics and logs (PostgreSQL).",
     internal: false,
+    safe: true,
 };
 
 const CLIENT_ENCODING: ServerVar<str> = ServerVar {
@@ -57,6 +58,7 @@ const CLIENT_ENCODING: ServerVar<str> = ServerVar {
     value: "UTF8",
     description: "Sets the client's character set encoding (PostgreSQL).",
     internal: false,
+    safe: true,
 };
 
 const CLIENT_MIN_MESSAGES: ServerVar<ClientSeverity> = ServerVar {
@@ -64,6 +66,7 @@ const CLIENT_MIN_MESSAGES: ServerVar<ClientSeverity> = ServerVar {
     value: &ClientSeverity::Notice,
     description: "Sets the message levels that are sent to the client (PostgreSQL).",
     internal: false,
+    safe: true,
 };
 pub const CLUSTER_VAR_NAME: &UncasedStr = UncasedStr::new("cluster");
 
@@ -72,6 +75,7 @@ const CLUSTER: ServerVar<str> = ServerVar {
     value: "default",
     description: "Sets the current cluster (Materialize).",
     internal: false,
+    safe: true,
 };
 
 const CLUSTER_REPLICA: ServerVar<Option<String>> = ServerVar {
@@ -79,6 +83,7 @@ const CLUSTER_REPLICA: ServerVar<Option<String>> = ServerVar {
     value: &None,
     description: "Sets a target cluster replica for SELECT queries (Materialize).",
     internal: false,
+    safe: true,
 };
 
 pub const DATABASE_VAR_NAME: &UncasedStr = UncasedStr::new("database");
@@ -88,6 +93,7 @@ const DATABASE: ServerVar<str> = ServerVar {
     value: DEFAULT_DATABASE_NAME,
     description: "Sets the current database (CockroachDB).",
     internal: false,
+    safe: true,
 };
 
 const DATE_STYLE: ServerVar<str> = ServerVar {
@@ -96,6 +102,7 @@ const DATE_STYLE: ServerVar<str> = ServerVar {
     value: "ISO, MDY",
     description: "Sets the display format for date and time values (PostgreSQL).",
     internal: false,
+    safe: true,
 };
 
 const EXTRA_FLOAT_DIGITS: ServerVar<i32> = ServerVar {
@@ -103,6 +110,7 @@ const EXTRA_FLOAT_DIGITS: ServerVar<i32> = ServerVar {
     value: &3,
     description: "Adjusts the number of digits displayed for floating-point values (PostgreSQL).",
     internal: false,
+    safe: true,
 };
 
 const FAILPOINTS: ServerVar<str> = ServerVar {
@@ -110,6 +118,7 @@ const FAILPOINTS: ServerVar<str> = ServerVar {
     value: "",
     description: "Allows failpoints to be dynamically activated.",
     internal: false,
+    safe: true,
 };
 
 const INTEGER_DATETIMES: ServerVar<bool> = ServerVar {
@@ -117,6 +126,7 @@ const INTEGER_DATETIMES: ServerVar<bool> = ServerVar {
     value: &true,
     description: "Reports whether the server uses 64-bit-integer dates and times (PostgreSQL).",
     internal: false,
+    safe: true,
 };
 
 const INTERVAL_STYLE: ServerVar<str> = ServerVar {
@@ -125,6 +135,7 @@ const INTERVAL_STYLE: ServerVar<str> = ServerVar {
     value: "postgres",
     description: "Sets the display format for interval values (PostgreSQL).",
     internal: false,
+    safe: true,
 };
 
 const MZ_VERSION_NAME: &UncasedStr = UncasedStr::new("mz_version");
@@ -136,6 +147,7 @@ static SEARCH_PATH: Lazy<ServerVar<[String]>> = Lazy::new(|| ServerVar {
     description:
         "Sets the schema search order for names that are not schema-qualified (PostgreSQL).",
     internal: false,
+    safe: true,
 });
 
 const STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
@@ -144,6 +156,7 @@ const STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
     description:
         "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations.",
     internal: false,
+    safe: true,
 };
 
 const IDLE_IN_TRANSACTION_SESSION_TIMEOUT: ServerVar<Duration> = ServerVar {
@@ -153,6 +166,7 @@ const IDLE_IN_TRANSACTION_SESSION_TIMEOUT: ServerVar<Duration> = ServerVar {
         "Sets the maximum allowed duration that a session can sit idle in a transaction before \
          being terminated. A value of zero disables the timeout (PostgreSQL).",
     internal: false,
+    safe: true,
 };
 
 const SERVER_VERSION: ServerVar<str> = ServerVar {
@@ -166,6 +180,7 @@ const SERVER_VERSION: ServerVar<str> = ServerVar {
     ),
     description: "Shows the server version (PostgreSQL).",
     internal: false,
+    safe: true,
 };
 
 const SERVER_VERSION_NUM: ServerVar<i32> = ServerVar {
@@ -175,6 +190,7 @@ const SERVER_VERSION_NUM: ServerVar<i32> = ServerVar {
         + cast::u8_to_i32(SERVER_PATCH_VERSION)),
     description: "Shows the server version as an integer (PostgreSQL).",
     internal: false,
+    safe: true,
 };
 
 const SQL_SAFE_UPDATES: ServerVar<bool> = ServerVar {
@@ -182,6 +198,7 @@ const SQL_SAFE_UPDATES: ServerVar<bool> = ServerVar {
     value: &false,
     description: "Prohibits SQL statements that may be overly destructive (CockroachDB).",
     internal: false,
+    safe: true,
 };
 
 const STANDARD_CONFORMING_STRINGS: ServerVar<bool> = ServerVar {
@@ -189,6 +206,7 @@ const STANDARD_CONFORMING_STRINGS: ServerVar<bool> = ServerVar {
     value: &true,
     description: "Causes '...' strings to treat backslashes literally (PostgreSQL).",
     internal: false,
+    safe: true,
 };
 
 const TIMEZONE: ServerVar<TimeZone> = ServerVar {
@@ -197,6 +215,7 @@ const TIMEZONE: ServerVar<TimeZone> = ServerVar {
     value: &TimeZone::UTC,
     description: "Sets the time zone for displaying and interpreting time stamps (PostgreSQL).",
     internal: false,
+    safe: true,
 };
 
 pub const TRANSACTION_ISOLATION_VAR_NAME: &UncasedStr = UncasedStr::new("transaction_isolation");
@@ -205,6 +224,7 @@ const TRANSACTION_ISOLATION: ServerVar<IsolationLevel> = ServerVar {
     value: &IsolationLevel::StrictSerializable,
     description: "Sets the current transaction's isolation level (PostgreSQL).",
     internal: false,
+    safe: true,
 };
 
 const MAX_AWS_PRIVATELINK_CONNECTIONS: ServerVar<u32> = ServerVar {
@@ -212,6 +232,7 @@ const MAX_AWS_PRIVATELINK_CONNECTIONS: ServerVar<u32> = ServerVar {
     value: &0,
     description: "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize).",
     internal: false,
+    safe: true,
 };
 
 const MAX_TABLES: ServerVar<u32> = ServerVar {
@@ -219,6 +240,7 @@ const MAX_TABLES: ServerVar<u32> = ServerVar {
     value: &25,
     description: "The maximum number of tables in the region, across all schemas (Materialize).",
     internal: false,
+    safe: true,
 };
 
 const MAX_SOURCES: ServerVar<u32> = ServerVar {
@@ -226,6 +248,7 @@ const MAX_SOURCES: ServerVar<u32> = ServerVar {
     value: &25,
     description: "The maximum number of sources in the region, across all schemas (Materialize).",
     internal: false,
+    safe: true,
 };
 
 const MAX_SINKS: ServerVar<u32> = ServerVar {
@@ -233,6 +256,7 @@ const MAX_SINKS: ServerVar<u32> = ServerVar {
     value: &25,
     description: "The maximum number of sinks in the region, across all schemas (Materialize).",
     internal: false,
+    safe: true,
 };
 
 const MAX_MATERIALIZED_VIEWS: ServerVar<u32> = ServerVar {
@@ -241,6 +265,7 @@ const MAX_MATERIALIZED_VIEWS: ServerVar<u32> = ServerVar {
     description:
         "The maximum number of materialized views in the region, across all schemas (Materialize).",
     internal: false,
+    safe: true,
 };
 
 const MAX_CLUSTERS: ServerVar<u32> = ServerVar {
@@ -248,6 +273,7 @@ const MAX_CLUSTERS: ServerVar<u32> = ServerVar {
     value: &10,
     description: "The maximum number of clusters in the region (Materialize).",
     internal: false,
+    safe: true,
 };
 
 const MAX_REPLICAS_PER_CLUSTER: ServerVar<u32> = ServerVar {
@@ -255,6 +281,7 @@ const MAX_REPLICAS_PER_CLUSTER: ServerVar<u32> = ServerVar {
     value: &5,
     description: "The maximum number of replicas of a single cluster (Materialize).",
     internal: false,
+    safe: true,
 };
 
 const MAX_DATABASES: ServerVar<u32> = ServerVar {
@@ -262,6 +289,7 @@ const MAX_DATABASES: ServerVar<u32> = ServerVar {
     value: &1000,
     description: "The maximum number of databases in the region (Materialize).",
     internal: false,
+    safe: true,
 };
 
 const MAX_SCHEMAS_PER_DATABASE: ServerVar<u32> = ServerVar {
@@ -269,6 +297,7 @@ const MAX_SCHEMAS_PER_DATABASE: ServerVar<u32> = ServerVar {
     value: &1000,
     description: "The maximum number of schemas in a database (Materialize).",
     internal: false,
+    safe: true,
 };
 
 const MAX_OBJECTS_PER_SCHEMA: ServerVar<u32> = ServerVar {
@@ -276,6 +305,7 @@ const MAX_OBJECTS_PER_SCHEMA: ServerVar<u32> = ServerVar {
     value: &1000,
     description: "The maximum number of objects in a schema (Materialize).",
     internal: false,
+    safe: true,
 };
 
 const MAX_SECRETS: ServerVar<u32> = ServerVar {
@@ -283,6 +313,7 @@ const MAX_SECRETS: ServerVar<u32> = ServerVar {
     value: &100,
     description: "The maximum number of secrets in the region, across all schemas (Materialize).",
     internal: false,
+    safe: true,
 };
 
 const MAX_ROLES: ServerVar<u32> = ServerVar {
@@ -290,6 +321,7 @@ const MAX_ROLES: ServerVar<u32> = ServerVar {
     value: &1000,
     description: "The maximum number of roles in the region (Materialize).",
     internal: false,
+    safe: true,
 };
 
 // Cloud environmentd is configured with 4 GiB of RAM, so 1 GiB is a good heuristic for a single
@@ -301,19 +333,21 @@ pub const MAX_RESULT_SIZE: ServerVar<u32> = ServerVar {
     value: &1_073_741_824,
     description: "The maximum size in bytes for a single query's result (Materialize).",
     internal: false,
+    safe: true,
 };
 
 /// The logical compaction window for builtin tables and sources that have the
 /// `retained_metrics_relation` flag set.
 ///
-/// The existence of this variable is a bit of a hack until we have a fully general
-/// solution for controlling retention windows.
+/// The existence of this variable is a bit of a hack until we have a fully
+/// general solution for controlling retention windows.
 pub const METRICS_RETENTION: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("metrics_retention"),
     // 30 days
     value: &Duration::from_secs(30 * 24 * 60 * 60),
-    description: "The time to retain cluster and storage host utilization metrics (Materialize).",
+    description: "The time to retain cluster utilization metrics (Materialize).",
     internal: true,
+    safe: true,
 };
 
 static DEFAULT_ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<Vec<String>> = Lazy::new(Vec::new);
@@ -322,23 +356,36 @@ static ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<ServerVar<Vec<String>>> = Lazy::new(|
     value: &DEFAULT_ALLOWED_CLUSTER_REPLICA_SIZES,
     description: "The allowed sizes when creating a new cluster replica (Materialize).",
     internal: false,
+    safe: true,
 });
 
-/// Controls [`PersistConfig::blob_target_size`].
+/// Controls [`mz_persist_client::cfg::DynamicConfig::blob_target_size`].
 const PERSIST_BLOB_TARGET_SIZE: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_blob_target_size"),
     value: &PersistConfig::DEFAULT_BLOB_TARGET_SIZE,
     description: "A target maximum size of persist blob payloads in bytes (Materialize).",
     internal: true,
+    safe: true,
 };
 
-/// Controls [`PersistConfig::compaction_minimum_timeout`].
+/// Controls [`mz_persist_client::cfg::DynamicConfig::compaction_minimum_timeout`].
 const PERSIST_COMPACTION_MINIMUM_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("persist_compaction_minimum_timeout"),
     value: &PersistConfig::DEFAULT_COMPACTION_MINIMUM_TIMEOUT,
     description: "The minimum amount of time to allow a persist compaction request to run before \
                   timing it out (Materialize).",
     internal: true,
+    safe: true,
+};
+
+/// The maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
+const DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("dataflow_max_inflight_bytes"),
+    value: &usize::MAX,
+    description: "The maximum number of in-flight bytes emitted by persist_sources feeding \
+                  dataflows (Materialize).",
+    internal: true,
+    safe: true,
 };
 
 /// Boolean flag indicating that the remote configuration was synchronized at
@@ -348,15 +395,16 @@ pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
     value: &false,
     description: "Boolean flag indicating that the remote configuration was synchronized at least once (Materialize).",
     internal: true,
+    safe: true,
 };
 
-pub const REAL_TIME_RECENCY_VAR_NAME: &UncasedStr = UncasedStr::new("real_time_recency");
 /// Feature flag indicating whether real time recency is enabled.
 static REAL_TIME_RECENCY: ServerVar<bool> = ServerVar {
-    name: REAL_TIME_RECENCY_VAR_NAME,
+    name: UncasedStr::new("real_time_recency"),
     value: &false,
     description: "Feature flag indicating whether real time recency is enabled (Materialize).",
     internal: true,
+    safe: false,
 };
 
 static EMIT_TIMESTAMP_NOTICE: ServerVar<bool> = ServerVar {
@@ -365,6 +413,7 @@ static EMIT_TIMESTAMP_NOTICE: ServerVar<bool> = ServerVar {
     description:
         "Boolean flag indicating whether to send a NOTICE specifying query timestamps (Materialize).",
     internal: false,
+    safe: true,
 };
 
 static EMIT_TRACE_ID_NOTICE: ServerVar<bool> = ServerVar {
@@ -373,6 +422,15 @@ static EMIT_TRACE_ID_NOTICE: ServerVar<bool> = ServerVar {
     description:
         "Boolean flag indicating whether to send a NOTICE specifying the trace id when available (Materialize).",
     internal: false,
+    safe: true,
+};
+
+static MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<mz_repr::Timestamp>> = ServerVar {
+    name: UncasedStr::new("mock_audit_event_timestamp"),
+    value: &None,
+    description: "Mocked timestamp to use for audit events for testing purposes",
+    internal: true,
+    safe: false,
 };
 
 /// Session variables.
@@ -994,8 +1052,14 @@ pub struct SystemVars {
     persist_blob_target_size: SystemVar<usize>,
     persist_compaction_minimum_timeout: SystemVar<Duration>,
 
+    // dataflow configuration
+    dataflow_max_inflight_bytes: SystemVar<usize>,
+
     // misc
     metrics_retention: SystemVar<Duration>,
+
+    // testing
+    mock_audit_event_timestamp: SystemVar<Option<mz_repr::Timestamp>>,
 }
 
 impl Default for SystemVars {
@@ -1018,7 +1082,9 @@ impl Default for SystemVars {
             allowed_cluster_replica_sizes: SystemVar::new(&ALLOWED_CLUSTER_REPLICA_SIZES),
             persist_blob_target_size: SystemVar::new(&PERSIST_BLOB_TARGET_SIZE),
             persist_compaction_minimum_timeout: SystemVar::new(&PERSIST_COMPACTION_MINIMUM_TIMEOUT),
+            dataflow_max_inflight_bytes: SystemVar::new(&DATAFLOW_MAX_INFLIGHT_BYTES),
             metrics_retention: SystemVar::new(&METRICS_RETENTION),
+            mock_audit_event_timestamp: SystemVar::new(&MOCK_AUDIT_EVENT_TIMESTAMP),
         }
     }
 }
@@ -1027,7 +1093,7 @@ impl SystemVars {
     /// Returns an iterator over the configuration parameters and their current
     /// values on disk.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        let vars: [&dyn Var; 18] = [
+        let vars: [&dyn Var; 20] = [
             &self.config_has_synced_once,
             &self.max_aws_privatelink_connections,
             &self.max_tables,
@@ -1045,7 +1111,9 @@ impl SystemVars {
             &self.allowed_cluster_replica_sizes,
             &self.persist_blob_target_size,
             &self.persist_compaction_minimum_timeout,
+            &self.dataflow_max_inflight_bytes,
             &self.metrics_retention,
+            &self.mock_audit_event_timestamp,
         ];
         vars.into_iter()
     }
@@ -1108,8 +1176,12 @@ impl SystemVars {
             Ok(&self.persist_blob_target_size)
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
             Ok(&self.persist_compaction_minimum_timeout)
+        } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
+            Ok(&self.dataflow_max_inflight_bytes)
         } else if name == METRICS_RETENTION.name {
             Ok(&self.metrics_retention)
+        } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
+            Ok(&self.mock_audit_event_timestamp)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -1159,8 +1231,12 @@ impl SystemVars {
             self.persist_blob_target_size.is_default(value)
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
             self.persist_compaction_minimum_timeout.is_default(value)
+        } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
+            self.dataflow_max_inflight_bytes.is_default(value)
         } else if name == METRICS_RETENTION.name {
             self.metrics_retention.is_default(value)
+        } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
+            self.mock_audit_event_timestamp.is_default(value)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -1219,8 +1295,12 @@ impl SystemVars {
             self.persist_blob_target_size.set(value)
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
             self.persist_compaction_minimum_timeout.set(value)
+        } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
+            self.dataflow_max_inflight_bytes.set(value)
         } else if name == METRICS_RETENTION.name {
             self.metrics_retention.set(value)
+        } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
+            self.mock_audit_event_timestamp.set(value)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -1274,8 +1354,12 @@ impl SystemVars {
             Ok(self.persist_blob_target_size.reset())
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
             Ok(self.persist_compaction_minimum_timeout.reset())
+        } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
+            Ok(self.dataflow_max_inflight_bytes.reset())
         } else if name == METRICS_RETENTION.name {
             Ok(self.metrics_retention.reset())
+        } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
+            Ok(self.mock_audit_event_timestamp.reset())
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -1366,9 +1450,19 @@ impl SystemVars {
         *self.persist_compaction_minimum_timeout.value()
     }
 
+    /// Returns the `dataflow_max_inflight_bytes` configuration parameter.
+    pub fn dataflow_max_inflight_bytes(&self) -> usize {
+        *self.dataflow_max_inflight_bytes.value()
+    }
+
     /// Returns the `metrics_retention` configuration parameter.
     pub fn metrics_retention(&self) -> Duration {
         *self.metrics_retention.value()
+    }
+
+    /// Returns the `mock_audit_event_timestamp` configuration parameter.
+    pub fn mock_audit_event_timestamp(&self) -> Option<mz_repr::Timestamp> {
+        *self.mock_audit_event_timestamp.value()
     }
 }
 
@@ -1394,6 +1488,11 @@ pub trait Var: fmt::Debug {
     /// [`crate::catalog::SYSTEM_USER`] user.
     fn visible(&self, user: &User) -> bool;
 
+    /// Indicates wither the [`Var`] is only visible in unsafe mode.
+    ///
+    /// Variables marked as `safe` are visible outside of unsafe mode.
+    fn safe(&self) -> bool;
+
     /// Indicates wither the [`Var`] is experimental.
     ///
     /// The default implementation determines this from the [`Var`] name, as
@@ -1413,6 +1512,7 @@ where
     value: &'static V,
     description: &'static str,
     internal: bool,
+    safe: bool,
 }
 
 impl<V> Var for ServerVar<V>
@@ -1437,6 +1537,10 @@ where
 
     fn visible(&self, user: &User) -> bool {
         !self.internal || user == &*SYSTEM_USER
+    }
+
+    fn safe(&self) -> bool {
+        self.safe
     }
 }
 
@@ -1525,6 +1629,10 @@ where
 
     fn visible(&self, user: &User) -> bool {
         self.parent.visible(user)
+    }
+
+    fn safe(&self) -> bool {
+        self.parent.safe()
     }
 }
 
@@ -1625,6 +1733,10 @@ where
     fn visible(&self, user: &User) -> bool {
         self.parent.visible(user)
     }
+
+    fn safe(&self) -> bool {
+        self.parent.safe()
+    }
 }
 
 impl Var for BuildInfo {
@@ -1645,6 +1757,10 @@ impl Var for BuildInfo {
     }
 
     fn visible(&self, _: &User) -> bool {
+        true
+    }
+
+    fn safe(&self) -> bool {
         true
     }
 }
@@ -1694,6 +1810,18 @@ impl Value for u32 {
     const TYPE_NAME: &'static str = "unsigned integer";
 
     fn parse(s: &str) -> Result<u32, ()> {
+        s.parse().map_err(|_| ())
+    }
+
+    fn format(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl Value for mz_repr::Timestamp {
+    const TYPE_NAME: &'static str = "mz-timestamp";
+
+    fn parse(s: &str) -> Result<mz_repr::Timestamp, ()> {
         s.parse().map_err(|_| ())
     }
 
@@ -1784,7 +1912,7 @@ impl Value for Duration {
 #[test]
 fn test_value_duration() {
     fn inner(t: &'static str, e: Duration, expected_format: Option<&'static str>) {
-        let d = Duration::parse(t).unwrap();
+        let d = Duration::parse(t).expect("invalid duration");
         assert_eq!(d, e);
         let mut d_format = d.format();
         d_format.retain(|c| !c.is_whitespace());
@@ -1919,6 +2047,24 @@ impl Value for Option<String> {
         match s {
             "" => Ok(None),
             _ => <str as Value>::parse(s).map(Some),
+        }
+    }
+
+    fn format(&self) -> String {
+        match self {
+            Some(s) => s.format(),
+            None => "".into(),
+        }
+    }
+}
+
+impl Value for Option<mz_repr::Timestamp> {
+    const TYPE_NAME: &'static str = "optional unsigned integer";
+
+    fn parse(s: &str) -> Result<Option<mz_repr::Timestamp>, ()> {
+        match s {
+            "" => Ok(None),
+            _ => <mz_repr::Timestamp as Value>::parse(s).map(Some),
         }
     }
 
@@ -2154,7 +2300,9 @@ impl From<TransactionIsolationLevel> for IsolationLevel {
 
 /// Returns whether the named variable is a compute configuration parameter.
 pub(crate) fn is_compute_config_var(name: &str) -> bool {
-    name == MAX_RESULT_SIZE.name() || is_persist_config_var(name)
+    name == MAX_RESULT_SIZE.name()
+        || name == DATAFLOW_MAX_INFLIGHT_BYTES.name()
+        || is_persist_config_var(name)
 }
 
 /// Returns whether the named variable is a storage configuration parameter.

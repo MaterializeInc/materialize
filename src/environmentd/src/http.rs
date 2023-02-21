@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::FromRequestParts;
+use axum::extract::{DefaultBodyLimit, FromRequestParts};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::{routing, Extension, Router};
@@ -45,6 +45,7 @@ use mz_adapter::catalog::{HTTP_DEFAULT_USER, SYSTEM_USER};
 use mz_adapter::session::{ExternalUserMetadata, User};
 use mz_adapter::{AdapterError, Client, SessionClient};
 use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
+use mz_ore::cast::u64_to_usize;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::result::ResultExt;
 use mz_ore::tracing::TracingHandle;
@@ -59,6 +60,9 @@ mod memory;
 mod probe;
 mod root;
 mod sql;
+
+/// Maximum allowed size for a request.
+pub const MAX_REQUEST_SIZE: usize = u64_to_usize(2 * bytesize::MB);
 
 #[derive(Debug, Clone)]
 pub struct HttpConfig {
@@ -110,6 +114,7 @@ impl HttpServer {
             .expect("rx known to be live");
 
         let base_router = base_router(BaseRouterConfig { profiling: false })
+            .layer(DefaultBodyLimit::max(MAX_REQUEST_SIZE))
             .layer(middleware::from_fn(move |req, next| {
                 let base_frontegg = Arc::clone(&base_frontegg);
                 async move { http_auth(req, next, tls_mode, &base_frontegg).await }
@@ -233,6 +238,7 @@ impl InternalHttpServer {
                 "/api/catalog",
                 routing::get(catalog::handle_internal_catalog),
             )
+            .layer(DefaultBodyLimit::max(MAX_REQUEST_SIZE))
             .layer(Extension(AuthedUser {
                 user: SYSTEM_USER.clone(),
                 create_if_not_exists: false,
@@ -522,6 +528,8 @@ struct BaseRouterConfig {
 /// Returns the router for routes that are shared between the internal and
 /// external HTTP servers.
 fn base_router(BaseRouterConfig { profiling }: BaseRouterConfig) -> Router {
+    // Adding a layer with in this function will only apply to the routes defined in this function.
+    // https://docs.rs/axum/0.6.1/axum/routing/struct.Router.html#method.layer
     let mut router = Router::new()
         .route(
             "/",

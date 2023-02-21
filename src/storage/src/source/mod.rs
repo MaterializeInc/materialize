@@ -27,7 +27,6 @@
 
 use differential_dataflow::Hashable;
 
-use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
 use mz_repr::GlobalId;
 
@@ -46,7 +45,6 @@ mod reclock;
 mod resumption;
 mod s3;
 mod source_reader_pipeline;
-pub mod statistics;
 // Public for integration testing.
 #[doc(hidden)]
 pub mod testscript;
@@ -64,12 +62,12 @@ pub use testscript::TestScriptSourceReader;
 
 /// Returns true if the given source id/worker id is responsible for handling the given
 /// partition.
-pub fn responsible_for(
+pub fn responsible_for<P: Hashable>(
     _source_id: &GlobalId,
     worker_id: usize,
     worker_count: usize,
-    pid: &PartitionId,
+    pid: P,
 ) -> bool {
     // Distribute partitions equally amongst workers.
-    (usize::cast_from(pid.hashed()) % worker_count) == worker_id
+    (usize::cast_from(pid.hashed().into()) % worker_count) == worker_id
 }

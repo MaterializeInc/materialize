@@ -519,8 +519,8 @@ mz_raw_compute_operator_durations_internal      log   <null>
 mz_scheduling_parks_internal                    log   <null>
 mz_sink_status_history                          source <null>
 mz_source_status_history                        source <null>
-mz_storage_host_metrics                         source <null>
 mz_source_statistics                            source <null>
+mz_sink_statistics                              source <null>
 mz_storage_shards                               source <null>
 mz_worker_compute_frontiers                     log   <null>
 mz_worker_compute_import_frontiers              log   <null>
@@ -534,7 +534,7 @@ mz_cluster_replica_heartbeats
 mz_cluster_replica_metrics
 mz_cluster_replica_sizes
 mz_cluster_replica_statuses
-mz_storage_host_sizes
+mz_postgres_sources
 mz_storage_usage_by_shard
 mz_view_foreign_keys
 mz_view_keys
@@ -561,9 +561,7 @@ mz_records_per_dataflow_operator
 mz_scheduling_elapsed
 mz_scheduling_parks
 mz_sink_statuses
-mz_sink_utilization
 mz_source_statuses
-mz_source_utilization
 mz_worker_compute_delays
 mz_show_cluster_replicas
 mz_show_indexes

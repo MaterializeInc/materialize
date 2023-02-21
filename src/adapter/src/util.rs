@@ -12,7 +12,10 @@ use std::fmt::Debug;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_compute_client::controller::error::{
+    CollectionUpdateError, DataflowCreationError, InstanceMissing, PeekError, SubscribeTargetError,
+};
+use mz_controller::clusters::ClusterId;
 use mz_ore::halt;
 use mz_ore::soft_assert;
 use mz_repr::{GlobalId, RelationDesc, Row, ScalarType};
@@ -23,6 +26,8 @@ use mz_sql_parser::ast::{
     CreateIndexStatement, FetchStatement, Ident, Raw, RawClusterName, RawObjectName, Statement,
 };
 use mz_stash::StashError;
+use mz_storage_client::controller::StorageError;
+use mz_transform::TransformError;
 
 use crate::catalog::Catalog;
 use crate::command::{Command, Response};
@@ -73,7 +78,12 @@ impl<T: Transmittable> ClientTransmitter<T> {
 
         // If we were not able to send a message, we must clean up the session
         // ourselves. Return it to the caller for disposal.
-        if let Err(res) = self.tx.take().unwrap().send(Response { result, session }) {
+        if let Err(res) = self
+            .tx
+            .take()
+            .expect("tx will always be `Some` unless `self` has been consumed")
+            .send(Response { result, session })
+        {
             self.internal_cmd_tx
                 .send(Message::Command(Command::Terminate {
                     session: res.session,
@@ -84,7 +94,9 @@ impl<T: Transmittable> ClientTransmitter<T> {
     }
 
     pub fn take(mut self) -> oneshot::Sender<Response<T>> {
-        self.tx.take().unwrap()
+        self.tx
+            .take()
+            .expect("tx will always be `Some` unless `self` has been consumed")
     }
 
     /// Sets `self` so that the next call to [`Self::send`] will [`soft_assert`]
@@ -166,7 +178,7 @@ pub(crate) fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
 // the responsibility of the SQL package.
 pub fn index_sql(
     index_name: String,
-    compute_instance: ComputeInstanceId,
+    cluster_id: ClusterId,
     view_name: FullObjectName,
     view_desc: &RelationDesc,
     keys: &[usize],
@@ -176,7 +188,7 @@ pub fn index_sql(
     CreateIndexStatement::<Raw> {
         name: Some(Ident::new(index_name)),
         on_name: RawObjectName::Name(mz_sql::normalize::unresolve(view_name)),
-        in_cluster: Some(RawClusterName::Resolved(compute_instance.to_string())),
+        in_cluster: Some(RawClusterName::Resolved(cluster_id.to_string())),
         key_parts: Some(
             keys.iter()
                 .map(|i| match view_desc.get_unambiguous_name(*i) {
@@ -229,10 +241,10 @@ pub fn describe(
     }
 }
 
-/// Type identifying a sink maintained by a compute instance.
+/// Type identifying a sink maintained by a cluster.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ComputeSinkId {
-    pub compute_instance: ComputeInstanceId,
+    pub cluster_id: ClusterId,
     pub global_id: GlobalId,
 }
 
@@ -283,5 +295,80 @@ impl ShouldHalt for crate::catalog::Error {
 impl ShouldHalt for StashError {
     fn should_halt(&self) -> bool {
         self.is_fence()
+    }
+}
+
+impl ShouldHalt for StorageError {
+    fn should_halt(&self) -> bool {
+        match self {
+            StorageError::UpdateBeyondUpper(_)
+            | StorageError::ReadBeforeSince(_)
+            | StorageError::InvalidUppers(_)
+            | StorageError::InvalidUsage(_) => true,
+            StorageError::SourceIdReused(_)
+            | StorageError::SinkIdReused(_)
+            | StorageError::IdentifierMissing(_)
+            | StorageError::ClientError(_)
+            | StorageError::DataflowError(_) => false,
+            StorageError::IOError(e) => e.should_halt(),
+        }
+    }
+}
+
+impl ShouldHalt for DataflowCreationError {
+    fn should_halt(&self) -> bool {
+        match self {
+            DataflowCreationError::SinceViolation(_) => true,
+            DataflowCreationError::InstanceMissing(_)
+            | DataflowCreationError::CollectionMissing(_)
+            | DataflowCreationError::MissingAsOf => false,
+        }
+    }
+}
+
+impl ShouldHalt for CollectionUpdateError {
+    fn should_halt(&self) -> bool {
+        match self {
+            CollectionUpdateError::InstanceMissing(_)
+            | CollectionUpdateError::CollectionMissing(_) => false,
+        }
+    }
+}
+
+impl ShouldHalt for PeekError {
+    fn should_halt(&self) -> bool {
+        match self {
+            PeekError::SinceViolation(_) => true,
+            PeekError::InstanceMissing(_)
+            | PeekError::CollectionMissing(_)
+            | PeekError::ReplicaMissing(_) => false,
+        }
+    }
+}
+
+impl ShouldHalt for SubscribeTargetError {
+    fn should_halt(&self) -> bool {
+        match self {
+            SubscribeTargetError::InstanceMissing(_)
+            | SubscribeTargetError::SubscribeMissing(_)
+            | SubscribeTargetError::ReplicaMissing(_)
+            | SubscribeTargetError::SubscribeAlreadyStarted => false,
+        }
+    }
+}
+
+impl ShouldHalt for TransformError {
+    fn should_halt(&self) -> bool {
+        match self {
+            TransformError::Internal(_)
+            | TransformError::LetRecUnsupported
+            | TransformError::IdentifierMissing(_) => false,
+        }
+    }
+}
+
+impl ShouldHalt for InstanceMissing {
+    fn should_halt(&self) -> bool {
+        false
     }
 }

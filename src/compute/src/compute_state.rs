@@ -7,7 +7,7 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 use std::ops::DerefMut;
 use std::rc::Rc;
@@ -24,7 +24,7 @@ use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::reachability::logging::TrackerEvent;
 use timely::worker::Worker as TimelyWorker;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 use tracing::{error, info, span, Level};
 use uuid::Uuid;
 
@@ -58,7 +58,7 @@ pub struct ComputeState {
     pub traces: TraceManager,
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.
-    pub sink_tokens: HashMap<GlobalId, SinkToken>,
+    pub sink_tokens: BTreeMap<GlobalId, SinkToken>,
     /// Shared buffer with SUBSCRIBE operator instances by which they can respond.
     ///
     /// The entries are pairs of sink identifier (to identify the subscribe instance)
@@ -66,28 +66,30 @@ pub struct ComputeState {
     pub subscribe_response_buffer: Rc<RefCell<Vec<(GlobalId, SubscribeResponse)>>>,
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
-    pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
+    pub sink_write_frontiers: BTreeMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
     /// Probe handles for regulating the output of dataflow sources.
     ///
     /// Keys are IDs of indexes that are (transitively) fed by a flow-controlled source. New
     /// dataflows that depend on these indexes are expected to report their output frontiers
     /// through the corresponding probe handles.
-    pub flow_control_probes: HashMap<GlobalId, Vec<probe::Handle<Timestamp>>>,
+    pub flow_control_probes: BTreeMap<GlobalId, Vec<probe::Handle<Timestamp>>>,
     /// Peek commands that are awaiting fulfillment.
-    pub pending_peeks: HashMap<Uuid, PendingPeek>,
+    pub pending_peeks: BTreeMap<Uuid, PendingPeek>,
     /// Tracks the frontier information that has been sent over `response_tx`.
-    pub reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
+    pub reported_frontiers: BTreeMap<GlobalId, ReportedFrontier>,
     /// Collections that were recently dropped and whose removal needs to be reported.
     pub dropped_collections: Vec<GlobalId>,
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub compute_logger: Option<logging::compute::Logger>,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers.
-    pub persist_clients: Arc<Mutex<PersistClientCache>>,
+    pub persist_clients: Arc<PersistClientCache>,
     /// History of commands received by this workers and all its peers.
     pub command_history: ComputeCommandHistory,
     /// Max size in bytes of any result.
     pub max_result_size: u32,
+    /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
+    pub dataflow_max_inflight_bytes: usize,
     /// Metrics for this replica.
     pub metrics: ComputeMetrics,
 }
@@ -157,12 +159,20 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     fn handle_update_configuration(&mut self, params: ComputeParameters) {
         info!("Applying configuration update: {params:?}");
 
-        if let Some(v) = params.max_result_size {
+        let ComputeParameters {
+            max_result_size,
+            dataflow_max_inflight_bytes,
+            persist,
+        } = params;
+
+        if let Some(v) = max_result_size {
             self.compute_state.max_result_size = v;
         }
+        if let Some(v) = dataflow_max_inflight_bytes {
+            self.compute_state.dataflow_max_inflight_bytes = v;
+        }
 
-        // TODO(#16753): apply config to `self.compute_state.persist_clients`
-        let _ = params.persist;
+        persist.apply(self.compute_state.persist_clients.cfg())
     }
 
     fn handle_create_dataflows(
@@ -184,10 +194,14 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
             // Initialize frontiers for each object, and optionally log their construction.
             for (object_id, collection_id) in exported_ids {
-                if let Some(frontier) = self.compute_state.reported_frontiers.insert(
-                    object_id,
-                    Antichain::from_elem(timely::progress::Timestamp::minimum()),
-                ) {
+                let reported_frontier = ReportedFrontier::NotReported {
+                    lower: dataflow.as_of.clone().unwrap(),
+                };
+                if let Some(frontier) = self
+                    .compute_state
+                    .reported_frontiers
+                    .insert(object_id, reported_frontier)
+                {
                     error!(
                         "existing frontier {frontier:?} for newly created dataflow id {object_id}"
                     );
@@ -196,11 +210,11 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 // Log dataflow construction, frontier construction, and any dependencies.
                 if let Some(logger) = self.compute_state.compute_logger.as_mut() {
                     logger.log(ComputeEvent::Dataflow(object_id, true));
-                    logger.log(ComputeEvent::Frontier(
-                        object_id,
-                        timely::progress::Timestamp::minimum(),
-                        1,
-                    ));
+                    logger.log(ComputeEvent::Frontier {
+                        id: object_id,
+                        time: timely::progress::Timestamp::minimum(),
+                        diff: 1,
+                    });
                     for import_id in dataflow.depends_on(collection_id) {
                         logger.log(ComputeEvent::DataflowDependency {
                             dataflow: object_id,
@@ -237,8 +251,8 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                     .expect("Dropped compute collection with no frontier");
                 if let Some(logger) = self.compute_state.compute_logger.as_mut() {
                     logger.log(ComputeEvent::Dataflow(id, false));
-                    if let Some(time) = prev_frontier.get(0) {
-                        logger.log(ComputeEvent::Frontier(id, *time, -1));
+                    if let Some(time) = prev_frontier.logging_time() {
+                        logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
                     }
                 }
 
@@ -302,12 +316,8 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     }
 
     fn handle_cancel_peeks(&mut self, uuids: BTreeSet<uuid::Uuid>) {
-        let pending_peeks_len = self.compute_state.pending_peeks.len();
-        let mut pending_peeks = std::mem::replace(
-            &mut self.compute_state.pending_peeks,
-            HashMap::with_capacity(pending_peeks_len),
-        );
-        for (uuid, peek) in pending_peeks.drain() {
+        let pending_peeks = std::mem::take(&mut self.compute_state.pending_peeks);
+        for (uuid, peek) in pending_peeks {
             if uuids.contains(&uuid) {
                 self.send_peek_response(peek, PeekResponse::Canceled);
             } else {
@@ -347,10 +357,10 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         let c_linked = std::rc::Rc::new(EventLink::new());
         let mut c_logger = BatchLogger::new(Rc::clone(&c_linked), interval);
 
-        let mut t_traces = HashMap::new();
-        let mut r_traces = HashMap::new();
-        let mut d_traces = HashMap::new();
-        let mut c_traces = HashMap::new();
+        let mut t_traces = BTreeMap::new();
+        let mut r_traces = BTreeMap::new();
+        let mut d_traces = BTreeMap::new();
+        let mut c_traces = BTreeMap::new();
 
         let activate_after = 128;
 
@@ -562,19 +572,20 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         let index_ids = logging.index_logs.values().copied();
         let sink_ids = logging.sink_logs.values().map(|(id, _)| *id);
         for id in index_ids.chain(sink_ids) {
-            if let Some(frontier) = self.compute_state.reported_frontiers.insert(
-                id,
-                Antichain::from_elem(timely::progress::Timestamp::minimum()),
-            ) {
+            if let Some(frontier) = self
+                .compute_state
+                .reported_frontiers
+                .insert(id, ReportedFrontier::new())
+            {
                 error!(
                     "existing frontier {frontier:?} for newly initialized logging export id {id}"
                 );
             }
-            logger.log(ComputeEvent::Frontier(
+            logger.log(ComputeEvent::Frontier {
                 id,
-                timely::progress::Timestamp::minimum(),
-                1,
-            ));
+                time: timely::progress::Timestamp::minimum(),
+                diff: 1,
+            });
         }
 
         self.compute_state.compute_logger = Some(logger);
@@ -602,26 +613,39 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         let mut new_uppers = Vec::new();
 
         let mut update_frontier = |id, new_frontier: &Antichain<Timestamp>| {
-            let prev_frontier = self.compute_state.reported_frontiers.get_mut(&id);
-            let prev_frontier = prev_frontier
+            let reported_frontier = self
+                .compute_state
+                .reported_frontiers
+                .get_mut(&id)
                 .unwrap_or_else(|| panic!("Frontier update for untracked identifier: {id}"));
 
-            assert!(PartialOrder::less_equal(prev_frontier, new_frontier));
-            if prev_frontier == new_frontier {
-                return; // nothing new to report
+            match reported_frontier {
+                ReportedFrontier::Reported(old_frontier) => {
+                    assert!(PartialOrder::less_equal(old_frontier, new_frontier));
+                    if old_frontier == new_frontier {
+                        return; // nothing new to report
+                    }
+                }
+                ReportedFrontier::NotReported { lower } => {
+                    if !PartialOrder::less_equal(lower, new_frontier) {
+                        return; // lower bound for reporting not yet reached
+                    }
+                }
             }
 
+            let new_reported_frontier = ReportedFrontier::Reported(new_frontier.clone());
+
             if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-                if let Some(time) = prev_frontier.get(0) {
-                    logger.log(ComputeEvent::Frontier(id, *time, -1));
+                if let Some(time) = reported_frontier.logging_time() {
+                    logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
                 }
-                if let Some(time) = new_frontier.get(0) {
-                    logger.log(ComputeEvent::Frontier(id, *time, 1));
+                if let Some(time) = new_reported_frontier.logging_time() {
+                    logger.log(ComputeEvent::Frontier { id, time, diff: 1 });
                 }
             }
 
             new_uppers.push((id, new_frontier.clone()));
-            prev_frontier.clone_from(new_frontier);
+            *reported_frontier = new_reported_frontier;
         };
 
         let mut new_frontier = Antichain::new();
@@ -665,12 +689,8 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     /// Scan pending peeks and attempt to retire each.
     pub fn process_peeks(&mut self) {
         let mut upper = Antichain::new();
-        let pending_peeks_len = self.compute_state.pending_peeks.len();
-        let mut pending_peeks = std::mem::replace(
-            &mut self.compute_state.pending_peeks,
-            HashMap::with_capacity(pending_peeks_len),
-        );
-        for (uuid, mut peek) in pending_peeks.drain() {
+        let pending_peeks = std::mem::take(&mut self.compute_state.pending_peeks);
+        for (uuid, mut peek) in pending_peeks {
             if let Some(response) =
                 peek.seek_fulfillment(&mut upper, self.compute_state.max_result_size)
             {
@@ -706,6 +726,48 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     pub fn process_subscribes(&mut self) {
         let mut subscribe_responses = self.compute_state.subscribe_response_buffer.borrow_mut();
         for (sink_id, mut response) in subscribe_responses.drain(..) {
+            // Update frontier logging for this subscribe.
+            if let Some(reported_frontier) = self.compute_state.reported_frontiers.get_mut(&sink_id)
+            {
+                let new_frontier = match &response {
+                    SubscribeResponse::Batch(b) => b.upper.clone(),
+                    SubscribeResponse::DroppedAt(_) => Antichain::new(),
+                };
+
+                match reported_frontier {
+                    ReportedFrontier::Reported(old_frontier) => {
+                        assert!(PartialOrder::less_than(old_frontier, &new_frontier))
+                    }
+                    ReportedFrontier::NotReported { lower } => {
+                        assert!(PartialOrder::less_equal(lower, &new_frontier))
+                    }
+                }
+
+                let new_reported_frontier = ReportedFrontier::Reported(new_frontier);
+
+                if let Some(logger) = self.compute_state.compute_logger.as_mut() {
+                    if let Some(time) = reported_frontier.logging_time() {
+                        logger.log(ComputeEvent::Frontier {
+                            id: sink_id,
+                            time,
+                            diff: -1,
+                        });
+                    }
+                    if let Some(time) = new_reported_frontier.logging_time() {
+                        logger.log(ComputeEvent::Frontier {
+                            id: sink_id,
+                            time,
+                            diff: 1,
+                        });
+                    }
+                }
+
+                *reported_frontier = new_reported_frontier;
+            } else {
+                // Presumably tracking state for this frontier was already dropped by
+                // `handle_allow_compaction`. There is nothing left to do for logging.
+            }
+
             response
                 .to_error_if_exceeds(usize::try_from(self.compute_state.max_result_size).unwrap());
             self.send_compute_response(ComputeResponse::SubscribeResponse(sink_id, response));
@@ -981,5 +1043,41 @@ impl PendingPeek {
         }
 
         Ok(results)
+    }
+}
+
+/// A frontier we have reported to the controller, or the least frontier we are allowed to report.
+#[derive(Debug)]
+pub enum ReportedFrontier {
+    /// A frontier has been previously reported.
+    Reported(Antichain<Timestamp>),
+    /// No frontier has been reported yet.
+    NotReported {
+        /// A lower bound for frontiers that may be reported in the future.
+        lower: Antichain<Timestamp>,
+    },
+}
+
+impl ReportedFrontier {
+    /// Create a new `ReportedFrontier` enforcing the minimum lower bound.
+    pub fn new() -> Self {
+        let lower = Antichain::from_elem(timely::progress::Timestamp::minimum());
+        Self::NotReported { lower }
+    }
+
+    /// Whether the reported frontier is the empty frontier.
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Reported(frontier) => frontier.is_empty(),
+            Self::NotReported { .. } => false,
+        }
+    }
+
+    /// Return a timestamp suitable for logging the reported frontier.
+    pub fn logging_time(&self) -> Option<Timestamp> {
+        match self {
+            Self::Reported(frontier) => frontier.get(0).copied(),
+            Self::NotReported { .. } => Some(timely::progress::Timestamp::minimum()),
+        }
     }
 }

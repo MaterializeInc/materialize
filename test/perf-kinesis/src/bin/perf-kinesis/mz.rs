@@ -10,7 +10,7 @@
 use std::time::Duration;
 
 use anyhow::Context;
-use aws_types::credentials::ProvideCredentials;
+use aws_credential_types::provider::ProvideCredentials;
 use tokio_postgres::Client;
 use tracing::info;
 

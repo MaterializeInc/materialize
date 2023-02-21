@@ -9,10 +9,11 @@
 
 use std::time::Duration;
 
+use timely::dataflow::operators::Capability;
+use timely::progress::Antichain;
 use timely::scheduling::SyncActivator;
 use tokio::time::sleep;
 
-use mz_expr::PartitionId;
 use mz_repr::GlobalId;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
@@ -46,6 +47,9 @@ struct Script {
 
 pub struct TestScriptSourceReader {
     script: Script,
+    /// Capabilities used to produce messages
+    data_capability: Capability<MzOffset>,
+    upper_capability: Capability<MzOffset>,
 }
 
 impl SourceConnectionBuilder for TestScriptSourceConnection {
@@ -59,7 +63,9 @@ impl SourceConnectionBuilder for TestScriptSourceConnection {
         worker_id: usize,
         worker_count: usize,
         _consumer_activator: SyncActivator,
-        _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
+        data_capability: Capability<<Self::Reader as SourceReader>::Time>,
+        upper_capability: Capability<<Self::Reader as SourceReader>::Time>,
+        _resume_upper: Antichain<<Self::Reader as SourceReader>::Time>,
         _encoding: SourceDataEncoding,
         _metrics: crate::source::metrics::SourceBaseMetrics,
         _connection_context: ConnectionContext,
@@ -70,6 +76,8 @@ impl SourceConnectionBuilder for TestScriptSourceConnection {
                 script: Script {
                     commands: commands.into_iter(),
                 },
+                data_capability,
+                upper_capability,
             },
             LogCommitter {
                 source_id,
@@ -90,7 +98,7 @@ impl SourceReader for TestScriptSourceReader {
     async fn next(
         &mut self,
         timestamp_granularity: Duration,
-    ) -> Option<SourceMessageType<Self::Key, Self::Value, Self::Diff>> {
+    ) -> Option<SourceMessageType<Self::Key, Self::Value, Self::Time, Self::Diff>> {
         if let Some(command) = self.script.commands.next() {
             match command {
                 ScriptCommand::Terminate => {
@@ -106,8 +114,12 @@ impl SourceReader for TestScriptSourceReader {
                         value: Some(value.into_bytes()),
                         headers: None,
                     });
-                    let ts = (PartitionId::None, MzOffset::from(offset));
-                    return Some(SourceMessageType::Finalized(msg, ts, ()));
+                    let ts = MzOffset::from(offset);
+                    let cap = self.data_capability.delayed(&ts);
+                    let next_ts = ts + 1;
+                    self.data_capability.downgrade(&next_ts);
+                    self.upper_capability.downgrade(&next_ts);
+                    return Some(SourceMessageType::Message(msg, cap, ()));
                 }
             }
         } else {

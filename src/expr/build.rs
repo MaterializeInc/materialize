@@ -71,6 +71,7 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
@@ -93,6 +94,7 @@ fn main() {
         .extern_path(".mz_repr.row", "::mz_repr")
         .extern_path(".mz_repr.strconv", "::mz_repr::strconv")
         .type_attribute(".", "#[allow(missing_docs)]")
+        .btree_map(["."])
         .compile_protos(
             &[
                 "expr/src/id.proto",
@@ -104,5 +106,5 @@ fn main() {
             ],
             &[".."],
         )
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"))
 }

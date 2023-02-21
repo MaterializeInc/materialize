@@ -71,6 +71,7 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
@@ -85,6 +86,7 @@ fn main() {
     prost_build::Config::new()
         .include_file("mod.rs")
         .file_descriptor_set_path(out_dir.join("file_descriptor_set.pb"))
+        .btree_map(["."])
         .compile_protos(&["benchmark.proto"], &["testdata"])
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"))
 }

@@ -71,6 +71,7 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
@@ -78,12 +79,11 @@ use std::path::PathBuf;
 use std::process;
 use std::sync::Arc;
 
-use anyhow::{bail, Context};
+use anyhow::Context;
 use axum::routing;
 use fail::FailScenario;
 use futures::future;
 use once_cell::sync::Lazy;
-use tokio::sync::Mutex;
 use tracing::info;
 
 use mz_build_info::{build_info, BuildInfo};
@@ -96,7 +96,7 @@ use mz_ore::netio::{Listener, SocketAddr};
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::PersistConfig;
+use mz_persist_client::cfg::PersistConfig;
 use mz_pid_file::PidFile;
 use mz_service::emit_boot_diagnostics;
 use mz_service::grpc::GrpcServer;
@@ -139,11 +139,6 @@ struct Args {
         default_value = "127.0.0.1:6878"
     )]
     internal_http_listen_addr: SocketAddr,
-
-    // === Storage options. ===
-    /// Number of dataflow worker threads.
-    #[clap(long, env = "STORAGE_WORKERS", value_name = "N", default_value = "1")]
-    storage_workers: usize,
 
     // === Cloud options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
@@ -263,31 +258,24 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         )
     });
 
-    let persist_clients = Arc::new(Mutex::new(PersistClientCache::new(
+    let persist_clients = Arc::new(PersistClientCache::new(
         PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone()),
         &metrics_registry,
-    )));
+    ));
 
     // Start storage server.
-    let (_storage_server, storage_client) = mz_storage::serve(mz_storage::Config {
-        persist_clients: Arc::clone(&persist_clients),
-        workers: args.storage_workers,
-        timely_config: timely::Config {
-            worker: timely::WorkerConfig::default(),
-            communication: match args.storage_workers {
-                0 => bail!("--storage-workers must be greater than 0"),
-                1 => timely::CommunicationConfig::Thread,
-                _ => timely::CommunicationConfig::Process(args.storage_workers),
-            },
+    let (_storage_server, storage_client) = mz_storage::serve(
+        mz_cluster::server::ClusterConfig {
+            metrics_registry: metrics_registry.clone(),
+            persist_clients: Arc::clone(&persist_clients),
         },
-        metrics_registry: metrics_registry.clone(),
-        now: SYSTEM_TIME.clone(),
-        connection_context: ConnectionContext::from_cli_args(
+        SYSTEM_TIME.clone(),
+        ConnectionContext::from_cli_args(
             &args.tracing.log_filter.inner,
             args.aws_external_id,
             secrets_reader,
         ),
-    })?;
+    )?;
     info!(
         "listening for storage controller connections on {}",
         args.storage_controller_listen_addr
@@ -304,7 +292,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     // Start compute server.
     let (_compute_server, compute_client) =
-        mz_compute::server::serve(mz_compute::server::Config {
+        mz_compute::server::serve(mz_cluster::server::ClusterConfig {
             metrics_registry,
             persist_clients,
         })?;

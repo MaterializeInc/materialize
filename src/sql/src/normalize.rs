@@ -297,6 +297,7 @@ pub fn create_statement(
     match &mut stmt {
         Statement::CreateSource(CreateSourceStatement {
             name,
+            in_cluster: _,
             col_names: _,
             connection: _,
             format: _,
@@ -305,7 +306,8 @@ pub fn create_statement(
             if_not_exists,
             key_constraint: _,
             with_options: _,
-            subsources: _,
+            referenced_subsources: _,
+            progress_subsource: _,
         }) => {
             *name = allocate_name(name)?;
             *if_not_exists = false;
@@ -316,6 +318,7 @@ pub fn create_statement(
             columns,
             constraints: _,
             if_not_exists,
+            with_options: _,
         }) => {
             *name = allocate_name(name)?;
             let mut normalizer = QueryNormalizer::new(scx);
@@ -352,6 +355,7 @@ pub fn create_statement(
 
         Statement::CreateSink(CreateSinkStatement {
             name,
+            in_cluster: _,
             connection: _,
             format: _,
             envelope: _,
@@ -500,7 +504,7 @@ macro_rules! generate_extracted_config {
         paste::paste! {
             #[derive(Debug)]
             pub struct [<$option_ty Extracted>] {
-                seen: HashSet::<[<$option_ty Name>]>,
+                seen: ::std::collections::BTreeSet::<[<$option_ty Name>]>,
                 $(
                     pub(crate) [<$option_name:snake>]: $t,
                 )*
@@ -509,7 +513,7 @@ macro_rules! generate_extracted_config {
             impl std::default::Default for [<$option_ty Extracted>] {
                 fn default() -> Self {
                     [<$option_ty Extracted>] {
-                        seen: HashSet::<[<$option_ty Name>]>::new(),
+                        seen: ::std::collections::BTreeSet::<[<$option_ty Name>]>::new(),
                         $(
                             [<$option_name:snake>]: $t::from($v),
                         )*
@@ -547,32 +551,3 @@ macro_rules! generate_extracted_config {
 }
 
 pub(crate) use generate_extracted_config;
-
-#[cfg(test)]
-mod tests {
-    use std::error::Error;
-
-    use mz_ore::collections::CollectionExt;
-
-    use super::*;
-    use crate::catalog::DummyCatalog;
-    use crate::names;
-
-    #[test]
-    fn normalized_create() -> Result<(), Box<dyn Error>> {
-        let scx = &mut StatementContext::new(None, &DummyCatalog);
-
-        let parsed = mz_sql_parser::parser::parse_statements("create view foo as select 1 as bar")?
-            .into_element();
-
-        let (stmt, _) = names::resolve(scx.catalog, parsed)?;
-
-        // Ensure that all identifiers are quoted.
-        assert_eq!(
-            r#"CREATE VIEW "dummy"."public"."foo" AS SELECT 1 AS "bar""#,
-            create_statement(scx, stmt)?,
-        );
-
-        Ok(())
-    }
-}

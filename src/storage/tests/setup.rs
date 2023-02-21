@@ -71,33 +71,34 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
 //! Unit tests for sources.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::marker::{Send, Sync};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
-use mz_ore::halt;
-use mz_storage::internal_control::{InternalCommandSender, InternalStorageCommand};
 use timely::progress::{Antichain, Timestamp as _};
 
 use mz_build_info::DUMMY_BUILD_INFO;
+use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task::RuntimeExt;
+use mz_persist_client::cfg::PersistConfig;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::TimestampManipulation;
-use mz_repr::{Diff, GlobalId, Timestamp};
+use mz_repr::{Diff, GlobalId, RelationDesc, Timestamp};
+use mz_storage::internal_control::{InternalCommandSender, InternalStorageCommand};
 use mz_storage::sink::SinkBaseMetrics;
 use mz_storage::source::metrics::SourceBaseMetrics;
 use mz_storage::source::testscript::ScriptCommand;
-use mz_storage::storage_state::async_storage_worker::AsyncStorageWorker;
 use mz_storage::DecodeMetrics;
 use mz_storage_client::types::sources::{
     encoding::SourceDataEncoding, GenericSourceConnection, SourceData, SourceDesc, SourceEnvelope,
@@ -195,8 +196,7 @@ where
             let sink_metrics = SinkBaseMetrics::register_with(&metrics_registry);
             let decode_metrics = DecodeMetrics::register_with(&metrics_registry);
 
-            let mut persistcfg =
-                mz_persist_client::PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+            let mut persistcfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
             persistcfg.reader_lease_duration = std::time::Duration::from_secs(60 * 15);
             persistcfg.now = SYSTEM_TIME.clone();
 
@@ -204,7 +204,7 @@ where
                 blob_uri: "mem://".to_string(),
                 consensus_uri: "mem://".to_string(),
             };
-            let mut persist_cache =
+            let persist_cache =
                 mz_persist_client::cache::PersistClientCache::new(persistcfg, &metrics_registry);
 
             // create a client for use with the `until` closure later.
@@ -212,45 +212,40 @@ where
                 .block_on(persist_cache.open(persist_location.clone()))
                 .unwrap();
 
-            let persist_clients = Arc::new(tokio::sync::Mutex::new(persist_cache));
+            let persist_clients = Arc::new(persist_cache);
 
-            let storage_state = mz_storage::storage_state::StorageState {
-                source_uppers: HashMap::new(),
-                source_tokens: HashMap::new(),
-                decode_metrics,
-                reported_frontiers: HashMap::new(),
-                ingestions: HashMap::new(),
-                exports: HashMap::new(),
-                now: SYSTEM_TIME.clone(),
-                source_metrics,
-                sink_metrics,
-                timely_worker_index: 0,
-                timely_worker_peers: 0,
-                connection_context: mz_storage_client::types::connections::ConnectionContext {
-                    librdkafka_log_level: tracing::Level::INFO,
-                    aws_external_id_prefix: None,
-                    secrets_reader: Arc::new(mz_secrets::InMemorySecretsController::new()),
-                },
-                persist_clients: Arc::clone(&persist_clients),
-                sink_tokens: HashMap::new(),
-                sink_write_frontiers: HashMap::new(),
-                sink_handles: HashMap::new(),
-                dropped_ids: Vec::new(),
-                source_statistics: HashMap::new(),
-                internal_cmd_tx: HaltingInternalCommandSender::new(),
+            let connection_context = mz_storage_client::types::connections::ConnectionContext {
+                librdkafka_log_level: tracing::Level::INFO,
+                aws_external_id_prefix: None,
+                secrets_reader: Arc::new(mz_secrets::InMemorySecretsController::new()),
             };
 
             let (_fake_tx, fake_rx) = crossbeam_channel::bounded(1);
-            let mut worker = mz_storage::storage_state::Worker {
-                timely_worker,
-                storage_state,
-                client_rx: fake_rx,
+
+            let mut worker = {
+                // Worker::new creates an async worker internally.
+                let _tokio_guard = tokio_runtime.enter();
+
+                mz_storage::storage_state::Worker::new(
+                    timely_worker,
+                    fake_rx,
+                    decode_metrics,
+                    source_metrics,
+                    sink_metrics,
+                    SYSTEM_TIME.clone(),
+                    connection_context,
+                    Arc::clone(&persist_clients),
+                )
             };
+
             let collection_metadata = mz_storage_client::controller::CollectionMetadata {
                 persist_location,
                 remap_shard: mz_persist_client::ShardId::new(),
                 data_shard: mz_persist_client::ShardId::new(),
                 status_shard: None,
+                // TODO(guswynn|danhhz): replace this with a real desc when persist requires a
+                // schema.
+                relation_desc: RelationDesc::empty(),
             };
             let data_shard = collection_metadata.data_shard.clone();
             let id = GlobalId::User(1);
@@ -265,8 +260,8 @@ where
             {
                 let _tokio_guard = tokio_runtime.enter();
 
-                let mut async_storage_worker =
-                    AsyncStorageWorker::new(thread::current(), Arc::clone(&persist_clients));
+                let async_storage_worker = Rc::clone(&worker.storage_state.async_worker);
+                let internal_command_fabric = &mut HaltingInternalCommandSender::new();
 
                 // NOTE: We only feed internal commands into the worker,
                 // bypassing "external" StorageCommand and the async worker that
@@ -274,7 +269,8 @@ where
                 // encounter weird behaviour from this test, this might be the
                 // reason.
                 worker.handle_internal_storage_command(
-                    &mut async_storage_worker,
+                    &mut *internal_command_fabric.as_mut().unwrap().borrow_mut(),
+                    &mut async_storage_worker.borrow_mut(),
                     InternalStorageCommand::CreateIngestionDataflow {
                         id,
                         ingestion_description:
@@ -284,10 +280,10 @@ where
                                 source_exports,
                                 // Only used for Debezium
                                 source_imports: BTreeMap::new(),
-                                host_config:
-                                    mz_storage_client::types::hosts::StorageHostConfig::Remote {
-                                        addr: "test".to_string(),
-                                    },
+                                instance_id:
+                                    mz_storage_client::types::instances::StorageInstanceId::User(
+                                        100,
+                                    ),
                             },
                         // TODO: test resumption as well!
                         resumption_frontier: Antichain::from_elem(Timestamp::minimum()),
@@ -305,6 +301,10 @@ where
                             .open::<SourceData, (), Timestamp, Diff>(
                                 data_shard.clone(),
                                 "tests::check_loop",
+                                // TODO(guswynn|danhhz): replace this with a real desc when persist requires a
+                                // schema.
+                                Arc::new(RelationDesc::empty()),
+                                Arc::new(UnitSchema),
                             )
                             .await
                             .unwrap();
@@ -368,5 +368,9 @@ impl HaltingInternalCommandSender {
 impl InternalCommandSender for HaltingInternalCommandSender {
     fn broadcast(&mut self, internal_cmd: mz_storage::internal_control::InternalStorageCommand) {
         halt!("got unexpected {:?} during testing", internal_cmd);
+    }
+
+    fn next(&mut self) -> Option<InternalStorageCommand> {
+        halt!("got unexpected call to next() during testing");
     }
 }

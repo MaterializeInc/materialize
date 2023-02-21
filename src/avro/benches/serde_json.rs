@@ -27,17 +27,17 @@
 extern crate test;
 
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 fn make_big_json_record() -> Value {
-    let mut address = HashMap::new();
+    let mut address = BTreeMap::new();
     address.insert("street".to_owned(), "street".to_owned());
     address.insert("city".to_owned(), "city".to_owned());
     address.insert("state_prov".to_owned(), "state_prov".to_owned());
     address.insert("country".to_owned(), "country".to_owned());
     address.insert("zip".to_owned(), "zip".to_owned());
     let address_json = serde_json::to_value(address).unwrap();
-    let mut big_record = std::collections::HashMap::new();
+    let mut big_record = std::collections::BTreeMap::new();
     big_record.insert(
         "username".to_owned(),
         serde_json::to_value("username").unwrap(),

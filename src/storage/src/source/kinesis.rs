@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::Duration;
 use std::time::Instant;
 
@@ -17,12 +17,13 @@ use aws_sdk_kinesis::output::GetRecordsOutput;
 use aws_sdk_kinesis::types::SdkError;
 use aws_sdk_kinesis::Client as KinesisClient;
 use prometheus::core::AtomicI64;
+use timely::dataflow::operators::Capability;
+use timely::progress::Antichain;
 use timely::scheduling::SyncActivator;
 use tokio::runtime::Handle as TokioHandle;
 use tracing::error;
 
 use mz_cloud_resources::AwsExternalIdPrefix;
-use mz_expr::PartitionId;
 use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
@@ -53,7 +54,7 @@ pub struct KinesisSourceReader {
     /// The name of the stream
     stream_name: String,
     /// The set of active shards
-    shard_set: HashMap<String, ShardMetrics>,
+    shard_set: BTreeMap<String, ShardMetrics>,
     /// A queue representing the next shard to read from. This is necessary
     /// to ensure that all shards are read from uniformly
     shard_queue: VecDeque<(String, Option<String>)>,
@@ -61,7 +62,7 @@ pub struct KinesisSourceReader {
     /// TODO(natacha): this should be moved to timestamper
     last_checked_shards: Instant,
     /// Storage for messages that have not yet been timestamped
-    buffered_messages: VecDeque<(SourceMessage<(), Option<Vec<u8>>>, (PartitionId, MzOffset))>,
+    buffered_messages: VecDeque<(SourceMessage<(), Option<Vec<u8>>>, MzOffset)>,
     /// Count of processed message
     processed_message_count: u64,
     /// Metrics from which per-shard metrics get created.
@@ -69,11 +70,9 @@ pub struct KinesisSourceReader {
     // Kinesis sources support single-threaded ingestion only, so only one of
     // the `KinesisSourceReader`s will actually produce data.
     active_read_worker: bool,
-    // The non-active reader (see above `active_read_worker`) has to report back
-    // that is is not consuming from the one [`PartitionId:None`] partition.
-    // Before it can return a [`NextMessage::Finished`]. This is keeping track
-    // of that.
-    reported_unconsumed_partitions: bool,
+    /// Capabilities used to produce messages
+    data_capability: Capability<MzOffset>,
+    upper_capability: Capability<MzOffset>,
 }
 
 struct ShardMetrics {
@@ -92,11 +91,11 @@ impl ShardMetrics {
 
 impl KinesisSourceReader {
     async fn update_shard_information(&mut self) -> Result<(), anyhow::Error> {
-        let current_shards: HashSet<_> =
+        let current_shards: BTreeSet<_> =
             mz_kinesis_util::get_shard_ids(&self.kinesis_client, &self.stream_name)
                 .await?
                 .collect();
-        let known_shards: HashSet<_> = self.shard_set.keys().cloned().collect();
+        let known_shards: BTreeSet<_> = self.shard_set.keys().cloned().collect();
         let new_shards = current_shards
             .difference(&known_shards)
             .map(|shard_id| shard_id.to_owned());
@@ -142,13 +141,15 @@ impl SourceConnectionBuilder for KinesisSourceConnection {
         worker_id: usize,
         worker_count: usize,
         _consumer_activator: SyncActivator,
-        _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
+        data_capability: Capability<<Self::Reader as SourceReader>::Time>,
+        upper_capability: Capability<<Self::Reader as SourceReader>::Time>,
+        _resume_upper: Antichain<<Self::Reader as SourceReader>::Time>,
         _encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
         connection_context: ConnectionContext,
     ) -> Result<(Self::Reader, Self::OffsetCommitter), anyhow::Error> {
         let active_read_worker =
-            crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
+            crate::source::responsible_for(&source_id, worker_id, worker_count, ());
 
         // TODO: This creates all the machinery, even for the non-active workers.
         // We could change that to only spin up Kinesis when needed.
@@ -172,7 +173,8 @@ impl SourceConnectionBuilder for KinesisSourceConnection {
                     processed_message_count: 0,
                     base_metrics: metrics.kinesis,
                     active_read_worker,
-                    reported_unconsumed_partitions: false,
+                    data_capability,
+                    upper_capability,
                 },
                 LogCommitter {
                     source_id,
@@ -191,14 +193,8 @@ impl SourceReader for KinesisSourceReader {
     type Time = MzOffset;
     type Diff = ();
 
-    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Diff> {
+    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Time, Self::Diff> {
         if !self.active_read_worker {
-            if !self.reported_unconsumed_partitions {
-                self.reported_unconsumed_partitions = true;
-                return NextMessage::Ready(SourceMessageType::DropPartitionCapabilities(vec![
-                    PartitionId::None,
-                ]));
-            }
             return NextMessage::Finished;
         }
 
@@ -214,18 +210,21 @@ impl SourceReader for KinesisSourceReader {
                 error!("{:#?}", e);
                 // XXX(petrosagg): We are fabricating a timestamp here. Is the error truly
                 // definite?
-                let ts = (
-                    PartitionId::None,
-                    MzOffset::from(self.processed_message_count),
-                );
+                let ts = MzOffset::from(self.processed_message_count);
+                let cap = self.data_capability.delayed(&ts);
+                self.upper_capability.downgrade(&(ts + 1));
                 let msg = Err(SourceReaderError::other_definite(e));
-                return NextMessage::Ready(SourceMessageType::InProgress(msg, ts, ()));
+                return NextMessage::Ready(SourceMessageType::Message(msg, cap, ()));
             }
             self.last_checked_shards = std::time::Instant::now();
         }
 
         if let Some((message, ts)) = self.buffered_messages.pop_front() {
-            NextMessage::Ready(SourceMessageType::Finalized(Ok(message), ts, ()))
+            let cap = self.data_capability.delayed(&ts);
+            let next_ts = ts + 1;
+            self.data_capability.downgrade(&next_ts);
+            self.upper_capability.downgrade(&next_ts);
+            NextMessage::Ready(SourceMessageType::Message(Ok(message), cap, ()))
         } else {
             // Rotate through all of a stream's shards, start with a new shard on each activation.
             if let Some((shard_id, mut shard_iterator)) = self.shard_queue.pop_front() {
@@ -259,14 +258,13 @@ impl SourceReader for KinesisSourceReader {
                             error!("{}", err.err());
                             // XXX(petrosagg): We are fabricating a timestamp here. Is the
                             // error truly definite?
-                            let ts = (
-                                PartitionId::None,
-                                MzOffset::from(self.processed_message_count),
-                            );
+                            let ts = MzOffset::from(self.processed_message_count);
+                            let cap = self.data_capability.delayed(&ts);
+                            self.upper_capability.downgrade(&(ts + 1));
                             let msg = Err(SourceReaderError {
                                 inner: SourceErrorDetails::Other(err.err().to_string()),
                             });
-                            return NextMessage::Ready(SourceMessageType::InProgress(msg, ts, ()));
+                            return NextMessage::Ready(SourceMessageType::Message(msg, cap, ()));
                         }
                         Err(SdkError::ServiceError(err))
                             if err.err().is_provisioned_throughput_exceeded_exception() =>
@@ -291,14 +289,13 @@ impl SourceReader for KinesisSourceReader {
                             error!("{}", e);
                             // XXX(petrosagg): We are fabricating a timestamp here. Is the
                             // error truly definite?
-                            let ts = (
-                                PartitionId::None,
-                                MzOffset::from(self.processed_message_count),
-                            );
+                            let ts = MzOffset::from(self.processed_message_count);
+                            let cap = self.data_capability.delayed(&ts);
+                            self.upper_capability.downgrade(&(ts + 1));
                             let msg = Err(SourceReaderError {
                                 inner: SourceErrorDetails::Other(e.to_string()),
                             });
-                            return NextMessage::Ready(SourceMessageType::InProgress(msg, ts, ()));
+                            return NextMessage::Ready(SourceMessageType::Message(msg, cap, ()));
                         }
                     };
 
@@ -310,10 +307,7 @@ impl SourceReader for KinesisSourceReader {
                         self.processed_message_count += 1;
 
                         //TODO: should MzOffset be modified to be a string?
-                        let ts = (
-                            PartitionId::None,
-                            MzOffset::from(self.processed_message_count),
-                        );
+                        let ts = MzOffset::from(self.processed_message_count);
                         let source_message = SourceMessage {
                             output: 0,
                             upstream_time_millis: None,
@@ -328,7 +322,11 @@ impl SourceReader for KinesisSourceReader {
             }
             match self.buffered_messages.pop_front() {
                 Some((msg, ts)) => {
-                    NextMessage::Ready(SourceMessageType::Finalized(Ok(msg), ts, ()))
+                    let cap = self.data_capability.delayed(&ts);
+                    let next_ts = ts + 1;
+                    self.data_capability.downgrade(&next_ts);
+                    self.upper_capability.downgrade(&next_ts);
+                    NextMessage::Ready(SourceMessageType::Message(Ok(msg), cap, ()))
                 }
                 None => NextMessage::Pending,
             }
@@ -348,7 +346,7 @@ async fn create_state(
     (
         KinesisClient,
         String,
-        HashMap<String, ShardMetrics>,
+        BTreeMap<String, ShardMetrics>,
         VecDeque<(String, Option<String>)>,
     ),
     anyhow::Error,
@@ -362,7 +360,7 @@ async fn create_state(
 
     let shard_set = mz_kinesis_util::get_shard_ids(&kinesis_client, &c.stream_name).await?;
     let mut shard_queue: VecDeque<(String, Option<String>)> = VecDeque::new();
-    let mut shard_map = HashMap::new();
+    let mut shard_map = BTreeMap::new();
     for shard_id in shard_set {
         shard_queue.push_back((
             shard_id.clone(),

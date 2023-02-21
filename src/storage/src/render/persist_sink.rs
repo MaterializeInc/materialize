@@ -8,11 +8,12 @@
 // by the Apache License, Version 2.0.
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::{Collection, Hashable};
+use mz_persist_types::codec_impls::UnitSchema;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::Scope;
 use timely::progress::frontier::Antichain;
@@ -62,6 +63,7 @@ where
 pub fn render<G>(
     scope: &mut G,
     src_id: GlobalId,
+    output_index: usize,
     metadata: CollectionMetadata,
     source_data: Collection<G, Result<Row, DataflowError>, Diff>,
     storage_state: &mut StorageState,
@@ -102,17 +104,17 @@ where
     let persist_clients = Arc::clone(&storage_state.persist_clients);
     let button = persist_op.build(move |_capabilities| async move {
         let mut buffer = Vec::new();
-        let mut stashed_batches = HashMap::new();
+        let mut stashed_batches = BTreeMap::new();
 
         let mut write = persist_clients
-            .lock()
-            .await
             .open(metadata.persist_location)
             .await
             .expect("could not open persist client")
             .open_writer::<SourceData, (), Timestamp, Diff>(
                 metadata.data_shard,
                 &format!("storage::persist_sink {}", src_id),
+                Arc::new(metadata.relation_desc.clone()),
+                Arc::new(UnitSchema),
             )
             .await
             .expect("could not open persist shard");
@@ -133,6 +135,18 @@ where
             source_statistics.initialize_snapshot_committed(&Antichain::<Timestamp>::new());
             return;
         }
+
+        // Whether or not we should pause the source
+        // to prevent committing the snapshot.
+        let mut pg_snapshot_pause = false;
+        (|| {
+            fail::fail_point!("pg_snapshot_pause", |val| {
+                pg_snapshot_pause = val.map_or(false, |index| {
+                    let index: usize = index.parse().unwrap();
+                    index == output_index
+                });
+            });
+        })();
 
         while let Some(event) = input.next().await {
             match event {
@@ -207,6 +221,18 @@ where
                             *current_upper.borrow_mut() = input_upper.clone();
                             // wait for more data or a new input frontier
                             continue;
+                        }
+
+                        // We evaluate this above to avoid checking an environment variable
+                        // in a hot loop. Note that we only pause before we emit
+                        // non-empty batches, because we do want to bump the upper
+                        // with empty ones before we start ingesting the snapshot.
+                        //
+                        // This is a fairly complex failure case we need to check
+                        // see `test/cluster/pg-snapshot-partial-failure` for more
+                        // information.
+                        if pg_snapshot_pause {
+                            futures::future::pending().await
                         }
 
                         // `current_upper` tracks the last known upper

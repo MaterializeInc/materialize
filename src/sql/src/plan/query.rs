@@ -33,7 +33,7 @@
 
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::{TryFrom, TryInto};
 
 use std::iter;
@@ -108,7 +108,7 @@ pub fn plan_root_query(
     mut query: Query<Aug>,
     lifetime: QueryLifetime,
 ) -> Result<PlannedQuery<HirRelationExpr>, PlanError> {
-    transform_ast::transform_query(scx, &mut query)?;
+    transform_ast::transform(scx, &mut query)?;
     let mut qcx = QueryContext::root(scx, lifetime);
     let (mut expr, scope, mut finishing) = plan_query(&mut qcx, &query)?;
 
@@ -189,9 +189,14 @@ pub fn plan_insert_query(
         );
     }
     let desc = table.desc(&scx.catalog.resolve_full_name(table.name()))?;
-    let defaults = table
+    let mut defaults = table
         .table_details()
-        .expect("attempted to insert into non-table");
+        .expect("attempted to insert into non-table")
+        .to_vec();
+
+    for default in &mut defaults {
+        transform_ast::transform(scx, default)?;
+    }
 
     if table.id().is_system() {
         sql_bail!(
@@ -212,7 +217,7 @@ pub fn plan_insert_query(
         source_types.extend(desc.iter_types().map(|x| &x.scalar_type));
         ordering.extend(0..desc.arity());
     } else {
-        let column_by_name: HashMap<&ColumnName, (usize, &ColumnType)> = desc
+        let column_by_name: BTreeMap<&ColumnName, (usize, &ColumnType)> = desc
             .iter()
             .enumerate()
             .map(|(idx, (name, typ))| (name, (idx, typ)))
@@ -238,7 +243,7 @@ pub fn plan_insert_query(
     // Plan the source.
     let expr = match source {
         InsertSource::Query(mut query) => {
-            transform_ast::transform_query(scx, &mut query)?;
+            transform_ast::transform(scx, &mut query)?;
 
             match query {
                 // Special-case simple VALUES clauses as PostgreSQL does.
@@ -300,14 +305,14 @@ pub fn plan_insert_query(
     let mut project_key = Vec::with_capacity(desc.arity());
 
     // Maps from table column index to position in the source query
-    let col_to_source: HashMap<_, _> = ordering.iter().enumerate().map(|(a, b)| (b, a)).collect();
+    let col_to_source: BTreeMap<_, _> = ordering.iter().enumerate().map(|(a, b)| (b, a)).collect();
 
     let column_details = desc.iter_types().zip_eq(defaults).enumerate();
     for (col_idx, (col_typ, default)) in column_details {
         if let Some(src_idx) = col_to_source.get(&col_idx) {
             project_key.push(*src_idx);
         } else {
-            let hir = plan_default_expr(scx, default, &col_typ.scalar_type)?;
+            let hir = plan_default_expr(scx, &default, &col_typ.scalar_type)?;
             project_key.push(expr_arity + map_exprs.len());
             map_exprs.push(hir);
         }
@@ -331,11 +336,12 @@ pub fn plan_insert_query(
             allow_subqueries: false,
             allow_windows: false,
         };
-        let table_func_names = HashMap::new();
+        let table_func_names = BTreeMap::new();
         let mut output_columns = vec![];
         let mut new_exprs = vec![];
         let mut new_type = RelationType::empty();
-        for si in returning {
+        for mut si in returning {
+            transform_ast::transform(scx, &mut si)?;
             for (select_item, column_name) in expand_select_item(ecx, &si, &table_func_names)? {
                 let expr = match &select_item {
                     ExpandedSelectItem::InputOrdinal(i) => HirScalarExpr::column(*i),
@@ -403,7 +409,7 @@ pub fn plan_copy_from(
         ordering.extend(0..desc.arity());
     } else {
         let columns: Vec<_> = columns.into_iter().map(normalize::column_name).collect();
-        let column_by_name: HashMap<&ColumnName, (usize, &ColumnType)> = desc
+        let column_by_name: BTreeMap<&ColumnName, (usize, &ColumnType)> = desc
             .iter()
             .enumerate()
             .map(|(idx, (name, typ))| (name, (idx, typ)))
@@ -444,12 +450,19 @@ pub fn plan_copy_from_rows(
     columns: Vec<usize>,
     rows: Vec<mz_repr::Row>,
 ) -> Result<HirRelationExpr, PlanError> {
+    let scx = StatementContext::new(Some(pcx), catalog);
+
     let table = catalog.get_item(&id);
     let desc = table.desc(&catalog.resolve_full_name(table.name()))?;
 
-    let defaults = table
+    let mut defaults = table
         .table_details()
-        .expect("attempted to insert into non-table");
+        .expect("attempted to insert into non-table")
+        .to_vec();
+
+    for default in &mut defaults {
+        transform_ast::transform(&scx, default)?;
+    }
 
     let column_types = columns
         .iter()
@@ -482,16 +495,14 @@ pub fn plan_copy_from_rows(
     let mut project_key = Vec::with_capacity(desc.arity());
 
     // Maps from table column index to position in the source query
-    let col_to_source: HashMap<_, _> = columns.iter().enumerate().map(|(a, b)| (b, a)).collect();
-
-    let scx = StatementContext::new(Some(pcx), catalog);
+    let col_to_source: BTreeMap<_, _> = columns.iter().enumerate().map(|(a, b)| (b, a)).collect();
 
     let column_details = desc.iter_types().zip_eq(defaults).enumerate();
     for (col_idx, (col_typ, default)) in column_details {
         if let Some(src_idx) = col_to_source.get(&col_idx) {
             project_key.push(*src_idx);
         } else {
-            let hir = plan_default_expr(&scx, default, &col_typ.scalar_type)?;
+            let hir = plan_default_expr(&scx, &default, &col_typ.scalar_type)?;
             project_key.push(typ.arity() + map_exprs.len());
             map_exprs.push(hir);
         }
@@ -506,7 +517,7 @@ pub struct ReadThenWritePlan {
     /// WHERE filter.
     pub selection: HirRelationExpr,
     /// Map from column index to SET expression. Empty for DELETE statements.
-    pub assignments: HashMap<usize, HirScalarExpr>,
+    pub assignments: BTreeMap<usize, HirScalarExpr>,
     pub finishing: RowSetFinishing,
 }
 
@@ -514,11 +525,7 @@ pub fn plan_delete_query(
     scx: &StatementContext,
     mut delete_stmt: DeleteStatement<Aug>,
 ) -> Result<ReadThenWritePlan, PlanError> {
-    transform_ast::run_transforms(
-        scx,
-        |t, delete_stmt| t.visit_delete_statement_mut(delete_stmt),
-        &mut delete_stmt,
-    )?;
+    transform_ast::transform(scx, &mut delete_stmt)?;
 
     let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
     plan_mutation_query_inner(
@@ -535,11 +542,7 @@ pub fn plan_update_query(
     scx: &StatementContext,
     mut update_stmt: UpdateStatement<Aug>,
 ) -> Result<ReadThenWritePlan, PlanError> {
-    transform_ast::run_transforms(
-        scx,
-        |t, update_stmt| t.visit_update_statement_mut(update_stmt),
-        &mut update_stmt,
-    )?;
+    transform_ast::transform(scx, &mut update_stmt)?;
 
     let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
 
@@ -607,7 +610,7 @@ pub fn plan_mutation_query_inner(
         get = handle_mutation_using_clause(&qcx, selection, using, get, scope.clone())?;
     }
 
-    let mut sets = HashMap::new();
+    let mut sets = BTreeMap::new();
     for Assignment { id, value } in assignments {
         // Get the index and type of the column.
         let name = normalize::column_name(id);
@@ -816,7 +819,7 @@ pub fn plan_up_to(
     let scope = Scope::empty();
     let desc = RelationDesc::empty();
     let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
-    transform_ast::transform_expr(scx, &mut up_to)?;
+    transform_ast::transform(scx, &mut up_to)?;
     let ecx = &ExprContext {
         qcx: &qcx,
         name: "UP TO",
@@ -843,7 +846,7 @@ pub fn plan_as_of(
                 let scope = Scope::empty();
                 let desc = RelationDesc::empty();
                 let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
-                transform_ast::transform_expr(scx, expr)?;
+                transform_ast::transform(scx, expr)?;
                 let ecx = &ExprContext {
                     qcx: &qcx,
                     name: "AS OF",
@@ -874,7 +877,7 @@ pub fn plan_secret_as(
     let desc = RelationDesc::empty();
     let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
 
-    transform_ast::transform_expr(scx, &mut expr)?;
+    transform_ast::transform(scx, &mut expr)?;
 
     let ecx = &ExprContext {
         qcx: &qcx,
@@ -932,7 +935,7 @@ pub fn plan_params<'a>(
     let mut types = Vec::new();
     let temp_storage = &RowArena::new();
     for (mut expr, ty) in params.into_iter().zip(&desc.param_types) {
-        transform_ast::transform_expr(scx, &mut expr)?;
+        transform_ast::transform(scx, &mut expr)?;
 
         let ecx = &ExprContext {
             qcx: &qcx,
@@ -979,7 +982,7 @@ pub fn plan_index_exprs<'a>(
     };
     let mut out = vec![];
     for mut expr in exprs {
-        transform_ast::transform_expr(scx, &mut expr)?;
+        transform_ast::transform(scx, &mut expr)?;
         let expr = plan_expr_or_col_index(ecx, &expr)?;
         let mut expr = expr.lower_uncorrelated()?;
         expr.reduce(&on_desc.typ().column_types);
@@ -1136,7 +1139,7 @@ pub fn plan_ctes(
     let mut result = Vec::new();
     // Retain the old descriptions of CTE bindings so that we can restore them
     // after we're done planning this SELECT.
-    let mut shadowed_descs = HashMap::new();
+    let mut shadowed_descs = BTreeMap::new();
 
     // A reused identifier indicates a reused name.
     if let Some(ident) = q.ctes.bound_identifiers().duplicates().next() {
@@ -1708,7 +1711,7 @@ fn plan_view_select(
         }
         visitor.into_result()?
     };
-    let mut table_func_names: HashMap<String, Ident> = HashMap::new();
+    let mut table_func_names: BTreeMap<String, Ident> = BTreeMap::new();
     if !table_funcs.is_empty() {
         let (expr, scope) = plan_scalar_table_funcs(
             qcx,
@@ -1755,7 +1758,7 @@ fn plan_view_select(
             allow_windows: false,
         };
         let mut group_key = vec![];
-        let mut group_exprs: HashMap<HirScalarExpr, ScopeItem> = HashMap::new();
+        let mut group_exprs: BTreeMap<HirScalarExpr, ScopeItem> = BTreeMap::new();
         let mut group_hir_exprs = vec![];
         let mut group_scope = Scope::empty();
         let mut select_all_mapping = BTreeMap::new();
@@ -2055,8 +2058,8 @@ fn plan_view_select(
 
 fn plan_scalar_table_funcs(
     qcx: &QueryContext,
-    table_funcs: HashMap<TableFunction<Aug>, String>,
-    table_func_names: &mut HashMap<String, Ident>,
+    table_funcs: BTreeMap<TableFunction<Aug>, String>,
+    table_func_names: &mut BTreeMap<String, Ident>,
     relation_expr: &HirRelationExpr,
     from_scope: &Scope,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
@@ -2697,7 +2700,7 @@ fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scop
 fn invent_column_name(
     ecx: &ExprContext,
     expr: &Expr<Aug>,
-    table_func_names: &HashMap<String, Ident>,
+    table_func_names: &BTreeMap<String, Ident>,
 ) -> Option<ColumnName> {
     // We follow PostgreSQL exactly here, which has some complicated rules
     // around "high" and "low" quality names. Low quality names override other
@@ -2714,7 +2717,7 @@ fn invent_column_name(
     fn invent(
         ecx: &ExprContext,
         expr: &Expr<Aug>,
-        table_func_names: &HashMap<String, Ident>,
+        table_func_names: &BTreeMap<String, Ident>,
     ) -> Option<(ColumnName, NameQuality)> {
         match expr {
             Expr::Identifier(names) => {
@@ -2807,13 +2810,14 @@ impl ExpandedSelectItem<'_> {
 fn expand_select_item<'a>(
     ecx: &ExprContext,
     s: &'a SelectItem<Aug>,
-    table_func_names: &HashMap<String, Ident>,
+    table_func_names: &BTreeMap<String, Ident>,
 ) -> Result<Vec<(ExpandedSelectItem<'a>, ColumnName)>, PlanError> {
     match s {
         SelectItem::Expr {
             expr: Expr::QualifiedWildcard(table_name),
             alias: _,
         } => {
+            *ecx.qcx.scx.ambiguous_columns.borrow_mut() = true;
             let table_name =
                 normalize::unresolved_object_name(UnresolvedObjectName(table_name.clone()))?;
             let out: Vec<_> = ecx
@@ -2836,6 +2840,7 @@ fn expand_select_item<'a>(
             expr: Expr::WildcardAccess(sql_expr),
             alias: _,
         } => {
+            *ecx.qcx.scx.ambiguous_columns.borrow_mut() = true;
             // A bit silly to have to plan the expression here just to get its
             // type, since we throw away the planned expression, but fixing this
             // requires a separate semantic analysis phase. Luckily this is an
@@ -2846,7 +2851,7 @@ fn expand_select_item<'a>(
                 ScalarType::Record { fields, .. } => fields,
                 ty => sql_bail!("type {} is not composite", ecx.humanize_scalar_type(&ty)),
             };
-            let mut skip_cols: HashSet<ColumnName> = HashSet::new();
+            let mut skip_cols: BTreeSet<ColumnName> = BTreeSet::new();
             if let Expr::Identifier(ident) = sql_expr.as_ref() {
                 if let [name] = ident.as_slice() {
                     if let Ok(items) = ecx.scope.items_from_table(
@@ -2884,6 +2889,7 @@ fn expand_select_item<'a>(
             Ok(items)
         }
         SelectItem::Wildcard => {
+            *ecx.qcx.scx.ambiguous_columns.borrow_mut() = true;
             let items: Vec<_> = ecx
                 .scope
                 .items
@@ -2969,8 +2975,12 @@ fn plan_join(
             kind,
         )?,
         JoinConstraint::Natural => {
+            // We shouldn't need to set ambiguous_columns on both the right and left qcx since they
+            // have the same scx. However, it doesn't hurt to be safe.
+            *left_qcx.scx.ambiguous_columns.borrow_mut() = true;
+            *right_qcx.scx.ambiguous_columns.borrow_mut() = true;
             let left_column_names = left_scope.column_names();
-            let right_column_names: HashSet<_> = right_scope.column_names().collect();
+            let right_column_names: BTreeSet<_> = right_scope.column_names().collect();
             let column_names: Vec<_> = left_column_names
                 .filter(|col| right_column_names.contains(col))
                 .cloned()
@@ -3006,7 +3016,7 @@ fn plan_using_constraint(
 
     // Cargo culting PG here; no discernable reason this must fail, but PG does
     // so we do, as well.
-    let mut unique_column_names = HashSet::new();
+    let mut unique_column_names = BTreeSet::new();
     for c in column_names {
         if !unique_column_names.insert(c) {
             return Err(PlanError::Unsupported {
@@ -4964,7 +4974,7 @@ struct AggregateTableFuncVisitor<'a> {
     scx: &'a StatementContext<'a>,
     aggs: Vec<Function<Aug>>,
     within_aggregate: bool,
-    tables: HashMap<TableFunction<Aug>, String>,
+    tables: BTreeMap<TableFunction<Aug>, String>,
     table_disallowed_context: Vec<&'static str>,
     in_select_item: bool,
     err: Option<PlanError>,
@@ -4976,7 +4986,7 @@ impl<'a> AggregateTableFuncVisitor<'a> {
             scx,
             aggs: Vec::new(),
             within_aggregate: false,
-            tables: HashMap::new(),
+            tables: BTreeMap::new(),
             table_disallowed_context: Vec::new(),
             in_select_item: false,
             err: None,
@@ -4985,13 +4995,13 @@ impl<'a> AggregateTableFuncVisitor<'a> {
 
     fn into_result(
         self,
-    ) -> Result<(Vec<Function<Aug>>, HashMap<TableFunction<Aug>, String>), PlanError> {
+    ) -> Result<(Vec<Function<Aug>>, BTreeMap<TableFunction<Aug>, String>), PlanError> {
         match self.err {
             Some(err) => Err(err),
             None => {
                 // Dedup while preserving the order. We don't care what the order is, but it
                 // has to be reproducible so that EXPLAIN PLAN tests work.
-                let mut seen = HashSet::new();
+                let mut seen = BTreeSet::new();
                 let aggs = self
                     .aggs
                     .into_iter()
@@ -5148,7 +5158,7 @@ pub struct QueryContext<'a> {
     /// The type of the outer relation expressions.
     pub outer_relation_types: Vec<RelationType>,
     /// CTEs for this query, mapping their assigned LocalIds to their definition.
-    pub ctes: HashMap<LocalId, CteDesc>,
+    pub ctes: BTreeMap<LocalId, CteDesc>,
     pub recursion_guard: RecursionGuard,
 }
 
@@ -5165,7 +5175,7 @@ impl<'a> QueryContext<'a> {
             lifetime,
             outer_scopes: vec![],
             outer_relation_types: vec![],
-            ctes: HashMap::new(),
+            ctes: BTreeMap::new(),
             recursion_guard: RecursionGuard::with_limit(1024), // chosen arbitrarily
         }
     }

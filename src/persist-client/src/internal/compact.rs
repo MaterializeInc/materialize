@@ -10,9 +10,7 @@
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
 use std::fmt::Debug;
-use std::iter::Peekable;
 use std::marker::PhantomData;
-use std::slice::Iter;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -34,12 +32,13 @@ use tracing::log::warn;
 use tracing::{debug, debug_span, trace, Instrument, Span};
 
 use crate::async_runtime::CpuHeavyRuntime;
-use crate::batch::BatchBuilder;
+use crate::batch::{BatchBuilder, BatchBuilderConfig};
+use crate::cfg::MB;
 use crate::fetch::{fetch_batch_part, EncodedPart};
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::state::{HollowBatch, HollowBatchPart};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
-use crate::{Metrics, PersistConfig, ShardId, WriterId, MB};
+use crate::{Metrics, PersistConfig, ShardId, WriterId};
 
 /// A request for compaction.
 ///
@@ -62,6 +61,23 @@ pub struct CompactReq<T> {
 pub struct CompactRes<T> {
     /// The compacted batch.
     pub output: HollowBatch<T>,
+}
+
+/// A snapshot of dynamic configs to make it easier to reason about an
+/// individual run of compaction.
+#[derive(Debug, Clone)]
+pub struct CompactConfig {
+    pub(crate) compaction_memory_bound_bytes: usize,
+    pub(crate) batch: BatchBuilderConfig,
+}
+
+impl From<&PersistConfig> for CompactConfig {
+    fn from(value: &PersistConfig) -> Self {
+        CompactConfig {
+            compaction_memory_bound_bytes: value.dynamic.compaction_memory_bound_bytes(),
+            batch: BatchBuilderConfig::from(value),
+        }
+    }
 }
 
 /// A service for performing physical and logical compaction.
@@ -112,7 +128,7 @@ where
                 compact_req_receiver.recv().await
             {
                 assert_eq!(req.shard_id, machine.shard_id());
-                let metrics = Arc::clone(&machine.metrics);
+                let metrics = Arc::clone(&machine.applier.metrics);
 
                 let permit = {
                     let inner = Arc::clone(&concurrency_limit);
@@ -140,15 +156,15 @@ where
                     .queued_seconds
                     .inc_by(enqueued.elapsed().as_secs_f64());
 
-                let cfg = machine.cfg.clone();
-                let blob = Arc::clone(&machine.state_versions.blob);
+                let cfg = machine.applier.cfg.clone();
+                let blob = Arc::clone(&machine.applier.state_versions.blob);
                 let cpu_heavy_runtime = Arc::clone(&cpu_heavy_runtime);
                 let writer_id = writer_id.clone();
 
                 let compact_span =
                     debug_span!(parent: None, "compact::apply", shard_id=%machine.shard_id());
                 compact_span.follows_from(&Span::current());
-                let _ = mz_ore::task::spawn(|| "PersistCompactionWorker", async move {
+                mz_ore::task::spawn(|| "PersistCompactionWorker", async move {
                     let res = Self::compact_and_apply(
                         cfg,
                         blob,
@@ -193,11 +209,11 @@ where
         // were just written, but it does result in non-trivial blob traffic
         // (especially in aggregate). This heuristic is something we'll need to
         // tune over time.
-        let should_compact = req.inputs.len() >= self.cfg.compaction_heuristic_min_inputs
+        let should_compact = req.inputs.len() >= self.cfg.dynamic.compaction_heuristic_min_inputs()
             || req.inputs.iter().map(|x| x.parts.len()).sum::<usize>()
-                >= self.cfg.compaction_heuristic_min_parts
+                >= self.cfg.dynamic.compaction_heuristic_min_parts()
             || req.inputs.iter().map(|x| x.len).sum::<usize>()
-                >= self.cfg.compaction_heuristic_min_updates;
+                >= self.cfg.dynamic.compaction_heuristic_min_updates();
         if !should_compact {
             self.metrics.compaction.skipped.inc();
             return None;
@@ -248,7 +264,7 @@ where
             .sum::<usize>();
         let timeout = Duration::max(
             // either our minimum timeout
-            cfg.compaction_minimum_timeout,
+            cfg.dynamic.compaction_minimum_timeout(),
             // or 1s per MB of input data
             Duration::from_secs(u64::cast_from(total_input_bytes / MB)),
         );
@@ -268,7 +284,7 @@ where
                 .spawn_named(
                     || "persist::compact::consolidate",
                     Self::compact(
-                        cfg.clone(),
+                        CompactConfig::from(&cfg),
                         Arc::clone(&blob),
                         Arc::clone(&metrics),
                         Arc::clone(&cpu_heavy_runtime),
@@ -302,13 +318,13 @@ where
                     ApplyMergeResult::AppliedExact => {
                         metrics.compaction.applied.inc();
                         metrics.compaction.applied_exact_match.inc();
-                        machine.shard_metrics.compaction_applied.inc();
+                        machine.applier.shard_metrics.compaction_applied.inc();
                         Ok(apply_merge_result)
                     }
                     ApplyMergeResult::AppliedSubset => {
                         metrics.compaction.applied.inc();
                         metrics.compaction.applied_subset_match.inc();
-                        machine.shard_metrics.compaction_applied.inc();
+                        machine.applier.shard_metrics.compaction_applied.inc();
                         Ok(apply_merge_result)
                     }
                     ApplyMergeResult::NotAppliedNoMatch
@@ -345,7 +361,7 @@ where
     ///     2. fetching parts from runs
     ///     3. additional in-flight requests to Blob
     ///
-    /// 1. In-progress work is bounded by 2 * [crate::PersistConfig::blob_target_size]. This
+    /// 1. In-progress work is bounded by 2 * [BatchBuilderConfig::blob_target_size]. This
     ///    usage is met at two mutually exclusive moments:
     ///   * When reading in a part, we hold the columnar format in memory while writing its
     ///     contents into a heap.
@@ -355,14 +371,14 @@ where
     /// 2. When compacting runs, only 1 part from each one is held in memory at a time.
     ///    Compaction will determine an appropriate number of runs to compact together
     ///    given the memory bound and accounting for the reservation in (1). A minimum
-    ///    of 2 * [crate::PersistConfig::blob_target_size] of memory is expected, to be
+    ///    of 2 * [BatchBuilderConfig::blob_target_size] of memory is expected, to be
     ///    able to at least have the capacity to compact two runs together at a time,
     ///    and more runs will be compacted together if more memory is available.
     ///
     /// 3. If there is excess memory after accounting for (1) and (2), we increase the
     ///    number of outstanding parts we can keep in-flight to Blob.
     pub async fn compact(
-        cfg: PersistConfig,
+        cfg: CompactConfig,
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
@@ -371,9 +387,9 @@ where
     ) -> Result<CompactRes<T>, anyhow::Error> {
         let () = Self::validate_req(&req)?;
         // compaction needs memory enough for at least 2 runs and 2 in-progress parts
-        assert!(cfg.compaction_memory_bound_bytes >= 4 * cfg.blob_target_size);
+        assert!(cfg.compaction_memory_bound_bytes >= 4 * cfg.batch.blob_target_size);
         // reserve space for the in-progress part to be held in-mem representation and columnar
-        let in_progress_part_reserved_memory_bytes = 2 * cfg.blob_target_size;
+        let in_progress_part_reserved_memory_bytes = 2 * cfg.batch.blob_target_size;
         // then remaining memory will go towards pulling down as many runs as we can
         let run_reserved_memory_bytes =
             cfg.compaction_memory_bound_bytes - in_progress_part_reserved_memory_bytes;
@@ -396,11 +412,11 @@ where
             // flight, but if we have excess, we can use it to increase our write parallelism
             let extra_outstanding_parts = (run_reserved_memory_bytes
                 .saturating_sub(run_chunk_max_memory_usage))
-                / cfg.blob_target_size;
-            let mut compact_cfg = cfg.clone();
-            compact_cfg.batch_builder_max_outstanding_parts = 1 + extra_outstanding_parts;
+                / cfg.batch.blob_target_size;
+            let mut run_cfg = cfg.clone();
+            run_cfg.batch.batch_builder_max_outstanding_parts = 1 + extra_outstanding_parts;
             let batch = Self::compact_runs(
-                &compact_cfg,
+                &run_cfg,
                 &req.shard_id,
                 &req.desc,
                 runs,
@@ -461,7 +477,7 @@ where
     /// determine the order in which runs are selected.
     fn chunk_runs<'a>(
         req: &'a CompactReq<T>,
-        cfg: &PersistConfig,
+        cfg: &CompactConfig,
         metrics: &Metrics,
         run_reserved_memory_bytes: usize,
     ) -> Vec<(Vec<(&'a Description<T>, &'a [HollowBatchPart])>, usize)> {
@@ -477,7 +493,7 @@ where
                 .iter()
                 .map(|x| x.encoded_size_bytes)
                 .max()
-                .unwrap_or(cfg.blob_target_size);
+                .unwrap_or(cfg.batch.blob_target_size);
             current_chunk.push(*run);
             current_chunk_max_memory_usage += run_greatest_part_size;
 
@@ -487,7 +503,7 @@ where
                     .iter()
                     .map(|x| x.encoded_size_bytes)
                     .max()
-                    .unwrap_or(cfg.blob_target_size);
+                    .unwrap_or(cfg.batch.blob_target_size);
 
                 // if we can fit the next run in our chunk without going over our reserved memory, we should do so
                 if current_chunk_max_memory_usage + next_run_greatest_part_size
@@ -539,19 +555,19 @@ where
     fn order_runs(req: &CompactReq<T>) -> Vec<(&Description<T>, &[HollowBatchPart])> {
         let total_number_of_runs = req.inputs.iter().map(|x| x.runs.len() + 1).sum::<usize>();
 
-        let mut batch_runs = Vec::with_capacity(req.inputs.len());
-        for batch in &req.inputs {
-            batch_runs.push((&batch.desc, batch.runs()));
-        }
+        let mut batch_runs: VecDeque<_> = req
+            .inputs
+            .iter()
+            .map(|batch| (&batch.desc, batch.runs()))
+            .collect();
 
         let mut ordered_runs = Vec::with_capacity(total_number_of_runs);
-        while batch_runs.len() > 0 {
-            for (desc, runs) in batch_runs.iter_mut() {
-                if let Some(run) = runs.next() {
-                    ordered_runs.push((*desc, run));
-                }
+
+        while let Some((desc, mut runs)) = batch_runs.pop_front() {
+            if let Some(run) = runs.next() {
+                ordered_runs.push((desc, run));
+                batch_runs.push_back((desc, runs));
             }
-            batch_runs.retain_mut(|(_, iter)| iter.inner.peek().is_some());
         }
 
         ordered_runs
@@ -562,7 +578,7 @@ where
     /// Maximum possible memory usage is `(# runs + 2) * [crate::PersistConfig::blob_target_size]`
     async fn compact_runs<'a>(
         // note: 'a cannot be elided due to https://github.com/rust-lang/rust/issues/63033
-        cfg: &'a PersistConfig,
+        cfg: &'a CompactConfig,
         shard_id: &'a ShardId,
         desc: &'a Description<T>,
         runs: Vec<(&'a Description<T>, &'a [HollowBatchPart])>,
@@ -578,7 +594,7 @@ where
         // between the two.
         //
         // For now, invent some some extra budget out of thin air for prefetch.
-        let prefetch_budget_bytes = 2 * cfg.blob_target_size;
+        let prefetch_budget_bytes = 2 * cfg.batch.blob_target_size;
 
         let mut sorted_updates = BinaryHeap::new();
 
@@ -599,7 +615,7 @@ where
         let mut timings = Timings::default();
 
         let mut batch = BatchBuilder::new(
-            cfg.clone(),
+            cfg.batch.clone(),
             Arc::clone(&metrics),
             metrics.compaction.batch.clone(),
             desc.lower().clone(),
@@ -751,49 +767,6 @@ impl Timings {
     }
 }
 
-impl<T> HollowBatch<T> {
-    pub(crate) fn runs(&self) -> HollowBatchRunIter<T> {
-        HollowBatchRunIter {
-            batch: self,
-            inner: self.runs.iter().peekable(),
-            emitted_implicit: false,
-        }
-    }
-}
-
-pub(crate) struct HollowBatchRunIter<'a, T> {
-    batch: &'a HollowBatch<T>,
-    inner: Peekable<Iter<'a, usize>>,
-    emitted_implicit: bool,
-}
-
-impl<'a, T> Iterator for HollowBatchRunIter<'a, T> {
-    type Item = &'a [HollowBatchPart];
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.batch.parts.is_empty() {
-            return None;
-        }
-
-        if !self.emitted_implicit {
-            self.emitted_implicit = true;
-            return Some(match self.inner.peek() {
-                None => &self.batch.parts,
-                Some(run_end) => &self.batch.parts[0..**run_end],
-            });
-        }
-
-        if let Some(run_start) = self.inner.next() {
-            return Some(match self.inner.peek() {
-                Some(run_end) => &self.batch.parts[*run_start..**run_end],
-                None => &self.batch.parts[*run_start..],
-            });
-        }
-
-        None
-    }
-}
-
 #[derive(Debug)]
 enum CompactionPart<'a, T> {
     Queued(&'a HollowBatchPart),
@@ -932,8 +905,8 @@ mod tests {
             (("1".to_owned(), "one".to_owned()), 1, 1),
         ];
 
-        let mut cache = new_test_client_cache();
-        cache.cfg.blob_target_size = 100;
+        let cache = new_test_client_cache();
+        cache.cfg.dynamic.set_blob_target_size(100);
         let (mut write, _) = cache
             .open(PersistLocation {
                 blob_uri: "mem://".to_owned(),
@@ -962,7 +935,7 @@ mod tests {
             inputs: vec![b0, b1],
         };
         let res = Compactor::<String, (), u64, i64>::compact(
-            write.cfg.clone(),
+            CompactConfig::from(&write.cfg),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
             Arc::new(CpuHeavyRuntime::new()),

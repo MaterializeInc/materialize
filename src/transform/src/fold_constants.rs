@@ -57,7 +57,7 @@ impl crate::Transform for FoldConstants {
             type_stack.push(relation_type);
             Ok(())
         });
-        mz_repr::explain_new::trace_plan(&*relation);
+        mz_repr::explain::trace_plan(&*relation);
         result
     }
 }

@@ -9,7 +9,7 @@
 
 //! Implementations of Maelstrom services as persist external durability
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -52,14 +52,14 @@ pub struct MaelstromConsensus {
     // It also secondarily means that more stale expectations make it to the
     // Maelstrom CaS call (with the `head` alternative we'd discover some then),
     // but this is mostly a side benefit.
-    cache: Mutex<HashMap<(String, SeqNo), Vec<u8>>>,
+    cache: Mutex<BTreeMap<(String, SeqNo), Vec<u8>>>,
 }
 
 impl MaelstromConsensus {
     pub fn new(handle: Handle) -> Arc<dyn Consensus + Send + Sync> {
         Arc::new(MaelstromConsensus {
             handle,
-            cache: Mutex::new(HashMap::new()),
+            cache: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -238,14 +238,14 @@ impl Blob for MaelstromBlob {
 #[derive(Debug)]
 pub struct CachingBlob {
     blob: Arc<dyn Blob + Send + Sync>,
-    cache: Mutex<HashMap<String, Vec<u8>>>,
+    cache: Mutex<BTreeMap<String, Vec<u8>>>,
 }
 
 impl CachingBlob {
     pub fn new(blob: Arc<dyn Blob + Send + Sync>) -> Arc<dyn Blob + Send + Sync> {
         Arc::new(CachingBlob {
             blob,
-            cache: Mutex::new(HashMap::new()),
+            cache: Mutex::new(BTreeMap::new()),
         })
     }
 }

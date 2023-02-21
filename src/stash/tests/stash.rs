@@ -71,6 +71,7 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
@@ -89,6 +90,10 @@ use mz_ore::{assert_contains, metrics::MetricsRegistry};
 use mz_stash::{
     Stash, StashCollection, StashError, StashFactory, TableTransaction, Timestamp, TypedCollection,
 };
+
+pub static C1: TypedCollection<i64, i64> = TypedCollection::new("c1");
+pub static C2: TypedCollection<i64, i64> = TypedCollection::new("c2");
+pub static C_SAVEPOINT: TypedCollection<i64, i64> = TypedCollection::new("c_savepoint");
 
 #[tokio::test]
 async fn test_stash_postgres() {
@@ -152,7 +157,7 @@ async fn test_stash_postgres() {
         let col_rw = stash_rw.collection::<i64, i64>("c1").await.unwrap();
         let mut batch = col_rw.make_batch(&mut stash_rw).await.unwrap();
         col_rw.append_to_batch(&mut batch, &1, &2, 1);
-        stash_rw.append(&[batch]).await.unwrap();
+        stash_rw.append(vec![batch]).await.unwrap();
 
         // Now make a readonly stash. We should fail to create new collections,
         // but be able to read existing collections.
@@ -165,8 +170,10 @@ async fn test_stash_postgres() {
             res.unwrap_err().to_string(),
             "cannot execute INSERT in a read-only transaction"
         );
-        let col_ro = stash_ro.collection::<i64, i64>("c1").await.unwrap();
-        assert_eq!(stash_ro.peek(col_ro).await.unwrap(), vec![(1, 2, 1)],);
+        assert_eq!(
+            C1.peek_one(&mut stash_ro).await.unwrap(),
+            BTreeMap::from([(1, 2)])
+        );
 
         // The previous stash should still be the leader.
         assert!(stash_rw.confirm_leadership().await.is_ok());
@@ -179,7 +186,6 @@ async fn test_stash_postgres() {
             .await
             .unwrap();
         // Data still present from previous test.
-        let c1_rw = stash_rw.collection::<i64, i64>("c1").await.unwrap();
 
         // Now make a savepoint stash. We should be allowed to create anything
         // we want, but it shouldn't be viewable to other stashes.
@@ -190,13 +196,16 @@ async fn test_stash_postgres() {
         let c1_sp = stash_rw.collection::<i64, i64>("c1").await.unwrap();
         let mut batch = c1_sp.make_batch(&mut stash_sp).await.unwrap();
         c1_sp.append_to_batch(&mut batch, &5, &6, 1);
-        stash_sp.append(&[batch]).await.unwrap();
+        stash_sp.append(vec![batch]).await.unwrap();
         assert_eq!(
-            stash_sp.peek(c1_sp).await.unwrap(),
-            vec![(1, 2, 1), (5, 6, 1)]
+            C1.peek_one(&mut stash_sp).await.unwrap(),
+            BTreeMap::from([(1, 2), (5, 6)]),
         );
         // RW collection can't see the new row.
-        assert_eq!(stash_rw.peek(c1_rw).await.unwrap(), vec![(1, 2, 1)]);
+        assert_eq!(
+            C1.peek_one(&mut stash_rw).await.unwrap(),
+            BTreeMap::from([(1, 2)])
+        );
 
         // SP stash can create a new collection, append to it, peek it.
         let c_savepoint = stash_sp
@@ -205,8 +214,11 @@ async fn test_stash_postgres() {
             .unwrap();
         let mut batch = c_savepoint.make_batch(&mut stash_sp).await.unwrap();
         c_savepoint.append_to_batch(&mut batch, &3, &4, 1);
-        stash_sp.append(&[batch]).await.unwrap();
-        assert_eq!(stash_sp.peek(c_savepoint).await.unwrap(), vec![(3, 4, 1)]);
+        stash_sp.append(vec![batch]).await.unwrap();
+        assert_eq!(
+            C_SAVEPOINT.peek_one(&mut stash_sp).await.unwrap(),
+            BTreeMap::from([(3, 4)])
+        );
         // But the RW collection can't see it.
         assert_eq!(
             stash_rw.collections().await.unwrap(),
@@ -218,7 +230,10 @@ async fn test_stash_postgres() {
         // The previous stash should still be the leader.
         assert!(stash_rw.confirm_leadership().await.is_ok());
         // Verify c1 didn't change.
-        assert_eq!(stash_rw.peek(c1_rw).await.unwrap(), vec![(1, 2, 1)]);
+        assert_eq!(
+            C1.peek_one(&mut stash_rw).await.unwrap(),
+            BTreeMap::from([(1, 2)])
+        );
         stash_rw.verify().await.unwrap();
     }
 }
@@ -240,7 +255,7 @@ where
         .to_string()
         .contains("since {-9223372036854775808} is not less than upper {-9223372036854775808}"));
     TYPED
-        .upsert_key(&mut stash, &"k1".to_string(), |_| {
+        .upsert_key(&mut stash, "k1".to_string(), |_| {
             Ok::<_, Infallible>("v1".to_string())
         })
         .await
@@ -251,7 +266,7 @@ where
         BTreeMap::from([("k1".to_string(), "v1".to_string())])
     );
     TYPED
-        .upsert_key(&mut stash, &"k1".to_string(), |_| {
+        .upsert_key(&mut stash, "k1".to_string(), |_| {
             Ok::<_, Infallible>("v2".to_string())
         })
         .await
@@ -263,14 +278,14 @@ where
     );
     assert_eq!(
         TYPED
-            .peek_key_one(&mut stash, &"k1".to_string())
+            .peek_key_one(&mut stash, "k1".to_string())
             .await
             .unwrap(),
         Some("v2".to_string()),
     );
     assert_eq!(
         TYPED
-            .peek_key_one(&mut stash, &"k2".to_string())
+            .peek_key_one(&mut stash, "k2".to_string())
             .await
             .unwrap(),
         None
@@ -296,129 +311,163 @@ where
     // Test append across collections.
     let orders = stash.collection::<String, String>("orders").await.unwrap();
     let other = stash.collection::<String, String>("other").await.unwrap();
-    // Seal so we can invalidate the upper below.
+
     stash
-        .seal(other, Antichain::from_elem(1).borrow())
+        .with_transaction(move |tx| {
+            Box::pin(async move {
+                // Seal so we can invalidate the upper below.
+                tx.seal(other.id, Antichain::from_elem(1), None)
+                    .await
+                    .unwrap();
+                let mut orders_batch = orders.make_batch_tx(&tx).await.unwrap();
+                orders.append_to_batch(&mut orders_batch, &"k1".to_string(), &"v1".to_string(), 1);
+                let mut other_batch = other.make_batch_tx(&tx).await.unwrap();
+                other.append_to_batch(&mut other_batch, &"k2".to_string(), &"v2".to_string(), 1);
+
+                // Invalidate one upper and ensure append doesn't commit partial batches.
+                let other_upper = other_batch.upper;
+                other_batch.upper = Antichain::from_elem(Timestamp::MIN);
+                assert_contains!(
+                    tx.append(vec![orders_batch.clone(), other_batch.clone()])
+                        .await
+                        .unwrap_err()
+                        .to_string(),
+                    "{-9223372036854775808}",
+                );
+                // Test batches in the other direction too.
+                assert_contains!(
+                    tx.append(vec![other_batch.clone(), orders_batch.clone()])
+                        .await
+                        .unwrap_err()
+                        .to_string(),
+                    "{-9223372036854775808}",
+                );
+
+                // Fix the upper, append should work now.
+                other_batch.upper = other_upper;
+                tx.append(vec![other_batch, orders_batch]).await.unwrap();
+                assert_eq!(
+                    tx.iter(orders).await.unwrap(),
+                    &[(("k1".into(), "v1".into()), -9223372036854775808, 1),]
+                );
+                assert_eq!(
+                    tx.iter(other).await.unwrap(),
+                    &[(("k2".into(), "v2".into()), 1, 1),]
+                );
+                assert_eq!(
+                    tx.peek_one(orders).await.unwrap(),
+                    BTreeMap::from([("k1".to_string(), "v1".to_string())])
+                );
+                assert_eq!(
+                    tx.peek_one(other).await.unwrap(),
+                    BTreeMap::from([("k2".to_string(), "v2".to_string())])
+                );
+
+                // Verify the upper got bumped.
+                assert_eq!(
+                    tx.since(orders.id).await.unwrap().into_option().unwrap(),
+                    tx.upper(orders.id).await.unwrap().into_option().unwrap() - 1
+                );
+                // Multiple empty batches should bump the upper and the since because append
+                // must also compact and consolidate.
+                for _ in 0..5 {
+                    let orders_batch = orders.make_batch_tx(&tx).await.unwrap();
+                    tx.append(vec![orders_batch]).await.unwrap();
+                    assert_eq!(
+                        tx.since(orders.id).await.unwrap().into_option().unwrap(),
+                        tx.upper(orders.id).await.unwrap().into_option().unwrap() - 1
+                    );
+                }
+                Ok(())
+            })
+        })
         .await
         .unwrap();
-    let mut orders_batch = orders.make_batch(&mut stash).await.unwrap();
-    orders.append_to_batch(&mut orders_batch, &"k1".to_string(), &"v1".to_string(), 1);
-    let mut other_batch = other.make_batch(&mut stash).await.unwrap();
-    other.append_to_batch(&mut other_batch, &"k2".to_string(), &"v2".to_string(), 1);
-
-    // Invalidate one upper and ensure append doesn't commit partial batches.
-    let other_upper = other_batch.upper;
-    other_batch.upper = Antichain::from_elem(Timestamp::MIN);
-    assert_eq!(
-          stash
-            .append(&[orders_batch.clone(), other_batch.clone()]).await
-            .unwrap_err()
-            .to_string(),
-        "stash error: seal request {-9223372036854775808} is less than the current upper frontier {1}",
-    );
-    // Test batches in the other direction too.
-    assert_eq!(
-        stash
-            .append(&[other_batch.clone(),orders_batch.clone() ]).await
-            .unwrap_err()
-            .to_string(),
-        "stash error: seal request {-9223372036854775808} is less than the current upper frontier {1}",
-    );
-
-    // Fix the upper, append should work now.
-    other_batch.upper = other_upper;
-    stash.append(&[other_batch, orders_batch]).await.unwrap();
-    assert_eq!(
-        stash.iter(orders).await.unwrap(),
-        &[(("k1".into(), "v1".into()), -9223372036854775808, 1),]
-    );
-    assert_eq!(
-        stash.iter(other).await.unwrap(),
-        &[(("k2".into(), "v2".into()), 1, 1),]
-    );
-    assert_eq!(
-        stash.peek_one(orders).await.unwrap(),
-        BTreeMap::from([("k1".to_string(), "v1".to_string())])
-    );
-    assert_eq!(
-        stash.peek_one(other).await.unwrap(),
-        BTreeMap::from([("k2".to_string(), "v2".to_string())])
-    );
-
-    // Verify the upper got bumped.
-    assert_eq!(
-        stash.since(orders).await.unwrap().into_option().unwrap(),
-        stash.upper(orders).await.unwrap().into_option().unwrap() - 1
-    );
-    // Multiple empty batches should bump the upper and the since because append
-    // must also compact and consolidate.
-    for _ in 0..5 {
-        let orders_batch = orders.make_batch(&mut stash).await.unwrap();
-        stash.append(&[orders_batch]).await.unwrap();
-        assert_eq!(
-            stash.since(orders).await.unwrap().into_option().unwrap(),
-            stash.upper(orders).await.unwrap().into_option().unwrap() - 1
-        );
-    }
-
-    // Don't attempt to verify persisted data for stashes that do not advertise it.
-    if stash.epoch().is_none() {
-        return stash;
-    }
 
     // Remake the stash and ensure data remains.
     let mut stash = f().await;
-    assert_eq!(
-        stash.peek_one(orders).await.unwrap(),
-        BTreeMap::from([("k1".to_string(), "v1".to_string())])
-    );
-    assert_eq!(
-        stash.peek_one(other).await.unwrap(),
-        BTreeMap::from([("k2".to_string(), "v2".to_string())])
-    );
+    stash
+        .with_transaction(move |tx| {
+            Box::pin(async move {
+                assert_eq!(
+                    tx.peek_one(orders).await.unwrap(),
+                    BTreeMap::from([("k1".to_string(), "v1".to_string())])
+                );
+                assert_eq!(
+                    tx.peek_one(other).await.unwrap(),
+                    BTreeMap::from([("k2".to_string(), "v2".to_string())])
+                );
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+
     // Remake again, mutate before reading, then read.
     let mut stash = f().await;
     stash
-        .update_many(orders, [(("k3".into(), "v3".into()), 1, 1)])
-        .await
-        .unwrap();
-    stash
-        .seal(orders, Antichain::from_elem(2).borrow())
-        .await
-        .unwrap();
+        .with_transaction(move |tx| {
+            Box::pin(async move {
+                tx.update_savepoint(orders.id, &[(("k3".into(), "v3".into()), 1, 1)], None)
+                    .await
+                    .unwrap();
+                tx.seal(orders.id, Antichain::from_elem(2), None)
+                    .await
+                    .unwrap();
 
-    assert_eq!(
-        stash.peek_one(orders).await.unwrap(),
-        BTreeMap::from([
-            ("k1".to_string(), "v1".to_string()),
-            ("k3".to_string(), "v3".to_string())
-        ])
-    );
+                assert_eq!(
+                    tx.peek_one(orders).await.unwrap(),
+                    BTreeMap::from([
+                        ("k1".to_string(), "v1".to_string()),
+                        ("k3".to_string(), "v3".to_string())
+                    ])
+                );
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
 
     // Remake the stash, mutate, then read.
     let mut stash = f().await;
-    let mut orders_batch = orders.make_batch(&mut stash).await.unwrap();
-    orders.append_to_batch(&mut orders_batch, &"k4".to_string(), &"v4".to_string(), 1);
-    stash.append(&[orders_batch]).await.unwrap();
-    assert_eq!(
-        stash.peek_one(orders).await.unwrap(),
-        BTreeMap::from([
-            ("k1".to_string(), "v1".to_string()),
-            ("k3".to_string(), "v3".to_string()),
-            ("k4".to_string(), "v4".to_string())
-        ])
-    );
+    stash
+        .with_transaction(move |tx| {
+            Box::pin(async move {
+                let mut orders_batch = orders.make_batch_tx(&tx).await.unwrap();
+                orders.append_to_batch(&mut orders_batch, &"k4".to_string(), &"v4".to_string(), 1);
+                tx.append(vec![orders_batch]).await.unwrap();
+                assert_eq!(
+                    tx.peek_one(orders).await.unwrap(),
+                    BTreeMap::from([
+                        ("k1".to_string(), "v1".to_string()),
+                        ("k3".to_string(), "v3".to_string()),
+                        ("k4".to_string(), "v4".to_string())
+                    ])
+                );
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
 
     // Remake and read again.
     let mut stash = f().await;
-    assert_eq!(
-        stash.peek_one(orders).await.unwrap(),
-        BTreeMap::from([
-            ("k1".to_string(), "v1".to_string()),
-            ("k3".to_string(), "v3".to_string()),
-            ("k4".to_string(), "v4".to_string())
-        ])
-    );
+    stash
+        .with_transaction(move |tx| {
+            Box::pin(async move {
+                assert_eq!(
+                    tx.peek_one(orders).await.unwrap(),
+                    BTreeMap::from([
+                        ("k1".to_string(), "v1".to_string()),
+                        ("k3".to_string(), "v3".to_string()),
+                        ("k4".to_string(), "v4".to_string())
+                    ])
+                );
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
 
     test_stash_table(&mut stash).await;
 
@@ -431,211 +480,200 @@ where
     F: Fn() -> O,
 {
     let mut stash = f().await;
-    // Create an arrangement, write some data into it, then read it back.
-    let orders = stash.collection::<String, String>("orders").await.unwrap();
     stash
-        .update(orders, ("widgets".into(), "1".into()), 1, 1)
-        .await
-        .unwrap();
-    stash
-        .update(orders, ("wombats".into(), "2".into()), 1, 2)
-        .await
-        .unwrap();
-    // Move this before iter to better test the memory stash's iter_key.
-    assert_eq!(
-        stash
-            .iter_key(orders, &"widgets".to_string())
-            .await
-            .unwrap(),
-        &[("1".into(), 1, 1)]
-    );
-    assert_eq!(
-        stash.iter(orders).await.unwrap(),
-        &[
-            (("widgets".into(), "1".into()), 1, 1),
-            (("wombats".into(), "2".into()), 1, 2),
-        ]
-    );
-    assert_eq!(
-        stash
-            .iter_key(orders, &"wombats".to_string())
-            .await
-            .unwrap(),
-        &[("2".into(), 1, 2)]
-    );
+        .with_transaction(move |tx| {
+            Box::pin(async move {
+                // Create an arrangement, write some data into it, then read it back.
+                let orders = tx.collection::<String, String>("orders").await.unwrap();
+                tx.update_savepoint(orders.id, &[(("widgets".into(), "1".into()), 1, 1)], None)
+                    .await
+                    .unwrap();
+                tx.update_savepoint(orders.id, &[(("wombats".into(), "2".into()), 1, 2)], None)
+                    .await
+                    .unwrap();
+                // Move this before iter to better test the memory tx's iter_key.
+                assert_eq!(
+                    tx.iter_key(orders, &"widgets".to_string()).await.unwrap(),
+                    &[("1".into(), 1, 1)]
+                );
+                assert_eq!(
+                    tx.iter(orders).await.unwrap(),
+                    &[
+                        (("widgets".into(), "1".into()), 1, 1),
+                        (("wombats".into(), "2".into()), 1, 2),
+                    ]
+                );
+                assert_eq!(
+                    tx.iter_key(orders, &"wombats".to_string()).await.unwrap(),
+                    &[("2".into(), 1, 2)]
+                );
 
-    // Write to another arrangement and ensure the data stays separate.
-    let other = stash.collection::<String, String>("other").await.unwrap();
-    stash
-        .update(other, ("foo".into(), "bar".into()), 1, 1)
+                // Write to another arrangement and ensure the data stays separate.
+                let other = tx.collection::<String, String>("other").await.unwrap();
+                tx.update_savepoint(other.id, &[(("foo".into(), "bar".into()), 1, 1)], None)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    tx.iter(other).await.unwrap(),
+                    &[(("foo".into(), "bar".into()), 1, 1)],
+                );
+                assert_eq!(
+                    tx.iter(orders).await.unwrap(),
+                    &[
+                        (("widgets".into(), "1".into()), 1, 1),
+                        (("wombats".into(), "2".into()), 1, 2),
+                    ]
+                );
+
+                // Check that consolidation happens immediately...
+                tx.update_savepoint(orders.id, &[(("wombats".into(), "2".into()), 1, -1)], None)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    tx.iter(orders).await.unwrap(),
+                    &[
+                        (("widgets".into(), "1".into()), 1, 1),
+                        (("wombats".into(), "2".into()), 1, 1),
+                    ]
+                );
+
+                // ...even when it results in a entry's removal.
+                tx.update_savepoint(orders.id, &[(("wombats".into(), "2".into()), 1, -1)], None)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    tx.iter(orders).await.unwrap(),
+                    &[(("widgets".into(), "1".into()), 1, 1),]
+                );
+
+                // Check that logical compaction applies immediately.
+                tx.update_savepoint(
+                    orders.id,
+                    &[
+                        (("widgets".into(), "1".into()), 2, 1),
+                        (("widgets".into(), "1".into()), 3, 1),
+                        (("widgets".into(), "1".into()), 4, 1),
+                    ],
+                    None,
+                )
+                .await
+                .unwrap();
+                tx.seal(orders.id, Antichain::from_elem(3), None)
+                    .await
+                    .unwrap();
+                // Peek should not observe widgets from timestamps 3 or 4.
+                assert_eq!(tx.peek_timestamp(orders).await.unwrap(), 2);
+                assert_eq!(
+                    tx.peek(orders).await.unwrap(),
+                    vec![("widgets".into(), "1".into(), 2)]
+                );
+                assert_eq!(
+                    tx.peek_one(orders).await.unwrap_err().to_string(),
+                    "stash error: unexpected peek multiplicity"
+                );
+                tx.compact(orders.id, &Antichain::from_elem(3), None)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    tx.iter(orders).await.unwrap(),
+                    &[
+                        (("widgets".into(), "1".into()), 3, 3),
+                        (("widgets".into(), "1".into()), 4, 1),
+                    ]
+                );
+
+                // Check that physical compaction does not change the collection's contents.
+                tx.consolidate(orders.id).await.unwrap();
+                assert_eq!(
+                    tx.iter(orders).await.unwrap(),
+                    &[
+                        (("widgets".into(), "1".into()), 3, 3),
+                        (("widgets".into(), "1".into()), 4, 1),
+                    ]
+                );
+
+                // Test invalid seals, compactions, and updates.
+                assert_eq!(
+                    tx.seal(orders.id, Antichain::from_elem(2), None)
+                        .await
+                        .unwrap_err()
+                        .to_string(),
+                    "stash error: seal request {2} is less than the current upper frontier {3}",
+                );
+                assert_eq!(
+                    tx.compact(orders.id, &Antichain::from_elem(2), None)
+                        .await
+                        .unwrap_err()
+                        .to_string(),
+                    "stash error: compact request {2} is less than the current since frontier {3}",
+                );
+                assert_eq!(
+                    tx.compact(orders.id, &Antichain::from_elem(4), None)
+                        .await
+                        .unwrap_err()
+                        .to_string(),
+                    "stash error: compact request {4} is greater than the current upper frontier {3}",
+                );
+                assert_eq!(
+                    tx.update_savepoint(orders.id, &[(("wodgets".into(), "1".into()), 2, 1)], None)
+                        .await
+                        .unwrap_err()
+                        .to_string(),
+                    "stash error: entry time 2 is less than the current upper frontier {3}",
+                );
+
+                // Test advancing since and upper to the empty frontier.
+                tx.seal(orders.id, Antichain::new(), None).await.unwrap();
+                tx.compact(orders.id, &Antichain::new(), None)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    match tx.iter(orders).await {
+                        Ok(_) => panic!("call to iter unexpectedly succeeded"),
+                        Err(e) => e.to_string(),
+                    },
+                    "stash error: cannot iterate collection with empty since frontier",
+                );
+                assert_eq!(
+                    match tx.iter_key(orders, &"wombats".to_string()).await {
+                        Ok(_) => panic!("call to iter_key unexpectedly succeeded"),
+                        Err(e) => e.to_string(),
+                    },
+                    "stash error: cannot iterate collection with empty since frontier",
+                );
+                tx.consolidate(orders.id).await.unwrap();
+
+                // Double check that the other collection is still untouched.
+                assert_eq!(
+                    tx.iter(other).await.unwrap(),
+                    &[(("foo".into(), "bar".into()), 1, 1)],
+                );
+                assert_eq!(
+                    tx.since(other.id).await.unwrap(),
+                    Antichain::from_elem(Timestamp::MIN)
+                );
+                assert_eq!(
+                    tx.upper(other.id).await.unwrap(),
+                    Antichain::from_elem(Timestamp::MIN)
+                );
+
+                // Test peek_one.
+                tx.seal(other.id, Antichain::from_elem(2), None)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    tx.peek_one(other).await.unwrap(),
+                    BTreeMap::from([("foo".to_string(), "bar".to_string())])
+                );
+                assert_eq!(
+                    tx.peek_key_one(other, &"foo".to_string()).await.unwrap(),
+                    Some("bar".to_string())
+                );
+                Ok(())
+            })
+        })
         .await
         .unwrap();
-    assert_eq!(
-        stash.iter(other).await.unwrap(),
-        &[(("foo".into(), "bar".into()), 1, 1)],
-    );
-    assert_eq!(
-        stash.iter(orders).await.unwrap(),
-        &[
-            (("widgets".into(), "1".into()), 1, 1),
-            (("wombats".into(), "2".into()), 1, 2),
-        ]
-    );
-
-    // Check that consolidation happens immediately...
-    stash
-        .update(orders, ("wombats".into(), "2".into()), 1, -1)
-        .await
-        .unwrap();
-    assert_eq!(
-        stash.iter(orders).await.unwrap(),
-        &[
-            (("widgets".into(), "1".into()), 1, 1),
-            (("wombats".into(), "2".into()), 1, 1),
-        ]
-    );
-
-    // ...even when it results in a entry's removal.
-    stash
-        .update(orders, ("wombats".into(), "2".into()), 1, -1)
-        .await
-        .unwrap();
-    assert_eq!(
-        stash.iter(orders).await.unwrap(),
-        &[(("widgets".into(), "1".into()), 1, 1),]
-    );
-
-    // Check that logical compaction applies immediately.
-    stash
-        .update_many(
-            orders,
-            [
-                (("widgets".into(), "1".into()), 2, 1),
-                (("widgets".into(), "1".into()), 3, 1),
-                (("widgets".into(), "1".into()), 4, 1),
-            ],
-        )
-        .await
-        .unwrap();
-    stash
-        .seal(orders, Antichain::from_elem(3).borrow())
-        .await
-        .unwrap();
-    // Peek should not observe widgets from timestamps 3 or 4.
-    assert_eq!(stash.peek_timestamp(orders).await.unwrap(), 2);
-    assert_eq!(
-        stash.peek(orders).await.unwrap(),
-        vec![("widgets".into(), "1".into(), 2)]
-    );
-    assert_eq!(
-        stash.peek_one(orders).await.unwrap_err().to_string(),
-        "stash error: unexpected peek multiplicity"
-    );
-    stash
-        .compact(orders, Antichain::from_elem(3).borrow())
-        .await
-        .unwrap();
-    assert_eq!(
-        stash.iter(orders).await.unwrap(),
-        &[
-            (("widgets".into(), "1".into()), 3, 3),
-            (("widgets".into(), "1".into()), 4, 1),
-        ]
-    );
-
-    // Check that physical compaction does not change the collection's contents.
-    stash.consolidate(orders.id).await.unwrap();
-    assert_eq!(
-        stash.iter(orders).await.unwrap(),
-        &[
-            (("widgets".into(), "1".into()), 3, 3),
-            (("widgets".into(), "1".into()), 4, 1),
-        ]
-    );
-
-    // Test invalid seals, compactions, and updates.
-    assert_eq!(
-        stash
-            .seal(orders, Antichain::from_elem(2).borrow())
-            .await
-            .unwrap_err()
-            .to_string(),
-        "stash error: seal request {2} is less than the current upper frontier {3}",
-    );
-    assert_eq!(
-        stash
-            .compact(orders, Antichain::from_elem(2).borrow())
-            .await
-            .unwrap_err()
-            .to_string(),
-        "stash error: compact request {2} is less than the current since frontier {3}",
-    );
-    assert_eq!(
-        stash
-            .compact(orders, Antichain::from_elem(4).borrow())
-            .await
-            .unwrap_err()
-            .to_string(),
-        "stash error: compact request {4} is greater than the current upper frontier {3}",
-    );
-    assert_eq!(
-        stash
-            .update(orders, ("wodgets".into(), "1".into()), 2, 1)
-            .await
-            .unwrap_err()
-            .to_string(),
-        "stash error: entry time 2 is less than the current upper frontier {3}",
-    );
-
-    // Test advancing since and upper to the empty frontier.
-    stash.seal(orders, Antichain::new().borrow()).await.unwrap();
-    stash
-        .compact(orders, Antichain::new().borrow())
-        .await
-        .unwrap();
-    assert_eq!(
-        match stash.iter(orders).await {
-            Ok(_) => panic!("call to iter unexpectedly succeeded"),
-            Err(e) => e.to_string(),
-        },
-        "stash error: cannot iterate collection with empty since frontier",
-    );
-    assert_eq!(
-        match stash.iter_key(orders, &"wombats".to_string()).await {
-            Ok(_) => panic!("call to iter_key unexpectedly succeeded"),
-            Err(e) => e.to_string(),
-        },
-        "stash error: cannot iterate collection with empty since frontier",
-    );
-    stash.consolidate(orders.id).await.unwrap();
-
-    // Double check that the other collection is still untouched.
-    assert_eq!(
-        stash.iter(other).await.unwrap(),
-        &[(("foo".into(), "bar".into()), 1, 1)],
-    );
-    assert_eq!(
-        stash.since(other).await.unwrap(),
-        Antichain::from_elem(Timestamp::MIN)
-    );
-    assert_eq!(
-        stash.upper(other).await.unwrap(),
-        Antichain::from_elem(Timestamp::MIN)
-    );
-
-    // Test peek_one.
-    stash
-        .seal(other, Antichain::from_elem(2).borrow())
-        .await
-        .unwrap();
-    assert_eq!(
-        stash.peek_one(other).await.unwrap(),
-        BTreeMap::from([("foo".to_string(), "bar".to_string())])
-    );
-    assert_eq!(
-        stash.peek_key_one(other, &"foo".to_string()).await.unwrap(),
-        Some("bar".to_string())
-    );
 
     stash
 }
@@ -656,12 +694,12 @@ async fn test_stash_table(stash: &mut Stash) {
         for (k, v, diff) in pending {
             collection.append_to_batch(&mut batch, &k, &v, diff);
         }
-        stash.append(&[batch]).await.unwrap();
+        stash.append(vec![batch]).await.unwrap();
         Ok(())
     }
 
     TABLE
-        .upsert_key(stash, &1i64.to_le_bytes().to_vec(), |_| {
+        .upsert_key(stash, 1i64.to_le_bytes().to_vec(), |_| {
             Ok::<_, Infallible>("v1".to_string())
         })
         .await
@@ -811,7 +849,7 @@ async fn test_stash_table(stash: &mut Stash) {
         .insert(1i64.to_le_bytes().to_vec(), "v5".to_string())
         .unwrap();
     commit(stash, collection, table.pending()).await.unwrap();
-    let items = stash.peek(collection).await.unwrap();
+    let items = TABLE.peek(stash).await.unwrap();
     assert_eq!(
         items,
         vec![(1i64.to_le_bytes().to_vec(), "v5".to_string(), 1)]

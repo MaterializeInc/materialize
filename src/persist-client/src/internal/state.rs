@@ -10,8 +10,11 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
+use std::iter::Peekable;
 use std::marker::PhantomData;
 use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
+use std::ops::{Deref, DerefMut};
+use std::slice;
 use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
@@ -23,6 +26,7 @@ use mz_persist_types::{Codec, Codec64, Opaque};
 use semver::Version;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use tracing::info;
 use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
@@ -200,6 +204,65 @@ impl<T: Ord> Ord for HollowBatch<T> {
     }
 }
 
+impl<T> HollowBatch<T> {
+    pub(crate) fn runs(&self) -> HollowBatchRunIter<T> {
+        HollowBatchRunIter {
+            batch: self,
+            inner: self.runs.iter().peekable(),
+            emitted_implicit: false,
+        }
+    }
+}
+
+pub(crate) struct HollowBatchRunIter<'a, T> {
+    batch: &'a HollowBatch<T>,
+    inner: Peekable<slice::Iter<'a, usize>>,
+    emitted_implicit: bool,
+}
+
+impl<'a, T> Iterator for HollowBatchRunIter<'a, T> {
+    type Item = &'a [HollowBatchPart];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.batch.parts.is_empty() {
+            return None;
+        }
+
+        if !self.emitted_implicit {
+            self.emitted_implicit = true;
+            return Some(match self.inner.peek() {
+                None => &self.batch.parts,
+                Some(run_end) => &self.batch.parts[0..**run_end],
+            });
+        }
+
+        if let Some(run_start) = self.inner.next() {
+            return Some(match self.inner.peek() {
+                Some(run_end) => &self.batch.parts[*run_start..**run_end],
+                None => &self.batch.parts[*run_start..],
+            });
+        }
+
+        None
+    }
+}
+
+/// A pointer to a rollup stored externally.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct HollowRollup {
+    /// Pointer usable to retrieve the rollup.
+    pub key: PartialRollupKey,
+    /// The encoded size of this rollup, if known.
+    pub encoded_size_bytes: Option<usize>,
+}
+
+/// A pointer to a blob stored externally.
+#[derive(Debug)]
+pub enum HollowBlobRef<'a, T> {
+    Batch(&'a HollowBatch<T>),
+    Rollup(&'a HollowRollup),
+}
+
 /// A sentinel for a state transition that was a no-op.
 ///
 /// Critically, this also indicates that the no-op state transition was not
@@ -217,7 +280,7 @@ pub struct StateCollections<T> {
     pub(crate) last_gc_req: SeqNo,
 
     // - Invariant: There is a rollup with `seqno <= self.seqno_since`.
-    pub(crate) rollups: BTreeMap<SeqNo, PartialRollupKey>,
+    pub(crate) rollups: BTreeMap<SeqNo, HollowRollup>,
 
     pub(crate) leased_readers: BTreeMap<LeasedReaderId, LeasedReaderState<T>>,
     pub(crate) critical_readers: BTreeMap<CriticalReaderId, CriticalReaderState<T>>,
@@ -247,21 +310,21 @@ where
 {
     pub fn add_and_remove_rollups(
         &mut self,
-        add_rollup: (SeqNo, &PartialRollupKey),
+        add_rollup: (SeqNo, &HollowRollup),
         remove_rollups: &[(SeqNo, PartialRollupKey)],
     ) -> ControlFlow<NoOpStateTransition<bool>, bool> {
-        let (rollup_seqno, rollup_key) = add_rollup;
+        let (rollup_seqno, rollup) = add_rollup;
         let applied = match self.rollups.get(&rollup_seqno) {
-            Some(x) => x == rollup_key,
+            Some(x) => x.key == rollup.key,
             None => {
-                self.rollups.insert(rollup_seqno, rollup_key.to_owned());
+                self.rollups.insert(rollup_seqno, rollup.to_owned());
                 true
             }
         };
         for (seqno, key) in remove_rollups {
             let removed_key = self.rollups.remove(seqno);
             debug_assert!(
-                removed_key.as_ref().map_or(true, |x| x == key),
+                removed_key.as_ref().map_or(true, |x| &x.key == key),
                 "{} vs {:?}",
                 key,
                 removed_key
@@ -837,7 +900,9 @@ where
 }
 
 // TODO: Document invariants.
-pub struct State<K, V, T, D> {
+#[derive(Debug)]
+#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
+pub struct State<T> {
     pub(crate) applier_version: semver::Version,
     pub(crate) shard_id: ShardId,
 
@@ -849,6 +914,12 @@ pub struct State<K, V, T, D> {
     /// debugging.
     pub(crate) hostname: String,
     pub(crate) collections: StateCollections<T>,
+}
+
+/// A newtype wrapper of State that guarantees the K, V, and D codecs match the
+/// ones in durable storage.
+pub struct TypedState<K, V, T, D> {
+    pub(crate) state: State<T>,
 
     // According to the docs, PhantomData is to "mark things that act like they
     // own a T". State doesn't actually own K, V, or D, just the ability to
@@ -860,79 +931,129 @@ pub struct State<K, V, T, D> {
     pub(crate) _phantom: PhantomData<fn() -> (K, V, D)>,
 }
 
-impl<K, V, T: Clone, D> State<K, V, T, D> {
+impl<K, V, T: Clone, D> TypedState<K, V, T, D> {
     pub(crate) fn clone(&self, applier_version: Version, hostname: String) -> Self {
-        Self {
-            applier_version,
-            shard_id: self.shard_id.clone(),
-            seqno: self.seqno.clone(),
-            walltime_ms: self.walltime_ms,
-            hostname,
-            collections: self.collections.clone(),
-            _phantom: self._phantom.clone(),
+        TypedState {
+            state: State {
+                applier_version,
+                shard_id: self.shard_id.clone(),
+                seqno: self.seqno.clone(),
+                walltime_ms: self.walltime_ms,
+                hostname,
+                collections: self.collections.clone(),
+            },
+            _phantom: PhantomData,
         }
     }
 }
 
-impl<K, V, T: Debug, D> Debug for State<K, V, T, D> {
+impl<K, V, T: Debug, D> Debug for TypedState<K, V, T, D> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         // Deconstruct self so we get a compile failure if new fields
         // are added.
-        let State {
-            applier_version,
-            shard_id,
-            seqno,
-            walltime_ms,
-            hostname,
-            collections,
-            _phantom,
-        } = self;
-        f.debug_struct("State")
-            .field("applier_version", applier_version)
-            .field("shard_id", shard_id)
-            .field("seqno", seqno)
-            .field("walltime_ms", walltime_ms)
-            .field("hostname", hostname)
-            .field("collections", collections)
-            .field("_phantom", _phantom)
-            .finish()
+        let TypedState { state, _phantom } = self;
+        f.debug_struct("TypedState").field("state", state).finish()
     }
 }
 
 // Impl PartialEq regardless of the type params.
 #[cfg(any(test, debug_assertions))]
-impl<K, V, T: PartialEq, D> PartialEq for State<K, V, T, D> {
+impl<K, V, T: PartialEq, D> PartialEq for TypedState<K, V, T, D> {
     fn eq(&self, other: &Self) -> bool {
         // Deconstruct self and other so we get a compile failure if new fields
         // are added.
-        let State {
-            applier_version: self_applier_version,
-            shard_id: self_shard_id,
-            seqno: self_seqno,
-            walltime_ms: self_walltime_ms,
-            hostname: self_hostname,
-            collections: self_collections,
-            _phantom: _,
+        let TypedState {
+            state: self_state,
+            _phantom,
         } = self;
-        let State {
-            applier_version: other_applier_version,
-            shard_id: other_shard_id,
-            seqno: other_seqno,
-            walltime_ms: other_walltime_ms,
-            hostname: other_hostname,
-            collections: other_collections,
-            _phantom: _,
+        let TypedState {
+            state: other_state,
+            _phantom,
         } = other;
-        self_applier_version == other_applier_version
-            && self_shard_id == other_shard_id
-            && self_seqno == other_seqno
-            && self_walltime_ms == other_walltime_ms
-            && self_hostname == other_hostname
-            && self_collections == other_collections
+        self_state == other_state
     }
 }
 
-impl<K, V, T, D> State<K, V, T, D>
+impl<K, V, T, D> Deref for TypedState<K, V, T, D> {
+    type Target = State<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+impl<K, V, T, D> DerefMut for TypedState<K, V, T, D> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.state
+    }
+}
+
+impl<K, V, T, D> TypedState<K, V, T, D>
+where
+    K: Codec,
+    V: Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Codec64,
+{
+    pub fn new(
+        applier_version: Version,
+        shard_id: ShardId,
+        hostname: String,
+        walltime_ms: u64,
+    ) -> Self {
+        let state = State {
+            applier_version,
+            shard_id,
+            seqno: SeqNo::minimum(),
+            walltime_ms,
+            hostname,
+            collections: StateCollections {
+                last_gc_req: SeqNo::minimum(),
+                rollups: BTreeMap::new(),
+                leased_readers: BTreeMap::new(),
+                critical_readers: BTreeMap::new(),
+                writers: BTreeMap::new(),
+                trace: Trace::default(),
+            },
+        };
+        TypedState {
+            state,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn clone_apply<R, E, WorkFn>(
+        &self,
+        cfg: &PersistConfig,
+        work_fn: &mut WorkFn,
+    ) -> ControlFlow<E, (R, Self)>
+    where
+        WorkFn: FnMut(SeqNo, &PersistConfig, &mut StateCollections<T>) -> ControlFlow<E, R>,
+    {
+        let mut new_state = State {
+            applier_version: cfg.build_version.clone(),
+            shard_id: self.shard_id,
+            seqno: self.seqno.next(),
+            walltime_ms: (cfg.now)(),
+            hostname: cfg.hostname.clone(),
+            collections: self.collections.clone(),
+        };
+        // Make sure walltime_ms is strictly increasing, in case clocks are
+        // offset.
+        if new_state.walltime_ms <= self.walltime_ms {
+            new_state.walltime_ms = self.walltime_ms + 1;
+        }
+
+        let work_ret = work_fn(new_state.seqno, cfg, &mut new_state.collections)?;
+        let new_state = TypedState {
+            state: new_state,
+            _phantom: PhantomData,
+        };
+        Continue((work_ret, new_state))
+    }
+}
+
+impl<T> State<T>
 where
     T: Timestamp + Lattice + Codec64,
 {
@@ -960,11 +1081,25 @@ where
         self.collections.trace.num_updates()
     }
 
-    pub fn batch_size_metrics(&self) -> (usize, usize) {
-        self.collections.trace.batch_size_metrics()
+    pub fn size_metrics(&self) -> StateSizeMetrics {
+        let mut ret = StateSizeMetrics::default();
+        self.map_blobs(|x| match x {
+            HollowBlobRef::Batch(x) => {
+                let mut batch_size = 0;
+                for x in x.parts.iter() {
+                    batch_size += x.encoded_size_bytes;
+                }
+                ret.largest_batch_bytes = std::cmp::max(ret.largest_batch_bytes, batch_size);
+                ret.state_batches_bytes += batch_size;
+            }
+            HollowBlobRef::Rollup(x) => {
+                ret.state_rollups_bytes += x.encoded_size_bytes.unwrap_or_default()
+            }
+        });
+        ret
     }
 
-    pub fn latest_rollup(&self) -> (&SeqNo, &PartialRollupKey) {
+    pub fn latest_rollup(&self) -> (&SeqNo, &HollowRollup) {
         // We maintain the invariant that every version of state has at least
         // one rollup.
         self.collections
@@ -975,45 +1110,13 @@ where
             .expect("State should have at least one rollup if seqno > minimum")
     }
 
-    pub(super) fn seqno_since(&self) -> SeqNo {
+    pub(crate) fn seqno_since(&self) -> SeqNo {
         let mut seqno_since = self.seqno;
         for cap in self.collections.leased_readers.values() {
             seqno_since = std::cmp::min(seqno_since, cap.seqno);
         }
         // critical_readers don't hold a seqno capability.
         seqno_since
-    }
-}
-
-impl<K, V, T, D> State<K, V, T, D>
-where
-    K: Codec,
-    V: Codec,
-    T: Timestamp + Lattice + Codec64,
-    D: Codec64,
-{
-    pub fn new(
-        applier_version: Version,
-        shard_id: ShardId,
-        hostname: String,
-        walltime_ms: u64,
-    ) -> Self {
-        State {
-            applier_version,
-            shard_id,
-            seqno: SeqNo::minimum(),
-            walltime_ms,
-            hostname,
-            collections: StateCollections {
-                last_gc_req: SeqNo::minimum(),
-                rollups: BTreeMap::new(),
-                leased_readers: BTreeMap::new(),
-                critical_readers: BTreeMap::new(),
-                writers: BTreeMap::new(),
-                trace: Trace::default(),
-            },
-            _phantom: PhantomData,
-        }
     }
 
     // Returns whether the cmd proposing this state has been selected to perform
@@ -1073,31 +1176,28 @@ where
         usize::cast_from(self.seqno.0.saturating_sub(self.seqno_since().0))
     }
 
-    pub fn clone_apply<R, E, WorkFn>(
-        &self,
-        cfg: &PersistConfig,
-        work_fn: &mut WorkFn,
-    ) -> ControlFlow<E, (R, Self)>
-    where
-        WorkFn: FnMut(SeqNo, &PersistConfig, &mut StateCollections<T>) -> ControlFlow<E, R>,
-    {
-        let mut new_state = State {
-            applier_version: cfg.build_version.clone(),
-            shard_id: self.shard_id,
-            seqno: self.seqno.next(),
-            walltime_ms: (cfg.now)(),
-            hostname: cfg.hostname.clone(),
-            collections: self.collections.clone(),
-            _phantom: PhantomData,
-        };
-        // Make sure walltime_ms is strictly increasing, in case clocks are
-        // offset.
-        if new_state.walltime_ms <= self.walltime_ms {
-            new_state.walltime_ms = self.walltime_ms + 1;
-        }
-
-        let work_ret = work_fn(new_state.seqno, cfg, &mut new_state.collections)?;
-        Continue((work_ret, new_state))
+    /// Expire all readers and writers up to the given walltime_ms.
+    pub fn expire_at(&mut self, walltime_ms: EpochMillis) -> ExpiryMetrics {
+        let mut metrics = ExpiryMetrics::default();
+        let shard_id = self.shard_id();
+        self.collections.leased_readers.retain(|k, v| {
+            let retain = v.last_heartbeat_timestamp_ms + v.lease_duration_ms >= walltime_ms;
+            if !retain {
+                info!("Force expiring reader ({k}) of shard ({shard_id}) due to inactivity");
+                metrics.readers_expired += 1;
+            }
+            retain
+        });
+        // critical_readers don't need forced expiration. (In fact, that's the point!)
+        self.collections.writers.retain(|k, v| {
+            let retain = (v.last_heartbeat_timestamp_ms + v.lease_duration_ms) >= walltime_ms;
+            if !retain {
+                info!("Force expiring writer ({k}) of shard ({shard_id}) due to inactivity");
+                // We don't track writer expiration metrics yet.
+            }
+            retain
+        });
+        metrics
     }
 
     /// Returns the batches that contain updates up to (and including) the given `as_of`. The
@@ -1154,31 +1254,6 @@ where
         ret
     }
 
-    pub fn handles_needing_expiration(
-        &self,
-        now_ms: EpochMillis,
-    ) -> (Vec<LeasedReaderId>, Vec<WriterId>) {
-        let mut readers = Vec::new();
-        for (reader, state) in self.collections.leased_readers.iter() {
-            let time_since_last_heartbeat_ms =
-                now_ms.saturating_sub(state.last_heartbeat_timestamp_ms);
-            if time_since_last_heartbeat_ms > state.lease_duration_ms {
-                readers.push(reader.clone());
-            }
-        }
-        // critical_readers don't need forced expiration (in fact, that's the
-        // point)
-        let mut writers = Vec::new();
-        for (writer, state) in self.collections.writers.iter() {
-            let time_since_last_heartbeat_ms =
-                now_ms.saturating_sub(state.last_heartbeat_timestamp_ms);
-            if time_since_last_heartbeat_ms > state.lease_duration_ms {
-                writers.push(writer.clone());
-            }
-        }
-        (readers, writers)
-    }
-
     pub fn need_rollup(&self) -> Option<SeqNo> {
         let (latest_rollup_seqno, _) = self.latest_rollup();
         if self.seqno.0.saturating_sub(latest_rollup_seqno.0) > PersistConfig::NEED_ROLLUP_THRESHOLD
@@ -1188,6 +1263,27 @@ where
             None
         }
     }
+
+    pub(crate) fn map_blobs<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
+        self.collections
+            .trace
+            .map_batches(|x| f(HollowBlobRef::Batch(x)));
+        for x in self.collections.rollups.values() {
+            f(HollowBlobRef::Rollup(x));
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct StateSizeMetrics {
+    pub largest_batch_bytes: usize,
+    pub state_batches_bytes: usize,
+    pub state_rollups_bytes: usize,
+}
+
+#[derive(Default)]
+pub struct ExpiryMetrics {
+    pub(crate) readers_expired: usize,
 }
 
 /// Wrapper for Antichain that represents a Since
@@ -1238,7 +1334,7 @@ mod tests {
 
     #[test]
     fn downgrade_since() {
-        let mut state = State::<(), (), u64, i64>::new(
+        let mut state = TypedState::<(), (), u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
             "".to_owned(),
@@ -1389,7 +1485,7 @@ mod tests {
     #[test]
     fn compare_and_append() {
         mz_ore::test::init_logging();
-        let mut state = State::<String, String, u64, i64>::new(
+        let state = &mut TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
             "".to_owned(),
@@ -1477,7 +1573,7 @@ mod tests {
         mz_ore::test::init_logging();
         let now = SYSTEM_TIME.clone();
 
-        let mut state = State::<String, String, u64, i64>::new(
+        let mut state = TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
             "".to_owned(),
@@ -1625,7 +1721,7 @@ mod tests {
     fn next_listen_batch() {
         mz_ore::test::init_logging();
 
-        let mut state = State::<String, String, u64, i64>::new(
+        let mut state = TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
             "".to_owned(),
@@ -1691,7 +1787,7 @@ mod tests {
     fn expire_writer() {
         mz_ore::test::init_logging();
 
-        let mut state = State::<String, String, u64, i64>::new(
+        let mut state = TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
             "".to_owned(),
@@ -1769,7 +1865,7 @@ mod tests {
     #[test]
     fn maybe_gc() {
         mz_ore::test::init_logging();
-        let mut state = State::<String, String, u64, i64>::new(
+        let mut state = TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
             "".to_owned(),
