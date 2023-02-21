@@ -9,12 +9,11 @@
 
 mode cockroach
 
-query TIIO colnames
-SELECT proname, pronamespace, oid, proargdefaults
+query TIIOI
+SELECT proname, pronamespace, oid, proargdefaults, prorettype
 FROM pg_catalog.pg_proc
 WHERE proname = 'substring'
 ORDER BY oid
 ----
-proname    pronamespace  oid  proargdefaults
-substring  20003         936  NULL
-substring  20003         937  NULL
+substring  20003  936  NULL  25
+substring  20003  937  NULL  25
