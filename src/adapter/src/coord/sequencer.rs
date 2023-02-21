@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::{NonZeroI64, NonZeroUsize};
+use std::panic::AssertUnwindSafe;
 use std::time::Duration;
 
 use anyhow::anyhow;
@@ -73,6 +74,7 @@ use crate::command::{Command, ExecuteResponse, Response};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::dataflows::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
+use crate::coord::peek::FastPathPlan;
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
@@ -2781,8 +2783,30 @@ impl Coordinator {
             stage,
             format,
             config,
+            no_errors,
             explainee,
         } = plan;
+
+        /// Like [`mz_ore::panic::catch_unwind`], with an extra guard that must be true
+        /// in order to wrap the function call in a [`mz_ore::panic::catch_unwind`] call.
+        fn catch_unwind<R, E, F>(guard: bool, stage: &'static str, f: F) -> Result<R, AdapterError>
+        where
+            F: FnOnce() -> Result<R, E>,
+            E: Into<AdapterError>,
+        {
+            if guard {
+                let r: Result<Result<R, E>, _> = mz_ore::panic::catch_unwind(AssertUnwindSafe(f));
+                match r {
+                    Ok(result) => result.map_err(Into::into),
+                    Err(_) => {
+                        let msg = format!("panic at the `{}` optimization stage", stage);
+                        Err(AdapterError::Internal(msg))
+                    }
+                }
+            } else {
+                f().map_err(Into::into)
+            }
+        }
 
         assert_ne!(stage, ExplainStage::Timestamp);
 
@@ -2791,61 +2815,94 @@ impl Coordinator {
             stage => OptimizerTrace::find(stage.path()), // collect a trace entry only the selected stage
         };
 
-        let (used_indexes, fast_path_plan) =
-            optimizer_trace.collect_trace(|| -> Result<_, AdapterError> {
-                let _span = tracing::span!(Level::INFO, "optimize").entered();
+        let pipeline_result = optimizer_trace.collect_trace(|| -> Result<_, AdapterError> {
+            let _span = tracing::span!(Level::INFO, "optimize").entered();
 
-                tracing::span!(Level::INFO, "raw").in_scope(|| {
-                    trace_plan(&raw_plan);
-                });
+            let explainee_id = match explainee {
+                Explainee::Dataflow(id) => id,
+                Explainee::Query => GlobalId::Explain,
+            };
 
-                let explainee_id = match explainee {
-                    Explainee::Dataflow(id) => id,
-                    Explainee::Query => GlobalId::Explain,
-                };
+            // Execute the various stages of the optimization pipeline
+            // -------------------------------------------------------
 
-                // run optimization pipeline
-                let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {})?;
+            // Trace the pipeline input under `optimize/raw`.
+            tracing::span!(Level::INFO, "raw").in_scope(|| {
+                trace_plan(&raw_plan);
+            });
 
-                self.validate_timeline_context(decorrelated_plan.depends_on())?;
+            // Execute the `optimize/hir_to_mir` stage.
+            let decorrelated_plan = catch_unwind(no_errors, "hir_to_mir", || {
+                raw_plan.optimize_and_lower(&OptimizerConfig {})
+            })?;
 
-                let optimized_plan = tracing::span!(Level::INFO, "local").in_scope(|| {
+            self.validate_timeline_context(decorrelated_plan.depends_on())?;
+
+            // Execute the `optimize/local` stage.
+            let optimized_plan = catch_unwind(no_errors, "local", || {
+                tracing::span!(Level::INFO, "local").in_scope(|| -> Result<_, AdapterError> {
                     let optimized_plan = self.view_optimizer.optimize(decorrelated_plan);
                     if let Ok(ref optimized_plan) = optimized_plan {
                         trace_plan(optimized_plan);
                     }
-                    optimized_plan
-                })?;
-
-                let mut dataflow = DataflowDesc::new("explanation".to_string());
-                self.dataflow_builder(cluster).import_view_into_dataflow(
-                    &explainee_id,
-                    &optimized_plan,
-                    &mut dataflow,
-                )?;
-
-                mz_transform::optimize_dataflow(&mut dataflow, &self.index_oracle(cluster))?;
-
-                let used_indexes = dataflow
-                    .index_imports
-                    .keys()
-                    .cloned()
-                    .collect::<Vec<GlobalId>>();
-
-                let fast_path_plan = match explainee {
-                    Explainee::Query => {
-                        peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?
-                    }
-                    _ => None,
-                };
-
-                let dataflow_plan = Plan::<mz_repr::Timestamp>::finalize_dataflow(dataflow)
-                    .expect("Finalized dataflow");
-
-                trace_plan(&dataflow_plan);
-
-                Ok((used_indexes, fast_path_plan))
+                    optimized_plan.map_err(Into::into)
+                })
             })?;
+
+            let mut dataflow = DataflowDesc::new("explanation".to_string());
+            self.dataflow_builder(cluster).import_view_into_dataflow(
+                &explainee_id,
+                &optimized_plan,
+                &mut dataflow,
+            )?;
+
+            // Execute the `optimize/global` stage.
+            catch_unwind(no_errors, "global", || {
+                mz_transform::optimize_dataflow(&mut dataflow, &self.index_oracle(cluster))
+            })?;
+
+            // Calculate indexes used by the dataflow at this point
+            let used_indexes = dataflow
+                .index_imports
+                .keys()
+                .cloned()
+                .collect::<Vec<GlobalId>>();
+
+            // Determine if fast path plan will be used for this explainee
+            let fast_path_plan = match explainee {
+                Explainee::Query => peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?,
+                _ => None,
+            };
+
+            // Execute the `optimize/mir_to_lir` stage.
+            let dataflow_plan = catch_unwind(no_errors, "mir_to_lir", || {
+                Plan::<mz_repr::Timestamp>::finalize_dataflow(dataflow)
+                    .map_err(AdapterError::Internal)
+            })?;
+
+            // Trace the resulting plan for the top-level `optimize` path.
+            trace_plan(&dataflow_plan);
+
+            // Return objects that need to be passed to the `ExplainContext`
+            // when rendering explanations for the various trace entries.
+            Ok((used_indexes, fast_path_plan))
+        });
+
+        let (used_indexes, fast_path_plan) = match pipeline_result {
+            Ok((used_indexes, fast_path_plan)) => (used_indexes, fast_path_plan),
+            Err(err) => {
+                if no_errors {
+                    tracing::error!("error while handling EXPLAIN statement: {}", err);
+
+                    let used_indexes: Vec<GlobalId> = vec![];
+                    let fast_path_plan: Option<FastPathPlan> = None;
+
+                    (used_indexes, fast_path_plan)
+                } else {
+                    return Err(err);
+                }
+            }
+        };
 
         let trace = optimizer_trace.drain_all(
             format,
@@ -2857,8 +2914,9 @@ impl Coordinator {
         )?;
 
         let rows = match stage {
-            // For the `Trace` stage, return the entire trace as (time, path, plan) triples.
             Trace => {
+                // For the `Trace` (pseudo-)stage, return the entire trace as (time,
+                // path, plan) triples.
                 let rows = trace
                     .into_iter()
                     .map(|entry| {
@@ -2874,15 +2932,16 @@ impl Coordinator {
                     .collect();
                 rows
             }
-            // For everything else, return the plan for the stage identified by the corresponding path.
             stage => {
+                // For everything else, return the plan for the stage identified
+                // by the corresponding path.
                 let row = trace
                     .into_iter()
                     .find(|entry| entry.path == stage.path())
                     .map(|entry| Row::pack_slice(&[Datum::from(entry.plan.as_str())]))
                     .ok_or_else(|| {
                         AdapterError::Internal(format!(
-                            "a plan at stage {} does not exist in the collected optimizer trace",
+                            "stage `{}` not present in the collected optimizer trace",
                             stage.path(),
                         ))
                     })?;
@@ -3262,7 +3321,7 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         let catalog = self.catalog.for_session(session);
         let values = mz_sql::plan::plan_copy_from(session.pcx(), &catalog, id, columns, rows)?;
-        let values = self.view_optimizer.optimize(values.lower())?;
+        let values = self.view_optimizer.optimize(values.lower()?)?;
         // Copied rows must always be constants.
         self.sequence_insert_constant(session, id, values.into_inner())
     }

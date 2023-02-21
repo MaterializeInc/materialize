@@ -1424,6 +1424,33 @@ impl MirRelationExpr {
         }
     }
 
+    /// Like [MirRelationExpr::let_in], but with a fallible return type.
+    pub fn let_in_fallible<Body, E>(
+        self,
+        id_gen: &mut IdGen,
+        body: Body,
+    ) -> Result<MirRelationExpr, E>
+    where
+        Body: FnOnce(&mut IdGen, MirRelationExpr) -> Result<MirRelationExpr, E>,
+    {
+        if let MirRelationExpr::Get { .. } = self {
+            // already done
+            body(id_gen, self)
+        } else {
+            let id = LocalId::new(id_gen.allocate_id());
+            let get = MirRelationExpr::Get {
+                id: Id::Local(id),
+                typ: self.typ(),
+            };
+            let body = (body)(id_gen, get)?;
+            Ok(MirRelationExpr::Let {
+                id,
+                value: Box::new(self),
+                body: Box::new(body),
+            })
+        }
+    }
+
     /// Return every row in `self` that does not have a matching row in the first columns of `keys_and_values`, using `default` to fill in the remaining columns
     /// (If `default` is a row of nulls, this is the 'outer' part of LEFT OUTER JOIN)
     pub fn anti_lookup(
