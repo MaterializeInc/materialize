@@ -2738,6 +2738,13 @@ impl Catalog {
             builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
         }
 
+        // Now prune rows that we no longer wish to retain
+        catalog
+            .storage()
+            .await
+            .prune_storage_usage(|e| u128::from(e.timestamp()) <= cutoff_ts)
+            .await;
+
         for ip in &catalog.state.egress_ips {
             builtin_table_updates.push(catalog.state.pack_egress_ip_update(ip)?);
         }
