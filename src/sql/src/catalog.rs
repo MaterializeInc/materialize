@@ -43,6 +43,7 @@ use crate::names::{
     ResolvedDatabaseSpecifier, RoleId, SchemaSpecifier,
 };
 use crate::normalize;
+use crate::plan::statement::ddl::PlannedRoleAttributes;
 use crate::plan::statement::StatementDesc;
 use crate::plan::PlanError;
 
@@ -277,9 +278,8 @@ pub trait CatalogSchema {
     fn has_items(&self) -> bool;
 }
 
-// TODO(jkosh44): Remove `Defualt` from derive list in v0.46.0.
 /// Attributes belonging to a [`CatalogRole`].
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct RoleAttributes {
     /// Indicates whether the role has super user status.
     pub super_user: bool,
@@ -295,6 +295,120 @@ pub struct RoleAttributes {
     pub create_persist: bool,
     /// Indicates whether the role can login.
     pub can_login: bool,
+    // Force use of constructor.
+    _private: (),
+}
+
+impl RoleAttributes {
+    /// Creates a new [`RoleAttributes`] with default attributes.
+    pub fn new() -> RoleAttributes {
+        RoleAttributes {
+            super_user: false,
+            inherit: true,
+            create_role: false,
+            create_db: false,
+            create_cluster: false,
+            create_persist: false,
+            can_login: false,
+            _private: (),
+        }
+    }
+
+    /// Adds the super user attribute.
+    pub fn with_super_user(mut self) -> RoleAttributes {
+        self.super_user = true;
+        self
+    }
+
+    /// Adds the create role attribute.
+    pub fn with_create_role(mut self) -> RoleAttributes {
+        self.create_role = true;
+        self
+    }
+
+    /// Adds the create db attribute.
+    pub fn with_create_db(mut self) -> RoleAttributes {
+        self.create_db = true;
+        self
+    }
+
+    /// Adds the create cluster attribute.
+    pub fn with_create_cluster(mut self) -> RoleAttributes {
+        self.create_cluster = true;
+        self
+    }
+
+    /// Adds the create persist attribute.
+    pub fn with_create_persist(mut self) -> RoleAttributes {
+        self.create_persist = true;
+        self
+    }
+
+    /// Adds the login attribute.
+    pub fn with_login(mut self) -> RoleAttributes {
+        self.can_login = true;
+        self
+    }
+}
+
+impl Default for RoleAttributes {
+    fn default() -> RoleAttributes {
+        RoleAttributes::new()
+    }
+}
+
+impl From<PlannedRoleAttributes> for RoleAttributes {
+    fn from(
+        PlannedRoleAttributes {
+            super_user,
+            inherit,
+            create_role,
+            create_db,
+            create_cluster,
+            create_persist,
+            can_login,
+        }: PlannedRoleAttributes,
+    ) -> RoleAttributes {
+        let default_attributes = RoleAttributes::new();
+        RoleAttributes {
+            super_user: super_user.unwrap_or(default_attributes.super_user),
+            inherit: inherit.unwrap_or(default_attributes.inherit),
+            create_role: create_role.unwrap_or(default_attributes.create_role),
+            create_db: create_db.unwrap_or(default_attributes.create_db),
+            create_cluster: create_cluster.unwrap_or(default_attributes.create_cluster),
+            create_persist: create_persist.unwrap_or(default_attributes.create_persist),
+            can_login: can_login.unwrap_or(default_attributes.can_login),
+            _private: (),
+        }
+    }
+}
+
+impl From<(&dyn CatalogRole, PlannedRoleAttributes)> for RoleAttributes {
+    fn from(
+        (
+            role,
+            PlannedRoleAttributes {
+                super_user,
+                inherit,
+                create_role,
+                create_db,
+                create_cluster,
+                create_persist,
+                can_login,
+            },
+        ): (&dyn CatalogRole, PlannedRoleAttributes),
+    ) -> RoleAttributes {
+        RoleAttributes {
+            super_user: super_user.unwrap_or_else(|| role.is_super_user()),
+            inherit: inherit.unwrap_or_else(|| role.is_inherit()),
+            create_role: create_role.unwrap_or_else(|| role.create_role()),
+            create_db: create_db.unwrap_or_else(|| role.create_db()),
+            create_cluster: create_cluster.unwrap_or_else(|| role.create_cluster()),
+            create_persist: create_persist.unwrap_or_else(|| role.create_persist()),
+            can_login: can_login.unwrap_or_else(|| role.can_login()),
+            _private: (),
+        }
+    }
 }
 
 /// A role in a [`SessionCatalog`].

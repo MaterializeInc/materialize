@@ -2820,28 +2820,18 @@ ON mz_catalog.mz_secrets (schema_id)",
 
 pub static MZ_SYSTEM_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*SYSTEM_USER.name,
-    attributes: RoleAttributes {
-        super_user: true,
-        inherit: true,
-        create_role: true,
-        create_db: true,
-        create_cluster: true,
-        create_persist: true,
-        can_login: true,
-    },
+    attributes: RoleAttributes::new()
+        .with_super_user()
+        .with_create_role()
+        .with_create_db()
+        .with_create_cluster()
+        .with_create_persist()
+        .with_login(),
 });
 
 pub static MZ_INTROSPECTION_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*INTROSPECTION_USER.name,
-    attributes: RoleAttributes {
-        super_user: false,
-        inherit: true,
-        create_role: false,
-        create_db: false,
-        create_cluster: false,
-        create_persist: false,
-        can_login: true,
-    },
+    attributes: RoleAttributes::new().with_login(),
 });
 
 pub static MZ_SYSTEM_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| BuiltinCluster {

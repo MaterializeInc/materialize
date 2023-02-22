@@ -180,17 +180,9 @@ impl Coordinator {
             }
             let plan = CreateRolePlan {
                 name: session.user().name.to_string(),
-                attributes: RoleAttributes {
-                    // TODO(jkosh44) We need to start checking if the frontegg user is an admin.
-                    //  Until then, everyone gets superuser attributes.
-                    super_user: true,
-                    inherit: true,
-                    create_role: false,
-                    create_db: false,
-                    create_cluster: false,
-                    create_persist: false,
-                    can_login: true,
-                },
+                // TODO(jkosh44) We need to start checking if the frontegg user is an admin.
+                //  Until then, everyone gets superuser attributes.
+                attributes: RoleAttributes::new().with_super_user().with_login(),
             };
             if let Err(err) = self.sequence_create_role(&session, plan).await {
                 let _ = tx.send(Response {

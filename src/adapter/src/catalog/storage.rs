@@ -35,7 +35,9 @@ use crate::catalog::builtin::{
     BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES, BUILTIN_ROLES,
 };
 use crate::catalog::error::{Error, ErrorKind};
-use crate::catalog::{is_reserved_name, SerializedRole, SystemObjectMapping, INTROSPECTION_USER};
+use crate::catalog::{
+    is_reserved_name, SerializedRole, SystemObjectMapping, INTROSPECTION_USER, SYSTEM_USER,
+};
 use crate::catalog::{SerializedReplicaConfig, DEFAULT_CLUSTER_REPLICA_NAME};
 use crate::coord::timeline;
 
@@ -260,15 +262,7 @@ async fn migrate(
                 RoleValue {
                     role: SerializedRole {
                         name: MATERIALIZE_ROLE.into(),
-                        attributes: RoleAttributes {
-                            super_user: true,
-                            inherit: true,
-                            create_role: true,
-                            create_db: true,
-                            create_cluster: true,
-                            create_persist: true,
-                            can_login: true,
-                        },
+                        attributes: RoleAttributes::new().with_super_user().with_login(),
                     },
                 },
             )?;
@@ -380,14 +374,14 @@ async fn migrate(
         |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
             txn.roles.update(|_role_key, role_value| {
                 let mut role_value = role_value.clone();
-                let is_materialize_role = role_value.role.name == MATERIALIZE_ROLE;
+                let is_mz_system_role = role_value.role.name == SYSTEM_USER.name;
                 let is_mz_introspection_role = role_value.role.name == INTROSPECTION_USER.name;
                 role_value.role.attributes.super_user = !is_mz_introspection_role;
                 role_value.role.attributes.inherit = true;
-                role_value.role.attributes.create_role = is_materialize_role;
-                role_value.role.attributes.create_db = is_materialize_role;
-                role_value.role.attributes.create_cluster = is_materialize_role;
-                role_value.role.attributes.create_persist = is_materialize_role;
+                role_value.role.attributes.create_role = is_mz_system_role;
+                role_value.role.attributes.create_db = is_mz_system_role;
+                role_value.role.attributes.create_cluster = is_mz_system_role;
+                role_value.role.attributes.create_persist = is_mz_system_role;
                 role_value.role.attributes.can_login = true;
                 Some(role_value)
             })?;

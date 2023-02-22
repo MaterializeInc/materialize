@@ -88,7 +88,7 @@ use crate::ast::{
     TableConstraint, UnresolvedDatabaseName, ViewDefinition,
 };
 use crate::catalog::{
-    CatalogCluster, CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails, RoleAttributes,
+    CatalogCluster, CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails,
 };
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
@@ -2425,14 +2425,14 @@ pub fn describe_create_role(
     Ok(StatementDesc::new(None))
 }
 
-struct PlannedRoleAttributes {
-    super_user: Option<bool>,
-    inherit: Option<bool>,
-    create_role: Option<bool>,
-    create_db: Option<bool>,
-    create_cluster: Option<bool>,
-    create_persist: Option<bool>,
-    can_login: Option<bool>,
+pub(crate) struct PlannedRoleAttributes {
+    pub(crate) super_user: Option<bool>,
+    pub(crate) inherit: Option<bool>,
+    pub(crate) create_role: Option<bool>,
+    pub(crate) create_db: Option<bool>,
+    pub(crate) create_cluster: Option<bool>,
+    pub(crate) create_persist: Option<bool>,
+    pub(crate) can_login: Option<bool>,
 }
 
 fn plan_role_attributes(
@@ -2528,32 +2528,16 @@ pub fn plan_create_role(
         options,
     }: CreateRoleStatement,
 ) -> Result<Plan, PlanError> {
-    let PlannedRoleAttributes {
-        super_user,
-        inherit,
-        create_role,
-        create_db,
-        create_cluster,
-        create_persist,
-        mut can_login,
-    } = plan_role_attributes(scx, options)?;
-    if is_user && can_login.is_none() {
-        can_login = Some(true);
+    let mut attributes = plan_role_attributes(scx, options)?;
+    if is_user && attributes.can_login.is_none() {
+        attributes.can_login = Some(true);
     }
-    if can_login.is_none() || can_login == Some(false) {
+    if attributes.can_login.is_none() || attributes.can_login == Some(false) {
         scx.require_unsafe_mode("non-login roles")?;
     }
     Ok(Plan::CreateRole(CreateRolePlan {
         name: normalize::ident(name),
-        attributes: RoleAttributes {
-            super_user: super_user.unwrap_or(false),
-            inherit: inherit.unwrap_or(true),
-            create_role: create_role.unwrap_or(false),
-            create_db: create_db.unwrap_or(false),
-            create_cluster: create_cluster.unwrap_or(false),
-            create_persist: create_persist.unwrap_or(false),
-            can_login: can_login.unwrap_or(false),
-        },
+        attributes: attributes.into(),
     }))
 }
 
@@ -4075,27 +4059,11 @@ pub fn plan_alter_role(
     AlterRoleStatement { name, options }: AlterRoleStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let role = scx.catalog.get_role(&name.id);
-    let PlannedRoleAttributes {
-        super_user,
-        inherit,
-        create_role,
-        create_db,
-        create_cluster,
-        create_persist,
-        can_login,
-    } = plan_role_attributes(scx, options)?;
+    let attributes = plan_role_attributes(scx, options)?;
 
     Ok(Plan::AlterRole(AlterRolePlan {
         id: name.id,
         name: name.name,
-        attributes: RoleAttributes {
-            super_user: super_user.unwrap_or_else(|| role.is_super_user()),
-            inherit: inherit.unwrap_or_else(|| role.is_inherit()),
-            create_role: create_role.unwrap_or_else(|| role.create_role()),
-            create_db: create_db.unwrap_or_else(|| role.create_db()),
-            create_cluster: create_cluster.unwrap_or_else(|| role.create_cluster()),
-            create_persist: create_persist.unwrap_or_else(|| role.create_persist()),
-            can_login: can_login.unwrap_or_else(|| role.can_login()),
-        },
+        attributes: (role, attributes).into(),
     }))
 }
