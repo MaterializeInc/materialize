@@ -75,7 +75,8 @@ impl SynchronizedParameters {
             .map(|var| {
                 let name = var.name().to_string();
                 let value = var.value();
-                let is_default = self.system_vars.is_default(&name, &value).expect("This will never panic because both the name and the value come from a `Var` instance");
+                let values = parse_set_variable_value(&value).expect("This will never panic because both the name and the value come from a `Var` instance");
+                let is_default = self.system_vars.is_default(&name, &values).expect("This will never panic because both the name and the value come from a `Var` instance");
                 ModifiedParameter {
                     name,
                     value,
@@ -112,12 +113,13 @@ impl SynchronizedParameters {
             // and `value` an error in `self.is_default(name, value)` implies
             // the same error in `self.system_vars.set(name, value)`.
 
-            let modified = if self.system_vars.is_default(name, value).unwrap_or(false) {
-                self.system_vars.reset(name)
-            } else {
-                parse_set_variable_value(value)
-                    .and_then(|values| self.system_vars.set(name, &values))
-            };
+            let modified = parse_set_variable_value(value).and_then(|values| {
+                if self.system_vars.is_default(name, &values).unwrap_or(false) {
+                    self.system_vars.reset(name)
+                } else {
+                    self.system_vars.set(name, &values)
+                }
+            });
             match modified {
                 Ok(true) => {
                     self.modified.insert(name);

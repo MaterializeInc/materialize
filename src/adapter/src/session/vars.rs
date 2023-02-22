@@ -1182,57 +1182,56 @@ impl SystemVars {
         }
     }
 
-    /// Check if the given `value` is the default value for the [`Var`]
+    /// Check if the given `values` is the default value for the [`Var`]
     /// identified by `name`.
     ///
     /// # Errors
     ///
     /// The call will return an error:
     /// 1. If `name` does not refer to a valid [`SystemVars`] field.
-    /// 2. If `value` does not represent a valid [`SystemVars`] value for
+    /// 2. If `values` does not represent a valid [`SystemVars`] value for
     ///    `name`.
-    pub fn is_default(&self, name: &str, value: &str) -> Result<bool, AdapterError> {
-        let values = parse_set_variable_value(value)?;
+    pub fn is_default(&self, name: &str, values: &[String]) -> Result<bool, AdapterError> {
         if name == CONFIG_HAS_SYNCED_ONCE.name {
-            self.config_has_synced_once.is_default(&values)
+            self.config_has_synced_once.is_default(values)
         } else if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
-            self.max_aws_privatelink_connections.is_default(&values)
+            self.max_aws_privatelink_connections.is_default(values)
         } else if name == MAX_TABLES.name {
-            self.max_tables.is_default(&values)
+            self.max_tables.is_default(values)
         } else if name == MAX_SOURCES.name {
-            self.max_sources.is_default(&values)
+            self.max_sources.is_default(values)
         } else if name == MAX_SINKS.name {
-            self.max_sinks.is_default(&values)
+            self.max_sinks.is_default(values)
         } else if name == MAX_MATERIALIZED_VIEWS.name {
-            self.max_materialized_views.is_default(&values)
+            self.max_materialized_views.is_default(values)
         } else if name == MAX_CLUSTERS.name {
-            self.max_clusters.is_default(&values)
+            self.max_clusters.is_default(values)
         } else if name == MAX_REPLICAS_PER_CLUSTER.name {
-            self.max_replicas_per_cluster.is_default(&values)
+            self.max_replicas_per_cluster.is_default(values)
         } else if name == MAX_DATABASES.name {
-            self.max_databases.is_default(&values)
+            self.max_databases.is_default(values)
         } else if name == MAX_SCHEMAS_PER_DATABASE.name {
-            self.max_schemas_per_database.is_default(&values)
+            self.max_schemas_per_database.is_default(values)
         } else if name == MAX_OBJECTS_PER_SCHEMA.name {
-            self.max_objects_per_schema.is_default(&values)
+            self.max_objects_per_schema.is_default(values)
         } else if name == MAX_SECRETS.name {
-            self.max_secrets.is_default(&values)
+            self.max_secrets.is_default(values)
         } else if name == MAX_ROLES.name {
-            self.max_roles.is_default(&values)
+            self.max_roles.is_default(values)
         } else if name == MAX_RESULT_SIZE.name {
-            self.max_result_size.is_default(&values)
+            self.max_result_size.is_default(values)
         } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
-            self.allowed_cluster_replica_sizes.is_default(&values)
+            self.allowed_cluster_replica_sizes.is_default(values)
         } else if name == PERSIST_BLOB_TARGET_SIZE.name {
-            self.persist_blob_target_size.is_default(&values)
+            self.persist_blob_target_size.is_default(values)
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
-            self.persist_compaction_minimum_timeout.is_default(&values)
+            self.persist_compaction_minimum_timeout.is_default(values)
         } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
-            self.dataflow_max_inflight_bytes.is_default(&values)
+            self.dataflow_max_inflight_bytes.is_default(values)
         } else if name == METRICS_RETENTION.name {
-            self.metrics_retention.is_default(&values)
+            self.metrics_retention.is_default(values)
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
-            self.mock_audit_event_timestamp.is_default(&values)
+            self.mock_audit_event_timestamp.is_default(values)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
