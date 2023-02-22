@@ -100,6 +100,7 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::async_runtime::CpuHeavyRuntime;
+use crate::cache::StateCache;
 use crate::cfg::PersistConfig;
 use crate::critical::{CriticalReaderId, SinceHandle};
 use crate::error::InvalidUsage;
@@ -252,6 +253,7 @@ pub struct PersistClient {
     consensus: Arc<dyn Consensus + Send + Sync>,
     metrics: Arc<Metrics>,
     cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+    shared_states: Arc<StateCache>,
 }
 
 impl PersistClient {
@@ -266,6 +268,7 @@ impl PersistClient {
         consensus: Arc<dyn Consensus + Send + Sync>,
         metrics: Arc<Metrics>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+        shared_states: Arc<StateCache>,
     ) -> Result<Self, ExternalError> {
         // TODO: Verify somehow that blob matches consensus to prevent
         // accidental misuse.
@@ -275,6 +278,7 @@ impl PersistClient {
             consensus,
             metrics,
             cpu_heavy_runtime,
+            shared_states,
         })
     }
 
@@ -355,6 +359,7 @@ impl PersistClient {
             shard_id,
             Arc::clone(&self.metrics),
             Arc::new(state_versions),
+            &self.shared_states,
         )
         .await?;
         let gc = GarbageCollector::new(machine.clone());
@@ -507,6 +512,7 @@ impl PersistClient {
             shard_id,
             Arc::clone(&self.metrics),
             Arc::new(state_versions),
+            &self.shared_states,
         )
         .await?;
         let gc = GarbageCollector::new(machine.clone());
@@ -559,6 +565,7 @@ impl PersistClient {
             shard_id,
             Arc::clone(&self.metrics),
             Arc::new(state_versions),
+            &self.shared_states,
         )
         .await?;
         let gc = GarbageCollector::new(machine.clone());
@@ -864,7 +871,7 @@ mod tests {
         let shard_id0 = "s00000000-0000-0000-0000-000000000000"
             .parse::<ShardId>()
             .expect("invalid shard id");
-        let client = new_test_client().await;
+        let mut client = new_test_client().await;
 
         let (mut write0, mut read0) = client
             .expect_open::<String, String, u64, i64>(shard_id0)
@@ -883,6 +890,7 @@ mod tests {
                 (k.to_owned(), v.to_owned(), t.to_owned(), d.to_owned(), None)
             }
 
+            client.shared_states = Arc::new(StateCache::default());
             assert_eq!(
                 client
                     .open::<Vec<u8>, String, u64, i64>(
