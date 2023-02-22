@@ -182,6 +182,10 @@ impl PostgresConsensus {
     pub async fn open(config: PostgresConsensusConfig) -> Result<Self, ExternalError> {
         let mut pg_config: Config = config.url.parse()?;
         pg_config.connect_timeout(config.knobs.connect_timeout());
+        pg_config.keepalives(true);
+        pg_config.keepalives_idle(Duration::from_secs(5));
+        pg_config.keepalives_interval(Duration::from_millis(1500));
+        pg_config.keepalives_retries(3);
         let tls = make_tls(&pg_config)?;
 
         let manager = Manager::from_config(

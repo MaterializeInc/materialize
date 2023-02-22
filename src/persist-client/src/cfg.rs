@@ -169,9 +169,9 @@ impl PersistConfig {
     /// Default value for [`DynamicConfig::compaction_minimum_timeout`].
     pub const DEFAULT_COMPACTION_MINIMUM_TIMEOUT: Duration = Duration::from_secs(90);
     /// Default value for [`DynamicConfig::consensus_connect_timeout`].
-    pub const DEFAULT_CONSENSUS_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+    pub const DEFAULT_CONSENSUS_CONNECT_TIMEOUT: Duration = Duration::from_secs(120);
     /// Default value for [`DynamicConfig::consensus_query_timeout`].
-    pub const DEFAULT_CONSENSUS_QUERY_TIMEOUT: Duration = Duration::from_secs(10);
+    pub const DEFAULT_CONSENSUS_QUERY_TIMEOUT: Duration = Duration::from_secs(120);
 
     // Move this to a PersistConfig field when we actually have read leases.
     //
