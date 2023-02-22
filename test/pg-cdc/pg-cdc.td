@@ -43,6 +43,10 @@ CREATE TABLE types_table (char_col char(3), date_col DATE, time_col TIME, timest
 INSERT INTO types_table VALUES ('foo', '2011-11-11', '11:11:11', '2011-11-11 11:11:11', 'A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11', 1234.56768, 1234.5678, '(,)', '(,)', '(,)', '(,)');
 ALTER TABLE types_table REPLICA IDENTITY FULL;
 
+CREATE TABLE array_types_table (date_col DATE[], time_col TIME[], timestamp_col TIMESTAMP[], uuid_col UUID[], double_col DOUBLE PRECISION[], numeric NUMERIC[], int4range_col INT4RANGE[], int8range_col INT8RANGE[], daterange_col DATERANGE[], numrange_col NUMRANGE[]);
+INSERT INTO array_types_table VALUES ('{2011-11-11}', '{11:11:11}', '{2011-11-11 11:11:11}', '{A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11}', '{1234.56768}', '{1234.5678}', '{"(,)"}', '{"(,)"}', '{"(,)"}', '{"(,)"}');
+ALTER TABLE array_types_table REPLICA IDENTITY FULL;
+
 CREATE TABLE large_text (f1 TEXT, f2 TEXT);
 INSERT INTO large_text VALUES (REPEAT('x', 16 * 1024 * 1024), REPEAT('y', 1 * 1024 * 1024));
 INSERT INTO large_text VALUES (REPEAT('a', 3 * 1024 * 1024),  REPEAT('b', 2 * 1024 * 1024));
@@ -222,6 +226,7 @@ regex: the following columns contain unsupported types:\npostgres\.public\.anoth
     "pk_table",
     "nonpk_table",
     "types_table",
+    "array_types_table",
     "large_text",
     "trailing_space_pk",
     "trailing_space_nopk",
@@ -237,6 +242,7 @@ regex: the following columns contain unsupported types:\npostgres\.public\.anoth
 $ set-regex match=\d+ replacement=<NUMBER>
 
 > SHOW SOURCES
+array_types_table     subsource <null>
 conflict_table        subsource <null>
 escaped_text_table    subsource <null>
 large_text            subsource <null>
@@ -302,6 +308,9 @@ contains: SOURCE materialize.public.conflict_table is a subsource and cannot be 
 
 > SELECT pg_typeof(numeric) FROM types_table;
 "numeric"
+
+> SELECT * FROM array_types_table;
+"{2011-11-11}" "{11:11:11}" "{2011-11-11 11:11:11}" "{a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11}" "{1234.56768}" "{1234.5678}" "{(,)}" "{(,)}" "{(,)}" "{(,)}"
 
 > SELECT LENGTH(f1), LENGTH(f2) FROM large_text;
 16777216 1048576
@@ -375,6 +384,8 @@ UPDATE nonpk_table SET f1 = f1 + 100 WHERE f1 = 3;
 
 INSERT INTO types_table VALUES ('foo', '2011-11-11', '11:11:11', '2011-11-11 11:11:11', 'A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11', 1234.56768, 1234.5678, 'empty', 'empty', 'empty', 'empty');
 
+INSERT INTO array_types_table VALUES ('{2011-11-11}', '{11:11:11}', '{2011-11-11 11:11:11}', '{A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11}', '{1234.56768}', '{1234.5678}', '{"(,)"}', '{"(,)"}', '{"(,)"}', '{"(,)"}');
+
 INSERT INTO large_text VALUES (REPEAT('x', 16 * 1024 * 1024), 'abc');
 
 INSERT INTO trailing_space_pk VALUES ('klm   ');
@@ -394,7 +405,6 @@ UPDATE nulls_table SET f2 = NULL WHERE f2 = 2;
 
 INSERT INTO utf8_table VALUES ('това е текст 2', 'това ''е'' "текст" 2');
 UPDATE utf8_table SET f1 = f1 || f1 , f2 = f2 || f2;
-
 INSERT INTO "таблица" SELECT * FROM "таблица";
 #
 # Check the updated data on the Materialize side
@@ -416,6 +426,10 @@ INSERT INTO "таблица" SELECT * FROM "таблица";
 > SELECT * FROM types_table;
 "foo" "2011-11-11" "11:11:11" "2011-11-11 11:11:11" "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" "1234.56768" "1234.5678" "(,)" "(,)" "(,)" "(,)"
 "foo" "2011-11-11" "11:11:11" "2011-11-11 11:11:11" "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" "1234.56768" "1234.5678" "empty" "empty" "empty" "empty"
+
+> SELECT * FROM array_types_table;
+"{2011-11-11}" "{11:11:11}" "{2011-11-11 11:11:11}" "{a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11}" "{1234.56768}" "{1234.5678}" "{(,)}" "{(,)}" "{(,)}" "{(,)}"
+"{2011-11-11}" "{11:11:11}" "{2011-11-11 11:11:11}" "{a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11}" "{1234.56768}" "{1234.5678}" "{(,)}" "{(,)}" "{(,)}" "{(,)}"
 
 > SELECT LENGTH(f1), LENGTH(f2) FROM large_text;
 16777216 1048576
