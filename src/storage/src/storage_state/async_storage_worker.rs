@@ -109,14 +109,9 @@ impl<T: Timestamp + Lattice + Codec64> AsyncStorageWorker<T> {
                             ),
                         );
 
-                        match res {
-                            Ok(_) => {
-                                // All's well!
-                            }
-                            Err(_err) => {
-                                // Receiver must have hung up.
-                                break;
-                            }
+                        if let Err(_err) = res {
+                            // Receiver must have hung up.
+                            break;
                         }
                     }
                     AsyncStorageWorkerCommand::CalculateExportAsOf(id, mut sink_desc) => {
@@ -147,14 +142,9 @@ impl<T: Timestamp + Lattice + Codec64> AsyncStorageWorker<T> {
                         let res = response_tx
                             .send(AsyncStorageWorkerResponse::UpdatedSinkDesc(id, sink_desc));
 
-                        match res {
-                            Ok(_) => {
-                                // All's well!
-                            }
-                            Err(_err) => {
-                                // Receiver must have hung up.
-                                break;
-                            }
+                        if let Err(_err) = res {
+                            // Receiver must have hung up.
+                            break;
                         }
                     }
                 }
