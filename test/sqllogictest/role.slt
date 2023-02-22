@@ -19,7 +19,7 @@ s2 mz_introspection false true false false false false true
 query TBBBBBBB
 SELECT name, super_user, inherit, create_role, create_db, create_cluster, create_persist, can_login FROM mz_roles WHERE id LIKE 'u%'
 ----
-materialize true true true true true true true
+materialize true true false false false false true
 
 statement error non inherit roles not yet supported
 CREATE ROLE foo NOINHERIT
@@ -43,7 +43,7 @@ SELECT name, super_user, inherit, create_role, create_db, create_cluster, create
 rj true true false false false false true
 fms true true false false false false true
 mz_system true true true true true true true
-materialize true true true true true true true
+materialize true true false false false false true
 mz_introspection false true false false false false true
 
 # Dropping multiple roles should not have any effect if one of the role names
