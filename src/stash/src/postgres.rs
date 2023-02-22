@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
+use fail::fail_point;
 use futures::future::{self, BoxFuture};
 use futures::future::{FutureExt, TryFutureExt};
 use futures::{Future, StreamExt};
@@ -622,38 +623,27 @@ impl Stash {
                     // reconnect (and also not need to worry about any
                     // in-progress transaction state cleanup).
                     self.client = None;
-                    match &e.inner {
-                        InternalStashError::Postgres(pgerr)
-                            if !matches!(self.txn_mode, TransactionMode::Savepoint) =>
-                        {
-                            // Some errors aren't retryable.
-                            if let Some(dberr) = pgerr.as_db_error() {
-                                if matches!(
-                                    dberr.code(),
-                                    &SqlState::UNDEFINED_TABLE
-                                        | &SqlState::WRONG_OBJECT_TYPE
-                                        | &SqlState::READ_ONLY_SQL_TRANSACTION
-                                ) {
-                                    return Err(e);
-                                }
-                            }
-                            attempt += 1;
-                            let cause = if pgerr.is_closed() {
-                                "closed"
-                            } else if let Some(&SqlState::T_R_SERIALIZATION_FAILURE) = pgerr.code()
-                            {
-                                "retry"
-                            } else {
-                                "other"
-                            };
-                            self.metrics
-                                .transaction_errors
-                                .with_label_values(&[cause])
-                                .inc();
-                            info!("tokio-postgres stash error, retry attempt {attempt}: {pgerr}");
-                            retry.next().await;
-                        }
-                        _ => return Err(e),
+
+                    attempt += 1;
+                    let cause = e.cause();
+                    self.metrics
+                        .transaction_errors
+                        .with_label_values(&[cause])
+                        .inc();
+                    info!(
+                        "tokio-postgres stash error, retry attempt {attempt}: {}, code: {:?}",
+                        e.inner(),
+                        e.code(),
+                    );
+
+                    if e.retryable(&self.txn_mode) {
+                        // Retry only known safe errors. Others need to cause a
+                        // fatal crash in environmentd because a transaction
+                        // could have committed without us receiving the commit
+                        // confirmation
+                        retry.next().await;
+                    } else {
+                        return Err(e.into());
                     }
                 }
             }
@@ -661,7 +651,7 @@ impl Stash {
     }
 
     #[tracing::instrument(name = "stash::transact_inner", level = "debug", skip_all)]
-    async fn transact_inner<F, T>(&mut self, f: &F) -> Result<T, StashError>
+    async fn transact_inner<F, T>(&mut self, f: &F) -> Result<T, TransactionError>
     where
         F: for<'a> Fn(
             &'a CountedStatements<'a>,
@@ -674,7 +664,7 @@ impl Stash {
             None => true,
         };
         if reconnect {
-            self.connect().await?;
+            self.connect().await.map_err(TransactionError::Connect)?;
         }
         // client is guaranteed to be Some here.
         let client = self.client.as_mut().unwrap();
@@ -686,24 +676,33 @@ impl Stash {
             TransactionMode::Readonly => ("BEGIN READ  ONLY", "COMMIT"),
             TransactionMode::Savepoint => ("SAVEPOINT stash", "RELEASE SAVEPOINT stash"),
         };
-        client.batch_execute(tx_start).await?;
+        client
+            .batch_execute(tx_start)
+            .await
+            .map_err(|err| TransactionError::Txn(err.into()))?;
         // Pipeline the epoch query and closure.
         let epoch_fut = client
             .query_one(stmts.select_epoch(), &[])
             .map_err(|err| err.into());
         let f_fut = f(&stmts, client, &self.collections);
-        let (row, res) = future::try_join(epoch_fut, f_fut).await?;
+        let (row, res) = future::try_join(epoch_fut, f_fut)
+            .await
+            .map_err(TransactionError::Txn)?;
         let current_epoch = NonZeroI64::new(row.get(0)).unwrap();
         if Some(current_epoch) != self.epoch {
-            return Err(InternalStashError::Fence(format!(
-                "unexpected fence epoch {}, expected {:?}",
-                current_epoch, self.epoch
-            ))
-            .into());
+            return Err(TransactionError::Epoch(
+                InternalStashError::Fence(format!(
+                    "unexpected fence epoch {}, expected {:?}",
+                    current_epoch, self.epoch
+                ))
+                .into(),
+            ));
         }
         let current_nonce: Vec<u8> = row.get(1);
         if current_nonce != self.nonce {
-            return Err(InternalStashError::Fence("unexpected fence nonce".into()).into());
+            return Err(TransactionError::Epoch(
+                InternalStashError::Fence("unexpected fence nonce".into()).into(),
+            ));
         }
         if let Some(counts) = stmts.counts {
             event!(
@@ -711,8 +710,128 @@ impl Stash {
                 counts = format!("{:?}", counts.lock().unwrap()),
             );
         }
-        client.batch_execute(tx_end).await?;
+        client
+            .batch_execute(tx_end)
+            .await
+            .map_err(|err| TransactionError::Commit(err.into()))?;
+
+        fail_point!("stash_commit", |r| Err(TransactionError::Commit(
+            r.unwrap_or_else(|| "stash_commit failpoint".to_string())
+                .into()
+        )));
+
         Ok(res)
+    }
+}
+
+enum TransactionError {
+    /// A failure occurred pre-transaction.
+    Connect(StashError),
+    /// The epoch check failed.
+    Epoch(StashError),
+    /// The transaction function failed and the commit was never started.
+    Txn(StashError),
+    /// The commit was started and failed.
+    Commit(StashError),
+}
+
+impl From<TransactionError> for StashError {
+    fn from(err: TransactionError) -> StashError {
+        err.into_inner()
+    }
+}
+
+impl TransactionError {
+    fn inner(&self) -> &StashError {
+        match self {
+            TransactionError::Connect(err)
+            | TransactionError::Epoch(err)
+            | TransactionError::Txn(err)
+            | TransactionError::Commit(err) => err,
+        }
+    }
+
+    fn into_inner(self) -> StashError {
+        match self {
+            TransactionError::Connect(err)
+            | TransactionError::Epoch(err)
+            | TransactionError::Txn(err)
+            | TransactionError::Commit(err) => err,
+        }
+    }
+
+    fn pgerr(&self) -> Option<&tokio_postgres::Error> {
+        if let InternalStashError::Postgres(err) = &self.inner().inner {
+            Some(err)
+        } else {
+            None
+        }
+    }
+
+    fn code(&self) -> Option<&SqlState> {
+        self.pgerr().and_then(|err| err.code())
+    }
+
+    fn is_closed(&self) -> bool {
+        match self.pgerr() {
+            Some(err) => err.is_closed(),
+            None => false,
+        }
+    }
+
+    fn cause(&self) -> &str {
+        if self.is_closed() {
+            "closed"
+        } else if let Some(&SqlState::T_R_SERIALIZATION_FAILURE) = self.code() {
+            "retry"
+        } else {
+            "other"
+        }
+    }
+
+    /// Reports whether this error can safely be retried.
+    fn retryable(&self, mode: &TransactionMode) -> bool {
+        // Savepoint is never retryable because we can't restore all previous
+        // savepoints.
+        if matches!(mode, TransactionMode::Savepoint) {
+            return false;
+        }
+        // Only attempt to retry postgres-related errors. Others come from stash
+        // code and can't be retried.
+        if !matches!(self.inner().inner, InternalStashError::Postgres(_)) {
+            return false;
+        }
+
+        match self {
+            // Always retry if the initial connection failed.
+            TransactionError::Connect(_) => true,
+            // Never retry if the epoch check failed.
+            TransactionError::Epoch(_) => false,
+            TransactionError::Txn(_) => {
+                // Check some known permanent failure codes.
+                if matches!(
+                    self.code(),
+                    Some(&SqlState::UNDEFINED_TABLE)
+                        | Some(&SqlState::WRONG_OBJECT_TYPE)
+                        | Some(&SqlState::READ_ONLY_SQL_TRANSACTION)
+                ) {
+                    return false;
+                }
+                // Anything else we will attempt to retry.
+                true
+            }
+            TransactionError::Commit(_) => {
+                // If the failure occurred during the commit attempt, only retry
+                // if we got an explicit code from the database notifying us
+                // that this is possible. A connection error or perhaps any
+                // other error could have left the stash in an unknown state.
+                // Until we are idempotent or able to recover from this, our
+                // only choice is to issue a fatal failure, forcing the caller
+                // to restart its process and reinitialize its memory from fully
+                // reading the stash.
+                matches!(self.code(), Some(&SqlState::T_R_SERIALIZATION_FAILURE))
+            }
+        }
     }
 }
 
