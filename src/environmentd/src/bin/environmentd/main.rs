@@ -274,7 +274,7 @@ pub struct Args {
     #[clap(
         long,
         env = "FRONTEGG_TENANT",
-        requires_all = &["frontegg-jwk", "frontegg-api-token-url", "frontegg_admin_role"],
+        requires_all = &["frontegg-jwk", "frontegg-api-token-url"],
         value_name = "UUID",
     )]
     frontegg_tenant: Option<Uuid>,
@@ -290,6 +290,7 @@ pub struct Args {
     #[clap(long, env = "FRONTEGG_PASSWORD_PREFIX", requires = "frontegg-tenant")]
     frontegg_password_prefix: Option<String>,
     /// The name of the admin role in Frontegg.
+    // TODO(jkosh44) Add this to requires_all for frontegg_tenant in v0.46.0
     #[clap(long, env = "FRONTEGG_ADMIN_ROLE", requires = "frontegg-tenant")]
     frontegg_admin_role: Option<String>,
 
@@ -616,10 +617,9 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         args.frontegg_tenant,
         args.frontegg_api_token_url,
         args.frontegg_jwk,
-        args.frontegg_admin_role,
     ) {
-        (None, None, None, None) => None,
-        (Some(tenant_id), Some(admin_api_token_url), Some(jwk), Some(admin_role)) => {
+        (None, None, None) => None,
+        (Some(tenant_id), Some(admin_api_token_url), Some(jwk)) => {
             Some(FronteggAuthentication::new(FronteggConfig {
                 admin_api_token_url,
                 decoding_key: DecodingKey::from_rsa_pem(jwk.as_bytes())?,
@@ -627,7 +627,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 now: mz_ore::now::SYSTEM_TIME.clone(),
                 refresh_before_secs: 60,
                 password_prefix: args.frontegg_password_prefix.unwrap_or_default(),
-                admin_role,
+                admin_role: args.frontegg_admin_role,
             }))
         }
         _ => unreachable!("clap enforced"),
