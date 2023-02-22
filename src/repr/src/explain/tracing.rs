@@ -13,7 +13,6 @@
 
 use std::fmt::Debug;
 use std::fmt::Display;
-use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::Mutex;
 
@@ -237,13 +236,13 @@ impl<T: Clone + 'static> PlanTrace<T> {
 
     /// Push a trace entry for the given `plan` to the current trace.
     ///
-    /// This is a noop if (1) the call is within a context without an enclosing
-    /// span, or if (2) [`PlanTrace::find`] is set and the current path is not a
-    /// prefix of its value.
+    /// This is a noop if
+    /// 1. the call is within a context without an enclosing span, or if
+    /// 2. [`PlanTrace::find`] is set not equal to [`PlanTrace::current_path`].
     fn push(&self, plan: &T) {
-        let times = self.times.lock().expect("times shouldn't be poisoned");
-        if let (Some(full_start), Some(span_start)) = (times.first(), times.last()) {
-            if let Some(current_path) = self.current_path() {
+        if let Some(current_path) = self.current_path() {
+            let times = self.times.lock().expect("times shouldn't be poisoned");
+            if let (Some(full_start), Some(span_start)) = (times.first(), times.last()) {
                 let mut entries = self.entries.lock().expect("entries shouldn't be poisoned");
                 let time = std::time::Instant::now();
                 entries.push(TraceEntry {
@@ -260,20 +259,19 @@ impl<T: Clone + 'static> PlanTrace<T> {
     /// Helper method: get a copy of the current path.
     ///
     /// If [`PlanTrace::find`] is set, this will also check the current path
-    /// against the `find` entry and return `None` if the former is not a prefix
-    /// of the latter.
+    /// against the `find` entry and return `None` if the two differ.
     fn current_path(&self) -> Option<String> {
         let path = self.path.lock().expect("path shouldn't be poisoned");
-        let path = path.deref();
+        let path = path.as_str();
         match self.find {
             Some(find) => {
-                if find.starts_with(path.as_str()) {
-                    Some(path.clone())
+                if find == path {
+                    Some(path.to_owned())
                 } else {
                     None
                 }
             }
-            None => Some(path.clone()),
+            None => Some(path.to_owned()),
         }
     }
 }
