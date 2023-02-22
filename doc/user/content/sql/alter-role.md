@@ -1,19 +1,12 @@
 ---
-title: "CREATE ROLE"
-description: "`CREATE ROLE` creates a new role."
+title: "ALTER ROLE"
+description: "`ALTER ROLE` alters the attributes of an existing role."
 menu:
   main:
     parent: commands
 ---
 
-`CREATE ROLE` creates a new role.
-
-## Conceptual framework
-
-A role is a user account in a Materialize instance.
-
-When you [connect to a Materialize instance](/integrations/psql), you must specify
-the name of a valid role in the system.
+`ALTER ROLE` alters the attributes of an existing role.
 
 {{< warning >}}
 Roles in Materialize are currently limited in functionality. In the future they
@@ -23,7 +16,7 @@ for details.
 
 ## Syntax
 
-{{< diagram "create-role.svg" >}}
+{{< diagram "alter-role.svg" >}}
 
 Field | Use
 ------|-----
@@ -35,29 +28,28 @@ _role_name_ | A name for the role.
 
 ## Details
 
-Materialize only permits creating user accounts with both the `LOGIN` and
+Materialize only permits user accounts with both the `LOGIN` and
 `SUPERUSER` options specified.
 
 You may not specify redundant or conflicting sets of options. For example,
-Materialize will reject the statement `CREATE ROLE ... LOGIN NOLOGIN` because
+Materialize will reject the statement `ALTER ROLE ... LOGIN NOLOGIN` because
 the `LOGIN` and `NOLOGIN` options conflict.
 
 ## Examples
 
 ```sql
-CREATE ROLE rj LOGIN SUPERUSER;
+ALTER ROLE rj LOGIN SUPERUSER;
 ```
 ```sql
-SELECT name FROM mz_roles;
+SELECT name, can_login, super_user FROM mz_roles WHERE name = 'rj';
 ```
 ```nofmt
-materialize
-rj
+rj  true  true
 ```
 
 ## Related pages
 
+- [CREATE ROLE](../create-role)
 - [CREATE USER](../create-user)
-- [ALTER ROLE](../alter-role)
 - [DROP ROLE](../drop-role)
 - [DROP USER](../drop-user)

@@ -28,5 +28,6 @@ _role_name_ | A name for the role.
 ## Related pages
 
 - [CREATE ROLE](../create-role)
+- [ALTER ROLE](../alter-role)
 - [DROP ROLE](../drop-role)
 - [DROP USER](../drop-user)
