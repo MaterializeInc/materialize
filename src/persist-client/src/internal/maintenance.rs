@@ -187,34 +187,13 @@ where
         let gc = gc.clone();
         let compactor = compactor.cloned();
         mz_ore::task::spawn(|| "writer-maintenance", async move {
-            self.perform_in_background(&machine, &gc, compactor.as_ref())
-                .await
+            self.perform(&machine, &gc, compactor.as_ref()).await
         });
     }
 
     /// Performs any writer maintenance necessary. Returns when all background
     /// tasks have completed and the maintenance is done.
-    ///
-    /// Used for testing maintenance-related state transitions deterministically
-    #[cfg(test)]
     pub(crate) async fn perform<K, V, D>(
-        self,
-        machine: &Machine<K, V, T, D>,
-        gc: &GarbageCollector<K, V, T, D>,
-        compactor: Option<&Compactor<K, V, T, D>>,
-    ) where
-        K: Debug + Codec,
-        V: Debug + Codec,
-        D: Semigroup + Codec64 + Send + Sync,
-    {
-        self.perform_in_background(machine, gc, compactor).await
-    }
-
-    /// Initiates maintenance work in the background, either through spawned tasks
-    /// or by sending messages to existing tasks. The returned futures may be
-    /// awaited to know when the work is completed, but do not need to be polled
-    /// to drive the work to completion.
-    async fn perform_in_background<K, V, D>(
         self,
         machine: &Machine<K, V, T, D>,
         gc: &GarbageCollector<K, V, T, D>,
