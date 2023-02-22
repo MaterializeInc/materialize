@@ -80,7 +80,7 @@ use mz_sql_parser::ast::TransactionIsolationLevel;
 pub use optimize::OptimizerConfig;
 pub use query::{QueryContext, QueryLifetime};
 pub use statement::{
-    describe, plan, plan_copy_from, scl::parse_set_variable_value, StatementContext, StatementDesc,
+    describe, plan, plan_copy_from, scl::plan_set_variable_to, StatementContext, StatementDesc,
 };
 
 /// Instructions for executing a SQL query.

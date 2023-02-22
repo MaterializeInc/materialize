@@ -91,7 +91,7 @@ use crate::catalog::storage::{BootstrapArgs, Transaction};
 use crate::client::ConnectionId;
 use crate::config::{SynchronizedParameters, SystemParameterFrontend};
 use crate::coord::DEFAULT_LOGICAL_COMPACTION_WINDOW;
-use crate::session::vars::{SystemVars, Var, CONFIG_HAS_SYNCED_ONCE};
+use crate::session::vars::{parse_set_variable_value, SystemVars, Var, CONFIG_HAS_SYNCED_ONCE};
 use crate::session::{PreparedStatement, Session, User, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
 use crate::{AdapterError, DUMMY_AVAILABILITY_ZONE};
@@ -880,7 +880,7 @@ impl CatalogState {
         name: &str,
         value: &str,
     ) -> Result<bool, AdapterError> {
-        let values = plan::parse_set_variable_value(value)?;
+        let values = parse_set_variable_value(value)?;
         self.system_configuration.set(name, &values)
     }
 
