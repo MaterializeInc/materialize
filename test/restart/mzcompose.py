@@ -268,6 +268,21 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
         ),
     )
 
+    # Assert that the persisted allowed_cluster_replica_sizes (a setting that
+    # supports multiple values) is correctly restored on restart.
+    c.kill("materialized")
+    c.up("materialized")
+
+    c.testdrive(
+        service="testdrive_no_reset",
+        input=dedent(
+            """
+            > SHOW allowed_cluster_replica_sizes
+            "\\"1\\", \\"2\\""
+            """
+        ),
+    )
+
 
 def workflow_default(c: Composition) -> None:
     c.workflow("github-17578")
