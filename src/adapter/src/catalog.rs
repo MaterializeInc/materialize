@@ -2322,7 +2322,9 @@ impl Catalog {
                     name: role.name,
                     id,
                     oid,
-                    attributes: role.attributes,
+                    attributes: role
+                        .attributes
+                        .expect("serialized role was not properly migrated"),
                 },
             );
         }
@@ -4268,7 +4270,7 @@ impl Catalog {
                     }
                     let serialized_role = SerializedRole {
                         name: name.clone(),
-                        attributes: attributes.clone(),
+                        attributes: Some(attributes.clone()),
                     };
                     tx.update_role(id, serialized_role)?;
 
@@ -4614,7 +4616,7 @@ impl Catalog {
                     }
                     let serialized_role = SerializedRole {
                         name: name.clone(),
-                        attributes: attributes.clone(),
+                        attributes: Some(attributes.clone()),
                     };
                     let id = tx.insert_user_role(serialized_role)?;
                     state.add_to_audit_log(
@@ -6211,16 +6213,15 @@ impl From<ReplicaLocation> for SerializedReplicaLocation {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct SerializedRole {
     pub name: String,
-    // TODO(jkosh44): Remove in v0.46.0
-    #[serde(default)]
-    pub attributes: RoleAttributes,
+    // TODO(jkosh44): Remove Option in v0.46.0
+    pub attributes: Option<RoleAttributes>,
 }
 
 impl From<Role> for SerializedRole {
     fn from(role: Role) -> Self {
         SerializedRole {
             name: role.name,
-            attributes: role.attributes,
+            attributes: Some(role.attributes),
         }
     }
 }
@@ -6229,7 +6230,7 @@ impl From<&BuiltinRole> for SerializedRole {
     fn from(role: &BuiltinRole) -> Self {
         SerializedRole {
             name: role.name.to_string(),
-            attributes: role.attributes.clone(),
+            attributes: Some(role.attributes.clone()),
         }
     }
 }

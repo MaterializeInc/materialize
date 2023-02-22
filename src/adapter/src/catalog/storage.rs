@@ -262,7 +262,7 @@ async fn migrate(
                 RoleValue {
                     role: SerializedRole {
                         name: MATERIALIZE_ROLE.into(),
-                        attributes: RoleAttributes::new().with_super_user().with_login(),
+                        attributes: Some(RoleAttributes::new().with_super_user().with_login()),
                     },
                 },
             )?;
@@ -374,15 +374,22 @@ async fn migrate(
         |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
             txn.roles.update(|_role_key, role_value| {
                 let mut role_value = role_value.clone();
-                let is_mz_system_role = role_value.role.name == SYSTEM_USER.name;
-                let is_mz_introspection_role = role_value.role.name == INTROSPECTION_USER.name;
-                role_value.role.attributes.super_user = !is_mz_introspection_role;
-                role_value.role.attributes.inherit = true;
-                role_value.role.attributes.create_role = is_mz_system_role;
-                role_value.role.attributes.create_db = is_mz_system_role;
-                role_value.role.attributes.create_cluster = is_mz_system_role;
-                role_value.role.attributes.create_persist = is_mz_system_role;
-                role_value.role.attributes.can_login = true;
+                if role_value.role.attributes.is_none() {
+                    let is_mz_system_role = role_value.role.name == SYSTEM_USER.name;
+                    let is_mz_introspection_role = role_value.role.name == INTROSPECTION_USER.name;
+                    let mut attributes = RoleAttributes::new().with_login();
+                    if is_mz_system_role {
+                        attributes = attributes
+                            .with_create_role()
+                            .with_create_db()
+                            .with_create_cluster()
+                            .with_create_persist();
+                    }
+                    if !is_mz_introspection_role {
+                        attributes = attributes.with_super_user();
+                    }
+                    role_value.role.attributes = Some(attributes);
+                }
                 Some(role_value)
             })?;
             Ok(())

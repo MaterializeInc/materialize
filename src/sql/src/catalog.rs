@@ -351,12 +351,6 @@ impl RoleAttributes {
     }
 }
 
-impl Default for RoleAttributes {
-    fn default() -> RoleAttributes {
-        RoleAttributes::new()
-    }
-}
-
 impl From<PlannedRoleAttributes> for RoleAttributes {
     fn from(
         PlannedRoleAttributes {
