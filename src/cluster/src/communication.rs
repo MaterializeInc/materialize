@@ -141,12 +141,32 @@ async fn create_sockets(
     let mut results: Vec<_> = (0..addresses.len()).map(|_| None).collect();
 
     let my_address = &addresses[my_index_uz];
+
+    // [btv] Binding to the address (which is of the form
+    // `hostname:port`) unnecessarily involves a DNS query. We should
+    // get the port from here, but otherwise just bind to `0.0.0.0`.
+    // Previously we bound to `my_address`, which caused
+    // https://github.com/MaterializeInc/cloud/issues/5070 .
+    let bind_address = match regex::Regex::new(r":(\d{1,5})$")
+        .unwrap()
+        .captures(my_address)
+    {
+        Some(cap) => {
+            let p: u16 = cap[1].parse().context("Port out of range")?;
+            format!("0.0.0.0:{p}")
+        }
+        None => {
+            // Address is not of the form `hostname:port`; it's
+            // probably a path to a Unix-domain socket.
+            my_address.to_string()
+        }
+    };
     let listener = loop {
         let mut tries = 0;
-        match Listener::bind(my_address.clone()).await {
+        match Listener::bind(&bind_address).await {
             Ok(ok) => break ok,
             Err(e) => {
-                warn!("failed to listen on address {my_address}: {e}");
+                warn!("failed to listen on address {bind_address}: {e}");
                 tries += 1;
                 if tries == 10 {
                     return Err(e.into());

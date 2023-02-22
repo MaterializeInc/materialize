@@ -3554,6 +3554,7 @@ dependencies = [
  "mz-timely-util",
  "once_cell",
  "prometheus",
+ "regex",
  "scopeguard",
  "serde",
  "smallvec",
