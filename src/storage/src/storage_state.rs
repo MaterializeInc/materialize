@@ -540,8 +540,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 // NOTE: If we want to share the load of async processing we
                 // have to change `handle_storage_command` and change this
                 // assert.
-                assert!(
-                    self.timely_worker.index() == 0,
+                assert_eq!(
+                    self.timely_worker.index(),
+                    0,
                     "only worker #0 is doing async processing"
                 );
                 internal_cmd_tx.broadcast(InternalStorageCommand::CreateIngestionDataflow {
@@ -550,13 +551,25 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     resumption_frontier,
                 });
             }
+            AsyncStorageWorkerResponse::UpdatedSinkDesc(id, sink_desc) => {
+                // NOTE: If we want to share the load of async processing we
+                // have to change `handle_storage_command` and change this
+                // assert.
+                assert_eq!(
+                    self.timely_worker.index(),
+                    0,
+                    "only worker #0 is doing async processing"
+                );
+                internal_cmd_tx
+                    .broadcast(InternalStorageCommand::CreateSinkDataflow(id, sink_desc));
+            }
         }
     }
 
     /// Entry point for applying an internal storage command.
     pub fn handle_internal_storage_command(
         &mut self,
-        internal_cmd_tx: &mut dyn InternalCommandSender,
+        _internal_cmd_tx: &mut dyn InternalCommandSender,
         async_worker: &mut AsyncStorageWorker<mz_repr::Timestamp>,
         internal_cmd: InternalStorageCommand,
     ) {
@@ -612,14 +625,15 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         return;
                     }
 
-                    // This needs to be broadcast by one worker and go through
-                    // the internal command fabric, to ensure consistent
-                    // ordering of dataflow rendering across all workers.
+                    // This needs to be done by one worker, which will
+                    // broadcasts a `CreateSinkDataflow` command to all workers
+                    // based on the enriched/updates `StorageSinkDesc`.
+                    //
+                    // Doing this separately on each worker could lead to
+                    // differing resume_uppers which might lead to all kinds of
+                    // mayhem.
                     if self.timely_worker.index() == 0 {
-                        internal_cmd_tx.broadcast(InternalStorageCommand::CreateSinkDataflow(
-                            id,
-                            sink_description,
-                        ));
+                        async_worker.calculate_export_as_of(id, sink_description);
                     }
 
                     // Continue with other commands.
@@ -1051,14 +1065,15 @@ impl StorageState {
                         ),
                     );
 
-                    // This needs to be broadcast by one worker and go through
-                    // the internal command fabric, to ensure consistent
-                    // ordering of dataflow rendering across all workers.
+                    // This needs to be done by one worker, which will
+                    // broadcasts a `CreateSinkDataflow` command to all workers
+                    // based on the enriched/updates `StorageSinkDesc`.
+                    //
+                    // Doing this separately on each worker could lead to
+                    // differing resume_uppers which might lead to all kinds of
+                    // mayhem.
                     if worker_index == 0 {
-                        internal_cmd_tx.broadcast(InternalStorageCommand::CreateSinkDataflow(
-                            export.id,
-                            export.description,
-                        ));
+                        async_worker.calculate_export_as_of(export.id, export.description);
                     }
                 }
             }
