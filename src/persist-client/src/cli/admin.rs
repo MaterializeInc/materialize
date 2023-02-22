@@ -27,6 +27,7 @@ use prometheus::proto::{MetricFamily, MetricType};
 use tracing::{info, warn};
 
 use crate::async_runtime::CpuHeavyRuntime;
+use crate::cache::StateCache;
 use crate::cli::inspect::StateArgs;
 use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
 use crate::internal::gc::{GarbageCollector, GcReq};
@@ -423,6 +424,7 @@ async fn make_machine(
         shard_id,
         metrics,
         state_versions,
+        &StateCache::default(),
     )
     .await?;
 

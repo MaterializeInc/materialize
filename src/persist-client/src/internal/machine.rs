@@ -28,6 +28,7 @@ use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64, Opaque};
 
+use crate::cache::StateCache;
 use crate::critical::CriticalReaderId;
 use crate::error::{CodecMismatch, InvalidUsage};
 use crate::internal::apply::Applier;
@@ -71,8 +72,9 @@ where
         shard_id: ShardId,
         metrics: Arc<Metrics>,
         state_versions: Arc<StateVersions>,
+        shared_states: &StateCache,
     ) -> Result<Self, Box<CodecMismatch>> {
-        let applier = Applier::new(cfg, shard_id, metrics, state_versions).await?;
+        let applier = Applier::new(cfg, shard_id, metrics, state_versions, shared_states).await?;
         Ok(Machine { applier })
     }
 
@@ -1022,6 +1024,7 @@ pub mod datadriven {
                 shard_id,
                 Arc::clone(&client.metrics),
                 Arc::clone(&state_versions),
+                &client.shared_states,
             )
             .await
             .expect("codecs should match");

@@ -22,6 +22,7 @@ use tracing::debug;
 
 use mz_persist::location::{Indeterminate, SeqNo};
 
+use crate::cache::StateCache;
 use crate::error::CodecMismatch;
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{CmdMetrics, Metrics, ShardMetrics};
@@ -79,6 +80,7 @@ where
         shard_id: ShardId,
         metrics: Arc<Metrics>,
         state_versions: Arc<StateVersions>,
+        shared_states: &StateCache,
     ) -> Result<Self, Box<CodecMismatch>> {
         let shard_metrics = metrics.shards.shard(&shard_id);
         let state = metrics
@@ -88,6 +90,18 @@ where
                 // No cas_mismatch retries because we just use the returned
                 // state on a mismatch.
                 state_versions.maybe_init_shard(&shard_metrics)
+            })
+            .await?;
+        let _state = shared_states
+            .get::<K, V, T, D, _, _>(shard_id, || {
+                metrics
+                    .cmds
+                    .init_state
+                    .run_cmd(&shard_metrics, |_cas_mismatch_metric| {
+                        // No cas_mismatch retries because we just use the returned
+                        // state on a mismatch.
+                        state_versions.maybe_init_shard(&shard_metrics)
+                    })
             })
             .await?;
         Ok(Applier {
