@@ -12,6 +12,7 @@ use std::fmt;
 use std::time::Duration;
 
 use const_format::concatcp;
+use mz_sql::plan::VariableValue;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use uncased::UncasedStr;
@@ -1191,7 +1192,7 @@ impl SystemVars {
     /// 2. If `value` does not represent a valid [`SystemVars`] value for
     ///    `name`.
     pub fn is_default(&self, name: &str, value: &str) -> Result<bool, AdapterError> {
-        let values = mz_sql::plan::parse_set_variable_value(value)?;
+        let values = parse_set_variable_value(value)?;
         if name == CONFIG_HAS_SYNCED_ONCE.name {
             self.config_has_synced_once.is_default(&values)
         } else if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
@@ -2295,4 +2296,18 @@ pub(crate) fn is_storage_config_var(name: &str) -> bool {
 /// Returns whether the named variable is a persist configuration parameter.
 fn is_persist_config_var(name: &str) -> bool {
     name == PERSIST_BLOB_TARGET_SIZE.name() || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
+}
+
+/// Split a single string into what would be parsed by `SET v TO <string>` into
+/// multiple values.
+pub fn parse_set_variable_value(value: &str) -> Result<Vec<String>, AdapterError> {
+    let parsed = mz_sql_parser::parser::parse_set_variable_to(value)?;
+    match mz_sql::plan::plan_set_variable_to(parsed)? {
+        // This is an awkward error, but makes the types work well for how this
+        // function is called (which is only by system var things).
+        VariableValue::Default => Err(AdapterError::Unstructured(anyhow::anyhow!(
+            "unexpected SET DEFAULT"
+        ))),
+        VariableValue::Values(values) => Ok(values),
+    }
 }

@@ -14,7 +14,7 @@ use mz_sql::ast::{
     SetVariableValue, Statement, Value,
 };
 
-use crate::session::vars::SystemVars;
+use crate::session::vars::{parse_set_variable_value, SystemVars};
 
 /// A struct that defines the system parameters that should be synchronized
 pub struct SynchronizedParameters {
@@ -115,10 +115,8 @@ impl SynchronizedParameters {
             let modified = if self.system_vars.is_default(name, value).unwrap_or(false) {
                 self.system_vars.reset(name)
             } else {
-                match mz_sql::plan::parse_set_variable_value(value) {
-                    Ok(values) => self.system_vars.set(name, &values),
-                    Err(err) => Err(err.into()),
-                }
+                parse_set_variable_value(value)
+                    .and_then(|values| self.system_vars.set(name, &values))
             };
             match modified {
                 Ok(true) => {
