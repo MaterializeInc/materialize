@@ -90,6 +90,8 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
+use base64::Engine;
 use headers::{Authorization, Header, HeaderMapExt};
 use hyper::client::HttpConnector;
 use hyper::http::header::{HeaderMap, HeaderValue, AUTHORIZATION};
@@ -924,10 +926,7 @@ fn test_auth_base() {
                     let mut buf = vec![];
                     buf.extend(client_id.as_bytes());
                     buf.extend(secret.as_bytes());
-                    Some(&format!(
-                        "mzauth_{}",
-                        base64::encode_config(buf, base64::URL_SAFE)
-                    ))
+                    Some(&format!("mzauth_{}", URL_SAFE.encode(buf)))
                 },
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -940,10 +939,7 @@ fn test_auth_base() {
                     let mut buf = vec![];
                     buf.extend(client_id.as_bytes());
                     buf.extend(secret.as_bytes());
-                    Some(&format!(
-                        "mzauth_{}",
-                        base64::encode_config(buf, base64::URL_SAFE_NO_PAD)
-                    ))
+                    Some(&format!("mzauth_{}", URL_SAFE_NO_PAD.encode(buf)))
                 },
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),

@@ -78,6 +78,8 @@
 use std::future::Future;
 use std::time::Duration;
 
+use base64::engine::general_purpose::URL_SAFE;
+use base64::Engine;
 use derivative::Derivative;
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use reqwest::Client;
@@ -190,7 +192,8 @@ impl FronteggAuthentication {
         let (client_id, secret) = if password.len() == 43 || password.len() == 44 {
             // If it's exactly 43 or 44 bytes, assume we have base64-encoded
             // UUID bytes without or with padding, respectively.
-            let buf = base64::decode_config(password, base64::URL_SAFE)
+            let buf = URL_SAFE
+                .decode(password)
                 .map_err(|_| FronteggError::InvalidPasswordFormat)?;
             let client_id =
                 Uuid::from_slice(&buf[..16]).map_err(|_| FronteggError::InvalidPasswordFormat)?;
