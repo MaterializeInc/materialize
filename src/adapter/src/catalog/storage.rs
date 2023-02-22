@@ -726,11 +726,16 @@ impl Connection {
                     for ev in rows.into_keys() {
                         if u128::from(ev.metric.timestamp()) >= cutoff_ts {
                             events.push(ev.metric);
-                        } else {
+                        } else if retention_period.is_some() {
                             collection.append_to_batch(&mut batch, &ev, &(), -1);
                         }
                     }
-                    tx.append(vec![batch]).await?;
+                    // Delete things only if a retention period is
+                    // specified (otherwise opening readonly catalogs
+                    // can fail).
+                    if retention_period.is_some() {
+                        tx.append(vec![batch]).await?;
+                    }
                     Ok(events)
                 })
             })
