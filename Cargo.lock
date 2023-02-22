@@ -3942,6 +3942,7 @@ dependencies = [
  "prometheus",
  "serde",
  "serde_json",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
  "workspace-hack",

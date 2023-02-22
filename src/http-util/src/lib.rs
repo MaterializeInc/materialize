@@ -79,6 +79,7 @@
 
 use askama::Template;
 use axum::http::status::StatusCode;
+use axum::http::HeaderValue;
 use axum::response::{Html, IntoResponse};
 use axum::Json;
 use axum::TypedHeader;
@@ -88,6 +89,7 @@ use mz_ore::tracing::TracingHandle;
 use prometheus::Encoder;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tower_http::cors::AllowOrigin;
 use tracing_subscriber::filter::Targets;
 
 /// Renders a template into an HTTP response.
@@ -209,4 +211,30 @@ pub async fn handle_tracing() -> impl IntoResponse {
             "current_level_filter": tracing::level_filters::LevelFilter::current().to_string()
         })),
     )
+}
+
+/// Construct a CORS policy to allow origins to query us via HTTP. If any bare
+/// '*' is passed, this allows any origin; otherwise, allows a list of origins,
+/// which can include wildcard subdomains. If the allowed origin starts with a
+/// '*', allow anything from that glob. Otherwise check for an exact match.
+pub fn build_cors_allowed_origin<'a, I>(allowed: I) -> AllowOrigin
+where
+    I: IntoIterator<Item = &'a HeaderValue>,
+{
+    let allowed = allowed.into_iter().cloned().collect::<Vec<HeaderValue>>();
+    if allowed.iter().any(|o| o.as_bytes() == b"*") {
+        AllowOrigin::any()
+    } else {
+        AllowOrigin::predicate(move |origin: &HeaderValue, _request_parts: _| {
+            for val in &allowed {
+                if (val.as_bytes().starts_with(b"*.")
+                    && origin.as_bytes().ends_with(&val.as_bytes()[1..]))
+                    || origin == val
+                {
+                    return true;
+                }
+            }
+            false
+        })
+    }
 }
