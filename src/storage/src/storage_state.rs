@@ -540,8 +540,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 // NOTE: If we want to share the load of async processing we
                 // have to change `handle_storage_command` and change this
                 // assert.
-                assert!(
-                    self.timely_worker.index() == 0,
+                assert_eq!(
+                    self.timely_worker.index(),
+                    0,
                     "only worker #0 is doing async processing"
                 );
                 internal_cmd_tx.broadcast(InternalStorageCommand::CreateIngestionDataflow {
@@ -554,8 +555,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 // NOTE: If we want to share the load of async processing we
                 // have to change `handle_storage_command` and change this
                 // assert.
-                assert!(
-                    self.timely_worker.index() == 0,
+                assert_eq!(
+                    self.timely_worker.index(),
+                    0,
                     "only worker #0 is doing async processing"
                 );
                 internal_cmd_tx
