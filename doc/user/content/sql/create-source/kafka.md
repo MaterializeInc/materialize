@@ -22,6 +22,11 @@ The same syntax, supported formats and features can be used to connect to a [Red
 
 {{< diagram "create-source-kafka.svg" >}}
 
+Field | Use
+------|-----
+_src_name_  | The name for the source.
+**EXPOSE PROGRESS AS** _progress_subsource_name_ | Name this source's progress collection `progress_subsource_name`; if this is not specified, Materialize names the progress collection `<src_name>_progress`. For details about the progress collection, see [Progress collection](#progress-collection).
+
 #### `format_spec`
 
 {{< diagram "format-spec.svg" >}}
@@ -261,6 +266,45 @@ It is possible to define how an Avro reader schema will be chosen for Avro sourc
 using the `KEY STRATEGY` and `VALUE STRATEGY` keywords, as shown in the syntax diagram.
 
 A strategy of `LATEST` (the default) will choose the latest writer schema from the schema registry to use as a reader schema. `ID` or `INLINE` will allow specifying a schema from the registry by ID or inline in the `CREATE SOURCE` statement, respectively.
+
+### Progress collection
+
+Each source exposes its progress as a separate progress collection. You can
+choose a name for this collection using **EXPOSE PROGRESS AS**
+_progress_subsource_name_ or Materialize will automatically name the collection
+`<source_name>_progress`. You can find the collection's name using [`SHOW
+SOURCES`](/sql/show-sources).
+
+The progress collection schema depends on your source type. For Kafka sources, a
+set of `partition`s (`numrange`) and the greatest `"offset"`
+([`uint8`](/sql/types/uint)) we have seen into each partition.
+
+The `partition` column is a range of [`numeric`](/sql/types/numeric) values for
+uninteresting technical reasons, but you can see a more "human readable"
+version of this data using a query like:
+
+```sql
+SELECT
+  partition, "offset"
+FROM
+  (
+    SELECT
+      -- Take the upper of the range, which is null for non-partition rows
+      -- Cast partition to u64, which is more ergonomic
+      upper(partition)::uint8 AS partition, "offset"
+    FROM
+      data_progress
+  )
+WHERE
+  -- Remove all non-partition rows
+  partition IS NOT NULL;
+```
+
+Note that the column name `"offset"` must be wrapped in quotation marks because
+it is also a SQL keyword.
+
+As long as any offset continues increasing, Materialize is consuming data from
+your Kafka producer.
 
 ## Examples
 

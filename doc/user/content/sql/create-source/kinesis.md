@@ -27,6 +27,11 @@ This page describes how to connect Materialize to Kinesis Data Streams to read d
 
 {{< diagram "create-source-kinesis.svg" >}}
 
+Field | Use
+------|-----
+_src_name_  | The name for the source.
+**EXPOSE PROGRESS AS** _progress_subsource_name_ | Name this source's progress collection `progress_subsource_name`; if this is not specified, Materialize names the progress collection `<src_name>_progress`. For details about the progress collection, see [Progress collection](#progress-collection).
+
 #### `format_spec`
 
 {{< diagram "kinesis-format-spec.svg" >}}
@@ -115,6 +120,20 @@ CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
 
 {{< /tab >}}
 {{< /tabs >}}
+
+### Progress collection
+
+Each source exposes its progress as a separate progress collection. You can
+choose a name for this collection using **EXPOSE PROGRESS AS**
+_progress_subsource_name_ or Materialize will automatically name the collection
+`<source_name>_progress`. You can find the collection's name using [`SHOW
+SOURCES`](/sql/show-sources).
+
+The progress collection schema depends on your source type. For Postgres
+sources, we return the greatest `lsn` ([`uint8`](/sql/types/uint)) we have
+consumed from your Postgres server's replication stream.
+
+As long as as the LSN continues to change, Materialize is consuming data.
 
 ## Known limitations
 
