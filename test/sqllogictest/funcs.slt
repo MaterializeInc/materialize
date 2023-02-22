@@ -288,6 +288,11 @@ SELECT ceil(1.1), ceil(1.111), ceil(100.1), ceil(100.11), ceil(-4.1)
 ----
 2  2  101  101  -4
 
+query RRRRR
+SELECT ceiling(1.1), ceiling(1.111), ceiling(100.1), ceiling(100.11), ceiling(-4.1)
+----
+2  2  101  101  -4
+
 # postgres converts ints to floats on floor/ceil
 query R
 SELECT floor(1)
