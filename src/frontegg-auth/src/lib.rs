@@ -100,6 +100,8 @@ pub struct FronteggConfig {
     pub refresh_before_secs: i64,
     /// Prefix that is expected to be present on all passwords.
     pub password_prefix: String,
+    /// Name of admin role.
+    pub admin_role: String,
 }
 
 #[derive(Clone, Derivative)]
@@ -113,6 +115,7 @@ pub struct FronteggAuthentication {
     validation: Validation,
     refresh_before_secs: i64,
     password_prefix: String,
+    admin_role: String,
 
     // Reqwest HTTP client pool.
     client: Client,
@@ -135,6 +138,7 @@ impl FronteggAuthentication {
             validation,
             refresh_before_secs: config.refresh_before_secs,
             password_prefix: config.password_prefix,
+            admin_role: config.admin_role,
             client: Client::builder()
                 .timeout(Duration::from_secs(5))
                 .build()
@@ -329,6 +333,10 @@ impl FronteggAuthentication {
     pub fn tenant_id(&self) -> Uuid {
         self.tenant_id
     }
+
+    pub fn admin_role(&self) -> &str {
+        &self.admin_role
+    }
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -371,6 +379,11 @@ impl Claims {
     /// Extracts the most specific user ID present in the token.
     pub fn best_user_id(&self) -> Uuid {
         self.user_id.unwrap_or(self.sub)
+    }
+
+    /// Returns true if the claims belong to a frontegg admin.
+    pub fn admin(&self, admin_name: &str) -> bool {
+        self.roles.iter().any(|role| role == admin_name)
     }
 }
 
