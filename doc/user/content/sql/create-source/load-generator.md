@@ -36,6 +36,7 @@ _src_name_  | The name for the source.
 **MAX CARDINALITY** | Valid for the `COUNTER` generator. Causes the generator to delete old values to keep the collection at most a given size. Defaults to unlimited.
 **FOR ALL TABLES** | Creates subsources for all tables in the load generator.
 **FOR TABLES (** _table_list_ **)** | Creates subsources for specific tables in the load generator.
+**EXPOSE PROGRESS AS** _progress_subsource_name_ | Name this source's progress collection `progress_subsource_name`; if this is not specified, Materialize names the progress collection `<src_name>_progress`. For details about the progress collection, see [Progress collection](#progress-collection).
 
 ### `WITH` options
 
@@ -115,6 +116,24 @@ The TPCH load generator implements the [TPC-H benchmark specification](https://w
 The TPCH source must be used with `FOR ALL TABLES`, which will create the standard TPCH relations.
 If `TICK INTERVAL` is specified, after the initial data load, an order and its lineitems will be changed at this interval.
 If not specified, the dataset will not change over time.
+
+### Progress collection
+
+Each source exposes its progress as a separate progress collection. You can
+choose a name for this collection using **EXPOSE PROGRESS AS**
+_progress_subsource_name_ or Materialize will automatically name the collection
+`<source_name>_progress`. You can find the collection's name using [`SHOW
+SOURCES`](/sql/show-sources).
+
+The progress collection schema depends on your source type. For load generator
+sources, we return the greatest `"offset"` ([`uint8`](/sql/types/uint)) we
+generated, which is essentially the number of times the load generator has
+emitted data.
+
+Note that the column name `"offset"` must be wrapped in quotation marks because
+it is also a SQL keyword.
+
+As long as as the `"offset"` continues to change, Materialize is producing data.
 
 ## Examples
 
