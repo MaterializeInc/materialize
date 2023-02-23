@@ -242,6 +242,7 @@ pub fn plan_explain(
         stage,
         config_flags,
         format,
+        no_errors,
         explainee,
     }: ExplainStatement<Aug>,
     params: &Params,
@@ -343,6 +344,7 @@ pub fn plan_explain(
         stage,
         format,
         config,
+        no_errors,
         explainee,
     }))
 }

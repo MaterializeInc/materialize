@@ -68,8 +68,9 @@ goofus,gallant
 # NOTE: These queries are slow to succeed because the default metrics scraping
 # interval is 30 seconds.
 
-# MIN is a sneaky way to `AND` booleans :)
-> SELECT s.name, MIN(u.snapshot_committed), SUM(u.messages_received), SUM(u.updates_staged), SUM(u.updates_committed), SUM(u.bytes_received) > 0
+> SELECT s.name,
+  bool_and(u.snapshot_committed),
+  SUM(u.messages_received), SUM(u.updates_staged), SUM(u.updates_committed), SUM(u.bytes_received) > 0
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('metrics_test_source')
@@ -82,7 +83,9 @@ metrics_test_source true 2 2 2 true
 # Note that only the base-source has `messages_received`, but the sub-sources have `messages_committed`.
 # Committed will usually, for auction sources, add up to received, but we don't test this (right now) because of
 # jitter on when metrics are produced for each sub-source.
-> SELECT s.name, MIN(u.snapshot_committed), SUM(u.messages_received) > 0, SUM(u.updates_staged) > 0, SUM(u.updates_committed) > 0, SUM(u.bytes_received) > 0
+> SELECT s.name,
+  bool_and(u.snapshot_committed),
+  SUM(u.messages_received) > 0, SUM(u.updates_staged) > 0, SUM(u.updates_committed) > 0, SUM(u.bytes_received) > 0
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('accounts', 'auction_house', 'auctions', 'bids', 'organizations', 'users')
@@ -106,7 +109,7 @@ users          true      false   true  true  false
 # We can't control this, so have to accept the range.
 > SELECT
     s.name,
-    MIN(u.snapshot_committed),
+    bool_and(u.snapshot_committed),
     SUM(u.messages_received),
     SUM(u.updates_staged) BETWEEN 3 AND 11,
     SUM(u.updates_committed) BETWEEN 3 AND 11,
@@ -131,7 +134,9 @@ SELECT
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "mammalmore"} {"f1":"moose2", "f2": 2}
 
-> SELECT s.name, MIN(u.snapshot_committed), SUM(u.messages_received), SUM(u.updates_staged), SUM(u.updates_committed), SUM(u.bytes_received) > 0
+> SELECT s.name,
+  bool_and(u.snapshot_committed),
+  SUM(u.messages_received), SUM(u.updates_staged), SUM(u.updates_committed), SUM(u.bytes_received) > 0
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')

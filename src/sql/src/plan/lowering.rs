@@ -130,7 +130,7 @@ impl HirRelationExpr {
     /// Rewrite `self` into a `mz_expr::MirRelationExpr`.
     /// This requires rewriting all correlated subqueries (nested `HirRelationExpr`s) into flat queries
     #[tracing::instrument(target = "optimizer", level = "debug", name = "hir_to_mir", skip_all)]
-    pub fn lower(self) -> mz_expr::MirRelationExpr {
+    pub fn lower(self) -> Result<mz_expr::MirRelationExpr, PlanError> {
         let result = match self {
             // We directly rewrite a Constant into the corresponding `MirRelationExpr::Constant`
             // to ensure that the downstream optimizer can easily bypass most
@@ -148,18 +148,16 @@ impl HirRelationExpr {
                 let mut id_gen = mz_ore::id_gen::IdGen::default();
                 transform_expr::split_subquery_predicates(&mut other);
                 transform_expr::try_simplify_quantified_comparisons(&mut other);
-                mz_expr::MirRelationExpr::constant(vec![vec![]], RelationType::new(vec![])).let_in(
-                    &mut id_gen,
-                    |id_gen, get_outer| {
+                mz_expr::MirRelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
+                    .let_in_fallible(&mut id_gen, |id_gen, get_outer| {
                         other.applied_to(id_gen, get_outer, &ColumnMap::empty(), &mut CteMap::new())
-                    },
-                )
+                    })?
             }
         };
 
         mz_repr::explain::trace_plan(&result);
 
-        result
+        Ok(result)
     }
 
     /// Return a `mz_expr::MirRelationExpr` which evaluates `self` once for each row of `get_outer`.
@@ -180,7 +178,7 @@ impl HirRelationExpr {
         get_outer: mz_expr::MirRelationExpr,
         col_map: &ColumnMap,
         cte_map: &mut CteMap,
-    ) -> mz_expr::MirRelationExpr {
+    ) -> Result<mz_expr::MirRelationExpr, PlanError> {
         maybe_grow(|| {
             use self::HirRelationExpr::*;
             use mz_expr::MirRelationExpr as SR;
@@ -192,7 +190,7 @@ impl HirRelationExpr {
                 );
             }
             assert_eq!(col_map.len(), get_outer.arity());
-            match self {
+            Ok(match self {
                 Constant { rows, typ } => {
                     // Constant expressions are not correlated with `get_outer`, and should be cross-products.
                     get_outer.product(SR::Constant {
@@ -264,8 +262,8 @@ impl HirRelationExpr {
                     value,
                     body,
                 } => {
-                    let value = value.applied_to(id_gen, get_outer.clone(), col_map, cte_map);
-                    value.let_in(id_gen, |id_gen, get_value| {
+                    let value = value.applied_to(id_gen, get_outer.clone(), col_map, cte_map)?;
+                    value.let_in_fallible(id_gen, |id_gen, get_value| {
                         let (new_id, typ) = if let mz_expr::MirRelationExpr::Get {
                             id: mz_expr::Id::Local(id),
                             typ,
@@ -296,7 +294,7 @@ impl HirRelationExpr {
                             cte_map.remove(&id);
                         }
                         body
-                    })
+                    })?
                 }
                 LetRec { bindings, body } => {
                     // We use the outer type with the HIR types to form MIR CTE types.
@@ -332,10 +330,10 @@ impl HirRelationExpr {
                             get_outer.clone(),
                             col_map,
                             cte_map,
-                        ));
+                        )?);
                     }
 
-                    let mir_body = body.applied_to(id_gen, get_outer, col_map, cte_map);
+                    let mir_body = body.applied_to(id_gen, get_outer, col_map, cte_map)?;
 
                     // Remove our bindings and reinstate any shadowed bindings.
                     for (id, shadowed) in shadowed_bindings {
@@ -355,7 +353,7 @@ impl HirRelationExpr {
                 Project { input, outputs } => {
                     // Projections should be applied to the decorrelated `inner`, and to its columns,
                     // which means rebasing `outputs` to start `get_outer.arity()` columns later.
-                    let input = input.applied_to(id_gen, get_outer.clone(), col_map, cte_map);
+                    let input = input.applied_to(id_gen, get_outer.clone(), col_map, cte_map)?;
                     let outputs = (0..get_outer.arity())
                         .chain(outputs.into_iter().map(|i| get_outer.arity() + i))
                         .collect::<Vec<_>>();
@@ -363,7 +361,12 @@ impl HirRelationExpr {
                 }
                 Map { input, mut scalars } => {
                     // Scalar expressions may contain correlated subqueries. We must be cautious!
-                    let mut input = input.applied_to(id_gen, get_outer, col_map, cte_map);
+
+                    // We lower scalars in chunks, and must keep track of the
+                    // arity of the HIR fragments lowered so far.
+                    let mut lowered_arity = input.arity();
+
+                    let mut input = input.applied_to(id_gen, get_outer, col_map, cte_map)?;
 
                     // Lower subqueries in maximally sized batches, such as no subquery in the current
                     // batch depends on columns from the same batch.
@@ -371,8 +374,6 @@ impl HirRelationExpr {
                     // Map operator, so we need to ensure these columns exist before lowering the
                     // subquery.
                     while !scalars.is_empty() {
-                        let old_arity = input.arity();
-
                         let end_idx = scalars
                             .iter_mut()
                             .position(|s| {
@@ -380,17 +381,20 @@ impl HirRelationExpr {
                                 #[allow(deprecated)]
                                 s.visit_columns(0, &mut |depth, col| {
                                     if col.level == depth {
-                                        requires_nonexistent_column |= (col.column + 1) > old_arity
+                                        requires_nonexistent_column |= col.column >= lowered_arity
                                     }
                                 });
                                 requires_nonexistent_column
                             })
                             .unwrap_or(scalars.len());
 
+                        lowered_arity = lowered_arity + end_idx;
                         let scalars = scalars.drain(0..end_idx).collect_vec();
+
+                        let old_arity = input.arity();
                         let (with_subqueries, subquery_map) = HirScalarExpr::lower_subqueries(
                             &scalars, id_gen, col_map, cte_map, input,
-                        );
+                        )?;
                         input = with_subqueries;
 
                         // We will proceed sequentially through the scalar expressions, for each transforming
@@ -409,7 +413,7 @@ impl HirRelationExpr {
                                 cte_map,
                                 &mut input,
                                 &Some(&subquery_map),
-                            );
+                            )?;
                             input = input.map_one(scalar);
                             scalar_columns.push(input.arity() - 1);
                         }
@@ -432,7 +436,7 @@ impl HirRelationExpr {
                     let exprs = exprs
                         .into_iter()
                         .map(|e| e.applied_to(id_gen, col_map, cte_map, &mut input, &None))
-                        .collect::<Vec<_>>();
+                        .collect::<Result<Vec<_>, _>>()?;
 
                     let new_arity = input.arity();
                     let output_arity = func.output_arity();
@@ -451,11 +455,11 @@ impl HirRelationExpr {
                     // Filter expressions may contain correlated subqueries.
                     // We extend `get_outer` with sufficient values to determine the value of the predicate,
                     // then filter the results, then strip off any columns that were added for this purpose.
-                    let mut input = input.applied_to(id_gen, get_outer, col_map, cte_map);
+                    let mut input = input.applied_to(id_gen, get_outer, col_map, cte_map)?;
                     for predicate in predicates {
                         let old_arity = input.arity();
                         let predicate =
-                            predicate.applied_to(id_gen, col_map, cte_map, &mut input, &None);
+                            predicate.applied_to(id_gen, col_map, cte_map, &mut input, &None)?;
                         let new_arity = input.arity();
                         input = input.filter(vec![predicate]);
                         if old_arity != new_arity {
@@ -482,8 +486,8 @@ impl HirRelationExpr {
 
                     assert!(kind.can_be_correlated());
 
-                    let left = left.applied_to(id_gen, get_outer, col_map, cte_map);
-                    left.let_in(id_gen, |id_gen, get_left| {
+                    let left = left.applied_to(id_gen, get_outer, col_map, cte_map)?;
+                    left.let_in_fallible(id_gen, |id_gen, get_left| {
                         let apply_requires_distinct_outer = false;
                         let mut join = branch(
                             id_gen,
@@ -495,11 +499,11 @@ impl HirRelationExpr {
                             |id_gen, right, get_left, col_map, cte_map| {
                                 right.applied_to(id_gen, get_left, col_map, cte_map)
                             },
-                        );
+                        )?;
 
                         // Plan the `on` predicate.
                         let old_arity = join.arity();
-                        let on = on.applied_to(id_gen, col_map, cte_map, &mut join, &None);
+                        let on = on.applied_to(id_gen, col_map, cte_map, &mut join, &None)?;
                         join = join.filter(vec![on]);
                         let new_arity = join.arity();
                         if old_arity != new_arity {
@@ -518,11 +522,11 @@ impl HirRelationExpr {
                                 .skip(get_left.arity())
                                 .map(|typ| (Datum::Null, typ.scalar_type))
                                 .collect();
-                            get_left.lookup(id_gen, join, default)
+                            Ok::<_, PlanError>(get_left.lookup(id_gen, join, default))
                         } else {
-                            join
+                            Ok::<_, PlanError>(join)
                         }
-                    })
+                    })?
                 }
                 Join {
                     left,
@@ -540,16 +544,16 @@ impl HirRelationExpr {
                     // against the records present in the left and right (decorrelated) inputs,
                     // depending on the type of join.
                     let oa = get_outer.arity();
-                    let left = left.applied_to(id_gen, get_outer.clone(), col_map, cte_map);
+                    let left = left.applied_to(id_gen, get_outer.clone(), col_map, cte_map)?;
                     let lt = left.typ().column_types.into_iter().skip(oa).collect_vec();
                     let la = lt.len();
-                    left.let_in(id_gen, |id_gen, get_left| {
+                    left.let_in_fallible(id_gen, |id_gen, get_left| {
                         let right_col_map = col_map.enter_scope(0);
                         let right =
-                            right.applied_to(id_gen, get_outer.clone(), &right_col_map, cte_map);
+                            right.applied_to(id_gen, get_outer.clone(), &right_col_map, cte_map)?;
                         let rt = right.typ().column_types.into_iter().skip(oa).collect_vec();
                         let ra = rt.len();
-                        right.let_in(id_gen, |id_gen, get_right| {
+                        right.let_in_fallible(id_gen, |id_gen, get_right| {
                             let mut product = SR::join(
                                 vec![get_left.clone(), get_right.clone()],
                                 (0..oa).map(|i| vec![(0, i), (1, i)]).collect(),
@@ -561,7 +565,8 @@ impl HirRelationExpr {
                                     .collect(),
                             );
                             let old_arity = product.arity();
-                            let on = on.applied_to(id_gen, col_map, cte_map, &mut product, &None);
+                            let on =
+                                on.applied_to(id_gen, col_map, cte_map, &mut product, &None)?;
 
                             // Attempt an efficient equijoin implementation, in which outer joins are
                             // more efficiently rendered than in general. This can return `None` if
@@ -575,8 +580,8 @@ impl HirRelationExpr {
                                     kind.clone(),
                                     oa,
                                     id_gen,
-                                ) {
-                                    return joined;
+                                )? {
+                                    return Ok(joined);
                                 }
                             }
 
@@ -587,7 +592,7 @@ impl HirRelationExpr {
                                 // this means we added some columns to handle subqueries, and now we need to get rid of them
                                 join = join.project((0..old_arity).collect());
                             }
-                            join.let_in(id_gen, |id_gen, get_join| {
+                            join.let_in_fallible(id_gen, |id_gen, get_join| {
                                 let mut result = get_join.clone();
                                 if let JoinKind::LeftOuter { .. } | JoinKind::FullOuter { .. } =
                                     kind
@@ -627,10 +632,10 @@ impl HirRelationExpr {
                                         );
                                     result = result.union(right_outer);
                                 }
-                                result
+                                Ok::<mz_expr::MirRelationExpr, PlanError>(result)
                             })
                         })
-                    })
+                    })?
                 }
                 Union { base, inputs } => {
                     // Union is uncomplicated.
@@ -640,13 +645,13 @@ impl HirRelationExpr {
                             get_outer.clone(),
                             col_map,
                             cte_map,
-                        )),
+                        )?),
                         inputs: inputs
                             .into_iter()
                             .map(|input| {
                                 input.applied_to(id_gen, get_outer.clone(), col_map, cte_map)
                             })
-                            .collect(),
+                            .collect::<Result<Vec<_>, _>>()?,
                     }
                 }
                 Reduce {
@@ -658,14 +663,15 @@ impl HirRelationExpr {
                     // Reduce may contain expressions with correlated subqueries.
                     // In addition, here an empty reduction key signifies that we need to supply default values
                     // in the case that there are no results (as in a SQL aggregation without an explicit GROUP BY).
-                    let mut input = input.applied_to(id_gen, get_outer.clone(), col_map, cte_map);
+                    let mut input =
+                        input.applied_to(id_gen, get_outer.clone(), col_map, cte_map)?;
                     let applied_group_key = (0..get_outer.arity())
                         .chain(group_key.iter().map(|i| get_outer.arity() + i))
                         .collect();
                     let applied_aggregates = aggregates
                         .into_iter()
                         .map(|aggregate| aggregate.applied_to(id_gen, col_map, cte_map, &mut input))
-                        .collect::<Vec<_>>();
+                        .collect::<Result<Vec<_>, _>>()?;
                     let input_type = input.typ();
                     let default = applied_aggregates
                         .iter()
@@ -689,7 +695,7 @@ impl HirRelationExpr {
                 Distinct { input } => {
                     // Distinct is uncomplicated.
                     input
-                        .applied_to(id_gen, get_outer, col_map, cte_map)
+                        .applied_to(id_gen, get_outer, col_map, cte_map)?
                         .distinct()
                 }
                 TopK {
@@ -700,7 +706,7 @@ impl HirRelationExpr {
                     offset,
                 } => {
                     // TopK is uncomplicated, except that we must group by the columns of `get_outer` as well.
-                    let input = input.applied_to(id_gen, get_outer.clone(), col_map, cte_map);
+                    let input = input.applied_to(id_gen, get_outer.clone(), col_map, cte_map)?;
                     let applied_group_key = (0..get_outer.arity())
                         .chain(group_key.iter().map(|i| get_outer.arity() + i))
                         .collect();
@@ -717,16 +723,16 @@ impl HirRelationExpr {
                 Negate { input } => {
                     // Negate is uncomplicated.
                     input
-                        .applied_to(id_gen, get_outer, col_map, cte_map)
+                        .applied_to(id_gen, get_outer, col_map, cte_map)?
                         .negate()
                 }
                 Threshold { input } => {
                     // Threshold is uncomplicated.
                     input
-                        .applied_to(id_gen, get_outer, col_map, cte_map)
+                        .applied_to(id_gen, get_outer, col_map, cte_map)?
                         .threshold()
                 }
-            }
+            })
         })
     }
 }
@@ -749,25 +755,31 @@ impl HirScalarExpr {
         cte_map: &mut CteMap,
         inner: &mut mz_expr::MirRelationExpr,
         subquery_map: &Option<&BTreeMap<HirScalarExpr, usize>>,
-    ) -> mz_expr::MirScalarExpr {
+    ) -> Result<mz_expr::MirScalarExpr, PlanError> {
         maybe_grow(|| {
             use self::HirScalarExpr::*;
             use mz_expr::MirScalarExpr as SS;
 
             if let Some(subquery_map) = subquery_map {
                 if let Some(col) = subquery_map.get(&self) {
-                    return SS::Column(*col);
+                    return Ok(SS::Column(*col));
                 }
             }
 
-            match self {
+            Ok::<mz_expr::MirScalarExpr, PlanError>(match self {
                 Column(col_ref) => SS::Column(col_map.get(&col_ref)),
                 Literal(row, typ) => SS::Literal(Ok(row), typ),
                 Parameter(_) => panic!("cannot decorrelate expression with unbound parameters"),
                 CallUnmaterializable(func) => SS::CallUnmaterializable(func),
                 CallUnary { func, expr } => SS::CallUnary {
                     func,
-                    expr: Box::new(expr.applied_to(id_gen, col_map, cte_map, inner, subquery_map)),
+                    expr: Box::new(expr.applied_to(
+                        id_gen,
+                        col_map,
+                        cte_map,
+                        inner,
+                        subquery_map,
+                    )?),
                 },
                 CallBinary { func, expr1, expr2 } => SS::CallBinary {
                     func,
@@ -777,21 +789,21 @@ impl HirScalarExpr {
                         cte_map,
                         inner,
                         subquery_map,
-                    )),
+                    )?),
                     expr2: Box::new(expr2.applied_to(
                         id_gen,
                         col_map,
                         cte_map,
                         inner,
                         subquery_map,
-                    )),
+                    )?),
                 },
                 CallVariadic { func, exprs } => SS::CallVariadic {
                     func,
                     exprs: exprs
                         .into_iter()
                         .map(|expr| expr.applied_to(id_gen, col_map, cte_map, inner, subquery_map))
-                        .collect::<Vec<_>>(),
+                        .collect::<Result<Vec<_>, _>>()?,
                 },
                 If { cond, then, els } => {
                     // The `If` case is complicated by the fact that we do not want to
@@ -815,7 +827,8 @@ impl HirScalarExpr {
                     // and we would benefit from not introducing the complexity.
 
                     let inner_arity = inner.arity();
-                    let cond_expr = cond.applied_to(id_gen, col_map, cte_map, inner, subquery_map);
+                    let cond_expr =
+                        cond.applied_to(id_gen, col_map, cte_map, inner, subquery_map)?;
 
                     // Defensive copies, in case we mangle these in decorrelation.
                     let inner_clone = inner.clone();
@@ -823,8 +836,10 @@ impl HirScalarExpr {
                     let else_clone = els.clone();
 
                     let cond_arity = inner.arity();
-                    let then_expr = then.applied_to(id_gen, col_map, cte_map, inner, subquery_map);
-                    let else_expr = els.applied_to(id_gen, col_map, cte_map, inner, subquery_map);
+                    let then_expr =
+                        then.applied_to(id_gen, col_map, cte_map, inner, subquery_map)?;
+                    let else_expr =
+                        els.applied_to(id_gen, col_map, cte_map, inner, subquery_map)?;
 
                     if cond_arity == inner.arity() {
                         // If no additional columns were added, we simply return the
@@ -840,7 +855,7 @@ impl HirScalarExpr {
                         // the two expressions independently, and apply their cases
                         // as `MirRelationExpr::Map` operations.
 
-                        *inner = inner_clone.let_in(id_gen, |id_gen, get_inner| {
+                        *inner = inner_clone.let_in_fallible(id_gen, |id_gen, get_inner| {
                             // Restrict to records satisfying `cond_expr` and apply `then` as a map.
                             let mut then_inner = get_inner.clone().filter(vec![cond_expr.clone()]);
                             let then_expr = then_clone.applied_to(
@@ -849,7 +864,7 @@ impl HirScalarExpr {
                                 cte_map,
                                 &mut then_inner,
                                 subquery_map,
-                            );
+                            )?;
                             let then_arity = then_inner.arity();
                             then_inner = then_inner
                                 .map_one(then_expr)
@@ -871,15 +886,15 @@ impl HirScalarExpr {
                                 cte_map,
                                 &mut else_inner,
                                 subquery_map,
-                            );
+                            )?;
                             let else_arity = else_inner.arity();
                             else_inner = else_inner
                                 .map_one(else_expr)
                                 .project((0..inner_arity).chain(Some(else_arity)).collect());
 
                             // concatenate the two results.
-                            then_inner.union(else_inner)
-                        });
+                            Ok::<mz_expr::MirRelationExpr, PlanError>(then_inner.union(else_inner))
+                        })?;
 
                         SS::Column(inner_arity)
                     }
@@ -905,7 +920,7 @@ impl HirScalarExpr {
                         cte_map,
                         *expr,
                         apply_requires_distinct_outer,
-                    );
+                    )?;
                     SS::Column(inner.arity() - 1)
                 }
 
@@ -918,7 +933,7 @@ impl HirScalarExpr {
                         cte_map,
                         *expr,
                         apply_requires_distinct_outer,
-                    );
+                    )?;
                     SS::Column(inner.arity() - 1)
                 }
                 Windowing(expr) => {
@@ -929,62 +944,256 @@ impl HirScalarExpr {
 
                     match expr.func {
                         WindowExprType::Scalar(func) => {
-                            *inner =
-                                inner
-                                    .take_dangerous()
-                                    .let_in(id_gen, |id_gen, mut get_inner| {
-                                        let order_by = order_by
-                                            .into_iter()
-                                            .map(|o| {
-                                                o.applied_to(
-                                                    id_gen,
-                                                    col_map,
-                                                    cte_map,
-                                                    &mut get_inner,
-                                                    subquery_map,
-                                                )
-                                            })
-                                            .collect_vec();
-
-                                        // Record input arity here so that any group_keys that need to mutate get_inner
-                                        // don't add those columns to the aggregate input.
-                                        let input_arity = get_inner.typ().arity();
-                                        // The reduction that computes the window function must be keyed on the columns
-                                        // from the outer context, plus the expressions in the partition key. The current
-                                        // subquery will be 'executed' for every distinct row from the outer context so
-                                        // by putting the outer columns in the grouping key we isolate each re-execution.
-                                        let mut group_key = col_map
-                                            .inner
-                                            .iter()
-                                            .map(|(_, outer_col)| *outer_col)
-                                            .sorted()
-                                            .collect_vec();
-                                        for p in partition {
-                                            let key = p.applied_to(
+                            *inner = inner.take_dangerous().let_in_fallible(
+                                id_gen,
+                                |id_gen, mut get_inner| {
+                                    let order_by = order_by
+                                        .into_iter()
+                                        .map(|o| {
+                                            o.applied_to(
                                                 id_gen,
                                                 col_map,
                                                 cte_map,
                                                 &mut get_inner,
                                                 subquery_map,
+                                            )
+                                        })
+                                        .collect::<Result<Vec<_>, _>>()?;
+
+                                    // Record input arity here so that any group_keys that need to mutate get_inner
+                                    // don't add those columns to the aggregate input.
+                                    let input_arity = get_inner.typ().arity();
+                                    // The reduction that computes the window function must be keyed on the columns
+                                    // from the outer context, plus the expressions in the partition key. The current
+                                    // subquery will be 'executed' for every distinct row from the outer context so
+                                    // by putting the outer columns in the grouping key we isolate each re-execution.
+                                    let mut group_key = col_map
+                                        .inner
+                                        .iter()
+                                        .map(|(_, outer_col)| *outer_col)
+                                        .sorted()
+                                        .collect_vec();
+                                    for p in partition {
+                                        let key = p.applied_to(
+                                            id_gen,
+                                            col_map,
+                                            cte_map,
+                                            &mut get_inner,
+                                            subquery_map,
+                                        )?;
+                                        if let mz_expr::MirScalarExpr::Column(c) = key {
+                                            group_key.push(c);
+                                        } else {
+                                            get_inner = get_inner.map_one(key);
+                                            group_key.push(get_inner.arity() - 1);
+                                        }
+                                    }
+
+                                    get_inner.let_in_fallible(id_gen, |_id_gen, get_inner| {
+                                        let to_reduce = get_inner;
+                                        let input_type = to_reduce.typ();
+                                        let fields = input_type
+                                            .column_types
+                                            .iter()
+                                            .take(input_arity)
+                                            .map(|t| (ColumnName::from("?column?"), t.clone()))
+                                            .collect_vec();
+                                        let agg_input = mz_expr::MirScalarExpr::CallVariadic {
+                                            func: mz_expr::VariadicFunc::RecordCreate {
+                                                field_names: fields
+                                                    .iter()
+                                                    .map(|(name, _)| name.clone())
+                                                    .collect_vec(),
+                                            },
+                                            exprs: (0..input_arity)
+                                                .map(|column| {
+                                                    mz_expr::MirScalarExpr::Column(column)
+                                                })
+                                                .collect_vec(),
+                                        };
+                                        let record_type = ScalarType::Record {
+                                            fields,
+                                            custom_id: None,
+                                        };
+                                        let agg_input = mz_expr::MirScalarExpr::CallVariadic {
+                                            func: mz_expr::VariadicFunc::ListCreate {
+                                                elem_type: record_type.clone(),
+                                            },
+                                            exprs: vec![agg_input],
+                                        };
+                                        let mut agg_input = vec![agg_input];
+                                        agg_input.extend(order_by.clone());
+                                        let agg_input = mz_expr::MirScalarExpr::CallVariadic {
+                                            func: mz_expr::VariadicFunc::RecordCreate {
+                                                field_names: (0..1)
+                                                    .map(|_| ColumnName::from("?column?"))
+                                                    .collect_vec(),
+                                            },
+                                            exprs: agg_input,
+                                        };
+                                        let list_type = ScalarType::List {
+                                            element_type: Box::new(record_type),
+                                            custom_id: None,
+                                        };
+                                        let agg_input_type = ScalarType::Record {
+                                            fields: std::iter::once(&list_type)
+                                                .map(|t| {
+                                                    (
+                                                        ColumnName::from("?column?"),
+                                                        t.clone().nullable(false),
+                                                    )
+                                                })
+                                                .collect_vec(),
+                                            custom_id: None,
+                                        }
+                                        .nullable(false);
+                                        let func = func.into_expr();
+                                        let aggregate = mz_expr::AggregateExpr {
+                                            func,
+                                            expr: agg_input,
+                                            distinct: false,
+                                        };
+                                        let mut reduce = to_reduce
+                                            .reduce(
+                                                group_key.clone(),
+                                                vec![aggregate.clone()],
+                                                None,
+                                            )
+                                            .flat_map(
+                                                mz_expr::TableFunc::UnnestList {
+                                                    el_typ: aggregate
+                                                        .func
+                                                        .output_type(agg_input_type)
+                                                        .scalar_type
+                                                        .unwrap_list_element_type()
+                                                        .clone(),
+                                                },
+                                                vec![mz_expr::MirScalarExpr::Column(
+                                                    group_key.len(),
+                                                )],
                                             );
-                                            if let mz_expr::MirScalarExpr::Column(c) = key {
-                                                group_key.push(c);
-                                            } else {
-                                                get_inner = get_inner.map_one(key);
-                                                group_key.push(get_inner.arity() - 1);
-                                            }
+                                        let record_col = reduce.arity() - 1;
+
+                                        // Unpack the record
+                                        for c in 0..input_arity {
+                                            reduce = reduce.take_dangerous().map_one(
+                                                mz_expr::MirScalarExpr::CallUnary {
+                                                    func: mz_expr::UnaryFunc::RecordGet(
+                                                        mz_expr::func::RecordGet(c),
+                                                    ),
+                                                    expr: Box::new(
+                                                        mz_expr::MirScalarExpr::CallUnary {
+                                                            func: mz_expr::UnaryFunc::RecordGet(
+                                                                mz_expr::func::RecordGet(1),
+                                                            ),
+                                                            expr: Box::new(
+                                                                mz_expr::MirScalarExpr::Column(
+                                                                    record_col,
+                                                                ),
+                                                            ),
+                                                        },
+                                                    ),
+                                                },
+                                            );
                                         }
 
-                                        get_inner.let_in(id_gen, |_id_gen, get_inner| {
-                                            let to_reduce = get_inner;
-                                            let input_type = to_reduce.typ();
-                                            let fields = input_type
-                                                .column_types
-                                                .iter()
-                                                .take(input_arity)
-                                                .map(|t| (ColumnName::from("?column?"), t.clone()))
-                                                .collect_vec();
-                                            let agg_input = mz_expr::MirScalarExpr::CallVariadic {
+                                        // Append the column with the result of the window function.
+                                        reduce = reduce.take_dangerous().map_one(
+                                            mz_expr::MirScalarExpr::CallUnary {
+                                                func: mz_expr::UnaryFunc::RecordGet(
+                                                    mz_expr::func::RecordGet(0),
+                                                ),
+                                                expr: Box::new(mz_expr::MirScalarExpr::Column(
+                                                    record_col,
+                                                )),
+                                            },
+                                        );
+
+                                        let agg_col = record_col + 1 + input_arity;
+                                        Ok::<_, PlanError>(
+                                            reduce.project(
+                                                (record_col + 1..agg_col + 1).collect_vec(),
+                                            ),
+                                        )
+                                    })
+                                },
+                            )?;
+                            SS::Column(inner.arity() - 1)
+                        }
+                        WindowExprType::Value(func) => {
+                            let hir_scalar_input = func.expr.clone();
+                            *inner = inner.take_dangerous().let_in_fallible(
+                                id_gen,
+                                |id_gen, mut get_inner| {
+                                    let order_by = order_by
+                                        .into_iter()
+                                        .map(|o| {
+                                            o.applied_to(
+                                                id_gen,
+                                                col_map,
+                                                cte_map,
+                                                &mut get_inner,
+                                                subquery_map,
+                                            )
+                                        })
+                                        .collect::<Result<Vec<_>, _>>()?;
+
+                                    // Compute the encoded args for all rows
+                                    let mir_encoded_args = hir_scalar_input.applied_to(
+                                        id_gen,
+                                        col_map,
+                                        cte_map,
+                                        &mut get_inner,
+                                        subquery_map,
+                                    )?;
+                                    let mir_encoded_args_type = mir_encoded_args
+                                        .typ(&get_inner.typ().column_types)
+                                        .scalar_type;
+
+                                    // Record input arity here so that any group_keys that need to mutate get_inner
+                                    // don't add those columns to the aggregate input.
+                                    let input_arity = get_inner.typ().arity();
+                                    // The reduction that computes the window function must be keyed on the columns
+                                    // from the outer context, plus the expressions in the partition key. The current
+                                    // subquery will be 'executed' for every distinct row from the outer context so
+                                    // by putting the outer columns in the grouping key we isolate each re-execution.
+                                    let mut group_key = col_map
+                                        .inner
+                                        .iter()
+                                        .map(|(_, outer_col)| *outer_col)
+                                        .sorted()
+                                        .collect_vec();
+                                    for p in partition {
+                                        let key = p.applied_to(
+                                            id_gen,
+                                            col_map,
+                                            cte_map,
+                                            &mut get_inner,
+                                            subquery_map,
+                                        )?;
+                                        if let mz_expr::MirScalarExpr::Column(c) = key {
+                                            group_key.push(c);
+                                        } else {
+                                            get_inner = get_inner.map_one(key);
+                                            group_key.push(get_inner.arity() - 1);
+                                        }
+                                    }
+
+                                    get_inner.let_in_fallible(id_gen, |_id_gen, get_inner| {
+                                        let to_reduce = get_inner;
+                                        let input_type = to_reduce.typ();
+
+                                        // Original columns of the relation
+                                        let fields = input_type
+                                            .column_types
+                                            .iter()
+                                            .take(input_arity)
+                                            .map(|t| (ColumnName::from("?column?"), t.clone()))
+                                            .collect_vec();
+
+                                        // Original row made into a record
+                                        let original_row_record =
+                                            mz_expr::MirScalarExpr::CallVariadic {
                                                 func: mz_expr::VariadicFunc::RecordCreate {
                                                     field_names: fields
                                                         .iter()
@@ -997,336 +1206,141 @@ impl HirScalarExpr {
                                                     })
                                                     .collect_vec(),
                                             };
-                                            let record_type = ScalarType::Record {
-                                                fields,
-                                                custom_id: None,
-                                            };
-                                            let agg_input = mz_expr::MirScalarExpr::CallVariadic {
-                                                func: mz_expr::VariadicFunc::ListCreate {
-                                                    elem_type: record_type.clone(),
-                                                },
-                                                exprs: vec![agg_input],
-                                            };
-                                            let mut agg_input = vec![agg_input];
-                                            agg_input.extend(order_by.clone());
-                                            let agg_input = mz_expr::MirScalarExpr::CallVariadic {
+                                        let original_row_record_type = ScalarType::Record {
+                                            fields,
+                                            custom_id: None,
+                                        };
+
+                                        // Build a new record with the original row in a record in a list + the encoded args in a record
+                                        let fn_input_record_fields =
+                                            [original_row_record_type, mir_encoded_args_type]
+                                                .iter()
+                                                .map(|t| {
+                                                    (
+                                                        ColumnName::from("?column?"),
+                                                        t.clone().nullable(false),
+                                                    )
+                                                })
+                                                .collect_vec();
+                                        let fn_input_record =
+                                            mz_expr::MirScalarExpr::CallVariadic {
                                                 func: mz_expr::VariadicFunc::RecordCreate {
-                                                    field_names: (0..1)
-                                                        .map(|_| ColumnName::from("?column?"))
+                                                    field_names: fn_input_record_fields
+                                                        .iter()
+                                                        .map(|(n, _)| n.clone())
                                                         .collect_vec(),
                                                 },
-                                                exprs: agg_input,
+                                                exprs: vec![original_row_record, mir_encoded_args],
                                             };
-                                            let list_type = ScalarType::List {
-                                                element_type: Box::new(record_type),
-                                                custom_id: None,
-                                            };
-                                            let agg_input_type = ScalarType::Record {
-                                                fields: std::iter::once(&list_type)
-                                                    .map(|t| {
-                                                        (
-                                                            ColumnName::from("?column?"),
-                                                            t.clone().nullable(false),
-                                                        )
-                                                    })
+                                        let fn_input_record_type = ScalarType::Record {
+                                            fields: fn_input_record_fields,
+                                            custom_id: None,
+                                        }
+                                        .nullable(false);
+
+                                        // Build a new record with the record above + the ORDER BY exprs
+                                        // This follows the standard encoding of ORDER BY exprs used by aggregate functions
+                                        let mut agg_input = vec![fn_input_record];
+                                        agg_input.extend(order_by.clone());
+                                        let agg_input = mz_expr::MirScalarExpr::CallVariadic {
+                                            func: mz_expr::VariadicFunc::RecordCreate {
+                                                field_names: (0..2)
+                                                    .map(|_| ColumnName::from("?column?"))
                                                     .collect_vec(),
-                                                custom_id: None,
-                                            }
-                                            .nullable(false);
-                                            let func = func.into_expr();
-                                            let aggregate = mz_expr::AggregateExpr {
-                                                func,
-                                                expr: agg_input,
-                                                distinct: false,
-                                            };
-                                            let mut reduce = to_reduce
-                                                .reduce(
-                                                    group_key.clone(),
-                                                    vec![aggregate.clone()],
-                                                    None,
-                                                )
-                                                .flat_map(
-                                                    mz_expr::TableFunc::UnnestList {
-                                                        el_typ: aggregate
-                                                            .func
-                                                            .output_type(agg_input_type)
-                                                            .scalar_type
-                                                            .unwrap_list_element_type()
-                                                            .clone(),
-                                                    },
-                                                    vec![mz_expr::MirScalarExpr::Column(
-                                                        group_key.len(),
-                                                    )],
-                                                );
-                                            let record_col = reduce.arity() - 1;
+                                            },
+                                            exprs: agg_input,
+                                        };
 
-                                            // Unpack the record
-                                            for c in 0..input_arity {
-                                                reduce =
-                                                    reduce
-                                                        .take_dangerous()
-                                                        .map_one(mz_expr::MirScalarExpr::CallUnary {
-                                                        func: mz_expr::UnaryFunc::RecordGet(
-                                                            mz_expr::func::RecordGet(c),
-                                                        ),
-                                                        expr: Box::new(
-                                                            mz_expr::MirScalarExpr::CallUnary {
-                                                                func: mz_expr::UnaryFunc::RecordGet(
-                                                                    mz_expr::func::RecordGet(1),
-                                                                ),
-                                                                expr: Box::new(
-                                                                    mz_expr::MirScalarExpr::Column(
-                                                                        record_col,
-                                                                    ),
-                                                                ),
-                                                            },
-                                                        ),
-                                                    });
-                                            }
+                                        let agg_input_type = ScalarType::Record {
+                                            fields: vec![(
+                                                ColumnName::from("?column?"),
+                                                fn_input_record_type.nullable(false),
+                                            )],
+                                            custom_id: None,
+                                        }
+                                        .nullable(false);
 
-                                            // Append the column with the result of the window function.
+                                        let func = func.into_expr();
+                                        let aggregate = mz_expr::AggregateExpr {
+                                            func,
+                                            expr: agg_input,
+                                            distinct: false,
+                                        };
+
+                                        // Actually call reduce with the window function
+                                        // The input is [((OriginalRow, EncodedArgs), OrderByExprs...)]
+                                        // The output of the aggregation function should be a list of tuples that has
+                                        // the result in the first position, and the original row in the second position
+                                        let mut reduce = to_reduce
+                                            .reduce(
+                                                group_key.clone(),
+                                                vec![aggregate.clone()],
+                                                None,
+                                            )
+                                            .flat_map(
+                                                mz_expr::TableFunc::UnnestList {
+                                                    el_typ: aggregate
+                                                        .func
+                                                        .output_type(agg_input_type)
+                                                        .scalar_type
+                                                        .unwrap_list_element_type()
+                                                        .clone(),
+                                                },
+                                                vec![mz_expr::MirScalarExpr::Column(
+                                                    group_key.len(),
+                                                )],
+                                            );
+                                        let record_col = reduce.arity() - 1;
+
+                                        // Unpack the record output by the window function
+                                        for c in 0..input_arity {
                                             reduce = reduce.take_dangerous().map_one(
                                                 mz_expr::MirScalarExpr::CallUnary {
                                                     func: mz_expr::UnaryFunc::RecordGet(
-                                                        mz_expr::func::RecordGet(0),
+                                                        mz_expr::func::RecordGet(c),
                                                     ),
-                                                    expr: Box::new(mz_expr::MirScalarExpr::Column(
-                                                        record_col,
-                                                    )),
+                                                    expr: Box::new(
+                                                        mz_expr::MirScalarExpr::CallUnary {
+                                                            func: mz_expr::UnaryFunc::RecordGet(
+                                                                mz_expr::func::RecordGet(1),
+                                                            ),
+                                                            expr: Box::new(
+                                                                mz_expr::MirScalarExpr::Column(
+                                                                    record_col,
+                                                                ),
+                                                            ),
+                                                        },
+                                                    ),
                                                 },
                                             );
-
-                                            let agg_col = record_col + 1 + input_arity;
-                                            reduce.project(
-                                                (record_col + 1..agg_col + 1).collect_vec(),
-                                            )
-                                        })
-                                    });
-                            SS::Column(inner.arity() - 1)
-                        }
-                        WindowExprType::Value(func) => {
-                            let hir_scalar_input = func.expr.clone();
-                            *inner =
-                                inner
-                                    .take_dangerous()
-                                    .let_in(id_gen, |id_gen, mut get_inner| {
-                                        let order_by = order_by
-                                            .into_iter()
-                                            .map(|o| {
-                                                o.applied_to(
-                                                    id_gen,
-                                                    col_map,
-                                                    cte_map,
-                                                    &mut get_inner,
-                                                    subquery_map,
-                                                )
-                                            })
-                                            .collect_vec();
-
-                                        // Compute the encoded args for all rows
-                                        let mir_encoded_args = hir_scalar_input.applied_to(
-                                            id_gen,
-                                            col_map,
-                                            cte_map,
-                                            &mut get_inner,
-                                            subquery_map,
-                                        );
-                                        let mir_encoded_args_type = mir_encoded_args
-                                            .typ(&get_inner.typ().column_types)
-                                            .scalar_type;
-
-                                        // Record input arity here so that any group_keys that need to mutate get_inner
-                                        // don't add those columns to the aggregate input.
-                                        let input_arity = get_inner.typ().arity();
-                                        // The reduction that computes the window function must be keyed on the columns
-                                        // from the outer context, plus the expressions in the partition key. The current
-                                        // subquery will be 'executed' for every distinct row from the outer context so
-                                        // by putting the outer columns in the grouping key we isolate each re-execution.
-                                        let mut group_key = col_map
-                                            .inner
-                                            .iter()
-                                            .map(|(_, outer_col)| *outer_col)
-                                            .sorted()
-                                            .collect_vec();
-                                        for p in partition {
-                                            let key = p.applied_to(
-                                                id_gen,
-                                                col_map,
-                                                cte_map,
-                                                &mut get_inner,
-                                                subquery_map,
-                                            );
-                                            if let mz_expr::MirScalarExpr::Column(c) = key {
-                                                group_key.push(c);
-                                            } else {
-                                                get_inner = get_inner.map_one(key);
-                                                group_key.push(get_inner.arity() - 1);
-                                            }
                                         }
 
-                                        get_inner.let_in(id_gen, |_id_gen, get_inner| {
-                                            let to_reduce = get_inner;
-                                            let input_type = to_reduce.typ();
+                                        // Append the column with the result of the window function.
+                                        reduce = reduce.take_dangerous().map_one(
+                                            mz_expr::MirScalarExpr::CallUnary {
+                                                func: mz_expr::UnaryFunc::RecordGet(
+                                                    mz_expr::func::RecordGet(0),
+                                                ),
+                                                expr: Box::new(mz_expr::MirScalarExpr::Column(
+                                                    record_col,
+                                                )),
+                                            },
+                                        );
 
-                                            // Original columns of the relation
-                                            let fields = input_type
-                                                .column_types
-                                                .iter()
-                                                .take(input_arity)
-                                                .map(|t| (ColumnName::from("?column?"), t.clone()))
-                                                .collect_vec();
-
-                                            // Original row made into a record
-                                            let original_row_record =
-                                                mz_expr::MirScalarExpr::CallVariadic {
-                                                    func: mz_expr::VariadicFunc::RecordCreate {
-                                                        field_names: fields
-                                                            .iter()
-                                                            .map(|(name, _)| name.clone())
-                                                            .collect_vec(),
-                                                    },
-                                                    exprs: (0..input_arity)
-                                                        .map(|column| {
-                                                            mz_expr::MirScalarExpr::Column(column)
-                                                        })
-                                                        .collect_vec(),
-                                                };
-                                            let original_row_record_type = ScalarType::Record {
-                                                fields,
-                                                custom_id: None,
-                                            };
-
-                                            // Build a new record with the original row in a record in a list + the encoded args in a record
-                                            let fn_input_record_fields =
-                                                [original_row_record_type, mir_encoded_args_type]
-                                                    .iter()
-                                                    .map(|t| {
-                                                        (
-                                                            ColumnName::from("?column?"),
-                                                            t.clone().nullable(false),
-                                                        )
-                                                    })
-                                                    .collect_vec();
-                                            let fn_input_record =
-                                                mz_expr::MirScalarExpr::CallVariadic {
-                                                    func: mz_expr::VariadicFunc::RecordCreate {
-                                                        field_names: fn_input_record_fields
-                                                            .iter()
-                                                            .map(|(n, _)| n.clone())
-                                                            .collect_vec(),
-                                                    },
-                                                    exprs: vec![
-                                                        original_row_record,
-                                                        mir_encoded_args,
-                                                    ],
-                                                };
-                                            let fn_input_record_type = ScalarType::Record {
-                                                fields: fn_input_record_fields,
-                                                custom_id: None,
-                                            }
-                                            .nullable(false);
-
-                                            // Build a new record with the record above + the ORDER BY exprs
-                                            // This follows the standard encoding of ORDER BY exprs used by aggregate functions
-                                            let mut agg_input = vec![fn_input_record];
-                                            agg_input.extend(order_by.clone());
-                                            let agg_input = mz_expr::MirScalarExpr::CallVariadic {
-                                                func: mz_expr::VariadicFunc::RecordCreate {
-                                                    field_names: (0..2)
-                                                        .map(|_| ColumnName::from("?column?"))
-                                                        .collect_vec(),
-                                                },
-                                                exprs: agg_input,
-                                            };
-
-                                            let agg_input_type = ScalarType::Record {
-                                                fields: vec![(
-                                                    ColumnName::from("?column?"),
-                                                    fn_input_record_type.nullable(false),
-                                                )],
-                                                custom_id: None,
-                                            }
-                                            .nullable(false);
-
-                                            let func = func.into_expr();
-                                            let aggregate = mz_expr::AggregateExpr {
-                                                func,
-                                                expr: agg_input,
-                                                distinct: false,
-                                            };
-
-                                            // Actually call reduce with the window function
-                                            // The input is [((OriginalRow, EncodedArgs), OrderByExprs...)]
-                                            // The output of the aggregation function should be a list of tuples that has
-                                            // the result in the first position, and the original row in the second position
-                                            let mut reduce = to_reduce
-                                                .reduce(
-                                                    group_key.clone(),
-                                                    vec![aggregate.clone()],
-                                                    None,
-                                                )
-                                                .flat_map(
-                                                    mz_expr::TableFunc::UnnestList {
-                                                        el_typ: aggregate
-                                                            .func
-                                                            .output_type(agg_input_type)
-                                                            .scalar_type
-                                                            .unwrap_list_element_type()
-                                                            .clone(),
-                                                    },
-                                                    vec![mz_expr::MirScalarExpr::Column(
-                                                        group_key.len(),
-                                                    )],
-                                                );
-                                            let record_col = reduce.arity() - 1;
-
-                                            // Unpack the record output by the window function
-                                            for c in 0..input_arity {
-                                                reduce =
-                                                    reduce
-                                                        .take_dangerous()
-                                                        .map_one(mz_expr::MirScalarExpr::CallUnary {
-                                                        func: mz_expr::UnaryFunc::RecordGet(
-                                                            mz_expr::func::RecordGet(c),
-                                                        ),
-                                                        expr: Box::new(
-                                                            mz_expr::MirScalarExpr::CallUnary {
-                                                                func: mz_expr::UnaryFunc::RecordGet(
-                                                                    mz_expr::func::RecordGet(1),
-                                                                ),
-                                                                expr: Box::new(
-                                                                    mz_expr::MirScalarExpr::Column(
-                                                                        record_col,
-                                                                    ),
-                                                                ),
-                                                            },
-                                                        ),
-                                                    });
-                                            }
-
-                                            // Append the column with the result of the window function.
-                                            reduce = reduce.take_dangerous().map_one(
-                                                mz_expr::MirScalarExpr::CallUnary {
-                                                    func: mz_expr::UnaryFunc::RecordGet(
-                                                        mz_expr::func::RecordGet(0),
-                                                    ),
-                                                    expr: Box::new(mz_expr::MirScalarExpr::Column(
-                                                        record_col,
-                                                    )),
-                                                },
-                                            );
-
-                                            let agg_col = record_col + 1 + input_arity;
+                                        let agg_col = record_col + 1 + input_arity;
+                                        Ok::<_, PlanError>(
                                             reduce.project(
                                                 (record_col + 1..agg_col + 1).collect_vec(),
-                                            )
-                                        })
-                                    });
+                                            ),
+                                        )
+                                    })
+                                },
+                            )?;
                             SS::Column(inner.arity() - 1)
                         }
                     }
                 }
-            }
+            })
         })
     }
 
@@ -1340,9 +1354,9 @@ impl HirScalarExpr {
         col_map: &ColumnMap,
         cte_map: &mut CteMap,
         inner: mz_expr::MirRelationExpr,
-    ) -> (mz_expr::MirRelationExpr, BTreeMap<HirScalarExpr, usize>) {
+    ) -> Result<(mz_expr::MirRelationExpr, BTreeMap<HirScalarExpr, usize>), PlanError> {
         let mut subquery_map = BTreeMap::new();
-        let output = inner.let_in(id_gen, |id_gen, get_inner| {
+        let output = inner.let_in_fallible(id_gen, |id_gen, get_inner| {
             let mut subqueries = Vec::new();
             let distinct_inner = get_inner.clone().distinct();
             for expr in exprs.iter() {
@@ -1364,7 +1378,8 @@ impl HirScalarExpr {
                                 cte_map,
                                 (**expr).clone(),
                                 apply_requires_distinct_outer,
-                            );
+                            )
+                            .unwrap();
 
                             subqueries.push((e.clone(), subquery));
                         }
@@ -1377,7 +1392,8 @@ impl HirScalarExpr {
                                 cte_map,
                                 (**expr).clone(),
                                 apply_requires_distinct_outer,
-                            );
+                            )
+                            .unwrap();
                             subqueries.push((e.clone(), subquery));
                         }
                         _ => {}
@@ -1386,7 +1402,7 @@ impl HirScalarExpr {
             }
 
             if subqueries.is_empty() {
-                get_inner
+                Ok::<mz_expr::MirRelationExpr, PlanError>(get_inner)
             } else {
                 let inner_arity = get_inner.arity();
                 let mut total_arity = inner_arity;
@@ -1420,10 +1436,13 @@ impl HirScalarExpr {
                             .collect_vec()
                     })
                     .collect_vec();
-                mz_expr::MirRelationExpr::join_scalars(join_inputs, equivalences)
+                Ok(mz_expr::MirRelationExpr::join_scalars(
+                    join_inputs,
+                    equivalences,
+                ))
             }
-        });
-        (output, subquery_map)
+        })?;
+        Ok((output, subquery_map))
     }
 
     /// Rewrites `self` into a `mz_expr::ScalarExpr`.
@@ -1489,7 +1508,7 @@ fn branch<F>(
     inner: HirRelationExpr,
     apply_requires_distinct_outer: bool,
     apply: F,
-) -> mz_expr::MirRelationExpr
+) -> Result<mz_expr::MirRelationExpr, PlanError>
 where
     F: FnOnce(
         &mut mz_ore::id_gen::IdGen,
@@ -1497,7 +1516,7 @@ where
         mz_expr::MirRelationExpr,
         &ColumnMap,
         &mut CteMap,
-    ) -> mz_expr::MirRelationExpr,
+    ) -> Result<mz_expr::MirRelationExpr, PlanError>,
 {
     // TODO: It would be nice to have a version of this code w/o optimizations,
     // at the least for purposes of understanding. It was difficult for one reader
@@ -1558,7 +1577,7 @@ where
     });
     if is_simple && !apply_requires_distinct_outer {
         let new_col_map = col_map.enter_scope(outer.arity() - col_map.len());
-        return outer.let_in(id_gen, |id_gen, get_outer| {
+        return outer.let_in_fallible(id_gen, |id_gen, get_outer| {
             apply(id_gen, inner, get_outer, &new_col_map, cte_map)
         });
     }
@@ -1635,8 +1654,7 @@ where
         }));
     }
     let new_col_map = ColumnMap::new(new_col_map);
-
-    outer.let_in(id_gen, |id_gen, get_outer| {
+    outer.let_in_fallible(id_gen, |id_gen, get_outer| {
         let keyed_outer = if key.is_empty() {
             // Don't depend on outer at all if the branch is not correlated,
             // which yields vastly better query plans. Note that this is a bit
@@ -1648,9 +1666,9 @@ where
         } else {
             get_outer.clone().distinct_by(key.clone())
         };
-        keyed_outer.let_in(id_gen, |id_gen, get_keyed_outer| {
+        keyed_outer.let_in_fallible(id_gen, |id_gen, get_keyed_outer| {
             let oa = get_outer.arity();
-            let branch = apply(id_gen, inner, get_keyed_outer, &new_col_map, cte_map);
+            let branch = apply(id_gen, inner, get_keyed_outer, &new_col_map, cte_map)?;
             let ba = branch.arity();
             let joined = mz_expr::MirRelationExpr::join(
                 vec![get_outer.clone(), branch],
@@ -1661,7 +1679,7 @@ where
             )
             // throw away the right-hand copy of the key we just joined on
             .project((0..oa).chain((oa + key.len())..(oa + ba)).collect());
-            joined
+            Ok(joined)
         })
     })
 }
@@ -1673,7 +1691,7 @@ fn apply_scalar_subquery(
     cte_map: &mut CteMap,
     scalar_subquery: HirRelationExpr,
     apply_requires_distinct_outer: bool,
-) -> mz_expr::MirRelationExpr {
+) -> Result<mz_expr::MirRelationExpr, PlanError> {
     branch(
         id_gen,
         outer,
@@ -1682,15 +1700,14 @@ fn apply_scalar_subquery(
         scalar_subquery,
         apply_requires_distinct_outer,
         |id_gen, expr, get_inner, col_map, cte_map| {
-            let select = expr
-                // compute for every row in get_inner
-                .applied_to(id_gen, get_inner.clone(), col_map, cte_map);
+            // compute for every row in get_inner
+            let select = expr.applied_to(id_gen, get_inner.clone(), col_map, cte_map)?;
             let col_type = select.typ().column_types.into_last();
 
             let inner_arity = get_inner.arity();
             // We must determine a count for each `get_inner` prefix,
             // and report an error if that count exceeds one.
-            let guarded = select.let_in(id_gen, |_id_gen, get_select| {
+            let guarded = select.let_in_fallible(id_gen, |_id_gen, get_select| {
                 // Count for each `get_inner` prefix.
                 let counts = get_select.clone().reduce(
                     (0..inner_arity).collect::<Vec<_>>(),
@@ -1714,11 +1731,11 @@ fn apply_scalar_subquery(
                         col_type.clone().scalar_type,
                     ));
                 // Return `get_select` and any errors added in.
-                get_select.union(errors)
-            });
+                Ok::<_, PlanError>(get_select.union(errors))
+            })?;
             // append Null to anything that didn't return any rows
             let default = vec![(Datum::Null, col_type.scalar_type)];
-            get_inner.lookup(id_gen, guarded, default)
+            Ok(get_inner.lookup(id_gen, guarded, default))
         },
     )
 }
@@ -1730,7 +1747,7 @@ fn apply_existential_subquery(
     cte_map: &mut CteMap,
     subquery_expr: HirRelationExpr,
     apply_requires_distinct_outer: bool,
-) -> mz_expr::MirRelationExpr {
+) -> Result<mz_expr::MirRelationExpr, PlanError> {
     branch(
         id_gen,
         outer,
@@ -1741,13 +1758,14 @@ fn apply_existential_subquery(
         |id_gen, expr, get_inner, col_map, cte_map| {
             let exists = expr
                 // compute for every row in get_inner
-                .applied_to(id_gen, get_inner.clone(), col_map, cte_map)
+                .applied_to(id_gen, get_inner.clone(), col_map, cte_map)?
                 // throw away actual values and just remember whether or not there were __any__ rows
                 .distinct_by((0..get_inner.arity()).collect())
                 // Append true to anything that returned any rows.
                 .map(vec![mz_expr::MirScalarExpr::literal_true()]);
+
             // append False to anything that didn't return any rows
-            get_inner.lookup(id_gen, exists, vec![(Datum::False, ScalarType::Bool)])
+            Ok(get_inner.lookup(id_gen, exists, vec![(Datum::False, ScalarType::Bool)]))
         },
     )
 }
@@ -1759,18 +1777,18 @@ impl AggregateExpr {
         col_map: &ColumnMap,
         cte_map: &mut CteMap,
         inner: &mut mz_expr::MirRelationExpr,
-    ) -> mz_expr::AggregateExpr {
+    ) -> Result<mz_expr::AggregateExpr, PlanError> {
         let AggregateExpr {
             func,
             expr,
             distinct,
         } = self;
 
-        mz_expr::AggregateExpr {
+        Ok(mz_expr::AggregateExpr {
             func: func.into_expr(),
-            expr: expr.applied_to(id_gen, col_map, cte_map, inner, &None),
+            expr: expr.applied_to(id_gen, col_map, cte_map, inner, &None)?,
             distinct,
-        }
+        })
     }
 }
 
@@ -1845,7 +1863,7 @@ fn attempt_outer_join(
     kind: JoinKind,
     oa: usize,
     id_gen: &mut mz_ore::id_gen::IdGen,
-) -> Option<mz_expr::MirRelationExpr> {
+) -> Result<Option<mz_expr::MirRelationExpr>, PlanError> {
     // Both `left` and `right` are decorrelated inputs, whose first `oa` columns
     // correspond to an outer context: we should do the outer join independently
     // for each prefix. In the case that `on` is just some equality tests between
@@ -1872,15 +1890,15 @@ fn attempt_outer_join(
 
     let equijoin_keys = derive_equijoin_cols(oa, la, ra, vec![on.clone()]);
     if equijoin_keys.is_none() {
-        return None;
+        return Ok(None);
     }
 
     let (l_keys, r_keys) = equijoin_keys.unwrap();
 
     // If we've gotten this far, we can do the clever thing.
     // We'll want to use left and right multiple times
-    let result = left.let_in(id_gen, |id_gen, get_left| {
-        right.let_in(id_gen, |id_gen, get_right| {
+    let result = left.let_in_fallible(id_gen, |id_gen, get_left| {
+        right.let_in_fallible(id_gen, |id_gen, get_right| {
             // TODO: we know that we can re-use the arrangements of left and right
             // needed for the inner join with each of the conditional outer joins.
             // It is not clear whether we should hint that, or just let the planner
@@ -1901,7 +1919,7 @@ fn attempt_outer_join(
             .filter(vec![on]);
 
             // We'll want to re-use the results of the join multiple times.
-            join.let_in(id_gen, |id_gen, get_join| {
+            join.let_in_fallible(id_gen, |id_gen, get_join| {
                 let mut result = get_join.clone();
 
                 // A collection of keys present in both left and right collections.
@@ -1913,7 +1931,7 @@ fn attempt_outer_join(
                 // inner join, subtract them from left and right respectively, pad what
                 // remains with nulls, and fold them in to `result`.
 
-                both_keys.let_in(id_gen, |_id_gen, get_both| {
+                both_keys.let_in_fallible(id_gen, |_id_gen, get_both| {
                     if let JoinKind::LeftOuter { .. } | JoinKind::FullOuter = kind {
                         // Rows in `left` that are matched in the inner equijoin.
                         let left_present = mz_expr::MirRelationExpr::join(
@@ -1973,10 +1991,10 @@ fn attempt_outer_join(
                             .union(result)
                     }
 
-                    result
+                    Ok::<_, PlanError>(result)
                 })
             })
         })
-    });
-    Some(result)
+    })?;
+    Ok(Some(result))
 }

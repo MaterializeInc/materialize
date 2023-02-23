@@ -1,0 +1,49 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+name: "Internal: Feedback on CI, Test Frameworks and Debuggability"
+description: |
+  Record any frustrations with the CI, the test frameworks or the product when it comes to being able to debug CI/test failures and product bugs
+title: "<FUNCTIONALITY> required to better debug <FAILURES>"
+labels: [C-bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Apologies for giving you a frustrating CI or debugging experience. Please take the time to describe
+        your frustration so that improvements can be made to make debugging easier in the future.
+  - type: input
+    id: buildkite
+    attributes:
+      label: Buildkite link
+      description: |
+        If your frustration involves a specific CI failure, please provide the link to the Buildkite job.
+
+        To report a flaky test, please use the "CI Flake" template.
+      placeholder: https://buildkite.com/materialize/tests/builds/...
+    validations:
+      required: true
+  - type: textarea
+    id: frustration
+    attributes:
+      label: Describe your frustration
+      description: |
+        Please describe the issue you were trying to debug and the frustration experienced during the process.
+
+        Please provide a step-by-step play-through of the actions you had to take in order to get to the core of the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expectation
+    attributes:
+      label: Describe the expected ideal experience
+      description: |
+        Please describe how your experience could have been better.
+
+        This could include having extra logging, tooling, reporting or any other CI or product functionality that would have helped.

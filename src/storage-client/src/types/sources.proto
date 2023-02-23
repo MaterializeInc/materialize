@@ -279,4 +279,5 @@ message ProtoIngestionDescription {
     ProtoSourceDesc desc = 4;
     reserved 5;
     mz_storage_client.types.instances.ProtoStorageInstanceId instance_id = 6;
+    mz_repr.global_id.ProtoGlobalId remap_collection_id = 7;
 }

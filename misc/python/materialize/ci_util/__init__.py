@@ -11,6 +11,7 @@
 
 import os
 from pathlib import Path
+from typing import Any
 
 import requests
 
@@ -71,3 +72,37 @@ def upload_junit_report(suite: str, junit_report: Path) -> None:
     except Exception as e:
         print(f"Got exception when uploading analytics: {e}")
     print(res.status_code, res.text)
+
+
+def get_artifacts() -> Any:
+    """Get artifact informations from Buildkite. Outside of CI, this function does nothing."""
+
+    if "CI" not in os.environ:
+        return []
+
+    ui.header(f"Getting artifact informations from Buildkite")
+    build = os.environ["BUILDKITE_BUILD_NUMBER"]
+    build_id = os.environ["BUILDKITE_BUILD_ID"]
+    job = os.environ["BUILDKITE_JOB_ID"]
+    token = os.environ["BUILDKITE_AGENT_ACCESS_TOKEN"]
+
+    payload = {
+        "query": "*",
+        "step": job,
+        "build": build,
+        "state": "finished",
+        "includeRetriedJobs": "false",
+        "includeDuplicates": "false",
+    }
+
+    res = requests.get(
+        f"https://agent.buildkite.com/v3/builds/{build_id}/artifacts/search",
+        params=payload,
+        headers={"Authorization": f"Token {token}"},
+    )
+
+    if res.status_code != 200:
+        print(f"Failed to get artifacts: {res.status_code} {res.text}")
+        return []
+
+    return res.json()

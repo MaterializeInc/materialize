@@ -2254,6 +2254,7 @@ pub struct ExplainStatement<T: AstInfo> {
     pub stage: ExplainStage,
     pub config_flags: Vec<Ident>,
     pub format: ExplainFormat,
+    pub no_errors: bool,
     pub explainee: Explainee<T>,
 }
 
@@ -2269,6 +2270,9 @@ impl<T: AstInfo> AstDisplay for ExplainStatement<T> {
         f.write_str(" AS ");
         f.write_node(&self.format);
         f.write_str(" FOR ");
+        if self.no_errors {
+            f.write_str("BROKEN ");
+        }
         f.write_node(&self.explainee);
     }
 }

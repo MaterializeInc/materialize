@@ -222,7 +222,7 @@ pub fn plan_create_table(
                     // Ensure expression can be planned and yields the correct
                     // type.
                     let mut expr = expr.clone();
-                    transform_ast::transform_expr(scx, &mut expr)?;
+                    transform_ast::transform(scx, &mut expr)?;
                     let _ = query::plan_default_expr(scx, &expr, &ty)?;
                     default = expr.clone();
                 }
@@ -353,11 +353,6 @@ pub fn plan_create_source(
         referenced_subsources,
         progress_subsource,
     } = &stmt;
-
-    // TODO: enable progress subsources.
-    if progress_subsource.is_some() {
-        sql_bail!("[internal error] should have errored in purification");
-    }
 
     let envelope = envelope.clone().unwrap_or(Envelope::None);
 
@@ -1031,6 +1026,22 @@ pub fn plan_create_source(
         timestamp_interval,
     };
 
+    // MIGRATION: v0.44 This can be converted to an unwrap in v0.46
+    let progress_subsource = progress_subsource
+        .as_ref()
+        .map(|name| match name {
+            DeferredObjectName::Named(name) => match name {
+                ResolvedObjectName::Object { id, .. } => Ok(*id),
+                ResolvedObjectName::Cte { .. } | ResolvedObjectName::Error => {
+                    sql_bail!("[internal error] invalid target id")
+                }
+            },
+            DeferredObjectName::Deferred(_) => {
+                sql_bail!("[internal error] progress subsource must be named during purification")
+            }
+        })
+        .transpose()?;
+
     let if_not_exists = *if_not_exists;
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.clone())?)?;
     let create_sql = normalize::create_statement(scx, Statement::CreateSource(stmt))?;
@@ -1058,6 +1069,7 @@ pub fn plan_create_source(
             // Currently no source reads from another source
             source_imports: BTreeSet::new(),
             subsource_exports,
+            progress_subsource,
         }),
         desc,
     };

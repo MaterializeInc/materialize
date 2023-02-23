@@ -12,11 +12,12 @@
 #![cfg(feature = "tracing_")]
 
 use std::fmt::Debug;
+use std::fmt::Display;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::Mutex;
 
-use tracing::{span, subscriber};
+use tracing::{span, subscriber, Level};
 use tracing_subscriber::{field, layer};
 
 /// A tracing layer used to accumulate a sequence of explainable plans.
@@ -108,6 +109,55 @@ pub fn trace_plan<T: Clone + 'static>(plan: &T) {
             trace.push(plan)
         }
     });
+}
+
+/// Create a span identified by `segment` and trace `plan` in it.
+///
+/// This primitive is useful for instrumentic code, see this commit[^example]
+/// for an example.
+///
+/// [^example]: <https://github.com/MaterializeInc/materialize/commit/2ce93229>
+pub fn dbg_plan<S: Display, T: Clone + 'static>(segment: S, plan: &T) {
+    span!(Level::DEBUG, "segment", path.segment = segment.to_string()).in_scope(|| {
+        trace_plan(plan);
+    });
+}
+
+/// Create a span identified by `segment` and trace `misc` in it.
+///
+/// This primitive is useful for instrumentic code, see this commit[^example]
+/// for an example.
+///
+/// [^example]: <https://github.com/MaterializeInc/materialize/commit/2ce93229>
+pub fn dbg_misc<S: Display, T: Display>(segment: S, misc: T) {
+    span!(Level::DEBUG, "segment", path.segment = segment.to_string()).in_scope(|| {
+        trace_plan(&misc.to_string());
+    });
+}
+
+/// A helper struct for wrapping entries that represent the invocation context
+/// of a function or method call into an object that renders as their hash.
+///
+/// Useful when constructing path segments when instrumenting a function trace
+/// with additional debugging information.
+#[allow(missing_debug_implementations)]
+pub struct ContextHash(u64);
+
+impl ContextHash {
+    pub fn of<T: std::hash::Hash>(t: T) -> Self {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::Hasher;
+
+        let mut h = DefaultHasher::new();
+        t.hash(&mut h);
+        ContextHash(h.finish())
+    }
+}
+
+impl Display for ContextHash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:x}", self.0 & 0xFFFFFFFu64) // show last 28 bits
+    }
 }
 
 /// A [`layer::Layer`] implementation for [`PlanTrace`].

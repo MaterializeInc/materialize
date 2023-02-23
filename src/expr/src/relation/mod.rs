@@ -1194,12 +1194,58 @@ impl MirRelationExpr {
         aggregates: Vec<AggregateExpr>,
         expected_group_size: Option<usize>,
     ) -> Self {
-        MirRelationExpr::Reduce {
-            input: Box::new(self),
-            group_key: group_key.into_iter().map(MirScalarExpr::Column).collect(),
-            aggregates,
-            monotonic: false,
-            expected_group_size,
+        // Check if we have an unsigned aggregation and add an appropriate cast here
+        // when the output is expected to be unsigned. This is done since rendering
+        // needs to accumulate to a signed number to deal with retractions, and we do
+        // not want to panic there (#17510).
+        let mut unsigned_sums = aggregates
+            .iter()
+            .enumerate()
+            .filter(|(_, agg)| {
+                agg.func == AggregateFunc::SumUInt16 || agg.func == AggregateFunc::SumUInt32
+            })
+            .map(|(idx, _)| idx)
+            .peekable();
+        if unsigned_sums.peek().is_some() {
+            let unsigned_sums: Vec<_> = unsigned_sums.collect();
+
+            // First, we build the cast expressions.
+            let key_arity = group_key.len();
+            let casts: Vec<_> = unsigned_sums
+                .iter()
+                .map(|idx| MirScalarExpr::CallUnary {
+                    func: crate::UnaryFunc::CastNumericToUint64(crate::func::CastNumericToUint64),
+                    expr: Box::new(MirScalarExpr::Column(key_arity + idx)),
+                })
+                .collect();
+
+            // Then, we create the reduction, followed by a map.
+            let expr_arity = key_arity + aggregates.len();
+            let reduce = MirRelationExpr::Reduce {
+                input: Box::new(self),
+                group_key: group_key.into_iter().map(MirScalarExpr::Column).collect(),
+                aggregates,
+                monotonic: false,
+                expected_group_size,
+            };
+            let map = reduce.map(casts);
+
+            // Finally, we create a projection keeping only the cast values.
+            let mut outputs = (0..expr_arity).collect::<Vec<_>>();
+            let mut offset = 0;
+            for idx in unsigned_sums {
+                outputs[key_arity + idx] = expr_arity + offset;
+                offset += 1;
+            }
+            map.project(outputs)
+        } else {
+            MirRelationExpr::Reduce {
+                input: Box::new(self),
+                group_key: group_key.into_iter().map(MirScalarExpr::Column).collect(),
+                aggregates,
+                monotonic: false,
+                expected_group_size,
+            }
         }
     }
 
@@ -1421,6 +1467,33 @@ impl MirRelationExpr {
                 value: Box::new(self),
                 body: Box::new(body),
             }
+        }
+    }
+
+    /// Like [MirRelationExpr::let_in], but with a fallible return type.
+    pub fn let_in_fallible<Body, E>(
+        self,
+        id_gen: &mut IdGen,
+        body: Body,
+    ) -> Result<MirRelationExpr, E>
+    where
+        Body: FnOnce(&mut IdGen, MirRelationExpr) -> Result<MirRelationExpr, E>,
+    {
+        if let MirRelationExpr::Get { .. } = self {
+            // already done
+            body(id_gen, self)
+        } else {
+            let id = LocalId::new(id_gen.allocate_id());
+            let get = MirRelationExpr::Get {
+                id: Id::Local(id),
+                typ: self.typ(),
+            };
+            let body = (body)(id_gen, get)?;
+            Ok(MirRelationExpr::Let {
+                id,
+                value: Box::new(self),
+                body: Box::new(body),
+            })
         }
     }
 

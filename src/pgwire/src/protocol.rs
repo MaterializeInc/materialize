@@ -181,6 +181,7 @@ where
                 let external_metadata = Some(ExternalUserMetadata {
                     user_id: claims.best_user_id(),
                     group_id: claims.tenant_id,
+                    admin: claims.admin(frontegg.admin_role()),
                 });
                 (external_metadata, is_expired.left_future())
             }

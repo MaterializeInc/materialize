@@ -330,7 +330,7 @@ impl<'a> Parser<'a> {
         self.parse_subexpr(Precedence::Zero)
     }
 
-    /// Parse tokens until the precedence changes
+    /// Parse tokens until the precedence decreases
     fn parse_subexpr(&mut self, precedence: Precedence) -> Result<Expr<Raw>, ParserError> {
         let expr = self.checked_recur_mut(|parser| parser.parse_prefix())?;
         self.parse_subexpr_seeded(precedence, expr)
@@ -491,7 +491,7 @@ impl<'a> Parser<'a> {
         // The approach taken here avoids backtracking by deferring the decision
         // of whether to parse as a subquery or a nested expression until we get
         // to the point marked (2) above. Once there, we know that the presence
-        // of a set operator implies that the parentheses belonged to a the
+        // of a set operator implies that the parentheses belonged to the
         // subquery; otherwise, they belonged to the expression.
         //
         // See also PostgreSQL's comments on the matter:
@@ -4734,7 +4734,7 @@ impl<'a> Parser<'a> {
             let next_token = self.peek_token();
             let op = self.parse_set_operator(&next_token);
             let next_precedence = match op {
-                // UNION and EXCEPT have the same binding power and evaluate left-to-right
+                // UNION and EXCEPT have the same precedence and evaluate left-to-right
                 Some(SetOperator::Union) | Some(SetOperator::Except) => SetPrecedence::UnionExcept,
                 // INTERSECT has higher precedence than UNION/EXCEPT
                 Some(SetOperator::Intersect) => SetPrecedence::Intersect,
@@ -5716,6 +5716,8 @@ impl<'a> Parser<'a> {
             self.expect_keyword(FOR)?;
         }
 
+        let no_errors = self.parse_keyword(BROKEN);
+
         // VIEW name | MATERIALIZED VIEW name | query
         let explainee = if self.parse_keyword(VIEW) {
             Explainee::View(self.parse_raw_name()?)
@@ -5729,6 +5731,7 @@ impl<'a> Parser<'a> {
             stage: stage.unwrap_or(ExplainStage::OptimizedPlan),
             config_flags,
             format,
+            no_errors,
             explainee,
         }))
     }

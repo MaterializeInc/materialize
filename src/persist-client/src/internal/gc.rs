@@ -253,6 +253,7 @@ where
             .state_versions
             .fetch_all_live_states::<T>(req.shard_id)
             .await
+            .expect("gc should only be called on an initialized shard")
             // TODO: Consider pulling the K, V, D params off of GC. If we do,
             // then we should be able to delete TypedStateVersionsIter (and
             // probably merge UntypedStateVersionsIter into StateVersionsIter).

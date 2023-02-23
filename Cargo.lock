@@ -3554,6 +3554,7 @@ dependencies = [
  "mz-timely-util",
  "once_cell",
  "prometheus",
+ "regex",
  "scopeguard",
  "serde",
  "smallvec",
@@ -3598,7 +3599,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.44.0-dev"
+version = "0.45.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3746,7 +3747,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.44.0-dev"
+version = "0.45.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -3936,11 +3937,16 @@ dependencies = [
  "askama",
  "axum",
  "headers",
+ "http",
+ "hyper",
  "include_dir",
  "mz-ore",
  "prometheus",
  "serde",
  "serde_json",
+ "tokio",
+ "tower",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
  "workspace-hack",
@@ -4274,7 +4280,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.44.0-dev"
+version = "0.45.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -7302,7 +7308,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#6a736009d0276b181f0a069174390b99c8bd9ae1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#5b808fff9bc83be29a2091c9a5d8910e009a6b15"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7320,12 +7326,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#6a736009d0276b181f0a069174390b99c8bd9ae1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#5b808fff9bc83be29a2091c9a5d8910e009a6b15"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#6a736009d0276b181f0a069174390b99c8bd9ae1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#5b808fff9bc83be29a2091c9a5d8910e009a6b15"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7341,7 +7347,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#6a736009d0276b181f0a069174390b99c8bd9ae1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#5b808fff9bc83be29a2091c9a5d8910e009a6b15"
 dependencies = [
  "columnation",
  "serde",
@@ -7350,7 +7356,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#6a736009d0276b181f0a069174390b99c8bd9ae1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#5b808fff9bc83be29a2091c9a5d8910e009a6b15"
 
 [[package]]
 name = "tiny-keccak"

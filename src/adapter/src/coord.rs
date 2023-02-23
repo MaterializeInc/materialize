@@ -555,7 +555,7 @@ impl Coordinator {
                 },
             )?;
             for (replica_id, replica) in instance.replicas_by_id.clone() {
-                let introspection_collections = replica
+                let introspection_collections: Vec<_> = replica
                     .config
                     .compute
                     .logging
@@ -563,6 +563,11 @@ impl Coordinator {
                     .iter()
                     .map(|(variant, id)| (*id, variant.desc().into()))
                     .collect();
+
+                self.controller
+                    .storage
+                    .migrate_collections(introspection_collections.clone())
+                    .await?;
 
                 // Create collections does not recreate existing collections, so it is safe to
                 // always call it.
@@ -699,10 +704,14 @@ impl Coordinator {
                             source_imports,
                             source_exports,
                             instance_id: ingestion.cluster_id,
+                            remap_collection_id: ingestion.remap_collection_id.expect(
+                                "ingestion-based collection must name remap collection before going to storage",
+                            ),
                         }),
                         source_status_collection_id,
                     )
                 }
+                DataSourceDesc::Progress => (DataSource::Progress, None),
                 DataSourceDesc::Source => (DataSource::Other, None),
                 DataSourceDesc::Introspection(introspection) => {
                     (DataSource::Introspection(*introspection), None)
@@ -715,6 +724,30 @@ impl Coordinator {
                 status_collection_id,
             }
         }
+
+        self.controller
+            .storage
+            .migrate_collections(
+                entries
+                    .iter()
+                    .filter_map(|entry| match entry.item() {
+                        CatalogItem::Source(source) => Some((
+                            entry.id(),
+                            source_desc(entry.id(), source_status_collection_id, source),
+                        )),
+                        CatalogItem::Table(table) => {
+                            let collection_desc = table.desc.clone().into();
+                            Some((entry.id(), collection_desc))
+                        }
+                        CatalogItem::MaterializedView(mview) => {
+                            let collection_desc = mview.desc.clone().into();
+                            Some((entry.id(), collection_desc))
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+            )
+            .await?;
 
         // Do a first pass looking for collections to create so we can call
         // create_collections only once with a large batch. This batches only

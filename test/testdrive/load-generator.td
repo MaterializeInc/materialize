@@ -10,12 +10,13 @@
 > CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
 > SHOW SOURCES
-accounts      subsource      <null>
-auction_house load-generator ${arg.default-storage-size}
-auctions      subsource      <null>
-bids          subsource      <null>
-organizations subsource      <null>
-users         subsource      <null>
+accounts                subsource      <null>
+auction_house           load-generator ${arg.default-storage-size}
+auction_house_progress  subsource <null>
+auctions                subsource      <null>
+bids                    subsource      <null>
+organizations           subsource      <null>
+users                   subsource      <null>
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
@@ -58,3 +59,13 @@ contains: unsupported max cardinality
 
 > SELECT count(*) FROM counter3
 0
+
+# Query automatically generated progress topic
+$ set-regex match=\d+ replacement=<NUMBER>
+> SELECT "offset" FROM auction_house_progress
+<NUMBER>
+
+# Ensure we report the write frontier of the progress subsource
+$ set-regex match=(\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
+> EXPLAIN TIMESTAMP FOR SELECT * FROM auction_house_progress
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.auction_house_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"

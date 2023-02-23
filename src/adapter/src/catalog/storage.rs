@@ -738,15 +738,44 @@ impl Connection {
             .map(|ev| ev.event))
     }
 
+    /// Loads storage usage events and permanently deletes from the stash those
+    /// that happened more than the retention period ago from boot_ts.
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn storage_usage(
+    pub async fn fetch_and_prune_storage_usage(
         &mut self,
-    ) -> Result<impl Iterator<Item = VersionedStorageUsage>, Error> {
-        Ok(COLLECTION_STORAGE_USAGE
-            .peek_one(&mut self.stash)
-            .await?
-            .into_keys()
-            .map(|ev| ev.metric))
+        retention_period: Option<Duration>,
+    ) -> Result<Vec<VersionedStorageUsage>, Error> {
+        // If no usage retention period is set, set the cutoff to MIN so nothing
+        // is removed.
+        let cutoff_ts = match retention_period {
+            None => u128::MIN,
+            Some(period) => u128::from(self.boot_ts) - period.as_millis(),
+        };
+        Ok(self
+            .stash
+            .with_transaction(move |tx| {
+                Box::pin(async move {
+                    let collection = COLLECTION_STORAGE_USAGE.from_tx(&tx).await?;
+                    let rows = tx.peek_one(collection).await?;
+                    let mut events = Vec::with_capacity(rows.len());
+                    let mut batch = collection.make_batch_tx(&tx).await?;
+                    for ev in rows.into_keys() {
+                        if u128::from(ev.metric.timestamp()) >= cutoff_ts {
+                            events.push(ev.metric);
+                        } else if retention_period.is_some() {
+                            collection.append_to_batch(&mut batch, &ev, &(), -1);
+                        }
+                    }
+                    // Delete things only if a retention period is
+                    // specified (otherwise opening readonly catalogs
+                    // can fail).
+                    if retention_period.is_some() {
+                        tx.append(vec![batch]).await?;
+                    }
+                    Ok(events)
+                })
+            })
+            .await?)
     }
 
     /// Load the persisted mapping of system object to global ID. Key is (schema-name, object-name).

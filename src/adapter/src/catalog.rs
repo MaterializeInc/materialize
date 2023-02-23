@@ -12,6 +12,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -1497,6 +1498,8 @@ pub enum DataSourceDesc {
     Source,
     /// Receives introspection data from an internal system
     Introspection(IntrospectionType),
+    /// Receives data from the source's reclocking/remapping operations.
+    Progress,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1517,7 +1520,9 @@ impl Source {
     pub fn is_external(&self) -> bool {
         match self.data_source {
             DataSourceDesc::Ingestion(_) => true,
-            DataSourceDesc::Source | DataSourceDesc::Introspection(_) => false,
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Source => false,
         }
     }
 
@@ -1525,7 +1530,7 @@ impl Source {
     pub fn source_type(&self) -> &str {
         match &self.data_source {
             DataSourceDesc::Ingestion(ingestion) => ingestion.desc.connection.name(),
-            DataSourceDesc::Source => "subsource",
+            DataSourceDesc::Progress | DataSourceDesc::Source => "subsource",
             DataSourceDesc::Introspection(_) => "source",
         }
     }
@@ -1563,8 +1568,9 @@ impl Source {
                     Some("materialize")
                 }
             },
-            DataSourceDesc::Source => None,
-            DataSourceDesc::Introspection(_) => None,
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Source => None,
         }
     }
 
@@ -1572,7 +1578,9 @@ impl Source {
     pub fn connection_id(&self) -> Option<GlobalId> {
         match &self.data_source {
             DataSourceDesc::Ingestion(ingestion) => ingestion.desc.connection.connection_id(),
-            DataSourceDesc::Source | DataSourceDesc::Introspection(_) => None,
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Source => None,
         }
     }
 }
@@ -1597,6 +1605,9 @@ pub struct Ingestion {
     /// This map does *not* include the export of the source associated with the ingestion itself
     pub subsource_exports: BTreeMap<GlobalId, usize>,
     pub cluster_id: ClusterId,
+    /// The ID of this collection's remap/progress collection.
+    // MIGRATION: v0.44 This can be converted to a `GlobalId` in v0.46
+    pub remap_collection_id: Option<GlobalId>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1760,7 +1771,9 @@ impl CatalogItem {
         match &self {
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion(ingestion) => Ok(Some(&ingestion.desc)),
-                DataSourceDesc::Source | DataSourceDesc::Introspection(_) => Ok(None),
+                DataSourceDesc::Introspection(_)
+                | DataSourceDesc::Progress
+                | DataSourceDesc::Source => Ok(None),
             },
             _ => Err(SqlCatalogError::UnexpectedType {
                 name: entry.name().item.to_string(),
@@ -1907,8 +1920,9 @@ impl CatalogItem {
             CatalogItem::Index(index) => Some(index.cluster_id),
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion(ingestion) => Some(ingestion.cluster_id),
-                DataSourceDesc::Source => None,
-                DataSourceDesc::Introspection(_) => None,
+                DataSourceDesc::Introspection(_)
+                | DataSourceDesc::Progress
+                | DataSourceDesc::Source => None,
             },
             CatalogItem::Sink(sink) => Some(sink.cluster_id),
             CatalogItem::Table(_)
@@ -2722,17 +2736,15 @@ impl Catalog {
             builtin_table_updates.push(catalog.state.pack_audit_log_update(&event)?);
         }
 
-        // To avoid reading over storage_usage() multiple times, do both the
-        // table updates and most-recent-timestamp calculations on a single
-        // iterator.
-        let storage_usage_events = catalog.storage().await.storage_usage().await?;
-        // If no usage retention period is set, we set it to an unreasonably large number
-        // of milliseconds, so that the filter code is simpler.
-        let cutoff_ts = match config.storage_usage_retention_period {
-            None => u128::MIN,
-            Some(period) => u128::from(catalog.storage().await.boot_ts()) - period.as_millis(),
-        };
-        for event in storage_usage_events.filter(|e| u128::from(e.timestamp()) > cutoff_ts) {
+        // To avoid reading over storage_usage events multiple times, do both
+        // the table updates and delete calculations in a single read over the
+        // data.
+        let storage_usage_events = catalog
+            .storage()
+            .await
+            .fetch_and_prune_storage_usage(config.storage_usage_retention_period)
+            .await?;
+        for event in storage_usage_events {
             builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
         }
 
@@ -3286,7 +3298,8 @@ impl Catalog {
         c: &Catalog,
     ) -> Result<Catalog, Error> {
         let mut c = c.clone();
-        let mut awaiting_dependencies: BTreeMap<GlobalId, Vec<_>> = BTreeMap::new();
+        let mut awaiting_id_dependencies: BTreeMap<GlobalId, Vec<_>> = BTreeMap::new();
+        let mut awaiting_name_dependencies: BTreeMap<String, Vec<_>> = BTreeMap::new();
         let mut items: VecDeque<_> = tx.loaded_items().into_iter().collect();
         while let Some((id, name, def)) = items.pop_front() {
             let d_c = def.clone();
@@ -3308,10 +3321,30 @@ impl Catalog {
                 }
                 // If we were missing a dependency, wait for it to be added.
                 Err(AdapterError::PlanError(plan::PlanError::InvalidId(missing_dep))) => {
-                    awaiting_dependencies
+                    awaiting_id_dependencies
                         .entry(missing_dep)
                         .or_default()
                         .push((id, name, def));
+                    continue;
+                }
+                // If we were missing a dependency, wait for it to be added.
+                Err(AdapterError::PlanError(plan::PlanError::Catalog(
+                    SqlCatalogError::UnknownItem(missing_dep),
+                ))) => {
+                    match GlobalId::from_str(&missing_dep) {
+                        Ok(id) => {
+                            awaiting_id_dependencies
+                                .entry(id)
+                                .or_default()
+                                .push((id, name, def));
+                        }
+                        Err(_) => {
+                            awaiting_name_dependencies
+                                .entry(missing_dep)
+                                .or_default()
+                                .push((id, name, def));
+                        }
+                    }
                     continue;
                 }
                 Err(e) => {
@@ -3321,17 +3354,45 @@ impl Catalog {
                 }
             };
             let oid = c.allocate_oid()?;
-            c.state.insert_item(id, oid, name, item);
-            if let Some(dependent_items) = awaiting_dependencies.remove(&id) {
+
+            // Enqueue any items waiting on this dependency.
+            if let Some(dependent_items) = awaiting_id_dependencies.remove(&id) {
                 items.extend(dependent_items);
             }
+            let full_name = c.resolve_full_name(&name, None);
+            if let Some(dependent_items) = awaiting_name_dependencies.remove(&full_name.to_string())
+            {
+                items.extend(dependent_items);
+            }
+
+            c.state.insert_item(id, oid, name, item);
         }
 
-        assert!(
-            awaiting_dependencies.is_empty(),
-            "the following dependencies were never filled {:?}",
-            awaiting_dependencies
-        );
+        // Error on any unsatisfied dependencies.
+        if let Some((missing_dep, mut dependents)) = awaiting_id_dependencies.into_iter().next() {
+            let (id, name, _def) = dependents.remove(0);
+            return Err(Error::new(ErrorKind::Corruption {
+                detail: format!(
+                    "failed to deserialize item {} ({}): {}",
+                    id,
+                    name,
+                    AdapterError::PlanError(plan::PlanError::InvalidId(missing_dep))
+                ),
+            }));
+        }
+
+        if let Some((missing_dep, mut dependents)) = awaiting_name_dependencies.into_iter().next() {
+            let (id, name, _def) = dependents.remove(0);
+            return Err(Error::new(ErrorKind::Corruption {
+                detail: format!(
+                    "failed to deserialize item {} ({}): {}",
+                    id,
+                    name,
+                    AdapterError::SqlCatalog(SqlCatalogError::UnknownItem(missing_dep))
+                ),
+            }));
+        }
+
         c.transient_revision = 1;
         Ok(c)
     }
@@ -5699,11 +5760,10 @@ impl Catalog {
                                     self.state.clusters_by_linked_object_id[&id]
                                 }
                             },
+                            remap_collection_id: ingestion.progress_subsource,
                         })
                     }
-                    mz_sql::plan::DataSourceDesc::Progress => {
-                        unreachable!("progress subsources error in purification")
-                    }
+                    mz_sql::plan::DataSourceDesc::Progress => DataSourceDesc::Progress,
                     mz_sql::plan::DataSourceDesc::Source => DataSourceDesc::Source,
                 },
                 desc: source.desc,
@@ -6708,10 +6768,19 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
     fn subsources(&self) -> Vec<GlobalId> {
         match &self.item {
             CatalogItem::Source(source) => match &source.data_source {
-                DataSourceDesc::Ingestion(ingestion) => {
-                    ingestion.subsource_exports.keys().copied().collect()
-                }
-                DataSourceDesc::Source | DataSourceDesc::Introspection(_) => vec![],
+                DataSourceDesc::Ingestion(ingestion) => ingestion
+                    .subsource_exports
+                    .keys()
+                    .copied()
+                    .chain(std::iter::once(
+                        ingestion
+                            .remap_collection_id
+                            .expect("remap collection must named by this point"),
+                    ))
+                    .collect(),
+                DataSourceDesc::Introspection(_)
+                | DataSourceDesc::Progress
+                | DataSourceDesc::Source => vec![],
             },
             CatalogItem::Table(_)
             | CatalogItem::Log(_)

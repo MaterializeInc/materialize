@@ -55,3 +55,18 @@ fish          value
 # Terminal sources have empty uppers
 > EXPLAIN TIMESTAMP FOR SELECT * FROM unit_terminated
 "                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <>\n                          upper:[]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.unit_terminated (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[]\n"
+
+# Query automatically generated progress topics
+> SELECT * FROM unit_progress
+3
+
+> SELECT * FROM unit_terminated_progress
+
+# Ensure we report the write frontier of the progress subsource
+$ set-regex match=(\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
+
+> EXPLAIN TIMESTAMP FOR SELECT * FROM unit_progress
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.unit_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
+
+> EXPLAIN TIMESTAMP FOR SELECT * FROM unit_terminated_progress
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <>\n                          upper:[]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.unit_terminated_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[]\n"

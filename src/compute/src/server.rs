@@ -36,8 +36,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::halt;
 use mz_persist_client::cache::PersistClientCache;
 
-use crate::compute_state::ActiveComputeState;
-use crate::compute_state::ComputeState;
+use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
 use crate::logging::compute::ComputeEvent;
 use crate::metrics::ComputeMetrics;
 use crate::{TraceManager, TraceMetrics};
@@ -471,9 +470,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
         // and creating new dataflows, in addition to standard peek and compaction commands.
         // The result should be the same as if dropping all dataflows and running `new_commands`.
         let mut todo_commands = Vec::new();
-        // Exported identifiers from dataflows we retain.
-        let mut retain_ids = BTreeSet::default();
-
         // We only have a compute history if we are in an initialized state
         // (i.e. after a `CreateInstance`).
         // If this is not the case, just copy `new_commands` into `todo_commands`.
@@ -527,6 +523,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
             // Compaction commands that can be applied to existing dataflows.
             let mut old_compaction = BTreeMap::default();
+            // Exported identifiers from dataflows we retain.
+            let mut retain_ids = BTreeSet::default();
+            // `as_of` frontiers of collections exported from requested dataflows.
+            let mut new_as_ofs = BTreeMap::default();
 
             // Traverse new commands, sorting out what remediation we can do.
             for command in new_commands.iter() {
@@ -537,7 +537,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
                         // Attempt to find an existing match for each dataflow.
                         for dataflow in dataflows.iter() {
+                            let as_of = dataflow.as_of.as_ref().unwrap();
                             let export_ids = dataflow.export_ids().collect::<BTreeSet<_>>();
+                            new_as_ofs.extend(export_ids.iter().map(|id| (*id, as_of.clone())));
+
                             if let Some(old_dataflow) = old_dataflows.get(&export_ids) {
                                 let compatible = old_dataflow.compatible_with(dataflow);
                                 let uncompacted = !export_ids
@@ -560,7 +563,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                                     // and compact its outputs to the dataflow's `as_of`.
                                     old_dataflows.remove(&export_ids);
                                     for id in export_ids.iter() {
-                                        old_compaction.insert(*id, dataflow.as_of.clone().unwrap());
+                                        old_compaction.insert(*id, as_of.clone());
                                     }
                                     retain_ids.extend(export_ids);
                                 } else {
@@ -637,18 +640,22 @@ impl<'w, A: Allocate> Worker<'w, A> {
             }
             // We compact away removed frontiers, and so only need to reset ids we continue to use.
             // We must remember, though, to compensate what already was sent to logging sources.
-            for (&id, frontier) in compute_state.reported_frontiers.iter_mut() {
+            for (&id, reported_frontier) in compute_state.reported_frontiers.iter_mut() {
+                let new_reported_frontier = match new_as_ofs.remove(&id) {
+                    Some(lower) => ReportedFrontier::NotReported { lower },
+                    None => ReportedFrontier::new(),
+                };
+
                 if let Some(logger) = &compute_state.compute_logger {
-                    if let Some(&time) = frontier.get(0) {
+                    if let Some(time) = reported_frontier.logging_time() {
                         logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
-                        logger.log(ComputeEvent::Frontier {
-                            id,
-                            time: Timestamp::minimum(),
-                            diff: 1,
-                        });
+                    }
+                    if let Some(time) = new_reported_frontier.logging_time() {
+                        logger.log(ComputeEvent::Frontier { id, time, diff: 1 });
                     }
                 }
-                *frontier = timely::progress::Antichain::from_elem(<_>::minimum());
+
+                *reported_frontier = new_reported_frontier;
             }
             // Sink tokens should be retained for retained dataflows, and dropped for dropped dataflows.
             compute_state
