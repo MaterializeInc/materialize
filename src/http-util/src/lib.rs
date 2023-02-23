@@ -238,3 +238,76 @@ where
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http::{header, Method, Request, Response};
+    use hyper::Body;
+    use std::convert::Infallible;
+    use tower::{Service, ServiceBuilder, ServiceExt};
+    use tower_http::cors::CorsLayer;
+
+    #[allow(clippy::unused_async)]
+    async fn handle(_request: Request<Body>) -> Result<Response<Body>, Infallible> {
+        Ok(Response::new(Body::empty()))
+    }
+
+    #[tokio::test]
+    async fn test_cors() -> Result<(), Box<dyn std::error::Error>> {
+        let allowed = vec![
+            HeaderValue::from_str("https://example.com").unwrap(),
+            HeaderValue::from_str("*.example.com").unwrap(),
+        ];
+        let cors = CorsLayer::new()
+            .allow_methods([Method::GET])
+            .allow_origin(build_cors_allowed_origin(allowed.iter()));
+
+        let mut service = ServiceBuilder::new().layer(cors).service_fn(handle);
+        let request = Request::builder()
+            .header(header::ORIGIN, "https://example.com")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = service.ready().await?.call(request).await?;
+
+        assert_eq!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .unwrap(),
+            "https://example.com",
+        );
+
+        let request2 = Request::builder()
+            .header(header::ORIGIN, "https://sample.example.com")
+            .body(Body::empty())
+            .unwrap();
+
+        let response2 = service.ready().await?.call(request2).await?;
+
+        assert_eq!(
+            response2
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .unwrap(),
+            "https://sample.example.com",
+        );
+
+        let request3 = Request::builder()
+            .method("OPTIONS")
+            .header(header::ORIGIN, "https://materialize.com")
+            .header(header::ACCESS_CONTROL_REQUEST_METHOD, "PUT")
+            .body(Body::empty())
+            .unwrap();
+
+        let response3 = service.ready().await?.call(request3).await?;
+
+        assert!(response3
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_none());
+
+        Ok(())
+    }
+}
