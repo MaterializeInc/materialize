@@ -15,8 +15,11 @@ use std::hash::{Hash, Hasher};
 
 use bitflags::bitflags;
 use dec::OrderedDecimal;
+use postgres_protocol::types;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use tokio_postgres::types::FromSql;
+use tokio_postgres::types::Type as PgType;
 
 use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};
@@ -817,5 +820,58 @@ pub fn parse_range_bound_flags<'a>(flags: &'a str) -> Result<(bool, bool), Inval
     match flags.next() {
         Some(_) => Err(InvalidRangeError::InvalidRangeBoundFlags),
         None => Ok((lower, upper)),
+    }
+}
+
+impl<'a, T: FromSql<'a>> FromSql<'a> for Range<T> {
+    fn from_sql(ty: &PgType, raw: &'a [u8]) -> Result<Range<T>, Box<dyn Error + Sync + Send>> {
+        let inner_typ = match ty {
+            &PgType::INT4_RANGE => PgType::INT4,
+            &PgType::INT8_RANGE => PgType::INT8,
+            &PgType::DATE_RANGE => PgType::DATE,
+            &PgType::NUM_RANGE => PgType::NUMERIC,
+            _ => unreachable!(),
+        };
+
+        let inner = match types::range_from_sql(raw)? {
+            types::Range::Empty => None,
+            types::Range::Nonempty(lower, upper) => {
+                let mut bounds = Vec::with_capacity(2);
+
+                for bound_outer in [lower, upper].into_iter() {
+                    let bound = match bound_outer {
+                        types::RangeBound::Exclusive(bound)
+                        | types::RangeBound::Inclusive(bound) => bound
+                            .map(|bound| T::from_sql(&inner_typ, bound))
+                            .transpose()?,
+                        types::RangeBound::Unbounded => None,
+                    };
+                    let inclusive = matches!(bound_outer, types::RangeBound::Inclusive(_));
+                    bounds.push(RangeBound { bound, inclusive });
+                }
+
+                let lower = bounds.remove(0);
+                let upper = bounds.remove(0);
+                assert!(bounds.is_empty());
+
+                Some(RangeInner {
+                    lower,
+                    // Rewrite bound in terms of appropriate `UPPER`
+                    upper: RangeBound {
+                        bound: upper.bound,
+                        inclusive: upper.inclusive,
+                    },
+                })
+            }
+        };
+
+        Ok(Range { inner })
+    }
+
+    fn accepts(ty: &PgType) -> bool {
+        matches!(
+            ty,
+            &PgType::INT4_RANGE | &PgType::INT8_RANGE | &PgType::DATE_RANGE | &PgType::NUM_RANGE
+        )
     }
 }
