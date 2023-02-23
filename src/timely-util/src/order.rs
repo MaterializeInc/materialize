@@ -527,3 +527,144 @@ mod test {
         assert_eq!(part_summary1.results_in(&ts4), None);
     }
 }
+
+pub mod hybrid {
+    use serde::{Deserialize, Serialize};
+    use std::borrow::Cow;
+    use std::fmt::Debug;
+    use std::hash::Hash;
+    use timely::progress::timestamp::Refines;
+    use timely::progress::{PathSummary, Timestamp};
+    use timely::{order, PartialOrder};
+
+    /// Extend a timestamp type `A` with an inner timestamp `B`.
+    /// This is useful when you want to track fine-grained progress (represented by `B`)
+    /// "within" each instance of some coarser-grained timestamp `A`.
+    /// The name is inspired by [hybrid logical clocks] (in which case the outer timestamp represents
+    /// wall-clock time and the inner represents some logical clock) but the implementation is
+    /// meant to work for arbitrary timestamp types.
+    ///
+    /// Unlike [`timely::order::Product`], where the two timestamps proceed more or less independently,
+    /// our inner timestamp will "reset" every time the outer timestamp increases. This means that
+    /// `Hybrid` is totally ordered if its component timestamps are, via the usual lexicographic
+    /// ordering.
+    ///
+    /// This also differs from timely's [`Timestamp`] implementation for tuples, even though tuples
+    /// are also lexicographically ordered:
+    /// - Tuples use the same summary semantics as `Product`. `Hybrid` summaries will reset the inner
+    ///   timestamp when the outer changes.
+    /// - `Hybrid` implements `Refines` on the outer timestamp, making it possible to use
+    ///   a finer-grained timestamp in a nested scope.
+    ///
+    /// [hybrid logical clocks]: https://cse.buffalo.edu/tech-reports/2014-04.pdf
+    #[derive(
+        Eq, PartialEq, Serialize, Deserialize, Hash, Debug, Copy, Clone, Ord, PartialOrd, Default,
+    )]
+    pub struct Hybrid<A, B>(pub A, pub B);
+
+    impl<A: PartialOrder, B: PartialOrder> PartialOrder for Hybrid<A, B> {
+        #[inline]
+        fn less_equal(&self, other: &Self) -> bool {
+            PartialOrder::less_equal(&self.0, &other.0)
+                && (&self.0 != &other.0 || PartialOrder::less_equal(&self.1, &other.1))
+        }
+    }
+
+    impl<A: order::TotalOrder, B: order::TotalOrder> order::TotalOrder for Hybrid<A, B> {}
+
+    impl<A: Timestamp, B: Timestamp> Timestamp for Hybrid<A, B> {
+        type Summary = Hybrid<A::Summary, B::Summary>;
+        fn minimum() -> Self {
+            Hybrid(A::minimum(), B::minimum())
+        }
+    }
+
+    impl<A: Timestamp, B: Timestamp> PathSummary<Hybrid<A, B>> for Hybrid<A::Summary, B::Summary> {
+        fn results_in(&self, src: &Hybrid<A, B>) -> Option<Hybrid<A, B>> {
+            self.0.results_in(&src.0).and_then(|outer| {
+                // "Reset" the inner timestamp iff the outer has changed.
+                let inner_start = if outer == src.0 {
+                    Cow::Borrowed(&src.1)
+                } else {
+                    Cow::Owned(B::minimum())
+                };
+                self.1
+                    .results_in(&inner_start)
+                    .map(|inner| Hybrid(outer, inner))
+            })
+        }
+
+        fn followed_by(&self, other: &Self) -> Option<Self> {
+            self.0.followed_by(&other.0).and_then(|outer| {
+                if outer == self.0 {
+                    self.1
+                        .followed_by(&other.1)
+                        .map(|inner| Hybrid(outer, inner))
+                } else {
+                    Some(Hybrid(outer, other.1.clone()))
+                }
+            })
+        }
+    }
+
+    impl<A: Timestamp, B: Timestamp> Refines<A> for Hybrid<A, B> {
+        fn to_inner(other: A) -> Self {
+            Hybrid(other, B::minimum())
+        }
+
+        fn to_outer(self) -> A {
+            self.0
+        }
+
+        fn summarize(path: Hybrid<A::Summary, B::Summary>) -> A::Summary {
+            path.0
+        }
+    }
+
+    #[cfg(test)]
+    mod test {
+        use super::*;
+        use proptest::prelude::*;
+
+        #[test]
+        fn basic_properties() {
+            // Hybrid timestamps are lexicographically ordered.
+            proptest!(|(left_outer: u64, left_inner: u32, right_outer: u64, right_inner: u32)| {
+                let left = Hybrid(left_outer, left_inner);
+                let right = Hybrid(right_outer, right_inner);
+                assert_eq!(
+                    left.less_equal(&right),
+                    (left_outer, left_inner) <= (right_outer, right_inner)
+                );
+            });
+
+            // Adding summaries gives you the same result as applying them in order.
+            proptest!(|(outer: u64, inner: u32, a_outer: u64, a_inner: u32, b_outer: u64, b_inner: u32)| {
+                let ts = Hybrid(outer, inner);
+                let path_a = Hybrid(a_outer, a_inner);
+                let path_b = Hybrid(b_outer, b_inner);
+
+                assert_eq!(
+                    path_a.results_in(&ts).and_then(|ts| path_b.results_in(&ts)),
+                    <Hybrid<u64, u32> as PathSummary<Hybrid<u64, u32>>>::followed_by(&path_a, &path_b)
+                      .and_then(|path| path.results_in(&ts)),
+                );
+            });
+
+            // From the timely docs:
+            // It is crucial for correctness that the result of this summarization's results_in
+            // method is equivalent to |time| path.results_in(time.to_inner()).to_outer(), or at
+            // least produces times less or equal to that result.
+            proptest!(|(time_outer: u64, outer_summary: u64, inner_summary: u32)| {
+                let path_hybrid = Hybrid(outer_summary, inner_summary);
+                let path_outer = <Hybrid<u64, u32> as Refines<u64>>::summarize(path_hybrid);
+                let results_outer = path_outer.results_in(&time_outer);
+                let time_hybrid = <Hybrid<u64, u32> as Refines<u64>>::to_inner(time_outer);
+                let results_inner = path_hybrid.results_in(&time_hybrid).map(Refines::to_outer);
+                assert_eq!(results_outer, results_inner);
+            });
+        }
+    }
+}
+
+pub use hybrid::Hybrid;
