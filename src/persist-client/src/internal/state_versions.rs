@@ -9,6 +9,7 @@
 
 //! A durable, truncatable log of versions of [State].
 
+#[cfg(debug_assertions)]
 use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::ops::ControlFlow::{Break, Continue};
@@ -32,9 +33,9 @@ use crate::internal::encoding::UntypedState;
 use crate::internal::machine::{retry_determinate, retry_external};
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey, RollupId};
-use crate::internal::state::{
-    HollowBatch, HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState,
-};
+#[cfg(debug_assertions)]
+use crate::internal::state::HollowBatch;
+use crate::internal::state::{HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState};
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::{Metrics, PersistConfig, ShardId};
 
