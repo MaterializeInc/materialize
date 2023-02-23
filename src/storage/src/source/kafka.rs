@@ -291,7 +291,7 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
                             Err(e) => {
                                 *status_report.lock().unwrap() =
                                     Some(HealthStatus::StalledWithError {
-                                        error: e.to_string(),
+                                        error: format!("{:#}", e),
                                         hint: None,
                                     });
                                 thread::park_timeout(metadata_refresh_frequency);
