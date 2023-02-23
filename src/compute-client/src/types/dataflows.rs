@@ -239,7 +239,12 @@ where
     /// Computes the set of identifiers upon which the specified collection
     /// identifier depends.
     ///
-    /// `id` must specify a valid object in `objects_to_build`.
+    /// `collection_id` must specify a valid object in `objects_to_build`.
+    ///
+    /// This method includes identifiers for e.g. intermediate views, and should be filtered
+    /// if one only wants sources and indexes.
+    ///
+    /// This method is safe for mutually recursive view defintions.
     pub fn depends_on(&self, collection_id: GlobalId) -> BTreeSet<GlobalId> {
         let mut out = BTreeSet::new();
         self.depends_on_into(collection_id, &mut out);
@@ -247,11 +252,6 @@ where
     }
 
     /// Like `depends_on`, but appends to an existing `BTreeSet`.
-    ///
-    /// This method includes identifiers for e.g. intermediate views, and should be filtered
-    /// if one only wants sources and indexes.
-    ///
-    /// This method is safe for mutually recursive view defintions.
     pub fn depends_on_into(&self, collection_id: GlobalId, out: &mut BTreeSet<GlobalId>) {
         out.insert(collection_id);
         if self.source_imports.contains_key(&collection_id) {
@@ -285,6 +285,19 @@ where
                 self.depends_on_into(id, out)
             }
         }
+    }
+
+    /// Computes the set of imports upon which the specified collection depends.
+    ///
+    /// This method behaves like `depends_on` but filters out internal dependencies that are not
+    /// included in the dataflow imports.
+    pub fn depends_on_imports(&self, collection_id: GlobalId) -> BTreeSet<GlobalId> {
+        let is_import = |id: &GlobalId| {
+            self.source_imports.contains_key(id) || self.index_imports.contains_key(id)
+        };
+
+        let deps = self.depends_on(collection_id);
+        deps.into_iter().filter(is_import).collect()
     }
 }
 

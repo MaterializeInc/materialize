@@ -215,7 +215,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                         time: timely::progress::Timestamp::minimum(),
                         diff: 1,
                     });
-                    for import_id in dataflow.depends_on(collection_id) {
+                    for import_id in dataflow.depends_on_imports(collection_id) {
                         logger.log(ComputeEvent::DataflowDependency {
                             dataflow: object_id,
                             source: import_id,
