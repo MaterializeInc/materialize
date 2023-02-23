@@ -579,6 +579,11 @@ mod inlining {
             } = expr
             {
                 if let Some(offer) = inline_offer.get_mut(id) {
+                    // It is important that we *not* continue to iterate
+                    // on the contents of `offer`, which has already been
+                    // maximally inlined. If we did, we could mis-inline
+                    // bindings into bodies that precede them, which would
+                    // change the semantics of the expression.
                     match offer {
                         InlineOffer::Take(value) => {
                             *expr = value.take().ok_or_else(|| {
@@ -587,11 +592,9 @@ mod inlining {
                                     id
                                 ))
                             })?;
-                            worklist.push(expr);
                         }
                         InlineOffer::Clone(value) => {
                             *expr = value.clone();
-                            worklist.push(expr);
                         }
                         InlineOffer::Unavailable(_) => {
                             // Do nothing.
