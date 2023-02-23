@@ -49,8 +49,8 @@ def upload_junit_report(suite: str, junit_report: Path) -> None:
         return
     ui.header(f"Uploading report for suite {suite!r} to Buildkite Test Analytics")
     suite = suite.upper().replace("-", "_")
+    token = os.environ[f"BUILDKITE_TEST_ANALYTICS_API_KEY_{suite}"]
     try:
-        token = os.environ[f"BUILDKITE_TEST_ANALYTICS_API_KEY_{suite}"]
         res = requests.post(
             "https://analytics-api.buildkite.com/v1/uploads",
             headers={"Authorization": f"Token {token}"},
@@ -68,9 +68,9 @@ def upload_junit_report(suite: str, junit_report: Path) -> None:
                 },
                 "data": junit_report.read_text(),
             },
-        except Exception as e:
-            print(f"Got exception when uploading analytics: {e}")
-    )
+        )
+    except Exception as e:
+        print(f"Got exception when uploading analytics: {e}")
     print(res.status_code, res.text)
 
 
@@ -80,20 +80,29 @@ def get_artifacts() -> Any:
     if "CI" not in os.environ:
         return []
 
-    ui.header(f"Getting artifact information from Buildkite")
-    org = os.environ["BUILDKITE_ORGANIZATION_SLUG"]
-    pipeline = os.environ["BUILDKITE_PIPELINE_SLUG"]
+    ui.header(f"Getting artifact informations from Buildkite")
     build = os.environ["BUILDKITE_BUILD_NUMBER"]
+    build_id = os.environ["BUILDKITE_BUILD_ID"]
     job = os.environ["BUILDKITE_JOB_ID"]
     token = os.environ["BUILDKITE_AGENT_ACCESS_TOKEN"]
 
+    payload = {
+        "query": "*",
+        "step": job,
+        "build": build,
+        "state": "finished",
+        "includeRetriedJobs": "false",
+        "includeDuplicates": "false",
+    }
+
     res = requests.get(
-        f"https://api.buildkite.com/v2/organizations/{org}/pipelines/{pipeline}/builds/{build}/jobs/{job}/artifacts",
-        headers={"Authorization": f"Bearer {token}"},
+        f"https://agent.buildkite.com/v3/builds/{build_id}/artifacts/search",
+        params=payload,
+        headers={"Authorization": f"Token {token}"},
     )
 
     if res.status_code != 200:
-        print("Failed to get artifacts: {res.status_code} {res.text}")
+        print(f"Failed to get artifacts: {res.status_code} {res.text}")
         return []
 
     return res.json()

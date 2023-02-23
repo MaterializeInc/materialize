@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
@@ -27,13 +27,9 @@ netstat -panelot > netstat-panelot.log
 ps aux > ps-aux.log
 docker ps -a --no-trunc > docker-ps-a.log
 
-ARTIFACTS=(run.log services.log journalctl-merge.log netstat-ant.log netstat-panelot.log ps-aux.log docker-ps-a.log)
-for ARTIFACT in "${ARTIFACTS[@]}"; do
-  buildkite-agent artifact upload "$ARTIFACT"
+artifacts=(run.log services.log journalctl-merge.log netstat-ant.log netstat-panelot.log ps-aux.log docker-ps-a.log)
+for artifact in "${artifacts[@]}"; do
+  buildkite-agent artifact upload "$artifact"
 done
 
-bin/ci-builder run stable bin/ci-logged-errors-detect "${ARTIFACTS[@]}"
-LOGGED_ERRORS_ARTIFACT="junit_${BUILDKITE_STEP_KEY}_logged_errors_${BUILDKITE_STEP_ID}.xml"
-if [ -f "$LOGGED_ERRORS_ARTIFACT" ]; then
-  buildkite-agent artifact upload "$LOGGED_ERRORS_ARTIFACT"
-fi
+bin/ci-builder run stable bin/ci-logged-errors-detect "${artifacts[@]}"

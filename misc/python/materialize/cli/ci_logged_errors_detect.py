@@ -22,7 +22,9 @@ import requests
 from materialize import ROOT, ci_util
 
 CI_RE = re.compile("ci-regexp: (.*)")
-ERROR_RE = re.compile(r"(panicked at|internal error:|\* FATAL:|[Oo]ut [Oo]f [Mm]emory)")
+ERROR_RE = re.compile(
+    r"(panicked at|internal error:|\* FATAL:|[Oo]ut [Oo]f [Mm]emory|cannot migrate from catalog)"
+)
 
 
 class KnownIssue:
@@ -67,14 +69,12 @@ def annotate_logged_errors(log_files: List[str]) -> None:
     junit_suite = junit_xml.TestSuite(suite_name)
 
     artifacts = ci_util.get_artifacts()
+    job = os.environ["BUILDKITE_JOB_ID"]
 
     for i, error in enumerate(error_logs):
         for artifact in artifacts:
-            if artifact["path"] == error.file:
-                org = os.environ["BUILDKITE_ORGANIZATION_SLUG"]
-                pipeline = os.environ["BUILDKITE_PIPELINE_SLUG"]
-                build = os.environ["BUILDKITE_BUILD_NUMBER"]
-                linked_file = f'<a href="https://buildkite.com/organizations/{org}/pipelines/{pipeline}/builds/{build}/jobs/{artifact["job_id"]}/artifacts/{artifact["id"]}">{error.file}</a>'
+            if artifact["job_id"] == job and artifact["path"] == error.file:
+                linked_file = f'<a href="{artifact["url"]}">{error.file}</a>'
                 break
         else:
             linked_file = error.file
@@ -91,7 +91,7 @@ def annotate_logged_errors(log_files: List[str]) -> None:
         else:
             test_case = junit_xml.TestCase(f"log error {i + 1} (new)", suite_name)
             test_case.add_failure_info(
-                message="Unknown error in logs<br/>In {error.file}:{error.line_nr}:",
+                message=f"Unknown error in logs<br/>In {linked_file}:{error.line_nr}:",
                 output=error.line,
             )
         junit_suite.test_cases.append(test_case)
@@ -101,9 +101,9 @@ def annotate_logged_errors(log_files: List[str]) -> None:
     junit_report = ci_util.junit_report_filename(junit_name)
     with junit_report.open("w") as f:
         junit_xml.to_xml_report_file(f, [junit_suite])
-    if step_key:
-        # TODO: JS tests fail with KeyError: 'BUILDKITE_TEST_ANALYTICS_API_KEY_LANG_JS', but are ignored internally in upload_junit_report
-        ci_util.upload_junit_report(step_key, ROOT / junit_report)
+
+    if "BUILDKITE_ANALYTICS_TOKEN_LOGGED_ERRORS" in os.environ:
+        ci_util.upload_junit_report("logged_errors", ROOT / junit_report)
 
 
 def get_error_logs(log_files: List[str]) -> List[ErrorLog]:
