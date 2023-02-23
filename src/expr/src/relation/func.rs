@@ -460,7 +460,9 @@ where
     if datums.peek().is_none() {
         Datum::Null
     } else {
-        let x: u64 = datums.map(|d| u64::from(d.unwrap_uint16())).sum();
+        let x: u128 = datums.map(|d| u128::from(d.unwrap_uint16())).sum();
+        // Note that we return here a numeric, but the value will be downcast
+        // as part of reduce planning to a uint8.
         Datum::from(x)
     }
 }
@@ -473,7 +475,9 @@ where
     if datums.peek().is_none() {
         Datum::Null
     } else {
-        let x: u64 = datums.map(|d| u64::from(d.unwrap_uint32())).sum();
+        let x: u128 = datums.map(|d| u128::from(d.unwrap_uint32())).sum();
+        // Note that we return here a numeric, but the value will be downcast
+        // as part of reduce planning to a uint8.
         Datum::from(x)
     }
 }

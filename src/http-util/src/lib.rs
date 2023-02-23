@@ -79,6 +79,7 @@
 
 use askama::Template;
 use axum::http::status::StatusCode;
+use axum::http::HeaderValue;
 use axum::response::{Html, IntoResponse};
 use axum::Json;
 use axum::TypedHeader;
@@ -88,6 +89,7 @@ use mz_ore::tracing::TracingHandle;
 use prometheus::Encoder;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tower_http::cors::AllowOrigin;
 use tracing_subscriber::filter::Targets;
 
 /// Renders a template into an HTTP response.
@@ -209,4 +211,103 @@ pub async fn handle_tracing() -> impl IntoResponse {
             "current_level_filter": tracing::level_filters::LevelFilter::current().to_string()
         })),
     )
+}
+
+/// Construct a CORS policy to allow origins to query us via HTTP. If any bare
+/// '*' is passed, this allows any origin; otherwise, allows a list of origins,
+/// which can include wildcard subdomains. If the allowed origin starts with a
+/// '*', allow anything from that glob. Otherwise check for an exact match.
+pub fn build_cors_allowed_origin<'a, I>(allowed: I) -> AllowOrigin
+where
+    I: IntoIterator<Item = &'a HeaderValue>,
+{
+    let allowed = allowed.into_iter().cloned().collect::<Vec<HeaderValue>>();
+    if allowed.iter().any(|o| o.as_bytes() == b"*") {
+        AllowOrigin::any()
+    } else {
+        AllowOrigin::predicate(move |origin: &HeaderValue, _request_parts: _| {
+            for val in &allowed {
+                if (val.as_bytes().starts_with(b"*.")
+                    && origin.as_bytes().ends_with(&val.as_bytes()[1..]))
+                    || origin == val
+                {
+                    return true;
+                }
+            }
+            false
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http::{header, Method, Request, Response};
+    use hyper::Body;
+    use std::convert::Infallible;
+    use tower::{Service, ServiceBuilder, ServiceExt};
+    use tower_http::cors::CorsLayer;
+
+    #[allow(clippy::unused_async)]
+    async fn handle(_request: Request<Body>) -> Result<Response<Body>, Infallible> {
+        Ok(Response::new(Body::empty()))
+    }
+
+    #[tokio::test]
+    async fn test_cors() -> Result<(), Box<dyn std::error::Error>> {
+        let allowed = vec![
+            HeaderValue::from_str("https://example.com").unwrap(),
+            HeaderValue::from_str("*.example.com").unwrap(),
+        ];
+        let cors = CorsLayer::new()
+            .allow_methods([Method::GET])
+            .allow_origin(build_cors_allowed_origin(allowed.iter()));
+
+        let mut service = ServiceBuilder::new().layer(cors).service_fn(handle);
+        let request = Request::builder()
+            .header(header::ORIGIN, "https://example.com")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = service.ready().await?.call(request).await?;
+
+        assert_eq!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .unwrap(),
+            "https://example.com",
+        );
+
+        let request2 = Request::builder()
+            .header(header::ORIGIN, "https://sample.example.com")
+            .body(Body::empty())
+            .unwrap();
+
+        let response2 = service.ready().await?.call(request2).await?;
+
+        assert_eq!(
+            response2
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .unwrap(),
+            "https://sample.example.com",
+        );
+
+        let request3 = Request::builder()
+            .method("OPTIONS")
+            .header(header::ORIGIN, "https://materialize.com")
+            .header(header::ACCESS_CONTROL_REQUEST_METHOD, "PUT")
+            .body(Body::empty())
+            .unwrap();
+
+        let response3 = service.ready().await?.call(request3).await?;
+
+        assert!(response3
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_none());
+
+        Ok(())
+    }
 }

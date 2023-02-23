@@ -242,6 +242,7 @@ escaped_text_table    subsource <null>
 large_text            subsource <null>
 multipart_pk          subsource <null>
 mz_source             postgres  <NUMBER>
+mz_source_progress    subsource <null>
 no_replica_identity   subsource <null>
 nonpk_table           subsource <null>
 nulls_table           subsource <null>
@@ -252,6 +253,14 @@ trailing_space_pk     subsource <null>
 types_table           subsource <null>
 utf<NUMBER>_table     subsource <null>
 таблица               subsource <null>
+
+> SELECT * FROM mz_source_progress
+<NUMBER>
+
+# Ensure we report the write frontier of the progress subsource
+$ set-regex match=(\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
+> EXPLAIN TIMESTAMP FOR SELECT * FROM mz_source_progress
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.mz_source_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
 
 $ set-regex match=[0-9]+|_[a-f0-9]+ replacement=<SUPPRESSED>
 
@@ -592,6 +601,7 @@ $ set-regex match=\d+ replacement=<NUMBER>
 > SELECT * FROM (SHOW SOURCES) WHERE name LIKE '%enum%';
 another_enum_table      subsource <null>
 enum_source             postgres  <NUMBER>
+enum_source_progress    subsource <null>
 enum_table              subsource <null>
 
 $ unset-regex

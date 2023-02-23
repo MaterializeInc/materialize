@@ -114,7 +114,7 @@ where
                         remap_shard,
                         data_shard,
                     },
-                )| { [(id, [remap_shard, data_shard])] },
+                )| { [(id, [remap_shard, Some(data_shard)])] },
             )
             .flatten()
             .collect();
@@ -122,14 +122,9 @@ where
         // Consider shards in use if they are still attached to a collection.
         let in_use_shards: BTreeSet<_> = all_shard_data
             .into_iter()
-            .filter_map(|(id, shards)| {
-                self.state
-                    .collections
-                    .get(&id)
-                    .map(|_| Some(shards.to_vec()))
-            })
+            .filter_map(|(id, shards)| self.state.collections.get(&id).map(|_| shards.to_vec()))
             .flatten()
-            .flatten()
+            .filter_map(|shard| shard)
             .collect();
 
         // Determine all shards that were marked to drop but are still in use by

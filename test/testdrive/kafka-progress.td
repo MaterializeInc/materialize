@@ -23,8 +23,21 @@ one
 > SELECT * from data
 one
 
-! CREATE SOURCE d
+# Ensure that we can select from automatically generated remap collection
+> SELECT partition::text, "offset" FROM data_progress
+[0,0] 1
+(0,) 0
+
+# Ensure we report the write frontier of the progress subsource
+$ set-regex match=(\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
+> EXPLAIN TIMESTAMP FOR SELECT * FROM data_progress
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.data_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
+
+> CREATE SOURCE d
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT TEXT
   EXPOSE PROGRESS AS exposed_progress_data;
-contains:PROGRESS subsources not yet supported
+
+> SELECT partition::text, "offset" FROM exposed_progress_data
+[0,0] 1
+(0,) 0

@@ -174,7 +174,7 @@ fn test_persistence() {
             .into_iter()
             .map(|row| row.get(0))
             .collect::<Vec<String>>(),
-        vec!["u1", "u2", "u3", "u4", "u5", "u6"]
+        vec!["u1", "u2", "u3", "u4", "u5", "u6", "u7"]
     );
 }
 

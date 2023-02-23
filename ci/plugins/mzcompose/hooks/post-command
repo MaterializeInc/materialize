@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+set -euo pipefail
+
+. misc/shlib/shlib.bash
+
+ci_unimportant_heading "Upload log artifacts"
+
+run() {
+    bin/ci-builder run stable bin/mzcompose --mz-quiet --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
+}
+
+run logs --no-color > services.log
+# shellcheck disable=SC2024
+sudo journalctl --merge > journalctl-merge.log
+netstat -ant > netstat-ant.log
+netstat -panelot > netstat-panelot.log
+ps aux > ps-aux.log
+docker ps -a --no-trunc > docker-ps-a.log
+
+artifacts=(run.log services.log journalctl-merge.log netstat-ant.log netstat-panelot.log ps-aux.log docker-ps-a.log)
+for artifact in "${artifacts[@]}"; do
+  buildkite-agent artifact upload "$artifact"
+done
+
+bin/ci-builder run stable bin/ci-logged-errors-detect "${artifacts[@]}"

@@ -662,6 +662,8 @@ pub struct Ingestion {
     pub desc: SourceDesc,
     pub source_imports: BTreeSet<GlobalId>,
     pub subsource_exports: BTreeMap<GlobalId, usize>,
+    // MIGRATION: v0.44 This can be converted to a `GlobalId` in v0.46
+    pub progress_subsource: Option<GlobalId>,
 }
 
 #[derive(Clone, Debug)]

@@ -255,7 +255,12 @@ where
                     .with_ansi(!no_color && atty::is(atty::Stream::Stderr)),
             )
         }
-        StderrLogFormat::Json => Box::new(fmt::layer().with_writer(io::stderr).json()),
+        StderrLogFormat::Json => Box::new(
+            fmt::layer()
+                .with_writer(io::stderr)
+                .json()
+                .with_current_span(true),
+        ),
     };
     let (stderr_log_filter, stderr_log_filter_reloader) =
         reload::Layer::new(config.stderr_log.filter);

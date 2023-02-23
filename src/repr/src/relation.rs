@@ -542,7 +542,7 @@ impl RelationDesc {
     /// Verifies that `d` meets all of the constraints for the `i`th column of `self`.
     ///
     /// n.b. The only constraint MZ currently supports in NOT NULL, but this
-    /// structure will  be simple to extend.
+    /// structure will be simple to extend.
     pub fn constraints_met(&self, i: usize, d: &Datum) -> Result<(), NotNullViolation> {
         let name = &self.names[i];
         let typ = &self.typ.column_types[i];

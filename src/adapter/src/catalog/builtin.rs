@@ -2173,10 +2173,12 @@ pub const PG_PROC: BuiltinView = BuiltinView {
     mz_functions.name AS proname,
     mz_schemas.oid AS pronamespace,
     NULL::pg_catalog.oid AS proowner,
-    NULL::pg_catalog.text AS proargdefaults
+    NULL::pg_catalog.text AS proargdefaults,
+    ret_type.oid AS prorettype
 FROM mz_catalog.mz_functions
 JOIN mz_catalog.mz_schemas ON mz_functions.schema_id = mz_schemas.id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
+JOIN mz_catalog.mz_types AS ret_type ON mz_functions.return_type_id = ret_type.id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
 };
 

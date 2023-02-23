@@ -512,10 +512,18 @@ impl Coordinator {
                             source_imports: ingestion.source_imports,
                             subsource_exports: ingestion.subsource_exports,
                             cluster_id,
+                            remap_collection_id: ingestion.progress_subsource,
                         })
                     }
                     mz_sql::plan::DataSourceDesc::Progress => {
-                        unreachable!("PROGRESS subsources error in purification");
+                        assert!(
+                            matches!(
+                                plan.cluster_config,
+                                mz_sql::plan::SourceSinkClusterConfig::Undefined
+                            ),
+                            "subsources must not have a host config defined"
+                        );
+                        DataSourceDesc::Progress
                     }
                     mz_sql::plan::DataSourceDesc::Source => {
                         assert!(
@@ -579,10 +587,14 @@ impl Coordinator {
                                     source_imports,
                                     source_exports,
                                     instance_id: ingestion.cluster_id,
+                                    remap_collection_id: ingestion.remap_collection_id.expect(
+                                        "ingestion-based collection must name remap collection before going to storage",
+                                    ),
                                 }),
                                 source_status_collection_id,
                             )
                         }
+                        DataSourceDesc::Progress => (DataSource::Progress, None),
                         DataSourceDesc::Source => (DataSource::Other, None),
                         DataSourceDesc::Introspection(_) => {
                             unreachable!("cannot create sources with introspection data sources")
@@ -3474,7 +3486,6 @@ impl Coordinator {
                                                         ))
                                                     }
                                                 };
-                                                desc.constraints_met(*idx, &updated)?;
                                                 updates.push((*idx, updated));
                                             }
                                             for (idx, new_value) in updates {
@@ -3491,6 +3502,13 @@ impl Coordinator {
                                                 diffs.push((row, -1))
                                             }
                                             MutationKind::Insert => diffs.push((row, 1)),
+                                        }
+                                    }
+                                    for (row, diff) in &diffs {
+                                        if *diff > 0 {
+                                            for (idx, datum) in row.iter().enumerate() {
+                                                desc.constraints_met(idx, &datum)?;
+                                            }
                                         }
                                     }
                                     Ok(diffs)
@@ -3736,7 +3754,9 @@ impl Coordinator {
             .expect("known to be source");
         match source.data_source {
             DataSourceDesc::Ingestion(_) => (),
-            DataSourceDesc::Source | DataSourceDesc::Introspection(_) => {
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Source => {
                 coord_bail!("cannot ALTER this type of source");
             }
         }

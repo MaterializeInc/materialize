@@ -76,6 +76,7 @@ mod collection_mgmt;
 mod command_wals;
 mod persist_handles;
 mod rehydration;
+mod remap_migration;
 mod statistics;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.controller.rs"));
@@ -131,6 +132,8 @@ pub enum DataSource {
     /// Data comes from introspection sources, which the controller itself is
     /// responsible for generating.
     Introspection(IntrospectionType),
+    /// Data comes from the source's remapping/reclock operator.
+    Progress,
     /// This source's data is does not need to be managed by the storage
     /// controller, e.g. it's a materialized view, table, or subsource.
     // TODO? Add a means to track some data sources' GlobalIds.
@@ -175,9 +178,11 @@ impl<T> CollectionDescription<T> {
                         // No storage dependencies.
                     }
                 }
+                result.push(ingestion.remap_collection_id);
             }
-            DataSource::Introspection(_) => {
-                // Introspection sources have no dependencies, for now.
+            DataSource::Introspection(_) | DataSource::Progress => {
+                // Introspection, Progress sources have no dependencies, for
+                // now.
             }
             DataSource::Other => {
                 // We don't know anything about it's dependencies.
@@ -276,6 +281,16 @@ pub trait StorageController: Debug + Send {
     fn collections(
         &self,
     ) -> Box<dyn Iterator<Item = (&GlobalId, &CollectionState<Self::Timestamp>)> + '_>;
+
+    /// Migrate any storage controller state from previous versions to this
+    /// version's expectations.
+    ///
+    /// This function must "see" the GlobalId of every collection you plan to
+    /// create, but can be called with all of the catalog's collections at once.
+    async fn migrate_collections(
+        &mut self,
+        collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
+    ) -> Result<(), StorageError>;
 
     /// Create the sources described in the individual CreateSourceCommand commands.
     ///
@@ -445,6 +460,10 @@ pub trait StorageController: Debug + Send {
 #[derive(Clone, Derivative)]
 #[derivative(Debug)]
 pub enum ReadPolicy<T> {
+    /// No-one has yet requested a `ReadPolicy` from us, which means that we can
+    /// still change the implied_capability/the collection since if we need
+    /// to.
+    NoPolicy { initial_since: Antichain<T> },
     /// Maintain the collection as valid from this frontier onward.
     ValidFrom(Antichain<T>),
     /// Maintain the collection as valid from a function of the write frontier.
@@ -514,6 +533,7 @@ impl ReadPolicy<mz_repr::Timestamp> {
 impl<T: Timestamp> ReadPolicy<T> {
     pub fn frontier(&self, write_frontier: AntichainRef<T>) -> Antichain<T> {
         match self {
+            ReadPolicy::NoPolicy { initial_since } => initial_since.clone(),
             ReadPolicy::ValidFrom(frontier) => frontier.clone(),
             ReadPolicy::LagWriteFrontier(logic) => logic(write_frontier),
             ReadPolicy::Multiple(policies) => {
@@ -535,7 +555,7 @@ pub struct CollectionMetadata {
     /// The persist location where the shards are located.
     pub persist_location: PersistLocation,
     /// The persist shard id of the remap collection used to reclock this collection.
-    pub remap_shard: ShardId,
+    pub remap_shard: Option<ShardId>,
     /// The persist shard containing the contents of this storage collection.
     pub data_shard: ShardId,
     /// The persist shard containing the status updates for this storage collection.
@@ -550,7 +570,7 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
             blob_uri: self.persist_location.blob_uri.clone(),
             consensus_uri: self.persist_location.consensus_uri.clone(),
             data_shard: self.data_shard.to_string(),
-            remap_shard: self.remap_shard.to_string(),
+            remap_shard: self.remap_shard.map(|s| s.to_string()),
             status_shard: self.status_shard.map(|s| s.to_string()),
             relation_desc: Some(self.relation_desc.into_proto()),
         }
@@ -564,8 +584,8 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
             },
             remap_shard: value
                 .remap_shard
-                .parse()
-                .map_err(TryFromProtoError::InvalidShardId)?,
+                .map(|s| s.parse().map_err(TryFromProtoError::InvalidShardId))
+                .transpose()?,
             data_shard: value
                 .data_shard
                 .parse()
@@ -604,15 +624,19 @@ pub trait ResumptionFrontierCalculator<T> {
 /// The subset of [`CollectionMetadata`] that must be durable stored.
 #[derive(Arbitrary, Clone, Debug, PartialEq, PartialOrd, Ord, Eq, Serialize, Deserialize)]
 pub struct DurableCollectionMetadata {
-    // See the comments on [`CollectionMetadata`].
-    pub remap_shard: ShardId,
+    // MIGRATION: v0.44 This field can be deleted in a future version of
+    // Materialize because we are moving the relationship between a collection
+    // and its remap shard into a relationship between a collection and its
+    // remap collection, i.e. we will use another collection's data shard as our
+    // remap shard, rendering this mapping duplicative.
+    pub remap_shard: Option<ShardId>,
     pub data_shard: ShardId,
 }
 
 impl RustType<ProtoDurableCollectionMetadata> for DurableCollectionMetadata {
     fn into_proto(&self) -> ProtoDurableCollectionMetadata {
         ProtoDurableCollectionMetadata {
-            remap_shard: self.remap_shard.to_string(),
+            remap_shard: self.remap_shard.into_proto(),
             data_shard: self.data_shard.to_string(),
         }
     }
@@ -621,8 +645,12 @@ impl RustType<ProtoDurableCollectionMetadata> for DurableCollectionMetadata {
         Ok(DurableCollectionMetadata {
             remap_shard: value
                 .remap_shard
-                .parse()
-                .map_err(TryFromProtoError::InvalidShardId)?,
+                .map(|data_shard| {
+                    data_shard
+                        .parse()
+                        .map_err(TryFromProtoError::InvalidShardId)
+                })
+                .transpose()?,
             data_shard: value
                 .data_shard
                 .parse()
@@ -1052,6 +1080,36 @@ where
         client.connect(location);
     }
 
+    // Add new migrations below and precede them with a short summary of the
+    // migration's purpose and optional additional commentary about safety or
+    // approach.
+    //
+    // Note that:
+    // - The sum of all migrations must be idempotent because all migrations run
+    //   every time the catalog opens, unless migrations are explicitly
+    //   disabled. This might mean changing code outside the migration itself,
+    //   or only executing some migrations when encountering certain versions.
+    // - Migrations must preserve backwards compatibility with all past releases
+    //   of Materialize.
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn migrate_collections(
+        &mut self,
+        collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
+    ) -> Result<(), StorageError> {
+        let mut durable_metadata = METADATA_COLLECTION.peek_one(&mut self.state.stash).await?;
+
+        // MIGRATION: v0.44 See comments on remap_shard_migration.
+        let remap_shard_migration_delta =
+            self.remap_shard_migration(&durable_metadata, &collections);
+
+        self.upsert_collection_metadata(&mut durable_metadata, remap_shard_migration_delta)
+            .await;
+
+        Ok(())
+    }
+
+    // TODO(aljoscha): It would be swell if we could refactor this Leviathan of
+    // a method/move individual parts to their own methods.
     #[tracing::instrument(level = "debug", skip_all)]
     async fn create_collections(
         &mut self,
@@ -1076,26 +1134,26 @@ where
             }
         }
 
-        // Install collection state for each bound description.
-        // Note that this method implementation attempts to do AS MUCH work
-        // concurrently as possible. There are inline comments explaining the motivation
-        // behind each section
+        // Install collection state for each bound description. Note that this
+        // method implementation attempts to do AS MUCH work concurrently as
+        // possible. There are inline comments explaining the motivation behind
+        // each section.
+        let mut entries = Vec::with_capacity(collections.len());
+
+        for (id, _desc) in &collections {
+            entries.push((
+                *id,
+                DurableCollectionMetadata {
+                    data_shard: ShardId::new(),
+                    remap_shard: None,
+                },
+            ))
+        }
 
         // Perform all stash writes in a single transaction, to minimize transaction overhead and
         // the time spent waiting for stash.
         METADATA_COLLECTION
-            .insert_without_overwrite(
-                &mut self.state.stash,
-                collections.iter().map(|(id, _)| {
-                    (
-                        *id,
-                        DurableCollectionMetadata {
-                            remap_shard: ShardId::new(),
-                            data_shard: ShardId::new(),
-                        },
-                    )
-                }),
-            )
+            .insert_without_overwrite(&mut self.state.stash, entries.into_iter())
             .await?;
 
         let mut durable_metadata = METADATA_COLLECTION.peek_one(&mut self.state.stash).await?;
@@ -1106,6 +1164,9 @@ where
             .into_iter()
             .map(|(id, description)| {
                 let collection_shards = durable_metadata.remove(&id).expect("inserted above");
+                // MIGRATION: v0.44
+                assert!(collection_shards.remap_shard.is_none(), "remap shards must be migrated to be the data shard of their remap/progress collections or dropped");
+
                 let status_shard =
                     if let Some(status_collection_id) = description.status_collection_id {
                         Some(
@@ -1118,9 +1179,27 @@ where
                         None
                     };
 
+                let remap_shard = match &description.data_source {
+                    // Only ingestions can have remap shards.
+                    DataSource::Ingestion(IngestionDescription {
+                        remap_collection_id,
+                        ..
+                    }) => {
+                        // Iff ingestion has a remap collection, its metadata must
+                        // exist (and be correct) by this point.
+                        Some(
+                            durable_metadata
+                                .get(remap_collection_id)
+                                .ok_or(StorageError::IdentifierMissing(*remap_collection_id))?
+                                .data_shard,
+                        )
+                    }
+                    _ => None,
+                };
+
                 let metadata = CollectionMetadata {
                     persist_location: self.persist_location.clone(),
-                    remap_shard: collection_shards.remap_shard,
+                    remap_shard,
                     data_shard: collection_shards.data_shard,
                     status_shard,
                     relation_desc: description.desc.clone(),
@@ -1147,14 +1226,14 @@ where
                 // should be replaced with real introspection (https://github.com/MaterializeInc/materialize/issues/14266)
                 // but for now, it's helpful to have this mapping written down somewhere
                 debug!(
-                    "mapping GlobalId={} to remap shard ({}), data shard ({}), status shard ({:?})",
+                    "mapping GlobalId={} to remap shard ({:?}), data shard ({}), status shard ({:?})",
                     id, metadata.remap_shard, metadata.data_shard, metadata.status_shard
                 );
 
                 let (write, since_handle) = this
                     .open_data_handles(
                         format!("controller data {}", id).as_str(),
-                        metadata.data_shard.clone(),
+                        metadata.data_shard,
                         metadata.relation_desc.clone(),
                         persist_client,
                     )
@@ -1183,18 +1262,13 @@ where
         // This work mutates the controller state, so must be done serially. Because there
         // is no io-bound work, its very fast.
         for (id, description, write, since_handle, metadata) in to_register {
-            let storage_dependencies = description.get_storage_dependencies();
-
             let data_shard_since = since_handle.since().clone();
-            let dependency_since = self.determine_dependency_since(&storage_dependencies)?;
-            let combined_since = data_shard_since.join(&dependency_since);
-            self.install_read_capabilities(&storage_dependencies, combined_since.clone())?;
 
             let collection_state = CollectionState::new(
                 description.clone(),
-                combined_since,
+                data_shard_since,
                 write.upper().clone(),
-                storage_dependencies,
+                vec![],
                 metadata.clone(),
             );
 
@@ -1204,6 +1278,108 @@ where
             self.state.collections.insert(id, collection_state);
 
             to_create.push((id, description));
+        }
+
+        // Patch up the since of all subsources (which includes the "main"
+        // collection) and install read holds from the subsources on the since
+        // of the remap collection. We need to do this here because a) the since
+        // of the remap collection might be in advance of the since of the data
+        // collections because we lazily forward commands to downgrade the since
+        // to persist, and b) at the time the subsources are created we know
+        // close to nothing about them, not even that they are subsources.
+        //
+        // N.B. Patching up the since based on the since of the remap collection
+        // is correct because the since of the remap collection can advance iff
+        // the storage controller allowed it to, which it only does when it
+        // would also allow the since of the data collections to advance. It's
+        // just that we need to reconcile outselves to the outside world
+        // (persist) here.
+        //
+        // TODO(aljoscha): We should find a way to put this information and the
+        // read holds in place when we create the subsource collections. OR, we
+        // could create the subsource collections only as part of creating the
+        // main source/ingestion.
+        for (_id, description) in to_create.iter() {
+            match &description.data_source {
+                DataSource::Ingestion(ingestion) => {
+                    let storage_dependencies = description.get_storage_dependencies();
+                    let dependency_since =
+                        self.determine_collection_since_joins(&storage_dependencies)?;
+
+                    // Install read capability for all non-remap subsources on
+                    // remap collection.
+                    //
+                    // N.B. The "main" collection of the source is included in
+                    // `source_exports`.
+                    for id in ingestion.source_exports.keys() {
+                        let collection = self.collection(*id).expect("known to exist");
+
+                        // At the time of collection creation, we did not yet
+                        // have firm guarantees that the since of our
+                        // dependencies was not advanced beyond those of its
+                        // dependents, so we need to patch up the
+                        // implied_capability/since of the collction.
+                        //
+                        // TODO(aljoscha): This comes largely from the fact that
+                        // subsources are created with a `DataSource::Other`, so
+                        // we have no idea (at their creation time) that they
+                        // are a subsource, or that they are a subsource of a
+                        // source where they need a read hold on that
+                        // ingestion's remap collection.
+                        if timely::order::PartialOrder::less_than(
+                            &collection.implied_capability,
+                            &dependency_since,
+                        ) {
+                            assert!(
+                                timely::order::PartialOrder::less_than(
+                                    &dependency_since,
+                                    &collection.write_frontier
+                                ),
+                                "write frontier ({:?}) must be in advance dependency collection's since ({:?})",
+                                collection.write_frontier,
+                                dependency_since,
+                            );
+                            mz_ore::soft_assert!(
+                                matches!(collection.read_policy, ReadPolicy::NoPolicy { .. }),
+                                "subsources should not have external read holds installed until \
+                                their ingestion is created, but {:?} has read policy {:?}",
+                                id,
+                                collection.read_policy
+                            );
+
+                            // This patches up the implied_capability!
+                            self.set_read_policy(vec![(
+                                *id,
+                                ReadPolicy::NoPolicy {
+                                    initial_since: dependency_since.clone(),
+                                },
+                            )]);
+
+                            // We have to re-borrow.
+                            let collection = self.collection(*id).expect("known to exist");
+                            assert!(
+                                collection.implied_capability == dependency_since,
+                                "monkey patching the implied_capability to {:?} did not work, is still {:?}",
+                                dependency_since,
+                                collection.implied_capability,
+                            );
+                        }
+
+                        // Fill in the storage dependencies.
+                        let collection = self.collection_mut(*id).expect("known to exist");
+                        collection
+                            .storage_dependencies
+                            .extend(storage_dependencies.iter().cloned());
+
+                        let read_hold = collection.implied_capability.clone();
+                        self.install_read_capabilities(&storage_dependencies, read_hold)?;
+                    }
+                }
+                DataSource::Introspection(_) | DataSource::Progress | DataSource::Other => {
+                    // No since to patch up and no read holds to install on
+                    // dependencies!
+                }
+            }
         }
 
         // Reborrow `&mut self` immutably, same reasoning as above.
@@ -1251,6 +1427,7 @@ where
                         // The rest of the fields are identical
                         desc: ingestion.desc,
                         instance_id: ingestion.instance_id,
+                        remap_collection_id: ingestion.remap_collection_id,
                     };
                     let mut state = desc.initialize_state(&self.persist).await;
                     let resume_upper = desc.calculate_resumption_frontier(&mut state).await;
@@ -1323,7 +1500,7 @@ where
                         }
                     }
                 }
-                DataSource::Other => {}
+                DataSource::Progress | DataSource::Other => {}
             }
         }
 
@@ -1356,7 +1533,7 @@ where
             return Err(StorageError::SourceIdReused(id));
         }
 
-        let dependency_since = self.determine_dependency_since(&[from_id])?;
+        let dependency_since = self.determine_collection_since_joins(&[from_id])?;
         self.install_read_capabilities(&[from_id], dependency_since.clone())?;
 
         info!(
@@ -1999,19 +2176,23 @@ where
     }
 
     /// Return the since frontier at which we can read from all the given
-    /// dependencies.
-    fn determine_dependency_since(
+    /// collections.
+    ///
+    /// The outer error is a potentially recoverable internal error, while the
+    /// inner error is appropriate to return to the adapter.
+    fn determine_collection_since_joins(
         &mut self,
-        storage_dependencies: &[GlobalId],
+        collections: &[GlobalId],
     ) -> Result<Antichain<T>, StorageError> {
-        let mut dependency_since = Antichain::from_elem(T::minimum());
-        for id in storage_dependencies {
+        let mut joined_since = Antichain::from_elem(T::minimum());
+        for id in collections {
             let collection = self.collection(*id)?;
+
             let since = collection.implied_capability.clone();
-            dependency_since.join_assign(&since);
+            joined_since.join_assign(&since);
         }
 
-        Ok(dependency_since)
+        Ok(joined_since)
     }
 
     /// Install read capabilities on the given `storage_dependencies`.
@@ -2280,20 +2461,14 @@ where
     /// `upsert_state` into in `all_current_metadata`, as well as
     /// `METADATA_COLLECTION`.
     ///
-    /// Any shards changed between the old and the new version will be
-    /// finalized. e.g. it is not currently possible to swap a collection's data
-    /// and remap shards.
+    /// Any shards no longer referenced after the upsert will be finalized.
     ///
     /// Note that this function expects to be called:
     /// - While no source is currently using the shards identified in the
     ///   current metadata.
     /// - Before any sources begins using the shards identified in
     ///   `new_metadata`.
-    ///
-    /// # Panics
-    /// - If the keys in `metadata_to_update` are not a strict subset of the
-    ///   keys in `current_metadata`.
-    async fn _rewrite_collection_metadata(
+    async fn upsert_collection_metadata(
         &mut self,
         all_current_metadata: &mut BTreeMap<GlobalId, DurableCollectionMetadata>,
         upsert_state: BTreeMap<GlobalId, DurableCollectionMetadata>,
@@ -2304,42 +2479,70 @@ where
             return;
         }
 
-        let mut shards_to_finalize = BTreeSet::new();
+        let mut new_shards = BTreeSet::new();
+        let mut dropped_shards = BTreeSet::new();
         let mut data_shards_to_replace = BTreeSet::new();
         let mut remap_shards_to_replace = BTreeSet::new();
         for (id, new_metadata) in upsert_state.iter() {
-            let metadata = &all_current_metadata[id];
+            assert!(
+                new_metadata.remap_shard.is_none(),
+                "must not reintroduce remap shards"
+            );
 
-            for (old, new, data_shard) in [
-                (metadata.data_shard, new_metadata.data_shard, true),
-                (metadata.remap_shard, new_metadata.remap_shard, false),
-            ] {
-                if old != new {
-                    info!(
-                        "replacing {:?}'s {} shard {:?} with {:?}",
-                        id,
-                        if data_shard { "data" } else { "remap" },
-                        old,
-                        new
-                    );
+            match all_current_metadata.get(id) {
+                Some(metadata) => {
+                    for (old, new, data_shard) in [
+                        (
+                            Some(metadata.data_shard),
+                            Some(new_metadata.data_shard),
+                            true,
+                        ),
+                        (metadata.remap_shard, new_metadata.remap_shard, false),
+                    ] {
+                        if old != new {
+                            info!(
+                                "replacing {:?}'s {} shard {:?} with {:?}",
+                                id,
+                                if data_shard { "data" } else { "remap" },
+                                old,
+                                new
+                            );
 
-                    shards_to_finalize.insert(old);
+                            if let Some(new) = new {
+                                new_shards.insert(new);
+                            }
 
-                    if data_shard {
-                        data_shards_to_replace.insert(*id);
-                    } else {
-                        remap_shards_to_replace.insert(*id);
+                            if let Some(old) = old {
+                                dropped_shards.insert(old);
+                            }
+
+                            if data_shard {
+                                data_shards_to_replace.insert(*id);
+                            } else {
+                                remap_shards_to_replace.insert(*id);
+                            }
+                        }
                     }
                 }
-            }
+                // New collections, which might use an another collection's
+                // dropped shard.
+                None => {
+                    new_shards.insert(new_metadata.data_shard);
+                    continue;
+                }
+            };
 
             // Update the in-memory representation.
             all_current_metadata.insert(*id, new_metadata.clone());
         }
 
+        // Reconcile dropped shards reference with shards that moved into a new
+        // collection.
+        dropped_shards.retain(|shard| !new_shards.contains(shard));
+
         // Ensure we don't leak any shards by tracking all of them we intend to
         // finalize.
-        self.register_shards_for_finalization(shards_to_finalize.iter().cloned())
+        self.register_shards_for_finalization(dropped_shards.iter().cloned())
             .await;
 
         // Update the on-disk representation.
@@ -2349,9 +2552,9 @@ where
             .expect("connect to stash");
 
         // Finalize any shards that are no longer-in use.
-        self.finalize_shards(shards_to_finalize).await;
+        self.finalize_shards(dropped_shards).await;
 
-        // Update in-memory state.
+        // Update in-memory state for remap shards.
         for id in remap_shards_to_replace {
             let c = match self.collection_mut(id) {
                 Ok(c) => c,
@@ -2372,6 +2575,7 @@ where
             .await
             .unwrap();
 
+        // Update the in-memory state for data shards
         for id in data_shards_to_replace {
             let c = match self.collection_mut(id) {
                 Ok(c) => c,
@@ -2520,7 +2724,9 @@ impl<T: Timestamp> CollectionState<T> {
             description,
             read_capabilities,
             implied_capability: since.clone(),
-            read_policy: ReadPolicy::ValidFrom(since),
+            read_policy: ReadPolicy::NoPolicy {
+                initial_since: since,
+            },
             storage_dependencies,
             write_frontier,
             collection_metadata: metadata,
@@ -2531,8 +2737,7 @@ impl<T: Timestamp> CollectionState<T> {
     fn cluster_id(&self) -> Option<StorageInstanceId> {
         match &self.description.data_source {
             DataSource::Ingestion(ingestion) => Some(ingestion.instance_id),
-            DataSource::Introspection(_) => None,
-            DataSource::Other => None,
+            DataSource::Introspection(_) | DataSource::Other | DataSource::Progress => None,
         }
     }
 }

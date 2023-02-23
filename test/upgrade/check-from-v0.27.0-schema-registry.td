@@ -10,6 +10,9 @@
 > SELECT * FROM data
 1
 
+$ skip-if
+SELECT mz_version_num() >= 4300;
+
 # This next query will fail if a bug like #10234 occurs again, where a migration
 # injects a `WITH` option into the wrong spot.
 

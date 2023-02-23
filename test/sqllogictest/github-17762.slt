@@ -7,13 +7,21 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Regression test for https://github.com/MaterializeInc/materialize/issues/17762
 mode cockroach
 
-query TIIOI
-SELECT proname, pronamespace, oid, proargdefaults, prorettype
-FROM pg_catalog.pg_proc
-WHERE proname = 'substring'
-ORDER BY oid
+query T
+SELECT
+	worker_id
+FROM
+	mz_internal.mz_scheduling_elapsed_internal
+	JOIN mz_indexes ON (NULL)
+	JOIN (
+			SELECT
+				worker_id AS a, CAST(NULLIF(records, CAST(NULL AS DECIMAL)) AS DECIMAL)
+			FROM
+				mz_internal.mz_records_per_dataflow
+		) ON (SELECT a IS NULL)
+WHERE
+	(SELECT a) IS NULL;
 ----
-substring  20003  936  NULL  25
-substring  20003  937  NULL  25

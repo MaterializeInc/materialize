@@ -134,6 +134,9 @@
   - signature: 'ceil(x: N) -> N'
     description: The smallest integer >= `x`
 
+  - signature: 'ceiling(x: N) -> N'
+    description: "Alias of `ceil`"
+
   - signature: 'exp(x: N) -> N'
     description: Exponential of `x` (e raised to the given power)
 

@@ -54,8 +54,11 @@ pub(crate) async fn login_with_browser(
 
     // Open the browser to login user.
     let url = endpoint.web_login_url(profile_name, port).to_string();
-    if let Err(err) = open::that(&url) {
-        bail!("An error occurred when opening '{}': {}", url, err)
+    if let Err(_err) = open::that(&url) {
+        println!(
+            "Could not open a browser to visit the login page <{}>: Please open the page yourself.",
+            url
+        )
     }
 
     // Wait for the browser to send the app password to our server.

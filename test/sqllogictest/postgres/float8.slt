@@ -232,16 +232,14 @@ select ceil(f1)::text as ceil_f1 from float8_tbl f
 1.2345678901234e+200
 1
 
-# TODO(benesch): support ceiling.
-#
-# query T rowsort
-# select ceiling(f1)::text as ceiling_f1 from float8_tbl f;
-# ----
-# 0
-# 1005
-# -34
-# 1.2345678901234e+200
-# 1
+query T rowsort
+select ceiling(f1)::text as ceiling_f1 from float8_tbl f;
+----
+0
+1005
+-34
+1.2345678901234e+200
+1
 
 # floor
 query T rowsort

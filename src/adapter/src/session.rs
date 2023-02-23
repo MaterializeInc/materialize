@@ -63,6 +63,8 @@ pub struct ExternalUserMetadata {
     pub user_id: Uuid,
     /// The ID of the user's active group in the external system.
     pub group_id: Uuid,
+    /// Indicates if the user is an admin in the external system.
+    pub admin: bool,
 }
 
 impl PartialEq for User {
@@ -75,6 +77,15 @@ impl User {
     /// Returns whether this is an internal user.
     pub fn is_internal(&self) -> bool {
         INTERNAL_USER_NAMES.contains(&self.name)
+    }
+
+    /// Returns whether this user is an admin in an external system.
+    pub fn is_external_admin(&self) -> bool {
+        self.external_metadata
+            .as_ref()
+            .map(|metadata| metadata.admin)
+            .clone()
+            .unwrap_or(false)
     }
 }
 

@@ -36,8 +36,11 @@ def main() -> int:
     )
     new_steps = []
     for step in pipeline["steps"]:
-        if "id" in step and step["id"] in selected_tests:
+        # Always run analyze step in the end
+        if "id" in step and (step["id"] in selected_tests or step["id"] == "analyze"):
             del step["id"]
+            new_steps.append(step)
+        if "wait" in step:
             new_steps.append(step)
     spawn.runv(
         ["buildkite-agent", "pipeline", "upload", "--replace"],

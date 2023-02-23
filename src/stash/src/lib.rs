@@ -85,7 +85,6 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use futures::Future;
 use mz_ore::soft_assert;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -377,22 +376,6 @@ where
     K: Data,
     V: Data,
 {
-    pub async fn transact<F, Fut, T>(&self, stash: &mut Stash, f: F) -> Result<T, StashError>
-    where
-        F: Fn(Transaction, StashCollection<K, V>) -> Fut + Clone + Send + Sync + 'static,
-        Fut: Future<Output = Result<T, StashError>> + Send,
-    {
-        let name = self.name;
-        stash
-            .with_transaction(move |tx| {
-                let f = f.clone();
-                Box::pin(async move {
-                    let collection = tx.collection::<K, V>(name).await?;
-                    f(tx, collection).await
-                })
-            })
-            .await
-    }
     pub async fn make_batch(
         &self,
         stash: &mut Stash,
@@ -412,6 +395,10 @@ where
 
     pub async fn get(&self, stash: &mut Stash) -> Result<StashCollection<K, V>, StashError> {
         stash.collection(self.name).await
+    }
+
+    pub async fn from_tx(&self, tx: &Transaction<'_>) -> Result<StashCollection<K, V>, StashError> {
+        tx.collection(self.name).await
     }
 
     pub async fn upper(&self, stash: &mut Stash) -> Result<Antichain<Timestamp>, StashError> {
