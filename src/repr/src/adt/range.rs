@@ -30,12 +30,22 @@ use super::numeric::Numeric;
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.range.rs"));
 
 bitflags! {
-    pub(crate) struct Flags: u8 {
+    pub(crate) struct InternalFlags: u8 {
         const EMPTY = 1;
         const LB_INCLUSIVE = 1 << 1;
         const LB_INFINITE = 1 << 2;
         const UB_INCLUSIVE = 1 << 3;
         const UB_INFINITE = 1 << 4;
+    }
+}
+
+bitflags! {
+    pub(crate) struct PgFlags: u8 {
+        const EMPTY = 0b0000_0001;
+        const LB_INCLUSIVE = 0b0000_0010;
+        const UB_INCLUSIVE = 0b0000_0100;
+        const LB_INFINITE = 0b0000_1000;
+        const UB_INFINITE = 0b0001_0000;
     }
 }
 
@@ -171,6 +181,56 @@ impl<D> Range<D> {
         Range {
             inner: inner.map(|(lower, upper)| RangeInner { lower, upper }),
         }
+    }
+
+    /// Get the flag bits appropriate to use in our internal (i.e. row) encoding
+    /// of range values.
+    ///
+    /// Note that this differs from the flags appropriate to encode with
+    /// Postgres, which has `UB_INFINITE` and `LB_INCLUSIVE` in the alternate
+    /// position.
+    pub fn internal_flag_bits(&self) -> u8 {
+        let mut flags = InternalFlags::empty();
+
+        match &self.inner {
+            None => {
+                flags.set(InternalFlags::EMPTY, true);
+            }
+            Some(RangeInner { lower, upper }) => {
+                flags.set(InternalFlags::EMPTY, false);
+                flags.set(InternalFlags::LB_INFINITE, lower.bound.is_none());
+                flags.set(InternalFlags::UB_INFINITE, upper.bound.is_none());
+                flags.set(InternalFlags::LB_INCLUSIVE, lower.inclusive);
+                flags.set(InternalFlags::UB_INCLUSIVE, upper.inclusive);
+            }
+        }
+
+        flags.bits()
+    }
+
+    /// Get the flag bits appropriate to use in PG-compatible encodings of range
+    /// values.
+    ///
+    /// Note that this differs from the flags appropriate for our internal
+    /// encoding, which has `UB_INFINITE` and `LB_INCLUSIVE` in the alternate
+    /// position.
+    pub fn pg_flag_bits(&self) -> u8 {
+        let mut flags = PgFlags::empty();
+
+        match &self.inner {
+            None => {
+                flags.set(PgFlags::EMPTY, true);
+            }
+            Some(RangeInner { lower, upper }) => {
+                flags.set(PgFlags::EMPTY, false);
+                flags.set(PgFlags::LB_INFINITE, lower.bound.is_none());
+                flags.set(PgFlags::UB_INFINITE, upper.bound.is_none());
+                flags.set(PgFlags::LB_INCLUSIVE, lower.inclusive);
+                flags.set(PgFlags::UB_INCLUSIVE, upper.inclusive);
+            }
+        }
+
+        flags.bits()
     }
 
     /// Converts `self` from having bounds of type `D` to type `O`, converting
