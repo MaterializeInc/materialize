@@ -617,37 +617,37 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::Range => {
             // See notes on `push_range_with` for details about encoding.
             let flag_byte = read_byte(data, offset);
-            let flags =
-                range::Flags::from_bits(flag_byte).expect("range flags must be encoded validly");
+            let flags = range::InternalFlags::from_bits(flag_byte)
+                .expect("range flags must be encoded validly");
 
-            if flags.contains(range::Flags::EMPTY) {
+            if flags.contains(range::InternalFlags::EMPTY) {
                 assert!(
-                    flags == range::Flags::EMPTY,
+                    flags == range::InternalFlags::EMPTY,
                     "empty ranges contain only RANGE_EMPTY flag"
                 );
 
                 return Datum::Range(Range { inner: None });
             }
 
-            let lower_bound = if flags.contains(range::Flags::LB_INFINITE) {
+            let lower_bound = if flags.contains(range::InternalFlags::LB_INFINITE) {
                 None
             } else {
                 Some(DatumNested::extract(data, offset))
             };
 
             let lower = RangeBound {
-                inclusive: flags.contains(range::Flags::LB_INCLUSIVE),
+                inclusive: flags.contains(range::InternalFlags::LB_INCLUSIVE),
                 bound: lower_bound,
             };
 
-            let upper_bound = if flags.contains(range::Flags::UB_INFINITE) {
+            let upper_bound = if flags.contains(range::InternalFlags::UB_INFINITE) {
                 None
             } else {
                 Some(DatumNested::extract(data, offset))
             };
 
             let upper = RangeBound {
-                inclusive: flags.contains(range::Flags::UB_INCLUSIVE),
+                inclusive: flags.contains(range::InternalFlags::UB_INCLUSIVE),
                 bound: upper_bound,
             };
 
@@ -875,30 +875,17 @@ where
                 }
             }
         }
-        Datum::Range(Range { inner }) => {
+        Datum::Range(range) => {
             // See notes on `push_range_with` for details about encoding.
             data.push(Tag::Range.into());
+            data.push(range.internal_flag_bits());
 
-            match inner {
-                None => {
-                    data.push(range::Flags::EMPTY.bits());
-                }
-                Some(RangeInner { lower, upper }) => {
-                    let mut flags = range::Flags::empty();
-
-                    flags.set(range::Flags::LB_INFINITE, lower.bound.is_none());
-                    flags.set(range::Flags::UB_INFINITE, upper.bound.is_none());
-                    flags.set(range::Flags::LB_INCLUSIVE, lower.inclusive);
-                    flags.set(range::Flags::UB_INCLUSIVE, upper.inclusive);
-
-                    data.push(flags.bits());
-
-                    for bound in [lower.bound, upper.bound] {
-                        if let Some(bound) = bound {
-                            match bound.datum() {
-                                Datum::Null => panic!("cannot push Datum::Null into range"),
-                                d => push_datum(data, d),
-                            }
+            if let Some(RangeInner { lower, upper }) = range.inner {
+                for bound in [lower.bound, upper.bound] {
+                    if let Some(bound) = bound {
+                        match bound.datum() {
+                            Datum::Null => panic!("cannot push Datum::Null into range"),
+                            d => push_datum(data, d),
                         }
                     }
                 }
@@ -1389,7 +1376,7 @@ impl RowPacker<'_> {
             None => {
                 self.row.data.push(Tag::Range.into());
                 // Untagged bytes only contains the `RANGE_EMPTY` flag value.
-                self.row.data.push(range::Flags::EMPTY.bits());
+                self.row.data.push(range::InternalFlags::EMPTY.bits());
                 Ok(())
             }
             Some(inner) => self.push_range_with(
@@ -1446,12 +1433,12 @@ impl RowPacker<'_> {
         let start = self.row.data.len();
         self.row.data.push(Tag::Range.into());
 
-        let mut flags = range::Flags::empty();
+        let mut flags = range::InternalFlags::empty();
 
-        flags.set(range::Flags::LB_INFINITE, lower.bound.is_none());
-        flags.set(range::Flags::UB_INFINITE, upper.bound.is_none());
-        flags.set(range::Flags::LB_INCLUSIVE, lower.inclusive);
-        flags.set(range::Flags::UB_INCLUSIVE, upper.inclusive);
+        flags.set(range::InternalFlags::LB_INFINITE, lower.bound.is_none());
+        flags.set(range::InternalFlags::UB_INFINITE, upper.bound.is_none());
+        flags.set(range::InternalFlags::LB_INCLUSIVE, lower.inclusive);
+        flags.set(range::InternalFlags::UB_INCLUSIVE, upper.inclusive);
 
         let mut expected_datums = 0;
 
