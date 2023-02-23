@@ -287,7 +287,7 @@ git bisect run /path/to/bisect.sh
 The `bisect.sh` can be something along the following lines:
 
 ```
-#!/bin/bash
+#!/usr/bin/env bash
 THIS_SHA=$(git rev-parse HEAD)
 GOOD_MZ_VERSION="vX.Y.Z"
 
