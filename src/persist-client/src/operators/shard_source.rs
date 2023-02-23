@@ -21,6 +21,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::ShutdownButton;
 use differential_dataflow::Hashable;
 use futures::StreamExt;
+use futures_util::stream::FuturesUnordered;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::vec::VecExt;
@@ -29,16 +30,16 @@ use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::CapabilitySet;
+use timely::dataflow::operators::{CapabilitySet, InputCapability};
 use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Semaphore};
 use tracing::trace;
 
 use crate::cache::PersistClientCache;
-use crate::fetch::{FetchedPart, SerdeLeasedBatchPart};
+use crate::fetch::{FetchedPart, LeasedBatchPart, SerdeLeasedBatchPart};
 use crate::read::ListenEvent;
 use crate::{PersistLocation, ShardId};
 
@@ -465,28 +466,67 @@ where
                 .await
         };
 
-        while let Some(event) = descs_input.next_mut().await {
-            if let Event::Data(cap, data) = event {
-                // `LeasedBatchPart`es cannot be dropped at this point w/o
-                // panicking, so swap them to an owned version.
-                for (_idx, part) in data.drain(..) {
-                    let (token, fetched) = fetcher
-                        .fetch_leased_part(fetcher.leased_part_from_exchangeable(part))
-                        .await;
-                    let fetched = fetched.expect("shard_id should match across all workers");
-                    {
-                        // Do very fine-grained output activation/session
-                        // creation to ensure that we don't hold activated
-                        // outputs or sessions across await points, which
-                        // would prevent messages from being flushed from
-                        // the shared timely output buffer.
-                        let mut fetched_output = fetched_output.activate();
-                        let mut tokens_output = tokens_output.activate();
-                        fetched_output.session(&cap).give(fetched);
-                        tokens_output
-                            .session(&cap)
-                            .give(token.into_exchangeable_part());
+        let memory_bound_bytes = clients.cfg.dynamic.compaction_memory_bound_bytes();
+        let semaphore = Semaphore::new(memory_bound_bytes);
+        let mut parts_in_flight = FuturesUnordered::new();
+
+        enum FileEvent<'a, K, V, T: Timestamp + Codec64, D, R> {
+            Fetched(
+                Arc<InputCapability<T>>,
+                LeasedBatchPart<T>,
+                FetchedPart<K, V, T, D>,
+            ),
+            Input(Event<T, &'a mut R>),
+            Done,
+        }
+
+        'event_loop: loop {
+            let event = tokio::select! {
+                Some(event) = descs_input.next_mut() => FileEvent::Input(event),
+                Some(file_event) = parts_in_flight.next() => file_event,
+                else => FileEvent::Done,
+            };
+
+            match event {
+                FileEvent::Input(Event::Data(cap, data)) => {
+                    let cap = Arc::new(cap);
+
+                    for (_, part) in data.drain(..) {
+                        let cap = Arc::clone(&cap);
+                        parts_in_flight.push(async {
+                            let leased = fetcher.leased_part_from_exchangeable(part);
+                            let reserve_bytes = leased
+                                .encoded_size_bytes
+                                .min(memory_bound_bytes)
+                                .try_into()
+                                .unwrap_or(u32::MAX);
+                            let _permit = semaphore.acquire_many(reserve_bytes);
+                            let (leased, result) = fetcher.fetch_leased_part(leased).await;
+                            FileEvent::Fetched(
+                                cap,
+                                leased,
+                                result.expect("shard_id should match across all workers"),
+                            )
+                        });
                     }
+                }
+                FileEvent::Fetched(cap, token, fetched) => {
+                    // Do very fine-grained output activation/session
+                    // creation to ensure that we don't hold activated
+                    // outputs or sessions across await points, which
+                    // would prevent messages from being flushed from
+                    // the shared timely output buffer.
+                    let mut fetched_output = fetched_output.activate();
+                    let mut tokens_output = tokens_output.activate();
+                    let cap: &InputCapability<T> = &cap;
+                    fetched_output.session(cap).give(fetched);
+                    tokens_output
+                        .session(cap)
+                        .give(token.into_exchangeable_part());
+                }
+                FileEvent::Input(Event::Progress(_)) => {}
+                FileEvent::Done => {
+                    break 'event_loop;
                 }
             }
         }
