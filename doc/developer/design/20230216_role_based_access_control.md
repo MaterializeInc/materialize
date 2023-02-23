@@ -88,6 +88,9 @@ We will add the following SQL statement:
 When a new user logs in, we will create a new role for them with only the `LOGIN` and `INHERIT` attributes. If that user
 is a frontegg admin, then the role will also have the `SUPERUSER` attribute.
 
+The system role `mz_system` will have all attributes. The system role `mz_introspection` will only have the `LOGIN`
+attribute.
+
 #### Implementation Details
 
 - Each attribute will be added as a column to `mz_roles` with boolean values.
@@ -227,6 +230,23 @@ privileges can be revoked.
 PostgreSQL allows arwd privileges on all table like objects (view, materialized view, etc.) even though they aren't
 useful. We remove privileges that don't make sense.
 
+Below is a summary of the default owners and privileges of all builtin objects:
+
+- The `mz_system` cluster will be owned by the `mz_system` role.
+- The `mz_system` role will have `UC` privileges on the `mz_system` cluster.
+- The `mz_introspection` cluster will be owned by the `mz_introspection` role.
+- The `mz_introspection` role will have `UC` privileges on the `mz_introspection` cluster.
+- All roles will have `U` privileges on the `mz_introspection` cluster.
+- The `default` cluster will be owned by the `mz_system` role.
+- The `mz_system` role will have `UC` privileges on the `default` cluster.
+- The `materialize` database will be owned by the `mz_system` role.
+- The `mz_sytem` role will have `UC` privileges on the `materialize` database.
+- The `materialize.public` schema will be owned by the `mz_system` role.
+- The `mz_system` role will have `UC` privileges on the `materialize.public` schema.
+- The `mz_system` role will own all catalog schemas [`pg_catalog`, `mz_catalog`, `mz_internal`, `information_schema`].
+- All roles will have `U` privileges on all catalog schemas.
+- All roles will have `r` privileges on all objects within all catalog schemas.
+
 Here is a summary of all the privileges, attributes, and ownership needed to perform certain actions:
 
 | Operation                            | Privilege, Attribute, and OwnerShip                                         |
@@ -353,9 +373,6 @@ We will update `DROP <object>` so that it revokes all privileges on `<object>`.
 
 ## Open questions
 
-- What should the default role be when a new Materialize instance is started up for the first time, and what should be
-  the privileges and attributes? How will clients connect to this role?It should probably have `LOGIN` and `SUPERUSER`
-  attributes.
 - PostgreSQL grants certain privileges on certain object types to all roles. None of those overlap with the set of
   objects and privileges we have, but do we want to do something similar?
 - Do we want different `SELECT` privileges based on if a new dataflow will be spun up or if we can use an existing one?
@@ -363,6 +380,5 @@ We will update `DROP <object>` so that it revokes all privileges on `<object>`.
     - Cons: Users (and the database) are unable to determine if they're allowed to execute a read until after that read
       has been fully planned.
 - What views/functions/commands do we want to add to help users query the current set of privileges.
-- What do privileges look like for system objects? Probably everyone should get `SELECT` permission by default.
 - Do we want to change `DROP OWNED` so that it drops databases and clusters?
 - What are security labels in PostgreSQL and do we want them?
