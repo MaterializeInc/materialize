@@ -150,7 +150,7 @@ class Materialized(Service):
                     "test": ["CMD", "curl", "-f", "localhost:6878/api/readyz"],
                     "interval": "1s",
                     # A fully loaded Materialize can take a long time to start.
-                    "start_period": "300s",
+                    "start_period": "600s",
                 },
             }
         )
