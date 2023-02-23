@@ -74,7 +74,10 @@ def annotate_logged_errors(log_files: List[str]) -> None:
     for i, error in enumerate(error_logs):
         for artifact in artifacts:
             if artifact["job_id"] == job and artifact["path"] == error.file:
-                linked_file = f'<a href="{artifact["url"]}">{error.file}</a>'
+                org = os.environ["BUILDKITE_ORGANIZATION_SLUG"]
+                pipeline = os.environ["BUILDKITE_PIPELINE_SLUG"]
+                build = os.environ["BUILDKITE_BUILD_NUMBER"]
+                linked_file = f'<a href="https://buildkite.com/organizations/{org}/pipelines/{pipeline}/builds/{build}/jobs/{artifact["job_id"]}/artifacts/{artifact["id"]}">{error.file}</a>'
                 break
         else:
             linked_file = error.file
