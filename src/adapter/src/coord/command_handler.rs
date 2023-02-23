@@ -95,7 +95,7 @@ impl Coordinator {
             }
 
             Command::DumpCatalog { session, tx } => {
-                // TODO(benesch): when we have RBAC, dumping the catalog should
+                // TODO(benesch/jkosh44): when we have RBAC, dumping the catalog should
                 // require superuser permissions.
 
                 let _ = tx.send(Response {
@@ -178,11 +178,13 @@ impl Coordinator {
                 });
                 return;
             }
+            let mut attributes = RoleAttributes::new().with_login();
+            if session.user().is_external_admin() {
+                attributes = attributes.with_super_user();
+            }
             let plan = CreateRolePlan {
                 name: session.user().name.to_string(),
-                // TODO(jkosh44) We need to start checking if the frontegg user is an admin.
-                //  Until then, everyone gets superuser attributes.
-                attributes: RoleAttributes::new().with_super_user().with_login(),
+                attributes,
             };
             if let Err(err) = self.sequence_create_role(&session, plan).await {
                 let _ = tx.send(Response {
