@@ -479,6 +479,14 @@ mod inlining {
             //  3. The binding is not available for inlining.
             let mut inline_offer = BTreeMap::new();
 
+            // Each binding may require the expiration of inlining offers.
+            // This occurs when an inlined body references the next iterate of a binding,
+            // and inlining it would change the meaning to be the current iterate.
+            // Roughly, all inlining offers expire just after the binding of the least
+            // identifier they contain that is greater than the bound identifier itself.
+            let mut expire_offers = BTreeMap::new();
+            let mut expired_offers = Vec::new();
+
             // For each binding, inline `Get`s and then determine if *it* should be inlined.
             // It is important that we do the substitution in-order and before reasoning
             // about the inlineability of each binding, to ensure that our conclusion about
@@ -490,9 +498,30 @@ mod inlining {
             for (id, mut expr) in ids.drain(..).zip(values.drain(..)) {
                 // Substitute any appropriate prior let bindings.
                 inline_lets_helper(&mut expr, &mut inline_offer)?;
+
+                // Determine the first `id'` at which any inlining offer must expire.
+                // An inlining offer expires because it references an `id'` that is not yet bound,
+                // indicating a reference to the *next* iterate of that identifier. Inlining the
+                // expression once `id'` becomes bound would advance the reference to be to the
+                // *current* iterate of the identifier.
+                expr.visit_pre(|e| {
+                    if let MirRelationExpr::Get {
+                        id: Id::Local(referenced_id),
+                        ..
+                    } = e
+                    {
+                        if referenced_id >= &id {
+                            expire_offers
+                                .entry(*referenced_id)
+                                .or_insert_with(Vec::new)
+                                .push(id);
+                        }
+                    }
+                });
+
                 // Gets for `id` only occur in later expressions, so this should still be correct.
                 let num_gets = counts.get(&id).map(|x| *x).unwrap_or(0);
-                // Counts of zero or one lead to substitution; other wise certain simple structures
+                // Counts of zero or one lead to substitution; otherwise certain simple structures
                 // are cloned in to `Get` operators, and all others emitted as `Let` bindings.
                 if num_gets == 0 {
                 } else if num_gets == 1 {
@@ -516,9 +545,25 @@ mod inlining {
                         inline_offer.insert(id, InlineOffer::Unavailable(expr));
                     }
                 }
+
+                // We must now discard any offers that reference `id`, as it is no longer correct
+                // to inline such an offer as it would have access to this iteration's binding of
+                // `id` rather than next iteration's binding of `id`.
+                if let Some(expirations) = expire_offers.remove(&id) {
+                    for id in expirations.into_iter() {
+                        if let Some(offer) = inline_offer.remove(&id) {
+                            expired_offers.push((id, offer));
+                        }
+                    }
+                }
             }
             // Complete the inlining in the base relation.
             inline_lets_helper(body, &mut inline_offer)?;
+
+            // Re-introduce expired offers for the subsequent logic that expects to see them all.
+            for (id, offer) in expired_offers.into_iter() {
+                inline_offer.insert(id, offer);
+            }
 
             // We may now be able to discard some of `inline_offer` based on the remaining pattern of `Get` expressions.
             // Starting from `body` and working backwards, we can activate bindings that are still required because we
