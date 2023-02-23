@@ -176,3 +176,21 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 > FETCH 1 c WITH (timeout='5s');
 <TIMESTAMP> 1 true
 > COMMIT
+
+# Test that the contents of mz_worker_compute_dependencies are correct.
+
+> CREATE TABLE t1 (a int)
+> CREATE TABLE t2 (b int)
+> CREATE MATERIALIZED VIEW mv1 AS SELECT * FROM t1, t2
+> CREATE DEFAULT INDEX ON mv1
+> CREATE MATERIALIZED VIEW mv2 AS SELECT 1;
+
+> SELECT export.name, import.name
+  FROM mz_internal.mz_worker_compute_dependencies dep
+  LEFT JOIN mz_objects export ON dep.export_id = export.id
+  LEFT JOIN mz_objects import ON dep.import_id = import.id
+  WHERE dep.worker_id = 0
+  ORDER BY export.name, import.name
+mv1             t1
+mv1             t2
+mv1_primary_idx mv1
