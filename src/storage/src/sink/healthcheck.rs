@@ -465,7 +465,7 @@ mod tests {
             .unwrap();
 
         let (write_handle, mut read_handle) = persist_client
-            .open(
+            .open::<SourceData, (), mz_repr::Timestamp, i64>(
                 shard_id,
                 "tests::dump_storage_collection",
                 Arc::new(MZ_SINK_STATUS_HISTORY_DESC.clone()),
@@ -475,7 +475,7 @@ mod tests {
             .unwrap();
 
         let upper = write_handle.upper();
-        let readable_upper = Antichain::from_elem(upper.elements()[0] - 1);
+        let readable_upper = Antichain::from_elem(upper.elements()[0].step_back().unwrap());
 
         read_handle
             .snapshot_and_fetch(readable_upper)
@@ -483,9 +483,11 @@ mod tests {
             .unwrap()
             .into_iter()
             .map(
-                |((v, _), _, _): ((Result<SourceData, String>, Result<(), String>), u64, i64)| {
-                    v.unwrap().0.unwrap()
-                },
+                |((v, _), _, _): (
+                    (Result<SourceData, String>, Result<(), String>),
+                    mz_repr::Timestamp,
+                    i64,
+                )| { v.unwrap().0.unwrap() },
             )
             .collect_vec()
     }

@@ -291,7 +291,7 @@ where
     }
 }
 
-/// A cache of [State], shared between all machines for that shard.
+/// A cache of `TypedState`, shared between all machines for that shard.
 ///
 /// This is shared between all machines that come out of the same
 /// [PersistClientCache], but in production there is one of those per process,

@@ -20,7 +20,7 @@ use mz_ore::task::spawn;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::task::JoinHandle;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
@@ -79,7 +79,7 @@ where
     }
 
     pub fn shard_id(&self) -> ShardId {
-        self.applier.state().shard_id()
+        self.applier.cached_state().shard_id
     }
 
     pub async fn fetch_upper(&mut self) -> &Antichain<T> {
@@ -88,16 +88,16 @@ where
     }
 
     pub fn upper(&self) -> &Antichain<T> {
-        self.applier.state().upper()
+        &self.applier.cached_state().upper
     }
 
     pub fn seqno(&self) -> SeqNo {
-        self.applier.state().seqno()
+        self.applier.cached_state().seqno
     }
 
-    #[cfg(test)]
+    #[cfg(WIP)]
     pub fn seqno_since(&self) -> SeqNo {
-        self.applier.state().seqno_since()
+        self.applier.cached_state().seqno_since
     }
 
     pub async fn add_rollup_for_current_seqno(&mut self) {
@@ -157,17 +157,17 @@ where
             })
             .await;
 
-        if !self.applier.state().collections.is_tombstone()
-            && !self
-                .applier
-                .state()
-                .collections
-                .leased_readers
-                .contains_key(reader_id)
-        {
-            error!("Reader {reader_id} was registered at timestamp {heartbeat_timestamp_ms} but immediately expired.\
-                    This implies {lease_duration:?} passed between the call and its completion, which should be rare.");
-        }
+        // if !self.applier.cached_state().is_tombstone
+        //     && !self
+        //         .applier
+        //         .state()
+        //         .collections
+        //         .leased_readers
+        //         .contains_key(reader_id)
+        // {
+        //     error!("Reader {reader_id} was registered at timestamp {heartbeat_timestamp_ms} but immediately expired.\
+        //             This implies {lease_duration:?} passed between the call and its completion, which should be rare.");
+        // }
         // Usually, the reader gets an initial seqno hold of the seqno at which
         // it was registered. However, on a tombstone shard the seqno hold
         // happens to get computed as the tombstone seqno + 1
@@ -177,10 +177,10 @@ where
         // hold is >= the seqno_since, so validate that instead of anything more
         // specific.
         debug_assert!(
-            reader_state.seqno >= self.applier.state().seqno_since(),
+            reader_state.seqno >= self.applier.cached_state().seqno_since,
             "{} vs {}",
             reader_state.seqno,
-            self.applier.state().seqno_since()
+            self.applier.cached_state().seqno_since
         );
         reader_state
     }
@@ -218,17 +218,17 @@ where
                 )
             })
             .await;
-        if !self.applier.state().collections.is_tombstone()
-            && !self
-                .applier
-                .state()
-                .collections
-                .writers
-                .contains_key(writer_id)
-        {
-            error!("Writer {writer_id} was registered at timestamp {heartbeat_timestamp_ms} but immediately expired.\
-                    This implies {lease_duration:?} passed between the call and its completion, which should be rare.");
-        }
+        // if !self.applier.cached_state().is_tombstone
+        //     && !self
+        //         .applier
+        //         .state()
+        //         .collections
+        //         .writers
+        //         .contains_key(writer_id)
+        // {
+        //     error!("Writer {writer_id} was registered at timestamp {heartbeat_timestamp_ms} but immediately expired.\
+        //             This implies {lease_duration:?} passed between the call and its completion, which should be rare.");
+        // }
         (shard_upper, writer_state)
     }
 
@@ -729,7 +729,9 @@ where
     }
 
     pub async fn maybe_become_tombstone(&mut self) -> Option<RoutineMaintenance> {
-        if !self.applier.state().upper().is_empty() || !self.applier.state().since().is_empty() {
+        if !self.applier.cached_state().upper.is_empty()
+            || !self.applier.cached_state().since.is_empty()
+        {
             return None;
         }
 
@@ -774,7 +776,7 @@ where
     ) -> Result<Vec<HollowBatch<T>>, Since<T>> {
         let mut retry: Option<MetricsRetryStream> = None;
         loop {
-            let upper = match self.applier.snapshot(as_of) {
+            let upper = match self.applier.snapshot(as_of).await {
                 Ok(Ok(x)) => return Ok(x),
                 Ok(Err(Upper(upper))) => {
                     // The upper isn't ready yet, fall through and try again.
@@ -820,8 +822,8 @@ where
     }
 
     // NB: Unlike the other methods here, this one is read-only.
-    pub fn verify_listen(&self, as_of: &Antichain<T>) -> Result<(), Since<T>> {
-        match self.applier.verify_listen(as_of) {
+    pub async fn verify_listen(&self, as_of: &Antichain<T>) -> Result<(), Since<T>> {
+        match self.applier.verify_listen(as_of).await {
             Ok(Ok(())) => Ok(()),
             Ok(Err(Upper(_))) => {
                 // The upper may not be ready yet (maybe it would be ready if we
@@ -835,8 +837,8 @@ where
         }
     }
 
-    pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Option<HollowBatch<T>> {
-        self.applier.next_listen_batch(frontier)
+    pub async fn next_listen_batch(&self, frontier: &Antichain<T>) -> Option<HollowBatch<T>> {
+        self.applier.next_listen_batch(frontier).await
     }
 
     async fn apply_unbatched_idempotent_cmd<
@@ -1106,8 +1108,8 @@ pub mod datadriven {
     ) -> Result<String, anyhow::Error> {
         Ok(format!(
             "since={:?} upper={:?}\n",
-            datadriven.machine.applier.state().since().elements(),
-            datadriven.machine.applier.state().upper().elements()
+            datadriven.machine.applier.cached_state().since.elements(),
+            datadriven.machine.applier.cached_state().upper.elements()
         ))
     }
 

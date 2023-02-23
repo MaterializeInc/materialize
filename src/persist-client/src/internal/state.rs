@@ -932,6 +932,7 @@ pub struct TypedState<K, V, T, D> {
 }
 
 impl<K, V, T: Clone, D> TypedState<K, V, T, D> {
+    #[cfg(any(test, debug_assertions))]
     pub(crate) fn clone(&self, applier_version: Version, hostname: String) -> Self {
         TypedState {
             state: State {

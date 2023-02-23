@@ -18,6 +18,8 @@ use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
+use timely::PartialOrder;
+use tokio::sync::Mutex;
 use tracing::debug;
 
 use mz_persist::location::{Indeterminate, SeqNo};
@@ -27,7 +29,7 @@ use crate::error::CodecMismatch;
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{CmdMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartialRollupKey, RollupId};
-use crate::internal::state::{HollowBatch, Since, StateCollections, TypedState, Upper};
+use crate::internal::state::{HollowBatch, Since, State, StateCollections, TypedState, Upper};
 use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::{EncodedRollup, StateVersions};
 use crate::internal::trace::FueledMergeReq;
@@ -44,12 +46,11 @@ pub struct Applier<K, V, T, D> {
     pub(crate) shard_metrics: Arc<ShardMetrics>,
     pub(crate) state_versions: Arc<StateVersions>,
 
-    // TODO: Wrap this in an Arc<tokio::sync::Mutex<_>> and have a single shared
-    // one for each shard in a process.
-    //
     // NB: This is very intentionally not pub(crate) so that it's easy to reason
     // very locally about the duration of Mutex holds.
-    state: TypedState<K, V, T, D>,
+    state: Arc<Mutex<TypedState<K, V, T, D>>>,
+
+    cached_state: CachedState<T>,
 }
 
 // Impl Clone regardless of the type params.
@@ -60,10 +61,79 @@ impl<K, V, T: Clone, D> Clone for Applier<K, V, T, D> {
             metrics: Arc::clone(&self.metrics),
             shard_metrics: Arc::clone(&self.shard_metrics),
             state_versions: Arc::clone(&self.state_versions),
-            state: self.state.clone(
-                self.state.applier_version.clone(),
-                self.state.hostname.clone(),
-            ),
+            state: Arc::clone(&self.state),
+            cached_state: self.cached_state.clone(),
+        }
+    }
+}
+
+// WIP probably make this <K, V, T, D>
+#[derive(Debug, Clone)]
+pub struct CachedState<T> {
+    pub shard_id: ShardId,
+    pub seqno: SeqNo,
+    pub upper: Antichain<T>,
+    pub since: Antichain<T>,
+    pub seqno_since: SeqNo,
+    pub is_tombstone: bool,
+}
+
+impl<T: Timestamp + Lattice + Codec64> From<&State<T>> for CachedState<T> {
+    fn from(value: &State<T>) -> Self {
+        CachedState {
+            shard_id: value.shard_id,
+            seqno: value.seqno,
+            upper: value.upper().clone(),
+            since: value.since().clone(),
+            seqno_since: value.seqno_since(),
+            is_tombstone: value.collections.is_tombstone(),
+        }
+    }
+}
+
+impl<T: Timestamp + Lattice + Codec64> CachedState<T> {
+    fn validate_cached_version_of(&self, state: &State<T>) -> Result<(), String> {
+        if self.shard_id != state.shard_id {
+            return Err(format!(
+                "shard_id didn't match {} vs {}",
+                self.shard_id, state.shard_id
+            ));
+        }
+        if !(self.seqno <= state.seqno) {
+            return Err(format!(
+                "seqno unexpectedly not leq {} vs {}",
+                self.seqno, state.seqno
+            ));
+        }
+        if !PartialOrder::less_equal(&self.since, state.since()) {
+            return Err(format!(
+                "since unexpectedly not leq {:?} vs {:?}",
+                self.since.elements(),
+                state.since().elements()
+            ));
+        }
+        if !PartialOrder::less_equal(&self.upper, state.upper()) {
+            return Err(format!(
+                "upper unexpectedly not leq {:?} vs {:?}",
+                self.upper.elements(),
+                state.upper().elements()
+            ));
+        }
+        Ok(())
+    }
+
+    fn update<K, V, D>(&mut self, state: &TypedState<K, V, T, D>) {
+        debug_assert_eq!(self.validate_cached_version_of(&state.state), Ok(()));
+        self.seqno = state.seqno;
+        if &self.upper != state.upper() {
+            self.upper.clone_from(state.upper());
+        }
+        if &self.since != state.since() {
+            self.since.clone_from(state.since());
+        }
+        let is_tombstone = state.collections.is_tombstone();
+        if self.is_tombstone != is_tombstone {
+            self.is_tombstone = is_tombstone;
         }
     }
 }
@@ -83,17 +153,8 @@ where
         shared_states: &StateCache,
     ) -> Result<Self, Box<CodecMismatch>> {
         let shard_metrics = metrics.shards.shard(&shard_id);
-        let state = metrics
-            .cmds
-            .init_state
-            .run_cmd(&shard_metrics, |_cas_mismatch_metric| {
-                // No cas_mismatch retries because we just use the returned
-                // state on a mismatch.
-                state_versions.maybe_init_shard(&shard_metrics)
-            })
-            .await?;
-        let _state = shared_states
-            .get::<K, V, T, D, _, _>(shard_id, || {
+        let state = shared_states
+            .get(shard_id, || async {
                 metrics
                     .cmds
                     .init_state
@@ -102,46 +163,61 @@ where
                         // state on a mismatch.
                         state_versions.maybe_init_shard(&shard_metrics)
                     })
+                    .await
             })
             .await?;
+        let cached_state = {
+            let state = state.lock().await;
+            CachedState::from(&state.state)
+        };
         Ok(Applier {
             cfg,
             metrics,
             shard_metrics,
             state_versions,
             state,
+            cached_state,
         })
     }
 
-    // TODO: Remove usages of this.
-    pub fn state(&self) -> &TypedState<K, V, T, D> {
-        &self.state
+    pub fn cached_state(&self) -> &CachedState<T> {
+        &self.cached_state
     }
 
-    pub fn all_fueled_merge_reqs(&self) -> Vec<FueledMergeReq<T>> {
-        self.state.collections.trace.all_fueled_merge_reqs()
+    pub async fn all_fueled_merge_reqs(&self) -> Vec<FueledMergeReq<T>> {
+        self.state
+            .lock()
+            .await
+            .collections
+            .trace
+            .all_fueled_merge_reqs()
     }
 
-    pub fn snapshot(
+    pub async fn snapshot(
         &self,
         as_of: &Antichain<T>,
     ) -> Result<Result<Vec<HollowBatch<T>>, Upper<T>>, Since<T>> {
-        self.state.snapshot(as_of)
+        self.state.lock().await.snapshot(as_of)
     }
 
-    pub fn verify_listen(&self, as_of: &Antichain<T>) -> Result<Result<(), Upper<T>>, Since<T>> {
-        self.state.verify_listen(as_of)
+    pub async fn verify_listen(
+        &self,
+        as_of: &Antichain<T>,
+    ) -> Result<Result<(), Upper<T>>, Since<T>> {
+        self.state.lock().await.verify_listen(as_of)
     }
 
-    pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Option<HollowBatch<T>> {
-        self.state.next_listen_batch(frontier)
+    pub async fn next_listen_batch(&self, frontier: &Antichain<T>) -> Option<HollowBatch<T>> {
+        self.state.lock().await.next_listen_batch(frontier)
     }
 
     pub async fn write_rollup_blob(&self, rollup_id: &RollupId) -> EncodedRollup {
-        let key = PartialRollupKey::new(self.state.seqno, rollup_id);
-        let rollup = self
-            .state_versions
-            .encode_rollup_blob(&self.shard_metrics, &self.state, key);
+        let rollup = {
+            let state = self.state.lock().await;
+            let key = PartialRollupKey::new(state.seqno, rollup_id);
+            self.state_versions
+                .encode_rollup_blob(&self.shard_metrics, &state, key)
+        };
         let () = self.state_versions.write_rollup_blob(&rollup).await;
         rollup
     }
@@ -155,8 +231,9 @@ where
         cmd: &CmdMetrics,
         work_fn: WorkFn,
     ) -> Result<(SeqNo, Result<R, E>, RoutineMaintenance), Indeterminate> {
+        let mut state = self.state.lock().await;
         let ret = Self::apply_unbatched_cmd_locked(
-            &mut self.state,
+            &mut state,
             cmd,
             work_fn,
             &self.cfg,
@@ -165,7 +242,7 @@ where
             &self.state_versions,
         )
         .await;
-        // TODO: Update any (upcoming) cached copies of state.
+        self.cached_state.update(&state);
         ret
     }
 
@@ -341,16 +418,18 @@ where
     }
 
     pub async fn fetch_and_update_state(&mut self) {
-        let seqno_before = self.state.seqno;
+        let mut state = self.state.lock().await;
+        let seqno_before = state.seqno;
         self.state_versions
-            .fetch_and_update_to_current(&mut self.state)
+            .fetch_and_update_to_current(&mut state)
             .await
             .expect("shard codecs should not change");
+        self.cached_state.update(&state);
         assert!(
-            seqno_before <= self.state.seqno,
+            seqno_before <= state.seqno,
             "state seqno regressed: {} vs {}",
             seqno_before,
-            self.state.seqno
+            state.seqno
         );
     }
 }
