@@ -4330,6 +4330,7 @@ dependencies = [
  "anyhow",
  "arrow2",
  "bytes",
+ "parquet2",
  "workspace-hack",
 ]
 
