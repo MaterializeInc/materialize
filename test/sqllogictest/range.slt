@@ -30,6 +30,9 @@ select pg_typeof('[0,100)'::int4range);
 ----
 int4range
 
+query error invalid input syntax for type range
+select '栬艷^Ằ['::int4range
+
 query T
 select 'empty'::int4range::text;
 ----
