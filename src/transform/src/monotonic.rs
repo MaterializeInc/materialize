@@ -136,7 +136,7 @@ impl MonotonicFlag {
                     while added {
                         added = false;
                         for (id, value) in ids.iter().zip(&mut *values) {
-                            if self.apply(value, mon_ids, locals)? {
+                            if !locals.contains(id) && self.apply(value, mon_ids, locals)? {
                                 added = true;
                                 locals.insert(*id);
                             }
