@@ -99,10 +99,10 @@ use fail::FailScenario;
 use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
+use mz_http_util::build_cors_allowed_origin;
 use once_cell::sync::Lazy;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
-use tower_http::cors::{self, AllowOrigin};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use url::Url;
@@ -629,39 +629,20 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     };
 
     // Configure CORS.
-    let cors_allowed_origin = if args
-        .cors_allowed_origin
-        .iter()
-        .any(|val| val.as_bytes() == b"*")
-    {
-        cors::Any.into()
-    } else if !args.cors_allowed_origin.is_empty() {
-        let allowed = args.cors_allowed_origin.clone();
-        AllowOrigin::predicate(move |origin: &HeaderValue, _request_parts: _| {
-            for val in &allowed {
-                // For each specified allow cors origin, check if it starts with
-                // a *. and allow anything from that glob. Otherwise check for
-                // an exact match.
-                if (val.as_bytes().starts_with(b"*.")
-                    && origin.as_bytes().ends_with(&val.as_bytes()[1..]))
-                    || origin == val
-                {
-                    return true;
-                }
-            }
-            false
-        })
+    let allowed_origins = if !args.cors_allowed_origin.is_empty() {
+        args.cors_allowed_origin
     } else {
         let port = args.http_listen_addr.port();
-        AllowOrigin::list([
+        vec![
             HeaderValue::from_str(&format!("http://localhost:{}", port)).unwrap(),
             HeaderValue::from_str(&format!("http://127.0.0.1:{}", port)).unwrap(),
             HeaderValue::from_str(&format!("http://[::1]:{}", port)).unwrap(),
             HeaderValue::from_str(&format!("https://localhost:{}", port)).unwrap(),
             HeaderValue::from_str(&format!("https://127.0.0.1:{}", port)).unwrap(),
             HeaderValue::from_str(&format!("https://[::1]:{}", port)).unwrap(),
-        ])
+        ]
     };
+    let cors_allowed_origin = build_cors_allowed_origin(allowed_origins.iter());
 
     // Configure controller.
     let (orchestrator, secrets_controller, cloud_resource_controller): (
