@@ -1,11 +1,11 @@
 ---
-title: "Data Applications"
+title: "Build an interactive data app"
 description: "How to build interactive data applications using Materialize"
 menu:
   main:
     parent: 'quickstarts'
-    weight: 30
-    name: 'Data applications'
+    weight: 40
+    name: 'Build an interactive data app'
 draft: true
 aliases:
   - /demos/data-applications
