@@ -289,6 +289,10 @@ pub struct Args {
     /// of all Frontegg passwords.
     #[clap(long, env = "FRONTEGG_PASSWORD_PREFIX", requires = "frontegg-tenant")]
     frontegg_password_prefix: Option<String>,
+    /// The name of the admin role in Frontegg.
+    // TODO(jkosh44) Add this to requires_all for frontegg_tenant in v0.46.0
+    #[clap(long, env = "FRONTEGG_ADMIN_ROLE", requires = "frontegg-tenant")]
+    frontegg_admin_role: Option<String>,
 
     // === Orchestrator options. ===
     /// The service orchestrator implementation to use.
@@ -623,6 +627,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 now: mz_ore::now::SYSTEM_TIME.clone(),
                 refresh_before_secs: 60,
                 password_prefix: args.frontegg_password_prefix.unwrap_or_default(),
+                admin_role: args.frontegg_admin_role,
             }))
         }
         _ => unreachable!("clap enforced"),

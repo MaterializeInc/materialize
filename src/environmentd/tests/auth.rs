@@ -709,6 +709,7 @@ fn test_auth_expiry() {
         now: SYSTEM_TIME.clone(),
         refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
         password_prefix: "mzauth_".to_string(),
+        admin_role: Some("mzadmin".to_string()),
     });
     let frontegg_user = "user@_.com";
     let frontegg_password = &format!("mzauth_{client_id}{secret}");
@@ -854,6 +855,7 @@ fn test_auth_base() {
         now,
         refresh_before_secs: 0,
         password_prefix: "mzauth_".to_string(),
+        admin_role: Some("mzadmin".to_string()),
     });
     let frontegg_user = "user@_.com";
     let frontegg_password = &format!("mzauth_{client_id}{secret}");
