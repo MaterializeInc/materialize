@@ -1,115 +1,174 @@
 # Overview
 
-*Allow users to transform a source before persisting it using SQL*
+People want to use Materialize to maintain SQL queries over recent histories of their append-only
+data. This is because persisting append-only data grows without bound, making rehydration both
+inefficient and expensive. Giving users more control into how and when to expire their data makes
+Materialize applicable to broader set of use cases and customers.
 
 # Goals
 
-- Make append-only sources viable by retaining a bounded number of updates
-- Thin-down sources by filtering before consuming storage
+This design doc proposes supporting a limited set of data transformations during ingestion made
+available to users by extending the syntax of the `CREATE SOURCE` statement. The extension has the
+form of a new `TRANSFORM USING` keyword which is paramterized by a SQL query describing the
+transformation.
 
-This design doc proposes supporting arbitrary data transformations during ingestion made available
-to users by extending the syntax of the `CREATE SOURCE` statement. The goal is to allow expressing
-any transformation that can be written as a SQL query with one candidate syntax being a `TRANSFORM
-USING <query>` fragment that can be optionally specified at the end of a `CREATE SOURCE` statement.
+The goal are to allow users to:
 
-**Example**
-
-```sql
-CREATE SOURCE foobar FROM POSTGRES ...
-TRANSFORM USING SELECT colA, colB FROM foobar WHERE colC > 4;
-```
-
-**Example with temporal filter**
-
-```sql
-CREATE SOURCE foobar FROM POSTGRES ...
-TRANSFORM USING SELECT colA, colB FROM foobar WHERE created_at > mz_now()
-```
+* Thin down their data through expiration, by using a temporal filter in their transformation.
+* More generally filter and transform their data before peristing them through SQL expressions.
 
 ### Non-goals
 
 - Express existing envelopes and decoders in terms of a transformation query instead of custom code.
-  It seems possible but it’s out of scope for the initial implementation of this feature
+  It seems possible but it’s out of scope for the initial implementation of this feature.
+- Allow arbitrary computation in the transformation queries.
+- Define syntax for both transforming and breaking up a source into subsources.
 
-## Product Details
+## Feature description
 
-While the proposed syntax allows arbitrary queries to be written there is a wide spectrum of product
-behavior that affects the kind of queries that the system is willing to accept and the promises to
-the user we are willing to make as to the effect of the queries will have to their cost model.
+### Syntax
 
-Engineering wise, it is possible to support arbitrary queries (described below) where the system
-makes a best effort to push as much of that query as possible before we start persisting data. This
-is not always possible and in the worst case the provided query can result in zero gains in the
-amount of persisted data. For this reason we might want to constraint kind of queries we accept to
-ones that have a predictable effect to storage usage.
+The current ingestion syntax can be viewed as a series of transformations that are applied one after
+the other. For example users can add a `FORMAT` transformation to do format decoding on top of the
+raw output and an `ENVELOPE` transformation to interpret a certain types of envelopes after format
+decoding.
 
-I postulate that a user typing a `TRANSFORM USING` query in their `CREATE SOURCE` statement would
-have the expectation that the only state stored by materialize would be the result of applying that
-query on top of their source. If that is the case, we might want to outright reject queries that
-cannot be fully applied on the raw source stream. In practice this could mean that we accept any
-query in the form of: `SELECT expr1, expr2, .. exprN WHERE pred1 && pred2 ..` which should be enough
-for users to apply temporal filters and thin down their data.
+This proposal introduces an additional transformation whose general form is `TRANSFORM USING
+(<query>)`. Semantically this transformation could be applied at before or after any of the existing
+transformations (i.e pre/post format and pre/post envelope) we will limit the allowed positions for
+the initial release of this feature to effectively post envelope. In other words, the schema that
+this query should expect to operate on will be the same schema that the source would have produced
+without it.
 
-The counterargument to this is that users already accept that the resource usage of their COMPUTE
-queries in terms of RAM usage is at the mercy of the optimizer and surprising behaviors might arise
-so it is possible to imagine them being fine with `STORAGE` also being less predictable in its usage
-of S3 storage. In that world we could be accepting any query and the user would inspect the effect
-their transform had in the ingestion after the fact, or perhaps with a suitable `EXPLAIN` query.
+**Example: Decode JSON and keep only certain rows**
 
-I will expand this section once I get the chance to talk with more people about it. Keep in mind
-that there are engineering reasons to prefer the first approach where the set of accepted queries is
-constrained.
+```sql
+CREATE SOURCE sales_staff
+FROM KAFKA CONNECTION ...
+FORMAT BYTES
+TRANSFORM USING (
+    SELECT
+        (data->>'id')::int AS id,
+        (data->>'name')::text AS name,
+    FROM
+        (SELECT CONVERT_FROM(data, 'utf8')::jsonb as data FROM sales_staff)
+    WHERE
+        (data->>'department')::text == 'sales'
+);
+```
 
-## Engineering Details
+**Example: Apply expiration to keep the orders of the last 30 days**
 
-### Storage execution model
+```sql
+CREATE SOURCE orders_30d
+FROM KAFKA ...
+FORMAT AVRO USING ...
+TRANSFORM USING (
+    SELECT * FROM orders_30d
+    WHERE mz_now() <= created_at + '30 days'
+);
+```
 
-Running dataflows in storage has some unique characteristics which are important to keep in mind
-when evaluating the various options laid out in the rest of the document so I will describe it here
-briefly.
+**Example: Apply expiration based on ingestion time**
 
-First, some definitions. We will represent the data in the external system that we want to ingest as
-a remote differential collection `RAW`. Storage is tasked with producing a durable storage
-collection `C = PERSIST(TRANSFORM(RAW))` by scheduling executions of ingestion dataflows. Currently
-`TRANSFORM` includes things like format decoding and envelope processing. For each remote collection
-storage maintains a read cursor in it at some frontier `F` that allows it to read the updates to
-`RAW` that happened at times `t: F <= t`. Ingestion dataflows are fault-tolerant and can be
-re-executed when one fails. Executions share no state between them except for any data durably
-stored in `persist` shards. Each execution is tasked with resuming the production of updates to `C`
-by only observing updates to `RAW` that happened beyond `F`.
+```sql
+CREATE SOURCE orders_30d
+FROM KAFKA ...
+FORMAT AVRO USING ...
+INCLUDE INGESTION TIMESTAMP as ingest_ts
+TRANSFORM USING (
+    SELECT * FROM orders_30d
+    WHERE mz_now() <= ingest_ts + '30 days'
+);
+```
 
-The unique characteristic is that `RAW` collections do not offer the ability to read a snapshot at
-an arbitrary time `t`, even if that time is beyond our read cursor. `RAW` collections are only able
-to provide the updates that happened at `t` and it is up to the reader to remember past values if
-that is important. The reason for that is that we want to be giving permission to upstream systems
-to *delete* (not just compact) data that we have already seen, if desired.
+**Example: Project specific columns of a multi-output source**
 
-As a result, the `TRANSFORM` function cannot rely on any in-memory state since its current execution
-can be interrupted at any moment and restarted in a new machine with a blank in-memory state. This
-limits the kinds of dataflow operators that we can use. Stateless operators like `map` and `filter`
-are safe and so are operators that can re-construct their in-memory state by reading a snapshot of
-`C` (not `RAW`). The upsert envelope is an instance of the latter case.
+```sql
+CREATE SOURCE pg_source
+FROM POSTGRES ...
+FOR TABLES (
+   orders TRANSFORM USING (SELECT id, item FROM orders),
+   customers TRANSFORM USING (SELECT id, name FROM customers) AS customer_data,
+);
+```
 
-### Adding arbitrary SQL to `TRANSFORM`
+### Allowed transformations
 
-Given the constraints of the transformation function that can be ran during ingestion we can explore
-a few different avenues to incorporate an arbitrary query `Q` as a transformation step. Every query
-in materialize, after planning and optimizing, can be decomposed into a `MapFilterProject` (MFP from
-now on) part (`Q_mfp`) and a relation expression part (`Q_expr`). Depending on the query any of
-these can be trivial (i.e the identity).
+#### Storage execution model
 
-This decomposition is relevant to what we’re trying to accomplish because `Q_mfp` has the property
-that it’s stateless (state for temporal filters discussed below) and can be evaluated without having
-access to input snapshots whereas `Q_expr` might include arrangements and therefore will need an
-input snapshot before it can resume.
+Running dataflows in storage has some unique characteristics that affect the kind of transformations
+that we are able to execute at that stage. At a high level, storage is tasked with reading a remote
+differential colletion `RAW`, applying some transformations, and writing down the result as a
+durable collection in `persist`. Currently the transformations include things like Avro decoding and
+upsert envelope processing. Crucially, storage never requests a full snapshot of `RAW` from the
+external system, except for the very beginning of the ingestion. Even beyond that, it actively gives
+permission to the upstream system to *delete* (not compact) updates that happen at times that we
+have already ingested. In other words, when a storage dataflow resumes, it can immediately pick up
+where it left of.
 
-With this decomposition we can instantiate two dataflows:
+#### Limitations due to absense of snapshots
 
-1. `C_intermediate = PERSIST(Q_mfp(RAW))`
-2. `C = PERSIST(Q_expr(C_intermediate))`
+The inability to access a snapshot of the data on resumption limits the kind of queries that can
+successfully resume in this setting. An obvious limitation is that any query that needs arrangements
+cannot be executed at this stage as we wouldn't be able to rehydrate the arrangement from a
+snapshot. However, dataflow state is not limited to arrangements. Operators can hold onto private
+in-memory state and rely on rehydrating from a snapshot to rebuild it. Therefore, absense of
+arrangements is not enough to characterize the set of queries that should be allowed.
 
-Where the first is scheduled in the storage timely cluster and the second in the compute timely
-cluster. In a future where the two timely clusters get unified this could be a single big dataflow.
+Instead of looking for arrangements the criterion will instead be whether the transformation can be
+fully optimized down to a `MapFilterProject` (MFP from now on). An MFP is a structure that can
+express any combination of simple maps, filters, and projections, including temporal filters. One of
+its appealing properties is that it can be fully evaluated "in-place" with no additional state,
+which makes it ideal for the storage execution model. A detailed discussion on the handling of
+temporal filters is defined below.
+
+It is hard to give a precise description of the queries that will optimize to an MFP, which poses a
+documentation challenge. A practical option can be presenting some guidelines (e.g no joins or
+agreggations) and a comprehensive set of examples. As shown in the examples above this set of
+queries are powerful enough to cover:
+
+* Thinning down collections by filtering
+* Thinning down collections by projecting specific columns
+* Thinning down collections by applying a temporal filter
+
+#### Limitations due to backward incompatibility
+
+Another implication of storage's execution model is that it is not as robust as materialized views
+in the presence of changes in how a particular SQL query evaluates. This is mostly a concern across
+version upgrades where a query might get optimized differently and be producing a different output
+for the same input. Some examples of how this can happen are:
+
+1. Re-ordering of floating point operations
+1. Re-ordering of logical operators where one of the atoms produces an error
+1. Purpusefully changing the behavior of a SQL function (e.g to fix a bug)
+
+This can be an especially bad problem if the transformation is applied over a non append-only
+source. If the input to the transformation contains a pair of updates `(data, t1, +1), (data, t2,
+-1)` that perfectly cancel out but we process them with two different versions of Materialize
+(perhaps they happen weeks apart), then we can end up with `(transform_v1(data), t1, +1),
+(transform_v2(data), t2, -1)` where the pair no longer matches up and we produce a negative
+accumulation (or other anomalies).
+
+To limit the risk of this happening we will initially limit the `TRANSFORM USING` syntax to only be
+available on the output of append-only envelopes, which practically means just `ENVELOPE NONE`.
+
+As we make progress on making more of our query evaluation deterministic and gain more confidence in
+the stability of our implementation we can lift this restriction and allow transformations on any
+kind of source.
+
+### Expected savings in storage and rehydration time
+
+The limitations introduced above have a positive flip-side which is great predictability of their
+effect in cost and rehydration times. When the Materialize accepts a `TRANSFORM USING` invocation
+the user can be certain that the entirety of their computation will be perform and applied before
+any data is persisted in Materialize.
+
+## Technical description
+
+In this section we explore some of the technial aspects of how the transformation described above
+can be implemented. We will represent as `Q_mfp` the MFP representation of the query after it has
+been planned and optimized.
 
 ### Handling MFPs with temporal filters
 
@@ -161,8 +220,13 @@ recover the original validity period. We can define the three parts like so:
 
 Given this decomposition we can now define the ingestion as:
 
-1. `C_intermediate = PERSIST(Q_expiration(Q_safemfp(RAW)))`
-2. `C = PERSIST(Q_expr(Q_final(C_intermediate)))`
+```
+C = Q_final(PERSIST(Q_expiration(Q_safemfp(RAW))))
+```
+
+Note that in the equation above `Q_final` is applied on the *output* of durably persisting
+persisting the rest of the ingestion. This MFP fragment will be deferred and applied on the read
+side when a dataflow uses the collection `C`.
 
 With these equations we have accomplished the goal of doing as much work as possible before the
 first persist operator while requiring no past state from `RAW` to resume. To see why that is the
@@ -185,90 +249,111 @@ in the future is maintained until the end of its validity period and `Q_mfp` has
 previously computed timestamps. This technique is similar to how the `UPSERT` envelope recovers its
 state from its output.
 
-### Planner/Optimizer/Data structure stabilization
+### Planner/Optimizer stabilization
 
-The inability to have `RAW` snapshots readily available has some deep implications on how much of
-our internal choices we are willing to stabilize, which in turn have deep implications on the kind
-of queries we want to allow users to use in the `TRANSFORM USING` position.
+When accepting a `CREATE SOURCE` statement with a `TRANSFORM USING` clause we are at that moment
+making a promise that that transformation will always be compatible with the storage execution
+model.
 
-In the equations above we had to define `C_intermediate` to effectively be a collection whose schema
-is very much dependent on planner and optimizer choices. Since the transformation from `RAW` to
-`C_intermediate` is not described by high level `SQL` that can be stored in the catalog we must
-explore what else we must stabilize in order to be able to continue ingesting a source across
-versions.
+In practice, since we have limited the accepted queries to only those that fully compile to an MFP,
+this means that the planner/optimizer must maintain the following invariant:
 
-There are various flavors of how this could go. I will lay out some of them below.
+> If a query `Q` fully optimizes to an MFP at some version `n` of Materialize, then it will continue
+> to plan and optimize to an MFP for all versions `n' >= n`. The MFPs are allowed to vary across
+> versions to allow for new optimizations to be taken advantage of.
 
-**Option 1: Only accept transforms `Q` whose `Q_expr` is the identity, stored as SQL**
+## Future improvements
 
-We make the guarantee that if a version of Materialize plans and optimizes a piece of SQL to just an
-MFP then all future versions will continue to do so and will be producing an identical MFP. No data
-structure stabilization needed.
+The feature as described includes a lot of limitations that are necessary with our current appetite
+for stability promises. Here we explore how we might lift some of them in the future.
 
-**Option 2: Only accept transforms `Q` whose `Q_expr` is the identity, stored as raw MFP**
+### Accept `TRANSFORM USING` for non-append only collections
 
-We make the guarantee that an MFP produced by some version of Materialize will be able to be read
-and interpreted in the intended way by all future versions. In practice this means stabilizing
-`MirScalarExpr`, `UnaryFunc`, `BinaryFunc`, and `VariadicFunc`.
+The fisrt limitation that we can lift is allowing transforming non-append only streams. This would
+allow users to transform the output of envelopes other than NONE, and also to transform the output
+of postgres sources.
 
-**Option 3: Accept any transform `Q`, stored as SQL**
+In order to do that we'll have to address the sources of non-determinism in the evaluation semantics
+of a SQL query. Here are a few thoughts on how each could be addressed but more design work is
+needed to fully spec these out.
 
-We make the guarantee that if a version of Materialize plans and optimizes a piece of SQL to a pair
-of `Q_mfp` and `Q_expr` then all future versions will continue to produce an identical `Q_mfp` but a
-potentially different `Q_expr`. No data structure stabilization needed.
+### Accept `TRANSFORM USING` in more ingestion positions
 
-**Option 4: Accept any transform `Q`, stored as `MirRelationExpr`**
+An improvement closely related to the one above would be to allow `TRANSFORM USING` to be used in
+positions other than post-envelope. Allowing this opens up usecases such as customizing the behavior
+of `ENVELOPE UPSERT` by transforming its input or even the behavior of `FORMAT` decoding by
+manipulating the bytes for instance before passing them to the `FORMAT` decoders.
 
-We make no guarantees to the properties of the planner/optimizer over time but we guarantee that a
-`MirRelationExpr` produced by a version of Materialize will be readable in the intended way by all
-future versions. This requires stabilizing everything that was needed for option 2 and additionally
-`MirRelationExpr`, `JoinImplementation`, `AggregateExpr` and perhaps more data strucutres that are
-transitively depended on by `MirRelationExpr`.
+Discussion on how the ingestion description can become more pipeliny and exposed to SQL is tracked
+[in this issue](https://github.com/MaterializeInc/materialize/issues/11957).
 
-> Petros’ take: Stabilizing data structures seems easier to think about than stabilizing code
-> behavior so I would shy away from options 1 and 3. Stabilizing `MirScalarExpr` seems tractable
-> given its simplicity so I would go for option 2 unless an amazing option 5 appears. Input from
-> COMPUTE folks would be helpful here.
+#### Floating point operations
 
-### Transformation re-optimization
+There is an active discussion about fixing [floating point
+correctness](https://github.com/MaterializeInc/materialize/issues/15186) for aggregations but that
+work will have to extend to normal scalar expression as well to fix the MFP issues.
 
-In the previous section we discussed how a query `Q` can be broken down into a `Q_mfp` and `Q_expr`
-where `Q_mfp` must stay fixed as Materialize evolves. This penalizes early adopters with potentially
-worse optimizations and potentially worse cost savings. This section discusses how we could take
-advantage of future improvements to the planner and optimizer in the context of source
-transformations.
+Another alternative would be to forbid floating point expressions on transformations on
+non-append-only collections. This comes with a documentation burden as we'll have to be listing
+these exceptions to explain to users how to use the feature.
 
-#### Optimizer improvements
+#### Non-deterministic logical operators
 
-First, let's consider improvements to the optimizer which operates on the `Mir` level. Suppose that
-some version `v1` of Materialize processes a source transformation query into a `Q_mfp_v1` and
-`Q_expr_v1` pair. As described in the previous section this will result in persisting the durable
-collection `Q_mfp_v1(RAW)`, whose schema will entirely depend on the optimizations that the `v1`
-optimizer will perform. Now let's say that version `v2` gets released that has more optimizations
-that would have resulted a better (`Q_mfp_v2`, `Q_expr_v2`) pair. Unfortunately we cannot use these
-query fragments as-is, because to do that we'd have to calculate `Q_mfp_v2(RAW)` on a snapshot, but
-the snapshot isn't available.
+The execution order of logical operators is currently unspecified and at the same time we are
+allowed to short-circuit evaluation. These together introduce non-determinism when faced with
+expressions such as `FALSE && ERROR` where we skip evaluating the error expression altogether.
 
-What we can do instead is to leave `Q_mfp_v1` fixed and compute `(Q_mfp_v2, Q_expr_v2) =
-optimizer_v2(Q_expr_v1)`. In other words, we can re-optimize the part of the query that *has* access
-to a snapshot. If such re-optimization yields a non-trivial MFP then it means that the new version
-of Materialize managed to push down more parts of the query and we can now create a
-`C_intermediate_v2` by stitching together `Q_mfp_v2(C_intermediate)` and `Q_mfp_v2(Q_mfp_v1(RAW))`.
+SQL has a construct that guarantees execution order, the `IF THEN ELSE` expression so one possible
+path would be that for the specific queries used in `TRANSFORM USING` we replace all occurences of
+logical operators with their equivalent `IF THEN ELSE` expression that will serve as an optimization
+blocker.
 
-In order to be able to re-optimize it is crucial that `MirRelationExpr` and the data structures it
-transitively depends on get stabilized so that future versions of Materialize can understand the
-semantics of `Q_expr_v1`.
+Another option would be to define the behavior of logical operators to be commutative, for example
+with the following "truth" table.
 
-#### Planner improvements
+| A  | B  | A && B      | B && A
+|----|----|-------------|--------
+| T  | T  | T           | T
+| T  | F  | F           | F
+| T  | E  | E           | E
+| F  | T  | F           | F
+| F  | F  | F           | F
+| F  | E  | F           | F
+| E  | T  | E           | E
+| E  | F  | F           | F
+| E1 | E2 | min(E1, E2) | min(E1, E2)
 
-Materialize currently performs a limited set of optimizations at the `Hir` level but more may be
-written in the future (e.g the QGM effort). My understanding of what we have today is that the only
-way that we could reap this kind of improvements after the fact would be to not lower the provided
-query `Q` to `Mir` for storage, but instead perform predicate push-down at the SQL level. For
-example, if given a SQL query `Q` we could come up with a `Q_hir_mfp` and a `Q_hir_expr` where
-`Q_hir_mfp` is guaranteed to be optimized to an `MFP` then every version of materialize could be
-re-running its optimizations in the respective parts and progressively moving computation from
-`Q_hir_expr` into `Q_hir_mfp`. However, this seems like a huge lift and potentially not worth
-blocking this feature on.
+#### Buggy SQL functions
 
-> Input from COMPUTE folks on other approaches for re-optimization would be helpful here.
+Potential options to address this risk is to have a list of allowed SQL functions for `TRANSFORM
+USING` that we are reasoably certain are bug free. Having this mechanism allows us to evolve and
+introduce new SQL functions without worry and only making them available to `TRANSFORM USING`
+queries once they stabilize.
+
+### Accept arbitrary queries
+
+Given the constraints of the transformation function that can be ran during ingestion we can explore
+a few different avenues to incorporate an arbitrary query `Q` as a transformation step. Every query
+in materialize, after planning and optimizing, can be decomposed into a `MapFilterProject` (MFP from
+now on) part (`Q_mfp`) and a relation expression part (`Q_expr`). Depending on the query any of
+these can be trivial (i.e the identity).
+
+With this decomposition we can instantiate two dataflows:
+
+1. `C_intermediate = PERSIST(Q_mfp(RAW))`
+2. `C = PERSIST(Q_expr(C_intermediate))`
+
+Where the first is scheduled in the storage timely cluster and the second in the compute timely
+cluster. In a future where the two timely clusters get unified this could be a single big dataflow.
+
+Going down that path has serious stability requirements for the behavior and/or the data structures
+that will have to be explored in detail in a future design document.
+
+### Allow decomposition of a source into multiple subsources
+
+The final future improvement is offering a way to not only transform the source collection into
+another collection but to allow definition of subsources, in a manner similar to how postgres
+sources directly produce their subsources.
+
+This is another direction where the design space is large and more design work is needed to pinpoint
+the shape we want.
