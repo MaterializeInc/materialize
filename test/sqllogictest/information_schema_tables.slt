@@ -124,6 +124,10 @@ mz_objects
 VIEW
 materialize
 mz_catalog
+mz_operators
+BASE TABLE
+materialize
+mz_catalog
 mz_pseudo_types
 BASE TABLE
 materialize
@@ -457,6 +461,10 @@ VIEW
 materialize
 pg_catalog
 pg_namespace
+VIEW
+materialize
+pg_catalog
+pg_operator
 VIEW
 materialize
 pg_catalog

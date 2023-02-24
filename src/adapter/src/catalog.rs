@@ -20,7 +20,6 @@ use anyhow::bail;
 use chrono::{DateTime, Utc};
 use futures::Future;
 use itertools::Itertools;
-use mz_controller::clusters::ClusterRole;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -36,6 +35,7 @@ use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::{LogVariant, LogView, DEFAULT_LOG_VARIANTS, DEFAULT_LOG_VIEWS};
 use mz_compute_client::protocol::command::ComputeParameters;
+use mz_controller::clusters::ClusterRole;
 use mz_controller::clusters::{
     ClusterEvent, ClusterId, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaAllocation,
     ReplicaConfig, ReplicaId, ReplicaLocation, ReplicaLogging, UnmanagedReplicaLocation,
@@ -57,6 +57,7 @@ use mz_sql::catalog::{
     CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId, IdReference, NameReference,
     SessionCatalog, TypeReference,
 };
+use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
     Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
     QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier, RoleId, SchemaId,
@@ -2717,6 +2718,22 @@ impl Catalog {
                     );
                     builtin_table_updates.push(update);
                 }
+            }
+        }
+        // Operators aren't stored in the catalog, but we would like them in
+        // introspection views.
+        for (op, func) in OP_IMPLS.iter() {
+            match func {
+                mz_sql::func::Func::Scalar(impls) => {
+                    for imp in impls {
+                        builtin_table_updates.push(catalog.state.pack_op_update(
+                            op,
+                            imp.details(),
+                            1,
+                        ));
+                    }
+                }
+                _ => unreachable!("all operators must be scalar functions"),
             }
         }
         let audit_logs = catalog.storage().await.load_audit_log().await?;

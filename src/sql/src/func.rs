@@ -449,9 +449,9 @@ fn experimental_sql_impl_table_func(
 
 /// Describes a single function's implementation.
 pub struct FuncImpl<R> {
-    oid: u32,
-    params: ParamList,
-    return_type: ReturnType,
+    pub oid: u32,
+    pub params: ParamList,
+    pub return_type: ReturnType,
     op: Operation<R>,
 }
 
@@ -466,7 +466,7 @@ pub struct FuncImplCatalogDetails {
 }
 
 impl<R: GetReturnType> FuncImpl<R> {
-    fn details(&self) -> FuncImplCatalogDetails {
+    pub fn details(&self) -> FuncImplCatalogDetails {
         FuncImplCatalogDetails {
             oid: self.oid,
             arg_typs: self.params.arg_names(),
@@ -3260,7 +3260,7 @@ fn array_to_string(
 }
 
 /// Correlates an operator with all of its implementations.
-static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
+pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
     use BinaryFunc::*;
     use ParamType::*;
     use ScalarBaseType::*;
