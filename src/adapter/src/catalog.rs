@@ -4200,8 +4200,14 @@ impl Catalog {
 
         let result = f(&state)?;
 
-        // The user closure was successful, apply the updates.
-        tx.commit().await?;
+        // The user closure was successful, apply the updates. Terminate the
+        // process if this fails, because we have to restart envd due to
+        // indeterminate stash state, which we only reconcile during catalog
+        // init.
+        tx.commit()
+            .await
+            .unwrap_or_terminate("catalog storage transaction commit must succeed");
+
         // Dropping here keeps the mutable borrow on self, preventing us accidentally
         // mutating anything until after f is executed.
         drop(storage);

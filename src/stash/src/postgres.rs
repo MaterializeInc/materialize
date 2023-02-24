@@ -636,7 +636,13 @@ impl Stash {
                         e.code(),
                     );
 
-                    if e.retryable(&self.txn_mode) {
+                    // Savepoint is never retryable because we can't restore all previous
+                    // savepoints.
+                    if matches!(self.txn_mode, TransactionMode::Savepoint) {
+                        return Err(e.into());
+                    }
+
+                    if e.retryable() {
                         // Retry only known safe errors. Others need to cause a
                         // fatal crash in environmentd because a transaction
                         // could have committed without us receiving the commit
@@ -724,7 +730,8 @@ impl Stash {
     }
 }
 
-enum TransactionError {
+#[derive(Debug)]
+pub(crate) enum TransactionError {
     /// A failure occurred pre-transaction.
     Connect(StashError),
     /// The epoch check failed.
@@ -737,21 +744,12 @@ enum TransactionError {
 
 impl From<TransactionError> for StashError {
     fn from(err: TransactionError) -> StashError {
-        err.into_inner()
+        InternalStashError::Transaction(Box::new(err)).into()
     }
 }
 
 impl TransactionError {
     fn inner(&self) -> &StashError {
-        match self {
-            TransactionError::Connect(err)
-            | TransactionError::Epoch(err)
-            | TransactionError::Txn(err)
-            | TransactionError::Commit(err) => err,
-        }
-    }
-
-    fn into_inner(self) -> StashError {
         match self {
             TransactionError::Connect(err)
             | TransactionError::Epoch(err)
@@ -790,15 +788,20 @@ impl TransactionError {
     }
 
     /// Reports whether this error can safely be retried.
-    fn retryable(&self, mode: &TransactionMode) -> bool {
-        // Savepoint is never retryable because we can't restore all previous
-        // savepoints.
-        if matches!(mode, TransactionMode::Savepoint) {
-            return false;
-        }
+    pub fn retryable(&self) -> bool {
         // Only attempt to retry postgres-related errors. Others come from stash
         // code and can't be retried.
         if !matches!(self.inner().inner, InternalStashError::Postgres(_)) {
+            return false;
+        }
+
+        // Check some known permanent failure codes.
+        if matches!(
+            self.code(),
+            Some(&SqlState::UNDEFINED_TABLE)
+                | Some(&SqlState::WRONG_OBJECT_TYPE)
+                | Some(&SqlState::READ_ONLY_SQL_TRANSACTION)
+        ) {
             return false;
         }
 
@@ -807,19 +810,8 @@ impl TransactionError {
             TransactionError::Connect(_) => true,
             // Never retry if the epoch check failed.
             TransactionError::Epoch(_) => false,
-            TransactionError::Txn(_) => {
-                // Check some known permanent failure codes.
-                if matches!(
-                    self.code(),
-                    Some(&SqlState::UNDEFINED_TABLE)
-                        | Some(&SqlState::WRONG_OBJECT_TYPE)
-                        | Some(&SqlState::READ_ONLY_SQL_TRANSACTION)
-                ) {
-                    return false;
-                }
-                // Anything else we will attempt to retry.
-                true
-            }
+            // Retry inner transaction failures.
+            TransactionError::Txn(_) => true,
             TransactionError::Commit(_) => {
                 // If the failure occurred during the commit attempt, only retry
                 // if we got an explicit code from the database notifying us

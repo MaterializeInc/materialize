@@ -294,7 +294,7 @@ impl ShouldHalt for crate::catalog::Error {
 
 impl ShouldHalt for StashError {
     fn should_halt(&self) -> bool {
-        self.is_fence()
+        self.is_unrecoverable()
     }
 }
 

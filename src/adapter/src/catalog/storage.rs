@@ -1622,6 +1622,11 @@ impl<'a> Transaction<'a> {
         assert!(prev.is_some());
     }
 
+    /// Commits the storage transaction to the stash. Any error returned
+    /// indicates the stash may be in an indeterminate state and needs to be
+    /// fully re-read before proceeding. In general, this must be fatal to the
+    /// calling process. We do not panic/halt inside this function itself so
+    /// that errors can bubble up during initialization.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn commit(self) -> Result<(), Error> {
         async fn add_batch<'tx, K, V>(
