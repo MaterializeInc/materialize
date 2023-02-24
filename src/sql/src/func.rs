@@ -2572,7 +2572,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(RangeAny) => UnaryFunc::RangeUpperInf(func::RangeUpperInf) => Bool, 3854;
         },
         "uuid_generate_v5" => Scalar {
-            params!(Uuid, String) => BinaryFunc::UuidGenerateV5, 16405;
+            params!(Uuid, String) => BinaryFunc::UuidGenerateV5, oid::FUNC_PG_UUID_GENERATE_V5;
         },
         "variance" => Scalar {
             params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("variance")) => Float64, 2151;
