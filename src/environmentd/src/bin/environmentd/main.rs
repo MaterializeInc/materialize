@@ -99,7 +99,6 @@ use fail::FailScenario;
 use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
-use mz_http_util::build_cors_allowed_origin;
 use once_cell::sync::Lazy;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
@@ -647,7 +646,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             HeaderValue::from_str(&format!("https://[::1]:{}", port)).unwrap(),
         ]
     };
-    let cors_allowed_origin = build_cors_allowed_origin(allowed_origins.iter());
+    let cors_allowed_origin = mz_http_util::build_cors_allowed_origin(&allowed_origins);
 
     // Configure controller.
     let (orchestrator, secrets_controller, cloud_resource_controller): (
