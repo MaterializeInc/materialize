@@ -297,3 +297,65 @@ BindComplete
 DataRow {"fields":["[1,)","{(,1),[-1,1)}"]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
+
+# test range binary encodings
+send
+Parse {"query": "SELECT * FROM int4range_values;"}
+Bind {"result_formats": [1]}
+Execute
+Parse {"query": "SELECT * FROM numrange_values;"}
+Bind {"result_formats": [1]}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["\u0001"]}
+DataRow {"fields":["\u0001"]}
+DataRow {"fields":["\u0001"]}
+DataRow {"fields":["\u0018"]}
+DataRow {"fields":["\u0018"]}
+DataRow {"fields":["\u0018"]}
+DataRow {"fields":["\u0018"]}
+DataRow {"fields":["\b\u0000\u0000\u0000\u0004\u0000\u0000\u0000\u0001"]}
+DataRow {"fields":["\b\u0000\u0000\u0000\u0004\u0000\u0000\u0000\u0001"]}
+DataRow {"fields":["\b\u0000\u0000\u0000\u0004\u0000\u0000\u0000\u0002"]}
+DataRow {"fields":["\b\u0000\u0000\u0000\u0004\u0000\u0000\u0000\u0002"]}
+DataRow {"fields":["\u0012\u0000\u0000\u0000\u0004\u0000\u0000\u0000\u0001"]}
+DataRow {"fields":["\u0012\u0000\u0000\u0000\u0004\u0000\u0000\u0000\u0001"]}
+DataRow {"fields":["\u0012\u0000\u0000\u0000\u0004\u0000\u0000\u0000\u0002"]}
+DataRow {"fields":["\u0012\u0000\u0000\u0000\u0004\u0000\u0000\u0000\u0002"]}
+DataRow {"fields":["\u0002\u0000\u0000\u0000\u0004\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004\u0000\u0000\u0000\u0001"]}
+DataRow {"fields":["\u0002\u0000\u0000\u0000\u0004\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004\u0000\u0000\u0000\u0001"]}
+DataRow {"fields":["\u0002\u0000\u0000\u0000\u0004\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0004\u0000\u0000\u0000\u0002"]}
+DataRow {"fields":["[2, 0, 0, 0, 4, 255, 255, 255, 255, 0, 0, 0, 4, 0, 0, 0, 1]"]}
+DataRow {"fields":["[2, 0, 0, 0, 4, 255, 255, 255, 255, 0, 0, 0, 4, 0, 0, 0, 2]"]}
+CommandComplete {"tag":"SELECT 20"}
+ParseComplete
+BindComplete
+DataRow {"fields":["\u0001"]}
+DataRow {"fields":["\u0001"]}
+DataRow {"fields":["\u0001"]}
+DataRow {"fields":["\u0018"]}
+DataRow {"fields":["\u0018"]}
+DataRow {"fields":["\u0018"]}
+DataRow {"fields":["\u0018"]}
+DataRow {"fields":["\b\u0000\u0000\u0000\n\u0000\u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001"]}
+DataRow {"fields":["\b\u0000\u0000\u0000\n\u0000\u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001"]}
+DataRow {"fields":["\f\u0000\u0000\u0000\n\u0000\u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001"]}
+DataRow {"fields":["\f\u0000\u0000\u0000\n\u0000\u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001"]}
+DataRow {"fields":["\u0010\u0000\u0000\u0000\n\u0000\u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001"]}
+DataRow {"fields":["\u0010\u0000\u0000\u0000\n\u0000\u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001"]}
+DataRow {"fields":["\u0012\u0000\u0000\u0000\n\u0000\u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001"]}
+DataRow {"fields":["\u0012\u0000\u0000\u0000\n\u0000\u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001"]}
+DataRow {"fields":["\u0000\u0000\u0000\u0000\n\u0000\u0001\u0000\u0000@\u0000\u0000\u0000\u0000\u0001\u0000\u0000\u0000\n\u0000\u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001"]}
+DataRow {"fields":["\u0002\u0000\u0000\u0000\n\u0000\u0001\u0000\u0000@\u0000\u0000\u0000\u0000\u0001\u0000\u0000\u0000\n\u0000\u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001"]}
+DataRow {"fields":["\u0004\u0000\u0000\u0000\n\u0000\u0001\u0000\u0000@\u0000\u0000\u0000\u0000\u0001\u0000\u0000\u0000\n\u0000\u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001"]}
+DataRow {"fields":["[6, 0, 0, 0, 8, 0, 0, 255, 255, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 255, 255, 0, 0, 0, 0]"]}
+DataRow {"fields":["\u0006\u0000\u0000\u0000\n\u0000\u0001\u0000\u0000@\u0000\u0000\u0000\u0000\u0001\u0000\u0000\u0000\n\u0000\u0001\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0001"]}
+CommandComplete {"tag":"SELECT 20"}
+ReadyForQuery {"status":"I"}
