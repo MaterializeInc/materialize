@@ -37,6 +37,8 @@ COCKROACH_SKIP_ENABLING_DIAGNOSTIC_REPORTING=true cockroach start-single-node \
 # See: https://github.com/MaterializeInc/materialize/issues/16726
 cockroach sql --insecure -e "SET CLUSTER SETTING sql.stats.forecasts.enabled = false"
 
+cockroach sql --insecure -e "SET CLUSTER SETTING kv.raft_log.disable_synchronization_unsafe = true"
+
 cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS consensus"
 cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS storage"
 cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS adapter"
