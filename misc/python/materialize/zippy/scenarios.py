@@ -133,7 +133,7 @@ class PostgresCdc(Scenario):
             KillClusterd: 5,
             StoragedKill: 5,
             StoragedStart: 5,
-            PostgresRestart: 10,
+            PostgresRestart: 5,
             CreateViewParameterized(): 10,
             ValidateView: 20,
             PostgresDML: 100,
