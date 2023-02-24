@@ -2832,7 +2832,6 @@ impl BinaryFunc {
 impl fmt::Display for BinaryFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            BinaryFunc::UuidGenerateV5 => f.write_str("+"),
             BinaryFunc::AddInt16 => f.write_str("+"),
             BinaryFunc::AddInt32 => f.write_str("+"),
             BinaryFunc::AddInt64 => f.write_str("+"),
@@ -3025,6 +3024,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::RangeUnion => f.write_str("+"),
             BinaryFunc::RangeIntersection => f.write_str("*"),
             BinaryFunc::RangeDifference => f.write_str("-"),
+            BinaryFunc::UuidGenerateV5 => f.write_str("uuid_generate_v5"),
         }
     }
 }
