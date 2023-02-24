@@ -1853,6 +1853,31 @@ FROM mz_internal.mz_worker_compute_frontiers
 GROUP BY export_id",
 };
 
+pub const MZ_DATAFLOW_CHANNEL_OPERATORS: BuiltinView = BuiltinView {
+    name: "mz_dataflow_channel_operators",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_dataflow_channel_operators AS
+WITH
+channel_addresses(id, worker_id, address, from_index, to_index) AS (
+     SELECT id, worker_id, address, from_index, to_index
+     FROM mz_internal.mz_dataflow_channels mdc
+     INNER JOIN mz_internal.mz_dataflow_addresses mda
+     USING (id, worker_id)
+),
+operator_addresses(channel_id, worker_id, from_address, to_address) AS (
+     SELECT id AS channel_id, worker_id,
+            address || from_index AS from_address,
+            address || to_index AS to_address
+     FROM channel_addresses
+)
+SELECT channel_id AS id, oa.worker_id, from_ops.id AS from_operator_id, to_ops.id AS to_operator_id
+FROM operator_addresses oa INNER JOIN mz_internal.mz_dataflow_addresses mda_from ON oa.from_address = mda_from.address AND oa.worker_id = mda_from.worker_id
+                           INNER JOIN mz_internal.mz_dataflow_operators from_ops ON mda_from.id = from_ops.id AND oa.worker_id = from_ops.worker_id
+                           INNER JOIN mz_internal.mz_dataflow_addresses mda_to ON oa.to_address = mda_to.address AND oa.worker_id = mda_to.worker_id
+                           INNER JOIN mz_internal.mz_dataflow_operators to_ops ON mda_to.id = to_ops.id AND oa.worker_id = to_ops.worker_id
+"
+};
+
 pub const MZ_COMPUTE_IMPORT_FRONTIERS: BuiltinView = BuiltinView {
     name: "mz_compute_import_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
@@ -3012,6 +3037,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY),
         Builtin::View(&MZ_CLUSTER_REPLICA_UTILIZATION),
         Builtin::View(&MZ_COMPUTE_FRONTIERS),
+        Builtin::View(&MZ_DATAFLOW_CHANNEL_OPERATORS),
         Builtin::View(&MZ_COMPUTE_IMPORT_FRONTIERS),
         Builtin::View(&MZ_MESSAGE_COUNTS),
         Builtin::View(&MZ_RAW_COMPUTE_OPERATOR_DURATIONS),
