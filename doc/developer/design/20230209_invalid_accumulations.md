@@ -78,7 +78,7 @@ The above translation is not without risks for impact in the query optimization 
 
 1. _Mitigation and Transfer_: The source of the risk is the addition of a column to the output schema of `Reduce^{MIR}`. To maintain the same schema, but still be able to report invalid accumulation errors, we could alternatively extend the `Datum` types that are produced by a reduction to also include a new `Datum:Err`. The trade-off is that several other parts of the codebase may now have to consider `Datum:Err` as a valid `Datum` variant. Significantly, scalar expression evaluation would potentially need to be changed to match also on `Datum:Err`. While the changes are non-trivial, most of the complexity is outside of the core optimization transform pipeline, as we already allow simple scalar functions to be applied to the results of an aggregation. Nevertheless, `reduce_fusion` might still need extensions to better handle the same scalar expression being applied to two fusable reduce outputs. So in summary, this strategy partly mitigates the risk on the optimizer and partly transfers it to other parts of the codebase.
 
-2. _Avoidance_: Instead of pursuing a translation-based approach as outlined above, with or without optimizer risk mitigation, we could instead opt for one of the different approaches outlined in the [Alternatives](#alternatives) section below. The analysis there points to implementing a fallible version of the Differential Dataflow reduction operator as the most promising alternative design. However, this design also comes with potential risks, which are discussed later in this document.
+2. _Avoidance_: Instead of pursuing a translation-based approach as outlined above, with or without optimizer risk mitigation, we could instead opt for one of the different approaches outlined in the [Alternatives](#alternatives) section below. The analysis there points to implementing a fallible version of the Differential Dataflow reduction operator as the most promising alternative design, but also highlights source-level multiset constraint checking as a possibility. However, these designs also come with potential risks, which are discussed later in this document.
 
 #### Details for Category 2 Errors
 
@@ -108,6 +108,10 @@ A **fifth alternative** is to employ a side channel, e.g., similar to the intern
 
 A **sixth alternative** is to first ensure that a negative number observed in the output from a sum of `uint8` values results in a query-level error, instead of resulting in a negative result being returned to the user. This alternative has the same weakness of the first alternative above: combination of a negative number with other query expressions may lead to the error not manifesting for the query. Another disadvantage of this alternative is that it is not a solution uniformly applicable to all unsigned integer types, since as discussed above not all of their sums result in `numeric`. Changing this behavior would have unfortunate implications for backwards compatibility.
 
+### Source-level solutions
+
+A **seventh alternative** is to include checks for the multiset property at the sources, with appropriate measures to surface errors to users when source data violates this constraint. This could be done, e.g., by a design where source data is consolidated to incrementally update a full snapshot of the data at every frontier advancement, followed by an (incremental) test of whether the multiset property has been violated. Only data passing such a test would be fed into a subsequent dataflow computation. Such a design would need to be applied redundantly to introspection sources as well as to persist. While attractive from the correctness perspective, consolidation prior to processing has unknown processing latency implications. Additionally, it might require either large memory requirements or a possibility to store the incrementally maintained data snapshot out-of-core. A concrete design that fulfills all of these goals is not yet available at the time of writing.
+
 ### Decision Criteria
 
 In summary, when considering the various alternatives above, the following decision criteria emerged as part of the discussions:
@@ -117,7 +121,7 @@ In summary, when considering the various alternatives above, the following decis
 3. The solution approach must not hinder arrangement reuse, due to the otherwise potentially significant overhead and stability implications.
 4. The solution approach must allow us to maintain consistent behavior across both rendered plans and constant-folded ones.
 
-Among the alternatives considered, only the fourth alternative above, i.e., designing a fallible reduce operator, and the alternative proposed in this design document fulfilled all of the decision criteria.
+Among the alternatives considered, only the fourth and seventh alternatives above, i.e., designing a fallible reduce operator or source-level multiset constraint checking, and the alternative proposed in this design document fulfilled all of the decision criteria. So these are considered the three viable alternatives for a final decision.
 
 ## Open questions
 
