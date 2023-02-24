@@ -262,7 +262,12 @@ set datestyle = 'iso,mdy';
 show datestyle;
 set datestyle = 'iso, mdy';
 show datestyle;
+set datestyle = '"iso", "mdy", "iso", "mdy"', "mdy", "iso", "ISO", "IsO", "mDy";
+show datestyle;
 ----
+COMPLETE 0
+ISO, MDY
+COMPLETE 1
 COMPLETE 0
 ISO, MDY
 COMPLETE 1

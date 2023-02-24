@@ -12,7 +12,7 @@ use std::fmt;
 use std::time::Duration;
 
 use const_format::concatcp;
-use mz_sql::plan::VariableValue;
+use itertools::Itertools;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use uncased::UncasedStr;
@@ -20,7 +20,7 @@ use uncased::UncasedStr;
 use mz_build_info::BuildInfo;
 use mz_ore::cast;
 use mz_persist_client::cfg::PersistConfig;
-use mz_sql::ast::{Ident, SetVariableTo, SetVariableValue};
+use mz_sql::ast::Ident;
 use mz_sql::DEFAULT_SCHEMA;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 
@@ -96,14 +96,15 @@ const DATABASE: ServerVar<str> = ServerVar {
     safe: true,
 };
 
-const DATE_STYLE: ServerVar<str> = ServerVar {
+static DEFAULT_DATE_STYLE: Lazy<Vec<String>> = Lazy::new(|| vec!["ISO".into(), "MDY".into()]);
+static DATE_STYLE: Lazy<ServerVar<Vec<String>>> = Lazy::new(|| ServerVar {
     // DateStyle has nonstandard capitalization for historical reasons.
     name: UncasedStr::new("DateStyle"),
-    value: "ISO, MDY",
+    value: &*DEFAULT_DATE_STYLE,
     description: "Sets the display format for date and time values (PostgreSQL).",
     internal: false,
     safe: true,
-};
+});
 
 const EXTRA_FLOAT_DIGITS: ServerVar<i32> = ServerVar {
     name: UncasedStr::new("extra_float_digits"),
@@ -140,8 +141,8 @@ const INTERVAL_STYLE: ServerVar<str> = ServerVar {
 
 const MZ_VERSION_NAME: &UncasedStr = UncasedStr::new("mz_version");
 
-static DEFAULT_SEARCH_PATH: Lazy<Vec<String>> = Lazy::new(|| vec![DEFAULT_SCHEMA.to_owned()]);
-static SEARCH_PATH: Lazy<ServerVar<Vec<String>>> = Lazy::new(|| ServerVar {
+static DEFAULT_SEARCH_PATH: Lazy<Vec<Ident>> = Lazy::new(|| vec![Ident::new(DEFAULT_SCHEMA)]);
+static SEARCH_PATH: Lazy<ServerVar<Vec<Ident>>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("search_path"),
     value: &*DEFAULT_SEARCH_PATH,
     description:
@@ -433,6 +434,49 @@ static MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<mz_repr::Timestamp>> = Serve
     safe: false,
 };
 
+/// Represents the input to a variable.
+///
+/// Each variable has different rules for how it handles each style of input.
+/// This type allows us to defer interpretation of the input until the
+/// variable-specific interpretation can be applied.
+#[derive(Debug, Clone, Copy)]
+pub enum VarInput<'a> {
+    /// The input has been flattened into a single string.
+    Flat(&'a str),
+    /// The input comes from a SQL `SET` statement and is jumbled across
+    /// multiple components.
+    SqlSet(&'a [String]),
+}
+
+impl<'a> VarInput<'a> {
+    /// Converts the variable input to an owned vector of strings.
+    fn to_vec(&self) -> Vec<String> {
+        match self {
+            VarInput::Flat(v) => vec![v.to_string()],
+            VarInput::SqlSet(values) => values.into_iter().map(|v| v.to_string()).collect(),
+        }
+    }
+}
+
+/// An owned version of [`VarInput`].
+#[derive(Debug, Clone)]
+pub enum OwnedVarInput {
+    /// See [`VarInput::Flat`].
+    Flat(String),
+    /// See [`VarInput::SqlSet`].
+    SqlSet(Vec<String>),
+}
+
+impl OwnedVarInput {
+    /// Converts this owned variable input as a [`VarInput`].
+    pub fn borrow(&self) -> VarInput {
+        match self {
+            OwnedVarInput::Flat(v) => VarInput::Flat(v),
+            OwnedVarInput::SqlSet(v) => VarInput::SqlSet(v),
+        }
+    }
+}
+
 /// Session variables.
 ///
 /// Materialize roughly follows the PostgreSQL configuration model, which works
@@ -470,12 +514,12 @@ pub struct SessionVars {
     cluster: SessionVar<str>,
     cluster_replica: SessionVar<Option<String>>,
     database: SessionVar<str>,
-    date_style: ServerVar<str>,
+    date_style: &'static ServerVar<Vec<String>>,
     extra_float_digits: SessionVar<i32>,
     failpoints: ServerVar<str>,
     integer_datetimes: ServerVar<bool>,
     interval_style: ServerVar<str>,
-    search_path: SessionVar<Vec<String>>,
+    search_path: SessionVar<Vec<Ident>>,
     server_version: ServerVar<str>,
     server_version_num: ServerVar<i32>,
     sql_safe_updates: SessionVar<bool>,
@@ -500,7 +544,7 @@ impl SessionVars {
             cluster: SessionVar::new(&CLUSTER),
             cluster_replica: SessionVar::new(&CLUSTER_REPLICA),
             database: SessionVar::new(&DATABASE),
-            date_style: DATE_STYLE,
+            date_style: &DATE_STYLE,
             extra_float_digits: SessionVar::new(&EXTRA_FLOAT_DIGITS),
             failpoints: FAILPOINTS,
             integer_datetimes: INTEGER_DATETIMES,
@@ -540,7 +584,7 @@ impl SessionVars {
             &self.cluster,
             &self.cluster_replica,
             &self.database,
-            &self.date_style,
+            self.date_style,
             &self.extra_float_digits,
             &self.failpoints,
             &self.integer_datetimes,
@@ -568,7 +612,7 @@ impl SessionVars {
         let vars: [&dyn Var; 9] = [
             &self.application_name,
             &self.client_encoding,
-            &self.date_style,
+            self.date_style,
             &self.integer_datetimes,
             &self.server_version,
             &self.standard_conforming_strings,
@@ -609,7 +653,7 @@ impl SessionVars {
         } else if name == DATABASE.name {
             Ok(&self.database)
         } else if name == DATE_STYLE.name {
-            Ok(&self.date_style)
+            Ok(self.date_style)
         } else if name == EXTRA_FLOAT_DIGITS.name {
             Ok(&self.extra_float_digits)
         } else if name == FAILPOINTS.name {
@@ -661,41 +705,45 @@ impl SessionVars {
     /// insensitively. If `value` is not valid, as determined by the underlying
     /// configuration parameter, or if the named configuration parameter does
     /// not exist, an error is returned.
-    pub fn set(&mut self, name: &str, values: &[String], local: bool) -> Result<(), AdapterError> {
+    pub fn set(&mut self, name: &str, input: VarInput, local: bool) -> Result<(), AdapterError> {
         if name == APPLICATION_NAME.name {
-            self.application_name.set(values, local)
+            self.application_name.set(input, local)
         } else if name == CLIENT_ENCODING.name {
-            match assert_single_value(values) {
+            match extract_single_value(input) {
                 Ok(value) if UncasedStr::new(value) == CLIENT_ENCODING.value => Ok(()),
                 _ => Err(AdapterError::FixedValueParameter(&CLIENT_ENCODING)),
             }
         } else if name == CLIENT_MIN_MESSAGES.name {
-            if let Ok(_) = ClientSeverity::parse(values) {
-                self.client_min_messages.set(values, local)
+            if let Ok(_) = ClientSeverity::parse(input) {
+                self.client_min_messages.set(input, local)
             } else {
                 return Err(AdapterError::ConstrainedParameter {
                     parameter: &CLIENT_MIN_MESSAGES,
-                    values: values.into(),
+                    values: input.to_vec(),
                     valid_values: Some(ClientSeverity::valid_values()),
                 });
             }
         } else if name == CLUSTER.name {
-            self.cluster.set(values, local)
+            self.cluster.set(input, local)
         } else if name == CLUSTER_REPLICA.name {
-            self.cluster_replica.set(values, local)
+            self.cluster_replica.set(input, local)
         } else if name == DATABASE.name {
-            self.database.set(values, local)
+            self.database.set(input, local)
         } else if name == DATE_STYLE.name {
-            for value in values.iter().map(|v| v.split(',')).flatten() {
+            let Ok(values) = Vec::<String>::parse(input) else {
+                return Err(AdapterError::FixedValueParameter(&*DATE_STYLE));
+            };
+            for value in values {
                 let value = UncasedStr::new(value.trim());
                 if value != "ISO" && value != "MDY" {
-                    return Err(AdapterError::FixedValueParameter(&DATE_STYLE));
+                    return Err(AdapterError::FixedValueParameter(&*DATE_STYLE));
                 }
             }
             Ok(())
         } else if name == EXTRA_FLOAT_DIGITS.name {
-            self.extra_float_digits.set(values, local)
+            self.extra_float_digits.set(input, local)
         } else if name == FAILPOINTS.name {
+            let values = input.to_vec();
             for mut cfg in values.iter().map(|v| v.trim().split(';')).flatten() {
                 cfg = cfg.trim();
                 if cfg.is_empty() {
@@ -707,19 +755,19 @@ impl SessionVars {
                         .next()
                         .ok_or_else(|| AdapterError::InvalidParameterValue {
                             parameter: &FAILPOINTS,
-                            values: values.into(),
+                            values: input.to_vec(),
                             reason: "missing failpoint name".into(),
                         })?;
                 let action = splits
                     .next()
                     .ok_or_else(|| AdapterError::InvalidParameterValue {
                         parameter: &FAILPOINTS,
-                        values: values.into(),
+                        values: input.to_vec(),
                         reason: "missing failpoint action".into(),
                     })?;
                 fail::cfg(failpoint, action).map_err(|e| AdapterError::InvalidParameterValue {
                     parameter: &FAILPOINTS,
-                    values: values.into(),
+                    values: input.to_vec(),
                     reason: e,
                 })?;
             }
@@ -727,20 +775,20 @@ impl SessionVars {
         } else if name == INTEGER_DATETIMES.name {
             Err(AdapterError::ReadOnlyParameter(&INTEGER_DATETIMES))
         } else if name == INTERVAL_STYLE.name {
-            match assert_single_value(values) {
+            match extract_single_value(input) {
                 Ok(value) if UncasedStr::new(value) == INTERVAL_STYLE.value => Ok(()),
                 _ => Err(AdapterError::FixedValueParameter(&INTERVAL_STYLE)),
             }
         } else if name == SEARCH_PATH.name {
-            self.search_path.set(values, local)
+            self.search_path.set(input, local)
         } else if name == SERVER_VERSION.name {
             Err(AdapterError::ReadOnlyParameter(&SERVER_VERSION))
         } else if name == SERVER_VERSION_NUM.name {
             Err(AdapterError::ReadOnlyParameter(&SERVER_VERSION_NUM))
         } else if name == SQL_SAFE_UPDATES.name {
-            self.sql_safe_updates.set(values, local)
+            self.sql_safe_updates.set(input, local)
         } else if name == STANDARD_CONFORMING_STRINGS.name {
-            match bool::parse(values) {
+            match bool::parse(input) {
                 Ok(value) if value == *STANDARD_CONFORMING_STRINGS.value => Ok(()),
                 Ok(_) => Err(AdapterError::FixedValueParameter(
                     &STANDARD_CONFORMING_STRINGS,
@@ -750,35 +798,35 @@ impl SessionVars {
                 )),
             }
         } else if name == STATEMENT_TIMEOUT.name {
-            self.statement_timeout.set(values, local)
+            self.statement_timeout.set(input, local)
         } else if name == IDLE_IN_TRANSACTION_SESSION_TIMEOUT.name {
-            self.idle_in_transaction_session_timeout.set(values, local)
+            self.idle_in_transaction_session_timeout.set(input, local)
         } else if name == TIMEZONE.name {
-            if let Ok(_) = TimeZone::parse(values) {
-                self.timezone.set(values, local)
+            if let Ok(_) = TimeZone::parse(input) {
+                self.timezone.set(input, local)
             } else {
                 Err(AdapterError::ConstrainedParameter {
                     parameter: &TIMEZONE,
-                    values: values.into(),
+                    values: input.to_vec(),
                     valid_values: None,
                 })
             }
         } else if name == TRANSACTION_ISOLATION.name {
-            if let Ok(_) = IsolationLevel::parse(values) {
-                self.transaction_isolation.set(values, local)
+            if let Ok(_) = IsolationLevel::parse(input) {
+                self.transaction_isolation.set(input, local)
             } else {
                 return Err(AdapterError::ConstrainedParameter {
                     parameter: &TRANSACTION_ISOLATION,
-                    values: values.into(),
+                    values: input.to_vec(),
                     valid_values: Some(IsolationLevel::valid_values()),
                 });
             }
         } else if name == REAL_TIME_RECENCY.name {
-            self.real_time_recency.set(values, local)
+            self.real_time_recency.set(input, local)
         } else if name == EMIT_TIMESTAMP_NOTICE.name {
-            self.emit_timestamp_notice.set(values, local)
+            self.emit_timestamp_notice.set(input, local)
         } else if name == EMIT_TRACE_ID_NOTICE.name {
-            self.emit_trace_id_notice.set(values, local)
+            self.emit_trace_id_notice.set(input, local)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -920,7 +968,7 @@ impl SessionVars {
     }
 
     /// Returns the value of the `DateStyle` configuration parameter.
-    pub fn date_style(&self) -> &'static str {
+    pub fn date_style(&self) -> &[String] {
         self.date_style.value
     }
 
@@ -950,12 +998,8 @@ impl SessionVars {
     }
 
     /// Returns the value of the `search_path` configuration parameter.
-    pub fn search_path(&self) -> Vec<&str> {
-        self.search_path
-            .value()
-            .iter()
-            .map(String::as_str)
-            .collect()
+    pub fn search_path(&self) -> &[Ident] {
+        self.search_path.value()
     }
 
     /// Returns the value of the `server_version` configuration parameter.
@@ -1038,7 +1082,7 @@ pub struct SystemVars {
     max_secrets: SystemVar<u32>,
     max_roles: SystemVar<u32>,
     max_result_size: SystemVar<u32>,
-    allowed_cluster_replica_sizes: SystemVar<Vec<String>>, // TODO: BTreeSet<String> will be better
+    allowed_cluster_replica_sizes: SystemVar<Vec<String>>,
 
     // features
     // (empty)
@@ -1191,47 +1235,47 @@ impl SystemVars {
     /// 1. If `name` does not refer to a valid [`SystemVars`] field.
     /// 2. If `values` does not represent a valid [`SystemVars`] value for
     ///    `name`.
-    pub fn is_default(&self, name: &str, values: &[String]) -> Result<bool, AdapterError> {
+    pub fn is_default(&self, name: &str, input: VarInput) -> Result<bool, AdapterError> {
         if name == CONFIG_HAS_SYNCED_ONCE.name {
-            self.config_has_synced_once.is_default(values)
+            self.config_has_synced_once.is_default(input)
         } else if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
-            self.max_aws_privatelink_connections.is_default(values)
+            self.max_aws_privatelink_connections.is_default(input)
         } else if name == MAX_TABLES.name {
-            self.max_tables.is_default(values)
+            self.max_tables.is_default(input)
         } else if name == MAX_SOURCES.name {
-            self.max_sources.is_default(values)
+            self.max_sources.is_default(input)
         } else if name == MAX_SINKS.name {
-            self.max_sinks.is_default(values)
+            self.max_sinks.is_default(input)
         } else if name == MAX_MATERIALIZED_VIEWS.name {
-            self.max_materialized_views.is_default(values)
+            self.max_materialized_views.is_default(input)
         } else if name == MAX_CLUSTERS.name {
-            self.max_clusters.is_default(values)
+            self.max_clusters.is_default(input)
         } else if name == MAX_REPLICAS_PER_CLUSTER.name {
-            self.max_replicas_per_cluster.is_default(values)
+            self.max_replicas_per_cluster.is_default(input)
         } else if name == MAX_DATABASES.name {
-            self.max_databases.is_default(values)
+            self.max_databases.is_default(input)
         } else if name == MAX_SCHEMAS_PER_DATABASE.name {
-            self.max_schemas_per_database.is_default(values)
+            self.max_schemas_per_database.is_default(input)
         } else if name == MAX_OBJECTS_PER_SCHEMA.name {
-            self.max_objects_per_schema.is_default(values)
+            self.max_objects_per_schema.is_default(input)
         } else if name == MAX_SECRETS.name {
-            self.max_secrets.is_default(values)
+            self.max_secrets.is_default(input)
         } else if name == MAX_ROLES.name {
-            self.max_roles.is_default(values)
+            self.max_roles.is_default(input)
         } else if name == MAX_RESULT_SIZE.name {
-            self.max_result_size.is_default(values)
+            self.max_result_size.is_default(input)
         } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
-            self.allowed_cluster_replica_sizes.is_default(values)
+            self.allowed_cluster_replica_sizes.is_default(input)
         } else if name == PERSIST_BLOB_TARGET_SIZE.name {
-            self.persist_blob_target_size.is_default(values)
+            self.persist_blob_target_size.is_default(input)
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
-            self.persist_compaction_minimum_timeout.is_default(values)
+            self.persist_compaction_minimum_timeout.is_default(input)
         } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
-            self.dataflow_max_inflight_bytes.is_default(values)
+            self.dataflow_max_inflight_bytes.is_default(input)
         } else if name == METRICS_RETENTION.name {
-            self.metrics_retention.is_default(values)
+            self.metrics_retention.is_default(input)
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
-            self.mock_audit_event_timestamp.is_default(values)
+            self.mock_audit_event_timestamp.is_default(input)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -1255,47 +1299,47 @@ impl SystemVars {
     /// 1. If `name` does not refer to a valid [`SystemVars`] field.
     /// 2. If `value` does not represent a valid [`SystemVars`] value for
     ///    `name`.
-    pub fn set(&mut self, name: &str, values: &[String]) -> Result<bool, AdapterError> {
+    pub fn set(&mut self, name: &str, input: VarInput) -> Result<bool, AdapterError> {
         if name == CONFIG_HAS_SYNCED_ONCE.name {
-            self.config_has_synced_once.set(values)
+            self.config_has_synced_once.set(input)
         } else if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
-            self.max_aws_privatelink_connections.set(values)
+            self.max_aws_privatelink_connections.set(input)
         } else if name == MAX_TABLES.name {
-            self.max_tables.set(values)
+            self.max_tables.set(input)
         } else if name == MAX_SOURCES.name {
-            self.max_sources.set(values)
+            self.max_sources.set(input)
         } else if name == MAX_SINKS.name {
-            self.max_sinks.set(values)
+            self.max_sinks.set(input)
         } else if name == MAX_MATERIALIZED_VIEWS.name {
-            self.max_materialized_views.set(values)
+            self.max_materialized_views.set(input)
         } else if name == MAX_CLUSTERS.name {
-            self.max_clusters.set(values)
+            self.max_clusters.set(input)
         } else if name == MAX_REPLICAS_PER_CLUSTER.name {
-            self.max_replicas_per_cluster.set(values)
+            self.max_replicas_per_cluster.set(input)
         } else if name == MAX_DATABASES.name {
-            self.max_databases.set(values)
+            self.max_databases.set(input)
         } else if name == MAX_SCHEMAS_PER_DATABASE.name {
-            self.max_schemas_per_database.set(values)
+            self.max_schemas_per_database.set(input)
         } else if name == MAX_OBJECTS_PER_SCHEMA.name {
-            self.max_objects_per_schema.set(values)
+            self.max_objects_per_schema.set(input)
         } else if name == MAX_SECRETS.name {
-            self.max_secrets.set(values)
+            self.max_secrets.set(input)
         } else if name == MAX_ROLES.name {
-            self.max_roles.set(values)
+            self.max_roles.set(input)
         } else if name == MAX_RESULT_SIZE.name {
-            self.max_result_size.set(values)
+            self.max_result_size.set(input)
         } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
-            self.allowed_cluster_replica_sizes.set(values)
+            self.allowed_cluster_replica_sizes.set(input)
         } else if name == PERSIST_BLOB_TARGET_SIZE.name {
-            self.persist_blob_target_size.set(values)
+            self.persist_blob_target_size.set(input)
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
-            self.persist_compaction_minimum_timeout.set(values)
+            self.persist_compaction_minimum_timeout.set(input)
         } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
-            self.dataflow_max_inflight_bytes.set(values)
+            self.dataflow_max_inflight_bytes.set(input)
         } else if name == METRICS_RETENTION.name {
-            self.metrics_retention.set(values)
+            self.metrics_retention.set(input)
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
-            self.mock_audit_event_timestamp.set(values)
+            self.mock_audit_event_timestamp.set(input)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -1466,8 +1510,11 @@ pub trait Var: fmt::Debug {
     /// Returns the name of the configuration parameter.
     fn name(&self) -> &'static str;
 
-    /// Constructs a string representation of the current value of the
+    /// Constructs a flattened string representation of the current value of the
     /// configuration parameter.
+    ///
+    /// The resulting string is guaranteed to be parsable if provided to
+    /// `Value::parse` as a [`VarInput::Flat`].
     fn value(&self) -> String;
 
     /// Returns a short sentence describing the purpose of the configuration
@@ -1563,8 +1610,8 @@ where
         }
     }
 
-    fn set(&mut self, values: &[String]) -> Result<bool, AdapterError> {
-        match V::parse(values) {
+    fn set(&mut self, input: VarInput) -> Result<bool, AdapterError> {
+        match V::parse(input) {
             Ok(v) => {
                 if self.persisted_value.as_ref() != Some(&v) {
                     self.persisted_value = Some(v);
@@ -1593,8 +1640,8 @@ where
             .unwrap_or(self.parent.value)
     }
 
-    fn is_default(&self, values: &[String]) -> Result<bool, AdapterError> {
-        match V::parse(values) {
+    fn is_default(&self, input: VarInput) -> Result<bool, AdapterError> {
+        match V::parse(input) {
             Ok(v) => Ok(self.parent.value == v.borrow()),
             Err(()) => Err(AdapterError::InvalidParameterType(self.parent)),
         }
@@ -1659,8 +1706,8 @@ where
         }
     }
 
-    fn set(&mut self, s: &[String], local: bool) -> Result<(), AdapterError> {
-        match V::parse(s) {
+    fn set(&mut self, input: VarInput, local: bool) -> Result<(), AdapterError> {
+        match V::parse(input) {
             Ok(v) => {
                 if local {
                     self.local_value = Some(v);
@@ -1764,19 +1811,19 @@ impl Var for BuildInfo {
 pub trait Value: ToOwned + Send + Sync {
     /// The name of the value type.
     const TYPE_NAME: &'static str;
-    /// Parses a value of this type from a string.
-    fn parse(values: &[String]) -> Result<Self::Owned, ()>;
-
-    // TODO: Do we need to change format to Vec<String>? Otherwise we might
-    // accidentally flatten things that support list inputs.
-
-    /// Formats this value as a string.
+    /// Parses a value of this type from a [`VarInput`].
+    fn parse(input: VarInput) -> Result<Self::Owned, ()>;
+    /// Formats this value as a flattened string.
+    ///
+    /// The resulting string is guaranteed to be parsable if provided to
+    /// [`Value::parse`] as a [`VarInput::Flat`].
     fn format(&self) -> String;
 }
 
-fn assert_single_value(values: &[String]) -> Result<&str, ()> {
-    match values {
-        [value] => Ok(value),
+fn extract_single_value(input: VarInput) -> Result<&str, ()> {
+    match input {
+        VarInput::Flat(value) => Ok(value),
+        VarInput::SqlSet([value]) => Ok(value),
         _ => Err(()),
     }
 }
@@ -1784,8 +1831,8 @@ fn assert_single_value(values: &[String]) -> Result<&str, ()> {
 impl Value for bool {
     const TYPE_NAME: &'static str = "boolean";
 
-    fn parse(values: &[String]) -> Result<Self, ()> {
-        let s = assert_single_value(values)?;
+    fn parse(input: VarInput) -> Result<Self, ()> {
+        let s = extract_single_value(input)?;
         match s {
             "t" | "true" | "on" => Ok(true),
             "f" | "false" | "off" => Ok(false),
@@ -1804,8 +1851,8 @@ impl Value for bool {
 impl Value for i32 {
     const TYPE_NAME: &'static str = "integer";
 
-    fn parse(values: &[String]) -> Result<i32, ()> {
-        let s = assert_single_value(values)?;
+    fn parse(input: VarInput) -> Result<i32, ()> {
+        let s = extract_single_value(input)?;
         s.parse().map_err(|_| ())
     }
 
@@ -1817,8 +1864,8 @@ impl Value for i32 {
 impl Value for u32 {
     const TYPE_NAME: &'static str = "unsigned integer";
 
-    fn parse(values: &[String]) -> Result<u32, ()> {
-        let s = assert_single_value(values)?;
+    fn parse(input: VarInput) -> Result<u32, ()> {
+        let s = extract_single_value(input)?;
         s.parse().map_err(|_| ())
     }
 
@@ -1830,8 +1877,8 @@ impl Value for u32 {
 impl Value for mz_repr::Timestamp {
     const TYPE_NAME: &'static str = "mz-timestamp";
 
-    fn parse(values: &[String]) -> Result<mz_repr::Timestamp, ()> {
-        let s = assert_single_value(values)?;
+    fn parse(input: VarInput) -> Result<mz_repr::Timestamp, ()> {
+        let s = extract_single_value(input)?;
         s.parse().map_err(|_| ())
     }
 
@@ -1843,8 +1890,8 @@ impl Value for mz_repr::Timestamp {
 impl Value for usize {
     const TYPE_NAME: &'static str = "unsigned integer";
 
-    fn parse(values: &[String]) -> Result<usize, ()> {
-        let s = assert_single_value(values)?;
+    fn parse(input: VarInput) -> Result<usize, ()> {
+        let s = extract_single_value(input)?;
         s.parse().map_err(|_| ())
     }
 
@@ -1861,8 +1908,8 @@ const MICRO_TO_MILLI: u32 = 1000u32;
 impl Value for Duration {
     const TYPE_NAME: &'static str = "duration";
 
-    fn parse(values: &[String]) -> Result<Duration, ()> {
-        let s = assert_single_value(values)?;
+    fn parse(input: VarInput) -> Result<Duration, ()> {
+        let s = extract_single_value(input)?;
         let s = s.trim();
         // Take all numeric values from [0..]
         let split_pos = s
@@ -1924,7 +1971,7 @@ impl Value for Duration {
 #[test]
 fn test_value_duration() {
     fn inner(t: &'static str, e: Duration, expected_format: Option<&'static str>) {
-        let d = Duration::parse(&[t.into()]).expect("invalid duration");
+        let d = Duration::parse(VarInput::Flat(t)).expect("invalid duration");
         assert_eq!(d, e);
         let mut d_format = d.format();
         d_format.retain(|c| !c.is_whitespace());
@@ -1971,7 +2018,7 @@ fn test_value_duration() {
     );
 
     fn errs(t: &'static str) {
-        assert!(Duration::parse(&[t.into()]).is_err());
+        assert!(Duration::parse(VarInput::Flat(t)).is_err());
     }
     errs("1 m");
     errs("1 sec");
@@ -1990,8 +2037,8 @@ fn test_value_duration() {
 impl Value for str {
     const TYPE_NAME: &'static str = "string";
 
-    fn parse(values: &[String]) -> Result<String, ()> {
-        let s = assert_single_value(values)?;
+    fn parse(input: VarInput) -> Result<String, ()> {
+        let s = extract_single_value(input)?;
         Ok(s.to_owned())
     }
 
@@ -2003,28 +2050,58 @@ impl Value for str {
 impl Value for Vec<String> {
     const TYPE_NAME: &'static str = "string list";
 
-    fn parse(values: &[String]) -> Result<Vec<String>, ()> {
-        Ok(values.to_vec())
+    fn parse(input: VarInput) -> Result<Vec<String>, ()> {
+        match input {
+            VarInput::Flat(v) => mz_sql_parser::parser::split_identifier_string(v).map_err(|_| ()),
+            // Unlike parsing `Vec<Ident>`, we further split each element.
+            // This matches PostgreSQL.
+            VarInput::SqlSet(values) => {
+                let mut out = vec![];
+                for v in values {
+                    let idents =
+                        mz_sql_parser::parser::split_identifier_string(v).map_err(|_| ())?;
+                    out.extend(idents)
+                }
+                Ok(out)
+            }
+        }
     }
 
     fn format(&self) -> String {
-        SetVariableTo::Values(
-            self.iter()
-                .map(|v| SetVariableValue::Ident(Ident::new(v)))
-                .collect(),
-        )
-        .to_string()
+        self.join(", ")
+    }
+}
+
+impl Value for Vec<Ident> {
+    const TYPE_NAME: &'static str = "identifier list";
+
+    fn parse(input: VarInput) -> Result<Vec<Ident>, ()> {
+        let holder;
+        let values = match input {
+            VarInput::Flat(value) => {
+                holder = mz_sql_parser::parser::split_identifier_string(value).map_err(|_| ())?;
+                &holder
+            }
+            // Unlike parsing `Vec<String>`, we do *not* further split each
+            // element. This matches PostgreSQL.
+            VarInput::SqlSet(values) => values,
+        };
+        Ok(values.iter().map(Ident::new).collect())
+    }
+
+    fn format(&self) -> String {
+        self.iter().map(|ident| ident.to_string()).join(", ")
     }
 }
 
 impl Value for Option<String> {
     const TYPE_NAME: &'static str = "optional string";
 
-    fn parse(values: &[String]) -> Result<Option<String>, ()> {
-        let s = assert_single_value(values)?;
+    fn parse(input: VarInput) -> Result<Option<String>, ()> {
+        let s = extract_single_value(input)?;
         match s {
             "" => Ok(None),
-            _ => <str as Value>::parse(values).map(Some),
+            _ => Ok(Some(s.to_string())),
         }
     }
 
@@ -2039,11 +2116,11 @@ impl Value for Option<String> {
 impl Value for Option<mz_repr::Timestamp> {
     const TYPE_NAME: &'static str = "optional unsigned integer";
 
-    fn parse(values: &[String]) -> Result<Option<mz_repr::Timestamp>, ()> {
-        let s = assert_single_value(values)?;
+    fn parse(input: VarInput) -> Result<Option<mz_repr::Timestamp>, ()> {
+        let s = extract_single_value(input)?;
         match s {
             "" => Ok(None),
-            _ => <mz_repr::Timestamp as Value>::parse(values).map(Some),
+            _ => <mz_repr::Timestamp as Value>::parse(VarInput::Flat(s)).map(Some),
         }
     }
 
@@ -2131,8 +2208,8 @@ impl ClientSeverity {
 impl Value for ClientSeverity {
     const TYPE_NAME: &'static str = "string";
 
-    fn parse(values: &[String]) -> Result<Self::Owned, ()> {
-        let s = assert_single_value(values)?;
+    fn parse(input: VarInput) -> Result<Self::Owned, ()> {
+        let s = extract_single_value(input)?;
         let s = UncasedStr::new(s);
 
         if s == ClientSeverity::Error.as_str() {
@@ -2191,8 +2268,8 @@ impl TimeZone {
 impl Value for TimeZone {
     const TYPE_NAME: &'static str = "string";
 
-    fn parse(values: &[String]) -> Result<Self::Owned, ()> {
-        let s = assert_single_value(values)?;
+    fn parse(input: VarInput) -> Result<Self::Owned, ()> {
+        let s = extract_single_value(input)?;
         let s = UncasedStr::new(s);
 
         if s == TimeZone::UTC.as_str() {
@@ -2244,8 +2321,8 @@ impl IsolationLevel {
 impl Value for IsolationLevel {
     const TYPE_NAME: &'static str = "string";
 
-    fn parse(values: &[String]) -> Result<Self::Owned, ()> {
-        let s = assert_single_value(values)?;
+    fn parse(input: VarInput) -> Result<Self::Owned, ()> {
+        let s = extract_single_value(input)?;
         let s = UncasedStr::new(s);
 
         // We don't have any optimizations for levels below Serializable,
@@ -2295,18 +2372,4 @@ pub(crate) fn is_storage_config_var(name: &str) -> bool {
 /// Returns whether the named variable is a persist configuration parameter.
 fn is_persist_config_var(name: &str) -> bool {
     name == PERSIST_BLOB_TARGET_SIZE.name() || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
-}
-
-/// Split a single string into what would be parsed by `SET v TO <string>` into
-/// multiple values.
-pub fn parse_set_variable_value(value: &str) -> Result<Vec<String>, AdapterError> {
-    let parsed = mz_sql_parser::parser::parse_set_variable_to(value)?;
-    match mz_sql::plan::plan_set_variable_to(parsed)? {
-        // This is an awkward error, but makes the types work well for how this
-        // function is called (which is only by system var things).
-        VariableValue::Default => Err(AdapterError::Unstructured(anyhow::anyhow!(
-            "unexpected SET DEFAULT"
-        ))),
-        VariableValue::Values(values) => Ok(values),
-    }
 }

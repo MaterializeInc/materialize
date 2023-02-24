@@ -36,6 +36,7 @@ use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
 };
+use mz_ore::collections::CollectionExt;
 use mz_ore::task;
 use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
@@ -86,7 +87,8 @@ use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::metrics;
 use crate::notice::AdapterNotice;
 use crate::session::vars::{
-    IsolationLevel, CLUSTER_VAR_NAME, DATABASE_VAR_NAME, TRANSACTION_ISOLATION_VAR_NAME,
+    IsolationLevel, OwnedVarInput, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
+    TRANSACTION_ISOLATION_VAR_NAME,
 };
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, Var,
@@ -1976,34 +1978,34 @@ impl Coordinator {
 
         match values {
             Some(values) => {
-                vars.set(&name, &values, local)?;
+                vars.set(&name, VarInput::SqlSet(&values), local)?;
 
-                if let Some(v) = values.first() {
-                    // Database or cluster value does not correspond to a catalog item.
-                    if name.as_str() == DATABASE_VAR_NAME
-                        && matches!(
-                            self.catalog.resolve_database(v),
-                            Err(CatalogError::UnknownDatabase(_))
-                        )
+                // Database or cluster value does not correspond to a catalog item.
+                if name.as_str() == DATABASE_VAR_NAME
+                    && matches!(
+                        self.catalog.resolve_database(vars.database()),
+                        Err(CatalogError::UnknownDatabase(_))
+                    )
+                {
+                    let name = vars.database().to_string();
+                    session.add_notice(AdapterNotice::DatabaseDoesNotExist { name });
+                } else if name.as_str() == CLUSTER_VAR_NAME
+                    && matches!(
+                        self.catalog.resolve_cluster(vars.cluster()),
+                        Err(CatalogError::UnknownCluster(_))
+                    )
+                {
+                    let name = vars.cluster().to_string();
+                    session.add_notice(AdapterNotice::ClusterDoesNotExist { name });
+                } else if name.as_str() == TRANSACTION_ISOLATION_VAR_NAME {
+                    let v = values.into_first().to_lowercase();
+                    if v == IsolationLevel::ReadUncommitted.as_str()
+                        || v == IsolationLevel::ReadCommitted.as_str()
+                        || v == IsolationLevel::RepeatableRead.as_str()
                     {
-                        session.add_notice(AdapterNotice::DatabaseDoesNotExist { name: v.clone() });
-                    } else if name.as_str() == CLUSTER_VAR_NAME
-                        && matches!(
-                            self.catalog.resolve_cluster(v),
-                            Err(CatalogError::UnknownCluster(_))
-                        )
-                    {
-                        session.add_notice(AdapterNotice::ClusterDoesNotExist { name: v.clone() });
-                    } else if name.as_str() == TRANSACTION_ISOLATION_VAR_NAME {
-                        let v = v.to_lowercase();
-                        if v == IsolationLevel::ReadUncommitted.as_str()
-                            || v == IsolationLevel::ReadCommitted.as_str()
-                            || v == IsolationLevel::RepeatableRead.as_str()
-                        {
-                            session.add_notice(AdapterNotice::UnimplementedIsolationLevel {
-                                isolation_level: v,
-                            });
-                        }
+                        session.add_notice(AdapterNotice::UnimplementedIsolationLevel {
+                            isolation_level: v,
+                        });
                     }
                 }
             }
@@ -3819,8 +3821,11 @@ impl Coordinator {
         let update_storage_config = session::vars::is_storage_config_var(&name);
         let update_metrics_retention = name == session::vars::METRICS_RETENTION.name();
         let op = match value {
-            Some(value) => catalog::Op::UpdateSystemConfiguration { name, value },
-            None => catalog::Op::ResetSystemConfiguration { name },
+            VariableValue::Values(values) => catalog::Op::UpdateSystemConfiguration {
+                name,
+                value: OwnedVarInput::SqlSet(values),
+            },
+            VariableValue::Default => catalog::Op::ResetSystemConfiguration { name },
         };
         self.catalog_transact(Some(session), vec![op]).await?;
         if update_compute_config {
