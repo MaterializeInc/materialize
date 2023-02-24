@@ -14,6 +14,7 @@ use std::fmt::{self, Debug, Display};
 use std::hash::{Hash, Hasher};
 
 use bitflags::bitflags;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use dec::OrderedDecimal;
 use postgres_protocol::types;
 use proptest_derive::Arbitrary;
@@ -29,6 +30,7 @@ use crate::Datum;
 
 use super::date::Date;
 use super::numeric::Numeric;
+use super::timestamp::CheckedTimestamp;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.range.rs"));
 
@@ -170,6 +172,18 @@ impl<'a> RangeOps<'a> for Date {
 impl<'a> RangeOps<'a> for OrderedDecimal<Numeric> {
     fn err_type_name() -> &'static str {
         "numeric"
+    }
+}
+
+impl<'a> RangeOps<'a> for CheckedTimestamp<NaiveDateTime> {
+    fn err_type_name() -> &'static str {
+        "timestamp"
+    }
+}
+
+impl<'a> RangeOps<'a> for CheckedTimestamp<DateTime<Utc>> {
+    fn err_type_name() -> &'static str {
+        "timestamptz"
     }
 }
 
@@ -695,7 +709,7 @@ impl<'a, const UPPER: bool> RangeBound<Datum<'a>, UPPER> {
                 d @ Datum::Int32(_) => self.canonicalize_inner::<i32>(d)?,
                 d @ Datum::Int64(_) => self.canonicalize_inner::<i64>(d)?,
                 d @ Datum::Date(_) => self.canonicalize_inner::<Date>(d)?,
-                Datum::Numeric(..) => {}
+                Datum::Numeric(..) | Datum::Timestamp(..) | Datum::TimestampTz(..) => {}
                 d => unreachable!("{d:?} not yet supported in ranges"),
             },
         })
@@ -830,6 +844,8 @@ impl<'a, T: FromSql<'a>> FromSql<'a> for Range<T> {
             &PgType::INT8_RANGE => PgType::INT8,
             &PgType::DATE_RANGE => PgType::DATE,
             &PgType::NUM_RANGE => PgType::NUMERIC,
+            &PgType::TS_RANGE => PgType::TIMESTAMP,
+            &PgType::TSTZ_RANGE => PgType::TIMESTAMPTZ,
             _ => unreachable!(),
         };
 
@@ -871,7 +887,12 @@ impl<'a, T: FromSql<'a>> FromSql<'a> for Range<T> {
     fn accepts(ty: &PgType) -> bool {
         matches!(
             ty,
-            &PgType::INT4_RANGE | &PgType::INT8_RANGE | &PgType::DATE_RANGE | &PgType::NUM_RANGE
+            &PgType::INT4_RANGE
+                | &PgType::INT8_RANGE
+                | &PgType::DATE_RANGE
+                | &PgType::NUM_RANGE
+                | &PgType::TS_RANGE
+                | &PgType::TSTZ_RANGE
         )
     }
 }

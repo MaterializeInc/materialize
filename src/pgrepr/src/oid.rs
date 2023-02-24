@@ -80,6 +80,10 @@ pub const TYPE_DATERANGE_OID: u32 = 3912;
 pub const TYPE_DATERANGE_ARRAY_OID: u32 = 3913;
 pub const TYPE_NUMRANGE_OID: u32 = 3906;
 pub const TYPE_NUMRANGE_ARRAY_OID: u32 = 3907;
+pub const TYPE_TSRANGE_OID: u32 = 3908;
+pub const TYPE_TSRANGE_ARRAY_OID: u32 = 3909;
+pub const TYPE_TSTZRANGE_OID: u32 = 3910;
+pub const TYPE_TSTZRANGE_ARRAY_OID: u32 = 3911;
 
 /// The first OID in PostgreSQL's system catalog that is not pinned during
 /// bootstrapping.
