@@ -16,13 +16,12 @@ use uncased::UncasedStr;
 
 use mz_repr::adt::interval::Interval;
 use mz_repr::{RelationDesc, ScalarType};
-use mz_sql_parser::ast::{SetVariableTo, SetVariableValue, Value};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     CloseStatement, DeallocateStatement, DeclareStatement, DiscardStatement, DiscardTarget,
     ExecuteStatement, FetchOption, FetchOptionName, FetchStatement, PrepareStatement,
-    ResetVariableStatement, SetVariableStatement, ShowVariableStatement,
+    ResetVariableStatement, SetVariableStatement, SetVariableTo, ShowVariableStatement,
 };
 use crate::names::{self, Aug};
 use crate::plan::statement::{StatementContext, StatementDesc};
@@ -60,21 +59,16 @@ pub fn plan_set_variable_to(to: SetVariableTo) -> Result<VariableValue, PlanErro
     match to {
         SetVariableTo::Default => Ok(VariableValue::Default),
         SetVariableTo::Values(values) => {
-            let mut out = vec![];
-            // Postgres flattens multiple SET values to a single string, and
-            // cares about the underlying variable's flags (guc_tables.c) when
-            // generating that string. We avoid needing to do that by passing a
-            // Vec instead. Each SET var is in charge of if it wants to split
-            // each member of the Vec or not.
-            for value in values {
-                out.push(match value {
-                    // lit.to_string will quote a Value::String, so get the unquoted version.
-                    SetVariableValue::Literal(Value::String(s)) => s,
-                    SetVariableValue::Literal(lit) => lit.to_string(),
-                    SetVariableValue::Ident(ident) => ident.into_string(),
-                });
-            }
-            Ok(VariableValue::Values(out))
+            // Per PostgreSQL, string literals and identifiers are treated
+            // equivalently during `SET`. We retain only the underlying string
+            // value of each element in the list. It's our caller's
+            // responsibility to figure out how to set the variable to the
+            // provided list of values using variable-specific logic.
+            let values = values
+                .into_iter()
+                .map(|v| v.into_unquoted_value())
+                .collect();
+            Ok(VariableValue::Values(values))
         }
     }
 }

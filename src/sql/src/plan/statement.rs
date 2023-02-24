@@ -38,7 +38,7 @@ use crate::plan::{Params, Plan, PlanContext, PlanKind};
 pub(crate) mod ddl;
 mod dml;
 mod raise;
-pub mod scl;
+mod scl;
 pub(crate) mod show;
 mod tcl;
 

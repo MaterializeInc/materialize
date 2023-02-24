@@ -39,7 +39,7 @@ use crate::session::vars::IsolationLevel;
 use crate::AdapterNotice;
 
 pub use self::vars::{
-    ClientSeverity, SessionVars, Var, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
+    ClientSeverity, SessionVars, Var, VarInput, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
     SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
 };
 
@@ -225,7 +225,7 @@ impl<T: TimestampManipulation> Session<T> {
 
         if let Some(isolation_level) = isolation_level {
             self.vars
-                .set("transaction_isolation", &[IsolationLevel::from(isolation_level).as_str().into()], true)
+                .set("transaction_isolation", VarInput::Flat(IsolationLevel::from(isolation_level).as_str()), true)
                 .expect("transaction_isolation should be a valid var and isolation level is a valid value");
         }
 

@@ -79,9 +79,7 @@ pub use explain::normalize_subqueries;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 pub use optimize::OptimizerConfig;
 pub use query::{QueryContext, QueryLifetime};
-pub use statement::{
-    describe, plan, plan_copy_from, scl::plan_set_variable_to, StatementContext, StatementDesc,
-};
+pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
 
 /// Instructions for executing a SQL query.
 #[derive(Debug, EnumKind)]
@@ -583,8 +581,7 @@ pub struct AlterSecretPlan {
 #[derive(Debug)]
 pub struct AlterSystemSetPlan {
     pub name: String,
-    // If Some, the flattened SET values. If None, reset to default.
-    pub value: Option<String>,
+    pub value: VariableValue,
 }
 
 #[derive(Debug)]

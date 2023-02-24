@@ -38,7 +38,7 @@ use mz_sql_parser::ast::{
     AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceStatement,
     AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
     CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    DeferredObjectName, SetVariableTo, SshConnectionOption, UnresolvedObjectName, Value,
+    DeferredObjectName, SshConnectionOption, UnresolvedObjectName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -99,7 +99,7 @@ use crate::plan::error::PlanError;
 use crate::plan::expr::ColumnRef;
 use crate::plan::query::{ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
-use crate::plan::statement::{StatementContext, StatementDesc};
+use crate::plan::statement::{scl, StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
@@ -3920,10 +3920,7 @@ pub fn plan_alter_system_set(
     let name = name.to_string();
     Ok(Plan::AlterSystemSet(AlterSystemSetPlan {
         name,
-        value: match to {
-            SetVariableTo::Default => None,
-            SetVariableTo::Values(_) => Some(to.to_ast_string_stable()),
-        },
+        value: scl::plan_set_variable_to(to)?,
     }))
 }
 

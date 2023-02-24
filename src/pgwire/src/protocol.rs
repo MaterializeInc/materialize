@@ -27,7 +27,7 @@ use mz_adapter::catalog::INTERNAL_USER_NAMES;
 use mz_adapter::session::User;
 use mz_adapter::session::{
     EndTransactionAction, ExternalUserMetadata, InProgressRows, Portal, PortalState,
-    RowBatchStream, TransactionStatus,
+    RowBatchStream, TransactionStatus, VarInput,
 };
 use mz_adapter::{AdapterNotice, ExecuteResponse, PeekResponseUnary, RowsFuture};
 use mz_frontegg_auth::FronteggAuthentication;
@@ -207,7 +207,7 @@ where
     });
     for (name, value) in params {
         let local = false;
-        let _ = session.vars_mut().set(&name, &[value], local);
+        let _ = session.vars_mut().set(&name, VarInput::Flat(&value), local);
     }
 
     let mut buf = vec![BackendMessage::AuthenticationOk];

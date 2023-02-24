@@ -14,7 +14,7 @@ use mz_sql::ast::{
     SetVariableValue, Statement, Value,
 };
 
-use crate::session::vars::{parse_set_variable_value, SystemVars};
+use crate::session::vars::{SystemVars, VarInput};
 
 /// A struct that defines the system parameters that should be synchronized
 pub struct SynchronizedParameters {
@@ -75,8 +75,7 @@ impl SynchronizedParameters {
             .map(|var| {
                 let name = var.name().to_string();
                 let value = var.value();
-                let values = parse_set_variable_value(&value).expect("This will never panic because both the name and the value come from a `Var` instance");
-                let is_default = self.system_vars.is_default(&name, &values).expect("This will never panic because both the name and the value come from a `Var` instance");
+                let is_default = self.system_vars.is_default(&name, VarInput::Flat(&value)).expect("This will never panic because both the name and the value come from a `Var` instance");
                 ModifiedParameter {
                     name,
                     value,
@@ -112,14 +111,12 @@ impl SynchronizedParameters {
             // It's OK to call `unwrap_or(false)` here because for fixed `name`
             // and `value` an error in `self.is_default(name, value)` implies
             // the same error in `self.system_vars.set(name, value)`.
-
-            let modified = parse_set_variable_value(value).and_then(|values| {
-                if self.system_vars.is_default(name, &values).unwrap_or(false) {
-                    self.system_vars.reset(name)
-                } else {
-                    self.system_vars.set(name, &values)
-                }
-            });
+            let value = VarInput::Flat(value);
+            let modified = if self.system_vars.is_default(name, value).unwrap_or(false) {
+                self.system_vars.reset(name)
+            } else {
+                self.system_vars.set(name, value)
+            };
             match modified {
                 Ok(true) => {
                     self.modified.insert(name);

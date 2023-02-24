@@ -2440,6 +2440,19 @@ impl AstDisplay for SetVariableValue {
 }
 impl_display!(SetVariableValue);
 
+impl SetVariableValue {
+    /// Returns the underlying value without quotes.
+    pub fn into_unquoted_value(self) -> String {
+        match self {
+            // `lit.to_string` will quote a `Value::String`, so get the unquoted
+            // version.
+            SetVariableValue::Literal(Value::String(s)) => s,
+            SetVariableValue::Literal(lit) => lit.to_string(),
+            SetVariableValue::Ident(ident) => ident.into_string(),
+        }
+    }
+}
+
 /// SQL assignment `foo = expr` as used in SQLUpdate
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Assignment<T: AstInfo> {

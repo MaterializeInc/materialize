@@ -114,20 +114,18 @@ pub fn parse_data_type(sql: &str) -> Result<RawDataType, ParserError> {
     }
 }
 
-/// Parses a SQL string containing a `SET` variable value.
-pub fn parse_set_variable_to(sql: &str) -> Result<SetVariableTo, ParserError> {
-    let tokens = lexer::lex(sql)?;
-    let mut parser = Parser::new(sql, tokens);
-    let to = parser.parse_set_variable_to()?;
-    if parser.next_token().is_some() {
-        parser_err!(
-            parser,
-            parser.peek_prev_pos(),
-            "extra token after SET variable value"
-        )
-    } else {
-        Ok(to)
-    }
+/// Parses a string containing a comma-separated list of identifiers and
+/// returns their underlying string values.
+///
+/// This is analogous to the `SplitIdentifierString` function in PostgreSQL.
+pub fn split_identifier_string(s: &str) -> Result<Vec<String>, ParserError> {
+    let tokens = lexer::lex(s)?;
+    let mut parser = Parser::new(s, tokens);
+    let values = parser.parse_comma_separated(Parser::parse_set_variable_value)?;
+    Ok(values
+        .into_iter()
+        .map(|v| v.into_unquoted_value())
+        .collect())
 }
 
 macro_rules! maybe {
