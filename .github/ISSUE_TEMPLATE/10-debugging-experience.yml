@@ -11,7 +11,8 @@ name: "Internal: Feedback on CI, Test Frameworks and Debuggability"
 description: |
   Record any frustrations with the CI, the test frameworks or the product when it comes to being able to debug CI/test failures and product bugs
 title: "<FUNCTIONALITY> required to better debug <FAILURES>"
-labels: [C-bug]
+labels: [T-Testing, C-feature]
+assignees: [philip-stoev]
 body:
   - type: markdown
     attributes:
