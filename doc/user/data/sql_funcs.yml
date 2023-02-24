@@ -508,8 +508,8 @@
 
 - type: UUID
   functions:
-  - signature: mz_environment_id() -> uuid
-    description: The `uuid` uniquely identifying this Materialize environment.
+  - signature: mz_environment_id() -> text
+    description: A string containing a `uuid` uniquely identifying this Materialize environment.
     unmaterializable: true
 
 - type: JSON
