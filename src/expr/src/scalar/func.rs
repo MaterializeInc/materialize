@@ -2281,6 +2281,12 @@ impl BinaryFunc {
                 ScalarType::Numeric { .. } => {
                     eager!(contains_range_elem::<OrderedDecimal<Numeric>>)
                 }
+                ScalarType::Timestamp => {
+                    eager!(contains_range_elem::<CheckedTimestamp<NaiveDateTime>>)
+                }
+                ScalarType::TimestampTz => {
+                    eager!(contains_range_elem::<CheckedTimestamp<DateTime<Utc>>>)
+                }
                 _ => unreachable!(),
             }),
             BinaryFunc::RangeContainsRange { rev: _ } => Ok(eager!(range_contains_range)),
@@ -6715,6 +6721,8 @@ impl fmt::Display for VariadicFunc {
                 ScalarType::Int64 => "int8range",
                 ScalarType::Date => "daterange",
                 ScalarType::Numeric { .. } => "numrange",
+                ScalarType::Timestamp => "tsrange",
+                ScalarType::TimestampTz => "tstzrange",
                 _ => unreachable!(),
             }),
         }

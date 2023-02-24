@@ -1132,6 +1132,54 @@ pub const TYPE_NUM_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
     },
 };
 
+pub const TYPE_TS_RANGE: BuiltinType<NameReference> = BuiltinType {
+    name: "tsrange",
+    schema: PG_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_TSRANGE_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Range {
+            element_reference: TYPE_TIMESTAMP.name,
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_TS_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_tsrange",
+    schema: PG_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_TSRANGE_ARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_TS_RANGE.name,
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_TSTZ_RANGE: BuiltinType<NameReference> = BuiltinType {
+    name: "tstzrange",
+    schema: PG_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_TSTZRANGE_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Range {
+            element_reference: TYPE_TIMESTAMPTZ.name,
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_TSTZ_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_tstzrange",
+    schema: PG_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_TSTZRANGE_ARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_TSTZ_RANGE.name,
+        },
+        array_id: None,
+    },
+};
+
 pub const MZ_DATAFLOW_OPERATORS: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_operators",
     schema: MZ_INTERNAL_SCHEMA,
@@ -2926,6 +2974,10 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Type(&TYPE_DATE_RANGE_ARRAY),
         Builtin::Type(&TYPE_NUM_RANGE),
         Builtin::Type(&TYPE_NUM_RANGE_ARRAY),
+        Builtin::Type(&TYPE_TS_RANGE),
+        Builtin::Type(&TYPE_TS_RANGE_ARRAY),
+        Builtin::Type(&TYPE_TSTZ_RANGE),
+        Builtin::Type(&TYPE_TSTZ_RANGE_ARRAY),
     ];
     for (schema, funcs) in &[
         (PG_CATALOG_SCHEMA, &*mz_sql::func::PG_CATALOG_BUILTINS),

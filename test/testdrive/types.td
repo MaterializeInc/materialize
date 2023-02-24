@@ -48,6 +48,8 @@ _text
 _time
 _timestamp
 _timestamptz
+_tsrange
+_tstzrange
 _uuid
 _varchar
 any
@@ -94,6 +96,8 @@ text
 time
 timestamp
 timestamptz
+tsrange
+tstzrange
 uuid
 varchar
 
