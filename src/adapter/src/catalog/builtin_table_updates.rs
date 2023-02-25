@@ -26,6 +26,7 @@ use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
+use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::types::connections::KafkaConnection;
@@ -38,8 +39,9 @@ use crate::catalog::builtin::{
     MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS,
     MZ_DATABASES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS,
     MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES,
-    MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES,
-    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_OPERATORS, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS,
+    MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_TABLES, MZ_TYPES,
+    MZ_VIEWS,
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connection, DataSourceDesc, Database, Error, ErrorKind, Func, Index,
@@ -818,6 +820,47 @@ impl CatalogState {
             });
         }
         updates
+    }
+
+    pub fn pack_op_update(
+        &self,
+        operator: &str,
+        func_impl_details: FuncImplCatalogDetails,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        let arg_type_ids = func_impl_details
+            .arg_typs
+            .iter()
+            .map(|typ| self.get_entry_in_system_schemas(typ).id().to_string())
+            .collect::<Vec<_>>();
+
+        let mut row = Row::default();
+        row.packer()
+            .push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: arg_type_ids.len(),
+                }],
+                arg_type_ids.iter().map(|id| Datum::String(id)),
+            )
+            .expect("arg_type_ids is 1 dimensional, and it's length is used for the array length");
+        let arg_type_ids = row.unpack_first();
+
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_OPERATORS),
+            row: Row::pack_slice(&[
+                Datum::UInt32(func_impl_details.oid),
+                Datum::String(operator),
+                arg_type_ids,
+                Datum::from(
+                    func_impl_details
+                        .return_typ
+                        .map(|typ| self.get_entry_in_system_schemas(typ).id().to_string())
+                        .as_deref(),
+                ),
+            ]),
+            diff,
+        }
     }
 
     fn pack_secret_update(

@@ -1568,6 +1568,19 @@ pub static MZ_FUNCTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("returns_set", ScalarType::Bool.nullable(false)),
     is_retained_metrics_relation: false,
 });
+pub static MZ_OPERATORS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_operators",
+    schema: MZ_CATALOG_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column(
+            "argument_type_ids",
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
+        )
+        .with_column("return_type_id", ScalarType::String.nullable(true)),
+    is_retained_metrics_relation: false,
+});
 
 pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_clusters",
@@ -2228,6 +2241,17 @@ JOIN mz_catalog.mz_schemas ON mz_functions.schema_id = mz_schemas.id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
 JOIN mz_catalog.mz_types AS ret_type ON mz_functions.return_type_id = ret_type.id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
+};
+
+pub const PG_OPERATOR: BuiltinView = BuiltinView {
+    name: "pg_operator",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_operator AS SELECT
+    mz_operators.oid,
+    mz_operators.name AS oprname,
+    ret_type.oid AS oprresult
+FROM mz_catalog.mz_operators
+JOIN mz_catalog.mz_types AS ret_type ON mz_operators.return_type_id = ret_type.id",
 };
 
 pub const PG_RANGE: BuiltinView = BuiltinView {
@@ -3040,6 +3064,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_ROLES),
         Builtin::Table(&MZ_PSEUDO_TYPES),
         Builtin::Table(&MZ_FUNCTIONS),
+        Builtin::Table(&MZ_OPERATORS),
         Builtin::Table(&MZ_CLUSTERS),
         Builtin::Table(&MZ_CLUSTER_LINKS),
         Builtin::Table(&MZ_SECRETS),
@@ -3086,6 +3111,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_TYPE),
         Builtin::View(&PG_ATTRIBUTE),
         Builtin::View(&PG_PROC),
+        Builtin::View(&PG_OPERATOR),
         Builtin::View(&PG_RANGE),
         Builtin::View(&PG_ENUM),
         Builtin::View(&PG_ATTRDEF),
