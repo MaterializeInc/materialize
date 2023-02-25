@@ -1194,6 +1194,14 @@ impl CatalogState {
         &self.system_configuration
     }
 
+    pub fn require_unsafe_mode(&self, feature_name: &'static str) -> Result<(), AdapterError> {
+        if !self.config.unsafe_mode {
+            Err(AdapterError::Unsupported(feature_name))
+        } else {
+            Ok(())
+        }
+    }
+
     /// Serializes the catalog's in-memory state.
     ///
     /// There are no guarantees about the format of the serialized state, except
@@ -5201,13 +5209,20 @@ impl Catalog {
                 Op::UpdateSystemConfiguration { name, value } => {
                     state.insert_system_configuration(&name, value.borrow())?;
                     let var = state.get_system_configuration(&name)?;
+                    if !var.safe() {
+                        state.require_unsafe_mode(var.name())?;
+                    }
                     tx.upsert_system_config(&name, var.value())?;
                 }
                 Op::ResetSystemConfiguration { name } => {
                     state.remove_system_configuration(&name)?;
+                    let var = state.get_system_configuration(&name)?;
+                    if !var.safe() {
+                        state.require_unsafe_mode(var.name())?;
+                    }
                     tx.remove_system_config(&name);
                 }
-                Op::ResetAllSystemConfiguration {} => {
+                Op::ResetAllSystemConfiguration => {
                     state.clear_system_configuration();
                     tx.clear_system_configs();
                 }
@@ -5896,11 +5911,7 @@ impl Catalog {
     }
 
     pub fn require_unsafe_mode(&self, feature_name: &'static str) -> Result<(), AdapterError> {
-        if !self.unsafe_mode() {
-            Err(AdapterError::Unsupported(feature_name))
-        } else {
-            Ok(())
-        }
+        self.state.require_unsafe_mode(feature_name)
     }
 
     /// Return the current compute configuration, derived from the system configuration.
@@ -6024,7 +6035,7 @@ pub enum Op {
     ResetSystemConfiguration {
         name: String,
     },
-    ResetAllSystemConfiguration {},
+    ResetAllSystemConfiguration,
     UpdateRotatedKeys {
         id: GlobalId,
         previous_public_key_pair: (String, String),

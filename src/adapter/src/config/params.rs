@@ -9,11 +9,6 @@
 
 use std::collections::BTreeSet;
 
-use mz_sql::ast::{
-    AlterSystemResetStatement, AlterSystemSetStatement, Ident, Raw, SetVariableTo,
-    SetVariableValue, Statement, Value,
-};
-
 use crate::session::vars::{SystemVars, VarInput};
 
 /// A struct that defines the system parameters that should be synchronized
@@ -142,27 +137,4 @@ pub struct ModifiedParameter {
     pub name: String,
     pub value: String,
     pub is_default: bool,
-}
-
-impl ModifiedParameter {
-    pub fn as_alter_system(&self) -> String {
-        match self.is_default {
-            true => format!("ALTER SYSTEM RESET {}", self.name),
-            false => format!("ALTER SYSTEM SET {} = {}", self.name, self.value),
-        }
-    }
-
-    pub fn as_stmt(&self) -> Statement<Raw> {
-        match self.is_default {
-            true => Statement::AlterSystemReset(AlterSystemResetStatement {
-                name: Ident::from(self.name.clone()),
-            }),
-            false => Statement::AlterSystemSet(AlterSystemSetStatement {
-                name: Ident::from(self.name.clone()),
-                to: SetVariableTo::Values(vec![SetVariableValue::Literal(Value::String(
-                    self.value.clone(),
-                ))]),
-            }),
-        }
-    }
 }

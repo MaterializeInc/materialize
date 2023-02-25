@@ -417,6 +417,21 @@ impl SessionClient {
         .await
     }
 
+    /// Gets the current value of all system variables.
+    pub async fn get_system_vars(&mut self) -> Result<BTreeMap<String, String>, AdapterError> {
+        self.send(|tx, session| Command::GetSystemVars { session, tx })
+            .await
+    }
+
+    /// Updates the specified system variables to the specified values.
+    pub async fn set_system_vars(
+        &mut self,
+        vars: BTreeMap<String, String>,
+    ) -> Result<(), AdapterError> {
+        self.send(|tx, session| Command::SetSystemVars { vars, session, tx })
+            .await
+    }
+
     /// Terminates the client session.
     pub async fn terminate(&mut self) {
         let res = self
@@ -467,6 +482,8 @@ impl SessionClient {
                     | Command::CancelRequest { .. }
                     | Command::DumpCatalog { .. }
                     | Command::CopyRows { .. }
+                    | Command::GetSystemVars { .. }
+                    | Command::SetSystemVars { .. }
                     | Command::Terminate { .. } => {}
                 };
                 cmd
