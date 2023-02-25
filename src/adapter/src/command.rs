@@ -11,6 +11,7 @@
 // https://github.com/rust-lang/rust-clippy/pull/9037 makes it into stable
 #![allow(clippy::extra_unused_lifetimes)]
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -100,6 +101,17 @@ pub enum Command {
         rows: Vec<Row>,
         session: Session,
         tx: oneshot::Sender<Response<ExecuteResponse>>,
+    },
+
+    GetSystemVars {
+        session: Session,
+        tx: oneshot::Sender<Response<BTreeMap<String, String>>>,
+    },
+
+    SetSystemVars {
+        vars: BTreeMap<String, String>,
+        session: Session,
+        tx: oneshot::Sender<Response<()>>,
     },
 
     Terminate {

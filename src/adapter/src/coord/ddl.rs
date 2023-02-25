@@ -26,7 +26,7 @@ use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::ResolvedDatabaseSpecifier;
-use mz_storage_client::controller::{CreateExportToken, ExportDescription};
+use mz_storage_client::controller::{CreateExportToken, ExportDescription, ReadPolicy};
 use mz_storage_client::types::sinks::{SinkAsOf, StorageSinkConnection};
 use mz_storage_client::types::sources::{GenericSourceConnection, Timeline};
 
@@ -38,7 +38,7 @@ use crate::client::ConnectionId;
 use crate::coord::appends::BuiltinTableUpdateSource;
 use crate::coord::Coordinator;
 use crate::session::vars::SystemVars;
-use crate::session::Session;
+use crate::session::{self, Session, Var};
 use crate::telemetry::SegmentClientExt;
 use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterError, AdapterNotice};
@@ -96,102 +96,116 @@ impl Coordinator {
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
         let mut peeks_to_drop = vec![];
+        let mut update_compute_config = false;
+        let mut update_storage_config = false;
+        let mut update_metrics_retention = false;
 
         for op in &ops {
-            if let catalog::Op::DropItem(id) = op {
-                match self.catalog.get_entry(id).item() {
-                    CatalogItem::Table(_) => {
-                        tables_to_drop.push(*id);
-                    }
-                    CatalogItem::Source(source) => {
-                        sources_to_drop.push(*id);
-                        if let DataSourceDesc::Ingestion(ingestion) = &source.data_source {
-                            match &ingestion.desc.connection {
-                                GenericSourceConnection::Postgres(conn) => {
-                                    let config = conn
-                                        .connection
-                                        .config(&*self.connection_context.secrets_reader)
-                                        .await
-                                        .unwrap_or_else(|e| {
-                                            panic!("Postgres source {id} missing secrets: {e}")
-                                        });
-                                    replication_slots_to_drop
-                                        .push((config, conn.publication_details.slot.clone()));
+            match op {
+                catalog::Op::DropItem(id) => {
+                    match self.catalog.get_entry(id).item() {
+                        CatalogItem::Table(_) => {
+                            tables_to_drop.push(*id);
+                        }
+                        CatalogItem::Source(source) => {
+                            sources_to_drop.push(*id);
+                            if let DataSourceDesc::Ingestion(ingestion) = &source.data_source {
+                                match &ingestion.desc.connection {
+                                    GenericSourceConnection::Postgres(conn) => {
+                                        let config = conn
+                                            .connection
+                                            .config(&*self.connection_context.secrets_reader)
+                                            .await
+                                            .unwrap_or_else(|e| {
+                                                panic!("Postgres source {id} missing secrets: {e}")
+                                            });
+                                        replication_slots_to_drop
+                                            .push((config, conn.publication_details.slot.clone()));
+                                    }
+                                    _ => {}
                                 }
-                                _ => {}
                             }
                         }
-                    }
-                    CatalogItem::Sink(catalog::Sink { connection, .. }) => match connection {
-                        StorageSinkConnectionState::Ready(_) => {
-                            storage_sinks_to_drop.push(*id);
-                        }
-                        StorageSinkConnectionState::Pending(_) => (),
-                    },
-                    CatalogItem::Index(catalog::Index { cluster_id, .. }) => {
-                        indexes_to_drop.push((*cluster_id, *id));
-                    }
-                    CatalogItem::MaterializedView(catalog::MaterializedView {
-                        cluster_id, ..
-                    }) => {
-                        materialized_views_to_drop.push((*cluster_id, *id));
-                    }
-                    CatalogItem::Secret(_) => {
-                        secrets_to_drop.push(*id);
-                    }
-                    CatalogItem::Connection(catalog::Connection { connection, .. }) => {
-                        match connection {
-                            // SSH connections have an associated secret that should be dropped
-                            mz_storage_client::types::connections::Connection::Ssh(_) => {
-                                secrets_to_drop.push(*id);
+                        CatalogItem::Sink(catalog::Sink { connection, .. }) => match connection {
+                            StorageSinkConnectionState::Ready(_) => {
+                                storage_sinks_to_drop.push(*id);
                             }
-                            // AWS PrivateLink connections have an associated
-                            // VpcEndpoint K8S resource that should be dropped
-                            mz_storage_client::types::connections::Connection::AwsPrivatelink(
-                                _,
-                            ) => {
-                                vpc_endpoints_to_drop.push(*id);
-                            }
-                            _ => (),
+                            StorageSinkConnectionState::Pending(_) => (),
+                        },
+                        CatalogItem::Index(catalog::Index { cluster_id, .. }) => {
+                            indexes_to_drop.push((*cluster_id, *id));
                         }
+                        CatalogItem::MaterializedView(catalog::MaterializedView {
+                            cluster_id,
+                            ..
+                        }) => {
+                            materialized_views_to_drop.push((*cluster_id, *id));
+                        }
+                        CatalogItem::Secret(_) => {
+                            secrets_to_drop.push(*id);
+                        }
+                        CatalogItem::Connection(catalog::Connection { connection, .. }) => {
+                            match connection {
+                                // SSH connections have an associated secret that should be dropped
+                                mz_storage_client::types::connections::Connection::Ssh(_) => {
+                                    secrets_to_drop.push(*id);
+                                }
+                                // AWS PrivateLink connections have an associated
+                                // VpcEndpoint K8S resource that should be dropped
+                                mz_storage_client::types::connections::Connection::AwsPrivatelink(
+                                    _,
+                                ) => {
+                                    vpc_endpoints_to_drop.push(*id);
+                                }
+                                _ => (),
+                            }
+                        }
+                        _ => (),
                     }
-                    _ => (),
                 }
-            } else if let catalog::Op::DropCluster { id } = op {
-                let cluster = self.catalog.get_cluster(*id);
+                catalog::Op::DropCluster { id } => {
+                    let cluster = self.catalog.get_cluster(*id);
 
-                // Drop the introspection sources
-                let replica_logs = cluster
-                    .replicas_by_id
-                    .values()
-                    .flat_map(|replica| replica.config.compute.logging.source_ids())
-                    .map(|log_id| (*id, log_id));
-                log_sources_to_drop.extend(replica_logs);
+                    // Drop the introspection sources
+                    let replica_logs = cluster
+                        .replicas_by_id
+                        .values()
+                        .flat_map(|replica| replica.config.compute.logging.source_ids())
+                        .map(|log_id| (*id, log_id));
+                    log_sources_to_drop.extend(replica_logs);
 
-                // Drop the cluster itself.
-                clusters_to_drop.push(*id);
+                    // Drop the cluster itself.
+                    clusters_to_drop.push(*id);
 
-                // Drop timelines
-                timelines_to_drop.extend(self.remove_compute_instance_from_timeline(*id));
-            } else if let catalog::Op::DropClusterReplica {
-                cluster_id,
-                replica_id,
-            } = op
-            {
-                let cluster = self.catalog.get_cluster(*cluster_id);
-                let replica = &cluster.replicas_by_id[replica_id];
+                    // Drop timelines
+                    timelines_to_drop.extend(self.remove_compute_instance_from_timeline(*id));
+                }
+                catalog::Op::DropClusterReplica {
+                    cluster_id,
+                    replica_id,
+                } => {
+                    let cluster = self.catalog.get_cluster(*cluster_id);
+                    let replica = &cluster.replicas_by_id[replica_id];
 
-                // Drop the introspection sources
-                let replica_logs = replica
-                    .config
-                    .compute
-                    .logging
-                    .source_ids()
-                    .map(|log_id| (cluster.id, log_id));
-                log_sources_to_drop.extend(replica_logs);
+                    // Drop the introspection sources
+                    let replica_logs = replica
+                        .config
+                        .compute
+                        .logging
+                        .source_ids()
+                        .map(|log_id| (cluster.id, log_id));
+                    log_sources_to_drop.extend(replica_logs);
 
-                // Drop the cluster replica itself.
-                cluster_replicas_to_drop.push((cluster.id, *replica_id));
+                    // Drop the cluster replica itself.
+                    cluster_replicas_to_drop.push((cluster.id, *replica_id));
+                }
+                catalog::Op::ResetSystemConfiguration { name }
+                | catalog::Op::UpdateSystemConfiguration { name, .. } => {
+                    update_compute_config |= session::vars::is_compute_config_var(name);
+                    update_storage_config |= session::vars::is_storage_config_var(name);
+                    update_metrics_retention |= name == session::vars::METRICS_RETENTION.name();
+                }
+                _ => (),
             }
         }
 
@@ -383,6 +397,16 @@ impl Coordinator {
                     }
                 });
             }
+
+            if update_compute_config {
+                self.update_compute_config();
+            }
+            if update_storage_config {
+                self.update_storage_config();
+            }
+            if update_metrics_retention {
+                self.update_metrics_retention();
+            }
         }
         .await;
 
@@ -533,6 +557,33 @@ impl Coordinator {
         self.catalog_transact(Some(session), ops)
             .await
             .expect("unable to drop temporary items for conn_id");
+    }
+
+    fn update_compute_config(&mut self) {
+        let config_params = self.catalog.compute_config();
+        self.controller.compute.update_configuration(config_params);
+    }
+
+    fn update_storage_config(&mut self) {
+        let config_params = self.catalog.storage_config();
+        self.controller.storage.update_configuration(config_params);
+    }
+
+    fn update_metrics_retention(&mut self) {
+        let duration = self.catalog.system_config().metrics_retention();
+        let policy = ReadPolicy::lag_writes_by(Timestamp::new(
+            u64::try_from(duration.as_millis()).unwrap_or_else(|_e| {
+                tracing::error!("Absurd metrics retention duration: {duration:?}.");
+                u64::MAX
+            }),
+        ));
+        let policies = self
+            .catalog
+            .entries()
+            .filter(|entry| entry.item().is_retained_metrics_relation())
+            .map(|entry| (entry.id(), policy.clone()))
+            .collect::<Vec<_>>();
+        self.update_storage_base_read_policies(policies)
     }
 
     async fn create_storage_export(

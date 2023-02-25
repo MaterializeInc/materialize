@@ -96,7 +96,7 @@ use crate::session::{
 };
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{send_immediate_rows, ClientTransmitter, ComputeSinkId, ResultExt};
-use crate::{guard_write_critical_section, session, PeekResponseUnary};
+use crate::{guard_write_critical_section, PeekResponseUnary};
 
 use super::timestamp_selection::{TimestampExplanation, TimestampSource};
 use super::ReplicaMetadata;
@@ -918,7 +918,7 @@ impl Coordinator {
             let config = ReplicaConfig {
                 location: self.catalog.concretize_replica_location(
                     location,
-                    self.catalog.system_config().allowed_cluster_replica_sizes(),
+                    &self.catalog.system_config().allowed_cluster_replica_sizes(),
                 )?,
                 compute: ComputeReplicaConfig {
                     logging,
@@ -1068,7 +1068,7 @@ impl Coordinator {
         let config = ReplicaConfig {
             location: self.catalog.concretize_replica_location(
                 location,
-                self.catalog.system_config().allowed_cluster_replica_sizes(),
+                &self.catalog.system_config().allowed_cluster_replica_sizes(),
             )?,
             compute: ComputeReplicaConfig {
                 logging,
@@ -3827,13 +3827,6 @@ impl Coordinator {
         AlterSystemSetPlan { name, value }: AlterSystemSetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session)?;
-        let var = self.catalog.state().get_system_configuration(&name)?;
-        if !var.safe() {
-            self.catalog.require_unsafe_mode(var.name())?;
-        }
-        let update_compute_config = session::vars::is_compute_config_var(&name);
-        let update_storage_config = session::vars::is_storage_config_var(&name);
-        let update_metrics_retention = name == session::vars::METRICS_RETENTION.name();
         let op = match value {
             VariableValue::Values(values) => catalog::Op::UpdateSystemConfiguration {
                 name,
@@ -3842,15 +3835,6 @@ impl Coordinator {
             VariableValue::Default => catalog::Op::ResetSystemConfiguration { name },
         };
         self.catalog_transact(Some(session), vec![op]).await?;
-        if update_compute_config {
-            self.update_compute_config();
-        }
-        if update_storage_config {
-            self.update_storage_config();
-        }
-        if update_metrics_retention {
-            self.update_metrics_retention();
-        }
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
@@ -3860,24 +3844,8 @@ impl Coordinator {
         AlterSystemResetPlan { name }: AlterSystemResetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session)?;
-        let var = self.catalog.state().get_system_configuration(&name)?;
-        if !var.safe() {
-            self.catalog.require_unsafe_mode(var.name())?;
-        }
-        let update_compute_config = session::vars::is_compute_config_var(&name);
-        let update_storage_config = session::vars::is_storage_config_var(&name);
-        let update_metrics_retention = name == session::vars::METRICS_RETENTION.name();
         let op = catalog::Op::ResetSystemConfiguration { name };
         self.catalog_transact(Some(session), vec![op]).await?;
-        if update_compute_config {
-            self.update_compute_config();
-        }
-        if update_storage_config {
-            self.update_storage_config();
-        }
-        if update_metrics_retention {
-            self.update_metrics_retention();
-        }
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
@@ -3887,11 +3855,8 @@ impl Coordinator {
         _: AlterSystemResetAllPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session)?;
-        let op = catalog::Op::ResetAllSystemConfiguration {};
+        let op = catalog::Op::ResetAllSystemConfiguration;
         self.catalog_transact(Some(session), vec![op]).await?;
-        self.update_compute_config();
-        self.update_storage_config();
-        self.update_metrics_retention();
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
@@ -3904,33 +3869,6 @@ impl Coordinator {
                 SYSTEM_USER.name,
             )))
         }
-    }
-
-    fn update_compute_config(&mut self) {
-        let config_params = self.catalog.compute_config();
-        self.controller.compute.update_configuration(config_params);
-    }
-
-    fn update_storage_config(&mut self) {
-        let config_params = self.catalog.storage_config();
-        self.controller.storage.update_configuration(config_params);
-    }
-
-    fn update_metrics_retention(&mut self) {
-        let duration = self.catalog.system_config().metrics_retention();
-        let policy = ReadPolicy::lag_writes_by(Timestamp::new(
-            u64::try_from(duration.as_millis()).unwrap_or_else(|_e| {
-                tracing::error!("Absurd metrics retention duration: {duration:?}.");
-                u64::MAX
-            }),
-        ));
-        let policies = self
-            .catalog
-            .entries()
-            .filter(|entry| entry.item().is_retained_metrics_relation())
-            .map(|entry| (entry.id(), policy.clone()))
-            .collect::<Vec<_>>();
-        self.update_storage_base_read_policies(policies)
     }
 
     // Returns the name of the portal to execute.
@@ -4113,7 +4051,7 @@ impl Coordinator {
         };
         let location = self.catalog.concretize_replica_location(
             location,
-            self.catalog.system_config().allowed_cluster_replica_sizes(),
+            &self.catalog.system_config().allowed_cluster_replica_sizes(),
         )?;
         let logging = {
             ReplicaLogging {

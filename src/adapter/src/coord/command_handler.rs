@@ -10,6 +10,7 @@
 //! Logic for  processing client [`Command`]s. Each [`Command`] is initiated by a
 //! client via some external Materialize API (ex: HTTP and psql).
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use opentelemetry::trace::TraceContextExt;
@@ -33,10 +34,11 @@ use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::peek::PendingPeek;
 use crate::coord::{ConnMeta, Coordinator, CreateSourceStatementReady, Message, PendingTxn};
 use crate::error::AdapterError;
-use crate::metrics;
 use crate::notice::AdapterNotice;
+use crate::session::vars::OwnedVarInput;
 use crate::session::{PreparedStatement, Session, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
+use crate::{catalog, metrics};
 
 impl Coordinator {
     pub(crate) async fn handle_command(&mut self, cmd: Command) {
@@ -112,6 +114,29 @@ impl Coordinator {
                 tx,
             } => {
                 let result = self.sequence_copy_rows(&mut session, id, columns, rows);
+                let _ = tx.send(Response { result, session });
+            }
+
+            Command::GetSystemVars { session, tx } => {
+                let mut vars = BTreeMap::new();
+                for var in self.catalog.system_config().iter() {
+                    vars.insert(var.name().to_string(), var.value());
+                }
+                let _ = tx.send(Response {
+                    result: Ok(vars),
+                    session,
+                });
+            }
+
+            Command::SetSystemVars { vars, session, tx } => {
+                let ops = vars
+                    .into_iter()
+                    .map(|(name, value)| catalog::Op::UpdateSystemConfiguration {
+                        name,
+                        value: OwnedVarInput::Flat(value),
+                    })
+                    .collect();
+                let result = self.catalog_transact(Some(&session), ops).await;
                 let _ = tx.send(Response { result, session });
             }
 

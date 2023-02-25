@@ -351,8 +351,8 @@ pub const METRICS_RETENTION: ServerVar<Duration> = ServerVar {
     safe: true,
 };
 
-static DEFAULT_ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<Vec<String>> = Lazy::new(Vec::new);
-static ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<ServerVar<Vec<String>>> = Lazy::new(|| ServerVar {
+static DEFAULT_ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<Vec<Ident>> = Lazy::new(Vec::new);
+static ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<ServerVar<Vec<Ident>>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("allowed_cluster_replica_sizes"),
     value: &DEFAULT_ALLOWED_CLUSTER_REPLICA_SIZES,
     description: "The allowed sizes when creating a new cluster replica (Materialize).",
@@ -1082,7 +1082,7 @@ pub struct SystemVars {
     max_secrets: SystemVar<u32>,
     max_roles: SystemVar<u32>,
     max_result_size: SystemVar<u32>,
-    allowed_cluster_replica_sizes: SystemVar<Vec<String>>,
+    allowed_cluster_replica_sizes: SystemVar<Vec<Ident>>,
 
     // features
     // (empty)
@@ -1475,8 +1475,12 @@ impl SystemVars {
     }
 
     /// Returns the value of the `allowed_cluster_replica_sizes` configuration parameter.
-    pub fn allowed_cluster_replica_sizes(&self) -> &Vec<String> {
-        self.allowed_cluster_replica_sizes.value()
+    pub fn allowed_cluster_replica_sizes(&self) -> Vec<String> {
+        self.allowed_cluster_replica_sizes
+            .value()
+            .into_iter()
+            .map(|s| s.as_str().into())
+            .collect()
     }
 
     /// Returns the `persist_blob_target_size` configuration parameter.
