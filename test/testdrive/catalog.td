@@ -546,6 +546,7 @@ name
 mz_arrangement_sharing
 mz_arrangement_sizes
 mz_dataflows
+mz_dataflow_channel_operators
 mz_dataflow_operator_dataflows
 mz_dataflow_operator_reachability
 mz_cluster_replica_utilization
