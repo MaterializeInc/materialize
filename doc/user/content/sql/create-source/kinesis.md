@@ -65,6 +65,32 @@ Not supported yet. If you're interested in this feature, please leave a comment 
 
 Not supported yet. If you're interested in this feature, please leave a comment in [#5972](https://github.com/MaterializeInc/materialize/issues/5972).
 
+### Monitoring source progress
+
+By default, Kinesis sources expose progress metadata as a subsource that you can
+use to monitor source **ingestion progress**. The name of the progress
+subsource can be specified when creating a source using the `EXPOSE PROGRESS
+AS` clause; otherwise, it will be named `<src_name>_progress`.
+
+The following metadata is available for each source as a progress subsource:
+
+[//]: # "NOTE(morsapaes) In the future, the progress subsource will expose the shard_id and sequence_number"
+
+Field          | Type                                     | Meaning
+---------------|------------------------------------------|--------
+`offset`       | [`uint8`](/sql/types/uint/#uint8-info)   | The greatest offset consumed from the upstream Kinesis broker.
+
+And can be queried using:
+
+```sql
+SELECT "offset"
+FROM <src_name>_progress;
+```
+
+As long as the LSN continues increasing, Materialize is consuming change data
+from the upstream PostgreSQL database. For more details on monitoring source
+ingestion progress and debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
+
 ## Authentication
 
 {{% specifying-aws-credentials %}}
@@ -120,20 +146,6 @@ CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
 
 {{< /tab >}}
 {{< /tabs >}}
-
-### Progress collection
-
-Each source exposes its progress as a separate progress collection. You can
-choose a name for this collection using **EXPOSE PROGRESS AS**
-_progress_subsource_name_ or Materialize will automatically name the collection
-`<source_name>_progress`. You can find the collection's name using [`SHOW
-SOURCES`](/sql/show-sources).
-
-The progress collection schema depends on your source type. For Postgres
-sources, we return the greatest `lsn` ([`uint8`](/sql/types/uint)) we have
-consumed from your Postgres server's replication stream.
-
-As long as as the LSN continues to change, Materialize is consuming data.
 
 ## Known limitations
 
