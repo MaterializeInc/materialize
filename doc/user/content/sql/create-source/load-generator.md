@@ -36,7 +36,7 @@ _src_name_  | The name for the source.
 **MAX CARDINALITY** | Valid for the `COUNTER` generator. Causes the generator to delete old values to keep the collection at most a given size. Defaults to unlimited.
 **FOR ALL TABLES** | Creates subsources for all tables in the load generator.
 **FOR TABLES (** _table_list_ **)** | Creates subsources for specific tables in the load generator.
-**EXPOSE PROGRESS AS** _progress_subsource_name_ | Name this source's progress collection `progress_subsource_name`; if this is not specified, Materialize names the progress collection `<src_name>_progress`. For details about the progress collection, see [Progress collection](#progress-collection).
+**EXPOSE PROGRESS AS** _progress_subsource_name_ | Name this source's progress collection `progress_subsource_name`; if this is not specified, Materialize names the progress collection `<src_name>_progress`. For details about the progress collection, see [Monitoring source progress](#monitoring-source-progress).
 
 ### `WITH` options
 
@@ -117,23 +117,29 @@ The TPCH source must be used with `FOR ALL TABLES`, which will create the standa
 If `TICK INTERVAL` is specified, after the initial data load, an order and its lineitems will be changed at this interval.
 If not specified, the dataset will not change over time.
 
-### Progress collection
+### Monitoring source progress
 
-Each source exposes its progress as a separate progress collection. You can
-choose a name for this collection using **EXPOSE PROGRESS AS**
-_progress_subsource_name_ or Materialize will automatically name the collection
-`<source_name>_progress`. You can find the collection's name using [`SHOW
-SOURCES`](/sql/show-sources).
+By default, load generator sources expose progress metadata as a subsource that
+you can use to monitor source **ingestion progress**. The name of the progress
+subsource can be specified when creating a source using the `EXPOSE PROGRESS
+AS` clause; otherwise, it will be named `<src_name>_progress`.
 
-The progress collection schema depends on your source type. For load generator
-sources, we return the greatest `"offset"` ([`uint8`](/sql/types/uint)) we
-generated, which is essentially the number of times the load generator has
-emitted data.
+The following metadata is available for each source as a progress subsource:
 
-Note that the column name `"offset"` must be wrapped in quotation marks because
-it is also a SQL keyword.
+Field          | Type                                     | Meaning
+---------------|------------------------------------------|--------
+`offset`       | [`uint8`](/sql/types/uint/#uint8-info)   | The greatest offset generated, which equates to the number of times the load generator has emitted data.
 
-As long as as the `"offset"` continues to change, Materialize is producing data.
+And can be queried using:
+
+```sql
+SELECT "offset"
+FROM <src_name>_progress;
+```
+
+As long as the offset continues increasing, Materialize is generating data. For
+more details on monitoring source ingestion progress and debugging related
+issues, see [Troubleshooting](/ops/troubleshooting/).
 
 ## Examples
 

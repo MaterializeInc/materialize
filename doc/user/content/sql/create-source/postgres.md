@@ -32,7 +32,7 @@ _src_name_  | The name for the source.
 **CONNECTION** _connection_name_ | The name of the PostgreSQL connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgresql) documentation page.
 **FOR ALL TABLES** | Create subsources for all tables in the publication.
 **FOR TABLES (** _table_list_ **)** | Create subsources for specific tables in the publication.
-**EXPOSE PROGRESS AS** _progress_subsource_name_ | Name this source's progress collection `progress_subsource_name`; if this is not specified, Materialize names the progress collection `<src_name>_progress`. For details about the progress collection, see [Progress collection](#progress-collection).
+**EXPOSE PROGRESS AS** _progress_subsource_name_ | The name of the progress collection for the source. If this is not specified, the progress collection will be named `<src_name>_progress`. For more information, see [Monitoring source progress](#monitoring-source-progress).
 
 ### `CONNECTION` options
 
@@ -124,19 +124,29 @@ CREATE SOURCE mz_source
   WITH (SIZE = '3xsmall');
 ```
 
-### Progress collection
+### Monitoring source progress
 
-Each source exposes its progress as a separate progress collection. You can
-choose a name for this collection using **EXPOSE PROGRESS AS**
-_progress_subsource_name_ or Materialize will automatically name the collection
-`<source_name>_progress`. You can find the collection's name using [`SHOW
-SOURCES`](/sql/show-sources).
+By default, PostgreSQL sources expose progress metadata as a subsource that you
+can use to monitor source **ingestion progress**. The name of the progress
+subsource can be specified when creating a source using the `EXPOSE PROGRESS
+AS` clause; otherwise, it will be named `<src_name>_progress`.
 
-The progress collection schema depends on your source type. For Postgres
-sources, we return the last `lsn` ([`uint8`](/sql/types/uint)) we have consumed
-from your Postgres server's replication stream.
+The following metadata is available for each source as a progress subsource:
 
-As long as as the LSN continues to change, Materialize is consuming data.
+Field          | Type                                     | Meaning
+---------------|------------------------------------------|--------
+`lsn`          | [`uint8`](/sql/types/uint/#uint8-info)   | The last Log Sequence Nubmer (LSN) consumed from the upstream PostgreSQL replication stream.
+
+And can be queried using:
+
+```sql
+SELECT lsn
+FROM <src_name>_progress;
+```
+
+As long as the LSN continues increasing, Materialize is consuming change data
+from the upstream PostgreSQL database. For more details on monitoring source
+ingestion progress and debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
 
 ## Known limitations
 
