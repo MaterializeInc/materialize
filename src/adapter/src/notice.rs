@@ -75,6 +75,10 @@ pub enum AdapterNotice {
     DroppedSubscribe {
         dropped_name: String,
     },
+    BadStartupSetting {
+        name: String,
+        reason: String,
+    },
 }
 
 impl AdapterNotice {
@@ -171,6 +175,9 @@ impl fmt::Display for AdapterNotice {
                     f,
                 "subscribe has been terminated because underlying relation {dropped_name} was dropped"
                 )
+            }
+            AdapterNotice::BadStartupSetting { name, reason } => {
+                write!(f, "startup setting {name} not set: {reason}")
             }
         }
     }

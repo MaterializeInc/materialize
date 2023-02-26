@@ -26,21 +26,80 @@ import org.postgresql.jdbc.TypeInfoCache;
 class SmokeTest {
     private Connection conn;
 
-    @BeforeEach
-    void setUp() throws SQLException, java.lang.ClassNotFoundException {
+    String connUrl() {
         String host = System.getenv("PGHOST");
         if (host == null)
             host = "localhost";
         String port = System.getenv("PGPORT");
         if (port == null)
             port = "6875";
-        String url = String.format("jdbc:postgresql://%s:%s/materialize", host, port);
+        return String.format("jdbc:postgresql://%s:%s/materialize", host, port);
+    }
+
+    @BeforeEach
+    void setUp() throws SQLException, java.lang.ClassNotFoundException {
+        String url = connUrl();
         conn = DriverManager.getConnection(url, "materialize", null);
     }
 
     @AfterEach
     void tearDown() throws SQLException, java.lang.ClassNotFoundException {
         conn.close();
+    }
+
+    @Test
+    void testConnectionOptions() throws SQLException {
+        // Test with an escaped =.
+        {
+            String url = connUrl() + "?options=--cluster%3Da_cluster";
+            Connection optionsConn = DriverManager.getConnection(url, "materialize", null);
+            PreparedStatement stmt = optionsConn.prepareStatement("SHOW cluster");
+            ResultSet rs = stmt.executeQuery();
+            Assertions.assertTrue(rs.next());
+            Assertions.assertEquals("a_cluster", rs.getString(1));
+            rs.close();
+            stmt.close();
+            optionsConn.close();
+        }
+
+        // Test without an escaped =.
+        {
+            String url = connUrl() + "?options=--cluster=b_cluster";
+            Connection optionsConn = DriverManager.getConnection(url, "materialize", null);
+            PreparedStatement stmt = optionsConn.prepareStatement("SHOW cluster");
+            ResultSet rs = stmt.executeQuery();
+            Assertions.assertTrue(rs.next());
+            Assertions.assertEquals("b_cluster", rs.getString(1));
+            rs.close();
+            stmt.close();
+            optionsConn.close();
+        }
+
+        // Test multiple options in a single query param.
+        {
+            String url = connUrl() + "?options=--cluster%3Db_cluster\\\\ -ccluster%3Dc_cluster";
+            Connection optionsConn = DriverManager.getConnection(url, "materialize", null);
+            PreparedStatement stmt = optionsConn.prepareStatement("SHOW cluster");
+            ResultSet rs = stmt.executeQuery();
+            Assertions.assertTrue(rs.next());
+            Assertions.assertEquals("c_cluster", rs.getString(1));
+            rs.close();
+            stmt.close();
+            optionsConn.close();
+        }
+
+        // Test multiple options in multiple query params.
+        {
+            String url = connUrl() + "?options=--cluster%3Db_cluster\\\\ -ccluster%3Dc_cluster&options=--cluster=d_cluster";
+            Connection optionsConn = DriverManager.getConnection(url, "materialize", null);
+            PreparedStatement stmt = optionsConn.prepareStatement("SHOW cluster");
+            ResultSet rs = stmt.executeQuery();
+            Assertions.assertTrue(rs.next());
+            Assertions.assertEquals("d_cluster", rs.getString(1));
+            rs.close();
+            stmt.close();
+            optionsConn.close();
+        }
     }
 
     @Test
