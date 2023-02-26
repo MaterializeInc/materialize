@@ -4767,6 +4767,7 @@ dependencies = [
  "anyhow",
  "criterion",
  "differential-dataflow",
+ "fail",
  "futures",
  "mz-ore",
  "mz-postgres-util",

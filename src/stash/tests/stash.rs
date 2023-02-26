@@ -147,6 +147,29 @@ async fn test_stash_postgres() {
         });
         let _: StashCollection<String, String> = conn2.collection("c").await.unwrap();
     }
+    // Test failures after commit.
+    {
+        let mut stash = connect(&factory, &connstr, tls.clone(), true).await;
+        let col = stash.collection::<i64, i64>("c1").await.unwrap();
+        let mut batch = col.make_batch(&mut stash).await.unwrap();
+        col.append_to_batch(&mut batch, &1, &2, 1);
+        stash.append(vec![batch]).await.unwrap();
+        assert_eq!(
+            C1.peek_one(&mut stash).await.unwrap(),
+            BTreeMap::from([(1, 2)])
+        );
+        let mut batch = col.make_batch(&mut stash).await.unwrap();
+        col.append_to_batch(&mut batch, &1, &2, -1);
+        // Enable the failpoint, which should cause the commit to succeed but the stash call to fail.
+        fail::cfg("stash_commit", "return(commit failpoint)").unwrap();
+        assert_contains!(
+            stash.append(vec![batch]).await.unwrap_err().to_string(),
+            "commit failpoint"
+        );
+        fail::cfg("stash_commit", "off").unwrap();
+        // Even though the append return an Error, it applied its diff.
+        assert_eq!(C1.peek_one(&mut stash).await.unwrap(), BTreeMap::new());
+    }
     // Test readonly.
     {
         Stash::clear(&connstr, tls.clone()).await.unwrap();
