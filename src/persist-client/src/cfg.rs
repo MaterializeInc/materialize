@@ -126,7 +126,7 @@ impl PersistConfig {
                 compaction_minimum_timeout: Self::DEFAULT_COMPACTION_MINIMUM_TIMEOUT,
                 consensus_connection_pool_ttl: Duration::from_secs(300),
                 consensus_connection_pool_ttl_stagger: Duration::from_secs(6),
-                consensus_connect_timeout: RwLock::new(Self::DEFAULT_CONSENSUS_CONNECT_TIMEOUT),
+                consensus_connect_timeout: RwLock::new(Self::DEFAULT_CRDB_CONNECT_TIMEOUT),
                 gc_blob_delete_concurrency_limit: AtomicUsize::new(32),
                 state_versions_recent_live_diffs_limit: AtomicUsize::new(usize::cast_from(
                     30 * Self::NEED_ROLLUP_THRESHOLD,
@@ -168,7 +168,7 @@ impl PersistConfig {
     /// Default value for [`DynamicConfig::compaction_minimum_timeout`].
     pub const DEFAULT_COMPACTION_MINIMUM_TIMEOUT: Duration = Duration::from_secs(90);
     /// Default value for [`DynamicConfig::consensus_connect_timeout`].
-    pub const DEFAULT_CONSENSUS_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+    pub const DEFAULT_CRDB_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
     // Move this to a PersistConfig field when we actually have read leases.
     //

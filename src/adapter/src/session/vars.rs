@@ -379,11 +379,13 @@ const PERSIST_COMPACTION_MINIMUM_TIMEOUT: ServerVar<Duration> = ServerVar {
     safe: true,
 };
 
-/// Controls [`mz_persist_client::cfg::DynamicConfig::consensus_connect_timeout`].
-const PERSIST_CONSENSUS_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
-    name: UncasedStr::new("persist_consensus_connect_timeout"),
-    value: &PersistConfig::DEFAULT_CONSENSUS_CONNECT_TIMEOUT,
-    description: "The time to connect to Consensus before timing out and retrying.",
+/// Controls the connection timeout to Cockroach.
+///
+/// Used by persist as [`mz_persist_client::cfg::DynamicConfig::consensus_connect_timeout`].
+const CRDB_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("crdb_connect_timeout"),
+    value: &PersistConfig::DEFAULT_CRDB_CONNECT_TIMEOUT,
+    description: "The time to connect to CockroachDB before timing out and retrying.",
     internal: true,
     safe: true,
 };
@@ -1099,7 +1101,9 @@ pub struct SystemVars {
     // persist configuration
     persist_blob_target_size: SystemVar<usize>,
     persist_compaction_minimum_timeout: SystemVar<Duration>,
-    persist_consensus_connect_timeout: SystemVar<Duration>,
+
+    // crdb configuration
+    crdb_connect_timeout: SystemVar<Duration>,
 
     // dataflow configuration
     dataflow_max_inflight_bytes: SystemVar<usize>,
@@ -1131,7 +1135,7 @@ impl Default for SystemVars {
             allowed_cluster_replica_sizes: SystemVar::new(&ALLOWED_CLUSTER_REPLICA_SIZES),
             persist_blob_target_size: SystemVar::new(&PERSIST_BLOB_TARGET_SIZE),
             persist_compaction_minimum_timeout: SystemVar::new(&PERSIST_COMPACTION_MINIMUM_TIMEOUT),
-            persist_consensus_connect_timeout: SystemVar::new(&PERSIST_CONSENSUS_CONNECT_TIMEOUT),
+            crdb_connect_timeout: SystemVar::new(&CRDB_CONNECT_TIMEOUT),
             dataflow_max_inflight_bytes: SystemVar::new(&DATAFLOW_MAX_INFLIGHT_BYTES),
             metrics_retention: SystemVar::new(&METRICS_RETENTION),
             mock_audit_event_timestamp: SystemVar::new(&MOCK_AUDIT_EVENT_TIMESTAMP),
@@ -1226,8 +1230,8 @@ impl SystemVars {
             Ok(&self.persist_blob_target_size)
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
             Ok(&self.persist_compaction_minimum_timeout)
-        } else if name == PERSIST_CONSENSUS_CONNECT_TIMEOUT.name {
-            Ok(&self.persist_consensus_connect_timeout)
+        } else if name == CRDB_CONNECT_TIMEOUT.name {
+            Ok(&self.crdb_connect_timeout)
         } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
             Ok(&self.dataflow_max_inflight_bytes)
         } else if name == METRICS_RETENTION.name {
@@ -1283,8 +1287,8 @@ impl SystemVars {
             self.persist_blob_target_size.is_default(input)
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
             self.persist_compaction_minimum_timeout.is_default(input)
-        } else if name == PERSIST_CONSENSUS_CONNECT_TIMEOUT.name {
-            self.persist_consensus_connect_timeout.is_default(input)
+        } else if name == CRDB_CONNECT_TIMEOUT.name {
+            self.crdb_connect_timeout.is_default(input)
         } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
             self.dataflow_max_inflight_bytes.is_default(input)
         } else if name == METRICS_RETENTION.name {
@@ -1349,8 +1353,8 @@ impl SystemVars {
             self.persist_blob_target_size.set(input)
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
             self.persist_compaction_minimum_timeout.set(input)
-        } else if name == PERSIST_CONSENSUS_CONNECT_TIMEOUT.name {
-            self.persist_consensus_connect_timeout.set(input)
+        } else if name == CRDB_CONNECT_TIMEOUT.name {
+            self.crdb_connect_timeout.set(input)
         } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
             self.dataflow_max_inflight_bytes.set(input)
         } else if name == METRICS_RETENTION.name {
@@ -1410,8 +1414,8 @@ impl SystemVars {
             Ok(self.persist_blob_target_size.reset())
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
             Ok(self.persist_compaction_minimum_timeout.reset())
-        } else if name == PERSIST_CONSENSUS_CONNECT_TIMEOUT.name {
-            Ok(self.persist_consensus_connect_timeout.reset())
+        } else if name == CRDB_CONNECT_TIMEOUT.name {
+            Ok(self.crdb_connect_timeout.reset())
         } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
             Ok(self.dataflow_max_inflight_bytes.reset())
         } else if name == METRICS_RETENTION.name {
@@ -1512,9 +1516,9 @@ impl SystemVars {
         *self.persist_compaction_minimum_timeout.value()
     }
 
-    /// Returns the `persist_consensus_connect_timeout` configuration parameter.
-    pub fn persist_consensus_connect_timeout(&self) -> Duration {
-        *self.persist_consensus_connect_timeout.value()
+    /// Returns the `crdb_connect_timeout` configuration parameter.
+    pub fn crdb_connect_timeout(&self) -> Duration {
+        *self.crdb_connect_timeout.value()
     }
 
     /// Returns the `dataflow_max_inflight_bytes` configuration parameter.
@@ -2401,5 +2405,5 @@ pub(crate) fn is_storage_config_var(name: &str) -> bool {
 fn is_persist_config_var(name: &str) -> bool {
     name == PERSIST_BLOB_TARGET_SIZE.name()
         || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
-        || name == PERSIST_CONSENSUS_CONNECT_TIMEOUT.name()
+        || name == CRDB_CONNECT_TIMEOUT.name()
 }
