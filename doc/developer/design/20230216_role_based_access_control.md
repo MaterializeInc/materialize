@@ -234,18 +234,18 @@ Below is a summary of the default owners and privileges of all builtin objects:
 
 - The `mz_system` cluster will be owned by the `mz_system` role.
 - The `mz_system` role will have `UC` privileges on the `mz_system` cluster.
-- The `mz_introspection` cluster will be owned by the `mz_introspection` role.
+- The `mz_introspection` cluster will be owned by the `mz_system` role.
 - The `mz_introspection` role will have `UC` privileges on the `mz_introspection` cluster.
 - All roles will have `U` privileges on the `mz_introspection` cluster.
 - The `default` cluster will be owned by the `mz_system` role.
 - The `mz_system` role will have `UC` privileges on the `default` cluster.
 - The `materialize` database will be owned by the `mz_system` role.
-- The `mz_sytem` role will have `UC` privileges on the `materialize` database.
+- The `mz_system` role will have `UC` privileges on the `materialize` database.
 - The `materialize.public` schema will be owned by the `mz_system` role.
 - The `mz_system` role will have `UC` privileges on the `materialize.public` schema.
 - The `mz_system` role will own all catalog schemas [`pg_catalog`, `mz_catalog`, `mz_internal`, `information_schema`].
-- All roles will have `U` privileges on all catalog schemas.
-- All roles will have `r` privileges on all objects within all catalog schemas.
+- The `PUBLIC` pseudo-role will have `U` privileges on all catalog schemas.
+- The `PUBLIC` pseudo-role will have `r` privileges on all objects within all catalog schemas.
 
 Here is a summary of all the privileges, attributes, and ownership needed to perform certain actions:
 
