@@ -100,22 +100,10 @@ class StartClusterdCompute(MzcomposeAction):
 
         clusterd = Clusterd(name="clusterd_compute_1")
         if self.tag:
-            # TODO(benesch): remove this conditional once v0.39 ships.
-            if any(self.tag.startswith(version) for version in ["v0.37", "v0.38"]):
-                clusterd = Clusterd(
-                    name="clusterd_compute_1",
-                    image=f"materialize/clusterd:{self.tag}",
-                    options=[
-                        "--compute-controller-listen-addr=0.0.0.0:2101",
-                        "--secrets-reader=process",
-                        "--secrets-reader-process-dir=/mzdata/secrets",
-                    ],
-                )
-            else:
-                clusterd = Clusterd(
-                    name="clusterd_compute_1",
-                    image=f"materialize/clusterd:{self.tag}",
-                )
+            clusterd = Clusterd(
+                name="clusterd_compute_1",
+                image=f"materialize/clusterd:{self.tag}",
+            )
         print(f"Starting Compute using image {clusterd.config.get('image')}")
 
         with c.override(clusterd):
