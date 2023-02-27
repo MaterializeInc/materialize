@@ -87,9 +87,9 @@ SELECT "offset"
 FROM <src_name>_progress;
 ```
 
-As long as the LSN continues increasing, Materialize is consuming change data
-from the upstream PostgreSQL database. For more details on monitoring source
-ingestion progress and debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
+As long as any offset continues increasing, Materialize is consuming data from
+the upstream Kafka broker. For more details on monitoring source ingestion
+progress and debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
 
 ## Authentication
 
