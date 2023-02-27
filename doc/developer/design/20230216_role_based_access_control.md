@@ -97,6 +97,8 @@ cannot specify these attributes in `CREATE ROLE` or `ALTER ROLE`. We use the fol
   session.
 - When you log in to a role with Frontegg and your JWT has the "Organization Admin" role, you implicitly get
   the `SUPERUSER` attribute for that session.
+    - The `SUPERUSER` attribute will be periodically updated as part of the periodic Frontegg re-validation done for
+      pgwire connections.
 
 This differs from PostgreSQL, which treats these as normal role attributes that persists between sessions and can be
 specified in `CREATE ROLE` and `ALTER ROLE`.
