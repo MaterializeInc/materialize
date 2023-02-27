@@ -9,7 +9,7 @@
 
 # Create sources and verify they can ingest data while `environmentd` is online.
 
-$ kafka-create-topic topic=data
+$ kafka-create-topic topic=data partitions=1
 $ kafka-ingest format=bytes topic=data
 one
 
