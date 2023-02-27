@@ -62,16 +62,12 @@ particular object. We will support the following attributes:
 
 | Name                      | Option Name     | Description                                                                                                                                           | From PostgreSQL |
 |---------------------------|-----------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------|
-| login privilege           | `LOGIN`         | Roles with this attribute can establish a database connection.                                                                                        | Yes             |
-| superuser status          | `SUPERUSER`     | Can bypass all permission checks, except login.                                                                                                       | Yes             |
 | database creation         | `CREATEDB`      | Can create a database.                                                                                                                                | Yes             |
 | role creation             | `CREATEROLE`    | Can create, alter, drop, grant membership to, and revoke membership from roles.                                                                       | Yes             |
 | inheritance of privileges | `INHERIT`       | Can inherit the privileges of roles that it is a member of. On by default. For this project we can keep this as a mandatory attribute.                | Yes             |
 | cluster creation          | `CREATECLUSTER` | Can create a cluster.                                                                                                                                 | No              |
-| persisted data creation   | `CREATEPERSIST` | Can write data to S3, either directly or indirectly (for example inserting into a table would be directly and creating a source would be indirectly). | No              |
 
-These attributes will be added to the attributes accepted by the `CREATE ROLE` statement. Additionally, we will not
-require `LOGIN` or `SUPERUSER` for new roles.
+These attributes will be added to the attributes accepted by the `CREATE ROLE` statement.
 
 We will add the following SQL statement:
 
@@ -85,11 +81,31 @@ We will add the following SQL statement:
         - `SUPERUSER` can run this without `CREATEROLE`.
     - `WITH` is ignored.
 
-When a new user logs in, we will create a new role for them with only the `LOGIN` and `INHERIT` attributes. If that user
-is a frontegg admin, then the role will also have the `SUPERUSER` attribute.
+When a new user logs in, we will create a new role for them with only the `INHERIT` attribute.
 
-The system role `mz_system` will have all attributes. The system role `mz_introspection` will only have the `LOGIN`
-attribute.
+We will also support the following session specific attributes:
+
+| Name                      | Option Name     | Description                                                                                                                                           | From PostgreSQL |
+|---------------------------|-----------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------|
+| login privilege           | `LOGIN`         | Roles with this attribute can establish a database connection.                                                                                        | Yes             |
+| superuser status          | `SUPERUSER`     | Can bypass all permission checks, except login.                                                                                                       | Yes             |
+
+These attributes are derived everytime a user tries to log in and only lasts as long as the session is active. You
+cannot specify these attributes in `CREATE ROLE` or `ALTER ROLE`. We use the following logic at every login:
+
+- When you log in to a role and are successfully authenticated, then you implicitly get the `LOGIN` attribute for that
+  session.
+- When you log in to a role with Frontegg and your JWT has the "Organization Admin" role, you implicitly get
+  the `SUPERUSER` attribute for that session.
+
+This differs from PostgreSQL, which treats these as normal role attributes that persists between sessions and can be
+specified in `CREATE ROLE` and `ALTER ROLE`.
+
+The system role `mz_system` will have all attributes (including `LOGIN` and `SUPERUSER`). The system
+role `mz_introspection` will only have the `LOGIN` attribute.
+
+We will add the following read-only session parameter:
+`IS_SUPERUSER`: True if the current role has superuser privileges.
 
 #### Implementation Details
 
