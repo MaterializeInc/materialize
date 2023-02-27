@@ -309,21 +309,6 @@ We will add the following SQL commands:
     - Requires `CREATE` privilege on the schema where `<object_name>` resides if the object resides in a schema.
         - Rationale is that this is equivalent to `DROP` then `CREATE`.
     - Requires `CREATE` privilege on the database where `<object_name>` resides if the object is a database.
-- `REASSIGN OWNED BY <old_role> TO <new_role>`
-    - Transfers ownership of all objects owned by `<old_role>` to `<new_role>`.
-    - Can only be run by a member of `<old_role>` and `<new_role>` or a superuser.
-    - Requires `CREATE` privilege on all schemas and databases where all objects reside.
-        - TODO: This isn't explicitly stated in th docs, but would make sense base on the `ALTER` privileges. I will
-          double-check this.
-    - In PostgreSQL, this only affects the current database, and does not reassign the database itself. We will diverge
-      here and have it affect all databases, including the databases themselves.
-- `DROP OWNED BY <name> [ CASCADE | RESTRICT]`
-    - Drops all objects owned by `<name>`.
-    - Requires membership of `<name>`.
-    - In PostgreSQL, this only affects the current database, and does not drop the database itself. We will diverge here
-      and have it affect all databases, including the databases themselves.
-    - Revokes all privileges granted to `<name>`.
-    - Default is `RESTRICT`.
 
 We will update `DROP ROLE` so that roles cannot be dropped until it meets the following criteria:
 
@@ -337,10 +322,13 @@ We will update `DROP <object>` so that it revokes all privileges on `<object>`.
 - Privileges will be stored in the catalog.
 - Privileges will be checked before operations in the sequencer.
 
+#### Out of Scope for Phase
+
+- `REASSIGN OWNED`
+- `DROP OWNED`
+
 #### Out of Scope for Project
 
-- `CURRENT_ROLE`, `CURRENT_USER`, `SESSION_USER`, aliases in `GRANT`, `REVOKE`, `ALTER`, `REASSIGN OWNED`
-  and `DROP OWNED`.
 - `GRANTED BY` option for `GRANT` and `REVOKE`.
 - `WITH GRANT OPTION` in `GRANT`.
 - `GRANT OPTION FOR` in `REVOKE`.
@@ -366,6 +354,31 @@ We will update `DROP <object>` so that it revokes all privileges on `<object>`.
     - `TABLESPACE`
     - `TYPE`
 - Adding the necessary pg views to support all role based `psql` meta-commands.
+
+### Phase 5 - Utility Commands (Optional)
+
+This is an optional phase to add some utility commands present in PostgreSQL. We will add the following SQL commands:
+
+- `REASSIGN OWNED BY <old_role> TO <new_role>`
+    - Transfers ownership of all objects owned by `<old_role>` to `<new_role>`.
+    - Can only be run by a member of `<old_role>` and `<new_role>` or a superuser.
+    - Requires `CREATE` privilege on all schemas and databases where all objects reside.
+        - TODO: This isn't explicitly stated in th docs, but would make sense base on the `ALTER` privileges. I will
+          double-check this.
+    - In PostgreSQL, this only affects the current database, and does not reassign the database itself. We will diverge
+      here and have it affect all databases, including the databases themselves.
+- `DROP OWNED BY <name> [ CASCADE | RESTRICT]`
+    - Drops all objects owned by `<name>`.
+    - Requires membership of `<name>`.
+    - In PostgreSQL, this only affects the current database, and does not drop the database itself. We will diverge here
+      and have it affect all databases, including the databases themselves.
+    - Revokes all privileges granted to `<name>`.
+    - Default is `RESTRICT`.
+
+#### Out of Scope for Project
+
+- `CURRENT_ROLE`, `CURRENT_USER`, `SESSION_USER`, aliases in `GRANT`, `REVOKE`, `ALTER`, `REASSIGN OWNED`
+  and `DROP OWNED`.
 
 ## Alternatives
 
