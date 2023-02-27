@@ -181,6 +181,7 @@ pub enum PlanError {
     InvalidKeysInSubscribeEnvelopeUpsert,
     InvalidKeysInSubscribeEnvelopeDebezium,
     InvalidOrderByInSubscribeWithinTimestampOrderBy,
+    FromValueRequiresParen,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -469,6 +470,9 @@ impl fmt::Display for PlanError {
             Self::InvalidOrderByInSubscribeWithinTimestampOrderBy => {
                 write!(f, "invalid ORDER BY in SUBSCRIBE WITHIN TIMESTAMP ORDER BY")
             }
+            Self::FromValueRequiresParen => f.write_str(
+                "VALUES expression in FROM clause must be surrounded by parentheses"
+            ),
         }
     }
 }

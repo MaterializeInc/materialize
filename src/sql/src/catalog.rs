@@ -1103,7 +1103,8 @@ impl fmt::Display for CatalogError {
 }
 
 impl CatalogError {
-    pub(crate) fn hint(&self) -> Option<String> {
+    /// Returns any applicable hints for [`CatalogError`].
+    pub fn hint(&self) -> Option<String> {
         match self {
             CatalogError::UnknownFunction { alternative, .. } => {
                 match alternative {

@@ -1734,7 +1734,13 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
     ) -> mz_sql_parser::ast::TableFunction<Aug> {
         mz_sql_parser::ast::TableFunction {
             name: match &node.name {
-                RawItemName::Name(..) => self.fold_raw_object_name_name_internal(node.name, true),
+                RawItemName::Name(name) => {
+                    if *name == UnresolvedItemName::unqualified("values") && self.status.is_ok() {
+                        self.status = Err(PlanError::FromValueRequiresParen);
+                    }
+
+                    self.fold_raw_object_name_name_internal(node.name, true)
+                }
                 RawItemName::Id(..) => self.fold_item_name(node.name),
             },
             args: self.fold_function_args(node.args),

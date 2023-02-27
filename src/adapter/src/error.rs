@@ -290,6 +290,7 @@ impl AdapterError {
                     .to_string(),
             ),
             AdapterError::Catalog(c) => c.hint(),
+            AdapterError::SqlCatalog(e) => e.hint(),
             AdapterError::Eval(e) => e.hint(),
             AdapterError::InvalidClusterReplicaAz { expected, az: _ } => {
                 Some(if expected.is_empty() {
