@@ -13,8 +13,11 @@ per-replica or global).
 
 ## Goals
 
-Compute introspection relations should be useful and easy to understand
-for internal debugging 
+* Compute introspection relations should be useful and easy to understand
+for internal debuggingl.
+
+* They should be useful and easy to use for building external
+  introspection UI.
 
 ## Non-Goals
 
@@ -34,7 +37,7 @@ provided in the web UI by the "external introspection" project.
 In this section, we describe the various issues that make the schema
 confusing.
 
-#### Worker-local vs. global
+#### Per-worker vs. aggregated
 
 Several relations have a `worker_id` column. Technically, the
 semantics of this column are the same across all the relations: it
@@ -142,13 +145,6 @@ reporting `environmentd`'s. For example, `mz_compute_frontiers`
 vs. `mz_cluster_replica_frontiers`. However, the names do not make it
 clear what the distinction is. 
 
-#### Redundant `mz_` in names.
-
-Every relation's name begins with `mz_`. This is redundant, because
-anyone querying these relations probably already understand that they
-are using Materialize. Even if not, they are already in a namespace
-called `mz_internal`.
-
 ### Suggested fixes for schema inconsistencies
 
 * All per-worker relations should have a corresponding "global" view
@@ -157,8 +153,8 @@ called `mz_internal`.
   restricting to worker 0). Because these global views are more likely
   to be useful than the underlying sources, they should have the basic
   name (e.g., `mz_arrangement_sharing`). The underlying source should
-  have a name with `per_worker` inserted (e.g.,
-  `mz_per_worker_arrangement_sharing`). Furthermore, the per-worker
+  have a name with `per_worker` suffixed (e.g.,
+  `mz_arrangement_sharing_per_worker`). Furthermore, the per-worker
   variant should be clearly less prominent in documentation (either at
   the bottom of the page, or in a "see more" section that has to be
   clicked to expand).
@@ -173,12 +169,13 @@ called `mz_internal`.
   should be in terms of intervals.
 * All histogram views or sources should have a per-bucket `sum`
   column.
+* All histogram views or sources should be suffixed with `_histogram`,
+  to make their role more obvious. 
 * All per-replica sources and views should have their names prepended
   with some string (perhaps `clusterd_`, though I'm open to
   suggestions) that makes it obvious which ones they are. Furthermore,
   the limitations of per-replica relations should be clearly
   documented.
-* The `mz_` prefix should be removed from all names.
 
 ### Possibly useful missing views
 
@@ -193,6 +190,14 @@ The only way to understand the structure of scope nesting currently is
 to use the `mz_dataflow_addresses` relation and do some tedious list
 manipulation. A simple view of `(id, parent_id)` would make this much
 simpler.
+
+#### Transitive object dependencies and end-to-end lag
+
+We should add the transitive closure of `mz_object_dependencies`,
+called e.g. `mz_transitive_object_dependencies`.
+
+This will allow us to see the end-to-end frontier lag for any
+dataflow.
 
 #### More views enriched with operator names, dataflow names, etc.
 
