@@ -300,7 +300,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 {{< /tab >}}
 {{< /tabs >}}
 
-If your Kafka broker is not exposed to the public internet, you can [tunnel the connection](/sql/create-connection/#network-security) through an AWS PrivateLink service or an SSH bastion host:
+If your Kafka broker is not exposed to the public internet, you can [tunnel the connection](/sql/create-connection/#network-security-connections) through an AWS PrivateLink service or an SSH bastion host:
 
 {{< tabs tabID="1" >}}
 {{< tab "AWS PrivateLink">}}
@@ -378,7 +378,7 @@ CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
 {{< /tab >}}
 {{< /tabs >}}
 
-If your Confluent Schema Registry server is not exposed to the public internet, you can [tunnel the connection](/sql/create-connection/#network-security) through an AWS PrivateLink service or an SSH bastion host:
+If your Confluent Schema Registry server is not exposed to the public internet, you can [tunnel the connection](/sql/create-connection/#network-security-connections) through an AWS PrivateLink service or an SSH bastion host:
 
 {{< tabs tabID="1" >}}
 {{< tab "AWS PrivateLink">}}

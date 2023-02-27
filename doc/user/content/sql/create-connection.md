@@ -19,7 +19,7 @@ securely store each credential in Materialize's secret management system.
 Credentials that are generally not sensitive (like usernames and SSL
 certificates) can be specified as plain `text`, or also stored as secrets.
 
-## Connectors
+## Source and sink connections
 
 ### Kafka
 
@@ -225,7 +225,7 @@ BROKERS (
 ```
 
 For step-by-step instructions on creating SSH tunnel connections and configuring
-an SSH bastion server to accept connections from Materialize, check [this guide](http://localhost:1313/ops/network-security/ssh-tunnel/).
+an SSH bastion server to accept connections from Materialize, check [this guide](/ops/network-security/ssh-tunnel/).
 
 {{< /tab >}}
 {{< /tabs >}}
@@ -429,7 +429,7 @@ an SSH bastion server to accept connections from Materialize, check [this guide]
 {{< /tab >}}
 {{< /tabs >}}
 
-## Network security
+## Network security connections
 
 ### AWS PrivateLink
 

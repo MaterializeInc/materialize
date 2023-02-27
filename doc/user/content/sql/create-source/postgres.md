@@ -170,7 +170,7 @@ CREATE CONNECTION pg_connection TO POSTGRES (
 );
 ```
 
-If your PostgreSQL server is not exposed to the public internet, you can [tunnel the connection](/sql/create-connection/#network-security) through an AWS PrivateLink service or an SSH bastion host.
+If your PostgreSQL server is not exposed to the public internet, you can [tunnel the connection](/sql/create-connection/#network-security-connections) through an AWS PrivateLink service or an SSH bastion host.
 
 {{< tabs tabID="1" >}}
 {{< tab "AWS PrivateLink">}}
