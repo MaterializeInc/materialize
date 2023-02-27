@@ -308,3 +308,129 @@ Explained Query:
         Get l0
 
 EOF
+
+## Tests for nested WITH MUTUALLY RECURSIVE
+
+statement ok
+CREATE TABLE edges (src int, dst int);
+
+statement ok
+INSERT INTO edges SELECT x, x + 1 FROM generate_series(0, 9) as x;
+
+statement ok
+INSERT INTO edges VALUES (4, 2), (8, 6);
+
+statement ok
+CREATE VIEW strongly_connected_components AS
+WITH MUTUALLY RECURSIVE
+    intra_edges (src int, dst int) as (
+        SELECT * FROM edges
+        EXCEPT ALL
+        SELECT * FROM edges_delayed
+        UNION ALL
+        SELECT src, dst
+        FROM
+            edges,
+            forward_labels f_src,
+            forward_labels f_dst,
+            reverse_labels r_src,
+            reverse_labels r_dst
+        WHERE src = f_src.node
+            AND src = r_src.node
+            AND dst = f_dst.node
+            AND dst = r_dst.node
+            AND f_src.label = f_dst.label
+            AND r_src.label = r_dst.label
+    ),
+    forward_labels (node int, label int) AS (
+        WITH MUTUALLY RECURSIVE
+            label (node int, comp int) AS (
+                SELECT dst, MIN(comp)
+                FROM (
+                    SELECT dst, dst AS comp FROM edges
+                    UNION ALL
+                    SELECT intra_edges.dst, label.comp
+                    FROM intra_edges, label
+                    WHERE intra_edges.src = label.node
+                )
+                GROUP BY dst
+            )
+        SELECT * FROM label
+    ),
+    reverse_labels (node int, label int) AS (
+        WITH MUTUALLY RECURSIVE
+            label (node int, comp int) AS (
+                SELECT src, MIN(comp)
+                FROM (
+                    SELECT src, src AS comp FROM edges
+                    UNION ALL
+                    SELECT intra_edges.src, label.comp
+                    FROM intra_edges, label
+                    WHERE intra_edges.dst = label.node
+                )
+                GROUP BY src
+            )
+        SELECT * FROM label
+    ),
+    edges_delayed (src int, dst int) AS (SELECT * FROM edges)
+SELECT * FROM forward_labels UNION SELECT * FROM reverse_labels;
+
+query II
+SELECT size, COUNT(*) FROM (
+    SELECT label, COUNT(*) as size
+    FROM strongly_connected_components
+    GROUP BY label
+)
+GROUP BY size;
+----
+1  5
+3  2
+
+query II
+SELECT label, COUNT(*) as size
+FROM strongly_connected_components
+GROUP BY label
+----
+0  1
+1  1
+2  3
+5  1
+6  3
+9  1
+10  1
+
+## Tests for sequenced WITH MUTUALLY RECURSIVE
+
+## We should not see any rounds greater than zero, because the fixed point
+## should have been reached in the first WITH MUTUALLY RECURSIVE.
+query II
+WITH MUTUALLY RECURSIVE
+    label (node int, comp int) AS (
+        SELECT dst, MIN(comp)
+        FROM (
+            SELECT dst, dst AS comp FROM edges
+            UNION ALL
+            SELECT edges.dst, label.comp
+            FROM edges, label
+            WHERE edges.src = label.node
+        )
+        GROUP BY dst
+    )
+SELECT round, COUNT(*) FROM (
+    WITH MUTUALLY RECURSIVE
+        relabel (node int, comp int, round int) AS (
+            SELECT DISTINCT ON(node) node, comp, round
+            FROM (
+                SELECT node, comp, 0 as round FROM label
+                UNION ALL
+                SELECT edges.dst, relabel.comp, relabel.round + 1
+                FROM edges, relabel
+                WHERE edges.src = relabel.node
+            )
+            ORDER BY node, comp
+        )
+    SELECT round FROM relabel
+)
+GROUP BY round;
+----
+0  10
