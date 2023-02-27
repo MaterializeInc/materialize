@@ -223,7 +223,7 @@ SELECT avg(a) FROM t2
 
 # avg of an explicit NULL should return an error.
 
-query error db error: ERROR: function pg_catalog\.sum\(unknown\) is not unique
+query error db error: ERROR: function sum\(unknown\) is not unique
 SELECT avg(NULL)
 
 statement error

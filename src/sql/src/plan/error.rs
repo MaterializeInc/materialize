@@ -277,6 +277,7 @@ impl PlanError {
             Self::InvalidOrderByInSubscribeWithinTimestampOrderBy => {
                 Some("All order bys must be output columns.".into())
             }
+            Self::Catalog(e) => e.hint(),
             _ => None,
         }
     }

@@ -1041,7 +1041,12 @@ pub enum CatalogError {
     /// Unknown item.
     UnknownItem(String),
     /// Unknown function.
-    UnknownFunction(String),
+    UnknownFunction {
+        /// The identifier of the function we couldn't find
+        name: String,
+        /// A suggested alternative to the named function.
+        alternative: Option<String>,
+    },
     /// Unknown connection.
     UnknownConnection(String),
     /// Expected the catalog item to have the given type, but it did not.
@@ -1066,7 +1071,7 @@ impl fmt::Display for CatalogError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::UnknownDatabase(name) => write!(f, "unknown database '{}'", name),
-            Self::UnknownFunction(name) => write!(f, "function \"{}\" does not exist", name),
+            Self::UnknownFunction { name, .. } => write!(f, "function \"{}\" does not exist", name),
             Self::UnknownConnection(name) => write!(f, "connection \"{}\" does not exist", name),
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
@@ -1093,6 +1098,20 @@ impl fmt::Display for CatalogError {
                 },
                 typ,
             ),
+        }
+    }
+}
+
+impl CatalogError {
+    pub(crate) fn hint(&self) -> Option<String> {
+        match self {
+            CatalogError::UnknownFunction { alternative, .. } => {
+                match alternative {
+                    None => Some("No function matches the given name and argument types. You might need to add explicit type casts.".into()),
+                    Some(alt) => Some(format!("Try using {alt}")),
+                }
+            }
+            _ => None,
         }
     }
 }

@@ -36,7 +36,7 @@ use crate::ast::{
     self, AstInfo, Cte, CteBlock, CteMutRec, Ident, Query, Raw, RawClusterName, RawDataType,
     RawItemName, Statement, UnresolvedItemName,
 };
-use crate::catalog::{CatalogItemType, CatalogTypeDetails, SessionCatalog};
+use crate::catalog::{CatalogError, CatalogItemType, CatalogTypeDetails, SessionCatalog};
 use crate::normalize;
 use crate::plan::PlanError;
 
@@ -1110,8 +1110,39 @@ impl<'a> NameResolver<'a> {
                             print_id,
                         }
                     }
-                    Err(e) => {
+                    Err(mut e) => {
                         if self.status.is_ok() {
+                            match &mut e {
+                                CatalogError::UnknownFunction { name, alternative } => {
+                                    // Suggest using the `jsonb_` version of
+                                    // `json_` functions that do not exist.
+                                    let name: Vec<&str> = name.split('.').collect();
+                                    match name.split_last() {
+                                        Some((i, q)) if i.starts_with("json_") && q.len() < 2 => {
+                                            let mut jsonb_version = q
+                                                .iter()
+                                                .map(|q| Ident::new(*q))
+                                                .collect::<Vec<_>>();
+                                            jsonb_version
+                                                .push(Ident::new(i.replace("json_", "jsonb_")));
+                                            let jsonb_version = RawItemName::Name(
+                                                UnresolvedItemName(jsonb_version),
+                                            );
+                                            let _ = self.fold_raw_object_name_name_internal(
+                                                jsonb_version.clone(),
+                                                true,
+                                            );
+
+                                            if self.status.is_ok() {
+                                                *alternative = Some(jsonb_version.to_string());
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                _ => {}
+                            }
+
                             self.status = Err(e.into());
                         }
                         ResolvedItemName::Error
