@@ -21,7 +21,7 @@ run() {
 
 run logs --no-color > services.log
 # shellcheck disable=SC2024
-sudo journalctl --merge > journalctl-merge.log
+sudo journalctl --merge --since "$(cat step_start_timestamp)" > journalctl-merge.log
 netstat -ant > netstat-ant.log
 netstat -panelot > netstat-panelot.log
 ps aux > ps-aux.log

@@ -1640,13 +1640,11 @@ impl<'a> Transaction<'a> {
     }
 
     /// Upserts persisted system configuration `name` to `value`.
-    pub fn upsert_system_config(&mut self, name: &str, value: &str) -> Result<(), Error> {
+    pub fn upsert_system_config(&mut self, name: &str, value: String) -> Result<(), Error> {
         let key = ServerConfigurationKey {
             name: name.to_string(),
         };
-        let value = ServerConfigurationValue {
-            value: value.to_string(),
-        };
+        let value = ServerConfigurationValue { value };
         self.system_configurations.set(key, Some(value))?;
         Ok(())
     }
@@ -1675,6 +1673,11 @@ impl<'a> Transaction<'a> {
         assert!(prev.is_some());
     }
 
+    /// Commits the storage transaction to the stash. Any error returned
+    /// indicates the stash may be in an indeterminate state and needs to be
+    /// fully re-read before proceeding. In general, this must be fatal to the
+    /// calling process. We do not panic/halt inside this function itself so
+    /// that errors can bubble up during initialization.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn commit(self) -> Result<(), Error> {
         async fn add_batch<'tx, K, V>(

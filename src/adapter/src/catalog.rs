@@ -20,7 +20,6 @@ use anyhow::bail;
 use chrono::{DateTime, Utc};
 use futures::Future;
 use itertools::Itertools;
-use mz_controller::clusters::ClusterRole;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -36,6 +35,7 @@ use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::{LogVariant, LogView, DEFAULT_LOG_VARIANTS, DEFAULT_LOG_VIEWS};
 use mz_compute_client::protocol::command::ComputeParameters;
+use mz_controller::clusters::ClusterRole;
 use mz_controller::clusters::{
     ClusterEvent, ClusterId, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaAllocation,
     ReplicaConfig, ReplicaId, ReplicaLocation, ReplicaLogging, UnmanagedReplicaLocation,
@@ -57,6 +57,7 @@ use mz_sql::catalog::{
     CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId, IdReference,
     NameReference, RoleAttributes, SessionCatalog, TypeReference,
 };
+use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
     Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
     QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier, RoleId, SchemaId,
@@ -91,7 +92,7 @@ use crate::catalog::storage::{BootstrapArgs, Transaction};
 use crate::client::ConnectionId;
 use crate::config::{SynchronizedParameters, SystemParameterFrontend};
 use crate::coord::DEFAULT_LOGICAL_COMPACTION_WINDOW;
-use crate::session::vars::{SystemVars, Var, CONFIG_HAS_SYNCED_ONCE};
+use crate::session::vars::{OwnedVarInput, SystemVars, Var, VarInput, CONFIG_HAS_SYNCED_ONCE};
 use crate::session::{PreparedStatement, Session, User, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
 use crate::{AdapterError, DUMMY_AVAILABILITY_ZONE};
@@ -883,7 +884,7 @@ impl CatalogState {
     fn insert_system_configuration(
         &mut self,
         name: &str,
-        value: &str,
+        value: VarInput,
     ) -> Result<bool, AdapterError> {
         self.system_configuration.set(name, value)
     }
@@ -1198,6 +1199,14 @@ impl CatalogState {
     /// Return current system configuration.
     pub fn system_config(&self) -> &SystemVars {
         &self.system_configuration
+    }
+
+    pub fn require_unsafe_mode(&self, feature_name: &'static str) -> Result<(), AdapterError> {
+        if !self.config.unsafe_mode {
+            Err(AdapterError::Unsupported(feature_name))
+        } else {
+            Ok(())
+        }
     }
 
     /// Serializes the catalog's in-memory state.
@@ -2731,6 +2740,22 @@ impl Catalog {
                 }
             }
         }
+        // Operators aren't stored in the catalog, but we would like them in
+        // introspection views.
+        for (op, func) in OP_IMPLS.iter() {
+            match func {
+                mz_sql::func::Func::Scalar(impls) => {
+                    for imp in impls {
+                        builtin_table_updates.push(catalog.state.pack_op_update(
+                            op,
+                            imp.details(),
+                            1,
+                        ));
+                    }
+                }
+                _ => unreachable!("all operators must be scalar functions"),
+            }
+        }
         let audit_logs = catalog.storage().await.load_audit_log().await?;
         for event in audit_logs {
             builtin_table_updates.push(catalog.state.pack_audit_log_update(&event)?);
@@ -2791,7 +2816,10 @@ impl Catalog {
             (system_config, boot_ts)
         };
         for (name, value) in &bootstrap_system_parameters {
-            match self.state.insert_system_configuration(name, value) {
+            match self
+                .state
+                .insert_system_configuration(name, VarInput::Flat(value))
+            {
                 Ok(_) => (),
                 Err(AdapterError::UnknownParameter(name)) => {
                     warn!(%name, "cannot load unknown system parameter from stash");
@@ -2800,7 +2828,10 @@ impl Catalog {
             };
         }
         for (name, value) in system_config {
-            match self.state.insert_system_configuration(&name, &value) {
+            match self
+                .state
+                .insert_system_configuration(&name, VarInput::Flat(&value))
+            {
                 Ok(_) => (),
                 Err(AdapterError::UnknownParameter(name)) => {
                     warn!(%name, "cannot load unknown system parameter from stash");
@@ -2861,13 +2892,19 @@ impl Catalog {
                         let name = param.name;
                         let value = param.value;
                         tracing::debug!(name, value, "sync parameter");
-                        Op::UpdateSystemConfiguration { name, value }
+                        Op::UpdateSystemConfiguration {
+                            name,
+                            value: OwnedVarInput::Flat(value),
+                        }
                     })
                     .chain(std::iter::once({
                         let name = CONFIG_HAS_SYNCED_ONCE.name().to_string();
                         let value = true.to_string();
                         tracing::debug!(name, value, "sync parameter");
-                        Op::UpdateSystemConfiguration { name, value }
+                        Op::UpdateSystemConfiguration {
+                            name,
+                            value: OwnedVarInput::Flat(value),
+                        }
                     }))
                     .collect::<Vec<_>>();
                 self.transact(boot_ts, None, ops, |_| Ok(()))
@@ -3492,7 +3529,9 @@ impl Catalog {
             .vars()
             .search_path()
             .iter()
-            .map(|schema| state.resolve_schema(database.as_ref(), None, schema, session.conn_id()))
+            .map(|schema| {
+                state.resolve_schema(database.as_ref(), None, schema.as_str(), session.conn_id())
+            })
             .filter_map(|schema| schema.ok())
             .map(|schema| (schema.name().database.clone(), schema.id().clone()))
             .collect();
@@ -4195,8 +4234,14 @@ impl Catalog {
 
         let result = f(&state)?;
 
-        // The user closure was successful, apply the updates.
-        tx.commit().await?;
+        // The user closure was successful, apply the updates. Terminate the
+        // process if this fails, because we have to restart envd due to
+        // indeterminate stash state, which we only reconcile during catalog
+        // init.
+        tx.commit()
+            .await
+            .unwrap_or_terminate("catalog storage transaction commit must succeed");
+
         // Dropping here keeps the mutable borrow on self, preventing us accidentally
         // mutating anything until after f is executed.
         drop(storage);
@@ -4288,14 +4333,6 @@ impl Catalog {
                 name: String,
                 attributes: RoleAttributes,
             },
-            UpdateSystemConfiguration {
-                name: String,
-                value: String,
-            },
-            ResetSystemConfiguration {
-                name: String,
-            },
-            ResetAllSystemConfiguration,
             UpdateRotatedKeys {
                 id: GlobalId,
                 new_item: CatalogItem,
@@ -5273,28 +5310,24 @@ impl Catalog {
                     )?;
                 }
                 Op::UpdateSystemConfiguration { name, value } => {
-                    tx.upsert_system_config(&name, &value)?;
-                    catalog_action(
-                        state,
-                        builtin_table_updates,
-                        Action::UpdateSystemConfiguration { name, value },
-                    )?;
+                    state.insert_system_configuration(&name, value.borrow())?;
+                    let var = state.get_system_configuration(&name)?;
+                    if !var.safe() {
+                        state.require_unsafe_mode(var.name())?;
+                    }
+                    tx.upsert_system_config(&name, var.value())?;
                 }
                 Op::ResetSystemConfiguration { name } => {
+                    state.remove_system_configuration(&name)?;
+                    let var = state.get_system_configuration(&name)?;
+                    if !var.safe() {
+                        state.require_unsafe_mode(var.name())?;
+                    }
                     tx.remove_system_config(&name);
-                    catalog_action(
-                        state,
-                        builtin_table_updates,
-                        Action::ResetSystemConfiguration { name },
-                    )?;
                 }
-                Op::ResetAllSystemConfiguration {} => {
+                Op::ResetAllSystemConfiguration => {
+                    state.clear_system_configuration();
                     tx.clear_system_configs();
-                    catalog_action(
-                        state,
-                        builtin_table_updates,
-                        Action::ResetAllSystemConfiguration,
-                    )?;
                 }
                 Op::UpdateRotatedKeys {
                     id,
@@ -5612,6 +5645,7 @@ impl Catalog {
                         1,
                     ));
                 }
+
                 Action::UpdateRole {
                     id,
                     name,
@@ -5629,15 +5663,6 @@ impl Catalog {
                         },
                     );
                     builtin_table_updates.push(state.pack_role_update(id, 1));
-                }
-                Action::UpdateSystemConfiguration { name, value } => {
-                    state.insert_system_configuration(&name, &value)?;
-                }
-                Action::ResetSystemConfiguration { name } => {
-                    state.remove_system_configuration(&name)?;
-                }
-                Action::ResetAllSystemConfiguration {} => {
-                    state.clear_system_configuration();
                 }
 
                 Action::UpdateRotatedKeys { id, new_item } => {
@@ -6018,11 +6043,7 @@ impl Catalog {
     }
 
     pub fn require_unsafe_mode(&self, feature_name: &'static str) -> Result<(), AdapterError> {
-        if !self.unsafe_mode() {
-            Err(AdapterError::Unsupported(feature_name))
-        } else {
-            Ok(())
-        }
+        self.state.require_unsafe_mode(feature_name)
     }
 
     /// Return the current compute configuration, derived from the system configuration.
@@ -6148,12 +6169,12 @@ pub enum Op {
     },
     UpdateSystemConfiguration {
         name: String,
-        value: String,
+        value: OwnedVarInput,
     },
     ResetSystemConfiguration {
         name: String,
     },
-    ResetAllSystemConfiguration {},
+    ResetAllSystemConfiguration,
     UpdateRotatedKeys {
         id: GlobalId,
         previous_public_key_pair: (String, String),
@@ -6809,6 +6830,7 @@ mod tests {
     use crate::catalog::{
         Catalog, CatalogItem, Index, MaterializedView, Op, Table, SYSTEM_CONN_ID,
     };
+    use crate::session::vars::VarInput;
     use crate::session::{Session, DEFAULT_DATABASE_NAME};
 
     /// System sessions have an empty `search_path` so it's necessary to
@@ -6972,7 +6994,7 @@ mod tests {
             let mut session = Session::dummy();
             session
                 .vars_mut()
-                .set("search_path", "pg_catalog", false)
+                .set("search_path", VarInput::Flat("pg_catalog"), false)
                 .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
             assert_ne!(
@@ -6999,7 +7021,7 @@ mod tests {
             let mut session = Session::dummy();
             session
                 .vars_mut()
-                .set("search_path", "mz_catalog", false)
+                .set("search_path", VarInput::Flat("mz_catalog"), false)
                 .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
             assert_ne!(
@@ -7026,7 +7048,7 @@ mod tests {
             let mut session = Session::dummy();
             session
                 .vars_mut()
-                .set("search_path", "mz_temp", false)
+                .set("search_path", VarInput::Flat("mz_temp"), false)
                 .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
             assert_ne!(

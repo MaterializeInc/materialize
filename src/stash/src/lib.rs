@@ -86,6 +86,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use mz_ore::soft_assert;
+use postgres::TransactionError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use timely::progress::Antichain;
@@ -182,21 +183,21 @@ pub struct StashError {
 }
 
 impl StashError {
-    /// Reports whether the error is unrecoverable (retrying will never
-    /// succeed).
+    /// Reports whether the error is unrecoverable (retrying will never succeed,
+    /// or a retry is not safe due to an indeterminate state).
     pub fn is_unrecoverable(&self) -> bool {
-        matches!(self.inner, InternalStashError::Fence(_))
-    }
-
-    /// Reports whether the error is a fence error.
-    pub fn is_fence(&self) -> bool {
-        matches!(self.inner, InternalStashError::Fence(_))
+        match &self.inner {
+            InternalStashError::Fence(_) => true,
+            InternalStashError::Transaction(e) => !e.retryable(),
+            _ => false,
+        }
     }
 }
 
 #[derive(Debug)]
 enum InternalStashError {
     Postgres(::tokio_postgres::Error),
+    Transaction(Box<TransactionError>),
     Fence(String),
     PeekSinceUpper(String),
     Other(String),
@@ -210,6 +211,7 @@ impl fmt::Display for StashError {
             InternalStashError::Fence(e) => f.write_str(e),
             InternalStashError::PeekSinceUpper(e) => f.write_str(e),
             InternalStashError::Other(e) => f.write_str(e),
+            InternalStashError::Transaction(e) => e.fmt(f),
         }
     }
 }

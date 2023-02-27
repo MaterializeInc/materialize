@@ -449,9 +449,9 @@ fn experimental_sql_impl_table_func(
 
 /// Describes a single function's implementation.
 pub struct FuncImpl<R> {
-    oid: u32,
-    params: ParamList,
-    return_type: ReturnType,
+    pub oid: u32,
+    pub params: ParamList,
+    pub return_type: ReturnType,
     op: Operation<R>,
 }
 
@@ -466,7 +466,7 @@ pub struct FuncImplCatalogDetails {
 }
 
 impl<R: GetReturnType> FuncImpl<R> {
-    fn details(&self) -> FuncImplCatalogDetails {
+    pub fn details(&self) -> FuncImplCatalogDetails {
         FuncImplCatalogDetails {
             oid: self.oid,
             arg_typs: self.params.arg_names(),
@@ -2197,7 +2197,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     func: VariadicFunc::RangeCreate { elem_type: ScalarType::Numeric { max_scale: None } },
                     exprs
                 })
-            }) => ScalarType::Range { element_type: Box::new(ScalarType::Int32)}, 3844;
+            }) =>  ScalarType::Range { element_type: Box::new(ScalarType::Numeric { max_scale: None })}, 3844;
             params!(Numeric, Numeric, String) => Operation::variadic(|_ecx, exprs| {
                 Ok(HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RangeCreate { elem_type: ScalarType::Numeric { max_scale: None } },
@@ -2530,6 +2530,36 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Float32) => UnaryFunc::TruncFloat32(func::TruncFloat32), oid::FUNC_TRUNC_F32_OID;
             params!(Float64) => UnaryFunc::TruncFloat64(func::TruncFloat64), 1343;
             params!(Numeric) => UnaryFunc::TruncNumeric(func::TruncNumeric), 1710;
+        },
+        "tsrange" => Scalar {
+            params!(Timestamp, Timestamp) => Operation::variadic(|_ecx, mut exprs| {
+                exprs.push(HirScalarExpr::literal(Datum::String("[)"), ScalarType::String));
+                Ok(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Timestamp },
+                    exprs
+                })
+            }) =>  ScalarType::Range { element_type: Box::new(ScalarType::Timestamp)}, 3933;
+            params!(Timestamp, Timestamp, String) => Operation::variadic(|_ecx, exprs| {
+                Ok(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Timestamp },
+                    exprs
+                })
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Timestamp)}, 3934;
+        },
+        "tstzrange" => Scalar {
+            params!(TimestampTz, TimestampTz) => Operation::variadic(|_ecx, mut exprs| {
+                exprs.push(HirScalarExpr::literal(Datum::String("[)"), ScalarType::String));
+                Ok(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::TimestampTz },
+                    exprs
+                })
+            }) =>  ScalarType::Range { element_type: Box::new(ScalarType::TimestampTz)}, 3937;
+            params!(TimestampTz, TimestampTz, String) => Operation::variadic(|_ecx, exprs| {
+                Ok(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::TimestampTz },
+                    exprs
+                })
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::TimestampTz)}, 3938;
         },
         "upper" => Scalar {
             params!(String) => UnaryFunc::Upper(func::Upper), 871;
@@ -3230,7 +3260,7 @@ fn array_to_string(
 }
 
 /// Correlates an operator with all of its implementations.
-static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
+pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
     use BinaryFunc::*;
     use ParamType::*;
     use ScalarBaseType::*;

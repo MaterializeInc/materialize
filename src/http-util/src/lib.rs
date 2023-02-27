@@ -241,73 +241,128 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use http::{header, Method, Request, Response};
+    use http::header::{ACCESS_CONTROL_ALLOW_ORIGIN, ORIGIN};
+    use http::{HeaderValue, Method, Request, Response};
     use hyper::Body;
-    use std::convert::Infallible;
     use tower::{Service, ServiceBuilder, ServiceExt};
     use tower_http::cors::CorsLayer;
 
-    #[allow(clippy::unused_async)]
-    async fn handle(_request: Request<Body>) -> Result<Response<Body>, Infallible> {
-        Ok(Response::new(Body::empty()))
-    }
-
     #[tokio::test]
-    async fn test_cors() -> Result<(), Box<dyn std::error::Error>> {
-        let allowed = vec![
-            HeaderValue::from_str("https://example.com").unwrap(),
-            HeaderValue::from_str("*.example.com").unwrap(),
+    async fn test_cors() {
+        async fn test_request(cors: &CorsLayer, origin: &HeaderValue) -> Option<HeaderValue> {
+            let mut service = ServiceBuilder::new()
+                .layer(cors)
+                .service_fn(|_| async { Ok::<_, anyhow::Error>(Response::new(Body::empty())) });
+            let request = Request::builder()
+                .header(ORIGIN, origin)
+                .body(Body::empty())
+                .unwrap();
+            let response = service.ready().await.unwrap().call(request).await.unwrap();
+            response.headers().get(ACCESS_CONTROL_ALLOW_ORIGIN).cloned()
+        }
+
+        #[derive(Default)]
+        struct TestCase {
+            /// The allowed origins to provide as input.
+            allowed_origins: Vec<HeaderValue>,
+            /// Request origins that are expected to be mirrored back in the
+            /// response.
+            mirrored_origins: Vec<HeaderValue>,
+            /// Request origins that are expected to be allowed via a `*`
+            /// response.
+            wildcard_origins: Vec<HeaderValue>,
+            /// Request origins that are expected to be rejected.
+            invalid_origins: Vec<HeaderValue>,
+        }
+
+        let test_cases = [
+            TestCase {
+                allowed_origins: vec![HeaderValue::from_static("https://example.org")],
+                mirrored_origins: vec![HeaderValue::from_static("https://example.org")],
+                invalid_origins: vec![HeaderValue::from_static("https://wrong.com")],
+                wildcard_origins: vec![],
+            },
+            TestCase {
+                allowed_origins: vec![HeaderValue::from_static("*.example.org")],
+                mirrored_origins: vec![
+                    HeaderValue::from_static("https://foo.example.org"),
+                    HeaderValue::from_static("https://bar.example.org"),
+                    HeaderValue::from_static("https://baz.bar.foo.example.org"),
+                ],
+                wildcard_origins: vec![],
+                invalid_origins: vec![
+                    HeaderValue::from_static("https://example.org"),
+                    HeaderValue::from_static("https://wrong.com"),
+                ],
+            },
+            TestCase {
+                allowed_origins: vec![
+                    HeaderValue::from_static("*.example.org"),
+                    HeaderValue::from_static("https://other.com"),
+                ],
+                mirrored_origins: vec![
+                    HeaderValue::from_static("https://foo.example.org"),
+                    HeaderValue::from_static("https://bar.example.org"),
+                    HeaderValue::from_static("https://baz.bar.foo.example.org"),
+                    HeaderValue::from_static("https://other.com"),
+                ],
+                wildcard_origins: vec![],
+                invalid_origins: vec![HeaderValue::from_static("https://example.org")],
+            },
+            TestCase {
+                allowed_origins: vec![HeaderValue::from_static("*")],
+                mirrored_origins: vec![],
+                wildcard_origins: vec![
+                    HeaderValue::from_static("literally"),
+                    HeaderValue::from_static("https://anything.com"),
+                ],
+                invalid_origins: vec![],
+            },
+            TestCase {
+                allowed_origins: vec![
+                    HeaderValue::from_static("*"),
+                    HeaderValue::from_static("https://iwillbeignored.com"),
+                ],
+                mirrored_origins: vec![],
+                wildcard_origins: vec![
+                    HeaderValue::from_static("literally"),
+                    HeaderValue::from_static("https://anything.com"),
+                ],
+                invalid_origins: vec![],
+            },
         ];
-        let cors = CorsLayer::new()
-            .allow_methods([Method::GET])
-            .allow_origin(build_cors_allowed_origin(allowed.iter()));
 
-        let mut service = ServiceBuilder::new().layer(cors).service_fn(handle);
-        let request = Request::builder()
-            .header(header::ORIGIN, "https://example.com")
-            .body(Body::empty())
-            .unwrap();
-
-        let response = service.ready().await?.call(request).await?;
-
-        assert_eq!(
-            response
-                .headers()
-                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
-                .unwrap(),
-            "https://example.com",
-        );
-
-        let request2 = Request::builder()
-            .header(header::ORIGIN, "https://sample.example.com")
-            .body(Body::empty())
-            .unwrap();
-
-        let response2 = service.ready().await?.call(request2).await?;
-
-        assert_eq!(
-            response2
-                .headers()
-                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
-                .unwrap(),
-            "https://sample.example.com",
-        );
-
-        let request3 = Request::builder()
-            .method("OPTIONS")
-            .header(header::ORIGIN, "https://materialize.com")
-            .header(header::ACCESS_CONTROL_REQUEST_METHOD, "PUT")
-            .body(Body::empty())
-            .unwrap();
-
-        let response3 = service.ready().await?.call(request3).await?;
-
-        assert!(response3
-            .headers()
-            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
-            .is_none());
-
-        Ok(())
+        for test_case in test_cases {
+            let allowed_origins = &test_case.allowed_origins;
+            let cors = CorsLayer::new()
+                .allow_methods([Method::GET])
+                .allow_origin(super::build_cors_allowed_origin(allowed_origins));
+            for valid in &test_case.mirrored_origins {
+                let header = test_request(&cors, valid).await;
+                assert_eq!(
+                    header.as_ref(),
+                    Some(valid),
+                    "origin {valid:?} unexpectedly not mirrored\n\
+                     allowed_origins={allowed_origins:?}",
+                );
+            }
+            for valid in &test_case.wildcard_origins {
+                let header = test_request(&cors, valid).await;
+                assert_eq!(
+                    header.as_ref(),
+                    Some(&HeaderValue::from_static("*")),
+                    "origin {valid:?} unexpectedly not allowed\n\
+                     allowed_origins={allowed_origins:?}",
+                );
+            }
+            for invalid in &test_case.invalid_origins {
+                let header = test_request(&cors, invalid).await;
+                assert_eq!(
+                    header, None,
+                    "origin {invalid:?} unexpectedly not allowed\n\
+                     allowed_origins={allowed_origins:?}",
+                );
+            }
+        }
     }
 }

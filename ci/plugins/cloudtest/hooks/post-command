@@ -27,7 +27,7 @@ kubectl get all > kubectl-get-all.log || true
 kubectl describe all > kubectl-describe-all.log || true
 
 # shellcheck disable=SC2024
-sudo journalctl --merge > journalctl-merge.log
+sudo journalctl --merge --since "$(cat step_start_timestamp)" > journalctl-merge.log
 
 artifacts=(kubectl-*.log journalctl-merge.log)
 for artifact in "${artifacts[@]}"; do

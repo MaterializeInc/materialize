@@ -38,8 +38,7 @@ use mz_sql_parser::ast::{
     AlterRoleStatement, AlterSinkAction, AlterSinkStatement, AlterSourceAction,
     AlterSourceStatement, AlterSystemResetAllStatement, AlterSystemResetStatement,
     AlterSystemSetStatement, CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption,
-    CreateTypeMapOptionName, DeferredObjectName, SetVariableValue, SshConnectionOption,
-    UnresolvedObjectName, Value,
+    CreateTypeMapOptionName, DeferredObjectName, SshConnectionOption, UnresolvedObjectName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -100,7 +99,7 @@ use crate::plan::error::PlanError;
 use crate::plan::expr::ColumnRef;
 use crate::plan::query::{ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
-use crate::plan::statement::{StatementContext, StatementDesc};
+use crate::plan::statement::{scl, StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
@@ -3959,14 +3958,13 @@ pub fn describe_alter_system_set(
 
 pub fn plan_alter_system_set(
     _: &StatementContext,
-    AlterSystemSetStatement { name, value }: AlterSystemSetStatement,
+    AlterSystemSetStatement { name, to }: AlterSystemSetStatement,
 ) -> Result<Plan, PlanError> {
     let name = name.to_string();
-    if matches!(&value, SetVariableValue::Literal(value) if matches!(value, mz_sql_parser::ast::Value::Null))
-    {
-        sql_bail!("Unable to set system configuration '{}' to NULL", name)
-    }
-    Ok(Plan::AlterSystemSet(AlterSystemSetPlan { name, value }))
+    Ok(Plan::AlterSystemSet(AlterSystemSetPlan {
+        name,
+        value: scl::plan_set_variable_to(to)?,
+    }))
 }
 
 pub fn describe_alter_system_reset(

@@ -17,6 +17,12 @@ and retrieve the AWS principal needed to configure the AWS PrivateLink service.
 {{< tabs tabID="1" >}}
 {{< tab "AWS MSK">}}
 
+{{< note >}}
+Materialize provides a [Terraform module](https://github.com/MaterializeInc/terraform-aws-msk-privatelink)
+that can be used to create the VPC endpoint service (step 5) and the AWS PrivateLink
+connection (step 6).
+{{< /note >}}
+
 1. #### Create target groups
     Create a dedicated [target group](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-target-group.html) **for each broker** with the following details:
 

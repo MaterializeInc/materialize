@@ -4330,6 +4330,7 @@ dependencies = [
  "anyhow",
  "arrow2",
  "bytes",
+ "parquet2",
  "workspace-hack",
 ]
 
@@ -4516,6 +4517,7 @@ dependencies = [
  "num_enum",
  "once_cell",
  "ordered-float",
+ "postgres-protocol",
  "proptest",
  "proptest-derive",
  "prost",
@@ -4530,6 +4532,7 @@ dependencies = [
  "smallvec",
  "thiserror",
  "timely",
+ "tokio-postgres",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -4764,6 +4767,7 @@ dependencies = [
  "anyhow",
  "criterion",
  "differential-dataflow",
+ "fail",
  "futures",
  "mz-ore",
  "mz-postgres-util",

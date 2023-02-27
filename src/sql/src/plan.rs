@@ -50,7 +50,7 @@ use mz_storage_client::types::sources::{SourceDesc, Timeline};
 
 use crate::ast::{
     ExplainStage, Expr, FetchDirection, IndexOptionName, NoticeSeverity, ObjectType, Raw,
-    SetVariableValue, Statement, StatementKind, TransactionAccessMode,
+    Statement, StatementKind, TransactionAccessMode,
 };
 use crate::catalog::{CatalogType, IdReference, RoleAttributes};
 use crate::names::{
@@ -440,8 +440,14 @@ pub struct ShowVariablePlan {
 #[derive(Debug)]
 pub struct SetVariablePlan {
     pub name: String,
-    pub value: SetVariableValue,
+    pub value: VariableValue,
     pub local: bool,
+}
+
+#[derive(Debug)]
+pub enum VariableValue {
+    Default,
+    Values(Vec<String>),
 }
 
 #[derive(Debug)]
@@ -579,7 +585,7 @@ pub struct AlterSecretPlan {
 #[derive(Debug)]
 pub struct AlterSystemSetPlan {
     pub name: String,
-    pub value: SetVariableValue,
+    pub value: VariableValue,
 }
 
 #[derive(Debug)]
