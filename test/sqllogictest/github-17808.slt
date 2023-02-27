@@ -10,7 +10,7 @@
 # Regression test for issues corrected by https://github.com/MaterializeInc/materialize/issues/17808.
 
 # The following query should not frustrate the system, although it did prior to
-# the associated PR being merged. It should product an empty result set.
+# the associated PR being merged. It should produce an empty result set.
 query I
 with mutually recursive
     a(x int) as (select * from a)

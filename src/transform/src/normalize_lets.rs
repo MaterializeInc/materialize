@@ -479,8 +479,8 @@ mod inlining {
             //  3. The binding is not available for inlining.
             let mut inline_offer = BTreeMap::new();
 
-            // Each binding may require the expiration of inlining offers.
-            // This occurs when an inlined body references the next iterate of a binding,
+            // Each binding may require the expiration of prior inlining offers.
+            // This occurs when an inlined body references the prior iterate of a binding,
             // and inlining it would change the meaning to be the current iterate.
             // Roughly, all inlining offers expire just after the binding of the least
             // identifier they contain that is greater than the bound identifier itself.
@@ -501,7 +501,7 @@ mod inlining {
 
                 // Determine the first `id'` at which any inlining offer must expire.
                 // An inlining offer expires because it references an `id'` that is not yet bound,
-                // indicating a reference to the *next* iterate of that identifier. Inlining the
+                // indicating a reference to the *prior* iterate of that identifier. Inlining the
                 // expression once `id'` becomes bound would advance the reference to be to the
                 // *current* iterate of the identifier.
                 expr.visit_pre(|e| {
@@ -548,16 +548,16 @@ mod inlining {
 
                 // We must now discard any offers that reference `id`, as it is no longer correct
                 // to inline such an offer as it would have access to this iteration's binding of
-                // `id` rather than next iteration's binding of `id`.
+                // `id` rather than the prior iteration's binding of `id`.
                 if let Some(expirations) = expire_offers.remove(&id) {
-                    for id in expirations.into_iter() {
-                        if let Some(offer) = inline_offer.remove(&id) {
-                            expired_offers.push((id, offer));
+                    for expired_id in expirations.into_iter() {
+                        if let Some(offer) = inline_offer.remove(&expired_id) {
+                            expired_offers.push((expired_id, offer));
                         }
                     }
                 }
             }
-            // Complete the inlining in the base relation.
+            // Complete the inlining in `body`.
             inline_lets_helper(body, &mut inline_offer)?;
 
             // Re-introduce expired offers for the subsequent logic that expects to see them all.
