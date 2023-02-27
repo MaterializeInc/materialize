@@ -81,7 +81,9 @@ We will add the following SQL statement:
         - `SUPERUSER` can run this without `CREATEROLE`.
     - `WITH` is ignored.
 
-When a new user logs in, we will create a new role for them with only the `INHERIT` attribute.
+When a new user logs in, as long as they were successfully authenticated through an external port, we will create a new
+role for them with only the `INHERIT` attribute. This will also allow us to delete the `materialize` role without
+breaking local development.
 
 We will also support the following session specific attributes:
 
