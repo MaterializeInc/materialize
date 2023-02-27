@@ -2324,6 +2324,17 @@ FROM (VALUES
 ) AS _ (name, setting)",
 };
 
+pub const PG_AUTH_MEMBERS: BuiltinView = BuiltinView {
+    name: "pg_auth_members",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_auth_members AS SELECT
+    NULL::pg_catalog.oid as roleid,
+    NULL::pg_catalog.oid as memberid,
+    NULL::pg_catalog.oid as grantor,
+    NULL::pg_catalog.bool as admin_option
+WHERE false",
+};
+
 pub const MZ_SCHEDULING_ELAPSED: BuiltinView = BuiltinView {
     name: "mz_scheduling_elapsed",
     schema: MZ_INTERNAL_SCHEMA,
@@ -3142,6 +3153,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_ENUM),
         Builtin::View(&PG_ATTRDEF),
         Builtin::View(&PG_SETTINGS),
+        Builtin::View(&PG_AUTH_MEMBERS),
         Builtin::View(&PG_CONSTRAINT),
         Builtin::View(&PG_TABLES),
         Builtin::View(&PG_ACCESS_METHODS),
