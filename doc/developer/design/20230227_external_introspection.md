@@ -152,7 +152,8 @@ overview from him of the testing strategy for this kind of feature)
 * If any of the features don't prove useful, we are cluttering our UX
   unnecessarily.
 * Maintaining the `mz_query_metadata` table will introduce overhead on
-  persist. We should 
+  persist, especially in high-QPS scenarios. We should measure this
+  before implementing.
 
 # Conclusion and alternatives
 [conclusion-and-alternatives]: #conclusion-and-alternatives
