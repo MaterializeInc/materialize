@@ -471,7 +471,7 @@ async fn auth(
 
     // Then, handle Frontegg authentication if required.
     let user = match (frontegg, creds) {
-        // If no Frontegg authentication, user the requested user or the default
+        // If no Frontegg authentication, use the requested user or the default
         // HTTP user.
         (None, Credentials::User(user)) => User {
             name: user.unwrap_or_else(|| HTTP_DEFAULT_USER.name.to_string()),

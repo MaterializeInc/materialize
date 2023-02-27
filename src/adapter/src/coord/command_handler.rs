@@ -190,6 +190,14 @@ impl Coordinator {
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
     ) {
+        // TODO(jkosh44) It's technically impossible for `create_user_if_not_exists` to be false
+        //  AND the user doesn't exist. `create_user_if_not_exists` is only false when using the
+        //  internal ports and we reject any user that is not part of a pre-defined set of roles
+        //  before ever reaching this point. So there's likely a lot of cleanup that can be done
+        //  here.
+
+        // TODO(jkosh44) Locally make sure that roles get admin.
+
         if self
             .catalog
             .for_session(&session)
