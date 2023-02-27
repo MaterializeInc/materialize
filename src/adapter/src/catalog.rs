@@ -1441,7 +1441,10 @@ impl CatalogState {
             search_path,
             name,
             conn_id,
-            SqlCatalogError::UnknownFunction,
+            |name| SqlCatalogError::UnknownFunction {
+                name,
+                alternative: None,
+            },
         )
     }
 
