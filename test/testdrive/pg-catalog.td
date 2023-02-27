@@ -151,7 +151,7 @@ name                nullable    type
 > SHOW COLUMNS FROM pg_auth_members
 name                nullable    type
 ------------------------------------------------------------
- roleid             false       oid         
- memberid           false       oid
+ roleid             false       oid
+ member           false       oid
  grantor            false       oid
  admin_option       false       boolean

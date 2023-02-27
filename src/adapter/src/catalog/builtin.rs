@@ -2329,7 +2329,7 @@ pub const PG_AUTH_MEMBERS: BuiltinView = BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_catalog.pg_auth_members AS SELECT
     NULL::pg_catalog.oid as roleid,
-    NULL::pg_catalog.oid as memberid,
+    NULL::pg_catalog.oid as member,
     NULL::pg_catalog.oid as grantor,
     NULL::pg_catalog.bool as admin_option
 WHERE false",
