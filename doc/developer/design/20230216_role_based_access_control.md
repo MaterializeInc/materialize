@@ -156,11 +156,6 @@ privileges of that role via `SET ROLE`. We will add the following SQL commands:
           this as future work.
     - `GROUP` is ignored.
     - Default is `RESTRICT`.
-- `SET ROLE <role_name>`
-    - Sets the current role to `<role_name>`.
-    - Requires the current role to be a member of `<role_name>`.
-- `RESET ROLE`
-    - Sets the current role to the role the connection was established with.
 
 We will add the following options to `CREATE ROLE`:`IN ROLE`,`IN GROUP`,`ROLE`,`USER`.
 
@@ -395,6 +390,34 @@ This is an optional phase to add some utility commands present in PostgreSQL. We
 
 - `CURRENT_ROLE`, `CURRENT_USER`, `SESSION_USER`, aliases in `GRANT`, `REVOKE`, `ALTER`, `REASSIGN OWNED`
   and `DROP OWNED`.
+
+## Rollout Plan
+
+- All new SQL commands will be gated by unsafe mode (or LaunchDarkly depending on the standard for feature flags when
+  this is implemented).
+- Specifying attributes in `CREATE ROLE` will be gated by unsafe mode (or LaunchDarkly depending on the standard for
+  feature flags when this is implemented).
+- All roles that authenticate through Frontegg will be given the `SUPERUSER` session attribute. This matches the
+  existing behavior where all roles have the `SUPERUSER` attribute.
+- Roles that are not authenticated through Frontegg, will not be given the `SUPERUSER` session attribute. This allows us
+  to test various permissions locally.
+- When we are ready to release this feature, we will do the following:
+    - Remove the unsafe gate from new SQL commands and role attributes.
+    - Modify the Frontegg authentication so that only roles that are Frontegg admins are given the `SUPERUSER` session
+      attribute.
+
+## Testing Plan
+
+- A lot of SLT and Testdrive tests that create various roles, grant them various attributes and privileges, and test
+  what they are and are not allowed to do.
+    - TODO: Come up with a matrix of all permutations
+- Rust test that ensures Frontegg admins are given the `SUPERUSER` session attribute.
+- Rust test that ensures non Frontegg admins are not given the `SUPERUSER` session attribute.
+- Rust test(s) that ensures `SUPERUSER`s can do all actions.
+    - This cannot be done through SLT or Testdrive because `SUPERUSER` can only be derived from Frontegg, which is not
+      available in those types of tests.
+- Port any ACL (Access Control List, which is what PostgreSQL calls this feature) tests that exist in PostgreSQL to
+  Materialize.
 
 ## Alternatives
 
