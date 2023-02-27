@@ -17,9 +17,7 @@
 
 from typing import List
 
-from materialize import util
 from materialize.checks.actions import Action, Initialize, Manipulate, Sleep, Validate
-from materialize.checks.mz_version import MzVersion
 from materialize.checks.mzcompose_actions import (
     KillClusterdCompute,
     KillMz,
@@ -28,14 +26,15 @@ from materialize.checks.mzcompose_actions import (
     UseClusterdCompute,
 )
 from materialize.checks.scenarios import Scenario
+from materialize.util import MzVersion, released_materialize_versions
 
-released_versions = util.released_materialize_versions()
+released_versions = released_materialize_versions()
 
 # Usually, the latest patch version of the current release
-last_version = MzVersion(f"v{released_versions[0]}")
+last_version = released_versions[0]
 
 # Usually, the last patch version of the previous release
-previous_version = MzVersion(f"v{released_versions[1]}")
+previous_version = released_versions[1]
 
 
 class UpgradeEntireMz(Scenario):
@@ -84,7 +83,7 @@ class UpgradeClusterdComputeLast(Scenario):
         return [
             StartMz(tag=last_version),
             StartClusterdCompute(tag=last_version),
-            UseClusterdCompute(),
+            UseClusterdCompute(base_version=last_version),
             Initialize(self.checks(), base_version=last_version),
             Manipulate(self.checks(), base_version=last_version, phase=1),
             KillMz(),
@@ -113,7 +112,7 @@ class UpgradeClusterdComputeFirst(Scenario):
         return [
             StartMz(tag=last_version),
             StartClusterdCompute(tag=last_version),
-            UseClusterdCompute(),
+            UseClusterdCompute(base_version=last_version),
             Initialize(self.checks(), base_version=last_version),
             Manipulate(self.checks(), base_version=last_version, phase=1),
             KillClusterdCompute(),

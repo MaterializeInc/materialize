@@ -19,7 +19,7 @@ import time
 from typing import TYPE_CHECKING, Any, List, Optional, Type
 
 from materialize.checks.executors import Executor
-from materialize.checks.mz_version import MzVersion
+from materialize.util import MzVersion
 
 if TYPE_CHECKING:
     from materialize.checks.checks import Check

@@ -21,7 +21,6 @@ from typing import List, Optional, Type
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.checks import Check
 from materialize.checks.executors import Executor
-from materialize.checks.mz_version import MzVersionCargo
 from materialize.checks.mzcompose_actions import (
     DropCreateDefaultReplica as DropCreateDefaultReplicaAction,
 )
@@ -44,6 +43,7 @@ from materialize.checks.mzcompose_actions import (
     StartMz,
     UseClusterdCompute,
 )
+from materialize.util import MzVersion
 
 
 class Scenario:
@@ -53,7 +53,7 @@ class Scenario:
         self._checks = checks
         self.executor = executor
         self.rng = None if seed is None else Random(seed)
-        self.version_cargo = MzVersionCargo()
+        self.version_cargo = MzVersion.parse_cargo()
 
     def checks(self) -> List[Type[Check]]:
         if self.rng:
@@ -115,7 +115,7 @@ class RestartClusterdCompute(Scenario):
         return [
             StartMz(),
             StartClusterdCompute(),
-            UseClusterdCompute(),
+            UseClusterdCompute(base_version=self.version_cargo),
             Initialize(self.checks(), base_version=self.version_cargo),
             KillClusterdCompute(),
             StartClusterdCompute(),
@@ -136,7 +136,7 @@ class RestartEnvironmentdClusterdStorage(Scenario):
         return [
             StartMz(),
             StartClusterdCompute(),
-            UseClusterdCompute(),
+            UseClusterdCompute(base_version=self.version_cargo),
             Initialize(self.checks(), base_version=self.version_cargo),
             KillMz(),
             StartMz(),
@@ -157,7 +157,7 @@ class KillClusterdStorage(Scenario):
         return [
             StartMz(),
             StartClusterdCompute(),
-            UseClusterdCompute(),
+            UseClusterdCompute(base_version=self.version_cargo),
             Initialize(self.checks(), base_version=self.version_cargo),
             KillClusterdStorageAction(),
             Manipulate(self.checks(), base_version=self.version_cargo, phase=1),

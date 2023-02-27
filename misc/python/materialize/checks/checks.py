@@ -19,7 +19,7 @@ from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.executors import Executor
-from materialize.checks.mz_version import MzVersion
+from materialize.util import MzVersion
 
 
 class Check:

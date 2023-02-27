@@ -19,8 +19,8 @@ from typing import List, Optional
 
 from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
-from materialize.checks.mz_version import MzVersion, MzVersionCargo
 from materialize.mzcompose.services import Clusterd, Materialized
+from materialize.util import MzVersion
 
 
 class MzcomposeAction(Action):
@@ -61,13 +61,13 @@ class StartMz(MzcomposeAction):
                 port=6877,
             )
 
-        mz_version = MzVersion(c.sql_query("SELECT mz_version()")[0][0])
+        mz_version = MzVersion.parse_sql(c)
         if self.tag:
             assert (
                 self.tag == mz_version
             ), f"Materialize version mismatch, expected {self.tag}, but got {mz_version}"
         else:
-            version_cargo = MzVersionCargo()
+            version_cargo = MzVersion.parse_cargo()
             assert (
                 version_cargo == mz_version
             ), f"Materialize version mismatch, expected {version_cargo}, but got {mz_version}"
@@ -80,15 +80,24 @@ class KillMz(MzcomposeAction):
 
 
 class UseClusterdCompute(MzcomposeAction):
+    def __init__(self, base_version: MzVersion) -> None:
+        self.base_version = base_version
+
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
+        storage_addresses = (
+            """STORAGECTL ADDRESSES ['clusterd_compute_1:2100'],
+                STORAGE ADDRESSES ['clusterd_compute_1:2103']"""
+            if self.base_version >= MzVersion(0, 44, 0)
+            else "STORAGECTL ADDRESS 'clusterd_compute_1:2100'"
+        )
+
         c.sql(
-            """
+            f"""
             DROP CLUSTER REPLICA default.r1;
             CREATE CLUSTER REPLICA default.r1
-                STORAGECTL ADDRESSES ['clusterd_compute_1:2100'],
-                STORAGE ADDRESSES ['clusterd_compute_1:2103'],
+                {storage_addresses},
                 COMPUTECTL ADDRESSES ['clusterd_compute_1:2101'],
                 COMPUTE ADDRESSES ['clusterd_compute_1:2102'],
                 WORKERS 1;

@@ -194,3 +194,10 @@ If the feature or database object you are testing depends on other objects, make
 and old objects in the `manipulate()` sections. For example, materialized views depend on tables, so a comprehensive check will attempt
 to create materialized views not only on tables that were created in the `initialize()` section, but also on tables that were created
 later in the execution. This will confirm that the database is able to perform any type of DDL in the face of restarts or upgrades.
+
+## Make sure the test is run on correct version only
+
+When you add new features or have SQL syntax changes, this can be handled in platform checks by comparing against the `base_version`. In a `Check` this can be done directly, see for example `UUID`:
+https://github.com/MaterializeInc/materialize/blob/2c62a0509e42b309848753c9c0b9552474eae88e/misc/python/materialize/checks/uuid.py#L17-L28
+For an action you have to pass the `base_version` parameter explicitly, see for example `UseClusterdCompute`:
+https://github.com/MaterializeInc/materialize/blob/2c62a0509e42b309848753c9c0b9552474eae88e/misc/python/materialize/checks/mzcompose_actions.py#L89-L94
