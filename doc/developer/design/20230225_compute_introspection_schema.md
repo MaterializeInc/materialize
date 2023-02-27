@@ -8,7 +8,7 @@ particular, some key views are missing (e.g., a way to connect channel
 IDs to the operators they connect), and there are various existing ones that
 have inconsistently named fields or inconsistent
 semantics. Furthermore, the documentation of the various relations is
-incomplete (e.g., it doesn't make clear wheter each relation is
+incomplete (e.g., it doesn't make clear whether each relation is
 per-replica or global). 
 
 ## Goals
