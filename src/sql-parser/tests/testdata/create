@@ -123,28 +123,21 @@ CREATE ROLE arjun
 ----
 CREATE ROLE arjun
 =>
-CreateRole(CreateRoleStatement { is_user: false, name: Ident("arjun"), options: [] })
-
-parse-statement
-CREATE USER arjun
-----
-CREATE USER arjun
-=>
-CreateRole(CreateRoleStatement { is_user: true, name: Ident("arjun"), options: [] })
+CreateRole(CreateRoleStatement { name: Ident("arjun"), options: [] })
 
 parse-statement
 CREATE ROLE frank SUPERUSER
 ----
 CREATE ROLE frank SUPERUSER
 =>
-CreateRole(CreateRoleStatement { is_user: false, name: Ident("frank"), options: [SuperUser] })
+CreateRole(CreateRoleStatement { name: Ident("frank"), options: [SuperUser] })
 
 parse-statement
-CREATE ROLE other_usr LOGIN NOSUPERUSER SUPERUSER NOLOGIN
+CREATE ROLE other_usr LOGIN NOSUPERUSER SUPERUSER NOLOGIN INHERIT NOINHERIT CREATECLUSTER NOCREATECLUSTER CREATEDB NOCREATEDB CREATEROLE NOCREATEROLE
 ----
-CREATE ROLE other_usr LOGIN NOSUPERUSER SUPERUSER NOLOGIN
+CREATE ROLE other_usr LOGIN NOSUPERUSER SUPERUSER NOLOGIN INHERIT NOINHERIT CREATECLUSTER NOCREATECLUSTER CREATEDB NOCREATEDB CREATEROLE NOCREATEROLE
 =>
-CreateRole(CreateRoleStatement { is_user: false, name: Ident("other_usr"), options: [Login, NoSuperUser, SuperUser, NoLogin] })
+CreateRole(CreateRoleStatement { name: Ident("other_usr"), options: [Login, NoSuperUser, SuperUser, NoLogin, Inherit, NoInherit, CreateCluster, NoCreateCluster, CreateDB, NoCreateDB, CreateRole, NoCreateRole] })
 
 parse-statement
 CREATE ROLE bad.qualification
@@ -158,7 +151,7 @@ CREATE ROLE usr WITH LOGIN
 ----
 CREATE ROLE usr LOGIN
 =>
-CreateRole(CreateRoleStatement { is_user: false, name: Ident("usr"), options: [Login] })
+CreateRole(CreateRoleStatement { name: Ident("usr"), options: [Login] })
 
 parse-statement
 CREATE ROLE usr WITH badopt
@@ -166,6 +159,48 @@ CREATE ROLE usr WITH badopt
 error: Expected end of statement, found identifier "badopt"
 CREATE ROLE usr WITH badopt
                      ^
+
+parse-statement
+ALTER ROLE arjun
+----
+ALTER ROLE arjun
+=>
+AlterRole(AlterRoleStatement { name: Ident("arjun"), options: [] })
+
+parse-statement
+ALTER ROLE frank SUPERUSER
+----
+ALTER ROLE frank SUPERUSER
+=>
+AlterRole(AlterRoleStatement { name: Ident("frank"), options: [SuperUser] })
+
+parse-statement
+ALTER ROLE other_usr LOGIN NOSUPERUSER SUPERUSER NOLOGIN INHERIT NOINHERIT CREATECLUSTER NOCREATECLUSTER CREATEDB NOCREATEDB CREATEROLE NOCREATEROLE
+----
+ALTER ROLE other_usr LOGIN NOSUPERUSER SUPERUSER NOLOGIN INHERIT NOINHERIT CREATECLUSTER NOCREATECLUSTER CREATEDB NOCREATEDB CREATEROLE NOCREATEROLE
+=>
+AlterRole(AlterRoleStatement { name: Ident("other_usr"), options: [Login, NoSuperUser, SuperUser, NoLogin, Inherit, NoInherit, CreateCluster, NoCreateCluster, CreateDB, NoCreateDB, CreateRole, NoCreateRole] })
+
+parse-statement
+ALTER ROLE bad.qualification
+----
+error: Expected end of statement, found dot
+ALTER ROLE bad.qualification
+              ^
+
+parse-statement
+ALTER ROLE usr WITH LOGIN
+----
+ALTER ROLE usr LOGIN
+=>
+AlterRole(AlterRoleStatement { name: Ident("usr"), options: [Login] })
+
+parse-statement
+ALTER ROLE usr WITH badopt
+----
+error: Expected end of statement, found identifier "badopt"
+ALTER ROLE usr WITH badopt
+                    ^
 
 parse-statement
 DROP ROLE IF EXISTS usr

@@ -193,9 +193,9 @@ ALTER SYSTEM SET max_roles = 2;
 > SHOW max_roles
 2
 
-> CREATE ROLE joe LOGIN SUPERUSER
+> CREATE ROLE joe
 
-! CREATE ROLE mike LOGIN SUPERUSER
+! CREATE ROLE mike
 contains:Role resource limit of 2 cannot be exceeded. Current amount is 2 instances, tried to create 1 new instances.
 
 $ postgres-execute connection=mz_system
@@ -204,7 +204,7 @@ ALTER SYSTEM SET max_roles = 3;
 > SHOW max_roles
 3
 
-> CREATE ROLE mike LOGIN SUPERUSER
+> CREATE ROLE mike
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_secrets = 1

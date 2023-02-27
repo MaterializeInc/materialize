@@ -394,9 +394,7 @@ fn test_conn_user() {
     );
 
     // But should succeed after that user comes into existence.
-    client
-        .batch_execute("CREATE ROLE rj LOGIN SUPERUSER")
-        .unwrap();
+    client.batch_execute("CREATE ROLE rj").unwrap();
     let mut client = server
         .pg_config()
         .user("rj")
