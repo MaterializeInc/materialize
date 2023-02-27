@@ -248,6 +248,10 @@ mz_dataflow_addresses
 SOURCE
 materialize
 mz_internal
+mz_dataflow_channel_operators
+VIEW
+materialize
+mz_internal
 mz_dataflow_channels
 SOURCE
 materialize

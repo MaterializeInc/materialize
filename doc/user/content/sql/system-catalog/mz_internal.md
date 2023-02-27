@@ -158,6 +158,19 @@ Field           | Type       | Meaning
 `to_index`      | [`bigint`] | The scope-local index of the target operator. Corresponds to an address in [`mz_dataflow_addresses.address`](#mz_dataflow_addresses).
 `to_port`       | [`bigint`] | The target operator's input port.
 
+### `mz_dataflow_channel_operators`
+
+The `mz_dataflow_channel_operators` view associates
+[channels](#mz_dataflow_channels) with the operators that are their endpoints.
+
+| Field              | Type       | Meaning                                          |
+|--------------------|------------|--------------------------------------------------|
+| `id`               | [`bigint`] | The ID of the channel.                           |
+| `worker_id`        | [`bigint`] | The ID of the worker thread hosting the channel. |
+| `from_operator_id` | [`bigint`] | The ID of the source of the channel.             |
+| `to_operator_id`   | [`bigint`] | The ID of the target of the channel.             |
+
+
 ### `mz_dataflow_operators`
 
 The `mz_dataflow_operators` source describes the dataflow operators in the
