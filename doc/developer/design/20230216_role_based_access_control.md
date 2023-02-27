@@ -315,13 +315,14 @@ We will add the following SQL commands:
     - Requires `CREATE` privilege on all schemas and databases where all objects reside.
         - TODO: This isn't explicitly stated in th docs, but would make sense base on the `ALTER` privileges. I will
           double-check this.
-    - In PostgreSQL, this only affects the current database. We will diverge here and have it affect all databases.
+    - In PostgreSQL, this only affects the current database, and does not reassign the database itself. We will diverge
+      here and have it affect all databases, including the databases themselves.
 - `DROP OWNED BY <name> [ CASCADE | RESTRICT]`
     - Drops all objects owned by `<name>`.
     - Requires membership of `<name>`.
-    - In PostgreSQL, this only affects the current database. We will diverge here and have it affect all databases.
+    - In PostgreSQL, this only affects the current database, and does not drop the database itself. We will diverge here
+      and have it affect all databases, including the databases themselves.
     - Revokes all privileges granted to `<name>`.
-    - Does not drop owned databases or clusters.
     - Default is `RESTRICT`.
 
 We will update `DROP ROLE` so that roles cannot be dropped until it meets the following criteria:
@@ -380,5 +381,4 @@ We will update `DROP <object>` so that it revokes all privileges on `<object>`.
     - Cons: Users (and the database) are unable to determine if they're allowed to execute a read until after that read
       has been fully planned.
 - What views/functions/commands do we want to add to help users query the current set of privileges.
-- Do we want to change `DROP OWNED` so that it drops databases and clusters?
 - What are security labels in PostgreSQL and do we want them?
