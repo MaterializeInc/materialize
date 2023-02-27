@@ -15,22 +15,18 @@ from materialize.mzcompose.services import (
     Clusterd,
     Cockroach,
     Debezium,
-    Kafka,
     Materialized,
     Minio,
     Postgres,
-    SchemaRegistry,
+    Redpanda,
     Testdrive,
-    Zookeeper,
 )
 from materialize.zippy.framework import Test
 from materialize.zippy.scenarios import *  # noqa: F401 F403
 
 SERVICES = [
-    Zookeeper(),
-    Kafka(auto_create_topics=True),
-    SchemaRegistry(),
-    Debezium(),
+    Redpanda(auto_create_topics=True),
+    Debezium(redpanda=True),
     Postgres(),
     Cockroach(setup_materialize=True),
     Minio(setup_materialize=True),
@@ -96,7 +92,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
     scenario_class = globals()[args.scenario]
 
-    c.up("zookeeper", "kafka", "schema-registry")
+    c.up("redpanda")
 
     random.seed(args.seed)
 

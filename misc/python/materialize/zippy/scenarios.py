@@ -16,7 +16,6 @@ from materialize.zippy.kafka_actions import (
     CreateTopicParameterized,
     Ingest,
     KafkaInsertParallel,
-    KafkaStart,
 )
 from materialize.zippy.kafka_capabilities import Envelope
 from materialize.zippy.minio_actions import MinioRestart, MinioStart
@@ -29,6 +28,7 @@ from materialize.zippy.postgres_actions import (
     PostgresRestart,
     PostgresStart,
 )
+from materialize.zippy.redpanda_actions import RedpandaStart
 from materialize.zippy.replica_actions import (
     CreateReplica,
     DropDefaultReplica,
@@ -45,7 +45,7 @@ from materialize.zippy.table_actions import DML, CreateTableParameterized, Valid
 from materialize.zippy.view_actions import CreateViewParameterized, ValidateView
 
 DEFAULT_BOOTSTRAP: List[ActionOrFactory] = [
-    KafkaStart,
+    RedpandaStart,
     CockroachStart,
     MinioStart,
     MzStart,
