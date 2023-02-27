@@ -2588,12 +2588,6 @@ fn plan_table_function_internal(
     with_ordinality: bool,
     table_name: Option<FullItemName>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
-    // if *name == UnresolvedItemName::unqualified("values") {
-    //     // Produce a nice error message for the common typo
-    //     // `SELECT * FROM VALUES (1)`.
-    //     sql_bail!("VALUES expression in FROM clause must be surrounded by parentheses");
-    // }
-
     let ecx = &ExprContext {
         qcx,
         name: "table function arguments",
