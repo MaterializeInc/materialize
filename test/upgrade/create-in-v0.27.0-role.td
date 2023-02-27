@@ -7,6 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> CREATE ROLE superuser_login SUPERUSER LOGIN;
+> CREATE ROLE superuser_login;
 
-> CREATE ROLE "space role" LOGIN SUPERUSER;
+> CREATE ROLE "space role";

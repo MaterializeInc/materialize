@@ -6631,32 +6631,20 @@ impl mz_sql::catalog::CatalogRole for Role {
         self.id
     }
 
-    fn is_super_user(&self) -> bool {
-        self.attributes.super_user
-    }
-
     fn is_inherit(&self) -> bool {
         self.attributes.inherit
     }
 
     fn create_role(&self) -> bool {
-        self.attributes.super_user || self.attributes.create_role
+        self.attributes.create_role
     }
 
     fn create_db(&self) -> bool {
-        self.attributes.super_user || self.attributes.create_db
+        self.attributes.create_db
     }
 
     fn create_cluster(&self) -> bool {
-        self.attributes.super_user || self.attributes.create_cluster
-    }
-
-    fn create_persist(&self) -> bool {
-        self.attributes.super_user || self.attributes.create_persist
-    }
-
-    fn can_login(&self) -> bool {
-        self.attributes.can_login
+        self.attributes.create_cluster
     }
 }
 

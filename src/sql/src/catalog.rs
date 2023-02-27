@@ -281,8 +281,6 @@ pub trait CatalogSchema {
 /// Attributes belonging to a [`CatalogRole`].
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct RoleAttributes {
-    /// Indicates whether the role has super user status.
-    pub super_user: bool,
     /// Indicates whether the role has inheritance of privileges.
     pub inherit: bool,
     /// Indicates whether the role is allowed to create more roles.
@@ -291,10 +289,6 @@ pub struct RoleAttributes {
     pub create_db: bool,
     /// Indicates whether the role is allowed to create clusters.
     pub create_cluster: bool,
-    /// Indicates whether the role is allowed to create persisted data.
-    pub create_persist: bool,
-    /// Indicates whether the role can login.
-    pub can_login: bool,
     // Force use of constructor.
     _private: (),
 }
@@ -303,21 +297,12 @@ impl RoleAttributes {
     /// Creates a new [`RoleAttributes`] with default attributes.
     pub fn new() -> RoleAttributes {
         RoleAttributes {
-            super_user: false,
             inherit: true,
             create_role: false,
             create_db: false,
             create_cluster: false,
-            create_persist: false,
-            can_login: false,
             _private: (),
         }
-    }
-
-    /// Adds the super user attribute.
-    pub fn with_super_user(mut self) -> RoleAttributes {
-        self.super_user = true;
-        self
     }
 
     /// Adds the create role attribute.
@@ -337,41 +322,23 @@ impl RoleAttributes {
         self.create_cluster = true;
         self
     }
-
-    /// Adds the create persist attribute.
-    pub fn with_create_persist(mut self) -> RoleAttributes {
-        self.create_persist = true;
-        self
-    }
-
-    /// Adds the login attribute.
-    pub fn with_login(mut self) -> RoleAttributes {
-        self.can_login = true;
-        self
-    }
 }
 
 impl From<PlannedRoleAttributes> for RoleAttributes {
     fn from(
         PlannedRoleAttributes {
-            super_user,
             inherit,
             create_role,
             create_db,
             create_cluster,
-            create_persist,
-            can_login,
         }: PlannedRoleAttributes,
     ) -> RoleAttributes {
         let default_attributes = RoleAttributes::new();
         RoleAttributes {
-            super_user: super_user.unwrap_or(default_attributes.super_user),
             inherit: inherit.unwrap_or(default_attributes.inherit),
             create_role: create_role.unwrap_or(default_attributes.create_role),
             create_db: create_db.unwrap_or(default_attributes.create_db),
             create_cluster: create_cluster.unwrap_or(default_attributes.create_cluster),
-            create_persist: create_persist.unwrap_or(default_attributes.create_persist),
-            can_login: can_login.unwrap_or(default_attributes.can_login),
             _private: (),
         }
     }
@@ -382,24 +349,18 @@ impl From<(&dyn CatalogRole, PlannedRoleAttributes)> for RoleAttributes {
         (
             role,
             PlannedRoleAttributes {
-                super_user,
                 inherit,
                 create_role,
                 create_db,
                 create_cluster,
-                create_persist,
-                can_login,
             },
         ): (&dyn CatalogRole, PlannedRoleAttributes),
     ) -> RoleAttributes {
         RoleAttributes {
-            super_user: super_user.unwrap_or_else(|| role.is_super_user()),
             inherit: inherit.unwrap_or_else(|| role.is_inherit()),
             create_role: create_role.unwrap_or_else(|| role.create_role()),
             create_db: create_db.unwrap_or_else(|| role.create_db()),
             create_cluster: create_cluster.unwrap_or_else(|| role.create_cluster()),
-            create_persist: create_persist.unwrap_or_else(|| role.create_persist()),
-            can_login: can_login.unwrap_or_else(|| role.can_login()),
             _private: (),
         }
     }
@@ -413,9 +374,6 @@ pub trait CatalogRole {
     /// Returns a stable ID for the role.
     fn id(&self) -> RoleId;
 
-    /// Indicates whether the role has super user status.
-    fn is_super_user(&self) -> bool;
-
     /// Indicates whether the role has inheritance of privileges.
     fn is_inherit(&self) -> bool;
 
@@ -427,12 +385,6 @@ pub trait CatalogRole {
 
     /// Indicates whether the role has the cluster creation attribute.
     fn create_cluster(&self) -> bool;
-
-    /// Indicates whether the role has the persist creation attribute.
-    fn create_persist(&self) -> bool;
-
-    /// Indicates whether the role has login privilege.
-    fn can_login(&self) -> bool;
 }
 
 /// A cluster in a [`SessionCatalog`].

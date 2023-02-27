@@ -58,6 +58,5 @@ rj
 ## Related pages
 
 - [CREATE USER](../create-user)
-- [ALTER ROLE](../alter-role)
 - [DROP ROLE](../drop-role)
 - [DROP USER](../drop-user)

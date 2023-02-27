@@ -126,13 +126,10 @@ impl CatalogState {
                 Datum::String(&role.id.to_string()),
                 Datum::UInt32(role.oid),
                 Datum::String(&role.name),
-                Datum::from(role.attributes.super_user),
                 Datum::from(role.attributes.inherit),
                 Datum::from(role.attributes.create_role),
                 Datum::from(role.attributes.create_db),
                 Datum::from(role.attributes.create_cluster),
-                Datum::from(role.attributes.create_persist),
-                Datum::from(role.attributes.can_login),
             ]),
             diff,
         }

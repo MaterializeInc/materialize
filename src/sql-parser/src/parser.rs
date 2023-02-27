@@ -1637,7 +1637,7 @@ impl<'a> Parser<'a> {
             self.parse_create_sink()
         } else if self.peek_keyword(TYPE) {
             self.parse_create_type()
-        } else if self.peek_keyword(ROLE) || self.peek_keyword(USER) {
+        } else if self.peek_keyword(ROLE) {
             self.parse_create_role()
         } else if self.peek_keyword(CLUSTER) {
             self.next_token();
@@ -3028,19 +3028,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_role(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let is_user = match self.expect_one_of_keywords(&[ROLE, USER])? {
-            ROLE => false,
-            USER => true,
-            _ => unreachable!(),
-        };
+        self.expect_keyword(ROLE)?;
         let name = self.parse_identifier()?;
         let _ = self.parse_keyword(WITH);
         let options = self.parse_role_attributes();
-        Ok(Statement::CreateRole(CreateRoleStatement {
-            is_user,
-            name,
-            options,
-        }))
+        Ok(Statement::CreateRole(CreateRoleStatement { name, options }))
     }
 
     fn parse_role_attributes(&mut self) -> Vec<RoleAttribute> {
@@ -3057,8 +3049,6 @@ impl<'a> Parser<'a> {
                 NOCREATECLUSTER,
                 CREATEDB,
                 NOCREATEDB,
-                CREATEPERSIST,
-                NOCREATEPERSIST,
                 CREATEROLE,
                 NOCREATEROLE,
             ]) {
@@ -3073,8 +3063,6 @@ impl<'a> Parser<'a> {
                 Some(NOCREATECLUSTER) => options.push(RoleAttribute::NoCreateCluster),
                 Some(CREATEDB) => options.push(RoleAttribute::CreateDB),
                 Some(NOCREATEDB) => options.push(RoleAttribute::NoCreateDB),
-                Some(CREATEPERSIST) => options.push(RoleAttribute::CreatePersist),
-                Some(NOCREATEPERSIST) => options.push(RoleAttribute::NoCreatePersist),
                 Some(CREATEROLE) => options.push(RoleAttribute::CreateRole),
                 Some(NOCREATEROLE) => options.push(RoleAttribute::NoCreateRole),
                 Some(_) => unreachable!(),

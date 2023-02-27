@@ -10,59 +10,63 @@
 mode cockroach
 
 # Verify initial roles.
-query TTBBBBBBB
-SELECT id, name, super_user, inherit, create_role, create_db, create_cluster, create_persist, can_login FROM mz_roles WHERE id LIKE 's%'
+query TTBBBB
+SELECT id, name, inherit, create_role, create_db, create_cluster FROM mz_roles WHERE id LIKE 's%'
 ----
-s1 mz_system true true true true true true true
-s2 mz_introspection false true false false false false true
+s1 mz_system true true true true
+s2 mz_introspection true false false false
 
-query TBBBBBBB
-SELECT name, super_user, inherit, create_role, create_db, create_cluster, create_persist, can_login FROM mz_roles WHERE id LIKE 'u%'
+query TBBBB
+SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles WHERE id LIKE 'u%'
 ----
-materialize true true false false false false true
+materialize true false false false
 
 statement error non inherit roles not yet supported
 CREATE ROLE foo NOINHERIT
 
-statement error conflicting or redundant options
-CREATE ROLE foo LOGIN LOGIN SUPERUSER
+statement error LOGIN attribute not yet supported
+CREATE ROLE foo LOGIN
+
+statement error SUPERUSER attribute not yet supported
+CREATE ROLE foo SUPERUSER
 
 statement error conflicting or redundant options
-CREATE ROLE foo LOGIN NOLOGIN SUPERUSER
+CREATE ROLE foo CREATEROLE CREATEROLE INHERIT
 
-# Create roles using both syntaxes and verify their existence.
+statement error conflicting or redundant options
+CREATE ROLE foo CREATEROLE NOCREATEROLE CREATEDB
+
+# Create role and verify its existence.
 statement ok
-CREATE ROLE rj LOGIN SUPERUSER
+CREATE ROLE rj
 
-statement ok
-CREATE USER fms SUPERUSER
+statement error Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, \[OR REPLACE\] \[TEMPORARY\] VIEW, or \[OR REPLACE\] MATERIALIZED VIEW after CREATE, found USER
+CREATE USER fms
 
-query TBBBBBBB
-SELECT name, super_user, inherit, create_role, create_db, create_cluster, create_persist, can_login FROM mz_roles
+query TBBBB
+SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles
 ----
-rj true true false false false false true
-fms true true false false false false true
-mz_system true true true true true true true
-materialize true true false false false false true
-mz_introspection false true false false false false true
+rj true false false false
+mz_system true true true true
+materialize true false false false
+mz_introspection true false false false
 
 # Dropping multiple roles should not have any effect if one of the role names
 # is bad...
 statement error unknown role 'bad'
-DROP ROLE rj, fms, bad
+DROP ROLE rj, bad
 
 query T
 SELECT name FROM mz_roles
 ----
 rj
-fms
 mz_system
 materialize
 mz_introspection
 
 # ...unless IF EXISTS is specified.
 statement ok
-DROP ROLE IF EXISTS rj, fms, bad
+DROP ROLE IF EXISTS rj, bad
 
 query T
 SELECT name FROM mz_roles
@@ -73,7 +77,7 @@ mz_introspection
 
 # Verify that the single name version of DROP ROLE works too.
 statement ok
-CREATE ROLE nlb LOGIN SUPERUSER
+CREATE ROLE nlb
 
 query T
 SELECT name FROM mz_roles
@@ -102,29 +106,29 @@ DROP ROLE materialize
 
 # No creating roles that already exist.
 statement error role 'materialize' already exists
-CREATE ROLE materialize LOGIN SUPERUSER
+CREATE ROLE materialize
 
 # No creating roles that look like system roles.
 statement error role name "mz_system" is reserved
-CREATE ROLE mz_system LOGIN SUPERUSER
+CREATE ROLE mz_system
 
 statement error role name "mz_foo" is reserved
-CREATE ROLE mz_foo LOGIN SUPERUSER
+CREATE ROLE mz_foo
 
 # Create role with attributes
 statement ok
-CREATE ROLE foo CREATEROLE NOLOGIN NOSUPERUSER CREATEDB
+CREATE ROLE foo CREATEROLE CREATEDB NOCREATECLUSTER
 
-query TBBBBBBB
-SELECT name, super_user, inherit, create_role, create_db, create_cluster, create_persist, can_login FROM mz_roles WHERE name = 'foo'
+query TBBBB
+SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles WHERE name = 'foo'
 ----
-foo false true true true false false false
+foo true true true false
 
 statement error non inherit roles not yet supported
 ALTER ROLE foo NOINHERIT
 
 statement error role name "mz_system" is reserved
-ALTER ROLE mz_system NOSUPERUSER
+ALTER ROLE mz_system NOCREATEDB
 
 statement error conflicting or redundant options
 ALTER ROLE foo CREATEROLE NOCREATEROLE
@@ -135,15 +139,15 @@ ALTER ROLE foo CREATEDB CREATEDB
 statement ok
 ALTER ROLE foo NOCREATEDB
 
-query TBBBBBBB
-SELECT name, super_user, inherit, create_role, create_db, create_cluster, create_persist, can_login FROM mz_roles WHERE name = 'foo'
+query TBBBB
+SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles WHERE name = 'foo'
 ----
-foo false true true false false false false
+foo true true false false
 
 statement ok
 ALTER ROLE foo CREATECLUSTER
 
-query TBBBBBBB
-SELECT name, super_user, inherit, create_role, create_db, create_cluster, create_persist, can_login FROM mz_roles WHERE name = 'foo'
+query TBBBB
+SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles WHERE name = 'foo'
 ----
-foo false true true false true false false
+foo true true false true

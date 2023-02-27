@@ -1493,13 +1493,10 @@ pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("super_user", ScalarType::Bool.nullable(false))
         .with_column("inherit", ScalarType::Bool.nullable(false))
         .with_column("create_role", ScalarType::Bool.nullable(false))
         .with_column("create_db", ScalarType::Bool.nullable(false))
-        .with_column("create_cluster", ScalarType::Bool.nullable(false))
-        .with_column("create_persist", ScalarType::Bool.nullable(false))
-        .with_column("can_login", ScalarType::Bool.nullable(false)),
+        .with_column("create_cluster", ScalarType::Bool.nullable(false)),
     is_retained_metrics_relation: false,
 });
 pub static MZ_PSEUDO_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2610,6 +2607,9 @@ pub const PG_AUTHID: BuiltinView = BuiltinView {
 AS SELECT
     r.oid AS oid,
     r.name AS rolname,
+    -- This column is not accurate. We determine superuser status each time a role logs in, so
+    -- there's no way to accurately depict this in the catalog. We do the following as a best
+    -- effort because we know that mz_system will always be a superuser.
     CASE
         WHEN r.name = 'mz_system' THEN true
         ELSE false
@@ -2617,7 +2617,9 @@ AS SELECT
     inherit AS rolinherit,
     create_role AS rolcreaterole,
     create_db AS rolcreatedb,
-    can_login AS rolcanlogin,
+    -- This column is not accurate. We determine login status each time a role logs in, so
+    -- there's no way to accurately depict this in the catalog. Instead we just hardcode false.
+    false AS rolcanlogin,
     -- MZ doesn't support replication in the same way Postgres does
     false AS rolreplication,
     -- MZ doesn't how row level security
@@ -2823,17 +2825,14 @@ ON mz_catalog.mz_secrets (schema_id)",
 pub static MZ_SYSTEM_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*SYSTEM_USER.name,
     attributes: RoleAttributes::new()
-        .with_super_user()
         .with_create_role()
         .with_create_db()
-        .with_create_cluster()
-        .with_create_persist()
-        .with_login(),
+        .with_create_cluster(),
 });
 
 pub static MZ_INTROSPECTION_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*INTROSPECTION_USER.name,
-    attributes: RoleAttributes::new().with_login(),
+    attributes: RoleAttributes::new(),
 });
 
 pub static MZ_SYSTEM_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| BuiltinCluster {

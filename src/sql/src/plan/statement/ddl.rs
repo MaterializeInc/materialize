@@ -2438,13 +2438,10 @@ pub fn describe_create_role(
 }
 
 pub(crate) struct PlannedRoleAttributes {
-    pub(crate) super_user: Option<bool>,
     pub(crate) inherit: Option<bool>,
     pub(crate) create_role: Option<bool>,
     pub(crate) create_db: Option<bool>,
     pub(crate) create_cluster: Option<bool>,
-    pub(crate) create_persist: Option<bool>,
-    pub(crate) can_login: Option<bool>,
 }
 
 fn plan_role_attributes(
@@ -2452,21 +2449,17 @@ fn plan_role_attributes(
     options: Vec<RoleAttribute>,
 ) -> Result<PlannedRoleAttributes, PlanError> {
     let mut planned_attributes = PlannedRoleAttributes {
-        super_user: None,
         inherit: None,
         create_role: None,
         create_db: None,
         create_cluster: None,
-        create_persist: None,
-        can_login: None,
     };
 
     for option in options {
         match option {
-            RoleAttribute::SuperUser | RoleAttribute::NoSuperUser
-                if planned_attributes.super_user.is_some() =>
-            {
-                sql_bail!("conflicting or redundant options");
+            RoleAttribute::Login | RoleAttribute::NoLogin => bail_unsupported!("LOGIN attribute"),
+            RoleAttribute::SuperUser | RoleAttribute::NoSuperUser => {
+                bail_unsupported!("SUPERUSER attribute")
             }
             RoleAttribute::Inherit | RoleAttribute::NoInherit
                 if planned_attributes.inherit.is_some() =>
@@ -2483,50 +2476,32 @@ fn plan_role_attributes(
             {
                 sql_bail!("conflicting or redundant options");
             }
-            RoleAttribute::CreatePersist | RoleAttribute::NoCreatePersist
-                if planned_attributes.create_persist.is_some() =>
-            {
-                sql_bail!("conflicting or redundant options");
-            }
             RoleAttribute::CreateRole | RoleAttribute::NoCreateRole
                 if planned_attributes.create_role.is_some() =>
             {
                 sql_bail!("conflicting or redundant options");
             }
-            RoleAttribute::Login | RoleAttribute::NoLogin
-                if planned_attributes.can_login.is_some() =>
-            {
-                sql_bail!("conflicting or redundant options");
-            }
-            RoleAttribute::SuperUser => planned_attributes.super_user = Some(true),
-            RoleAttribute::NoSuperUser => planned_attributes.super_user = Some(false),
+
             RoleAttribute::Inherit => planned_attributes.inherit = Some(true),
             RoleAttribute::NoInherit => planned_attributes.inherit = Some(false),
             RoleAttribute::CreateCluster => planned_attributes.create_cluster = Some(true),
             RoleAttribute::NoCreateCluster => planned_attributes.create_cluster = Some(false),
             RoleAttribute::CreateDB => planned_attributes.create_db = Some(true),
             RoleAttribute::NoCreateDB => planned_attributes.create_db = Some(false),
-            RoleAttribute::CreatePersist => planned_attributes.create_persist = Some(true),
-            RoleAttribute::NoCreatePersist => planned_attributes.create_persist = Some(false),
             RoleAttribute::CreateRole => planned_attributes.create_role = Some(true),
             RoleAttribute::NoCreateRole => planned_attributes.create_role = Some(false),
-            RoleAttribute::Login => planned_attributes.can_login = Some(true),
-            RoleAttribute::NoLogin => planned_attributes.can_login = Some(false),
         }
     }
     if planned_attributes.inherit == Some(false) {
         bail_unsupported!("non inherit roles");
     }
 
-    if planned_attributes.super_user == Some(false)
-        || planned_attributes.can_login == Some(false)
-        || planned_attributes.inherit.is_some()
+    if planned_attributes.inherit.is_some()
         || planned_attributes.create_cluster.is_some()
         || planned_attributes.create_db.is_some()
-        || planned_attributes.create_persist.is_some()
         || planned_attributes.create_role.is_some()
     {
-        scx.require_unsafe_mode("roles that don't have exactly LOGIN and SUPERUSER attributes")?;
+        scx.require_unsafe_mode("role attributes")?;
     }
 
     Ok(planned_attributes)
@@ -2534,19 +2509,9 @@ fn plan_role_attributes(
 
 pub fn plan_create_role(
     scx: &StatementContext,
-    CreateRoleStatement {
-        name,
-        is_user,
-        options,
-    }: CreateRoleStatement,
+    CreateRoleStatement { name, options }: CreateRoleStatement,
 ) -> Result<Plan, PlanError> {
-    let mut attributes = plan_role_attributes(scx, options)?;
-    if is_user && attributes.can_login.is_none() {
-        attributes.can_login = Some(true);
-    }
-    if attributes.can_login.is_none() || attributes.can_login == Some(false) {
-        scx.require_unsafe_mode("non-login roles")?;
-    }
+    let attributes = plan_role_attributes(scx, options)?;
     Ok(Plan::CreateRole(CreateRolePlan {
         name: normalize::ident(name),
         attributes: attributes.into(),
@@ -4070,6 +4035,8 @@ pub fn plan_alter_role(
     scx: &StatementContext,
     AlterRoleStatement { name, options }: AlterRoleStatement<Aug>,
 ) -> Result<Plan, PlanError> {
+    scx.require_unsafe_mode("ALTER ROLE")?;
+
     let role = scx.catalog.get_role(&name.id);
     let attributes = plan_role_attributes(scx, options)?;
 

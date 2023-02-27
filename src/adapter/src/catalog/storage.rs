@@ -35,9 +35,7 @@ use crate::catalog::builtin::{
     BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES, BUILTIN_ROLES,
 };
 use crate::catalog::error::{Error, ErrorKind};
-use crate::catalog::{
-    is_reserved_name, SerializedRole, SystemObjectMapping, INTROSPECTION_USER, SYSTEM_USER,
-};
+use crate::catalog::{is_reserved_name, SerializedRole, SystemObjectMapping, SYSTEM_USER};
 use crate::catalog::{SerializedReplicaConfig, DEFAULT_CLUSTER_REPLICA_NAME};
 use crate::coord::timeline;
 
@@ -254,7 +252,9 @@ async fn migrate(
                     name: "information_schema".into(),
                 },
             )?;
-            // TODO(jkosh44) This role should be removed, but we need to think of a good local dev workaround.
+            // TODO(jkosh44) This role should be removed, but we need to think of a good local
+            //  dev workaround. Most likely something around making sure that when developing
+            //  locally create_user_if_not_exists is set to true.
             txn.roles.insert(
                 RoleKey {
                     id: RoleId::User(MATERIALIZE_ROLE_ID),
@@ -262,7 +262,7 @@ async fn migrate(
                 RoleValue {
                     role: SerializedRole {
                         name: MATERIALIZE_ROLE.into(),
-                        attributes: Some(RoleAttributes::new().with_super_user().with_login()),
+                        attributes: Some(RoleAttributes::new()),
                     },
                 },
             )?;
@@ -376,17 +376,12 @@ async fn migrate(
                 let mut role_value = role_value.clone();
                 if role_value.role.attributes.is_none() {
                     let is_mz_system_role = role_value.role.name == SYSTEM_USER.name;
-                    let is_mz_introspection_role = role_value.role.name == INTROSPECTION_USER.name;
-                    let mut attributes = RoleAttributes::new().with_login();
+                    let mut attributes = RoleAttributes::new();
                     if is_mz_system_role {
                         attributes = attributes
                             .with_create_role()
                             .with_create_db()
-                            .with_create_cluster()
-                            .with_create_persist();
-                    }
-                    if !is_mz_introspection_role {
-                        attributes = attributes.with_super_user();
+                            .with_create_cluster();
                     }
                     role_value.role.attributes = Some(attributes);
                 }

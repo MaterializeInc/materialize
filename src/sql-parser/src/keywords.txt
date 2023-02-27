@@ -86,7 +86,6 @@ Counter
 Create
 Createcluster
 Createdb
-Createpersist
 Createrole
 Cross
 Csv
@@ -228,7 +227,6 @@ Next
 No
 Nocreatecluster
 Nocreatedb
-Nocreatepersist
 Nocreaterole
 Noinherit
 Nologin

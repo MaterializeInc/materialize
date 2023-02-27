@@ -1030,8 +1030,6 @@ impl<T: AstInfo> AstDisplay for IndexOption<T> {
 /// A `CREATE ROLE` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateRoleStatement {
-    /// Whether this was actually a `CREATE USER` statement.
-    pub is_user: bool,
     /// The specified role.
     pub name: Ident,
     /// Any options that were attached, in the order they were presented.
@@ -1041,11 +1039,7 @@ pub struct CreateRoleStatement {
 impl AstDisplay for CreateRoleStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("CREATE ");
-        if self.is_user {
-            f.write_str("USER ");
-        } else {
-            f.write_str("ROLE ");
-        }
+        f.write_str("ROLE ");
         f.write_node(&self.name);
         for option in &self.options {
             f.write_str(" ");
@@ -1058,14 +1052,6 @@ impl_display!(CreateRoleStatement);
 /// Attributes that can be attached to roles.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RoleAttribute {
-    /// The `SUPERUSER` option.
-    SuperUser,
-    /// The `NOSUPERUSER` option.
-    NoSuperUser,
-    /// The `LOGIN` option.
-    Login,
-    /// The `NOLOGIN` option.
-    NoLogin,
     /// The `INHERIT` option.
     Inherit,
     /// The `NOINHERIT` option.
@@ -1078,14 +1064,15 @@ pub enum RoleAttribute {
     CreateDB,
     /// The `NOCREATEDB` option.
     NoCreateDB,
-    /// The `CREATEPERSIST` option.
-    CreatePersist,
-    /// The `NOCREATEPERSIST` option.
-    NoCreatePersist,
     /// The `CREATEROLE` option.
     CreateRole,
     /// The `NOCREATEROLE` option.
     NoCreateRole,
+    // The following are not supported, but included to give helpful error messages.
+    Login,
+    NoLogin,
+    SuperUser,
+    NoSuperUser,
 }
 
 impl AstDisplay for RoleAttribute {
@@ -1101,8 +1088,6 @@ impl AstDisplay for RoleAttribute {
             RoleAttribute::NoCreateCluster => f.write_str("NOCREATECLUSTER"),
             RoleAttribute::CreateDB => f.write_str("CREATEDB"),
             RoleAttribute::NoCreateDB => f.write_str("NOCREATEDB"),
-            RoleAttribute::CreatePersist => f.write_str("CREATEPERSIST"),
-            RoleAttribute::NoCreatePersist => f.write_str("NOCREATEPERSIST"),
             RoleAttribute::CreateRole => f.write_str("CREATEROLE"),
             RoleAttribute::NoCreateRole => f.write_str("NOCREATEROLE"),
         }

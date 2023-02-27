@@ -165,6 +165,8 @@ impl Coordinator {
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
     ) {
+        // TODO(jkosh44) SUPERUSER should be derived and added to the session. Make sure that
+        //  `MZ_SYSTEM` always has SUPERUSER. This will be done in a follow-up PR.
         if self
             .catalog
             .for_session(&session)
@@ -178,10 +180,7 @@ impl Coordinator {
                 });
                 return;
             }
-            let mut attributes = RoleAttributes::new().with_login();
-            if session.user().is_external_admin() {
-                attributes = attributes.with_super_user();
-            }
+            let attributes = RoleAttributes::new();
             let plan = CreateRolePlan {
                 name: session.user().name.to_string(),
                 attributes,
