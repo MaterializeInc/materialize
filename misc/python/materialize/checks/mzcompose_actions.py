@@ -19,6 +19,7 @@ from typing import List, Optional
 
 from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
+from materialize.checks.mz_version import MzVersion, MzVersionCargo
 from materialize.mzcompose.services import Clusterd, Materialized
 
 
@@ -28,7 +29,7 @@ class MzcomposeAction(Action):
 
 class StartMz(MzcomposeAction):
     def __init__(
-        self, tag: Optional[str] = None, environment_extra: List[str] = []
+        self, tag: Optional[MzVersion] = None, environment_extra: List[str] = []
     ) -> None:
         self.tag = tag
         self.environment_extra = environment_extra
@@ -59,6 +60,17 @@ class StartMz(MzcomposeAction):
                 user="mz_system",
                 port=6877,
             )
+
+        mz_version = MzVersion(c.sql_query("SELECT mz_version()")[0][0])
+        if self.tag:
+            assert (
+                self.tag == mz_version
+            ), f"Materialize version mismatch, expected {self.tag}, but got {mz_version}"
+        else:
+            version_cargo = MzVersionCargo()
+            assert (
+                version_cargo == mz_version
+            ), f"Materialize version mismatch, expected {version_cargo}, but got {mz_version}"
 
 
 class KillMz(MzcomposeAction):
@@ -92,7 +104,7 @@ class KillClusterdCompute(MzcomposeAction):
 
 
 class StartClusterdCompute(MzcomposeAction):
-    def __init__(self, tag: Optional[str] = None) -> None:
+    def __init__(self, tag: Optional[MzVersion] = None) -> None:
         self.tag = tag
 
     def execute(self, e: Executor) -> None:

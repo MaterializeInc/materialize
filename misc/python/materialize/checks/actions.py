@@ -19,6 +19,7 @@ import time
 from typing import TYPE_CHECKING, Any, List, Optional, Type
 
 from materialize.checks.executors import Executor
+from materialize.checks.mz_version import MzVersion
 
 if TYPE_CHECKING:
     from materialize.checks.checks import Check
@@ -58,8 +59,8 @@ class Sleep(Action):
 
 
 class Initialize(Action):
-    def __init__(self, checks: List[Type["Check"]]) -> None:
-        self.checks = [check_class() for check_class in checks]
+    def __init__(self, checks: List[Type["Check"]], base_version: MzVersion) -> None:
+        self.checks = [check_class(base_version) for check_class in checks]
 
     def execute(self, e: Executor) -> None:
         for check in self.checks:
@@ -72,12 +73,15 @@ class Initialize(Action):
 
 class Manipulate(Action):
     def __init__(
-        self, checks: List[Type["Check"]], phase: Optional[int] = None
+        self,
+        checks: List[Type["Check"]],
+        base_version: MzVersion,
+        phase: Optional[int] = None,
     ) -> None:
         assert phase is not None
         self.phase = phase - 1
 
-        self.checks = [check_class() for check_class in checks]
+        self.checks = [check_class(base_version) for check_class in checks]
         assert len(self.checks) >= self.phase
 
     def execute(self, e: Executor) -> None:
@@ -91,8 +95,8 @@ class Manipulate(Action):
 
 
 class Validate(Action):
-    def __init__(self, checks: List[Type["Check"]]) -> None:
-        self.checks = [check_class() for check_class in checks]
+    def __init__(self, checks: List[Type["Check"]], base_version: MzVersion) -> None:
+        self.checks = [check_class(base_version) for check_class in checks]
 
     def execute(self, e: Executor) -> None:
         for check in self.checks:

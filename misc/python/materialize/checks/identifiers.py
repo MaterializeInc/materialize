@@ -13,6 +13,7 @@ from pg8000.converters import literal  # type: ignore
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
+from materialize.checks.mz_version import MzVersion
 
 
 def dq(ident: str) -> str:
@@ -220,9 +221,14 @@ class Identifiers(Check):
               INTO KAFKA CONNECTION {dq(ident["kafka_conn"])} (TOPIC 'sink-sink-ident0')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {dq(ident["csr_conn"])}
               ENVELOPE DEBEZIUM;
-
+            """
+                + (
+                    f"""
             > CREATE SECRET {dq(ident["secret"])} as {sq(ident["secret_value"])};
             """
+                    if self.base_version >= MzVersion("v0.44.0")
+                    else ""
+                )
                 for i, ident in enumerate(self.IDENTS)
             ]
         )
@@ -286,7 +292,9 @@ pg_catalog
 
 > SELECT * FROM {dq(ident["source_view"])};
 U2 A 1000
-
+"""
+        if self.base_version >= MzVersion("v0.44.0"):
+            cmds += f"""
 > SHOW SECRETS;
 {dq_print(ident["secret"])}
 """
