@@ -190,8 +190,13 @@ where
         // means the pipeline will be able to retire bigger chunks of work.
         vec![Antichain::new()],
     );
-    let mut completed_fetches =
-        builder.new_input_connection(&feedback_stream, Pipeline, vec![Antichain::new()]);
+    let mut completed_fetches = builder.new_input_connection(
+        &feedback_stream,
+        // We must ensure all completed fetches are fed into
+        // the worker responsible for managing part leases
+        Exchange::new(|| u64::cast_from(chosen_worker)),
+        vec![Antichain::new()],
+    );
 
     // NB: It is not safe to use the shutdown button, due to the possibility
     // of the Subscribe handle's SeqNo hold releasing before `shard_source_fetch`
