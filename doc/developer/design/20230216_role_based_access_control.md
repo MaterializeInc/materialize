@@ -101,12 +101,10 @@ cannot specify these attributes in `CREATE ROLE` or `ALTER ROLE`. We use the fol
   the `SUPERUSER` attribute for that session.
     - The `SUPERUSER` attribute will be periodically updated as part of the periodic Frontegg re-validation done for
       pgwire connections.
+    - The `mz_system` role will always have the `SUPERUSER` attribute.
 
 This differs from PostgreSQL, which treats these as normal role attributes that persists between sessions and can be
 specified in `CREATE ROLE` and `ALTER ROLE`.
-
-The system role `mz_system` will have all attributes (including `LOGIN` and `SUPERUSER`). The system
-role `mz_introspection` will only have the `LOGIN` attribute.
 
 We will add the following read-only session parameter:
 `IS_SUPERUSER`: True if the current role has superuser privileges.
