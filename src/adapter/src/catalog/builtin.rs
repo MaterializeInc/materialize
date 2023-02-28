@@ -2932,10 +2932,7 @@ ON mz_catalog.mz_secrets (schema_id)",
 
 pub static MZ_SYSTEM_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*SYSTEM_USER.name,
-    attributes: RoleAttributes::new()
-        .with_create_role()
-        .with_create_db()
-        .with_create_cluster(),
+    attributes: RoleAttributes::new().with_all(),
 });
 
 pub static MZ_INTROSPECTION_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {

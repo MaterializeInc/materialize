@@ -322,6 +322,15 @@ impl RoleAttributes {
         self.create_cluster = true;
         self
     }
+
+    /// Adds all attributes.
+    pub fn with_all(mut self) -> RoleAttributes {
+        self.inherit = true;
+        self.create_role = true;
+        self.create_db = true;
+        self.create_cluster = true;
+        self
+    }
 }
 
 impl From<PlannedRoleAttributes> for RoleAttributes {

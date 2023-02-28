@@ -341,10 +341,7 @@ async fn migrate(
                     let is_mz_system_role = role_value.role.name == SYSTEM_USER.name;
                     let mut attributes = RoleAttributes::new();
                     if is_mz_system_role {
-                        attributes = attributes
-                            .with_create_role()
-                            .with_create_db()
-                            .with_create_cluster();
+                        attributes = attributes.with_all();
                     }
                     role_value.role.attributes = Some(attributes);
                 }
