@@ -123,7 +123,7 @@ where
 {
     let name = source_id.to_string();
     let (fetched, token) = shard_source(
-        scope,
+        &mut scope.clone(),
         &name,
         persist_clients,
         metadata.persist_location,
