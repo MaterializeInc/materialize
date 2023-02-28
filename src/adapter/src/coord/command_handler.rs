@@ -45,12 +45,10 @@ impl Coordinator {
         match cmd {
             Command::Startup {
                 session,
-                create_user_if_not_exists,
                 cancel_tx,
                 tx,
             } => {
-                self.handle_startup(session, create_user_if_not_exists, cancel_tx, tx)
-                    .await;
+                self.handle_startup(session, cancel_tx, tx).await;
             }
 
             Command::Execute {
@@ -186,31 +184,19 @@ impl Coordinator {
     async fn handle_startup(
         &mut self,
         session: Session,
-        create_user_if_not_exists: bool,
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
     ) {
-        // TODO(jkosh44) It's technically impossible for `create_user_if_not_exists` to be false
-        //  AND the user doesn't exist. `create_user_if_not_exists` is only false when using the
-        //  internal ports and we reject any user that is not part of a pre-defined set of roles
-        //  before ever reaching this point. So there's likely a lot of cleanup that can be done
-        //  here.
-
-        // TODO(jkosh44) Locally make sure that roles get admin.
-
         if self
             .catalog
             .for_session(&session)
             .resolve_role(&session.user().name)
             .is_err()
         {
-            if !create_user_if_not_exists {
-                let _ = tx.send(Response {
-                    result: Err(AdapterError::UnknownLoginRole(session.user().name.clone())),
-                    session,
-                });
-                return;
-            }
+            // If the user has made it to this point, that means they have been fully authenticated.
+            // This includes preventing any user, except a pre-defined set of system users, from
+            // connecting to an internal port. Therefore it's ok to always create a new role for
+            // the user.
             let plan = CreateRolePlan {
                 name: session.user().name.to_string(),
             };
