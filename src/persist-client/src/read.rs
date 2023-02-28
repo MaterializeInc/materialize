@@ -758,7 +758,9 @@ where
         seqno
     }
 
-    /// WIP: update
+    /// Returns a [`SubscriptionLeaseReturner`] tied to this [`ReadHandle`],
+    /// allowing a caller to return leases without needing to mutably borrowing
+    /// this `ReadHandle` directly.
     pub(crate) fn clone_lease_returner(&self) -> SubscriptionLeaseReturner {
         self.lease_returner.clone()
     }
