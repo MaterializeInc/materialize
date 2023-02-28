@@ -27,7 +27,7 @@ impl SystemParameterBackend {
     pub async fn new(client: Client) -> Result<Self, AdapterError> {
         let conn_client = client.new_conn()?;
         let session = conn_client.new_session(SYSTEM_USER.clone());
-        let (session_client, _) = conn_client.startup(session, true).await?;
+        let (session_client, _) = conn_client.startup(session).await?;
         Ok(Self { session_client })
     }
 

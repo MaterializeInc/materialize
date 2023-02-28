@@ -709,7 +709,7 @@ fn test_auth_expiry() {
         now: SYSTEM_TIME.clone(),
         refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
         password_prefix: "mzauth_".to_string(),
-        admin_role: Some("mzadmin".to_string()),
+        admin_role: "mzadmin".to_string(),
     });
     let frontegg_user = "user@_.com";
     let frontegg_password = &format!("mzauth_{client_id}{secret}");
@@ -855,7 +855,7 @@ fn test_auth_base() {
         now,
         refresh_before_secs: 0,
         password_prefix: "mzauth_".to_string(),
-        admin_role: Some("mzadmin".to_string()),
+        admin_role: "mzadmin".to_string(),
     });
     let frontegg_user = "user@_.com";
     let frontegg_password = &format!("mzauth_{client_id}{secret}");
@@ -1136,6 +1136,17 @@ fn test_auth_base() {
                     assert_contains!(message, "unauthorized");
                 })),
             },
+            TestCase::Ws {
+                auth: &WebSocketAuth::Basic {
+                    user: (&*SYSTEM_USER.name).into(),
+                    password: frontegg_system_password.to_string(),
+                },
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, CloseCode::Protocol);
+                    assert_eq!(message, "unauthorized");
+                })),
+            },
         ],
     );
     drop(server);
@@ -1216,16 +1227,13 @@ fn test_auth_base() {
         "TlsMode::Require",
         &server,
         &[
-            // Mz Cloud auth should fail.
+            // Non-existent role will be created.
             TestCase::Pgwire {
                 user: frontegg_user,
                 password: Some(frontegg_password),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
-                assert: Assert::DbErr(Box::new(|err| {
-                    assert_eq!(err.message(), r#"role "user@_.com" does not exist"#);
-                    assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
-                })),
+                assert: Assert::Success,
             },
             // Test that specifying an mzcloud header does nothing and uses the default
             // user.

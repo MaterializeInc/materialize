@@ -45,12 +45,10 @@ impl Coordinator {
         match cmd {
             Command::Startup {
                 session,
-                create_user_if_not_exists,
                 cancel_tx,
                 tx,
             } => {
-                self.handle_startup(session, create_user_if_not_exists, cancel_tx, tx)
-                    .await;
+                self.handle_startup(session, cancel_tx, tx).await;
             }
 
             Command::Execute {
@@ -186,7 +184,6 @@ impl Coordinator {
     async fn handle_startup(
         &mut self,
         session: Session,
-        create_user_if_not_exists: bool,
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
     ) {
@@ -198,13 +195,10 @@ impl Coordinator {
             .resolve_role(&session.user().name)
             .is_err()
         {
-            if !create_user_if_not_exists {
-                let _ = tx.send(Response {
-                    result: Err(AdapterError::UnknownLoginRole(session.user().name.clone())),
-                    session,
-                });
-                return;
-            }
+            // If the user has made it to this point, that means they have been fully authenticated.
+            // This includes preventing any user, except a pre-defined set of system users, from
+            // connecting to an internal port. Therefore it's ok to always create a new role for
+            // the user.
             let attributes = RoleAttributes::new();
             let plan = CreateRolePlan {
                 name: session.user().name.to_string(),

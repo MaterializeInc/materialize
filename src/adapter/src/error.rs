@@ -284,16 +284,6 @@ impl AdapterError {
                 ..
             } => Some(format!("Available values: {}.", valid_values.join(", "))),
             AdapterError::Eval(e) => e.hint(),
-            AdapterError::UnknownLoginRole(_) => {
-                // TODO(benesch): this will be a bad hint when people are used
-                // to creating roles in Materialize, since they might drop the
-                // default "materialize" role. Remove it in a few months
-                // (say, April 2021) when folks are more used to using roles
-                // with Materialize. (We don't want to do something more clever
-                // and include the actual roles that exist in the message,
-                // because that leaks information to unauthenticated clients.)
-                Some("Try connecting as the \"materialize\" user.".into())
-            }
             AdapterError::InvalidClusterReplicaAz { expected, az: _ } => {
                 Some(if expected.is_empty() {
                     "No availability zones configured; do not specify AVAILABILITY ZONE".into()

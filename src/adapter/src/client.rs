@@ -110,7 +110,7 @@ impl Client {
         // Connect to the coordinator.
         let conn_client = self.new_conn()?;
         let session = conn_client.new_session(INTROSPECTION_USER.clone());
-        let (mut session_client, _) = conn_client.startup(session, false).await?;
+        let (mut session_client, _) = conn_client.startup(session).await?;
 
         // Parse the SQL statement.
         let stmts = mz_sql::parse::parse(sql)?;
@@ -185,7 +185,6 @@ impl ConnClient {
     pub async fn startup(
         self,
         session: Session,
-        create_user_if_not_exists: bool,
     ) -> Result<(SessionClient, StartupResponse), AdapterError> {
         // Cancellation works by creating a watch channel (which remembers only
         // the last value sent to it) and sharing it between the coordinator and
@@ -205,7 +204,6 @@ impl ConnClient {
         let response = client
             .send(|tx, session| Command::Startup {
                 session,
-                create_user_if_not_exists,
                 cancel_tx,
                 tx,
             })

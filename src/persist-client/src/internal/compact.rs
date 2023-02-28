@@ -35,6 +35,7 @@ use crate::async_runtime::CpuHeavyRuntime;
 use crate::batch::{BatchBuilder, BatchBuilderConfig};
 use crate::cfg::MB;
 use crate::fetch::{fetch_batch_part, EncodedPart};
+use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::state::{HollowBatch, HollowBatchPart};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
@@ -85,7 +86,7 @@ impl From<&PersistConfig> for CompactConfig {
 /// This will possibly be called over RPC in the future. Physical compaction is
 /// merging adjacent batches. Logical compaction is advancing timestamps to a
 /// new since and consolidating the resulting updates.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Compactor<K, V, T, D> {
     cfg: PersistConfig,
     metrics: Arc<Metrics>,
@@ -96,6 +97,17 @@ pub struct Compactor<K, V, T, D> {
         oneshot::Sender<Result<ApplyMergeResult, anyhow::Error>>,
     )>,
     _phantom: PhantomData<fn() -> D>,
+}
+
+impl<K, V, T, D> Clone for Compactor<K, V, T, D> {
+    fn clone(&self) -> Self {
+        Compactor {
+            cfg: self.cfg.clone(),
+            metrics: Arc::clone(&self.metrics),
+            sender: self.sender.clone(),
+            _phantom: Default::default(),
+        }
+    }
 }
 
 impl<K, V, T, D> Compactor<K, V, T, D>
@@ -110,6 +122,7 @@ where
         metrics: Arc<Metrics>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         writer_id: WriterId,
+        gc: GarbageCollector<K, V, T, D>,
     ) -> Self {
         let (compact_req_sender, mut compact_req_receiver) = mpsc::channel::<(
             Instant,
@@ -164,6 +177,7 @@ where
                 let compact_span =
                     debug_span!(parent: None, "compact::apply", shard_id=%machine.shard_id());
                 compact_span.follows_from(&Span::current());
+                let gc = gc.clone();
                 mz_ore::task::spawn(|| "PersistCompactionWorker", async move {
                     let res = Self::compact_and_apply(
                         cfg,
@@ -173,6 +187,7 @@ where
                         req,
                         writer_id,
                         &mut machine,
+                        &gc,
                     )
                     .instrument(compact_span)
                     .await;
@@ -250,6 +265,7 @@ where
         req: CompactReq<T>,
         writer_id: WriterId,
         machine: &mut Machine<K, V, T, D>,
+        gc: &GarbageCollector<K, V, T, D>,
     ) -> Result<ApplyMergeResult, anyhow::Error> {
         metrics.compaction.started.inc();
         let start = Instant::now();
@@ -313,7 +329,8 @@ where
         match res {
             Ok(Ok(res)) => {
                 let res = FueledMergeRes { output: res.output };
-                let apply_merge_result = machine.merge_res(&res).await;
+                let (apply_merge_result, maintenance) = machine.merge_res(&res).await;
+                maintenance.start_performing(machine, gc);
                 match &apply_merge_result {
                     ApplyMergeResult::AppliedExact => {
                         metrics.compaction.applied.inc();

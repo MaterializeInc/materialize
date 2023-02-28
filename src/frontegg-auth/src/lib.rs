@@ -101,7 +101,7 @@ pub struct FronteggConfig {
     /// Prefix that is expected to be present on all passwords.
     pub password_prefix: String,
     /// Name of admin role.
-    pub admin_role: Option<String>,
+    pub admin_role: String,
 }
 
 #[derive(Clone, Derivative)]
@@ -115,7 +115,7 @@ pub struct FronteggAuthentication {
     validation: Validation,
     refresh_before_secs: i64,
     password_prefix: String,
-    admin_role: Option<String>,
+    admin_role: String,
 
     // Reqwest HTTP client pool.
     client: Client,
@@ -334,8 +334,8 @@ impl FronteggAuthentication {
         self.tenant_id
     }
 
-    pub fn admin_role(&self) -> Option<&str> {
-        self.admin_role.as_deref()
+    pub fn admin_role(&self) -> &str {
+        &self.admin_role
     }
 }
 
@@ -382,12 +382,8 @@ impl Claims {
     }
 
     /// Returns true if the claims belong to a frontegg admin.
-    pub fn admin(&self, admin_name: Option<&str>) -> bool {
-        if let Some(admin_name) = admin_name {
-            self.roles.iter().any(|role| role == admin_name)
-        } else {
-            false
-        }
+    pub fn admin(&self, admin_name: &str) -> bool {
+        self.roles.iter().any(|role| role == admin_name)
     }
 }
 
