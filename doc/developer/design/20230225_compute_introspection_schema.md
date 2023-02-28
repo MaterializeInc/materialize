@@ -14,7 +14,7 @@ per-replica or global).
 ## Goals
 
 * Compute introspection relations should be useful and easy to understand
-for internal debuggingl.
+for internal debugging.
 
 * They should be useful and easy to use for building external
   introspection UI.
