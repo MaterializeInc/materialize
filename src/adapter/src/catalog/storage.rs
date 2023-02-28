@@ -49,7 +49,6 @@ const PG_CATALOG_SCHEMA_ID: u64 = 2;
 const PUBLIC_SCHEMA_ID: u64 = 3;
 const MZ_INTERNAL_SCHEMA_ID: u64 = 4;
 const INFORMATION_SCHEMA_ID: u64 = 5;
-const MATERIALIZE_ROLE_ID: u64 = 1;
 const DEFAULT_USER_CLUSTER_ID: ClusterId = ClusterId::User(1);
 const DEFAULT_REPLICA_ID: u64 = 1;
 
@@ -116,9 +115,7 @@ async fn migrate(
                 IdAllocKey {
                     name: USER_ROLE_ID_ALLOC_KEY.into(),
                 },
-                IdAllocValue {
-                    next_id: MATERIALIZE_ROLE_ID + 1,
-                },
+                IdAllocValue { next_id: 1 },
             )?;
             txn.id_allocator.insert(
                 IdAllocKey {
@@ -250,32 +247,6 @@ async fn migrate(
                     name: "information_schema".into(),
                 },
             )?;
-            txn.roles.insert(
-                RoleKey {
-                    id: RoleId::User(MATERIALIZE_ROLE_ID),
-                },
-                RoleValue {
-                    name: "materialize".into(),
-                },
-            )?;
-            let id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
-            txn.audit_log_updates.push((
-                AuditLogKey {
-                    event: VersionedEvent::new(
-                        id,
-                        EventType::Create,
-                        ObjectType::Role,
-                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
-                            id: MATERIALIZE_ROLE_ID.to_string(),
-                            name: "materialize".into(),
-                        }),
-                        None,
-                        now,
-                    ),
-                },
-                (),
-                1,
-            ));
             let default_cluster = ClusterValue {
                 name: "default".into(),
                 linked_object_id: None,

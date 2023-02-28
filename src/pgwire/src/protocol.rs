@@ -255,8 +255,7 @@ where
     conn.flush().await?;
 
     // Register session with adapter.
-    let (adapter_client, startup) = match adapter_client.startup(session, frontegg.is_some()).await
-    {
+    let (adapter_client, startup) = match adapter_client.startup(session).await {
         Ok(startup) => startup,
         Err(e) => {
             return conn

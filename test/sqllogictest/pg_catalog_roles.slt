@@ -17,4 +17,4 @@ SELECT oid, rolname FROM pg_roles ORDER BY oid
 ----
 20007  mz_system
 20008  mz_introspection
-20009  materialize
+20383  materialize
