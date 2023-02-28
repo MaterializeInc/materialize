@@ -2715,19 +2715,19 @@ pub const PG_AUTHID: BuiltinView = BuiltinView {
 AS SELECT
     r.oid AS oid,
     r.name AS rolname,
-    -- This column is not accurate. We determine superuser status each time a role logs in, so
-    -- there's no way to accurately depict this in the catalog. We do the following as a best
-    -- effort because we know that mz_system will always be a superuser.
+    -- We determine superuser status each time a role logs in, so there's no way to accurately
+    -- depict this in the catalog. Except for mz_system, which is always a superuser. For all other
+    -- roles we hardcode NULL.
     CASE
         WHEN r.name = 'mz_system' THEN true
-        ELSE false
+        ELSE NULL
     END AS rolsuper,
     inherit AS rolinherit,
     create_role AS rolcreaterole,
     create_db AS rolcreatedb,
-    -- This column is not accurate. We determine login status each time a role logs in, so
-    -- there's no way to accurately depict this in the catalog. Instead we just hardcode false.
-    false AS rolcanlogin,
+    -- We determine login status each time a role logs in, so there's no way to accurately depict
+    -- this in the catalog. Instead we just hardcode NULL.
+    NULL AS rolcanlogin,
     -- MZ doesn't support replication in the same way Postgres does
     false AS rolreplication,
     -- MZ doesn't how row level security
