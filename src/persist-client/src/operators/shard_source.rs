@@ -19,6 +19,7 @@ use std::time::Instant;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
+use futures::StreamExt;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::{Scope, ScopeParent, Stream};
@@ -26,18 +27,16 @@ use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::sync::mpsc;
-use tokio_stream::StreamExt;
-use tracing::{info, trace};
+use tracing::trace;
 
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::vec::VecExt;
-use mz_persist::location::ExternalError;
 use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 
 use crate::cache::PersistClientCache;
-use crate::fetch::{FetchedPart, LeasedBatchPart, SerdeLeasedBatchPart};
+use crate::fetch::{FetchedPart, SerdeLeasedBatchPart};
 use crate::read::ListenEvent;
 use crate::{PersistLocation, ShardId};
 
@@ -83,7 +82,6 @@ where
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder + Default,
 {
-    // WIP: update
     // WARNING! If emulating any of this code, you should read the doc string on
     // [`LeasedBatchPart`] and [`Subscribe`] or will likely run into intentional
     // panics.
@@ -98,9 +96,6 @@ where
     //    from S3, and outputs them to a timely stream. Additionally, the
     //    operator returns the `LeasedBatchPart` to the original worker, so it
     //    can release the SeqNo lease.
-    // 4. Consumed part collector: A timely operator running only on the
-    //    original worker that collects workers' `LeasedBatchPart`s. Internally,
-    //    this drops the part's SeqNo lease, allowing GC to occur.
 
     let chosen_worker = usize::cast_from(name.hashed()) % scope.peers();
 
@@ -140,11 +135,6 @@ pub struct FlowControl<G: Scope> {
     pub progress_stream: Stream<G, Infallible>,
     /// Maximum number of in-flight bytes.
     pub max_inflight_bytes: usize,
-}
-
-enum SourceInput<T: Timestamp + Codec64> {
-    Listen(Result<ListenEvent<T, LeasedBatchPart<T>>, ExternalError>),
-    Feedback(Antichain<T>),
 }
 
 pub(crate) fn shard_source_descs<K, V, D, G>(
@@ -200,12 +190,17 @@ where
         // means the pipeline will be able to retire bigger chunks of work.
         vec![Antichain::new()],
     );
-
     let mut completed_fetches =
         builder.new_input_connection(&feedback_stream, Pipeline, vec![Antichain::new()]);
 
+    // NB: It is not safe to use the shutdown button, due to the possibility
+    // of the Subscribe handle's SeqNo hold releasing before `shard_source_fetch`
+    // has completed fetches to each outstanding part. Instead, we create a
+    // channel that we pass along as a token. Dropping the Sender informs this
+    // operator that the dataflow is being shutdown, and allows for a graceful
+    // termination where we wait for `shard_source_fetch` to complete all of
+    // its fetches before expiring our Subscribe handle and its SeqNo hold.
     let (token_tx, mut token_rx) = mpsc::channel::<()>(1);
-
     let _shutdown_button = builder.build(move |caps| async move {
         let mut cap_set = CapabilitySet::from_elem(caps.into_element());
 
@@ -214,19 +209,6 @@ where
         let mut inflight_parts: Vec<(Antichain<G::Timestamp>, usize)> = Vec::new();
 
         let max_inflight_bytes = flow_control_bytes.unwrap_or(usize::MAX);
-        // let completed_fetches = async_stream::stream! {
-        //     while let Some(x) = completed_fetches.next().await {
-        //         match x {
-        //             Event::Data(_, _) => {}
-        //             Event::Progress(t) => yield t,
-        //         }
-        //     }
-        // };
-        // let completed_fetches = Box::pin(completed_fetches);
-        //
-        // let pinned_stream = pinned_stream.map(|x| SourceInput::Listen(x));
-        // let completed_fetches = completed_fetches.map(|x| SourceInput::Feedback(x));
-        // let mut inputs = pinned_stream.merge(completed_fetches);
 
         // Only one worker is responsible for distributing parts
         if worker_index != chosen_worker {
@@ -253,7 +235,6 @@ where
         let as_of = as_of.unwrap_or_else(|| read.since().clone());
 
         let subscription = read.subscribe(as_of.clone()).await;
-
         let mut subscription = subscription.unwrap_or_else(|e| {
             panic!(
                 "{}: {} cannot serve requested as_of {:?}: {:?}",
@@ -261,121 +242,136 @@ where
             )
         });
 
-        let mut done = false;
+        let mut emitted_to_until = false;
         let mut parts_buffer = vec![];
         let mut batch_parts = vec![];
 
-        // Eagerly yield the initial as_of. This makes sure that the output
-        // frontier of the `persist_source` closely tracks the `upper` frontier
-        // of the persist shard. It might be that the snapshot for `as_of` is
-        // not initially available yet, but this makes sure we already downgrade
-        // to it.
-        //
-        // Downstream consumers might rely on close frontier tracking for making
-        // progress. For example, the `persist_sink` needs to know the
-        // up-to-date upper of the output shard to make progress because it
-        // will only write out new data once it knows that earlier writes went
-        // through, including the initial downgrade of the shard upper to the
-        // `as_of`.
-        // cap_set.downgrade(as_of.iter());
+        let mut lease_returner = subscription.clone_lease_returner();
+        let subscription_stream = async_stream::stream! {
+            // Eagerly yield the initial as_of. This makes sure that the output
+            // frontier of the `persist_source` closely tracks the `upper` frontier
+            // of the persist shard. It might be that the snapshot for `as_of` is
+            // not initially available yet, but this makes sure we already downgrade
+            // to it.
+            //
+            // Downstream consumers might rely on close frontier tracking for making
+            // progress. For example, the `persist_sink` needs to know the
+            // up-to-date upper of the output shard to make progress because it
+            // will only write out new data once it knows that earlier writes went
+            // through, including the initial downgrade of the shard upper to the
+            // `as_of`.
+            yield ListenEvent::Progress(as_of.clone());
 
-        'outer:
-        while !done {
+            loop {
+                for event in subscription.next().await {
+                    yield event;
+                }
+            }
+        };
+        tokio::pin!(subscription_stream);
+
+        'emitting_parts:
+        while !emitted_to_until {
             // While we have budget left for fetching more parts, read from the
             // subscription and pass them on.
             while inflight_bytes < max_inflight_bytes {
                 tokio::select! {
+                    // If the token has been dropped, we begin a graceful shutdown 
+                    // by downgrading to the empty frontier and proceeding to the
+                    // next state, where we await our feedback edge's progression.
+                    //
+                    // NB: Reading from a channel is cancel safe.
                     None = token_rx.recv() => {
-                        info!("oneshot token has been dropped");
                         cap_set.downgrade(&[]);
-                        done = true;
-                        break 'outer;
+                        break 'emitting_parts;
                     }
+                    // Return the leases of any parts that the following stage,
+                    // `shard_source_fetch` has finished reading. This allows us
+                    // to advance our SeqNo hold as we continue to emit batches.
+                    //
+                    // NB: AsyncInputHandle::next is cancel safe
                     Some(completed_fetch) = completed_fetches.next() => {
                         match completed_fetch {
                             Event::Data(_cap, parts) => {
                                 parts.swap(&mut parts_buffer);
                                 for part in parts_buffer.drain(..) {
-                                    info!("returning part: {:?}", part);
-                                    subscription.return_leased_part(subscription.leased_part_from_exchangeable(part));
+                                    lease_returner.return_leased_part(lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part));
                                 }
                             }
                             Event::Progress(_) => {}
                         }
                     }
-                    // WIP: cancel safety???
-                    events = subscription.next() => {
-                        for event in events {
-                            match event {
-                                ListenEvent::Updates(mut parts) => {
-                                    batch_parts.append(&mut parts);
+                    // Read and emit the next batch from our Subscribe.
+                    //
+                    // NB: async_stream::next is cancel safe
+                    Some(event) = subscription_stream.next() => {
+                        match event {
+                            ListenEvent::Updates(mut parts) => {
+                                batch_parts.append(&mut parts);
+                            }
+                            ListenEvent::Progress(progress) => {
+                                // If `until.less_equal(progress)`, it means that all subsequent batches will
+                                // contain only times greater or equal to `until`, which means they can be
+                                // dropped in their entirety. The current batch must be emitted, but we can
+                                // stop afterwards.
+                                if PartialOrder::less_equal(&until, &progress) {
+                                    emitted_to_until = true;
                                 }
-                                ListenEvent::Progress(progress) => {
-                                    // If `until.less_equal(progress)`, it means that all subsequent batches will
-                                    // contain only times greater or equal to `until`, which means they can be
-                                    // dropped in their entirety. The current batch must be emitted, but we can
-                                    // stop afterwards.
-                                    if PartialOrder::less_equal(&until, &progress) {
-                                        done = true;
+
+                                let session_cap = cap_set.delayed(&current_ts);
+                                let mut descs_output = descs_output.activate();
+                                let mut descs_session = descs_output.session(&session_cap);
+
+                                // NB: in order to play nice with downstream operators whose invariants
+                                // depend on seeing the full contents of an individual batch, we must
+                                // atomically emit all parts here (e.g. no awaits).
+                                let bytes_emitted = {
+                                    let mut bytes_emitted = 0;
+                                    for part_desc in std::mem::take(&mut batch_parts) {
+                                        bytes_emitted += part_desc.encoded_size_bytes();
+                                        // Give the part to a random worker. This isn't
+                                        // round robin in an attempt to avoid skew issues:
+                                        // if your parts alternate size large, small, then
+                                        // you'll end up only using half of your workers.
+                                        //
+                                        // There's certainly some other things we could be
+                                        // doing instead here, but this has seemed to work
+                                        // okay so far. Continue to revisit as necessary.
+                                        let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
+                                        descs_session.give((worker_idx, part_desc.into_exchangeable_part()));
                                     }
+                                    bytes_emitted
+                                };
 
-                                    let session_cap = cap_set.delayed(&current_ts);
-                                    let mut descs_output = descs_output.activate();
-                                    let mut descs_session = descs_output.session(&session_cap);
+                                // Only track in-flight parts if flow control is enabled. Otherwise we
+                                // would leak memory, as tracked parts would never be drained.
+                                if flow_control_bytes.is_some() && bytes_emitted > 0 {
+                                    inflight_parts.push((progress.clone(), bytes_emitted));
+                                    inflight_bytes += bytes_emitted;
+                                    trace!(
+                                        "shard {} putting {} bytes inflight. total: {}. batch frontier {:?}",
+                                        shard_id,
+                                        bytes_emitted,
+                                        inflight_bytes,
+                                        progress,
+                                    );
+                                }
 
-                                    // NB: in order to play nice with downstream operators whose invariants
-                                    // depend on seeing the full contents of an individual batch, we must
-                                    // atomically emit all parts here (e.g. no awaits).
-                                    let bytes_emitted = {
-                                        let mut bytes_emitted = 0;
-                                        for part_desc in std::mem::take(&mut batch_parts) {
-                                            bytes_emitted += part_desc.encoded_size_bytes();
-                                            // Give the part to a random worker. This isn't
-                                            // round robin in an attempt to avoid skew issues:
-                                            // if your parts alternate size large, small, then
-                                            // you'll end up only using half of your workers.
-                                            //
-                                            // There's certainly some other things we could be
-                                            // doing instead here, but this has seemed to work
-                                            // okay so far. Continue to revisit as necessary.
-                                            let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
-                                            descs_session.give((worker_idx, part_desc.into_exchangeable_part()));
-                                        }
-                                        bytes_emitted
-                                    };
-
-                                    // Only track in-flight parts if flow control is enabled. Otherwise we
-                                    // would leak memory, as tracked parts would never be drained.
-                                    if flow_control_bytes.is_some() && bytes_emitted > 0 {
-                                        inflight_parts.push((progress.clone(), bytes_emitted));
-                                        inflight_bytes += bytes_emitted;
-                                        trace!(
-                                            "shard {} putting {} bytes inflight. total: {}. batch frontier {:?}",
-                                            shard_id,
-                                            bytes_emitted,
-                                            inflight_bytes,
-                                            progress,
-                                        );
+                                cap_set.downgrade(progress.iter());
+                                match progress.into_option() {
+                                    Some(ts) => {
+                                        current_ts = ts;
                                     }
-
-                                    cap_set.downgrade(progress.iter());
-                                    match progress.into_option() {
-                                        Some(ts) => {
-                                            current_ts = ts;
-                                        }
-                                        None => {
-                                            cap_set.downgrade(&[]);
-                                            done = true;
-                                            break 'outer;
-                                        }
+                                    None => {
+                                        cap_set.downgrade(&[]);
+                                        break 'emitting_parts;
                                     }
                                 }
                             }
                         }
                     }
                     else => {
-                        done = true;
-                        break 'outer;
+                        break 'emitting_parts;
                     }
                 }
             }
@@ -416,21 +412,23 @@ where
             }
         }
 
-        // wait for all outstanding parts to be fetched before spinning down. this ensures our
-        // subscribe handle
+        // We have finished outputting all leased parts the dataflow will need, 
+        // but `shard_source_fetches` may still be fetching those parts. We must 
+        // keep our Subscribe (and its SeqNo hold) alive until all of them have
+        // been fetched to avoid racing with GC and panicking on a missing blob.
+        // We can drop our handle when the feedback edge from `shard_source_fetches` 
+        // advances to the empty frontier, indicating that all parts have been read.
         while let Some(completed_fetch) = completed_fetches.next().await {
             match completed_fetch {
                 Event::Data(_cap, parts) => {
                     parts.swap(&mut parts_buffer);
                     for part in parts_buffer.drain(..) {
-                        info!("returning part: {:?}", part);
-                        subscription.return_leased_part(subscription.leased_part_from_exchangeable(part));
+                        lease_returner.return_leased_part(lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part));
                     }
                 }
                 Event::Progress(frontier) => {
                     if frontier.is_empty() {
-                        info!("Completed fetches reached empty antichain");
-                        break;
+                        return;
                     }
                 }
             }

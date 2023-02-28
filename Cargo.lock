@@ -116,7 +116,7 @@ checksum = "7a4c5b03335bc1cb0fd9f5297f8fd3bbfd6fb04f3cb0bc7d6c91b7128cb8336a"
 dependencies = [
  "ahash",
  "arrow-format",
- "base64 0.13.1",
+ "base64",
  "bytemuck",
  "chrono",
  "dyn-clone",
@@ -703,6 +703,7 @@ dependencies = [
 [[package]]
 name = "axum"
 <<<<<<< HEAD
+<<<<<<< HEAD
 version = "0.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2fb79c228270dcf2426e74864cabc94babb5dbab01a4314e702d2f16540e1591"
@@ -710,10 +711,14 @@ checksum = "2fb79c228270dcf2426e74864cabc94babb5dbab01a4314e702d2f16540e1591"
 version = "0.6.9"
 source = "git+https://github.com/tokio-rs/axum.git#6067223fcc40e33f64408e1e151d004e357bfb67"
 >>>>>>> 7e936bc0f6 (WIP: feedback edge to return parts; not yet cancel safe)
+=======
+version = "0.6.1"
+source = "git+https://github.com/tokio-rs/axum.git#978ae6335862b264b4368e01a52177d98c42b2d9"
+>>>>>>> 2cf07c62f1 (tidy)
 dependencies = [
  "async-trait",
  "axum-core",
- "base64 0.21.0",
+ "base64",
  "bitflags",
  "bytes",
  "futures-util",
@@ -737,13 +742,14 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tower",
- "tower-http 0.4.0",
+ "tower-http",
  "tower-layer",
  "tower-service",
 ]
 
 [[package]]
 name = "axum-core"
+<<<<<<< HEAD
 <<<<<<< HEAD
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -752,6 +758,10 @@ checksum = "b2f958c80c248b34b9a877a643811be8dbca03ca5ba827f2b63baf3a81e5fc4e"
 version = "0.3.2"
 source = "git+https://github.com/tokio-rs/axum.git#6067223fcc40e33f64408e1e151d004e357bfb67"
 >>>>>>> 7e936bc0f6 (WIP: feedback edge to return parts; not yet cancel safe)
+=======
+version = "0.3.0"
+source = "git+https://github.com/tokio-rs/axum.git#978ae6335862b264b4368e01a52177d98c42b2d9"
+>>>>>>> 2cf07c62f1 (tidy)
 dependencies = [
  "async-trait",
  "bytes",
@@ -801,12 +811,6 @@ name = "base64"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e1b586273c5702936fe7b7d6896644d8be71e6314cfe09d3167c95f712589e8"
-
-[[package]]
-name = "base64"
-version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4a4ddaa51a5bc52a6948f74c06d20aaaddb71924eab79b8c97a8c556e942d6a"
 
 [[package]]
 name = "base64-simd"
@@ -2416,7 +2420,7 @@ version = "7.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6490be71f07a5f62b564bc58e36953f675833df11c7e4a0647bee7a07ca1ec5e"
 dependencies = [
- "base64 0.13.1",
+ "base64",
  "byteorder",
  "flate2",
  "nom",
@@ -2429,7 +2433,7 @@ version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3e372db8e5c0d213e0cd0b9be18be2aca3d44cf2fe30a9d46a65581cd454584"
 dependencies = [
- "base64 0.13.1",
+ "base64",
  "bitflags",
  "bytes",
  "headers-core",
@@ -2497,9 +2501,9 @@ dependencies = [
 
 [[package]]
 name = "http"
-version = "0.2.9"
+version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd6effc99afb63425aff9b05836f029929e345a6148a14b7ecd5ab67af944482"
+checksum = "75f43d41e26995c17e71ee126451dd3941010b0514a81a9d11f3b341debc2399"
 dependencies = [
  "bytes",
  "fnv",
@@ -2544,6 +2548,7 @@ checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
 [[package]]
 name = "hyper"
 <<<<<<< HEAD
+<<<<<<< HEAD
 version = "0.14.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cc5e554ff619822309ffd57d8734d77cd5ce6238bc956f037ea06c58238c9899"
@@ -2552,6 +2557,11 @@ version = "0.14.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e011372fa0b68db8350aa7a248930ecc7839bf46d8485577d69f117a75f164c"
 >>>>>>> 7e936bc0f6 (WIP: feedback edge to return parts; not yet cancel safe)
+=======
+version = "0.14.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "034711faac9d2166cb1baf1a2fb0b60b1f277f8492fd72176c17f3515e1abd3c"
+>>>>>>> 2cf07c62f1 (tidy)
 dependencies = [
  "bytes",
  "futures-channel",
@@ -2723,6 +2733,7 @@ dependencies = [
 [[package]]
 name = "itoa"
 <<<<<<< HEAD
+<<<<<<< HEAD
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "453ad9f582a441959e5f0d088b02ce04cfe8d51a8eaf077f12ac6d3e94164ca6"
@@ -2731,6 +2742,11 @@ version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fad582f4b9e86b6caa621cabeb0963332d92eea04729ab12892c2533951e6440"
 >>>>>>> 7e936bc0f6 (WIP: feedback edge to return parts; not yet cancel safe)
+=======
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aab8fc367588b89dcee83ab0fd66b72b50b72fa1904d7095045ace2b0c81c35"
+>>>>>>> 2cf07c62f1 (tidy)
 
 [[package]]
 name = "jobserver"
@@ -2779,7 +2795,7 @@ version = "8.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09f4f04699947111ec1733e71778d763555737579e44b85844cae8e1940a1828"
 dependencies = [
- "base64 0.13.1",
+ "base64",
  "pem",
  "ring",
  "serde",
@@ -2806,7 +2822,7 @@ version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d9455388f4977de4d0934efa9f7d36296295537d774574113a20f6082de03da"
 dependencies = [
- "base64 0.13.1",
+ "base64",
  "bytes",
  "chrono",
  "http",
@@ -2836,7 +2852,7 @@ version = "0.77.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e80db3ca107e89da5f7eae37ea5274e06cefdcf9689d0ebd5ec3575a6f983e4e"
 dependencies = [
- "base64 0.13.1",
+ "base64",
  "bytes",
  "chrono",
  "dirs-next",
@@ -2863,7 +2879,7 @@ dependencies = [
  "tokio-tungstenite",
  "tokio-util",
  "tower",
- "tower-http 0.3.5",
+ "tower-http",
  "tracing",
 ]
 
@@ -3317,7 +3333,7 @@ version = "0.29.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9006c95034ccf7b903d955f210469119f6c3477fc9c9e7a7845ce38a3e665c2a"
 dependencies = [
- "base64 0.13.1",
+ "base64",
  "bigdecimal",
  "bindgen",
  "bitflags",
@@ -3789,7 +3805,7 @@ dependencies = [
  "assert_cmd",
  "async-trait",
  "axum",
- "base64 0.13.1",
+ "base64",
  "bytes",
  "bytesize",
  "cc",
@@ -3868,7 +3884,7 @@ dependencies = [
  "tokio-openssl",
  "tokio-postgres",
  "tokio-stream",
- "tower-http 0.3.5",
+ "tower-http",
  "tracing",
  "tracing-core",
  "tracing-opentelemetry",
@@ -3951,7 +3967,7 @@ name = "mz-frontegg-auth"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "base64 0.13.1",
+ "base64",
  "derivative",
  "jsonwebtoken",
  "mz-ore",
@@ -3981,7 +3997,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tower",
- "tower-http 0.3.5",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
  "workspace-hack",
@@ -4281,7 +4297,7 @@ dependencies = [
  "aws-credential-types",
  "aws-sdk-s3",
  "aws-types",
- "base64 0.13.1",
+ "base64",
  "bytes",
  "deadpool-postgres",
  "differential-dataflow",
@@ -4353,7 +4369,6 @@ dependencies = [
  "tempfile",
  "timely",
  "tokio",
- "tokio-stream",
  "tracing",
  "uuid",
  "workspace-hack",
@@ -4775,7 +4790,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-postgres",
- "tower-http 0.3.5",
+ "tower-http",
  "tracing",
  "uuid",
  "walkdir",
@@ -5613,7 +5628,7 @@ version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9a3b09a20e374558580a4914d3b7d89bd61b954a5a5e1dcbea98753addb1947"
 dependencies = [
- "base64 0.13.1",
+ "base64",
 ]
 
 [[package]]
@@ -5796,7 +5811,7 @@ name = "postgres-protocol"
 version = "0.6.4"
 source = "git+https://github.com/MaterializeInc/rust-postgres#9c9086235344fe794361a9985d97a64b42e61929"
 dependencies = [
- "base64 0.13.1",
+ "base64",
  "byteorder",
  "bytes",
  "fallible-iterator",
@@ -6082,7 +6097,7 @@ version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d378290cd658b119ce87621931ef448017ef1a0044d7b681159d779e7e07b8f6"
 dependencies = [
- "base64 0.13.1",
+ "base64",
  "prost",
  "prost-types",
  "serde",
@@ -6319,7 +6334,7 @@ version = "0.11.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68cc60575865c7831548863cc02356512e3f1dc2f3f82cb837d7fc4cc8f3c97c"
 dependencies = [
- "base64 0.13.1",
+ "base64",
  "bytes",
  "encoding_rs",
  "futures-core",
@@ -6794,7 +6809,7 @@ version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25bf4a5a814902cd1014dbccfa4d4560fb8432c779471e96e035602519f82eef"
 dependencies = [
- "base64 0.13.1",
+ "base64",
  "chrono",
  "hex",
  "indexmap",
@@ -7434,9 +7449,9 @@ checksum = "cda74da7e1a664f795bb1f8a87ec406fb89a02522cf6e50620d016add6dbbf5c"
 
 [[package]]
 name = "tokio"
-version = "1.25.0"
+version = "1.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8e00990ebabbe4c14c08aca901caed183ecd5c09562a12c824bb53d3c3fd3af"
+checksum = "597a12a59981d9e3c38d216785b0c37399f6e415e8d0712047620f189371b0bb"
 dependencies = [
  "autocfg",
  "bytes",
@@ -7532,9 +7547,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-stream"
-version = "0.1.12"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fb52b74f05dbf495a8fba459fdc331812b96aa086d9eb78101fa0d4569c3313"
+checksum = "d660770404473ccd7bc9f8b28494a811bc18542b915c0855c51e8f419d5223ce"
 dependencies = [
  "futures-core",
  "pin-project-lite",
@@ -7588,7 +7603,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "axum",
- "base64 0.13.1",
+ "base64",
  "bytes",
  "futures-core",
  "futures-util",
@@ -7650,7 +7665,7 @@ version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f873044bf02dd1e8239e9c1293ea39dad76dc594ec16185d0a1bf31d8dc8d858"
 dependencies = [
- "base64 0.13.1",
+ "base64",
  "bitflags",
  "bytes",
  "futures-core",
@@ -7663,25 +7678,6 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
-]
-
-[[package]]
-name = "tower-http"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d1d42a9b3f3ec46ba828e8d376aec14592ea199f70a06a548587ecd1c4ab658"
-dependencies = [
- "bitflags",
- "bytes",
- "futures-core",
- "futures-util",
- "http",
- "http-body",
- "http-range-header",
- "pin-project-lite",
- "tower",
- "tower-layer",
- "tower-service",
 ]
 
 [[package]]
@@ -7828,7 +7824,7 @@ version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "30ee6ab729cd4cf0fd55218530c4522ed30b7b6081752839b68fcec8d0960788"
 dependencies = [
- "base64 0.13.1",
+ "base64",
  "byteorder",
  "bytes",
  "http",
@@ -7940,7 +7936,7 @@ version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b97acb4c28a254fd7a4aeec976c46a7fa404eac4d7c134b30c75144846d7cb8f"
 dependencies = [
- "base64 0.13.1",
+ "base64",
  "chunked_transfer",
  "log",
  "native-tls",
@@ -8256,7 +8252,7 @@ dependencies = [
  "aws-sigv4",
  "aws-smithy-http",
  "axum",
- "base64 0.13.1",
+ "base64",
  "bstr",
  "byteorder",
  "bytes",
@@ -8342,7 +8338,7 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tower",
- "tower-http 0.3.5",
+ "tower-http",
  "tracing",
  "tracing-core",
  "tracing-subscriber",

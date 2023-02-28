@@ -171,12 +171,20 @@ where
 
     /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
     pub fn leased_part_from_exchangeable(&self, x: SerdeLeasedBatchPart) -> LeasedBatchPart<T> {
-        LeasedBatchPart::from(x, Arc::clone(&self.listen.handle.metrics))
+        self.listen
+            .handle
+            .lease_returner
+            .leased_part_from_exchangeable(x)
     }
 
     /// Returns the given [`LeasedBatchPart`], releasing its lease.
     pub fn return_leased_part(&mut self, leased_part: LeasedBatchPart<T>) {
         self.listen.handle.process_returned_leased_part(leased_part)
+    }
+
+    /// Returns a [`SubscriptionLeaseReturner`] tied to this [`Subscribe`].
+    pub(crate) fn clone_lease_returner(&self) -> SubscriptionLeaseReturner {
+        self.listen.handle.clone_lease_returner()
     }
 }
 
@@ -430,6 +438,45 @@ where
     }
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct SubscriptionLeaseReturner {
+    leased_seqnos: Arc<Mutex<BTreeMap<SeqNo, usize>>>,
+    reader_id: LeasedReaderId,
+    metrics: Arc<Metrics>,
+}
+
+impl SubscriptionLeaseReturner {
+    /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
+    pub(crate) fn leased_part_from_exchangeable<T: Timestamp + Codec64>(
+        &self,
+        x: SerdeLeasedBatchPart,
+    ) -> LeasedBatchPart<T> {
+        LeasedBatchPart::from(x, Arc::clone(&self.metrics))
+    }
+
+    pub(crate) fn return_leased_part<T: Timestamp + Codec64>(
+        &mut self,
+        mut leased_part: LeasedBatchPart<T>,
+    ) {
+        if let Some(lease) = leased_part.return_lease(&self.reader_id) {
+            // Tracks that a `SeqNo` lease has been returned and can be dropped. Once
+            // a `SeqNo` has no more outstanding leases, it can be removed, and
+            // `Self::downgrade_since` no longer needs to prevent it from being
+            // garbage collected.
+            let mut leased_seqnos = self.leased_seqnos.lock().expect("lock poisoned");
+            let remaining_leases = leased_seqnos
+                .get_mut(&lease)
+                .expect("leased SeqNo returned, but lease not issued from this ReadHandle");
+
+            *remaining_leases -= 1;
+
+            if remaining_leases == &0 {
+                leased_seqnos.remove(&lease);
+            }
+        }
+    }
+}
+
 /// A "capability" granting the ability to read the state of some shard at times
 /// greater or equal to `self.since()`.
 ///
@@ -475,33 +522,6 @@ where
     pub(crate) heartbeat_task: Option<JoinHandle<()>>,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct SubscriptionLeaseReturner(Arc<Mutex<BTreeMap<SeqNo, usize>>>, LeasedReaderId);
-
-impl SubscriptionLeaseReturner {
-    pub(crate) fn return_leased_part<T: Timestamp + Codec64>(
-        &mut self,
-        mut leased_part: LeasedBatchPart<T>,
-    ) {
-        if let Some(lease) = leased_part.return_lease(&self.1) {
-            // Tracks that a `SeqNo` lease has been returned and can be dropped. Once
-            // a `SeqNo` has no more outstanding leases, it can be removed, and
-            // `Self::downgrade_since` no longer needs to prevent it from being
-            // garbage collected.
-            let mut leased_seqnos = self.0.lock().expect("lock poisoned");
-            let remaining_leases = leased_seqnos
-                .get_mut(&lease)
-                .expect("leased SeqNo returned, but lease not issued from this ReadHandle");
-
-            *remaining_leases -= 1;
-
-            if remaining_leases == &0 {
-                leased_seqnos.remove(&lease);
-            }
-        }
-    }
-}
-
 impl<K, V, T, D> ReadHandle<K, V, T, D>
 where
     K: Debug + Codec,
@@ -520,6 +540,11 @@ where
         last_heartbeat: EpochMillis,
     ) -> Self {
         let leased_seqnos = Arc::new(Mutex::new(BTreeMap::new()));
+        let lease_returner = SubscriptionLeaseReturner {
+            leased_seqnos: Arc::clone(&leased_seqnos),
+            reader_id: reader_id.clone(),
+            metrics: Arc::clone(&metrics),
+        };
         ReadHandle {
             cfg,
             metrics,
@@ -531,10 +556,7 @@ where
             last_heartbeat,
             explicitly_expired: false,
             leased_seqnos,
-            lease_returner: SubscriptionLeaseReturner(
-                Arc::clone(&leased_seqnos),
-                reader_id.clone(),
-            ),
+            lease_returner,
             heartbeat_task: Some(machine.start_reader_heartbeat_task(reader_id).await),
         }
     }
