@@ -337,6 +337,20 @@ async fn migrate(
         |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
             txn.roles
                 .delete(|_role_key, role_value| &role_value.name == "materialize");
+            if let Some((event, _, _)) = txn.audit_log_updates.iter().find(|(key, _, _)| match &key
+                .event
+            {
+                VersionedEvent::V1(event) => match &event.details {
+                    EventDetails::IdNameV1(id_name) => {
+                        event.event_type == EventType::Create
+                            && event.object_type == ObjectType::Role
+                            && id_name.name == "materialize"
+                    }
+                    _ => false,
+                },
+            }) {
+                txn.audit_log_updates.push((event.clone(), (), -1));
+            }
             Ok(())
         },
         // Add new migrations above.
