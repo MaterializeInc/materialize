@@ -11,10 +11,12 @@
 
 use std::collections::BTreeSet;
 
+use anyhow::bail;
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 use tokio_postgres::types::Oid;
+use tracing::warn;
 
 use mz_proto::{RustType, TryFromProtoError};
 
@@ -34,6 +36,54 @@ pub struct PostgresTableDesc {
     /// Applicable keys for this table (i.e. primary key and unique
     /// constraints).
     pub keys: BTreeSet<PostgresKeyDesc>,
+}
+
+impl PostgresTableDesc {
+    /// Determines if two `PostgresTableDesc` are compatible with one another in
+    /// a way that Materialize can handle.
+    ///
+    /// Currently this means that the values are equal except for the following
+    /// exceptions:
+    /// - `self`'s columns are a compatible prefix of `other`'s columns.
+    ///   Compatibility is defined as returning `true` for
+    ///   `PostgresColumnDesc::is_compatible`.
+    /// - `self`'s keys are all present in `other`
+    pub fn determine_compatibility(&self, other: &PostgresTableDesc) -> Result<(), anyhow::Error> {
+        if self == other {
+            return Ok(());
+        }
+
+        let PostgresTableDesc {
+            oid: other_oid,
+            namespace: other_namespace,
+            name: other_name,
+            columns: other_cols,
+            keys: other_keys,
+        } = other;
+
+        // Table columns cannot change position, so only need to ensure that
+        // `self.columns` is a prefix of `other_cols`.
+        if self.columns.len() == other_cols.len()
+            && self.columns.iter().zip(other_cols.iter()).all(|(s, o)| s.is_compatible(o))
+            && &self.name == other_name
+            && &self.oid == other_oid
+            && &self.namespace == other_namespace
+            // Our keys are all still present in exactly the same shape.
+            && self.keys.difference(other_keys).next().is_none()
+        {
+            Ok(())
+        } else {
+            warn!(
+                "Error validating table in publication. Expected: {:?} Actual: {:?}",
+                &self, other
+            );
+            bail!(
+                "source table {} with oid {} has been altered",
+                self.name,
+                self.oid
+            )
+        }
+    }
 }
 
 impl RustType<ProtoPostgresTableDesc> for PostgresTableDesc {
@@ -105,6 +155,26 @@ pub struct PostgresColumnDesc {
     pub type_mod: i32,
     /// True if the column lacks a `NOT NULL` constraint.
     pub nullable: bool,
+}
+
+impl PostgresColumnDesc {
+    /// Determines if data a relation with a structure of `other` can be treated
+    /// the same as `self`.
+    ///
+    /// Note that this function somewhat unnecessarily errors if the names
+    /// differ; this is negotiable but we want users to understand the fixedness
+    /// of names in our schemas.
+    fn is_compatible(&self, other: &PostgresColumnDesc) -> bool {
+        self.name == other.name
+            && self.col_num == other.col_num
+            && self.type_oid == other.type_oid
+            && self.type_mod == other.type_mod
+            // Columns are compatible if:
+            // - self is nullable; introducing a not null constraint doesn't
+            //   change this column's behavior.
+            // - self and other are both not nullable
+            && (self.nullable || self.nullable == other.nullable)
+    }
 }
 
 impl RustType<ProtoPostgresColumnDesc> for PostgresColumnDesc {
