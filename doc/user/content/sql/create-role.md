@@ -27,25 +27,26 @@ for details.
 
 Field | Use
 ------|-----
-**LOGIN** | Grants the user the ability to log in.
-**NOLOGIN** | Denies the user the ability to log in.
-**SUPERUSER** | Grants the user superuser permission, i.e., unrestricted access to the system.
-**NOSUPERUSER** | Denies the user superuser permission.
 _role_name_ | A name for the role.
 
 ## Details
 
-Materialize only permits creating user accounts with both the `LOGIN` and
-`SUPERUSER` options specified.
+Materialize does not currently support any role attributes.
+
+Unlike PostgreSQL, materialize derives the `LOGIN` and `SUPERUSER`
+attributes for a role during authentication, every time that role tries
+to connect to Materialize. Therefore, you cannot specify either
+attribute when creating a new role. Additionally, we do not support
+`CREATE USER` because it implies a `LOGIN` attribute for the role.
 
 You may not specify redundant or conflicting sets of options. For example,
-Materialize will reject the statement `CREATE ROLE ... LOGIN NOLOGIN` because
-the `LOGIN` and `NOLOGIN` options conflict.
+Materialize will reject the statement `CREATE ROLE ... INHERIT NOINHERIT` because
+the `INHERIT` and `NOINHERIT` options conflict.
 
 ## Examples
 
 ```sql
-CREATE ROLE rj LOGIN SUPERUSER;
+CREATE ROLE rj;
 ```
 ```sql
 SELECT name FROM mz_roles;

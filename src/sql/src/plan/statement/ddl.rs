@@ -2456,9 +2456,11 @@ fn plan_role_attributes(
 
     for option in options {
         match option {
-            RoleAttribute::Login | RoleAttribute::NoLogin => bail_unsupported!("LOGIN attribute"),
+            RoleAttribute::Login | RoleAttribute::NoLogin => {
+                bail_never_supported!("LOGIN attribute", "sql/create-role/#details")
+            }
             RoleAttribute::SuperUser | RoleAttribute::NoSuperUser => {
-                bail_unsupported!("SUPERUSER attribute")
+                bail_never_supported!("SUPERUSER attribute", "sql/create-role/#details")
             }
             RoleAttribute::Inherit | RoleAttribute::NoInherit
                 if planned_attributes.inherit.is_some() =>

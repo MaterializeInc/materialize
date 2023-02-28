@@ -1663,6 +1663,12 @@ impl<'a> Parser<'a> {
             || self.peek_keywords(&[OR, REPLACE, MATERIALIZED, VIEW])
         {
             self.parse_create_materialized_view()
+        } else if self.peek_keywords(&[USER]) {
+            parser_err!(
+                self,
+                self.peek_pos(),
+                "CREATE USER is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details"
+            )
         } else {
             let index = self.index;
 
