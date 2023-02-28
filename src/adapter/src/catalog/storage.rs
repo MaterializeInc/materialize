@@ -329,6 +329,16 @@ async fn migrate(
             txn.cluster_replicas.update(|_k, v| Some(v.clone()))?;
             Ok(())
         },
+        // Remove the materialize role from existing deployments
+        //
+        // Introduced in v0.45.0
+        //
+        // TODO(jkosh44) Can be cleared (patched to be empty) in v0.46.0
+        |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
+            txn.roles
+                .delete(|_role_key, role_value| &role_value.name == "materialize");
+            Ok(())
+        },
         // Add new migrations above.
         //
         // Migrations should be preceded with a comment of the following form:
