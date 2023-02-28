@@ -23,7 +23,25 @@ from materialize import ROOT, ci_util
 
 CI_RE = re.compile("ci-regexp: (.*)")
 ERROR_RE = re.compile(
-    r"(panicked at|internal error:|\* FATAL:|[Oo]ut [Oo]f [Mm]emory|cannot migrate from catalog)"
+    r"""
+    ( panicked\ at
+    | internal\ error:
+    | \*\ FATAL:
+    | [Oo]ut\ [Oo]f\ [Mm]emory
+    | cannot\ migrate\ from\ catalog
+    | halting\ process: # Rust unwrap
+    # From src/testdrive/src/action/sql.rs
+    | column\ name\ mismatch
+    | non-matching\ rows:
+    | wrong\ row\ count:
+    | wrong\ hash\ value:
+    | expected\ one\ statement
+    | query\ succeeded,\ but\ expected
+    | expected\ .*,\ got\ .*
+    | expected\ .*,\ but\ found\ none
+    | unsupported\ SQL\ type\ in\ testdrive:
+    )
+    """
 )
 
 
