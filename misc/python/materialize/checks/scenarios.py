@@ -45,7 +45,7 @@ class Scenario:
         self._checks = checks
         self.executor = executor
         self.rng = None if seed is None else Random(seed)
-        self.version_cargo = MzVersion.parse_cargo()
+        self._base_version = MzVersion.parse_cargo()
 
     def checks(self) -> List[Type[Check]]:
         if self.rng:
@@ -54,6 +54,9 @@ class Scenario:
 
     def actions(self) -> List[Action]:
         assert False
+
+    def base_version(self) -> MzVersion:
+        return self._base_version
 
     def run(self) -> None:
         for action in self.actions():
@@ -64,10 +67,10 @@ class NoRestartNoUpgrade(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
-            Initialize(self.checks(), base_version=self.version_cargo),
-            Manipulate(self.checks(), base_version=self.version_cargo, phase=1),
-            Manipulate(self.checks(), base_version=self.version_cargo, phase=2),
-            Validate(self.checks(), base_version=self.version_cargo),
+            Initialize(self),
+            Manipulate(self, phase=1),
+            Manipulate(self, phase=2),
+            Validate(self),
         ]
 
 
@@ -75,16 +78,16 @@ class RestartEntireMz(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
-            Initialize(self.checks(), base_version=self.version_cargo),
+            Initialize(self),
             KillMz(),
             StartMz(),
-            Manipulate(self.checks(), base_version=self.version_cargo, phase=1),
+            Manipulate(self, phase=1),
             KillMz(),
             StartMz(),
-            Manipulate(self.checks(), base_version=self.version_cargo, phase=2),
+            Manipulate(self, phase=2),
             KillMz(),
             StartMz(),
-            Validate(self.checks(), base_version=self.version_cargo),
+            Validate(self),
         ]
 
 
@@ -92,11 +95,11 @@ class DropCreateDefaultReplica(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
-            Initialize(self.checks(), base_version=self.version_cargo),
-            Manipulate(self.checks(), base_version=self.version_cargo, phase=1),
+            Initialize(self),
+            Manipulate(self, phase=1),
             DropCreateDefaultReplicaAction(),
-            Manipulate(self.checks(), base_version=self.version_cargo, phase=2),
-            Validate(self.checks(), base_version=self.version_cargo),
+            Manipulate(self, phase=2),
+            Validate(self),
         ]
 
 
@@ -107,17 +110,17 @@ class RestartClusterdCompute(Scenario):
         return [
             StartMz(),
             StartClusterdCompute(),
-            UseClusterdCompute(base_version=self.version_cargo),
-            Initialize(self.checks(), base_version=self.version_cargo),
+            UseClusterdCompute(base_version=self.base_version()),
+            Initialize(self),
             KillClusterdCompute(),
             StartClusterdCompute(),
-            Manipulate(self.checks(), base_version=self.version_cargo, phase=1),
+            Manipulate(self, phase=1),
             KillClusterdCompute(),
             StartClusterdCompute(),
-            Manipulate(self.checks(), base_version=self.version_cargo, phase=2),
+            Manipulate(self, phase=2),
             KillClusterdCompute(),
             StartClusterdCompute(),
-            Validate(self.checks(), base_version=self.version_cargo),
+            Validate(self),
         ]
 
 
@@ -128,17 +131,17 @@ class RestartEnvironmentdClusterdStorage(Scenario):
         return [
             StartMz(),
             StartClusterdCompute(),
-            UseClusterdCompute(base_version=self.version_cargo),
-            Initialize(self.checks(), base_version=self.version_cargo),
+            UseClusterdCompute(base_version=self.base_version()),
+            Initialize(self),
             KillMz(),
             StartMz(),
-            Manipulate(self.checks(), base_version=self.version_cargo, phase=1),
+            Manipulate(self, phase=1),
             KillMz(),
             StartMz(),
-            Manipulate(self.checks(), base_version=self.version_cargo, phase=2),
+            Manipulate(self, phase=2),
             KillMz(),
             StartMz(),
-            Validate(self.checks(), base_version=self.version_cargo),
+            Validate(self),
         ]
 
 
@@ -149,14 +152,14 @@ class KillClusterdStorage(Scenario):
         return [
             StartMz(),
             StartClusterdCompute(),
-            UseClusterdCompute(base_version=self.version_cargo),
-            Initialize(self.checks(), base_version=self.version_cargo),
+            UseClusterdCompute(base_version=self.base_version()),
+            Initialize(self),
             KillClusterdStorageAction(),
-            Manipulate(self.checks(), base_version=self.version_cargo, phase=1),
+            Manipulate(self, phase=1),
             KillClusterdStorageAction(),
-            Manipulate(self.checks(), base_version=self.version_cargo, phase=2),
+            Manipulate(self, phase=2),
             KillClusterdStorageAction(),
-            Validate(self.checks(), base_version=self.version_cargo),
+            Validate(self),
         ]
 
 
@@ -164,13 +167,13 @@ class RestartCockroach(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
-            Initialize(self.checks(), base_version=self.version_cargo),
+            Initialize(self),
             RestartCockroachAction(),
-            Manipulate(self.checks(), base_version=self.version_cargo, phase=1),
+            Manipulate(self, phase=1),
             RestartCockroachAction(),
-            Manipulate(self.checks(), base_version=self.version_cargo, phase=2),
+            Manipulate(self, phase=2),
             RestartCockroachAction(),
-            Validate(self.checks(), base_version=self.version_cargo),
+            Validate(self),
         ]
 
 
@@ -178,13 +181,13 @@ class RestartSourcePostgres(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
-            Initialize(self.checks(), base_version=self.version_cargo),
+            Initialize(self),
             RestartSourcePostgresAction(),
-            Manipulate(self.checks(), base_version=self.version_cargo, phase=1),
+            Manipulate(self, phase=1),
             RestartSourcePostgresAction(),
-            Manipulate(self.checks(), base_version=self.version_cargo, phase=2),
+            Manipulate(self, phase=2),
             RestartSourcePostgresAction(),
-            Validate(self.checks(), base_version=self.version_cargo),
+            Validate(self),
         ]
 
 
@@ -192,11 +195,11 @@ class RestartRedpandaDebezium(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
-            Initialize(self.checks(), base_version=self.version_cargo),
+            Initialize(self),
             RestartRedpandaDebeziumAction(),
-            Manipulate(self.checks(), base_version=self.version_cargo, phase=1),
+            Manipulate(self, phase=1),
             RestartRedpandaDebeziumAction(),
-            Manipulate(self.checks(), base_version=self.version_cargo, phase=2),
+            Manipulate(self, phase=2),
             RestartRedpandaDebeziumAction(),
-            Validate(self.checks(), base_version=self.version_cargo),
+            Validate(self),
         ]
