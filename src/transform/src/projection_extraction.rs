@@ -72,6 +72,7 @@ impl ProjectionExtraction {
             aggregates,
             monotonic: _,
             expected_group_size: _,
+            has_validity_column,
         } = relation
         {
             let mut projection = Vec::new();
@@ -105,6 +106,12 @@ impl ProjectionExtraction {
                     projection.push(group_key.len() + finger);
                     finger += 1;
                 }
+            }
+
+            // If we have a validating reduction, propagate the validity column to
+            // the projection as well.
+            if *has_validity_column {
+                projection.push(group_key.len() + aggregates.len());
             }
             if projection.iter().enumerate().any(|(i, p)| i != *p) {
                 *relation = relation.take_dangerous().project(projection);

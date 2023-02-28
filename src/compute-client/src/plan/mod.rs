@@ -1284,6 +1284,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 aggregates,
                 monotonic,
                 expected_group_size,
+                has_validity_column: _, // TODO(vmarcos): chain this down to rendering
             } => {
                 let input_arity = input.arity();
                 let output_arity = group_key.len() + aggregates.len();

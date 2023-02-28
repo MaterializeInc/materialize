@@ -508,7 +508,18 @@ impl LiteralLifting {
                     aggregates,
                     monotonic: _,
                     expected_group_size: _,
+                    has_validity_column,
                 } => {
+                    // If we have a validating reduction in our hands, we need to account
+                    // for the validity column when lifting literals. For now, we panic
+                    // if a validating reduction is provided.
+                    // TODO(vmarcos): Before enabling validating reductions, we need to fix
+                    // the code below so that the projection left at the end (if any) is also
+                    // placing the validity column at the right place.
+                    if *has_validity_column {
+                        unimplemented!("Validating reductions cannot yet be enabled");
+                    }
+
                     let literals = self.action(input, gets)?;
                     if !literals.is_empty() {
                         // Reduce absorbs maps, and we should inline literals.
@@ -571,6 +582,10 @@ impl LiteralLifting {
                     let non_constant_aggr = aggregates.iter().filter(|x| !x.is_constant()).count();
                     if non_literal_keys != group_key.len() || non_constant_aggr != aggregates.len()
                     {
+                        // TODO (vmarcos): In a validating reduction, the first_projected_literal below
+                        // would need to be shifted by an extra column and the subsequent projection would
+                        // need to be adjusted to place the validity column at the end, obtaining the same
+                        // schema that the original validating reduction was exposing.
                         let first_projected_literal: usize = non_literal_keys + non_constant_aggr;
                         let mut projection = Vec::new();
                         let mut projected_literals = Vec::new();

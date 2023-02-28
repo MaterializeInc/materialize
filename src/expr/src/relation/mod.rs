@@ -221,6 +221,9 @@ pub enum MirRelationExpr {
         /// User hint: expected number of values per group key. Used to optimize physical rendering.
         #[serde(default)]
         expected_group_size: Option<usize>,
+        /// True iff an additional column is produced to indicate the validity of the accumulation.
+        #[serde(default)]
+        has_validity_column: bool,
     },
     /// Groups and orders within each group, limiting output.
     ///
@@ -433,13 +436,23 @@ impl MirRelationExpr {
             Reduce {
                 group_key,
                 aggregates,
+                has_validity_column,
                 ..
             } => {
                 let input = input_types.next().unwrap();
+                let validity = if *has_validity_column {
+                    Some(ColumnType {
+                        scalar_type: ScalarType::Bool,
+                        nullable: false,
+                    })
+                } else {
+                    None
+                };
                 group_key
                     .iter()
                     .map(|e| e.typ(input))
                     .chain(aggregates.iter().map(|agg| agg.typ(input)))
+                    .chain(validity)
                     .collect()
             }
             TopK { .. } | Negate { .. } | Threshold { .. } | ArrangeBy { .. } => {
@@ -925,8 +938,12 @@ impl MirRelationExpr {
                 input: _,
                 group_key,
                 aggregates,
+                has_validity_column,
                 ..
-            } => group_key.len() + aggregates.len(),
+            } => {
+                let validity: usize = (*has_validity_column).into();
+                group_key.len() + aggregates.len() + validity
+            }
             Filter { .. }
             | TopK { .. }
             | Negate { .. }
@@ -1227,6 +1244,7 @@ impl MirRelationExpr {
                 aggregates,
                 monotonic: false,
                 expected_group_size,
+                has_validity_column: false,
             };
             let map = reduce.map(casts);
 
@@ -1245,6 +1263,7 @@ impl MirRelationExpr {
                 aggregates,
                 monotonic: false,
                 expected_group_size,
+                has_validity_column: false,
             }
         }
     }

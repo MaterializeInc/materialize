@@ -43,6 +43,7 @@ impl Reduce {
             aggregates,
             monotonic: _,
             expected_group_size: _,
+            has_validity_column,
         } = relation
         {
             if let MirRelationExpr::Reduce {
@@ -51,6 +52,7 @@ impl Reduce {
                 aggregates: inner_aggregates,
                 monotonic: _,
                 expected_group_size: _,
+                has_validity_column: inner_has_validity_column,
             } = &mut **input
             {
                 // Collect all columns referenced by outer
@@ -69,7 +71,21 @@ impl Reduce {
                     return Ok(());
                 }
 
-                if aggregates.is_empty() && inner_aggregates.is_empty() {
+                // Note that currently, we only fuse reductions that contain no aggregates.
+                // These are non-validating reductions in rendering, so we just sanity-check
+                // here that they do not produce validity columns.
+                // TODO(vmarcos): Discuss if we need validating reductions for distinct aggregates
+                // and if so, revisit this comment. Fusion would become much more involved with
+                // validating reductions, since we'd need to still serve the validity columns to
+                // operators that make use of them on top of the Reduce nodes (or find a way to
+                // eliminate some of these validity checks). Additionally, we may need to understand
+                // if we'd even produce a pattern such as one Reduce node being given to another,
+                // since we would have planned map-projection chains for validation in-between.
+                if aggregates.is_empty()
+                    && inner_aggregates.is_empty()
+                    && !*has_validity_column
+                    && !*inner_has_validity_column
+                {
                     // Replace inner reduce with map + project (no grouping)
                     let mut outputs = vec![];
                     let mut scalars = vec![];

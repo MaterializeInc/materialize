@@ -90,7 +90,16 @@ impl FoldConstants {
                 aggregates,
                 monotonic: _,
                 expected_group_size: _,
+                has_validity_column,
             } => {
+                // For now, if we require a validity column, abort constant folding.
+                // TODO(vmarcos): We can produce a validity column in fold_reduce_constant
+                // below, making the validation behavior of constant folding closer to
+                // the what happens in rendered evaluation (see e.g., #17758).
+                if *has_validity_column {
+                    return Ok(());
+                }
+
                 let input_typ = input_types.next().unwrap();
                 // Reduce expressions to their simplest form.
                 for key in group_key.iter_mut() {
@@ -113,9 +122,13 @@ impl FoldConstants {
                 if let Some((rows, ..)) = (**input).as_const() {
                     let new_rows = match rows {
                         Ok(rows) => {
-                            if let Some(rows) =
-                                Self::fold_reduce_constant(group_key, aggregates, rows, self.limit)
-                            {
+                            if let Some(rows) = Self::fold_reduce_constant(
+                                group_key,
+                                aggregates,
+                                rows,
+                                self.limit,
+                                *has_validity_column,
+                            ) {
                                 rows
                             } else {
                                 return Ok(());
@@ -431,6 +444,7 @@ impl FoldConstants {
         aggregates: &[AggregateExpr],
         rows: &[(Row, Diff)],
         limit: Option<usize>,
+        _has_validity_column: bool,
     ) -> Option<Result<Vec<(Row, Diff)>, EvalError>> {
         // Build a map from `group_key` to `Vec<Vec<an, ..., a1>>)`,
         // where `an` is the input to the nth aggregate function in
@@ -440,6 +454,9 @@ impl FoldConstants {
         let mut row_buf = Row::default();
         let mut limit_remaining = limit.unwrap_or(usize::MAX);
         for (row, diff) in rows {
+            // TODO(vmarcos): Below, we can instead of returning an error,
+            // produce a validity column in case we have a validating reduction.
+
             // We currently maintain the invariant that any negative
             // multiplicities will be consolidated away before they
             // arrive at a reduce.

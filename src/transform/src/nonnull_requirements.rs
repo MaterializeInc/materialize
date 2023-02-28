@@ -217,10 +217,15 @@ impl NonNullRequirements {
                     aggregates,
                     monotonic: _,
                     expected_group_size: _,
+                    has_validity_column,
                 } => {
                     let mut new_columns = BTreeSet::new();
-                    let (group_key_columns, aggr_columns): (Vec<usize>, Vec<usize>) =
-                        columns.iter().partition(|c| **c < group_key.len());
+                    let (group_key_columns, aggr_columns): (Vec<usize>, Vec<usize>) = columns
+                        .iter()
+                        .filter(|c| {
+                            !*has_validity_column || **c != group_key.len() + aggregates.len()
+                        })
+                        .partition(|c| **c < group_key.len());
                     for column in group_key_columns {
                         group_key[column].non_null_requirements(&mut new_columns);
                     }

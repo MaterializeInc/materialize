@@ -285,6 +285,7 @@ impl RedundantJoin {
                     input,
                     group_key,
                     aggregates,
+                    has_validity_column,
                     ..
                 } => {
                     // Reduce yields its first few columns as a key, and produces
@@ -296,6 +297,10 @@ impl RedundantJoin {
                             .map(|key| prov.strict_dereference(key))
                             .collect_vec();
                         projection.extend((0..aggregates.len()).map(|_| None));
+                        if *has_validity_column {
+                            // If we produce an extra validity column, extend projection.
+                            projection.push(None);
+                        }
                         prov.dereferenced_projection = projection;
                     }
                     // TODO: For min, max aggregates, we could preserve provenance

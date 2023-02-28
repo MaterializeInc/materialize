@@ -266,6 +266,7 @@ impl ColumnKnowledge {
                     aggregates,
                     monotonic: _,
                     expected_group_size: _,
+                    has_validity_column,
                 } => {
                     let input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
                     let input_typ = input.typ();
@@ -336,6 +337,12 @@ impl ColumnKnowledge {
                             }
                         };
                         output.push(knowledge);
+                    }
+                    if *has_validity_column {
+                        output.push(DatumKnowledge {
+                            value: None,
+                            nullable: false,
+                        });
                     }
                     Ok(output)
                 }

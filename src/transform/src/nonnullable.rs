@@ -78,6 +78,7 @@ impl NonNullable {
                 aggregates,
                 monotonic: _,
                 expected_group_size: _,
+                has_validity_column: _,
             } => {
                 let contains_isnull_or_count = aggregates
                     .iter()

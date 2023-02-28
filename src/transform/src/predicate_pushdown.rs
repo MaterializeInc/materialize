@@ -286,6 +286,7 @@ impl PredicatePushdown {
                             aggregates,
                             monotonic: _,
                             expected_group_size: _,
+                            has_validity_column: _,
                         } => {
                             let mut retain = Vec::new();
                             let mut push_down = Vec::new();

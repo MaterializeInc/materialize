@@ -220,6 +220,7 @@ impl ProjectionLifting {
                     aggregates,
                     monotonic: _,
                     expected_group_size: _,
+                    has_validity_column: _,
                 } => {
                     // Reduce *absorbs* projections, which is amazing!
                     self.action(input, gets)?;

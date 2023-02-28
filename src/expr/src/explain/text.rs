@@ -525,7 +525,8 @@ impl MirRelationExpr {
                 group_key,
                 aggregates,
                 expected_group_size,
-                monotonic: _, // TODO: monotonic should be an attribute
+                monotonic: _,           // TODO: monotonic should be an attribute
+                has_validity_column: _, // TODO(vmarcos): has_validity_column should be an attribute
                 input,
             } => {
                 FmtNode {

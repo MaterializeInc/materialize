@@ -254,6 +254,7 @@ impl ProjectionPushdown {
                 aggregates,
                 monotonic: _,
                 expected_group_size: _,
+                has_validity_column: _,
             } => {
                 let mut columns_to_pushdown = BTreeSet::new();
                 // Group keys determine aggregation granularity and are

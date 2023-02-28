@@ -233,6 +233,7 @@ impl Demand {
                     aggregates,
                     monotonic: _,
                     expected_group_size: _,
+                    has_validity_column,
                 } => {
                     let mut new_columns = BTreeSet::new();
                     // Group keys determine aggregation granularity and are
@@ -246,6 +247,13 @@ impl Demand {
                             new_columns
                                 .extend(aggregates[*column - group_key.len()].expr.support());
                         }
+                    }
+
+                    // If this is a validating reduction, but the validity column is not
+                    // demanded, then we can turn the reduction into non-validating.
+                    let validity_column = group_key.len() + aggregates.len();
+                    if *has_validity_column && !columns.contains(&validity_column) {
+                        *has_validity_column = false;
                     }
 
                     // Replace un-demanded aggregations with dummies.

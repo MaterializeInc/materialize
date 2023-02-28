@@ -149,20 +149,31 @@ pub fn is_superset_of(mut lhs: &MirRelationExpr, mut rhs: &MirRelationExpr) -> b
             },
             // Descend in both sides if the current roots are reduces with empty aggregates
             // on the same set of keys (that is, a distinct operation on those keys).
+            // Note that currently, these reductions are non-validating in rendering, so we
+            // do not handle validating reductions here.
+            // TODO(vmarcos): Discuss if we need validating reductions for distinct operations
+            // and if so, revisit this comment. The reasoning here would need to become more
+            // complex to take into account the map-projection chains that would be introduced
+            // to check for validity of the validating reduction output.
             MirRelationExpr::Reduce {
                 input: rhs_input,
                 group_key: rhs_group_key,
                 aggregates: rhs_aggregates,
                 monotonic: _,
                 expected_group_size: _,
-            } if rhs_aggregates.is_empty() => match lhs {
+                has_validity_column: rhs_has_validity_column,
+            } if rhs_aggregates.is_empty() && !*rhs_has_validity_column => match lhs {
                 MirRelationExpr::Reduce {
                     input: lhs_input,
                     group_key: lhs_group_key,
                     aggregates: lhs_aggregates,
                     monotonic: _,
                     expected_group_size: _,
-                } if lhs_aggregates.is_empty() && lhs_group_key == rhs_group_key => {
+                    has_validity_column: lhs_has_validity_column,
+                } if lhs_aggregates.is_empty()
+                    && !*lhs_has_validity_column
+                    && lhs_group_key == rhs_group_key =>
+                {
                     rhs = &**rhs_input;
                     lhs = &**lhs_input;
                 }

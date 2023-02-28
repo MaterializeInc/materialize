@@ -711,7 +711,8 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                   ],
                   "aggregates": [],
                   "monotonic": false,
-                  "expected_group_size": null
+                  "expected_group_size": null,
+                  "has_validity_column": false
                 }
               },
               "inputs": [
@@ -755,7 +756,8 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                         ],
                         "aggregates": [],
                         "monotonic": false,
-                        "expected_group_size": null
+                        "expected_group_size": null,
+                        "has_validity_column": false
                       }
                     }
                   }
@@ -1010,7 +1012,8 @@ SELECT abs(min(a) - max(a)) FROM t
                 }
               ],
               "monotonic": false,
-              "expected_group_size": null
+              "expected_group_size": null,
+              "has_validity_column": false
             }
           },
           "body": {
@@ -1230,7 +1233,8 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                     }
                   ],
                   "monotonic": false,
-                  "expected_group_size": null
+                  "expected_group_size": null,
+                  "has_validity_column": false
                 }
               },
               "scalars": [
@@ -1367,7 +1371,8 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                   ],
                                                   "aggregates": [],
                                                   "monotonic": false,
-                                                  "expected_group_size": null
+                                                  "expected_group_size": null,
+                                                  "has_validity_column": false
                                                 }
                                               },
                                               "keys": [
@@ -1469,7 +1474,8 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                             ],
                             "aggregates": [],
                             "monotonic": false,
-                            "expected_group_size": null
+                            "expected_group_size": null,
+                            "has_validity_column": false
                           }
                         },
                         "keys": [
@@ -1620,7 +1626,8 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                   ],
                                                   "aggregates": [],
                                                   "monotonic": false,
-                                                  "expected_group_size": null
+                                                  "expected_group_size": null,
+                                                  "has_validity_column": false
                                                 }
                                               },
                                               "keys": [
@@ -1722,7 +1729,8 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                             ],
                             "aggregates": [],
                             "monotonic": false,
-                            "expected_group_size": null
+                            "expected_group_size": null,
+                            "has_validity_column": false
                           }
                         },
                         "keys": [
@@ -1865,7 +1873,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                   ],
                   "aggregates": [],
                   "monotonic": false,
-                  "expected_group_size": null
+                  "expected_group_size": null,
+                  "has_validity_column": false
                 }
               },
               "body": {
@@ -3120,7 +3129,8 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                     ],
                                                     "aggregates": [],
                                                     "monotonic": false,
-                                                    "expected_group_size": null
+                                                    "expected_group_size": null,
+                                                    "has_validity_column": false
                                                   }
                                                 },
                                                 "keys": [
@@ -3460,7 +3470,8 @@ FROM
                                                       ],
                                                       "aggregates": [],
                                                       "monotonic": false,
-                                                      "expected_group_size": null
+                                                      "expected_group_size": null,
+                                                      "has_validity_column": false
                                                     }
                                                   },
                                                   "keys": [
@@ -3538,7 +3549,8 @@ FROM
                                           }
                                         ],
                                         "monotonic": false,
-                                        "expected_group_size": null
+                                        "expected_group_size": null,
+                                        "has_validity_column": false
                                       }
                                     },
                                     "keys": [
@@ -3711,7 +3723,8 @@ FROM
                                                       ],
                                                       "aggregates": [],
                                                       "monotonic": false,
-                                                      "expected_group_size": null
+                                                      "expected_group_size": null,
+                                                      "has_validity_column": false
                                                     }
                                                   },
                                                   "keys": [
@@ -3789,7 +3802,8 @@ FROM
                                           }
                                         ],
                                         "monotonic": false,
-                                        "expected_group_size": null
+                                        "expected_group_size": null,
+                                        "has_validity_column": false
                                       }
                                     },
                                     "keys": [

@@ -49,6 +49,7 @@ impl ReduceElision {
             aggregates,
             monotonic: _,
             expected_group_size: _,
+            has_validity_column,
         } = relation
         {
             let input_type = input.typ();
@@ -56,9 +57,16 @@ impl ReduceElision {
                 keys.iter()
                     .all(|k| group_key.contains(&mz_expr::MirScalarExpr::Column(*k)))
             }) {
+                let validity: usize = (*has_validity_column).into();
+                let validity_expr = if *has_validity_column {
+                    Some(mz_expr::MirScalarExpr::literal_true())
+                } else {
+                    None
+                };
                 let map_scalars = aggregates
                     .iter()
                     .map(|a| a.on_unique(&input_type.column_types))
+                    .chain(validity_expr)
                     .collect_vec();
 
                 let mut result = input.take_dangerous();
@@ -69,7 +77,8 @@ impl ReduceElision {
                 new_scalars.extend(map_scalars);
                 result = result.map(new_scalars).project(
                     (input_type.column_types.len()
-                        ..(input_type.column_types.len() + (group_key.len() + aggregates.len())))
+                        ..(input_type.column_types.len()
+                            + (group_key.len() + aggregates.len() + validity)))
                         .collect(),
                 );
 

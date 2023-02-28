@@ -92,6 +92,7 @@ impl ReductionPushdown {
             aggregates,
             monotonic,
             expected_group_size,
+            has_validity_column,
         } = relation
         {
             // Map expressions can be absorbed into the Reduce at no cost.
@@ -148,6 +149,7 @@ impl ReductionPushdown {
                     aggregates,
                     *monotonic,
                     *expected_group_size,
+                    *has_validity_column,
                 ) {
                     *relation = new_relation_expr;
                 }
@@ -164,6 +166,7 @@ fn try_push_reduce_through_join(
     aggregates: &Vec<AggregateExpr>,
     monotonic: bool,
     expected_group_size: Option<usize>,
+    has_validity_column: bool,
 ) -> Option<MirRelationExpr> {
     // Variable name details:
     // The goal is to turn `old` (`Reduce { Join { <inputs> }}`) into
@@ -178,6 +181,14 @@ fn try_push_reduce_through_join(
     //
     // `<component>` is either `Join {<subset of inputs>}` or
     // `<element of inputs>`.
+
+    // For now, abort reduction pushdown if we have a validating reduce.
+    // TODO(vmarcos): We can AND together the results of the various Reduce
+    // nodes over <component> subexpressions so that validity checks above
+    // the original Reduce can function properly.
+    if has_validity_column {
+        return None;
+    }
 
     let old_join_mapper =
         JoinInputMapper::new_from_input_types(&inputs.iter().map(|i| i.typ()).collect::<Vec<_>>());
@@ -318,7 +329,9 @@ fn try_push_reduce_through_join(
 
     let new_inputs = new_reduces
         .into_iter()
-        .map(|builder| builder.construct_reduce(monotonic, expected_group_size))
+        .map(|builder| {
+            builder.construct_reduce(monotonic, expected_group_size, has_validity_column)
+        })
         .collect::<Vec<_>>();
 
     let new_equivalences = new_join_equivalences_by_component
@@ -454,6 +467,7 @@ impl ReduceBuilder {
         self,
         monotonic: bool,
         expected_group_size: Option<usize>,
+        has_validity_column: bool,
     ) -> MirRelationExpr {
         MirRelationExpr::Reduce {
             input: Box::new(self.input),
@@ -461,6 +475,7 @@ impl ReduceBuilder {
             aggregates: self.aggregates,
             monotonic,
             expected_group_size,
+            has_validity_column,
         }
     }
 }
