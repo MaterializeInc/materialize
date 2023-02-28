@@ -424,6 +424,10 @@ pg_attribute
 VIEW
 materialize
 pg_catalog
+pg_auth_members
+VIEW
+materialize
+pg_catalog
 pg_authid
 VIEW
 materialize
