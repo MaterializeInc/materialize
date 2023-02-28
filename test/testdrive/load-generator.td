@@ -60,6 +60,14 @@ contains: unsupported max cardinality
 > SELECT count(*) FROM counter3
 0
 
+# Check that negative tick intervals are rejected
+! CREATE SOURCE counter4 FROM LOAD GENERATOR COUNTER (TICK INTERVAL '-1s')
+contains: out of range integral type conversion
+
+# Check that out of range tick interval values are rejected
+! CREATE SOURCE counter5 FROM LOAD GENERATOR COUNTER (TICK INTERVAL '2147483647d')
+contains: out of range integral type conversion
+
 # Query automatically generated progress topic
 $ set-regex match=\d+ replacement=<NUMBER>
 > SELECT "offset" FROM auction_house_progress
