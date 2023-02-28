@@ -335,20 +335,31 @@ async fn migrate(
         //
         // TODO(jkosh44) Can be cleared (patched to be empty) in v0.46.0
         |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
-            txn.roles
-                .delete(|_role_key, role_value| &role_value.name == "materialize");
-            if let Some((event, _, _)) = txn.audit_log_updates.iter().find(|(key, _, _)| match &key
-                .event
-            {
-                VersionedEvent::V1(event) => match &event.details {
-                    EventDetails::IdNameV1(id_name) => {
-                        event.event_type == EventType::Create
-                            && event.object_type == ObjectType::Role
-                            && id_name.name == "materialize"
-                    }
-                    _ => false,
-                },
-            }) {
+            let n = txn
+                .roles
+                .delete(|_role_key, role_value| &role_value.name == "materialize")
+                .len();
+            assert!(n <= 1, "duplicate roles are not allowed");
+            if n == 1 {
+                // Only delete the most recent CREATE ROLE event if the role currently exists.
+                let (event, _, diff) = txn
+                    .audit_log_updates
+                    .iter()
+                    .sorted_by(|(key1, _, _), (key2, _, _)| {
+                        Ord::cmp(&key1.event.sortable_id(), &key2.event.sortable_id())
+                    })
+                    .rfind(|(key, _, _)| match &key.event {
+                        VersionedEvent::V1(event) => match &event.details {
+                            EventDetails::IdNameV1(id_name) => {
+                                event.event_type == EventType::Create
+                                    && event.object_type == ObjectType::Role
+                                    && id_name.name == "materialize"
+                            }
+                            _ => false,
+                        },
+                    })
+                    .expect("the role is known to exist, so there must be an audit event");
+                assert_eq!(*diff, 1, "unexpected multiplicity stored in audit log");
                 txn.audit_log_updates.push((event.clone(), (), -1));
             }
             Ok(())
