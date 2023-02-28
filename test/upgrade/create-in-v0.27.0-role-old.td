@@ -12,4 +12,4 @@ SELECT mz_version_num() >= 4500;
 
 > CREATE ROLE superuser_login LOGIN SUPERUSER;
 
-> CREATE ROLE "space role" LOGIN SUPERUSER;;
+> CREATE ROLE "space role" LOGIN SUPERUSER;
