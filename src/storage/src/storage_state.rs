@@ -1079,6 +1079,12 @@ impl StorageState {
             }
             StorageCommand::AllowCompaction(list) => {
                 for (id, frontier) in list {
+                    // Update our knowledge of the `as_of`, in case we need to
+                    // internally restart a sink in the future.
+                    if let Some(export_description) = self.exports.get_mut(&id) {
+                        export_description.as_of.maybe_fast_forward(&frontier);
+                    }
+
                     if frontier.is_empty() {
                         // Indicates that we may drop `id`, as there are no more valid times to read.
                         //
