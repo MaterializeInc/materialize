@@ -12,7 +12,7 @@
 use std::backtrace::Backtrace;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use differential_dataflow::difference::Semigroup;
@@ -469,9 +469,37 @@ where
     since: Antichain<T>,
     pub(crate) last_heartbeat: EpochMillis,
     explicitly_expired: bool,
-    leased_seqnos: BTreeMap<SeqNo, usize>,
+    leased_seqnos: Arc<Mutex<BTreeMap<SeqNo, usize>>>,
+    lease_returner: SubscriptionLeaseReturner,
 
     pub(crate) heartbeat_task: Option<JoinHandle<()>>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SubscriptionLeaseReturner(Arc<Mutex<BTreeMap<SeqNo, usize>>>, LeasedReaderId);
+
+impl SubscriptionLeaseReturner {
+    pub(crate) fn return_leased_part<T: Timestamp + Codec64>(
+        &mut self,
+        mut leased_part: LeasedBatchPart<T>,
+    ) {
+        if let Some(lease) = leased_part.return_lease(&self.1) {
+            // Tracks that a `SeqNo` lease has been returned and can be dropped. Once
+            // a `SeqNo` has no more outstanding leases, it can be removed, and
+            // `Self::downgrade_since` no longer needs to prevent it from being
+            // garbage collected.
+            let mut leased_seqnos = self.0.lock().expect("lock poisoned");
+            let remaining_leases = leased_seqnos
+                .get_mut(&lease)
+                .expect("leased SeqNo returned, but lease not issued from this ReadHandle");
+
+            *remaining_leases -= 1;
+
+            if remaining_leases == &0 {
+                leased_seqnos.remove(&lease);
+            }
+        }
+    }
 }
 
 impl<K, V, T, D> ReadHandle<K, V, T, D>
@@ -491,6 +519,7 @@ where
         since: Antichain<T>,
         last_heartbeat: EpochMillis,
     ) -> Self {
+        let leased_seqnos = Arc::new(Mutex::new(BTreeMap::new()));
         ReadHandle {
             cfg,
             metrics,
@@ -501,8 +530,12 @@ where
             since,
             last_heartbeat,
             explicitly_expired: false,
-            leased_seqnos: BTreeMap::new(),
-            heartbeat_task: Some(machine.start_reader_heartbeat_task(reader_id, gc).await),
+            leased_seqnos,
+            lease_returner: SubscriptionLeaseReturner(
+                Arc::clone(&leased_seqnos),
+                reader_id.clone(),
+            ),
+            heartbeat_task: Some(machine.start_reader_heartbeat_task(reader_id).await),
         }
     }
 
@@ -526,7 +559,13 @@ where
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn downgrade_since(&mut self, new_since: &Antichain<T>) {
         // Guaranteed to be the smallest/oldest outstanding lease on a `SeqNo`.
-        let outstanding_seqno = self.leased_seqnos.keys().next().cloned();
+        let outstanding_seqno = self
+            .leased_seqnos
+            .lock()
+            .expect("lock poisoned")
+            .keys()
+            .next()
+            .cloned();
 
         let heartbeat_ts = (self.cfg.now)();
         let (_seqno, current_reader_since, maintenance) = self
@@ -687,9 +726,19 @@ where
     fn lease_seqno(&mut self) -> SeqNo {
         let seqno = self.machine.seqno();
 
-        *self.leased_seqnos.entry(seqno).or_insert(0) += 1;
+        *self
+            .leased_seqnos
+            .lock()
+            .expect("lock poisoned")
+            .entry(seqno)
+            .or_insert(0) += 1;
 
         seqno
+    }
+
+    /// WIP: update
+    pub(crate) fn clone_lease_returner(&self) -> SubscriptionLeaseReturner {
+        self.lease_returner.clone()
     }
 
     /// Processes that a part issued from `self` has been consumed, and `self`
@@ -698,23 +747,8 @@ where
     /// # Panics
     /// - If `self` does not have record of issuing the [`LeasedBatchPart`], e.g.
     ///   it originated from from another `ReadHandle`.
-    pub(crate) fn process_returned_leased_part(&mut self, mut leased_part: LeasedBatchPart<T>) {
-        if let Some(lease) = leased_part.return_lease(&self.reader_id) {
-            // Tracks that a `SeqNo` lease has been returned and can be dropped. Once
-            // a `SeqNo` has no more outstanding leases, it can be removed, and
-            // `Self::downgrade_since` no longer needs to prevent it from being
-            // garbage collected.
-            let remaining_leases = self
-                .leased_seqnos
-                .get_mut(&lease)
-                .expect("leased SeqNo returned, but lease not issued from this ReadHandle");
-
-            *remaining_leases -= 1;
-
-            if remaining_leases == &0 {
-                self.leased_seqnos.remove(&lease);
-            }
-        }
+    pub(crate) fn process_returned_leased_part(&mut self, leased_part: LeasedBatchPart<T>) {
+        self.lease_returner.return_leased_part(leased_part)
     }
 
     /// Returns an independent [ReadHandle] with a new [LeasedReaderId] but the
@@ -1128,6 +1162,8 @@ mod tests {
                 .listen
                 .handle
                 .leased_seqnos
+                .lock()
+                .expect("lock poisoned")
                 .get(&part_seqno)
                 .is_none();
 

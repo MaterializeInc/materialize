@@ -117,7 +117,6 @@ where
         until,
         flow_control,
         completed_fetches_feedback_stream,
-        consumed_part_rx,
         chosen_worker,
         Arc::clone(&key_schema),
         Arc::clone(&val_schema),
@@ -158,7 +157,6 @@ pub(crate) fn shard_source_descs<K, V, D, G>(
     until: Antichain<G::Timestamp>,
     flow_control: Option<FlowControl<G>>,
     feedback_stream: Stream<G, SerdeLeasedBatchPart>,
-    mut consumed_part_rx: mpsc::UnboundedReceiver<SerdeLeasedBatchPart>,
     chosen_worker: usize,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
@@ -254,6 +252,19 @@ where
             .expect("could not open persist shard");
         let as_of = as_of.unwrap_or_else(|| read.since().clone());
 
+        let subscription = read.subscribe(as_of.clone()).await;
+
+        let mut subscription = subscription.unwrap_or_else(|e| {
+            panic!(
+                "{}: {} cannot serve requested as_of {:?}: {:?}",
+                name_owned, shard_id, as_of, e
+            )
+        });
+
+        let mut done = false;
+        let mut parts_buffer = vec![];
+        let mut batch_parts = vec![];
+
         // Eagerly yield the initial as_of. This makes sure that the output
         // frontier of the `persist_source` closely tracks the `upper` frontier
         // of the persist shard. It might be that the snapshot for `as_of` is
@@ -266,25 +277,12 @@ where
         // will only write out new data once it knows that earlier writes went
         // through, including the initial downgrade of the shard upper to the
         // `as_of`.
-        // yield ListenEvent::Progress(as_of.clone());
-
-        let subscription = read.subscribe(as_of.clone()).await;
-
-        let mut subscription = subscription.unwrap_or_else(|e| {
-            panic!(
-                "{}: {} cannot serve requested as_of {:?}: {:?}",
-                name_owned, shard_id, as_of, e
-            )
-        });
-
-        let mut done = false;
-        let mut parts_buffer = vec![];
-        // While we have budget left for fetching more parts, read from the
-        // subscription and pass them on.
-        let mut batch_parts = vec![];
+        // cap_set.downgrade(as_of.iter());
 
         'outer:
         while !done {
+            // While we have budget left for fetching more parts, read from the
+            // subscription and pass them on.
             while inflight_bytes < max_inflight_bytes {
                 tokio::select! {
                     None = token_rx.recv() => {
@@ -367,25 +365,11 @@ where
                                         }
                                         None => {
                                             cap_set.downgrade(&[]);
-                                            // return;
+                                            done = true;
+                                            break 'outer;
                                         }
                                     }
                                 }
-                                // Err::<_, ExternalError>(e) => {
-                                //     panic!("unexpected error from persist {e}")
-                                // }
-                                // Some(SourceInput::Feedback(t)) => {
-                                //     if t.into_option().is_none() {
-                                //         info!("Dataflow completed observed feedback edge completion.");
-                                //         return;
-                                //     }
-                                // }
-                                // We never expect any further output from `pinned_stream`,
-                                // so propagate that information downstream.
-                                // None => {
-                                //     cap_set.downgrade(&[]);
-                                //     return;
-                                // }
                             }
                         }
                     }
@@ -432,6 +416,8 @@ where
             }
         }
 
+        // wait for all outstanding parts to be fetched before spinning down. this ensures our
+        // subscribe handle
         while let Some(completed_fetch) = completed_fetches.next().await {
             match completed_fetch {
                 Event::Data(_cap, parts) => {
