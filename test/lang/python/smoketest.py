@@ -18,6 +18,13 @@ MATERIALIZED_URL = "postgresql://materialize@materialized:6875/materialize"
 
 
 class SmokeTest(unittest.TestCase):
+    def test_connection_options(self) -> None:
+        with psycopg3.connect(MATERIALIZED_URL + "?options=--cluster%3Db") as conn:
+            with conn.cursor() as cur:
+                cur.execute("SHOW cluster")
+                row = cur.fetchone()
+                self.assertEqual(row, ("b",))
+
     def test_custom_types(self) -> None:
         with psycopg3.connect(MATERIALIZED_URL, autocommit=True) as conn:
             # Text encoding of lists and maps is supported...
