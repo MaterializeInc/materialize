@@ -32,12 +32,12 @@ ALTER PUBLICATION mz_source ADD TABLE t2;
 
 INSERT INTO t2 SELECT a1.f1 + a6.f1 , E'abc\nxyz' FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4, ten AS a5, ten AS a6;
 
-DROP TABLE IF EXISTS alter_fail_add_col;
-CREATE TABLE alter_fail_add_col (f1 INTEGER);
-ALTER TABLE alter_fail_add_col REPLICA IDENTITY FULL;
+DROP TABLE IF EXISTS alter_fail_drop_col;
+CREATE TABLE alter_fail_drop_col (f1 INTEGER, f2 INTEGER);
+ALTER TABLE alter_fail_drop_col REPLICA IDENTITY FULL;
 
-INSERT INTO alter_fail_add_col VALUES (1);
-ALTER PUBLICATION mz_source_alter_add_col ADD TABLE alter_fail_add_col;
+INSERT INTO alter_fail_drop_col VALUES (1, 1);
+ALTER PUBLICATION mz_source_alter_add_col ADD TABLE alter_fail_drop_col;
 
 DROP TABLE IF EXISTS alter_fail_drop_constraint;
 CREATE TABLE alter_fail_drop_constraint (f1 INTEGER NOT NULL);

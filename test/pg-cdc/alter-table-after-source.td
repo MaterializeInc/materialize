@@ -47,8 +47,9 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE add_columns ADD COLUMN f2 varchar(2);
 INSERT INTO add_columns VALUES (2, 'ab');
 
-! SELECT * from add_columns;
-contains:altered
+> SELECT * from add_columns;
+1
+2
 
 > DROP SOURCE mz_source;
 
@@ -593,7 +594,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR ALL TABLES;
 
-> SELECT * from alter_table_rename_column;
+> SELECT * FROM alter_table_rename_column;
 f1_orig f2_orig
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -638,6 +639,53 @@ ALTER TABLE alter_table_change_attnum ADD COLUMN f2 VARCHAR(10);
 INSERT INTO alter_table_change_attnum (f1, f2) VALUES ('f1_changed', 'f2_changed');
 
 ! SELECT * FROM alter_table_change_attnum;
+contains:altered
+
+> DROP SOURCE mz_source;
+
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER USER postgres WITH replication;
+DROP SCHEMA IF EXISTS public CASCADE;
+DROP PUBLICATION IF EXISTS mz_source;
+
+CREATE SCHEMA public;
+
+CREATE TABLE alter_table_supported (f1 int, f2 int);
+ALTER TABLE alter_table_supported REPLICA IDENTITY FULL;
+INSERT INTO alter_table_supported (f1, f2) VALUES (1, 1);
+
+CREATE PUBLICATION mz_source FOR ALL TABLES;
+
+> CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES ("alter_table_supported") WITH (size = '1');
+
+> SELECT * from alter_table_supported;
+1 1
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER TABLE alter_table_supported ADD COLUMN f3 int;
+INSERT INTO alter_table_supported (f1, f2, f3) VALUES (2, 2, 2);
+
+> SELECT * from alter_table_supported;
+1 1
+2 2
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER TABLE alter_table_supported DROP COLUMN f3;
+INSERT INTO alter_table_supported (f1, f2) VALUES (3, 3);
+
+> SELECT * from alter_table_supported;
+1 1
+2 2
+3 3
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER TABLE alter_table_supported DROP COLUMN f2;
+INSERT INTO alter_table_supported (f1) VALUES (1);
+
+! SELECT * from alter_table_supported;
 contains:altered
 
 > DROP SOURCE mz_source;
