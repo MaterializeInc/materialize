@@ -94,7 +94,7 @@ def annotate_logged_errors(log_files: List[str]) -> None:
         else:
             test_case = junit_xml.TestCase(f"log error {i + 1} (new)", suite_name)
             test_case.add_failure_info(
-                message=f"Unknown error in logs<br/>In {linked_file}:{error.line_nr}:",
+                message=f'Unknown error in logs (<a href="https://github.com/MaterializeInc/materialize/blob/main/doc/developer/ci-regexp.md">ci-regexp guide</a>)<br/>In {linked_file}:{error.line_nr}:',
                 output=error.line,
             )
         junit_suite.test_cases.append(test_case)
