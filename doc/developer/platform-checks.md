@@ -198,6 +198,6 @@ later in the execution. This will confirm that the database is able to perform a
 ## Make sure the test is run on correct version only
 
 When you add new features or have SQL syntax changes, this can be handled in platform checks by comparing against the `base_version`. In a `Check` this can be done directly, see for example `UUID`:
-https://github.com/MaterializeInc/materialize/blob/2c62a0509e42b309848753c9c0b9552474eae88e/misc/python/materialize/checks/uuid.py#L17-L28
+https://github.com/MaterializeInc/materialize/blob/fef9d6a00de4ff2bc6a92968470a2c88f85cab12/misc/python/materialize/checks/uuid.py#L17-L19
 For an action you have to pass the `base_version` parameter explicitly, see for example `UseClusterdCompute`:
-https://github.com/MaterializeInc/materialize/blob/2c62a0509e42b309848753c9c0b9552474eae88e/misc/python/materialize/checks/mzcompose_actions.py#L89-L94
+https://github.com/MaterializeInc/materialize/blob/fef9d6a00de4ff2bc6a92968470a2c88f85cab12/misc/python/materialize/checks/mzcompose_actions.py#L74-L97
