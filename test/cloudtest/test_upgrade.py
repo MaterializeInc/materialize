@@ -68,18 +68,18 @@ class CloudtestUpgrade(Scenario):
     def actions(self) -> List[Action]:
         return [
             LiftClusterLimits(),
-            Initialize(self.checks()),
-            Manipulate(self.checks(), phase=1),
+            Initialize(self.checks(), base_version=self.version_cargo),
+            Manipulate(self.checks(), base_version=self.version_cargo, phase=1),
             ReplaceEnvironmentdStatefulSet(new_tag=None),
-            Manipulate(self.checks(), phase=2),
-            Validate(self.checks()),
+            Manipulate(self.checks(), base_version=self.version_cargo, phase=2),
+            Validate(self.checks(), base_version=self.version_cargo),
         ]
 
 
 @pytest.mark.long
 def test_upgrade(aws_region: Optional[str]) -> None:
     """Test upgrade from the last released verison to the current source by running all the Platform Checks"""
-    last_released_version = f"v{util.released_materialize_versions()[0]}"
+    last_released_version = str(util.released_materialize_versions()[0])
 
     mz = MaterializeApplication(tag=last_released_version, aws_region=aws_region)
     wait(condition="condition=Ready", resource="pod/cluster-u1-replica-1-0")
