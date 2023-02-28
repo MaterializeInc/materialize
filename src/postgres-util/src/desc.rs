@@ -63,7 +63,7 @@ impl PostgresTableDesc {
 
         // Table columns cannot change position, so only need to ensure that
         // `self.columns` is a prefix of `other_cols`.
-        if self.columns.len() == other_cols.len()
+        if self.columns.len() <= other_cols.len()
             && self.columns.iter().zip(other_cols.iter()).all(|(s, o)| s.is_compatible(o))
             && &self.name == other_name
             && &self.oid == other_oid

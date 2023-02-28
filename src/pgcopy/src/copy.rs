@@ -315,11 +315,23 @@ impl<'a> CopyTextFormatParser<'a> {
         }
     }
 
+    /// Error if more than `num_columns` values in `parser`.
     pub fn iter_raw(self, num_columns: usize) -> RawIterator<'a> {
         RawIterator {
             parser: self,
             current_column: 0,
             num_columns,
+            truncate: false,
+        }
+    }
+
+    /// Return no more than `num_columns` values from `parser`.
+    pub fn iter_raw_truncating(self, num_columns: usize) -> RawIterator<'a> {
+        RawIterator {
+            parser: self,
+            current_column: 0,
+            num_columns,
+            truncate: true,
         }
     }
 }
@@ -328,6 +340,7 @@ pub struct RawIterator<'a> {
     parser: CopyTextFormatParser<'a>,
     current_column: usize,
     num_columns: usize,
+    truncate: bool,
 }
 
 impl<'a> RawIterator<'a> {
@@ -337,11 +350,13 @@ impl<'a> RawIterator<'a> {
         }
 
         if self.current_column == self.num_columns {
-            if let Some(err) = self.parser.expect_end_of_line().err() {
-                return Some(Err(err));
-            } else {
-                return None;
+            if !self.truncate {
+                if let Some(err) = self.parser.expect_end_of_line().err() {
+                    return Some(Err(err));
+                }
             }
+
+            return None;
         }
 
         if self.current_column > 0 {

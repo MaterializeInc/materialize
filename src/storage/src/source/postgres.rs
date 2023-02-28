@@ -321,10 +321,9 @@ impl SourceConnectionBuilder for PostgresSourceConnection {
                 resume_lsn: Arc::clone(&resume_lsn),
             };
 
-            task::spawn(
-                || format!("postgres_source:{}", source_id),
-                postgres_replication_loop(task_info),
-            );
+            task::spawn(|| format!("postgres_source:{}", source_id), {
+                postgres_replication_loop(task_info)
+            });
         }
 
         Ok((
@@ -897,7 +896,7 @@ fn produce_snapshot<'a>(
                 // and list of string-encoded values, e.g. Row{ 16391 , ["1", "2"] }
                 let parser = mz_pgcopy::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
 
-                let mut raw_values = parser.iter_raw(info.desc.columns.len());
+                let mut raw_values = parser.iter_raw_truncating(info.desc.columns.len());
                 while let Some(raw_value) = raw_values.next() {
                     match raw_value.err_definite()? {
                         Some(value) => {
@@ -923,13 +922,14 @@ fn produce_snapshot<'a>(
 /// Packs a Tuple received in the replication stream into a Row packer.
 fn datums_from_tuple<'a, T>(
     rel_id: u32,
+    len: usize,
     tuple_data: T,
     datums: &mut Vec<Datum<'a>>,
 ) -> Result<(), anyhow::Error>
 where
     T: IntoIterator<Item = &'a TupleData>,
 {
-    for val in tuple_data.into_iter() {
+    for val in tuple_data.into_iter().take(len) {
         let datum = match val {
             TupleData::Null => Datum::Null,
             TupleData::UnchangedToast => bail!(
@@ -1042,7 +1042,15 @@ async fn produce_replication<'a>(
                             let info = source_tables.get(&rel_id).unwrap();
                             let new_tuple = insert.tuple().tuple_data();
                             let mut datums = datum_vec.borrow();
-                            datums_from_tuple(rel_id, new_tuple, &mut *datums).err_definite()?;
+
+                            datums_from_tuple(
+                                rel_id,
+                                info.desc.columns.len(),
+                                new_tuple,
+                                &mut *datums,
+                            )
+                            .err_definite()?;
+
                             let row = cast_row(&info.casts, &datums).err_definite()?;
                             inserts.push((info.output_index, row));
                         }
@@ -1065,8 +1073,15 @@ async fn produce_replication<'a>(
                                 .tuple_data();
 
                             let mut old_datums = datum_vec.borrow();
-                            datums_from_tuple(rel_id, old_tuple, &mut *old_datums)
-                                .err_definite()?;
+
+                            datums_from_tuple(
+                                rel_id,
+                                info.desc.columns.len(),
+                                old_tuple,
+                                &mut *old_datums,
+                            )
+                            .err_definite()?;
+
                             let old_row = cast_row(&info.casts, &old_datums).err_definite()?;
                             deletes.push((info.output_index, old_row));
                             drop(old_datums);
@@ -1083,8 +1098,15 @@ async fn produce_replication<'a>(
                                     _ => new,
                                 });
                             let mut new_datums = datum_vec.borrow();
-                            datums_from_tuple(rel_id, new_tuple, &mut *new_datums)
-                                .err_definite()?;
+
+                            datums_from_tuple(
+                                rel_id,
+                                info.desc.columns.len(),
+                                new_tuple,
+                                &mut *new_datums,
+                            )
+                            .err_definite()?;
+
                             let new_row = cast_row(&info.casts, &new_datums).err_definite()?;
                             inserts.push((info.output_index, new_row));
                         }
@@ -1106,7 +1128,15 @@ async fn produce_replication<'a>(
                                 .err_definite()?
                                 .tuple_data();
                             let mut datums = datum_vec.borrow();
-                            datums_from_tuple(rel_id, old_tuple, &mut *datums).err_definite()?;
+
+                            datums_from_tuple(
+                                rel_id,
+                                info.desc.columns.len(),
+                                old_tuple,
+                                &mut *datums,
+                            )
+                            .err_definite()?;
+
                             let row = cast_row(&info.casts, &datums).err_definite()?;
                             deletes.push((info.output_index, row));
                         }

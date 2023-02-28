@@ -15,5 +15,5 @@
 ! SELECT * FROM alter_fail_drop_constraint;
 contains:has been altered
 
-! SELECT * FROM alter_fail_add_col;
+! SELECT * FROM alter_fail_drop_col;
 contains:has been altered
