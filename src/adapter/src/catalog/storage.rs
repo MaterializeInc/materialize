@@ -62,8 +62,6 @@ const REPLICA_ID_ALLOC_KEY: &str = "replica";
 pub(crate) const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 pub(crate) const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
 
-const MATERIALIZE_ROLE: &str = "materialize";
-
 async fn migrate(
     stash: &mut Stash,
     version: u64,
