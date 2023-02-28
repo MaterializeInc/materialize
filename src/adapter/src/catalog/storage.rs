@@ -16,7 +16,9 @@ use std::time::Duration;
 use itertools::{max, Itertools};
 use serde::{Deserialize, Serialize};
 
-use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
+use mz_audit_log::{
+    EventDetails, EventType, EventV1, ObjectType, VersionedEvent, VersionedStorageUsage,
+};
 use mz_controller::clusters::{ClusterId, ReplicaConfig, ReplicaId};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -334,33 +336,31 @@ async fn migrate(
         // Introduced in v0.45.0
         //
         // TODO(jkosh44) Can be cleared (patched to be empty) in v0.46.0
-        |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
-            let n = txn
+        |txn: &mut Transaction<'_>, now, _bootstrap_args| {
+            let roles = txn
                 .roles
-                .delete(|_role_key, role_value| &role_value.name == "materialize")
-                .len();
-            assert!(n <= 1, "duplicate roles are not allowed");
-            if n == 1 {
-                // Only delete the most recent CREATE ROLE event if the role currently exists.
-                let (event, _, diff) = txn
-                    .audit_log_updates
-                    .iter()
-                    .sorted_by(|(key1, _, _), (key2, _, _)| {
-                        Ord::cmp(&key1.event.sortable_id(), &key2.event.sortable_id())
-                    })
-                    .rfind(|(key, _, _)| match &key.event {
-                        VersionedEvent::V1(event) => match &event.details {
-                            EventDetails::IdNameV1(id_name) => {
-                                event.event_type == EventType::Create
-                                    && event.object_type == ObjectType::Role
-                                    && id_name.name == "materialize"
-                            }
-                            _ => false,
-                        },
-                    })
-                    .expect("the role is known to exist, so there must be an audit event");
-                assert_eq!(*diff, 1, "unexpected multiplicity stored in audit log");
-                txn.audit_log_updates.push((event.clone(), (), -1));
+                .delete(|_role_key, role_value| &role_value.name == "materialize");
+            assert!(roles.len() <= 1, "duplicate roles are not allowed");
+            if roles.len() == 1 {
+                let (role_key, role_value) = roles.into_element();
+                let id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+                txn.audit_log_updates.push((
+                    AuditLogKey {
+                        event: VersionedEvent::V1(EventV1 {
+                            id,
+                            event_type: EventType::Drop,
+                            object_type: ObjectType::Role,
+                            details: EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                                id: role_key.id.to_string(),
+                                name: role_value.name,
+                            }),
+                            user: None,
+                            occurred_at: now,
+                        }),
+                    },
+                    (),
+                    1,
+                ));
             }
             Ok(())
         },
