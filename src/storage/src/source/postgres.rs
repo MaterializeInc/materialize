@@ -518,7 +518,8 @@ async fn postgres_replication_loop_inner(
         .err_indefinite()?;
 
         // Validate publication tables against the state snapshot
-        validate_tables(&task_info.source_tables, publication_tables).err_definite()?;
+        determine_table_compatibility(&task_info.source_tables, publication_tables)
+            .err_definite()?;
 
         let client = task_info
             .connection_config
@@ -792,29 +793,33 @@ impl RowSender {
     }
 }
 
-/// Validates that all expected tables exist in the publication tables and they have the same schema
-fn validate_tables(
+/// Determines if a set of [`SourceTable`]s and a set of [`PostgresTableDesc`]
+/// are compatible with one another in a way that Materialize can handle.
+///
+/// The returned `BTreeMap` represents the order in which ingested data from
+/// tables must be projected to recover the expected ordering (i.e. their
+/// schemas have changed). Tables without an entry in the returned `BTreeMap` do
+/// not require projection (i.e. their schemas have not changed).
+///
+/// # Errors
+/// - If `source_tables` is not a strict subset of `tables`, based on the
+///   tables' OIDs.
+/// - If any object in `tables` is incompatible with its representation in
+///   `source_tables`, e.g. no longer contains all of the columns identified in
+///   `source_tables`.
+fn determine_table_compatibility(
     source_tables: &BTreeMap<u32, SourceTable>,
     tables: Vec<PostgresTableDesc>,
 ) -> Result<(), anyhow::Error> {
     let pub_tables: BTreeMap<u32, PostgresTableDesc> =
         tables.into_iter().map(|t| (t.oid, t)).collect();
+
     for (id, info) in source_tables.iter() {
         match pub_tables.get(id) {
             Some(pub_schema) => {
                 // Keep this method in sync with the check in response to
                 // Relation messages in the replication stream.
-                if pub_schema != &info.desc {
-                    warn!(
-                        "Error validating table in publication. Expected: {:?} Actual: {:?}",
-                        &info.desc, pub_schema
-                    );
-                    bail!(
-                        "source table {} with oid {} has been altered",
-                        info.desc.name,
-                        info.desc.oid
-                    )
-                }
+                info.desc.determine_compatibility(pub_schema)?;
             }
             None => {
                 warn!(
@@ -829,6 +834,7 @@ fn validate_tables(
             }
         }
     }
+
     Ok(())
 }
 
@@ -1121,97 +1127,41 @@ async fn produce_replication<'a>(
                         Relation(relation) => {
                             last_data_message = Instant::now();
                             let rel_id = relation.rel_id();
-                            let mut valid_schema_change = true;
                             if let Some(info) = source_tables.get(&rel_id) {
-                                // Start with the cheapest check first, this will catch the majority of alters
-                                if info.desc.columns.len() != relation.columns().len() {
-                                    warn!(
-                                        "alter table detected on {} with id {}",
-                                        info.desc.name, info.desc.oid
-                                    );
-                                    valid_schema_change = false;
-                                }
-                                let same_name = info.desc.name == relation.name().unwrap();
-                                let same_namespace =
-                                    info.desc.namespace == relation.namespace().unwrap();
-                                if !same_name || !same_namespace {
-                                    warn!(
-                                        "table name changed on {}.{} with id {} to {}.{}",
-                                        info.desc.namespace,
-                                        info.desc.name,
-                                        info.desc.oid,
-                                        relation.namespace().unwrap(),
-                                        relation.name().unwrap()
-                                    );
-                                    valid_schema_change = false;
-                                }
+                                // Because the replication stream doesn't include columns'
+                                // attnums, we need to check the current local schema against
+                                // the current remote schema to ensure e.g. we haven't received
+                                // a schema update with the same terminal column name which is
+                                // actually a different column.
+                                let current_publication_info = mz_postgres_util::publication_info(
+                                    &client_config,
+                                    publication,
+                                    Some(rel_id),
+                                )
+                                .await
+                                .err_indefinite()?;
 
-                                // Relation messages do not include nullability/primary_key data so we
-                                // check the name, type_oid, and type_mod explicitly and error if any
-                                // of them differ
-                                for (src, rel) in info.desc.columns.iter().zip(relation.columns()) {
-                                    let same_name = src.name == rel.name().unwrap();
-                                    let rel_typoid = u32::try_from(rel.type_id()).unwrap();
-                                    let same_typoid = src.type_oid == rel_typoid;
-                                    let same_typmod = src.type_mod == rel.type_modifier();
-
-                                    if !same_name || !same_typoid || !same_typmod {
+                                match current_publication_info.get(0) {
+                                    Some(desc) => {
+                                        // Keep this method in sync with the check in
+                                        // validate_tables.
+                                        info.desc
+                                            .determine_compatibility(desc)
+                                            .map_err(Definite)?;
+                                    }
+                                    None => {
                                         warn!(
-                                            "alter table error: name {}, oid {}, old_schema {:?}, new_schema {:?}",
+                                            "alter table error, table removed from upstream source: name {}, oid {}, old_schema {:?}",
                                             info.desc.name,
                                             info.desc.oid,
                                             info.desc.columns,
-                                            relation.columns()
                                         );
-
-                                        valid_schema_change = false;
+                                        return Err(Definite(anyhow!(
+                                            "source table {} with oid {} has been dropped",
+                                            info.desc.name,
+                                            info.desc.oid
+                                        )))?;
                                     }
-                                }
-
-                                if valid_schema_change {
-                                    // Because the replication stream doesn't
-                                    // include columns' attnums, we need to check
-                                    // the current local schema against the current
-                                    // remote schema to ensure e.g. we haven't
-                                    // received a schema update with the same
-                                    // terminal column name which is actually a
-                                    // different column.
-                                    let current_publication_info =
-                                        mz_postgres_util::publication_info(
-                                            &client_config,
-                                            publication,
-                                            Some(rel_id),
-                                        )
-                                        .await
-                                        .err_indefinite()?;
-
-                                    let remote_schema_eq =
-                                        Some(&info.desc) == current_publication_info.get(0);
-                                    if !remote_schema_eq {
-                                        warn!(
-                                        "alter table error: name {}, oid {}, current local schema {:?}, current remote schema {:?}",
-                                        info.desc.name,
-                                        info.desc.oid,
-                                        info.desc.columns,
-                                        current_publication_info.get(0)
-                                    );
-
-                                        valid_schema_change = false;
-                                    }
-                                }
-
-                                if !valid_schema_change {
-                                    return Err(Definite(anyhow!(
-                                        "source table {} with oid {} has been altered",
-                                        info.desc.name,
-                                        info.desc.oid
-                                    )))?;
-                                } else {
-                                    warn!(
-                                        "source table {} with oid {} has been altered, but we could not determine how",
-                                        info.desc.name,
-                                        info.desc.oid
-                                    )
                                 }
                             }
                         }
