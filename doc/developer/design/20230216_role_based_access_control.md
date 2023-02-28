@@ -392,6 +392,9 @@ This is an optional phase to add some utility commands present in PostgreSQL. We
 
 - `CURRENT_ROLE`, `CURRENT_USER`, `SESSION_USER`, aliases in `GRANT`, `REVOKE`, `ALTER`, `REASSIGN OWNED`
   and `DROP OWNED`.
+- Row level security policies (https://www.postgresql.org/docs/current/ddl-rowsecurity.html). If any catalog object
+  contains sensitive information, then all users will be able to read all the contents. As a follow-up project, we can
+  implement row level security to prevent this.
 
 ## Rollout Plan
 
