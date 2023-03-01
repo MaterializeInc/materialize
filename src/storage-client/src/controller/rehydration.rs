@@ -23,7 +23,6 @@ use std::time::Duration;
 use anyhow::anyhow;
 use differential_dataflow::lattice::Lattice;
 use futures::{Stream, StreamExt};
-use mz_persist_types::codec_impls::UnitSchema;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::select;
@@ -38,7 +37,7 @@ use mz_ore::retry::Retry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::Codec64;
-use mz_repr::{Diff, GlobalId};
+use mz_repr::GlobalId;
 use mz_service::client::{GenericClient, Partitioned};
 
 use crate::client::{
@@ -48,7 +47,6 @@ use crate::client::{
 use crate::controller::ResumptionFrontierCalculator;
 use crate::metrics::RehydratingStorageClientMetrics;
 use crate::types::parameters::StorageParameters;
-use crate::types::sources::SourceData;
 
 /// A storage client that replays the command stream on failure.
 ///
@@ -302,45 +300,6 @@ where
                 .calculate_resumption_frontier(&mut state)
                 .await;
             ingest.resume_upper = resume_upper;
-        }
-
-        for export in self.sinks.values_mut() {
-            let persist_client = self
-                .persist
-                .open(
-                    export
-                        .description
-                        .from_storage_metadata
-                        .persist_location
-                        .clone(),
-                )
-                .await
-                .expect("error creating persist client");
-            let from_read_handle = persist_client
-                .open_leased_reader::<SourceData, (), T, Diff>(
-                    export.description.from_storage_metadata.data_shard,
-                    "rehydration since",
-                    // This is also `from_desc`, but this would be the _only_ usage
-                    // of `from_desc` in storage, and we try to be consistent about
-                    // where we get `RelationDesc`s for perist clients
-                    Arc::new(
-                        export
-                            .description
-                            .from_storage_metadata
-                            .relation_desc
-                            .clone(),
-                    ),
-                    Arc::new(UnitSchema),
-                )
-                .await
-                .expect("from collection disappeared");
-
-            let cached_as_of = &export.description.as_of;
-            // The controller has the dependency recorded in it's `exported_collections` so this
-            // should not change at least until the sink is started up (because the storage
-            // controller will not downgrade the source's since).
-            let from_since = from_read_handle.since();
-            export.description.as_of = cached_as_of.maybe_fast_forward(from_since);
         }
 
         // Rehydrate all commands.
