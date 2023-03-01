@@ -48,4 +48,4 @@ fi
 
 ci_uncollapsed_heading ":docker: Running \`mzcompose run ${run_args[*]}\`"
 
-mzcompose run "${run_args[@]}" | tee run.log
+mzcompose run "${run_args[@]}" |& tee run.log

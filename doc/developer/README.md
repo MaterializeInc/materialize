@@ -22,6 +22,9 @@ land, and then browsed as reference material as you skill up on the codebase.
 
 ## Table of contents
 
+* [ci-regexp.md](ci-regexp.md) describes how to mark a flaky CI issue with a
+  regular expression to ignore it in future CI runs.
+
 * [change-data-capture.md](change-data-capture.md) describes our change data
   capture (CDC) requirements.
 
