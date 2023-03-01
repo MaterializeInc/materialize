@@ -110,7 +110,7 @@ class RestartClusterdCompute(Scenario):
         return [
             StartMz(),
             StartClusterdCompute(),
-            UseClusterdCompute(base_version=self.base_version()),
+            UseClusterdCompute(self),
             Initialize(self),
             KillClusterdCompute(),
             StartClusterdCompute(),
@@ -131,7 +131,7 @@ class RestartEnvironmentdClusterdStorage(Scenario):
         return [
             StartMz(),
             StartClusterdCompute(),
-            UseClusterdCompute(base_version=self.base_version()),
+            UseClusterdCompute(self),
             Initialize(self),
             KillMz(),
             StartMz(),
@@ -152,7 +152,7 @@ class KillClusterdStorage(Scenario):
         return [
             StartMz(),
             StartClusterdCompute(),
-            UseClusterdCompute(base_version=self.base_version()),
+            UseClusterdCompute(self),
             Initialize(self),
             KillClusterdStorageAction(),
             Manipulate(self, phase=1),

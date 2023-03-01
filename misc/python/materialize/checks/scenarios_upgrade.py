@@ -78,7 +78,7 @@ class UpgradeClusterdComputeLast(Scenario):
         return [
             StartMz(tag=self.base_version()),
             StartClusterdCompute(tag=self.base_version()),
-            UseClusterdCompute(base_version=self.base_version()),
+            UseClusterdCompute(self),
             Initialize(self),
             Manipulate(self, phase=1),
             KillMz(),
@@ -110,7 +110,7 @@ class UpgradeClusterdComputeFirst(Scenario):
         return [
             StartMz(tag=self.base_version()),
             StartClusterdCompute(tag=self.base_version()),
-            UseClusterdCompute(base_version=self.base_version()),
+            UseClusterdCompute(self),
             Initialize(self),
             Manipulate(self, phase=1),
             KillClusterdCompute(),
