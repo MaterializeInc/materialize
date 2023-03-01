@@ -249,6 +249,9 @@ where
         // creating a Subscribe can take indefinitely long (e.g. as_of in the far future),
         // so we race its creation with our token to ensure any async work is dropped once
         // the token is dropped.
+        //
+        // NB: reading from a channel (token_is_dropped) is cancel-safe.
+        //     create_subscribe is NOT cancel-safe, but we will not retry it if it is dropped.
         let (subscription, as_of) = match futures::future::select(create_subscribe, token_is_dropped).await {
             Either::Left(((subscription, as_of), _)) => {
                 (subscription, as_of)
