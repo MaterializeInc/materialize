@@ -37,7 +37,7 @@ contains:non-temporary items cannot depend on temporary item
 > CREATE TEMP VIEW double_temp_v AS SELECT * FROM temp_v
 
 ! CREATE TEMP VIEW double_temp_v AS SELECT * FROM temp_v
-contains:catalog item 'double_temp_v' : view, already exists
+contains:catalog item "double_temp_v" : view, already exists
 
 > CREATE OR REPLACE TEMP VIEW double_temp_v AS SELECT * FROM temp_v
 
@@ -101,7 +101,7 @@ contains:unknown catalog item 'v1'
 > CREATE TEMPORARY TABLE temp_t (a int, b text NOT NULL)
 
 ! CREATE TEMP TABLE temp_t (a int, b text NOT NULL)
-contains:catalog item 'temp_t' : table, already exists
+contains:catalog item "temp_t" : table, already exists
 
 > INSERT INTO temp_t VALUES (1, 'testing')
 

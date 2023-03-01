@@ -24,7 +24,7 @@ CREATE TABLE not_a_secret (a int);
 statement ok
 CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'broker');
 
-statement error catalog item 'kafka_conn' : connection, already exists
+statement error catalog item "kafka_conn" : connection, already exists
 CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'broker');
 
 statement ok
