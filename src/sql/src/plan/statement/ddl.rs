@@ -91,8 +91,9 @@ use crate::catalog::{
 };
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
-    Aug, FullSchemaName, QualifiedObjectName, RawDatabaseSpecifier, ResolvedClusterName,
-    ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedObjectName, SchemaSpecifier,
+    Aug, FullSchemaName, PartialObjectName, QualifiedObjectName, RawDatabaseSpecifier,
+    ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedObjectName,
+    SchemaSpecifier,
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
@@ -289,6 +290,14 @@ pub fn plan_create_table(
     } else {
         scx.allocate_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?
     };
+
+    if scx.item_exists(&name) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: name.item,
+            item_type: CatalogItemType::Table,
+        });
+    }
+
     let desc = RelationDesc::new(typ, names);
 
     let create_sql = normalize::create_statement(scx, Statement::CreateTable(stmt.clone()))?;
@@ -1701,6 +1710,7 @@ pub fn plan_create_view(
     } = &mut stmt;
     let partial_name = normalize::unresolved_object_name(definition.name.clone())?;
     let (name, view) = plan_view(scx, definition, params, *temporary)?;
+
     let replace = if *if_exists == IfExistsBehavior::Replace {
         if let Ok(item) = scx.catalog.resolve_item(&partial_name) {
             if view.expr.depends_on().contains(&item.id()) {
@@ -1717,6 +1727,14 @@ pub fn plan_create_view(
     } else {
         None
     };
+
+    if replace.is_none() && scx.item_exists(&name) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: name.item,
+            item_type: CatalogItemType::View,
+        });
+    }
+
     Ok(Plan::CreateView(CreateViewPlan {
         name,
         view,
@@ -1793,6 +1811,13 @@ pub fn plan_create_materialized_view(
         IfExistsBehavior::Error => (),
     }
 
+    if replace.is_none() && !if_not_exists && scx.item_exists(&name) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: name.item,
+            item_type: CatalogItemType::MaterializedView,
+        });
+    }
+
     Ok(Plan::CreateMaterializedView(CreateMaterializedViewPlan {
         name,
         materialized_view: MaterializedView {
@@ -1853,6 +1878,13 @@ pub fn plan_create_sink(
         Some(Envelope::None) => bail_unsupported!("\"ENVELOPE NONE\" sinks"),
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
+    if scx.item_exists(&name) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: name.item,
+            item_type: CatalogItemType::Sink,
+        });
+    }
+
     let from = scx.get_item_by_resolved_name(&from)?;
 
     let desc = from.desc(&scx.catalog.resolve_full_name(from.name()))?;
@@ -2276,6 +2308,12 @@ pub fn plan_create_index(
             idx_name
         }
     };
+    if scx.item_exists(&index_name) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: index_name.item,
+            item_type: CatalogItemType::Index,
+        });
+    }
 
     let options = plan_index_options(scx, with_options.clone())?;
     let cluster_id = match in_cluster {
@@ -2412,13 +2450,20 @@ pub fn plan_create_type(
 
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
     if scx.item_exists(&name) {
-        sql_bail!("catalog item '{}' already exists", name);
+        let partial_name = PartialObjectName::from(scx.catalog.resolve_full_name(&name));
+        match scx.catalog.resolve_item(&partial_name) {
+            Ok(item) => Err(PlanError::ItemAlreadyExists {
+                name: name.item,
+                item_type: item.item_type(),
+            }),
+            Err(_) => Err(sql_err!("catalog item '{}' already exists", name.item)),
+        }
+    } else {
+        Ok(Plan::CreateType(CreateTypePlan {
+            name,
+            typ: Type { create_sql, inner },
+        }))
     }
-
-    Ok(Plan::CreateType(CreateTypePlan {
-        name,
-        typ: Type { create_sql, inner },
-    }))
 }
 
 generate_extracted_config!(CreateTypeListOption, (ElementType, ResolvedDataType));
@@ -3220,6 +3265,13 @@ pub fn plan_create_connection(
         }
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
+    if scx.item_exists(&name) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: name.item,
+            item_type: CatalogItemType::Connection,
+        });
+    }
+
     let plan = CreateConnectionPlan {
         name,
         if_not_exists,

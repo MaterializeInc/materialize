@@ -30,7 +30,7 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::UnresolvedObjectName;
 use mz_sql_parser::parser::ParserError;
 
-use crate::catalog::CatalogError;
+use crate::catalog::{CatalogError, CatalogItemType};
 use crate::names::PartialObjectName;
 use crate::names::ResolvedObjectName;
 use crate::plan::plan_utils::JoinSide;
@@ -145,6 +145,10 @@ pub enum PlanError {
         supported_azs: BTreeSet<String>,
     },
     InvalidSchemaName,
+    ItemAlreadyExists {
+        name: String,
+        item_type: CatalogItemType,
+    },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -385,6 +389,7 @@ impl fmt::Display for PlanError {
             },
             Self::InvalidPrivatelinkAvailabilityZone { name, ..} => write!(f, "invalid AWS PrivateLink availability zone {}", name.quoted()),
             Self::InvalidSchemaName => write!(f, "no schema has been selected to create in"),
+            Self::ItemAlreadyExists { name, item_type } => write!(f, "catalog item '{name}' : {item_type}, already exists"),
         }
     }
 }
