@@ -59,9 +59,6 @@ contains:Objects per schema resource limit of 2 cannot be exceeded. Current amou
 ! CREATE TYPE t AS (a float8)
 contains:Objects per schema resource limit of 2 cannot be exceeded. Current amount is 3 instances, tried to create 1 new instances.
 
-! CREATE TABLE t4 (a INT)
-contains:Objects per schema resource limit of 2 cannot be exceeded. Current amount is 3 instances, tried to create 1 new instances.
-
 > CREATE SCHEMA s1;
 
 > CREATE TABLE s1.t4 (a INT)

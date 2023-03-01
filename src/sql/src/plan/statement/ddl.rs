@@ -293,7 +293,7 @@ pub fn plan_create_table(
 
     // check for an object in the catalog with this same name
     let partial_name = PartialObjectName::from(scx.catalog.resolve_full_name(&name));
-    if let Ok(item) = scx.catalog.resolve_item(&partial_name) {
+    if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
         return Err(PlanError::ItemAlreadyExists {
             name: name.item,
             item_type: item.item_type(),
