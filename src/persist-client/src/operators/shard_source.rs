@@ -194,7 +194,7 @@ where
         &feedback_stream,
         // We must ensure all completed fetches are fed into
         // the worker responsible for managing part leases
-        Exchange::new(|| u64::cast_from(chosen_worker)),
+        Exchange::new(move |_| u64::cast_from(chosen_worker)),
         vec![Antichain::new()],
     );
 
