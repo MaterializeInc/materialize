@@ -44,16 +44,16 @@ $ kafka-ingest format=avro topic=data schema=${schema}
 # Test that creating objects of the same name does not work
 
 ! CREATE MATERIALIZED VIEW i AS SELECT 1.5 AS c
-contains:catalog item 'i' already exists
+contains:catalog item 'i' : index, already exists
 
 ! CREATE INDEX i ON s("Y")
-contains:catalog item 'i' already exists
+contains:catalog item 'i' : index, already exists
 
 ! CREATE INDEX j on v2(x)
-contains:catalog item 'j' already exists
+contains:catalog item 'j': index, already exists
 
 ! CREATE INDEX v ON v2(x)
-contains:catalog item 'v' already exists
+contains:catalog item 'v': index, already exists
 
 $ set dummy={
     "type": "record",

@@ -118,7 +118,7 @@ contains:unknown catalog item 'test4'
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-contains:catalog item 's1' already exists
+contains:catalog item 's1' : sink, already exists
 
 > CREATE SINK IF NOT EXISTS s1 FROM s
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v2-${testdrive.seed}')

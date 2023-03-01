@@ -37,7 +37,7 @@ contains:non-temporary items cannot depend on temporary item
 > CREATE TEMP VIEW double_temp_v AS SELECT * FROM temp_v
 
 ! CREATE TEMP VIEW double_temp_v AS SELECT * FROM temp_v
-contains:catalog item 'double_temp_v' already exists
+contains:catalog item 'double_temp_v' : view, already exists
 
 > CREATE OR REPLACE TEMP VIEW double_temp_v AS SELECT * FROM temp_v
 

@@ -40,7 +40,7 @@ SELECT * FROM mv
 
 # Test: Materialized view creation can be skipped if a materialized view already exists.
 
-statement error catalog item 'mv' already exists
+statement error catalog item 'mv' : materialized view, already exists
 CREATE MATERIALIZED VIEW mv AS SELECT 1
 
 statement ok
