@@ -16,7 +16,9 @@ use std::time::Duration;
 use itertools::{max, Itertools};
 use serde::{Deserialize, Serialize};
 
-use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
+use mz_audit_log::{
+    EventDetails, EventType, EventV1, ObjectType, VersionedEvent, VersionedStorageUsage,
+};
 use mz_controller::clusters::{ClusterId, ReplicaConfig, ReplicaId};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -327,6 +329,39 @@ async fn migrate(
         // Introduced in v0.39.0
         |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
             txn.cluster_replicas.update(|_k, v| Some(v.clone()))?;
+            Ok(())
+        },
+        // Remove the materialize role from existing deployments
+        //
+        // Introduced in v0.45.0
+        //
+        // TODO(jkosh44) Can be cleared (patched to be empty) in v0.46.0
+        |txn: &mut Transaction<'_>, now, _bootstrap_args| {
+            let roles = txn
+                .roles
+                .delete(|_role_key, role_value| &role_value.name == "materialize");
+            assert!(roles.len() <= 1, "duplicate roles are not allowed");
+            if roles.len() == 1 {
+                let (role_key, role_value) = roles.into_element();
+                let id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+                txn.audit_log_updates.push((
+                    AuditLogKey {
+                        event: VersionedEvent::V1(EventV1 {
+                            id,
+                            event_type: EventType::Drop,
+                            object_type: ObjectType::Role,
+                            details: EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                                id: role_key.id.to_string(),
+                                name: role_value.name,
+                            }),
+                            user: None,
+                            occurred_at: now,
+                        }),
+                    },
+                    (),
+                    1,
+                ));
+            }
             Ok(())
         },
         // Attributes were added to role definitions.
