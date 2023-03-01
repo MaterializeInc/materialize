@@ -823,15 +823,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
         }
 
         if !new_uppers.is_empty() {
-            // Sinks maintain a read handle over their input data, in case environmentd is unable
-            // to maintain the global read hold. It's tempting to use environmentd's AllowCompaction
-            // messages to maintain an even more conservative hold... but environmentd only sends
-            // clusterd AllowCompaction messages for its own id, not for its dependencies.
-            for (id, upper) in &new_uppers {
-                if let Some(handle) = &self.storage_state.sink_handles.get(id) {
-                    handle.downgrade_since(upper.clone());
-                }
-            }
             self.send_storage_response(response_tx, StorageResponse::FrontierUppers(new_uppers));
         }
     }
@@ -1095,6 +1086,21 @@ impl StorageState {
                     // internally restart a sink in the future.
                     if let Some(export_description) = self.exports.get_mut(&id) {
                         export_description.as_of.maybe_fast_forward(&frontier);
+
+                        // Sinks maintain a read handle over their input data to
+                        // ensure that we can restart at the `as_of` that we
+                        // store and update in the export description.
+                        //
+                        // Communication between the storage controller and this
+                        // here worker is asynchronous, so we might learn that
+                        // the controller downgraded a since after it has
+                        // downgraded it's handle. Keeping a handle here ensures
+                        // that we can restart based on our local state.
+                        //
+                        // NOTE: It's important that we always update/downgrade
+                        // the sink `as_of` and the `SinkHandle` in lockstep.
+                        let sink_handle = self.sink_handles.get(&id).expect("missing SinkHandle");
+                        sink_handle.downgrade_since(frontier.clone());
                     }
 
                     if frontier.is_empty() {
