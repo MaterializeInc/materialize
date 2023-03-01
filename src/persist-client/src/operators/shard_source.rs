@@ -281,7 +281,7 @@ where
             // subscription and pass them on.
             while inflight_bytes < max_inflight_bytes {
                 tokio::select! {
-                    // If the token has been dropped, we begin a graceful shutdown 
+                    // If the token has been dropped, we begin a graceful shutdown
                     // by downgrading to the empty frontier and proceeding to the
                     // next state, where we await our feedback edge's progression.
                     //
@@ -417,11 +417,11 @@ where
             }
         }
 
-        // We have finished outputting all leased parts the dataflow will need, 
-        // but `shard_source_fetches` may still be fetching those parts. We must 
+        // We have finished outputting all leased parts the dataflow will need,
+        // but `shard_source_fetches` may still be fetching those parts. We must
         // keep our Subscribe (and its SeqNo hold) alive until all of them have
         // been fetched to avoid racing with GC and panicking on a missing blob.
-        // We can drop our handle when the feedback edge from `shard_source_fetches` 
+        // We can drop our handle when the feedback edge from `shard_source_fetches`
         // advances to the empty frontier, indicating that all parts have been read.
         while let Some(completed_fetch) = completed_fetches.next().await {
             match completed_fetch {
