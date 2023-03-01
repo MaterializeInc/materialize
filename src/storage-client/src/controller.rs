@@ -1641,7 +1641,7 @@ where
 
             let storage_dependencies = vec![from_id];
 
-            let as_of = MetadataExportFetcher::get_stash_collection()
+            let mut durable_export_data = MetadataExportFetcher::get_stash_collection()
                 .insert_key_without_overwrite(
                     &mut self.state.stash,
                     id,
@@ -1649,15 +1649,15 @@ where
                         initial_as_of: description.sink.as_of.clone(),
                     },
                 )
-                .await?
-                .initial_as_of
-                .maybe_fast_forward(&acquired_since);
+                .await?;
+
+            durable_export_data.initial_as_of.downgrade(&acquired_since);
 
             info!(
                 sink_id = id.to_string(),
                 from_id = from_id.to_string(),
                 acquired_since = ?acquired_since,
-                initial_as_of = ?as_of,
+                initial_as_of = ?durable_export_data.initial_as_of,
                 "create_exports: creating sink"
             );
 
@@ -1688,7 +1688,7 @@ where
                     from_desc: description.sink.from_desc,
                     connection: description.sink.connection,
                     envelope: description.sink.envelope,
-                    as_of,
+                    as_of: durable_export_data.initial_as_of,
                     status_id,
                     from_storage_metadata,
                 },

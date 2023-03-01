@@ -416,7 +416,7 @@ where
             StorageCommand::AllowCompaction(frontiers) => {
                 for (id, frontier) in frontiers {
                     if let Some(export) = self.sinks.get_mut(id) {
-                        export.description.as_of.maybe_fast_forward(frontier);
+                        export.description.as_of.downgrade(frontier);
                     }
                 }
             }

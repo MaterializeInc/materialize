@@ -1071,7 +1071,7 @@ impl StorageState {
                     // Update our knowledge of the `as_of`, in case we need to
                     // internally restart a sink in the future.
                     if let Some(export_description) = self.exports.get_mut(&id) {
-                        export_description.as_of.maybe_fast_forward(&frontier);
+                        export_description.as_of.downgrade(&frontier);
 
                         // Sinks maintain a read handle over their input data to
                         // ensure that we can restart at the `as_of` that we
