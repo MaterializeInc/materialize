@@ -308,6 +308,7 @@ impl SinkHandle {
         sink_id: GlobalId,
         from_metadata: &CollectionMetadata,
         shard_id: ShardId,
+        initial_since: Antichain<Timestamp>,
         persist_clients: Arc<PersistClientCache>,
     ) -> SinkHandle {
         let (downgrade_tx, mut rx) = watch::channel(Antichain::from_elem(Timestamp::minimum()));
@@ -330,6 +331,14 @@ impl SinkHandle {
                 )
                 .await
                 .expect("opening reader for shard");
+
+            assert!(
+                !PartialOrder::less_than(&initial_since, read_handle.since()),
+                "could not acquire a SinkHandle that can hold the \
+                initial since {:?}, the since is already at {:?}",
+                initial_since,
+                read_handle.since()
+            );
 
             let mut downgrade_to = read_handle.since().clone();
             'downgrading: loop {
@@ -1055,12 +1064,15 @@ impl StorageState {
                         Antichain::from_elem(mz_repr::Timestamp::minimum()),
                     );
 
+                    let initial_since = export.description.as_of.frontier.clone();
+
                     self.sink_handles.insert(
                         export.id,
                         SinkHandle::new(
                             export.id,
                             &export.description.from_storage_metadata,
                             export.description.from_storage_metadata.data_shard,
+                            initial_since,
                             Arc::clone(&self.persist_clients),
                         ),
                     );
