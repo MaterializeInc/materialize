@@ -7,12 +7,15 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
 from materialize.mzcompose.services import Clusterd, Materialized
 from materialize.util import MzVersion
+
+if TYPE_CHECKING:
+    from materialize.checks.scenarios import Scenario
 
 
 class MzcomposeAction(Action):
@@ -72,8 +75,8 @@ class KillMz(MzcomposeAction):
 
 
 class UseClusterdCompute(MzcomposeAction):
-    def __init__(self, base_version: MzVersion) -> None:
-        self.base_version = base_version
+    def __init__(self, scenario: "Scenario") -> None:
+        self.base_version = scenario.base_version()
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()

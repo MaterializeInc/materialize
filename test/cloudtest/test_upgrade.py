@@ -68,11 +68,11 @@ class CloudtestUpgrade(Scenario):
     def actions(self) -> List[Action]:
         return [
             LiftClusterLimits(),
-            Initialize(self.checks(), base_version=self.version_cargo),
-            Manipulate(self.checks(), base_version=self.version_cargo, phase=1),
+            Initialize(self),
+            Manipulate(self, phase=1),
             ReplaceEnvironmentdStatefulSet(new_tag=None),
-            Manipulate(self.checks(), base_version=self.version_cargo, phase=2),
-            Validate(self.checks(), base_version=self.version_cargo),
+            Manipulate(self, phase=2),
+            Validate(self),
         ]
 
 
