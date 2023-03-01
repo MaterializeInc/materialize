@@ -19,7 +19,7 @@ use std::time::Instant;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::ShutdownButton;
-use differential_dataflow::Hashable;
+use differential_dataflow::{Data, Hashable};
 use futures::StreamExt;
 use futures_util::stream::FuturesUnordered;
 use mz_ore::cast::CastFrom;
@@ -27,16 +27,18 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::vec::VecExt;
 use mz_persist::location::ExternalError;
 use mz_persist_types::{Codec, Codec64};
+use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{CapabilitySet, InputCapability};
+use timely::dataflow::operators::{Capability, CapabilitySet, InputCapability};
 use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::sync::{mpsc, Semaphore};
-use tracing::trace;
+use tracing::{info, trace};
 
 use crate::cache::PersistClientCache;
 use crate::fetch::{FetchedPart, LeasedBatchPart, SerdeLeasedBatchPart};
@@ -65,7 +67,7 @@ use crate::{PersistLocation, ShardId};
 /// using [`timely::dataflow::operators::generic::operator::empty`].
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn shard_source<K, V, D, G>(
+pub fn shard_source<K, V, E, D, G>(
     scope: &G,
     name: &str,
     clients: Arc<PersistClientCache>,
@@ -76,10 +78,18 @@ pub fn shard_source<K, V, D, G>(
     flow_control: Option<FlowControl<G>>,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
-) -> (Stream<G, FetchedPart<K, V, G::Timestamp, D>>, Rc<dyn Any>)
+    yield_fn: impl Fn(Instant, usize) -> bool + 'static,
+    emit_fn: impl FnMut(
+            &mut ConsolidateBuffer<G::Timestamp, E, D, Tee<G::Timestamp, (E, G::Timestamp, D)>>,
+            &Capability<G::Timestamp>,
+            ((Result<K, String>, Result<V, String>), G::Timestamp, D),
+        ) -> usize
+        + 'static,
+) -> (Stream<G, (E, G::Timestamp, D)>, Rc<dyn Any>)
 where
     K: Debug + Codec,
     V: Debug + Codec,
+    E: Data,
     D: Semigroup + Codec64 + Send + Sync,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
@@ -126,7 +136,7 @@ where
         Arc::clone(&val_schema),
     );
     let (parts, tokens) = shard_source_fetch(
-        &descs, name, clients, location, shard_id, key_schema, val_schema,
+        &descs, name, clients, location, shard_id, key_schema, val_schema, yield_fn, emit_fn,
     );
     shard_source_tokens(&tokens, name, consumed_part_tx, chosen_worker);
 
@@ -412,7 +422,7 @@ where
     (descs_stream, shutdown_button)
 }
 
-pub(crate) fn shard_source_fetch<K, V, T, D, G>(
+pub(crate) fn shard_source_fetch<K, V, E, T, D, G>(
     descs: &Stream<G, (usize, SerdeLeasedBatchPart)>,
     name: &str,
     clients: Arc<PersistClientCache>,
@@ -420,13 +430,18 @@ pub(crate) fn shard_source_fetch<K, V, T, D, G>(
     shard_id: ShardId,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
-) -> (
-    Stream<G, FetchedPart<K, V, T, D>>,
-    Stream<G, SerdeLeasedBatchPart>,
-)
+    yield_fn: impl Fn(Instant, usize) -> bool + 'static,
+    mut emit_fn: impl FnMut(
+            &mut ConsolidateBuffer<T, E, D, Tee<T, (E, T, D)>>,
+            &Capability<T>,
+            ((Result<K, String>, Result<V, String>), T, D),
+        ) -> usize
+        + 'static,
+) -> (Stream<G, (E, T, D)>, Stream<G, SerdeLeasedBatchPart>)
 where
     K: Debug + Codec,
     V: Debug + Codec,
+    E: Data,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
     G: Scope<Timestamp = T>,
@@ -516,13 +531,24 @@ where
                     // outputs or sessions across await points, which
                     // would prevent messages from being flushed from
                     // the shared timely output buffer.
-                    let mut fetched_output = fetched_output.activate();
                     let mut tokens_output = tokens_output.activate();
                     let cap: &InputCapability<T> = &cap;
-                    fetched_output.session(cap).give(fetched);
                     tokens_output
                         .session(cap)
                         .give(token.into_exchangeable_part());
+
+                    let mut work = 0;
+                    let start_time = Instant::now();
+
+                    let fetch_cap = cap.delayed(cap.time());
+                    let mut fetched_output = fetched_output.activate();
+                    let mut consolidated = ConsolidateBuffer::new(&mut fetched_output, 0);
+                    for tuple in fetched {
+                        work += emit_fn(&mut consolidated, &fetch_cap, tuple);
+                        if yield_fn(start_time, work) {
+                            info!("I should really be yielding here!");
+                        }
+                    }
                 }
                 FileEvent::Input(Event::Progress(_)) => {}
                 FileEvent::Done => {
