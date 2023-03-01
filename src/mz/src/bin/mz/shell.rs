@@ -37,10 +37,13 @@ pub(crate) fn check_environment_health(
     valid_profile: &ValidProfile<'_>,
     environment: &Environment,
 ) -> Result<bool> {
+    if !environment.resolvable {
+        return Ok(false);
+    }
     let status = Command::new("pg_isready")
-        .arg(environment.sql_url(valid_profile).to_string())
-        .env("PGPASSWORD", valid_profile.app_password.clone())
         .arg("-q")
+        .args(environment.pg_isready_args(valid_profile))
+        .env("PGPASSWORD", valid_profile.app_password.clone())
         .output()
         .context("failed to execute pg_isready")?
         .status

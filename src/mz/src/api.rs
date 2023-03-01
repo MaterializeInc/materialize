@@ -70,6 +70,7 @@ pub struct Region {
 pub struct Environment {
     pub environmentd_pgwire_address: String,
     pub environmentd_https_address: String,
+    pub resolvable: bool,
 }
 
 impl Environment {
@@ -86,6 +87,21 @@ impl Environment {
             url.query_pairs_mut().append_pair("sslmode", "require");
         }
         url
+    }
+
+    pub fn pg_isready_args(&self, profile: &ValidProfile) -> Vec<String> {
+        let mut hostport = self.environmentd_pgwire_address.split(':');
+        [
+            "-h",
+            hostport.next().unwrap(),
+            "-p",
+            hostport.next().unwrap(),
+            "-U",
+            profile.profile.get_email(),
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect()
     }
 }
 
