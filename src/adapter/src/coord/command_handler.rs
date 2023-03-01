@@ -187,8 +187,6 @@ impl Coordinator {
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
     ) {
-        // TODO(jkosh44) SUPERUSER should be derived and added to the session. Make sure that
-        //  `MZ_SYSTEM` always has SUPERUSER. This will be done in a follow-up PR.
         if self
             .catalog
             .for_session(&session)

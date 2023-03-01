@@ -445,6 +445,14 @@ static MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<mz_repr::Timestamp>> = Serve
     safe: false,
 };
 
+const IS_SUPERUSER: ServerVar<str> = ServerVar {
+    name: UncasedStr::new("is_superuser"),
+    value: "off",
+    description: "Indicates whether the current session is a super user (PostgreSQL).",
+    internal: false,
+    safe: true,
+};
+
 /// Represents the input to a variable.
 ///
 /// Each variable has different rules for how it handles each style of input.
@@ -542,11 +550,12 @@ pub struct SessionVars {
     real_time_recency: SessionVar<bool>,
     emit_timestamp_notice: SessionVar<bool>,
     emit_trace_id_notice: SessionVar<bool>,
+    is_superuser: SessionVar<str>,
 }
 
 impl SessionVars {
     /// Creates a new [`SessionVars`].
-    pub fn new(build_info: &'static BuildInfo) -> SessionVars {
+    pub fn new(build_info: &'static BuildInfo, is_superuser: bool) -> SessionVars {
         SessionVars {
             application_name: SessionVar::new(&APPLICATION_NAME),
             build_info,
@@ -574,12 +583,17 @@ impl SessionVars {
             real_time_recency: SessionVar::new(&REAL_TIME_RECENCY),
             emit_timestamp_notice: SessionVar::new(&EMIT_TIMESTAMP_NOTICE),
             emit_trace_id_notice: SessionVar::new(&EMIT_TRACE_ID_NOTICE),
+            is_superuser: Self::is_superuser_var(is_superuser),
         }
     }
 
     /// Returns a new SessionVars with the cluster variable set to `cluster`.
-    pub fn for_cluster(build_info: &'static BuildInfo, cluster_name: &str) -> Self {
-        let mut vars = SessionVars::new(build_info);
+    pub fn for_cluster(
+        build_info: &'static BuildInfo,
+        cluster_name: &str,
+        is_superuser: bool,
+    ) -> Self {
+        let mut vars = SessionVars::new(build_info, is_superuser);
         vars.cluster.session_value = Some(cluster_name.into());
         vars
     }
@@ -587,7 +601,7 @@ impl SessionVars {
     /// Returns an iterator over the configuration parameters and their current
     /// values for this session.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        let vars: [&dyn Var; 24] = [
+        let vars: [&dyn Var; 25] = [
             &self.application_name,
             self.build_info,
             &self.client_encoding,
@@ -612,6 +626,7 @@ impl SessionVars {
             &self.real_time_recency,
             &self.emit_timestamp_notice,
             &self.emit_trace_id_notice,
+            &self.is_superuser,
         ];
         vars.into_iter()
     }
@@ -699,6 +714,8 @@ impl SessionVars {
             Ok(&self.emit_timestamp_notice)
         } else if name == EMIT_TRACE_ID_NOTICE.name {
             Ok(&self.emit_trace_id_notice)
+        } else if name == IS_SUPERUSER.name {
+            Ok(&self.is_superuser)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -838,6 +855,8 @@ impl SessionVars {
             self.emit_timestamp_notice.set(input, local)
         } else if name == EMIT_TRACE_ID_NOTICE.name {
             self.emit_trace_id_notice.set(input, local)
+        } else if name == IS_SUPERUSER.name {
+            Err(AdapterError::FixedValueParameter(&IS_SUPERUSER))
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -892,6 +911,7 @@ impl SessionVars {
             || name == SERVER_VERSION.name
             || name == SERVER_VERSION_NUM.name
             || name == STANDARD_CONFORMING_STRINGS.name
+            || name == IS_SUPERUSER.name
         {
             // fixed value
         } else {
@@ -930,6 +950,7 @@ impl SessionVars {
             real_time_recency,
             emit_timestamp_notice,
             emit_trace_id_notice,
+            is_superuser: _,
         } = self;
         application_name.end_transaction(action);
         client_min_messages.end_transaction(action);
@@ -1068,6 +1089,23 @@ impl SessionVars {
     /// Returns the value of `emit_trace_id_notice` configuration parameter.
     pub fn emit_trace_id_notice(&self) -> bool {
         *self.emit_trace_id_notice.value()
+    }
+
+    /// Returns the value of `is_superuser` configuration parameter.
+    pub fn is_superuser(&self) -> &str {
+        self.is_superuser.value()
+    }
+
+    fn is_superuser_var(is_superuser: bool) -> SessionVar<str> {
+        let mut is_superuser_var = SessionVar::new(&IS_SUPERUSER);
+        if is_superuser {
+            is_superuser_var.session_value = Some("on".to_string());
+        }
+        is_superuser_var
+    }
+
+    pub(crate) fn update_is_superuser(&mut self, is_superuser: bool) {
+        self.is_superuser = Self::is_superuser_var(is_superuser);
     }
 }
 

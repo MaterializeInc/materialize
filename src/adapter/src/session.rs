@@ -130,10 +130,11 @@ impl<T: TimestampManipulation> Session<T> {
         user: User,
     ) -> Session<T> {
         let (notices_tx, notices_rx) = mpsc::unbounded_channel();
+        let is_superuser = Self::is_superuser_inner(&user);
         let vars = if INTERNAL_USER_NAMES.contains(&user.name) {
-            SessionVars::for_cluster(build_info, &user.name)
+            SessionVars::for_cluster(build_info, &user.name, is_superuser)
         } else {
-            SessionVars::new(build_info)
+            SessionVars::new(build_info, is_superuser)
         };
         Session {
             conn_id,
@@ -618,7 +619,7 @@ impl<T: TimestampManipulation> Session<T> {
     pub fn reset(&mut self) {
         let _ = self.clear_transaction();
         self.prepared_statements.clear();
-        self.vars = SessionVars::new(self.vars.build_info());
+        self.vars = SessionVars::new(self.vars.build_info(), self.is_superuser());
     }
 
     /// Returns the user who owns this session.
@@ -652,6 +653,21 @@ impl<T: TimestampManipulation> Session<T> {
             None => false,
             Some(txn) => txn.write_lock_guard.is_some(),
         }
+    }
+
+    /// Returns whether the current session is a superuser.
+    pub fn is_superuser(&self) -> bool {
+        Self::is_superuser_inner(&self.user)
+    }
+
+    fn is_superuser_inner(user: &User) -> bool {
+        user.is_external_admin() || user.name == SYSTEM_USER.name
+    }
+
+    /// Update the external user metadata stored in the session.
+    pub fn update_external_user_metadata(&mut self, external_user_metadata: ExternalUserMetadata) {
+        self.user.external_metadata = Some(external_user_metadata);
+        self.vars.update_is_superuser(self.is_superuser());
     }
 }
 

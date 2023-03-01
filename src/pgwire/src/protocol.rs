@@ -24,13 +24,13 @@ use tokio::time::{self, Duration, Instant};
 use tracing::{debug, warn, Instrument};
 
 use mz_adapter::catalog::INTERNAL_USER_NAMES;
-use mz_adapter::session::User;
 use mz_adapter::session::{
     EndTransactionAction, ExternalUserMetadata, InProgressRows, Portal, PortalState,
     RowBatchStream, TransactionStatus, VarInput,
 };
+use mz_adapter::session::{Session, User};
 use mz_adapter::{AdapterNotice, ExecuteResponse, PeekResponseUnary, RowsFuture};
-use mz_frontegg_auth::FronteggAuthentication;
+use mz_frontegg_auth::{Claims, FronteggAuthentication};
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::str::StrExt;
@@ -157,7 +157,7 @@ where
         }
     }
 
-    let (external_metadata, is_expired) = if let Some(frontegg) = frontegg {
+    let (external_metadata, is_expired, mut claims_rx) = if let Some(frontegg) = frontegg {
         conn.send(BackendMessage::AuthenticationCleartextPassword)
             .await?;
         conn.flush().await?;
@@ -177,13 +177,16 @@ where
             .await
             .and_then(|token| frontegg.continuously_validate_access_token(token, user.clone()))
         {
-            Ok((claims, is_expired)) => {
-                let external_metadata = Some(ExternalUserMetadata {
-                    user_id: claims.best_user_id(),
-                    group_id: claims.tenant_id,
-                    admin: claims.admin(frontegg.admin_role()),
-                });
-                (external_metadata, is_expired.left_future())
+            Ok((claims, is_expired, claims_rx)) => {
+                let external_metadata = Some(convert_claims_to_external_metadata(
+                    claims,
+                    frontegg.admin_role(),
+                ));
+                (
+                    external_metadata,
+                    is_expired.left_future(),
+                    Some((claims_rx, frontegg.admin_role().to_string())),
+                )
             }
             Err(e) => {
                 warn!("PGwire connection failed authentication: {}", e);
@@ -196,8 +199,8 @@ where
             }
         }
     } else {
-        // No frontegg check, so is_expired never resolves.
-        (None, pending().right_future())
+        // No frontegg check, so is_expired never resolves and claims are never updated.
+        (None, pending().right_future(), None)
     };
 
     // Construct session.
@@ -279,14 +282,32 @@ where
         adapter_client,
     };
 
+    let update_claims_fn = move |session: &mut Session| {
+        if let Some((claims_rx, admin_role)) = &mut claims_rx {
+            while let Ok(claims) = claims_rx.try_recv() {
+                let external_user_metadata =
+                    convert_claims_to_external_metadata(claims, admin_role);
+                session.update_external_user_metadata(external_user_metadata);
+            }
+        }
+    };
+
     select! {
-        r = machine.run() => r,
+        r = machine.run(update_claims_fn) => r,
         _ = is_expired => {
             conn
                 .send(ErrorResponse::fatal(SqlState::INVALID_AUTHORIZATION_SPECIFICATION, "authentication expired"))
                 .await?;
             conn.flush().await
         }
+    }
+}
+
+fn convert_claims_to_external_metadata(claims: Claims, admin_role: &str) -> ExternalUserMetadata {
+    ExternalUserMetadata {
+        user_id: claims.best_user_id(),
+        group_id: claims.tenant_id,
+        admin: claims.admin(admin_role),
     }
 }
 
@@ -381,11 +402,15 @@ where
     // somewhere within the Future.
     #[allow(clippy::manual_async_fn)]
     #[tracing::instrument(level = "debug", skip_all)]
-    fn run(mut self) -> impl Future<Output = Result<(), io::Error>> + Send + 'a {
+    fn run(
+        mut self,
+        mut update_claims_fn: impl FnMut(&mut Session) + Send + 'a,
+    ) -> impl Future<Output = Result<(), io::Error>> + Send + 'a {
         async move {
             let mut state = State::Ready;
             loop {
                 self.send_pending_notices().await?;
+                update_claims_fn(self.adapter_client.session());
                 state = match state {
                     State::Ready => self.advance_ready().await?,
                     State::Drain => self.advance_drain().await?,

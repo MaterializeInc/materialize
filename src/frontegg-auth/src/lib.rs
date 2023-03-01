@@ -270,14 +270,24 @@ impl FronteggAuthentication {
         &self,
         mut token: ApiTokenResponse,
         expected_email: String,
-    ) -> Result<(Claims, impl Future<Output = ()>), FronteggError> {
+    ) -> Result<
+        (
+            Claims,
+            impl Future<Output = ()>,
+            tokio::sync::mpsc::UnboundedReceiver<Claims>,
+        ),
+        FronteggError,
+    > {
         // Do an initial full validity check of the token.
         let mut claims = self.validate_access_token(&token.access_token, Some(&expected_email))?;
+        let ret_claims = claims.clone();
         let frontegg = self.clone();
+
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         // This future resolves once the token expiry time has been reached. It will
         // repeatedly attempt to refresh the token before it expires.
-        Ok((claims.clone(), async move {
+        let expire_future = async move {
             let refresh_url = format!("{}{}", frontegg.admin_api_token_url, REFRESH_SUFFIX);
             loop {
                 let expire_in = claims.exp - frontegg.now.as_secs();
@@ -324,10 +334,13 @@ impl FronteggAuthentication {
                     (refresh_token, refresh_claims) = refresh_request => {
                         token = refresh_token;
                         claims = refresh_claims;
+                        // Ignore errors if the session has hung up.
+                        let _ = tx.send(claims.clone());
                     },
                 };
             }
-        }))
+        };
+        Ok((ret_claims, expire_future, rx))
     }
 
     pub fn tenant_id(&self) -> Uuid {
