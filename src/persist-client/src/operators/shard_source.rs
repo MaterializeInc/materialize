@@ -20,6 +20,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
 use futures::StreamExt;
+use futures_util::future::Either;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::{Scope, ScopeParent, Stream};
@@ -201,11 +202,11 @@ where
     // NB: It is not safe to use the shutdown button, due to the possibility
     // of the Subscribe handle's SeqNo hold releasing before `shard_source_fetch`
     // has completed fetches to each outstanding part. Instead, we create a
-    // channel that we pass along as a token. Dropping the Sender informs this
+    // channel that we pass along as a token. Dropping the Receiver informs this
     // operator that the dataflow is being shutdown, and allows for a graceful
     // termination where we wait for `shard_source_fetch` to complete all of
     // its fetches before expiring our Subscribe handle and its SeqNo hold.
-    let (token_tx, mut token_rx) = mpsc::channel::<()>(1);
+    let (token_tx, token_rx) = mpsc::channel::<()>(1);
     let _shutdown_button = builder.build(move |caps| async move {
         let mut cap_set = CapabilitySet::from_elem(caps.into_element());
 
@@ -224,22 +225,43 @@ where
             return;
         }
 
-        let client = clients
-            .open(location)
-            .await
-            .expect("location should be valid");
-        let read = client
-            .open_leased_reader::<K, V, G::Timestamp, D>(
-                shard_id,
-                &format!("shard_source({})", name_owned),
-                key_schema,
-                val_schema,
-            )
-            .await
-            .expect("could not open persist shard");
-        let as_of = as_of.unwrap_or_else(|| read.since().clone());
+        let create_subscribe = async {
+            let client = clients
+                .open(location)
+                .await
+                .expect("location should be valid");
+            let read = client
+                .open_leased_reader::<K, V, G::Timestamp, D>(
+                    shard_id,
+                    &format!("shard_source({})", name_owned),
+                    key_schema,
+                    val_schema,
+                )
+                .await
+                .expect("could not open persist shard");
+            let as_of = as_of.unwrap_or_else(|| read.since().clone());
+            (read.subscribe(as_of.clone()).await, as_of)
+        };
+        tokio::pin!(create_subscribe);
+        let token_is_dropped = token_tx.closed();
+        tokio::pin!(token_is_dropped);
 
-        let subscription = read.subscribe(as_of.clone()).await;
+        // creating a Subscribe can take indefinitely long (e.g. as_of in the far future),
+        // so we race its creation with our token to ensure any async work is dropped once
+        // the token is dropped.
+        let (subscription, as_of) = match futures::future::select(create_subscribe, token_is_dropped).await {
+            Either::Left(((subscription, as_of), _)) => {
+                (subscription, as_of)
+            }
+            Either::Right(_) => {
+                // the token dropped before we finished creating our Subscribe.
+                // we can return immediately, as we could not have emitted any
+                // parts to fetch.
+                cap_set.downgrade(&[]);
+                return;
+            }
+        };
+
         let mut subscription = subscription.unwrap_or_else(|e| {
             panic!(
                 "{}: {} cannot serve requested as_of {:?}: {:?}",
@@ -286,7 +308,7 @@ where
                     // next state, where we await our feedback edge's progression.
                     //
                     // NB: Reading from a channel is cancel safe.
-                    None = token_rx.recv() => {
+                    _ = token_tx.closed() => {
                         cap_set.downgrade(&[]);
                         break 'emitting_parts;
                     }
@@ -440,7 +462,7 @@ where
         }
     });
 
-    (descs_stream, Rc::new(token_tx))
+    (descs_stream, Rc::new(token_rx))
 }
 
 pub(crate) fn shard_source_fetch<K, V, T, D, G>(
