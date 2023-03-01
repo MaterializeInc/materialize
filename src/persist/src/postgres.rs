@@ -268,10 +268,8 @@ impl PostgresConsensus {
         let start = Instant::now();
         let res = self.pool.get().await;
         if let Err(PoolError::Backend(err)) = &res {
-            // sadly, there does not appear to be an easy way to match on the error kind
-            if err.to_string().contains("connection timed out") {
-                self.metrics.connpool_connection_timeouts.inc();
-            }
+            debug!("error establishing connection: {}", err);
+            self.metrics.connpool_connection_errors.inc();
         }
         self.metrics
             .connpool_acquire_seconds
