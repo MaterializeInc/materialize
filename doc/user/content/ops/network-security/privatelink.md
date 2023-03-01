@@ -19,7 +19,7 @@ and retrieve the AWS principal needed to configure the AWS PrivateLink service.
 
 {{< note >}}
 Materialize provides a [Terraform module](https://github.com/MaterializeInc/terraform-aws-msk-privatelink)
-that can be used to create the Target groups for each Kafka Broker (step 1), the Network Load Balancer (step 2),
+that can be used to create the target groups for each Kafka broker (step 1), the network load balancer (step 2),
 the TCP listeners (step 3) and the VPC endpoint service (step 5).
 {{< /note >}}
 
