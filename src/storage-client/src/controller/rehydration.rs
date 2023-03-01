@@ -415,8 +415,12 @@ where
             }
             StorageCommand::AllowCompaction(frontiers) => {
                 for (id, frontier) in frontiers {
-                    if let Some(export) = self.sinks.get_mut(id) {
-                        export.description.as_of.downgrade(frontier);
+                    match self.sinks.get_mut(id) {
+                        Some(export) => {
+                            export.description.as_of.downgrade(frontier);
+                        }
+                        None if self.sources.contains_key(id) => continue,
+                        None => panic!("AllowCompaction command for non-existent {id}"),
                     }
                 }
             }
