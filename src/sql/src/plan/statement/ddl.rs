@@ -291,10 +291,12 @@ pub fn plan_create_table(
         scx.allocate_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?
     };
 
-    if scx.item_exists(&name) {
+    // check for an object in the catalog with this same name
+    let partial_name = PartialObjectName::from(scx.catalog.resolve_full_name(&name));
+    if let Ok(item) = scx.catalog.resolve_item(&partial_name) {
         return Err(PlanError::ItemAlreadyExists {
             name: name.item,
-            item_type: CatalogItemType::Table,
+            item_type: item.item_type(),
         });
     }
 
@@ -1728,10 +1730,14 @@ pub fn plan_create_view(
         None
     };
 
-    if *if_exists == IfExistsBehavior::Error && scx.item_exists(&name) {
+    // check for an object in the catalog with this same name
+    let partial_name = PartialObjectName::from(scx.catalog.resolve_full_name(&name));
+    if let (IfExistsBehavior::Error, Ok(item)) =
+        (*if_exists, scx.catalog.resolve_item(&partial_name))
+    {
         return Err(PlanError::ItemAlreadyExists {
             name: name.item,
-            item_type: CatalogItemType::View,
+            item_type: item.item_type(),
         });
     }
 
@@ -1811,10 +1817,14 @@ pub fn plan_create_materialized_view(
         IfExistsBehavior::Error => (),
     }
 
-    if replace.is_none() && !if_not_exists && scx.item_exists(&name) {
+    // check for an object in the catalog with this same name
+    let partial_name = PartialObjectName::from(scx.catalog.resolve_full_name(&name));
+    if let (IfExistsBehavior::Error, Ok(item)) =
+        (stmt.if_exists, scx.catalog.resolve_item(&partial_name))
+    {
         return Err(PlanError::ItemAlreadyExists {
             name: name.item,
-            item_type: CatalogItemType::MaterializedView,
+            item_type: item.item_type(),
         });
     }
 
@@ -1878,10 +1888,13 @@ pub fn plan_create_sink(
         Some(Envelope::None) => bail_unsupported!("\"ENVELOPE NONE\" sinks"),
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
-    if scx.item_exists(&name) {
+
+    // check for an object in the catalog with this same name
+    let partial_name = PartialObjectName::from(scx.catalog.resolve_full_name(&name));
+    if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
         return Err(PlanError::ItemAlreadyExists {
             name: name.item,
-            item_type: CatalogItemType::Sink,
+            item_type: item.item_type(),
         });
     }
 
@@ -2308,10 +2321,13 @@ pub fn plan_create_index(
             idx_name
         }
     };
-    if scx.item_exists(&index_name) {
+
+    // check for an object in the catalog with this same name
+    let partial_name = PartialObjectName::from(scx.catalog.resolve_full_name(&index_name));
+    if let (false, Ok(item)) = (*if_not_exists, scx.catalog.resolve_item(&partial_name)) {
         return Err(PlanError::ItemAlreadyExists {
             name: index_name.item,
-            item_type: CatalogItemType::Index,
+            item_type: item.item_type(),
         });
     }
 
@@ -2449,21 +2465,20 @@ pub fn plan_create_type(
     };
 
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
-    if scx.item_exists(&name) {
-        let partial_name = PartialObjectName::from(scx.catalog.resolve_full_name(&name));
-        match scx.catalog.resolve_item(&partial_name) {
-            Ok(item) => Err(PlanError::ItemAlreadyExists {
-                name: name.item,
-                item_type: item.item_type(),
-            }),
-            Err(_) => Err(sql_err!("catalog item '{}' already exists", name.item)),
-        }
-    } else {
-        Ok(Plan::CreateType(CreateTypePlan {
-            name,
-            typ: Type { create_sql, inner },
-        }))
+
+    // check for an object in the catalog with this same name
+    let partial_name = PartialObjectName::from(scx.catalog.resolve_full_name(&name));
+    if let Ok(item) = scx.catalog.resolve_item(&partial_name) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: name.item,
+            item_type: item.item_type(),
+        });
     }
+
+    Ok(Plan::CreateType(CreateTypePlan {
+        name,
+        typ: Type { create_sql, inner },
+    }))
 }
 
 generate_extracted_config!(CreateTypeListOption, (ElementType, ResolvedDataType));
@@ -3265,10 +3280,13 @@ pub fn plan_create_connection(
         }
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
-    if !if_not_exists && scx.item_exists(&name) {
+
+    // check for an object in the catalog with this same name
+    let partial_name = PartialObjectName::from(scx.catalog.resolve_full_name(&name));
+    if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
         return Err(PlanError::ItemAlreadyExists {
             name: name.item,
-            item_type: CatalogItemType::Connection,
+            item_type: item.item_type(),
         });
     }
 
