@@ -161,6 +161,22 @@ pub async fn purify_create_source(
         }
     };
 
+    match &connection {
+        CreateSourceConnection::Kafka(_)
+        | CreateSourceConnection::Kinesis { .. }
+        | CreateSourceConnection::S3 { .. }
+        | CreateSourceConnection::TestScript { .. } => match &referenced_subsources {
+            Some(ReferencedSubsources::All) => {
+                sql_bail!("FOR ALL TABLES is only valid for multi-output sources");
+            }
+            Some(ReferencedSubsources::Subset(_)) => {
+                sql_bail!("FOR TABLES (..) is only valid for multi-output sources");
+            }
+            None => {}
+        },
+        CreateSourceConnection::Postgres { .. } | CreateSourceConnection::LoadGenerator { .. } => {}
+    }
+
     match connection {
         CreateSourceConnection::Kafka(KafkaSourceConnection {
             connection:
