@@ -201,18 +201,21 @@ pub fn and<'a>(
 ) -> Result<Datum<'a>, EvalError> {
     // If any is false, then return false. Else, if any is null, then return null. Else, return true.
     let mut null = false;
+    let mut err = None;
     for expr in exprs {
-        match expr.eval(datums, temp_storage)? {
-            Datum::False => return Ok(Datum::False), // short-circuit
-            Datum::True => {}
-            Datum::Null => null = true, // No return here, because we might still see a false
+        match expr.eval(datums, temp_storage) {
+            Ok(Datum::False) => return Ok(Datum::False), // short-circuit
+            Ok(Datum::True) => {}
+            // No return in these two cases, because we might still see a false
+            Ok(Datum::Null) => null = true,
+            Err(this_err) => err = std::cmp::max(err.take(), Some(this_err)),
             _ => unreachable!(),
         }
     }
-    if null {
-        Ok(Datum::Null)
-    } else {
-        Ok(Datum::True)
+    match (err, null) {
+        (Some(err), _) => Err(err),
+        (None, true) => Ok(Datum::Null),
+        (None, false) => Ok(Datum::True),
     }
 }
 
@@ -223,18 +226,21 @@ pub fn or<'a>(
 ) -> Result<Datum<'a>, EvalError> {
     // If any is true, then return true. Else, if any is null, then return null. Else, return false.
     let mut null = false;
+    let mut err = None;
     for expr in exprs {
-        match expr.eval(datums, temp_storage)? {
-            Datum::False => {}
-            Datum::True => return Ok(Datum::True), // short-circuit
-            Datum::Null => null = true, // No return here, because we might still see a true
+        match expr.eval(datums, temp_storage) {
+            Ok(Datum::False) => {}
+            Ok(Datum::True) => return Ok(Datum::True), // short-circuit
+            // No return in these two cases, because we might still see a true
+            Ok(Datum::Null) => null = true,
+            Err(this_err) => err = std::cmp::max(err.take(), Some(this_err)),
             _ => unreachable!(),
         }
     }
-    if null {
-        Ok(Datum::Null)
-    } else {
-        Ok(Datum::False)
+    match (err, null) {
+        (Some(err), _) => Err(err),
+        (None, true) => Ok(Datum::Null),
+        (None, false) => Ok(Datum::False),
     }
 }
 
