@@ -42,7 +42,8 @@ pub(crate) fn check_environment_health(
     }
     let status = Command::new("pg_isready")
         .arg("-q")
-        .args(environment.pg_isready_args(valid_profile))
+        .arg("-d")
+        .arg(environment.sql_url(valid_profile).to_string())
         .env("PGPASSWORD", valid_profile.app_password.clone())
         .output()
         .context("failed to execute pg_isready")?

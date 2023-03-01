@@ -88,21 +88,6 @@ impl Environment {
         }
         url
     }
-
-    pub fn pg_isready_args(&self, profile: &ValidProfile) -> Vec<String> {
-        let mut hostport = self.environmentd_pgwire_address.split(':');
-        [
-            "-h",
-            hostport.next().unwrap(),
-            "-p",
-            hostport.next().unwrap(),
-            "-U",
-            profile.profile.get_email(),
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect()
-    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
