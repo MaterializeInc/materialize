@@ -69,6 +69,7 @@ pub enum Statement<T: AstInfo> {
     AlterSystemReset(AlterSystemResetStatement),
     AlterSystemResetAll(AlterSystemResetAllStatement),
     AlterConnection(AlterConnectionStatement),
+    AlterRole(AlterRoleStatement<T>),
     Discard(DiscardStatement),
     DropDatabase(DropDatabaseStatement),
     DropSchema(DropSchemaStatement),
@@ -126,6 +127,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterSystemReset(stmt) => f.write_node(stmt),
             Statement::AlterSystemResetAll(stmt) => f.write_node(stmt),
             Statement::AlterConnection(stmt) => f.write_node(stmt),
+            Statement::AlterRole(stmt) => f.write_node(stmt),
             Statement::Discard(stmt) => f.write_node(stmt),
             Statement::DropDatabase(stmt) => f.write_node(stmt),
             Statement::DropSchema(stmt) => f.write_node(stmt),
@@ -1028,22 +1030,16 @@ impl<T: AstInfo> AstDisplay for IndexOption<T> {
 /// A `CREATE ROLE` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateRoleStatement {
-    /// Whether this was actually a `CREATE USER` statement.
-    pub is_user: bool,
     /// The specified role.
     pub name: Ident,
     /// Any options that were attached, in the order they were presented.
-    pub options: Vec<CreateRoleOption>,
+    pub options: Vec<RoleAttribute>,
 }
 
 impl AstDisplay for CreateRoleStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("CREATE ");
-        if self.is_user {
-            f.write_str("USER ");
-        } else {
-            f.write_str("ROLE ");
-        }
+        f.write_str("ROLE ");
         f.write_node(&self.name);
         for option in &self.options {
             f.write_str(" ");
@@ -1053,30 +1049,51 @@ impl AstDisplay for CreateRoleStatement {
 }
 impl_display!(CreateRoleStatement);
 
-/// Options that can be attached to [`CreateRoleStatement`].
+/// Attributes that can be attached to roles.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CreateRoleOption {
-    /// The `SUPERUSER` option.
-    SuperUser,
-    /// The `NOSUPERUSER` option.
-    NoSuperUser,
-    /// The `LOGIN` option.
+pub enum RoleAttribute {
+    /// The `INHERIT` option.
+    Inherit,
+    /// The `NOINHERIT` option.
+    NoInherit,
+    /// The `CREATECLUSTER` option.
+    CreateCluster,
+    /// The `NOCREATECLUSTER` option.
+    NoCreateCluster,
+    /// The `CREATEDB` option.
+    CreateDB,
+    /// The `NOCREATEDB` option.
+    NoCreateDB,
+    /// The `CREATEROLE` option.
+    CreateRole,
+    /// The `NOCREATEROLE` option.
+    NoCreateRole,
+    // The following are not supported, but included to give helpful error messages.
     Login,
-    /// The `NOLOGIN` option.
     NoLogin,
+    SuperUser,
+    NoSuperUser,
 }
 
-impl AstDisplay for CreateRoleOption {
+impl AstDisplay for RoleAttribute {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            CreateRoleOption::SuperUser => f.write_str("SUPERUSER"),
-            CreateRoleOption::NoSuperUser => f.write_str("NOSUPERUSER"),
-            CreateRoleOption::Login => f.write_str("LOGIN"),
-            CreateRoleOption::NoLogin => f.write_str("NOLOGIN"),
+            RoleAttribute::SuperUser => f.write_str("SUPERUSER"),
+            RoleAttribute::NoSuperUser => f.write_str("NOSUPERUSER"),
+            RoleAttribute::Login => f.write_str("LOGIN"),
+            RoleAttribute::NoLogin => f.write_str("NOLOGIN"),
+            RoleAttribute::Inherit => f.write_str("INHERIT"),
+            RoleAttribute::NoInherit => f.write_str("NOINHERIT"),
+            RoleAttribute::CreateCluster => f.write_str("CREATECLUSTER"),
+            RoleAttribute::NoCreateCluster => f.write_str("NOCREATECLUSTER"),
+            RoleAttribute::CreateDB => f.write_str("CREATEDB"),
+            RoleAttribute::NoCreateDB => f.write_str("NOCREATEDB"),
+            RoleAttribute::CreateRole => f.write_str("CREATEROLE"),
+            RoleAttribute::NoCreateRole => f.write_str("NOCREATEROLE"),
         }
     }
 }
-impl_display!(CreateRoleOption);
+impl_display!(RoleAttribute);
 
 /// A `CREATE SECRET` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1561,6 +1578,28 @@ impl AstDisplay for AlterConnectionStatement {
 }
 
 impl_display!(AlterConnectionStatement);
+
+/// `ALTER ROLE`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterRoleStatement<T: AstInfo> {
+    /// The specified role.
+    pub name: T::RoleName,
+    /// Any options that were attached, in the order they were presented.
+    pub options: Vec<RoleAttribute>,
+}
+
+impl<T: AstInfo> AstDisplay for AlterRoleStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER ");
+        f.write_str("ROLE ");
+        f.write_node(&self.name);
+        for option in &self.options {
+            f.write_str(" ");
+            option.fmt(f)
+        }
+    }
+}
+impl_display_t!(AlterRoleStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiscardStatement {

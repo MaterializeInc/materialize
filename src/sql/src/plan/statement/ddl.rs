@@ -35,10 +35,10 @@ use mz_repr::strconv;
 use mz_repr::{ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
-    AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceStatement,
-    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
-    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    DeferredObjectName, SshConnectionOption, UnresolvedObjectName, Value,
+    AlterRoleStatement, AlterSinkAction, AlterSinkStatement, AlterSourceAction,
+    AlterSourceStatement, AlterSystemResetAllStatement, AlterSystemResetStatement,
+    AlterSystemSetStatement, CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption,
+    CreateTypeMapOptionName, DeferredObjectName, SshConnectionOption, UnresolvedObjectName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -68,7 +68,7 @@ use crate::ast::{
     AwsConnectionOptionName, AwsPrivatelinkConnectionOption, AwsPrivatelinkConnectionOptionName,
     ClusterOption, ClusterOptionName, ColumnOption, Compression, CreateClusterReplicaStatement,
     CreateClusterStatement, CreateConnection, CreateConnectionStatement, CreateDatabaseStatement,
-    CreateIndexStatement, CreateMaterializedViewStatement, CreateRoleOption, CreateRoleStatement,
+    CreateIndexStatement, CreateMaterializedViewStatement, CreateRoleStatement,
     CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
     CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceFormat,
     CreateSourceOption, CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
@@ -82,7 +82,7 @@ use crate::ast::{
     KafkaConfigOptionName, KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint,
     LoadGeneratorOption, LoadGeneratorOptionName, ObjectType, PgConfigOption, PgConfigOptionName,
     PostgresConnectionOption, PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica,
-    ReferencedSubsources, ReplicaDefinition, ReplicaOption, ReplicaOptionName,
+    ReferencedSubsources, ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute,
     SourceIncludeMetadata, SourceIncludeMetadataType, SshConnectionOptionName, Statement,
     TableConstraint, UnresolvedDatabaseName, ViewDefinition,
 };
@@ -104,9 +104,9 @@ use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, transform_ast, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter, AlterSecretPlan, AlterSinkPlan,
-    AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
-    ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, CreateClusterPlan,
+    AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter, AlterRolePlan, AlterSecretPlan,
+    AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
+    AlterSystemSetPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, CreateClusterPlan,
     CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
     CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
     CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
@@ -2436,41 +2436,86 @@ pub fn describe_create_role(
     Ok(StatementDesc::new(None))
 }
 
-pub fn plan_create_role(
-    _: &StatementContext,
-    CreateRoleStatement {
-        name,
-        is_user,
-        options,
-    }: CreateRoleStatement,
-) -> Result<Plan, PlanError> {
-    let mut login = None;
-    let mut super_user = None;
+pub(crate) struct PlannedRoleAttributes {
+    pub(crate) inherit: Option<bool>,
+    pub(crate) create_role: Option<bool>,
+    pub(crate) create_db: Option<bool>,
+    pub(crate) create_cluster: Option<bool>,
+}
+
+fn plan_role_attributes(
+    scx: &StatementContext,
+    options: Vec<RoleAttribute>,
+) -> Result<PlannedRoleAttributes, PlanError> {
+    let mut planned_attributes = PlannedRoleAttributes {
+        inherit: None,
+        create_role: None,
+        create_db: None,
+        create_cluster: None,
+    };
+
     for option in options {
         match option {
-            CreateRoleOption::Login | CreateRoleOption::NoLogin if login.is_some() => {
+            RoleAttribute::Login | RoleAttribute::NoLogin => {
+                bail_never_supported!("LOGIN attribute", "sql/create-role/#details")
+            }
+            RoleAttribute::SuperUser | RoleAttribute::NoSuperUser => {
+                bail_never_supported!("SUPERUSER attribute", "sql/create-role/#details")
+            }
+            RoleAttribute::Inherit | RoleAttribute::NoInherit
+                if planned_attributes.inherit.is_some() =>
+            {
                 sql_bail!("conflicting or redundant options");
             }
-            CreateRoleOption::SuperUser | CreateRoleOption::NoSuperUser if super_user.is_some() => {
+            RoleAttribute::CreateCluster | RoleAttribute::NoCreateCluster
+                if planned_attributes.create_cluster.is_some() =>
+            {
                 sql_bail!("conflicting or redundant options");
             }
-            CreateRoleOption::Login => login = Some(true),
-            CreateRoleOption::NoLogin => login = Some(false),
-            CreateRoleOption::SuperUser => super_user = Some(true),
-            CreateRoleOption::NoSuperUser => super_user = Some(false),
+            RoleAttribute::CreateDB | RoleAttribute::NoCreateDB
+                if planned_attributes.create_db.is_some() =>
+            {
+                sql_bail!("conflicting or redundant options");
+            }
+            RoleAttribute::CreateRole | RoleAttribute::NoCreateRole
+                if planned_attributes.create_role.is_some() =>
+            {
+                sql_bail!("conflicting or redundant options");
+            }
+
+            RoleAttribute::Inherit => planned_attributes.inherit = Some(true),
+            RoleAttribute::NoInherit => planned_attributes.inherit = Some(false),
+            RoleAttribute::CreateCluster => planned_attributes.create_cluster = Some(true),
+            RoleAttribute::NoCreateCluster => planned_attributes.create_cluster = Some(false),
+            RoleAttribute::CreateDB => planned_attributes.create_db = Some(true),
+            RoleAttribute::NoCreateDB => planned_attributes.create_db = Some(false),
+            RoleAttribute::CreateRole => planned_attributes.create_role = Some(true),
+            RoleAttribute::NoCreateRole => planned_attributes.create_role = Some(false),
         }
     }
-    if is_user && login.is_none() {
-        login = Some(true);
+    if planned_attributes.inherit == Some(false) {
+        bail_unsupported!("non inherit roles");
     }
-    if login != Some(true) {
-        bail_unsupported!("non-login users");
+
+    if planned_attributes.inherit.is_some()
+        || planned_attributes.create_cluster.is_some()
+        || planned_attributes.create_db.is_some()
+        || planned_attributes.create_role.is_some()
+    {
+        scx.require_unsafe_mode("role attributes")?;
     }
-    if super_user != Some(true) {
-        bail_unsupported!("non-superusers");
-    }
+
+    Ok(planned_attributes)
+}
+
+pub fn plan_create_role(
+    scx: &StatementContext,
+    CreateRoleStatement { name, options }: CreateRoleStatement,
+) -> Result<Plan, PlanError> {
+    let attributes = plan_role_attributes(scx, options)?;
     Ok(Plan::CreateRole(CreateRolePlan {
         name: normalize::ident(name),
+        attributes: attributes.into(),
     }))
 }
 
@@ -3346,7 +3391,7 @@ pub fn plan_drop_role(
             sql_bail!("current user cannot be dropped");
         }
         match scx.catalog.resolve_role(&name) {
-            Ok(_) => out.push(name),
+            Ok(role) => out.push((role.id(), name)),
             Err(_) if if_exists => {
                 // TODO(benesch): generate a notice indicating that the
                 // role does not exist.
@@ -3354,7 +3399,7 @@ pub fn plan_drop_role(
             Err(e) => return Err(e.into()),
         }
     }
-    Ok(Plan::DropRoles(DropRolesPlan { names: out }))
+    Ok(Plan::DropRoles(DropRolesPlan { ids: out }))
 }
 
 pub fn describe_drop_cluster(
@@ -3977,4 +4022,27 @@ pub fn plan_alter_connection(
 
     let id = entry.id();
     Ok(Plan::RotateKeys(RotateKeysPlan { id }))
+}
+
+pub fn describe_alter_role(
+    _: &StatementContext,
+    _: AlterRoleStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_role(
+    scx: &StatementContext,
+    AlterRoleStatement { name, options }: AlterRoleStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    scx.require_unsafe_mode("ALTER ROLE")?;
+
+    let role = scx.catalog.get_role(&name.id);
+    let attributes = plan_role_attributes(scx, options)?;
+
+    Ok(Plan::AlterRole(AlterRolePlan {
+        id: name.id,
+        name: name.name,
+        attributes: (role, attributes).into(),
+    }))
 }

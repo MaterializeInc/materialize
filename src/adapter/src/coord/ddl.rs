@@ -845,7 +845,8 @@ impl Coordinator {
                         | CatalogItem::Func(_) => {}
                     }
                 }
-                Op::AlterSink { .. }
+                Op::AlterRole { .. }
+                | Op::AlterSink { .. }
                 | Op::AlterSource { .. }
                 | Op::DropTimeline(_)
                 | Op::RenameItem { .. }

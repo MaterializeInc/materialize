@@ -65,7 +65,7 @@ SELECT id, name FROM mz_databases
 3 bar
 
 statement ok
-CREATE ROLE foo LOGIN SUPERUSER
+CREATE ROLE foo
 
 query TT rowsort
 SELECT id, name FROM mz_roles
@@ -79,7 +79,7 @@ statement ok
 DROP ROLE foo
 
 statement ok
-CREATE ROLE bar LOGIN SUPERUSER
+CREATE ROLE bar
 
 query TT rowsort
 SELECT id, name FROM mz_roles

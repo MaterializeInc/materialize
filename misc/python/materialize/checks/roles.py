@@ -22,10 +22,10 @@ class CreateRole(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE ROLE create_role1 SUPERUSER LOGIN;
+                > CREATE ROLE create_role1;
                 """,
                 """
-                > CREATE ROLE create_role2 SUPERUSER LOGIN;
+                > CREATE ROLE create_role2;
                 """,
             ]
         ]
@@ -47,7 +47,7 @@ class DropRole(Check):
         return Testdrive(
             dedent(
                 """
-                > CREATE ROLE drop_role1 SUPERUSER LOGIN;
+                > CREATE ROLE drop_role1;
             """
             )
         )
@@ -58,7 +58,7 @@ class DropRole(Check):
             for s in [
                 """
                 > DROP ROLE drop_role1;
-                > CREATE ROLE drop_role2 SUPERUSER LOGIN;
+                > CREATE ROLE drop_role2;
                 """,
                 """
                 > DROP ROLE drop_role2;

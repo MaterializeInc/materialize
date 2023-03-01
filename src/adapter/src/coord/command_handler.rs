@@ -23,7 +23,7 @@ use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::ScalarType;
 use mz_sql::ast::{InsertSource, Query, Raw, SetExpr, Statement};
-use mz_sql::catalog::SessionCatalog as _;
+use mz_sql::catalog::{RoleAttributes, SessionCatalog};
 use mz_sql::plan::{CreateRolePlan, Params};
 
 use crate::client::ConnectionId;
@@ -95,7 +95,7 @@ impl Coordinator {
             }
 
             Command::DumpCatalog { session, tx } => {
-                // TODO(benesch): when we have RBAC, dumping the catalog should
+                // TODO(benesch/jkosh44): when we have RBAC, dumping the catalog should
                 // require superuser permissions.
 
                 let _ = tx.send(Response {
@@ -187,6 +187,8 @@ impl Coordinator {
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
     ) {
+        // TODO(jkosh44) SUPERUSER should be derived and added to the session. Make sure that
+        //  `MZ_SYSTEM` always has SUPERUSER. This will be done in a follow-up PR.
         if self
             .catalog
             .for_session(&session)
@@ -197,8 +199,10 @@ impl Coordinator {
             // This includes preventing any user, except a pre-defined set of system users, from
             // connecting to an internal port. Therefore it's ok to always create a new role for
             // the user.
+            let attributes = RoleAttributes::new();
             let plan = CreateRolePlan {
                 name: session.user().name.to_string(),
+                attributes,
             };
             if let Err(err) = self.sequence_create_role(&session, plan).await {
                 let _ = tx.send(Response {
@@ -392,6 +396,7 @@ impl Coordinator {
                     | Statement::AlterSink(_)
                     | Statement::AlterSource(_)
                     | Statement::AlterObjectRename(_)
+                    | Statement::AlterRole(_)
                     | Statement::AlterSystemSet(_)
                     | Statement::AlterSystemReset(_)
                     | Statement::AlterSystemResetAll(_)

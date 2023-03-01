@@ -591,6 +591,18 @@ impl fmt::Display for ResolvedDataType {
     }
 }
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ResolvedRoleName {
+    pub id: RoleId,
+    pub name: String,
+}
+
+impl AstDisplay for ResolvedRoleName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(format!("[{} AS {}]", self.id, self.name));
+    }
+}
+
 impl AstInfo for Aug {
     type NestedStatement = Statement<Raw>;
     type ObjectName = ResolvedObjectName;
@@ -599,6 +611,7 @@ impl AstInfo for Aug {
     type ClusterName = ResolvedClusterName;
     type DataType = ResolvedDataType;
     type CteId = LocalId;
+    type RoleName = ResolvedRoleName;
 }
 
 /// The identifier for a schema.
@@ -694,6 +707,12 @@ impl fmt::Display for RoleId {
             Self::System(id) => write!(f, "s{}", id),
             Self::User(id) => write!(f, "u{}", id),
         }
+    }
+}
+
+impl AstDisplay for RoleId {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(format!("{}", self));
     }
 }
 
@@ -1161,6 +1180,25 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             ConnectionKafkaBroker(broker) => ConnectionKafkaBroker(self.fold_kafka_broker(broker)),
         }
     }
+
+    fn fold_role_name(&mut self, name: <Raw as AstInfo>::RoleName) -> <Aug as AstInfo>::RoleName {
+        match self.catalog.resolve_role(name.as_str()) {
+            Ok(role) => ResolvedRoleName {
+                id: role.id(),
+                name: role.name().to_string(),
+            },
+            Err(e) => {
+                if self.status.is_ok() {
+                    self.status = Err(e.into());
+                }
+                // garbage value that will be ignored since there's an error.
+                ResolvedRoleName {
+                    id: RoleId::User(0),
+                    name: "".to_string(),
+                }
+            }
+        }
+    }
 }
 
 /// Resolves names in an AST node using the provided catalog.
@@ -1271,6 +1309,9 @@ impl Fold<Aug, Aug> for TransientResolver<'_> {
         &mut self,
         node: <Aug as AstInfo>::SchemaName,
     ) -> <Aug as AstInfo>::SchemaName {
+        node
+    }
+    fn fold_role_name(&mut self, node: <Aug as AstInfo>::RoleName) -> <Aug as AstInfo>::RoleName {
         node
     }
 }

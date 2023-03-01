@@ -54,8 +54,8 @@ use mz_sql::ast::Expr;
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError as SqlCatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogItemType,
-    CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId, IdReference, NameReference,
-    SessionCatalog, TypeReference,
+    CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId, IdReference,
+    NameReference, RoleAttributes, SessionCatalog, TypeReference,
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
@@ -81,8 +81,9 @@ use mz_storage_client::types::sources::{SourceConnection, SourceDesc, SourceEnve
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{
-    Builtin, BuiltinLog, BuiltinTable, BuiltinType, Fingerprint, BUILTINS, BUILTIN_PREFIXES,
-    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
+    Builtin, BuiltinLog, BuiltinRole, BuiltinTable, BuiltinType, Fingerprint, BUILTINS,
+    BUILTIN_PREFIXES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA,
+    PG_CATALOG_SCHEMA,
 };
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
@@ -187,7 +188,8 @@ pub struct CatalogState {
     clusters_by_id: BTreeMap<ClusterId, Cluster>,
     clusters_by_name: BTreeMap<String, ClusterId>,
     clusters_by_linked_object_id: BTreeMap<GlobalId, ClusterId>,
-    roles: BTreeMap<String, Role>,
+    roles_by_name: BTreeMap<String, RoleId>,
+    roles_by_id: BTreeMap<RoleId, Role>,
     config: mz_sql::catalog::CatalogConfig,
     oid_counter: u32,
     cluster_replica_sizes: ClusterReplicaSizeMap,
@@ -436,6 +438,10 @@ impl CatalogState {
             ReplicaLocation::Unmanaged(_) => None,
             ReplicaLocation::Managed(ManagedReplicaLocation { size, .. }) => Some(size),
         }
+    }
+
+    fn get_role(&self, id: &RoleId) -> &Role {
+        &self.roles_by_id[id]
     }
 
     /// Create and insert the per replica log sources and log views.
@@ -1385,6 +1391,7 @@ pub struct Role {
     pub id: RoleId,
     #[serde(skip)]
     pub oid: u32,
+    pub attributes: RoleAttributes,
 }
 
 impl Role {
@@ -2242,7 +2249,8 @@ impl Catalog {
                 clusters_by_id: BTreeMap::new(),
                 clusters_by_name: BTreeMap::new(),
                 clusters_by_linked_object_id: BTreeMap::new(),
-                roles: BTreeMap::new(),
+                roles_by_name: BTreeMap::new(),
+                roles_by_id: BTreeMap::new(),
                 config: mz_sql::catalog::CatalogConfig {
                     start_time: to_datetime((config.now)()),
                     start_instant: Instant::now(),
@@ -2328,14 +2336,18 @@ impl Catalog {
         }
 
         let roles = catalog.storage().await.load_roles().await?;
-        for (id, name) in roles {
+        for (id, role) in roles {
             let oid = catalog.allocate_oid()?;
-            catalog.state.roles.insert(
-                name.clone(),
+            catalog.state.roles_by_name.insert(role.name.clone(), id);
+            catalog.state.roles_by_id.insert(
+                id,
                 Role {
-                    name: name.clone(),
+                    name: role.name,
                     id,
                     oid,
+                    attributes: role
+                        .attributes
+                        .expect("serialized role was not properly migrated"),
                 },
             );
         }
@@ -2698,8 +2710,8 @@ impl Catalog {
                 }
             }
         }
-        for (_name, role) in &catalog.state.roles {
-            builtin_table_updates.push(catalog.state.pack_role_update(role, 1));
+        for (_id, role) in &catalog.state.roles_by_id {
+            builtin_table_updates.push(catalog.state.pack_role_update(role.id, 1));
         }
         for (id, cluster) in &catalog.state.clusters_by_id {
             builtin_table_updates.push(catalog.state.pack_cluster_update(&cluster.name, 1));
@@ -4270,6 +4282,7 @@ impl Catalog {
                 id: RoleId,
                 oid: u32,
                 name: String,
+                attributes: RoleAttributes,
             },
             CreateCluster {
                 id: ClusterId,
@@ -4297,7 +4310,7 @@ impl Catalog {
                 schema_id: SchemaId,
             },
             DropRole {
-                name: String,
+                id: RoleId,
             },
             DropCluster {
                 id: ClusterId,
@@ -4314,6 +4327,11 @@ impl Catalog {
             },
             UpdateClusterReplicaStatus {
                 event: ClusterEvent,
+            },
+            UpdateRole {
+                id: RoleId,
+                name: String,
+                attributes: RoleAttributes,
             },
             UpdateRotatedKeys {
                 id: GlobalId,
@@ -4338,6 +4356,48 @@ impl Catalog {
 
         for op in ops {
             match op {
+                Op::AlterRole {
+                    id,
+                    name,
+                    attributes,
+                } => {
+                    if is_reserved_name(&name) {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReservedRoleName(name),
+                        )));
+                    }
+                    let serialized_role = SerializedRole {
+                        name: name.clone(),
+                        attributes: Some(attributes.clone()),
+                    };
+                    tx.update_role(id, serialized_role)?;
+
+                    // NB: this will be re-incremented by the action below.
+                    builtin_table_updates.push(state.pack_role_update(id, -1));
+
+                    state.add_to_audit_log(
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        builtin_table_updates,
+                        audit_events,
+                        EventType::Alter,
+                        ObjectType::Role,
+                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                            id: id.to_string(),
+                            name: name.clone(),
+                        }),
+                    )?;
+                    catalog_action(
+                        state,
+                        builtin_table_updates,
+                        Action::UpdateRole {
+                            id,
+                            name,
+                            attributes,
+                        },
+                    )?;
+                }
                 Op::AlterSink { id, cluster_config } => {
                     use mz_sql::ast::Value;
                     use mz_sql_parser::ast::CreateSinkOptionName::*;
@@ -4642,13 +4702,21 @@ impl Catalog {
                         },
                     )?;
                 }
-                Op::CreateRole { name, oid } => {
+                Op::CreateRole {
+                    name,
+                    oid,
+                    attributes,
+                } => {
                     if is_reserved_name(&name) {
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReservedRoleName(name),
                         )));
                     }
-                    let role_id = tx.insert_user_role(&name)?;
+                    let serialized_role = SerializedRole {
+                        name: name.clone(),
+                        attributes: Some(attributes.clone()),
+                    };
+                    let id = tx.insert_user_role(serialized_role)?;
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -4658,7 +4726,7 @@ impl Catalog {
                         EventType::Create,
                         ObjectType::Role,
                         EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
-                            id: role_id.to_string(),
+                            id: id.to_string(),
                             name: name.clone(),
                         }),
                     )?;
@@ -4666,9 +4734,10 @@ impl Catalog {
                         state,
                         builtin_table_updates,
                         Action::CreateRole {
-                            id: role_id,
+                            id,
                             oid,
                             name,
+                            attributes,
                         },
                     )?;
                 }
@@ -4932,15 +5001,15 @@ impl Catalog {
                         },
                     )?;
                 }
-                Op::DropRole { name } => {
+                Op::DropRole { id, name } => {
                     if is_reserved_name(&name) {
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReservedRoleName(name),
                         )));
                     }
                     tx.remove_role(&name)?;
-                    let role = &state.roles[&name];
-                    builtin_table_updates.push(state.pack_role_update(role, -1));
+                    let role = &state.roles_by_id[&id];
+                    builtin_table_updates.push(state.pack_role_update(role.id, -1));
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -4954,7 +5023,7 @@ impl Catalog {
                             name: name.clone(),
                         }),
                     )?;
-                    catalog_action(state, builtin_table_updates, Action::DropRole { name })?;
+                    catalog_action(state, builtin_table_updates, Action::DropRole { id })?;
                 }
                 Op::DropCluster { id } => {
                     let cluster = state.get_cluster(id);
@@ -5355,18 +5424,25 @@ impl Catalog {
                     ));
                 }
 
-                Action::CreateRole { id, oid, name } => {
+                Action::CreateRole {
+                    id,
+                    oid,
+                    name,
+                    attributes,
+                } => {
                     info!("create role {}", name);
-                    state.roles.insert(
-                        name.clone(),
+                    state.roles_by_name.insert(name.clone(), id);
+                    state.roles_by_id.insert(
+                        id,
                         Role {
-                            name: name.clone(),
+                            name,
                             id,
                             oid,
+                            attributes,
                         },
                     );
-                    let role = &state.roles[&name];
-                    builtin_table_updates.push(state.pack_role_update(role, 1));
+                    let role = &state.roles_by_id[&id];
+                    builtin_table_updates.push(state.pack_role_update(role.id, 1));
                 }
 
                 Action::CreateCluster {
@@ -5458,9 +5534,10 @@ impl Catalog {
                     db.schemas_by_id.remove(&schema_id);
                 }
 
-                Action::DropRole { name } => {
-                    if state.roles.remove(&name).is_some() {
-                        info!("drop role {}", name);
+                Action::DropRole { id } => {
+                    if let Some(role) = state.roles_by_id.remove(&id) {
+                        state.roles_by_name.remove(role.name());
+                        info!("drop role {}", role.name());
                     }
                 }
 
@@ -5567,6 +5644,25 @@ impl Catalog {
                         event.process_id,
                         1,
                     ));
+                }
+
+                Action::UpdateRole {
+                    id,
+                    name,
+                    attributes,
+                } => {
+                    let old_role = state.roles_by_id.remove(&id).expect("catalog out of sync");
+                    info!("update role {name} ({id})");
+                    state.roles_by_id.insert(
+                        id,
+                        Role {
+                            id,
+                            oid: old_role.oid,
+                            name,
+                            attributes,
+                        },
+                    );
+                    builtin_table_updates.push(state.pack_role_update(id, 1));
                 }
 
                 Action::UpdateRotatedKeys { id, new_item } => {
@@ -5859,7 +5955,10 @@ impl Catalog {
     }
 
     pub fn user_roles(&self) -> impl Iterator<Item = &Role> {
-        self.state.roles.values().filter(|role| role.is_user())
+        self.state
+            .roles_by_id
+            .values()
+            .filter(|role| role.is_user())
     }
 
     /// Allocate ids for legacy, active logs. Called once per cluster creation.
@@ -5989,6 +6088,11 @@ pub enum Op {
         id: GlobalId,
         cluster_config: plan::SourceSinkClusterConfig,
     },
+    AlterRole {
+        id: RoleId,
+        name: String,
+        attributes: RoleAttributes,
+    },
     CreateDatabase {
         name: String,
         oid: u32,
@@ -6002,6 +6106,7 @@ pub enum Op {
     CreateRole {
         name: String,
         oid: u32,
+        attributes: RoleAttributes,
     },
     CreateCluster {
         id: ClusterId,
@@ -6029,6 +6134,7 @@ pub enum Op {
         schema_id: SchemaId,
     },
     DropRole {
+        id: RoleId,
         name: String,
     },
     DropCluster {
@@ -6182,6 +6288,33 @@ impl From<ReplicaLocation> for SerializedReplicaLocation {
     }
 }
 
+/// A [`Role`] that is serialized as JSON and persisted to the catalog
+/// stash. This is a separate type to allow us to evolve the on-disk format
+/// independently from the SQL layer.
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+pub struct SerializedRole {
+    pub name: String,
+    // TODO(jkosh44): Remove Option in v0.46.0
+    pub attributes: Option<RoleAttributes>,
+}
+
+impl From<Role> for SerializedRole {
+    fn from(role: Role) -> Self {
+        SerializedRole {
+            name: role.name,
+            attributes: Some(role.attributes),
+        }
+    }
+}
+
+impl From<&BuiltinRole> for SerializedRole {
+    fn from(role: &BuiltinRole) -> Self {
+        SerializedRole {
+            name: role.name.to_string(),
+            attributes: Some(role.attributes.clone()),
+        }
+    }
+}
 impl ConnCatalog<'_> {
     fn resolve_item_name(
         &self,
@@ -6398,10 +6531,14 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self,
         role_name: &str,
     ) -> Result<&dyn mz_sql::catalog::CatalogRole, SqlCatalogError> {
-        match self.state.roles.get(role_name) {
-            Some(role) => Ok(role),
+        match self.state.roles_by_name.get(role_name) {
+            Some(id) => Ok(&self.state.roles_by_id[id]),
             None => Err(SqlCatalogError::UnknownRole(role_name.into())),
         }
+    }
+
+    fn get_role(&self, id: &RoleId) -> &dyn mz_sql::catalog::CatalogRole {
+        &self.state.roles_by_id[id]
     }
 
     fn resolve_cluster(
@@ -6513,6 +6650,22 @@ impl mz_sql::catalog::CatalogRole for Role {
 
     fn id(&self) -> RoleId {
         self.id
+    }
+
+    fn is_inherit(&self) -> bool {
+        self.attributes.inherit
+    }
+
+    fn create_role(&self) -> bool {
+        self.attributes.create_role
+    }
+
+    fn create_db(&self) -> bool {
+        self.attributes.create_db
+    }
+
+    fn create_cluster(&self) -> bool {
+        self.attributes.create_cluster
     }
 }
 

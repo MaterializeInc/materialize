@@ -24,7 +24,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::GlobalId;
-use mz_sql::catalog::{CatalogError as SqlCatalogError, CatalogItemType};
+use mz_sql::catalog::{CatalogError as SqlCatalogError, CatalogItemType, RoleAttributes};
 use mz_sql::names::{
     DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, RoleId, SchemaId,
     SchemaSpecifier,
@@ -37,7 +37,7 @@ use crate::catalog::builtin::{
     BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES, BUILTIN_ROLES,
 };
 use crate::catalog::error::{Error, ErrorKind};
-use crate::catalog::{is_reserved_name, SystemObjectMapping};
+use crate::catalog::{is_reserved_name, SerializedRole, SystemObjectMapping, SYSTEM_USER};
 use crate::catalog::{SerializedReplicaConfig, DEFAULT_CLUSTER_REPLICA_NAME};
 use crate::coord::timeline;
 
@@ -339,7 +339,7 @@ async fn migrate(
         |txn: &mut Transaction<'_>, now, _bootstrap_args| {
             let roles = txn
                 .roles
-                .delete(|_role_key, role_value| &role_value.name == "materialize");
+                .delete(|_role_key, role_value| &role_value.role.name == "materialize");
             assert!(roles.len() <= 1, "duplicate roles are not allowed");
             if roles.len() == 1 {
                 let (role_key, role_value) = roles.into_element();
@@ -352,7 +352,7 @@ async fn migrate(
                             object_type: ObjectType::Role,
                             details: EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
                                 id: role_key.id.to_string(),
-                                name: role_value.name,
+                                name: role_value.role.name,
                             }),
                             user: None,
                             occurred_at: now,
@@ -362,6 +362,26 @@ async fn migrate(
                     1,
                 ));
             }
+            Ok(())
+        },
+        // Attributes were added to role definitions.
+        //
+        // Introduced in v0.45.0
+        //
+        // TODO(jkosh44) Can be cleared (patched to be empty) in v0.46.0
+        |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
+            txn.roles.update(|_role_key, role_value| {
+                let mut role_value = role_value.clone();
+                if role_value.role.attributes.is_none() {
+                    let is_mz_system_role = role_value.role.name == SYSTEM_USER.name;
+                    let mut attributes = RoleAttributes::new();
+                    if is_mz_system_role {
+                        attributes = attributes.with_all();
+                    }
+                    role_value.role.attributes = Some(attributes);
+                }
+                Some(role_value)
+            })?;
             Ok(())
         },
         // Add new migrations above.
@@ -404,7 +424,7 @@ fn add_new_builtin_roles_migration(txn: &mut Transaction<'_>) -> Result<(), cata
         .roles
         .items()
         .into_values()
-        .map(|value| value.name)
+        .map(|value| value.role.name)
         .collect();
     for builtin_role in &*BUILTIN_ROLES {
         assert!(
@@ -413,7 +433,7 @@ fn add_new_builtin_roles_migration(txn: &mut Transaction<'_>) -> Result<(), cata
             BUILTIN_PREFIXES.join(", ")
         );
         if !role_names.contains(builtin_role.name) {
-            txn.insert_system_role(builtin_role.name)?;
+            txn.insert_system_role(SerializedRole::from(*builtin_role))?;
         }
     }
     Ok(())
@@ -666,12 +686,12 @@ impl Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_roles(&mut self) -> Result<Vec<(RoleId, String)>, Error> {
+    pub async fn load_roles(&mut self) -> Result<Vec<(RoleId, SerializedRole)>, Error> {
         Ok(COLLECTION_ROLE
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
-            .map(|(k, v)| (k.id, v.name))
+            .map(|(k, v)| (k.id, v.role))
             .collect())
     }
 
@@ -1075,7 +1095,7 @@ pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Er
             a.database_id == b.database_id && a.name == b.name
         }),
         items: TableTransaction::new(items, |a, b| a.schema_id == b.schema_id && a.name == b.name),
-        roles: TableTransaction::new(roles, |a, b| a.name == b.name),
+        roles: TableTransaction::new(roles, |a, b| a.role.name == b.role.name),
         clusters: TableTransaction::new(clusters, |a, b| a.name == b.name),
         cluster_replicas: TableTransaction::new(cluster_replicas, |a, b| {
             a.cluster_id == b.cluster_id && a.name == b.name
@@ -1200,17 +1220,17 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn insert_user_role(&mut self, role_name: &str) -> Result<RoleId, Error> {
-        self.insert_role(role_name, USER_ROLE_ID_ALLOC_KEY, RoleId::User)
+    pub fn insert_user_role(&mut self, role: SerializedRole) -> Result<RoleId, Error> {
+        self.insert_role(role, USER_ROLE_ID_ALLOC_KEY, RoleId::User)
     }
 
-    fn insert_system_role(&mut self, role_name: &str) -> Result<RoleId, Error> {
-        self.insert_role(role_name, SYSTEM_ROLE_ID_ALLOC_KEY, RoleId::System)
+    fn insert_system_role(&mut self, role: SerializedRole) -> Result<RoleId, Error> {
+        self.insert_role(role, SYSTEM_ROLE_ID_ALLOC_KEY, RoleId::System)
     }
 
     fn insert_role<F>(
         &mut self,
-        role_name: &str,
+        role: SerializedRole,
         id_alloc_key: &str,
         role_id_variant: F,
     ) -> Result<RoleId, Error>
@@ -1219,16 +1239,10 @@ impl<'a> Transaction<'a> {
     {
         let id = self.get_and_increment_id(id_alloc_key.to_string())?;
         let id = role_id_variant(id);
-        match self.roles.insert(
-            RoleKey { id },
-            RoleValue {
-                name: role_name.to_string(),
-            },
-        ) {
+        let name = role.name.clone();
+        match self.roles.insert(RoleKey { id }, RoleValue { role }) {
             Ok(_) => Ok(id),
-            Err(_) => Err(Error::new(ErrorKind::RoleAlreadyExists(
-                role_name.to_owned(),
-            ))),
+            Err(_) => Err(Error::new(ErrorKind::RoleAlreadyExists(name))),
         }
     }
 
@@ -1416,7 +1430,12 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn remove_role(&mut self, name: &str) -> Result<(), Error> {
-        let n = self.roles.delete(|_k, v| v.name == name).len();
+        let roles = self.roles.delete(|_k, v| v.role.name == name);
+        assert!(
+            roles.iter().all(|(k, _)| k.id.is_user()),
+            "cannot delete non-user roles"
+        );
+        let n = roles.len();
         assert!(n <= 1);
         if n == 1 {
             Ok(())
@@ -1519,7 +1538,7 @@ impl<'a> Transaction<'a> {
     /// Updates all items with ids matching the keys of `items` in the transaction, to the
     /// corresponding value in `items`.
     ///
-    /// Returns an error if any id in `ids` is not found.
+    /// Returns an error if any id in `items` is not found.
     ///
     /// NOTE: On error, there still may be some items updated in the transaction. It is
     /// up to the called to either abort the transaction or commit.
@@ -1546,6 +1565,29 @@ impl<'a> Transaction<'a> {
             let item_ids: BTreeSet<_> = self.items.items().keys().map(|k| k.gid).collect();
             let mut unknown = update_ids.difference(&item_ids);
             Err(SqlCatalogError::UnknownItem(unknown.join(", ")).into())
+        }
+    }
+
+    /// Updates role `id` in the transaction to `role`.
+    ///
+    /// Returns an error if `id` is not found.
+    ///
+    /// Runtime is linear with respect to the total number of items in the stash.
+    /// DO NOT call this function in a loop, implement and use some `Self::update_roles` instead.
+    /// You should model it after [`Self::update_items`].
+    pub fn update_role(&mut self, id: RoleId, role: SerializedRole) -> Result<(), Error> {
+        let n = self.roles.update(move |k, _v| {
+            if k.id == id {
+                Some(RoleValue { role: role.clone() })
+            } else {
+                None
+            }
+        })?;
+        assert!(n <= 1);
+        if n == 1 {
+            Ok(())
+        } else {
+            Err(SqlCatalogError::UnknownItem(id.to_string()).into())
         }
     }
 
@@ -1936,14 +1978,16 @@ pub struct ItemValue {
     definition: SerializedCatalogItem,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
 pub struct RoleKey {
     id: RoleId,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Debug)]
 pub struct RoleValue {
-    name: String,
+    // flatten needed for backwards compatibility.
+    #[serde(flatten)]
+    role: SerializedRole,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]

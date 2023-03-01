@@ -30,7 +30,7 @@ statement ok
 DROP DATABASE test
 
 statement ok
-CREATE ROLE foo LOGIN SUPERUSER
+CREATE ROLE foo
 
 statement ok
 DROP ROLE foo

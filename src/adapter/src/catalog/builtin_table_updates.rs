@@ -27,7 +27,7 @@ use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
 use mz_sql::func::FuncImplCatalogDetails;
-use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
+use mz_sql::names::{ResolvedDatabaseSpecifier, RoleId, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::types::connections::KafkaConnection;
 use mz_storage_client::types::sinks::{KafkaSinkConnection, StorageSinkConnection};
@@ -45,7 +45,7 @@ use crate::catalog::builtin::{
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connection, DataSourceDesc, Database, Error, ErrorKind, Func, Index,
-    MaterializedView, Role, Sink, StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
+    MaterializedView, Sink, StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
 
 use super::builtin::{MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_CLUSTER_REPLICA_SIZES};
@@ -120,13 +120,18 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_role_update(&self, role: &Role, diff: Diff) -> BuiltinTableUpdate {
+    pub(super) fn pack_role_update(&self, id: RoleId, diff: Diff) -> BuiltinTableUpdate {
+        let role = self.get_role(&id);
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_ROLES),
             row: Row::pack_slice(&[
                 Datum::String(&role.id.to_string()),
                 Datum::UInt32(role.oid),
                 Datum::String(&role.name),
+                Datum::from(role.attributes.inherit),
+                Datum::from(role.attributes.create_role),
+                Datum::from(role.attributes.create_db),
+                Datum::from(role.attributes.create_cluster),
             ]),
             diff,
         }

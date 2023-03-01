@@ -31,7 +31,7 @@ use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, Timely
 use mz_pgrepr::oid;
 use mz_repr::{RelationDesc, RelationType, ScalarType};
 use mz_sql::catalog::{
-    CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, TypeReference,
+    CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, RoleAttributes, TypeReference,
 };
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::healthcheck::{MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC};
@@ -158,6 +158,7 @@ pub struct BuiltinRole {
     ///
     /// IMPORTANT: Must start with a prefix from [`BUILTIN_PREFIXES`].
     pub name: &'static str,
+    pub attributes: RoleAttributes,
 }
 
 #[derive(Clone, Debug)]
@@ -1539,7 +1540,11 @@ pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false)),
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("inherit", ScalarType::Bool.nullable(false))
+        .with_column("create_role", ScalarType::Bool.nullable(false))
+        .with_column("create_db", ScalarType::Bool.nullable(false))
+        .with_column("create_cluster", ScalarType::Bool.nullable(false)),
     is_retained_metrics_relation: false,
 });
 pub static MZ_PSEUDO_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2710,18 +2715,19 @@ pub const PG_AUTHID: BuiltinView = BuiltinView {
 AS SELECT
     r.oid AS oid,
     r.name AS rolname,
+    -- We determine superuser status each time a role logs in, so there's no way to accurately
+    -- depict this in the catalog. Except for mz_system, which is always a superuser. For all other
+    -- roles we hardcode NULL.
     CASE
         WHEN r.name = 'mz_system' THEN true
-        ELSE false
+        ELSE NULL::pg_catalog.bool
     END AS rolsuper,
-    -- MZ doesn't have role inheritence
-    false AS rolinherit,
-    -- All roles can create other roles
-    true AS rolcreaterole,
-    -- All roles can create other dbs
-    true AS rolcreatedb,
-    -- All roles can login
-    true AS rolcanlogin,
+    inherit AS rolinherit,
+    create_role AS rolcreaterole,
+    create_db AS rolcreatedb,
+    -- We determine login status each time a role logs in, so there's no way to accurately depict
+    -- this in the catalog. Instead we just hardcode NULL.
+    NULL::pg_catalog.bool AS rolcanlogin,
     -- MZ doesn't support replication in the same way Postgres does
     false AS rolreplication,
     -- MZ doesn't how row level security
@@ -2926,10 +2932,12 @@ ON mz_catalog.mz_secrets (schema_id)",
 
 pub static MZ_SYSTEM_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*SYSTEM_USER.name,
+    attributes: RoleAttributes::new().with_all(),
 });
 
 pub static MZ_INTROSPECTION_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*INTROSPECTION_USER.name,
+    attributes: RoleAttributes::new(),
 });
 
 pub static MZ_SYSTEM_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| BuiltinCluster {
