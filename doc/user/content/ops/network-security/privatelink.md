@@ -19,8 +19,8 @@ and retrieve the AWS principal needed to configure the AWS PrivateLink service.
 
 {{< note >}}
 Materialize provides a [Terraform module](https://github.com/MaterializeInc/terraform-aws-msk-privatelink)
-that can be used to create the VPC endpoint service (step 5) and the AWS PrivateLink
-connection (step 6).
+that can be used to create the Target groups for each Kafka Broker (step 1), the Network Load Balancer (step 2),
+the TCP listeners (step 3) and the VPC endpoint service (step 5).
 {{< /note >}}
 
 1. #### Create target groups
@@ -35,18 +35,6 @@ connection (step 6).
     d. Make sure that the target group is in the same VPC as the MSK cluster.
 
     e. Click next, and register the respective MSK broker to each target group using its IP address.
-
-1. #### Verify security groups and health checks
-
-    Once the target groups have been created, make sure that the [health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html) are passing and that the targets are reported as healthy.
-
-    If you have set up a security group for your MSK cluster, you must ensure that it allows traffic on both the listener port and the health check port.
-
-    **Remarks**:
-
-    a. Network Load Balancers do not have associated security groups. Therefore, the security groups for your targets must use IP addresses to allow traffic.
-
-    b. You can't use the security groups for the clients as a source in the security groups for the targets. Therefore, the security groups for your targets must use the IP addresses of the clients to allow traffic. For more details, check the [AWS documentation](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html).
 
 1. #### Create a Network Load Balancer (NLB)
     Create a [Network Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-network-load-balancer.html) that is **enabled for the same subnets** that the MSK brokers are in.
@@ -64,6 +52,18 @@ connection (step 6).
     b. Port `9002` → broker `b-2...`.
 
     c. Port `9003` → broker `b-3...`.
+
+1. #### Verify security groups and health checks
+
+    Once the TCP listeners have been created, make sure that the [health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html) for each target group are passing and that the targets are reported as healthy.
+
+    If you have set up a security group for your MSK cluster, you must ensure that it allows traffic on both the listener port and the health check port.
+
+    **Remarks**:
+
+    a. Network Load Balancers do not have associated security groups. Therefore, the security groups for your targets must use IP addresses to allow traffic.
+
+    b. You can't use the security groups for the clients as a source in the security groups for the targets. Therefore, the security groups for your targets must use the IP addresses of the clients to allow traffic. For more details, check the [AWS documentation](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html).
 
 1. #### Create a VPC endpoint service
 
