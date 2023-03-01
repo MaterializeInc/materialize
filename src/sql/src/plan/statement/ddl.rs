@@ -1728,7 +1728,7 @@ pub fn plan_create_view(
         None
     };
 
-    if replace.is_none() && scx.item_exists(&name) {
+    if *if_exists == IfExistsBehavior::Error && scx.item_exists(&name) {
         return Err(PlanError::ItemAlreadyExists {
             name: name.item,
             item_type: CatalogItemType::View,
@@ -3265,7 +3265,7 @@ pub fn plan_create_connection(
         }
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
-    if scx.item_exists(&name) {
+    if !if_not_exists && scx.item_exists(&name) {
         return Err(PlanError::ItemAlreadyExists {
             name: name.item,
             item_type: CatalogItemType::Connection,
