@@ -101,7 +101,7 @@ contains:unknown catalog item 'v1'
 > CREATE TEMPORARY TABLE temp_t (a int, b text NOT NULL)
 
 ! CREATE TEMP TABLE temp_t (a int, b text NOT NULL)
-contains:catalog item 'temp_t' already exists
+contains:catalog item 'temp_t' : table, already exists
 
 > INSERT INTO temp_t VALUES (1, 'testing')
 
