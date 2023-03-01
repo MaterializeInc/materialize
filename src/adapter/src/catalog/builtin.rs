@@ -2720,14 +2720,14 @@ AS SELECT
     -- roles we hardcode NULL.
     CASE
         WHEN r.name = 'mz_system' THEN true
-        ELSE NULL
+        ELSE NULL::pg_catalog.bool
     END AS rolsuper,
     inherit AS rolinherit,
     create_role AS rolcreaterole,
     create_db AS rolcreatedb,
     -- We determine login status each time a role logs in, so there's no way to accurately depict
     -- this in the catalog. Instead we just hardcode NULL.
-    NULL AS rolcanlogin,
+    NULL::pg_catalog.bool AS rolcanlogin,
     -- MZ doesn't support replication in the same way Postgres does
     false AS rolreplication,
     -- MZ doesn't how row level security

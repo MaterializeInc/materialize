@@ -339,7 +339,7 @@ async fn migrate(
         |txn: &mut Transaction<'_>, now, _bootstrap_args| {
             let roles = txn
                 .roles
-                .delete(|_role_key, role_value| &role_value.name == "materialize");
+                .delete(|_role_key, role_value| &role_value.role.name == "materialize");
             assert!(roles.len() <= 1, "duplicate roles are not allowed");
             if roles.len() == 1 {
                 let (role_key, role_value) = roles.into_element();
@@ -352,7 +352,7 @@ async fn migrate(
                             object_type: ObjectType::Role,
                             details: EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
                                 id: role_key.id.to_string(),
-                                name: role_value.name,
+                                name: role_value.role.name,
                             }),
                             user: None,
                             occurred_at: now,

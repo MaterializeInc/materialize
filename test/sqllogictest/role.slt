@@ -24,10 +24,10 @@ materialize true false false false
 statement error non inherit roles not yet supported
 CREATE ROLE foo NOINHERIT
 
-statement error LOGIN attribute not yet supported
+statement error LOGIN attribute is not supported, for more information consult the documentation at
 CREATE ROLE foo LOGIN
 
-statement error SUPERUSER attribute not yet supported
+statement error SUPERUSER attribute is not supported, for more information consult the documentation at
 CREATE ROLE foo SUPERUSER
 
 statement error conflicting or redundant options
@@ -40,7 +40,7 @@ CREATE ROLE foo CREATEROLE NOCREATEROLE CREATEDB
 statement ok
 CREATE ROLE rj
 
-statement error Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, \[OR REPLACE\] \[TEMPORARY\] VIEW, or \[OR REPLACE\] MATERIALIZED VIEW after CREATE, found USER
+statement error CREATE USER is not supported, for more information consult the documentation at
 CREATE USER fms
 
 query TBBBB
