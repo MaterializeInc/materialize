@@ -751,7 +751,7 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
     pending_sink_drops: Vec<GlobalId>,
     /// Compaction commands to send during the next call to
     /// `StorageController::process`.
-    pending_compaction_commands: Vec<(GlobalId, Antichain<T>)>,
+    pending_compaction_commands: Vec<(GlobalId, Antichain<T>, Option<StorageInstanceId>)>,
 
     /// Interface for managed collections
     pub(super) collection_manager: collection_mgmt::CollectionManager,
@@ -1914,7 +1914,8 @@ where
         updates: &mut BTreeMap<GlobalId, ChangeBatch<Self::Timestamp>>,
     ) {
         // Location to record consequences that we need to act on.
-        let mut storage_net = BTreeMap::new();
+        let mut collections_net = BTreeMap::new();
+        let mut exports_net = BTreeMap::new();
 
         // Repeatedly extract the maximum id, and updates for it.
         while let Some(key) = updates.keys().rev().next().cloned() {
@@ -1940,12 +1941,13 @@ where
                         .extend(update.iter().cloned());
                 }
 
-                let (changes, frontier) = storage_net
+                let (changes, frontier, cluster_id) = collections_net
                     .entry(key)
-                    .or_insert_with(|| (ChangeBatch::new(), Antichain::new()));
+                    .or_insert_with(|| (ChangeBatch::new(), Antichain::new(), None));
 
                 changes.extend(update.drain());
                 *frontier = collection.read_capabilities.frontier().to_owned();
+                *cluster_id = collection.cluster_id();
             } else if let Ok(export) = self.export_mut(key) {
                 // Exports are not depended upon by other storage objects. We
                 // only need to report changes in our own read_capability to our
@@ -1956,6 +1958,16 @@ where
                         .or_insert_with(ChangeBatch::new)
                         .extend(update.iter().cloned());
                 }
+
+                // Make sure we also send `AllowCompaction` commands for sinks,
+                // which drives updating the sink's `as_of`, among other things.
+                let (changes, frontier, cluster_id) = exports_net
+                    .entry(key)
+                    .or_insert_with(|| (ChangeBatch::new(), Antichain::new(), None));
+
+                changes.extend(update.drain());
+                *frontier = export.read_capability.clone();
+                *cluster_id = export.cluster_id();
             } else {
                 // This is confusing and we should probably error.
                 panic!("Unknown collection identifier {}", key);
@@ -1965,20 +1977,34 @@ where
         // Translate our net compute actions into `AllowCompaction` commands and
         // downgrade persist sinces. The actual downgrades are performed by a Tokio
         // task asynchorously.
-        let mut compaction_commands = BTreeMap::default();
-        for (key, (mut changes, frontier)) in storage_net {
+        //
+        // N.B. We only downgrade persist sinces for collections because
+        // exports/sinks don't have an associated collection. We still _do_ want
+        // to sent `AllowCompaction` commands to workers for them, though.
+        let mut worker_compaction_commands = BTreeMap::default();
+        let mut persist_compaction_commands = BTreeMap::default();
+        for (key, (mut changes, frontier, cluster_id)) in collections_net {
             if !changes.is_empty() {
-                compaction_commands.insert(key, frontier);
+                worker_compaction_commands.insert(key, (frontier.clone(), cluster_id));
+                persist_compaction_commands.insert(key, frontier);
             }
         }
+        for (key, (mut changes, frontier, cluster_id)) in exports_net {
+            if !changes.is_empty() {
+                worker_compaction_commands.insert(key, (frontier, cluster_id));
+            }
+        }
+
         self.state
             .persist_read_handles
-            .downgrade(compaction_commands.clone());
+            .downgrade(persist_compaction_commands);
 
-        for (id, frontier) in compaction_commands {
+        for (id, (frontier, cluster_id)) in worker_compaction_commands {
             // Acquiring a client for a storage instance requires await, so we
             // instead stash these for later and process when we can.
-            self.state.pending_compaction_commands.push((id, frontier));
+            self.state
+                .pending_compaction_commands
+                .push((id, frontier, cluster_id));
         }
     }
 
@@ -2037,9 +2063,9 @@ where
 
         // TODO(aljoscha): We could consolidate these before sending to
         // instances, but this seems fine for now.
-        for (id, frontier) in self.state.pending_compaction_commands.drain(..) {
+        for (id, frontier, cluster_id) in self.state.pending_compaction_commands.drain(..) {
             // TODO(petrosagg): make this a strict check
-            let cluster_id = self.state.collections[&id].cluster_id();
+            // TODO(aljoscha): What's up with this TODO?
             let client = cluster_id.and_then(|cluster_id| self.state.clients.get_mut(&cluster_id));
 
             // Only ingestion collections have actual work to do on drop.
@@ -2779,6 +2805,11 @@ impl<T: Timestamp> ExportState<T> {
             storage_dependencies,
             write_frontier: Antichain::from_elem(Timestamp::minimum()),
         }
+    }
+
+    /// Returns the cluster to which the export is bound, if applicable.
+    fn cluster_id(&self) -> Option<StorageInstanceId> {
+        Some(self.description.instance_id)
     }
 }
 
