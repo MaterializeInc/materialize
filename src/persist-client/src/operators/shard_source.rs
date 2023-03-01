@@ -308,7 +308,7 @@ where
                     }
                     // Read and emit the next batch from our Subscribe.
                     //
-                    // NB: async_stream::next is cancel safe
+                    // NB: StreamExt::next is cancel safe
                     Some(event) = subscription_stream.next() => {
                         match event {
                             ListenEvent::Updates(mut parts) => {
