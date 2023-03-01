@@ -450,6 +450,7 @@ where
         writer_id: &WriterId,
         heartbeat_timestamp_ms: u64,
         idempotency_token: &IdempotencyToken,
+        extra_effort: usize,
     ) -> ControlFlow<CompareAndAppendBreak<T>, Vec<FueledMergeReq<T>>> {
         // We expire all writers if the upper and since both advance to the
         // empty antichain. Gracefully handle this. At the same time,
@@ -521,9 +522,9 @@ where
         }
 
         let merge_reqs = if batch.desc.upper() != batch.desc.lower() {
-            self.trace.push_batch(batch.clone())
+            self.trace.push_batch_and_exert(batch.clone(), extra_effort)
         } else {
-            Vec::new()
+            self.trace.exert(extra_effort)
         };
         debug_assert_eq!(self.trace.upper(), batch.desc.upper());
         writer_state.most_recent_write_token = idempotency_token.clone();
@@ -1508,7 +1509,8 @@ mod tests {
                 &hollow(1, 2, &["key1"], 1),
                 &writer_id,
                 now(),
-                &IdempotencyToken::new()
+                &IdempotencyToken::new(),
+                0,
             ),
             Break(CompareAndAppendBreak::Upper {
                 shard_upper: Antichain::from_elem(0),
@@ -1522,7 +1524,8 @@ mod tests {
                 &hollow(0, 5, &[], 0),
                 &writer_id,
                 now(),
-                &IdempotencyToken::new()
+                &IdempotencyToken::new(),
+                0,
             )
             .is_continue());
 
@@ -1532,7 +1535,8 @@ mod tests {
                 &hollow(5, 4, &["key1"], 1),
                 &writer_id,
                 now(),
-                &IdempotencyToken::new()
+                &IdempotencyToken::new(),
+                0,
             ),
             Break(CompareAndAppendBreak::InvalidUsage(InvalidBounds {
                 lower: Antichain::from_elem(5),
@@ -1546,7 +1550,8 @@ mod tests {
                 &hollow(5, 5, &["key1"], 1),
                 &writer_id,
                 now(),
-                &IdempotencyToken::new()
+                &IdempotencyToken::new(),
+                0,
             ),
             Break(CompareAndAppendBreak::InvalidUsage(
                 InvalidEmptyTimeInterval {
@@ -1563,7 +1568,8 @@ mod tests {
                 &hollow(5, 5, &[], 0),
                 &writer_id,
                 now(),
-                &IdempotencyToken::new()
+                &IdempotencyToken::new(),
+                0,
             )
             .is_continue());
     }
@@ -1603,7 +1609,8 @@ mod tests {
                 &hollow(0, 5, &["key1"], 1),
                 &writer_id,
                 now(),
-                &IdempotencyToken::new()
+                &IdempotencyToken::new(),
+                0,
             )
             .is_continue());
 
@@ -1663,7 +1670,8 @@ mod tests {
                 &hollow(5, 10, &[], 0),
                 &writer_id,
                 now(),
-                &IdempotencyToken::new()
+                &IdempotencyToken::new(),
+                0,
             )
             .is_continue());
 
@@ -1686,7 +1694,8 @@ mod tests {
                 &hollow(10, 15, &["key2"], 1),
                 &writer_id,
                 now(),
-                &IdempotencyToken::new()
+                &IdempotencyToken::new(),
+                0,
             )
             .is_continue());
 
@@ -1746,7 +1755,8 @@ mod tests {
                 &hollow(0, 5, &["key1"], 1),
                 &writer_id,
                 now(),
-                &IdempotencyToken::new()
+                &IdempotencyToken::new(),
+                0,
             )
             .is_continue());
         assert!(state
@@ -1755,7 +1765,8 @@ mod tests {
                 &hollow(5, 10, &["key2"], 1),
                 &writer_id,
                 now(),
-                &IdempotencyToken::new()
+                &IdempotencyToken::new(),
+                0,
             )
             .is_continue());
 
@@ -1803,7 +1814,8 @@ mod tests {
                 &hollow(0, 2, &["key1"], 1),
                 &writer_id_one,
                 now(),
-                &IdempotencyToken::new()
+                &IdempotencyToken::new(),
+                0,
             ),
             Break(CompareAndAppendBreak::InvalidUsage(
                 InvalidUsage::UnknownWriter(writer_id_one.clone())
@@ -1828,7 +1840,8 @@ mod tests {
                 &hollow(0, 2, &["key1"], 1),
                 &writer_id_one,
                 now(),
-                &IdempotencyToken::new()
+                &IdempotencyToken::new(),
+                0,
             )
             .is_continue());
 
@@ -1843,7 +1856,8 @@ mod tests {
                 &hollow(2, 5, &["key2"], 1),
                 &writer_id_one,
                 now(),
-                &IdempotencyToken::new()
+                &IdempotencyToken::new(),
+                0,
             ),
             Break(CompareAndAppendBreak::InvalidUsage(
                 InvalidUsage::UnknownWriter(writer_id_one.clone())
@@ -1857,7 +1871,8 @@ mod tests {
                 &hollow(2, 5, &["key2"], 1),
                 &writer_id_two,
                 now(),
-                &IdempotencyToken::new()
+                &IdempotencyToken::new(),
+                0,
             )
             .is_continue());
     }
