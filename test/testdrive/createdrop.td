@@ -53,7 +53,7 @@ contains:catalog item 'i' : index, already exists
 contains:catalog item 'j' : index, already exists
 
 ! CREATE INDEX v ON v2(x)
-contains:catalog item 'v' : index, already exists
+contains:catalog item 'v' : materialized view, already exists
 
 $ set dummy={
     "type": "record",
