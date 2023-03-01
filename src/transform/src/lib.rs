@@ -470,13 +470,17 @@ impl Optimizer {
             //   Filters from the Gets;
             // - there is no RelationCSE between this LiteralConstraints and JoinImplementation,
             //   because that could move an IndexedFilter behind a Get.
+            // - The last RelationCSE before JoinImplementation should be with inline_mfp = true.
             Box::new(crate::literal_constraints::LiteralConstraints),
             Box::new(crate::Fixpoint {
                 limit: 100,
+                transforms: vec![Box::new(
+                    crate::join_implementation::JoinImplementation::default(),
+                )],
+            }),
+            Box::new(crate::Fixpoint {
+                limit: 100,
                 transforms: vec![
-                    // The last RelationCSE before JoinImplementation should be with
-                    // inline_mfp = true.
-                    Box::new(crate::join_implementation::JoinImplementation::default()),
                     Box::new(crate::column_knowledge::ColumnKnowledge::default()),
                     Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
                     Box::new(crate::demand::Demand::default()),
