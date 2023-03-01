@@ -440,6 +440,7 @@ where
 
 #[derive(Clone, Debug)]
 pub(crate) struct SubscriptionLeaseReturner {
+    // A non-async mutex protecting plain-old-data that is written by `SubscriptionLeaseReturner`s, and read as part of normal `Subscription` operation.
     leased_seqnos: Arc<Mutex<BTreeMap<SeqNo, usize>>>,
     reader_id: LeasedReaderId,
     metrics: Arc<Metrics>,
