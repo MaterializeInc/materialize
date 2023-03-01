@@ -1,0 +1,55 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for issues corrected by https://github.com/MaterializeInc/materialize/issues/17808.
+
+# The following query should not frustrate the system, although it did prior to
+# the associated PR being merged. It should produce an empty result set.
+query I
+with mutually recursive
+    a(x int) as (select * from a)
+select * from a;
+----
+
+
+statement ok
+CREATE TABLE foo (a int)
+
+# The following query should not inline `a` into `c`, as doing so would change
+# the reference to `b` from "the prior iterate" to "the current iterate", at which
+# point it could be canceled out, which would be incorrect.
+# This query may need to be improved as `with mutually recursive` analysis improves,
+# as it is not semantically complicated just syntactically complicated.
+query T multiline
+EXPLAIN with mutually recursive
+    a(x int) as (select * from b),
+    b(x int) as (select * from foo),
+    -- meant to contain `b` minus its previous iterate.
+    c(x int) as (select * from b except all select * from a)
+select * from c;
+----
+Explained Query:
+  Return
+    Threshold
+      Union
+        Get l1
+        Negate
+          Get l0
+  With Mutually Recursive
+    cte l1 =
+      CrossJoin type=differential
+        ArrangeBy keys=[[]]
+          Constant
+            - ()
+        ArrangeBy keys=[[]]
+          Get materialize.public.foo
+    cte l0 =
+      Get l1
+
+EOF
