@@ -143,6 +143,9 @@ impl PostgresConsensusConfig {
             fn connection_pool_ttl_stagger(&self) -> Duration {
                 Duration::MAX
             }
+            fn connect_timeout(&self) -> Duration {
+                Duration::MAX
+            }
         }
 
         let config = PostgresConsensusConfig::new(
@@ -170,7 +173,8 @@ impl PostgresConsensus {
     /// Open a Postgres [Consensus] instance with `config`, for the collection
     /// named `shard`.
     pub async fn open(config: PostgresConsensusConfig) -> Result<Self, ExternalError> {
-        let pg_config: Config = config.url.parse()?;
+        let mut pg_config: Config = config.url.parse()?;
+        pg_config.connect_timeout(config.knobs.connect_timeout());
         let tls = make_tls(&pg_config)?;
 
         let manager = Manager::from_config(
@@ -263,6 +267,10 @@ impl PostgresConsensus {
     async fn get_connection(&self) -> Result<Object, PoolError> {
         let start = Instant::now();
         let res = self.pool.get().await;
+        if let Err(PoolError::Backend(err)) = &res {
+            debug!("error establishing connection: {}", err);
+            self.metrics.connpool_connection_errors.inc();
+        }
         self.metrics
             .connpool_acquire_seconds
             .inc_by(start.elapsed().as_secs_f64());
