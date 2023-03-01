@@ -1,0 +1,79 @@
+# Copyright 2020 The Actions Ecosystem Authors
+# Modifications Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Portions of this file are derived from the README examples in the Action
+# Slack Notifier project. The original source code was retrieved on
+# January 5, 2022 from:
+
+#     https://github.com/actions-ecosystem/action-slack-notifier/blob/fc778468d09c43a6f4d1b8cccaca59766656996a/README.md
+
+name: Slack Issue Notifications
+
+on:
+  issues:
+    types:
+      - opened
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check membership
+        id: is_organization_member
+        uses: jamessingleton/is-organization-member@v1
+        with:
+          organization: MaterializeInc
+          username: ${{ github.event.issue.user.login }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push to Slack
+        if: |
+          steps.is_organization_member.outputs.result == false
+        uses: actions-ecosystem/action-slack-notifier@v1
+        with:
+          slack_token: ${{ secrets.SLACK_TOKEN }}
+          channel: devex
+          custom_payload: |
+            {
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "An external user just opened a GitHub issue! :eyes-shaking:"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "• *User:* ${{ github.event.issue.user.name }} ( ${{ github.event.issue.user.login }} )"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "• *Issue:* ${{ github.event.issue.title }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "• *URL:* ${{ github.event.issue.url }}"
+                  }
+                }
+              ]
+            }
