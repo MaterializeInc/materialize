@@ -140,6 +140,16 @@ Naming standards:
   * Examples of collective final nouns are `_usage`, `_history`, and `_utilization`.
   * A good example of these standards in practice is the set of relations `mz_sources`, `mz_source_statuses`, and `mz_source_status_history`.
 
+### Function Style
+
+We adhere to standards for our SQL functions.
+
+Naming standards:
+* If the function exists in PostgreSQL, then use the PostgreSQL function and argument names.
+* If the function is specific to Materialize internals, then the name should be prefixed with `mz_`. For example, `mz_now()`. 
+
+
+
 ## Log message style
 
 We use the [`tracing` crate](https://docs.rs/tracing/latest/tracing/)'s log
