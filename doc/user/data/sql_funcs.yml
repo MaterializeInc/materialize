@@ -694,6 +694,10 @@
     description: >-
       Returns the name of the user who executed the containing query.
     unmaterializable: true
+  - signature: 'is_superuser() -> boolean'
+    description: >-
+      Reports whether the user who executed the containing query is a superuser.
+    unmaterializable: true
   - signature: 'mz_row_size(expr: Record) -> int'
     description: Returns the number of bytes used to store a row.
 

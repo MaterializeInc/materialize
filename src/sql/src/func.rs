@@ -2076,6 +2076,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "isempty" => Scalar {
             params!(RangeAny) => UnaryFunc::RangeEmpty(func::RangeEmpty) => Bool, 3850;
         },
+        "is_superuser" => Scalar {
+            params!() => UnmaterializableFunc::IsSuperuser, oid::FUNC_IS_SUPERUSER;
+        },
         "jsonb_array_length" => Scalar {
             params!(Jsonb) => UnaryFunc::JsonbArrayLength(func::JsonbArrayLength) => Int32, 3207;
         },

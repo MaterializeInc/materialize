@@ -30,7 +30,7 @@ use mz_adapter::session::{
 };
 use mz_adapter::session::{Session, User};
 use mz_adapter::{AdapterNotice, ExecuteResponse, PeekResponseUnary, RowsFuture};
-use mz_frontegg_auth::{Claims, FronteggAuthentication};
+use mz_frontegg_auth::{Claims, ContinuousValidationContext, FronteggAuthentication};
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::str::StrExt;
@@ -177,7 +177,11 @@ where
             .await
             .and_then(|token| frontegg.continuously_validate_access_token(token, user.clone()))
         {
-            Ok((claims, is_expired, claims_rx)) => {
+            Ok(ContinuousValidationContext {
+                claims,
+                is_expired,
+                refreshed_claims_rx,
+            }) => {
                 let external_metadata = Some(convert_claims_to_external_metadata(
                     claims,
                     frontegg.admin_role(),
@@ -185,7 +189,7 @@ where
                 (
                     external_metadata,
                     is_expired.left_future(),
-                    Some((claims_rx, frontegg.admin_role().to_string())),
+                    Some((refreshed_claims_rx, frontegg.admin_role().to_string())),
                 )
             }
             Err(e) => {
@@ -201,6 +205,15 @@ where
     } else {
         // No frontegg check, so is_expired never resolves and claims are never updated.
         (None, pending().right_future(), None)
+    };
+    let update_claims_fn = move |session: &mut Session| {
+        if let Some((claims_rx, admin_role)) = &mut claims_rx {
+            while let Ok(claims) = claims_rx.try_recv() {
+                let external_user_metadata =
+                    convert_claims_to_external_metadata(claims, admin_role);
+                session.update_external_user_metadata(external_user_metadata);
+            }
+        }
     };
 
     // Construct session.
@@ -280,20 +293,11 @@ where
     let machine = StateMachine {
         conn,
         adapter_client,
-    };
-
-    let update_claims_fn = move |session: &mut Session| {
-        if let Some((claims_rx, admin_role)) = &mut claims_rx {
-            while let Ok(claims) = claims_rx.try_recv() {
-                let external_user_metadata =
-                    convert_claims_to_external_metadata(claims, admin_role);
-                session.update_external_user_metadata(external_user_metadata);
-            }
-        }
+        update_claims_fn,
     };
 
     select! {
-        r = machine.run(update_claims_fn) => r,
+        r = machine.run() => r,
         _ = is_expired => {
             conn
                 .send(ErrorResponse::fatal(SqlState::INVALID_AUTHORIZATION_SPECIFICATION, "authentication expired"))
@@ -388,29 +392,30 @@ enum State {
     Done,
 }
 
-struct StateMachine<'a, A> {
+struct StateMachine<'a, A, C>
+where
+    C: FnMut(&mut Session) + Send + 'a,
+{
     conn: &'a mut FramedConn<A>,
     adapter_client: mz_adapter::SessionClient,
+    update_claims_fn: C,
 }
 
-impl<'a, A> StateMachine<'a, A>
+impl<'a, A, C> StateMachine<'a, A, C>
 where
     A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin + 'a,
+    C: FnMut(&mut Session) + Send + 'a,
 {
     // Manually desugar this (don't use `async fn run`) here because a much better
     // error message is produced if there are problems with Send or other traits
     // somewhere within the Future.
     #[allow(clippy::manual_async_fn)]
     #[tracing::instrument(level = "debug", skip_all)]
-    fn run(
-        mut self,
-        mut update_claims_fn: impl FnMut(&mut Session) + Send + 'a,
-    ) -> impl Future<Output = Result<(), io::Error>> + Send + 'a {
+    fn run(mut self) -> impl Future<Output = Result<(), io::Error>> + Send + 'a {
         async move {
             let mut state = State::Ready;
             loop {
                 self.send_pending_notices().await?;
-                update_claims_fn(self.adapter_client.session());
                 state = match state {
                     State::Ready => self.advance_ready().await?,
                     State::Drain => self.advance_drain().await?,
@@ -444,6 +449,7 @@ where
         self.adapter_client
             .remove_idle_in_transaction_session_timeout();
         self.adapter_client.reset_canceled();
+        (self.update_claims_fn)(self.adapter_client.session());
 
         // NOTE(guswynn): we could consider adding spans to all message types. Currently
         // only a few message types seem useful.

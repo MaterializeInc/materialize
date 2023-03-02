@@ -93,6 +93,7 @@ message ProtoUnmaterializableFunc {
         google.protobuf.Empty version = 13;
         google.protobuf.Empty mz_version_num = 14;
         google.protobuf.Empty current_setting = 15;
+        google.protobuf.Empty is_superuser = 16;
     }
 }
 

@@ -384,9 +384,8 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                         let mut pg_client = pg_client.connect(tls.clone()).unwrap();
                         let row = pg_client.query_one("SELECT current_user", &[]).unwrap();
                         assert_eq!(row.get::<_, String>(0), *user);
-                        let row = pg_client.query_one("SHOW is_superuser", &[]).unwrap();
-                        let expected = if *is_superuser { "on" } else { "off" };
-                        assert_eq!(row.get::<_, String>(0), *expected);
+                        let row = pg_client.query_one("SELECT is_superuser()", &[]).unwrap();
+                        assert_eq!(row.get::<_, bool>(0), *is_superuser);
                     }
                     Assert::DbErr(check) => {
                         // This sometimes returns a network error, so retry until we get a db error.
@@ -500,10 +499,18 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                     }
                     Assert::SuccessSuperuserCheck(is_superuser) => {
                         assert_success_response(res, vec![vec![user.to_string()]], &runtime);
-                        let res =
-                            query_http_api("SHOW is_superuser", &uri, headers, configure, &runtime);
-                        let expected = if *is_superuser { "on" } else { "off" };
-                        assert_success_response(res, vec![vec![expected.to_string()]], &runtime);
+                        let res = query_http_api(
+                            "SELECT is_superuser()",
+                            &uri,
+                            headers,
+                            configure,
+                            &runtime,
+                        );
+                        assert_success_response(
+                            res,
+                            vec![vec![is_superuser.to_string()]],
+                            &runtime,
+                        );
                     }
                     Assert::Err(check) => {
                         let (code, message) = match res {
@@ -589,10 +596,15 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                     Assert::Success => assert_success_response(&mut ws, None, Some("SELECT 1")),
                     Assert::SuccessSuperuserCheck(is_superuser) => {
                         assert_success_response(&mut ws, None, Some("SELECT 1"));
-                        ws.write_message(Message::Text(r#"{"query": "SHOW is_superuser"}"#.into()))
-                            .unwrap();
-                        let expected = if *is_superuser { "\"on\"" } else { "\"off\"" };
-                        assert_success_response(&mut ws, Some(vec![expected]), Some("SELECT 1"));
+                        ws.write_message(Message::Text(
+                            r#"{"query": "SELECT is_superuser()"}"#.into(),
+                        ))
+                        .unwrap();
+                        assert_success_response(
+                            &mut ws,
+                            Some(vec![&is_superuser.to_string()]),
+                            Some("SELECT 1"),
+                        );
                     }
                     Assert::Err(check) => {
                         let resp = ws.read_message().unwrap();
@@ -1653,38 +1665,29 @@ fn test_auth_admin() {
             })))
             .unwrap();
 
-        assert_eq!(
-            pg_client
-                .query_one("SHOW is_superuser", &[])
-                .unwrap()
-                .get::<_, String>(0),
-            "off"
-        );
+        assert!(!pg_client
+            .query_one("SELECT is_superuser()", &[])
+            .unwrap()
+            .get::<_, bool>(0));
 
         role_tx
             .send((frontegg_user.to_string(), vec![admin_role.to_string()]))
             .unwrap();
         wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
 
-        assert_eq!(
-            pg_client
-                .query_one("SHOW is_superuser", &[])
-                .unwrap()
-                .get::<_, String>(0),
-            "on"
-        );
+        assert!(pg_client
+            .query_one("SELECT is_superuser()", &[])
+            .unwrap()
+            .get::<_, bool>(0));
 
         role_tx
             .send((frontegg_user.to_string(), Vec::new()))
             .unwrap();
         wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
 
-        assert_eq!(
-            pg_client
-                .query_one("SHOW is_superuser", &[])
-                .unwrap()
-                .get::<_, String>(0),
-            "off"
-        );
+        assert!(!pg_client
+            .query_one("SELECT is_superuser()", &[])
+            .unwrap()
+            .get::<_, bool>(0));
     }
 }

@@ -121,6 +121,12 @@ pub struct FronteggAuthentication {
     client: Client,
 }
 
+pub struct ContinuousValidationContext<T: Future<Output = ()>> {
+    pub claims: Claims,
+    pub is_expired: T,
+    pub refreshed_claims_rx: tokio::sync::mpsc::UnboundedReceiver<Claims>,
+}
+
 pub const REFRESH_SUFFIX: &str = "/token/refresh";
 
 impl FronteggAuthentication {
@@ -263,21 +269,17 @@ impl FronteggAuthentication {
     /// Continuously validates and refreshes an access token.
     ///
     /// Validates the provided access token once, as `validate_access_token`
-    /// does. If is valid, returns the contained claims and a future that will
-    /// attempt to refresh the access token before it expires, resolving iff
-    /// the token expires or fails to refresh.
+    /// does. If is valid, returns three things:
+    /// 1. Contained claims.
+    /// 2. A future that will attempt to refresh the access token before it
+    /// expires, resolving iff the token expires or fails to refresh.
+    /// 3. A channel that will send new claims whenever the user's claims
+    /// are updated.
     pub fn continuously_validate_access_token(
         &self,
         mut token: ApiTokenResponse,
         expected_email: String,
-    ) -> Result<
-        (
-            Claims,
-            impl Future<Output = ()>,
-            tokio::sync::mpsc::UnboundedReceiver<Claims>,
-        ),
-        FronteggError,
-    > {
+    ) -> Result<ContinuousValidationContext<impl Future<Output = ()>>, FronteggError> {
         // Do an initial full validity check of the token.
         let mut claims = self.validate_access_token(&token.access_token, Some(&expected_email))?;
         let ret_claims = claims.clone();
@@ -340,7 +342,11 @@ impl FronteggAuthentication {
                 };
             }
         };
-        Ok((ret_claims, expire_future, rx))
+        Ok(ContinuousValidationContext {
+            claims: ret_claims,
+            is_expired: expire_future,
+            refreshed_claims_rx: rx,
+        })
     }
 
     pub fn tenant_id(&self) -> Uuid {
