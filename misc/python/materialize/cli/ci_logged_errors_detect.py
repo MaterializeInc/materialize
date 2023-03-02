@@ -41,7 +41,8 @@ ERROR_RE = re.compile(
     | expected\ .*,\ but\ found\ none
     | unsupported\ SQL\ type\ in\ testdrive:
     )
-    """
+    """,
+    re.VERBOSE,
 )
 
 
