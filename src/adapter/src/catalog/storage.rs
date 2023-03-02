@@ -1043,7 +1043,7 @@ where
         .map(|v| v.ts))
 }
 
-#[tracing::instrument(name = "storage::transaction", level = "trace", skip_all)]
+#[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
 pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Error> {
     let (
         databases,

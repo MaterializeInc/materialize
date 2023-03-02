@@ -480,6 +480,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) async fn sequence_create_source(
         &mut self,
         session: &mut Session,
@@ -648,6 +649,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn sequence_create_connection(
         &mut self,
         session: &mut Session,
@@ -732,6 +734,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn sequence_create_database(
         &mut self,
         session: &mut Session,
@@ -757,6 +760,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn sequence_create_schema(
         &mut self,
         session: &mut Session,
@@ -783,6 +787,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) async fn sequence_create_role(
         &mut self,
         session: &Session,
@@ -819,6 +824,7 @@ impl Coordinator {
         first_argmin.clone()
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn sequence_create_cluster(
         &mut self,
         session: &Session,
@@ -979,6 +985,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn sequence_create_cluster_replica(
         &mut self,
         session: &Session,
@@ -1238,6 +1245,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn sequence_create_secret(
         &mut self,
         session: &mut Session,
@@ -1290,6 +1298,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self, tx))]
     async fn sequence_create_sink(
         &mut self,
         mut session: Session,
@@ -1462,6 +1471,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn sequence_create_view(
         &mut self,
         session: &mut Session,
@@ -1536,6 +1546,7 @@ impl Coordinator {
         Ok(ops)
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn sequence_create_materialized_view(
         &mut self,
         session: &mut Session,
@@ -1674,6 +1685,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn sequence_create_index(
         &mut self,
         session: &mut Session,
@@ -1745,6 +1757,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn sequence_create_type(
         &mut self,
         session: &Session,
