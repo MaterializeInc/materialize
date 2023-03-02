@@ -230,7 +230,7 @@ impl Coordinator {
             ));
         }
 
-        let session_type = metrics::session_type_label_value(&session);
+        let session_type = metrics::session_type_label_value(session.user());
         self.metrics
             .active_sessions
             .with_label_values(&[session_type])
@@ -283,7 +283,7 @@ impl Coordinator {
             None => return tx.send(Ok(ExecuteResponse::EmptyQuery), session),
         };
 
-        let session_type = metrics::session_type_label_value(&session);
+        let session_type = metrics::session_type_label_value(session.user());
         let stmt_type = metrics::statement_type_label_value(&stmt);
         self.metrics
             .query_total
@@ -592,7 +592,7 @@ impl Coordinator {
         self.catalog
             .drop_temporary_schema(&session.conn_id())
             .unwrap_or_terminate("unable to drop temporary schema");
-        let session_type = metrics::session_type_label_value(session);
+        let session_type = metrics::session_type_label_value(session.user());
         self.metrics
             .active_sessions
             .with_label_values(&[session_type])

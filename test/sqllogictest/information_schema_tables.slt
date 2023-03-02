@@ -388,6 +388,10 @@ mz_storage_usage_by_shard
 BASE TABLE
 materialize
 mz_internal
+mz_subscriptions
+BASE TABLE
+materialize
+mz_internal
 mz_view_foreign_keys
 BASE TABLE
 materialize

@@ -37,6 +37,7 @@ use mz_expr::{
     OptimizedMirRelationExpr, RowSetFinishing,
 };
 use mz_ore::collections::CollectionExt;
+use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task;
 use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
@@ -85,7 +86,6 @@ use crate::coord::{
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
-use crate::metrics;
 use crate::notice::AdapterNotice;
 use crate::session::vars::{
     IsolationLevel, OwnedVarInput, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -2727,30 +2727,23 @@ impl Coordinator {
             .iter()
             .next()
             .expect("subscribes have a single sink export");
-        let arity = sink_desc.from_desc.arity();
         let (tx, rx) = mpsc::unbounded_channel();
-        let session_type = metrics::session_type_label_value(session);
-        self.metrics
-            .active_subscribes
-            .with_label_values(&[session_type])
-            .inc();
-        self.active_subscribes.insert(
-            sink_id,
-            ActiveSubscribe {
-                session_type,
-                conn_id: session.conn_id(),
-                channel: tx,
-                emit_progress,
-                arity,
-                cluster_id,
-                depends_on: depends_on.into_iter().collect(),
-            },
-        );
+        let active_subscribe = ActiveSubscribe {
+            user: session.user().clone(),
+            conn_id: session.conn_id(),
+            channel: tx,
+            emit_progress,
+            arity: sink_desc.from_desc.arity(),
+            cluster_id,
+            depends_on: depends_on.into_iter().collect(),
+            start_time: SYSTEM_TIME(),
+        };
+        self.add_active_subscribe(sink_id, active_subscribe).await;
 
         match self.ship_dataflow(dataflow, cluster_id).await {
             Ok(_) => {}
             Err(e) => {
-                self.remove_active_subscribe(&sink_id);
+                self.remove_active_subscribe(sink_id).await;
                 return Err(e);
             }
         };

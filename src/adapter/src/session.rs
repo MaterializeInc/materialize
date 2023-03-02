@@ -180,11 +180,6 @@ impl<T: TimestampManipulation> Session<T> {
             .pcx
     }
 
-    /// Reports whether the session is a system session.
-    pub fn is_system(&self) -> bool {
-        crate::catalog::is_reserved_name(&self.user().name)
-    }
-
     /// Starts an explicit transaction, or changes an implicit to an explicit
     /// transaction.
     pub fn start_transaction(
