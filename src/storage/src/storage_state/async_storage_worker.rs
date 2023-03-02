@@ -22,17 +22,12 @@ use tokio::sync::mpsc;
 use tracing::Instrument;
 
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec64;
-use mz_repr::Diff;
 use mz_repr::GlobalId;
 use mz_service::local::Activatable;
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::controller::ResumptionFrontierCalculator;
-use mz_storage_client::types::sinks::MetadataFilled;
-use mz_storage_client::types::sinks::StorageSinkDesc;
 use mz_storage_client::types::sources::IngestionDescription;
-use mz_storage_client::types::sources::SourceData;
 
 /// A worker that can execute commands that come in on a channel and returns
 /// responses on another channel. This is useful in places where we can't
@@ -52,8 +47,6 @@ pub enum AsyncStorageWorkerCommand<T: Timestamp + Lattice + Codec64> {
         IngestionDescription<CollectionMetadata>,
         PhantomData<T>,
     ),
-    /// Calculate a recent as_of for the export/sink.
-    CalculateExportAsOf(GlobalId, StorageSinkDesc<MetadataFilled, T>),
 }
 
 /// Responses from [AsyncStorageWorker].
@@ -65,8 +58,6 @@ pub enum AsyncStorageWorkerResponse<T: Timestamp + Lattice + Codec64> {
         IngestionDescription<CollectionMetadata>,
         Antichain<T>,
     ),
-    /// A `StorageSinkDesc` with an updated, recent `as_of`.
-    UpdatedSinkDesc(GlobalId, StorageSinkDesc<MetadataFilled, T>),
 }
 
 impl<T: Timestamp + Lattice + Codec64> AsyncStorageWorker<T> {
@@ -114,39 +105,6 @@ impl<T: Timestamp + Lattice + Codec64> AsyncStorageWorker<T> {
                             break;
                         }
                     }
-                    AsyncStorageWorkerCommand::CalculateExportAsOf(id, mut sink_desc) => {
-                        let persist_client = persist_clients
-                            .open(sink_desc.from_storage_metadata.persist_location.clone())
-                            .await
-                            .expect("error creating persist client");
-
-                        let from_read_handle = persist_client
-                            .open_leased_reader::<SourceData, (), T, Diff>(
-                                sink_desc.from_storage_metadata.data_shard,
-                                "graceful restart since",
-                                // This is also `from_desc`, but this would be
-                                // the _only_ usage of `from_desc` in storage,
-                                // and we try to be consistent about where we
-                                // get `RelationDesc`s for perist clients
-                                Arc::new(sink_desc.from_storage_metadata.relation_desc.clone()),
-                                Arc::new(UnitSchema),
-                            )
-                            .await
-                            .expect("from collection disappeared");
-
-                        let cached_as_of = &sink_desc.as_of;
-
-                        let from_since = from_read_handle.since();
-                        sink_desc.as_of = cached_as_of.maybe_fast_forward(from_since);
-
-                        let res = response_tx
-                            .send(AsyncStorageWorkerResponse::UpdatedSinkDesc(id, sink_desc));
-
-                        if let Err(_err) = res {
-                            // Receiver must have hung up.
-                            break;
-                        }
-                    }
                 }
             }
             tracing::trace!("shutting down async storage worker task");
@@ -168,18 +126,6 @@ impl<T: Timestamp + Lattice + Codec64> AsyncStorageWorker<T> {
             id,
             ingestion,
             PhantomData,
-        ))
-    }
-
-    /// Updates the given `sink_desc` with a recent `as_of` by advancing it to
-    /// the `since` of the sinked persist shard.
-    pub fn calculate_export_as_of(
-        &self,
-        id: GlobalId,
-        sink_desc: StorageSinkDesc<MetadataFilled, T>,
-    ) {
-        self.send(AsyncStorageWorkerCommand::CalculateExportAsOf(
-            id, sink_desc,
         ))
     }
 
