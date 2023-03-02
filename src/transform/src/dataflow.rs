@@ -69,6 +69,12 @@ pub fn optimize_dataflow(
 }
 
 /// Inline views used in one other view, and in no exported objects.
+#[tracing::instrument(
+    target = "optimizer",
+    level = "debug",
+    skip_all,
+    fields(path.segment = "inline_views")
+)]
 fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
     // We cannot inline anything whose `BuildDesc::id` appears in either the
     // `index_exports` or `sink_exports` of `dataflow`, because we lose our
@@ -161,6 +167,8 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
             dataflow.objects_to_build.remove(index);
         }
     }
+
+    mz_repr::explain::trace_plan(dataflow);
 
     Ok(())
 }
@@ -396,6 +404,8 @@ pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), Tr
         )?;
     }
 
+    mz_repr::explain::trace_plan(dataflow);
+
     Ok(())
 }
 
@@ -468,5 +478,8 @@ fn optimize_dataflow_index_imports(
             false
         }
     });
+
+    mz_repr::explain::trace_plan(dataflow);
+
     Ok(())
 }

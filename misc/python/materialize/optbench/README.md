@@ -13,6 +13,20 @@ These two steps are modeled by the `init` and `run` commands.
 For example, for the `tpch` scenario, type
 
 ```bash
+# For a locally running Materialize, use the defaults
+
+# For Materialize Cloud (staging), use:
+PGHOST=$mz_orgid.$aws_region.aws.staging.materialize.cloud
+PGUSER=$mz_user
+PGPASSWORD=$mz_password
+PGPORT=6875
+PGREQUIRESSL=true
+
+# For a locally running Postgres, use:
+PGHOST=localhost
+PGUSER=$USER
+PGPORT=5432
+
 bin/optbench init tpch
 bin/optbench run tpch --repository="$HOME/optbench"
 ```

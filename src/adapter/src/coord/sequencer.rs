@@ -2856,7 +2856,7 @@ impl Coordinator {
                 tracing::span!(Level::INFO, "local").in_scope(|| -> Result<_, AdapterError> {
                     let optimized_plan = self.view_optimizer.optimize(decorrelated_plan);
                     if let Ok(ref optimized_plan) = optimized_plan {
-                        trace_plan(optimized_plan);
+                        trace_plan(optimized_plan.as_inner());
                     }
                     optimized_plan.map_err(Into::into)
                 })
