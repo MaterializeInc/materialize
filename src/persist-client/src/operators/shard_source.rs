@@ -9,6 +9,7 @@
 
 //! A source that reads from a persist shard.
 
+use bytes::BufMut;
 use std::any::Any;
 use std::cmp::Reverse;
 use std::collections::btree_map::Entry;
@@ -40,6 +41,8 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::vec::VecExt;
 use mz_persist::location::ExternalError;
+use mz_persist_types::columnar::{DataType, PartDecoder, PartEncoder, Schema};
+use mz_persist_types::part::{ColumnsMut, ColumnsRef};
 use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
@@ -48,6 +51,66 @@ use crate::cache::PersistClientCache;
 use crate::fetch::{FetchedPart, LeasedBatchPart, SerdeLeasedBatchPart};
 use crate::read::ListenEvent;
 use crate::{PersistLocation, ShardId};
+
+/// A key along with its serialized representation. Used to both deserialize the data and keep
+/// around the raw bytes for comparison.
+#[derive(Debug)]
+struct RawKey<K>(K, Vec<u8>);
+
+#[derive(Debug)]
+struct Raw<S>(S);
+
+impl<K: Codec> Codec for RawKey<K> {
+    type Schema = Raw<Arc<K::Schema>>;
+
+    fn codec_name() -> String {
+        K::codec_name()
+    }
+
+    fn encode<B>(&self, buf: &mut B)
+    where
+        B: BufMut,
+    {
+        self.1.encode(buf);
+    }
+
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        // TODO: limit the bytes kept? (ArrayVec?)
+        Ok(RawKey(K::decode(buf)?, buf.to_vec()))
+    }
+}
+
+impl<'a, T, D: PartDecoder<'a, T>> PartDecoder<'a, RawKey<T>> for Raw<D> {
+    fn decode(&self, idx: usize, val: &mut RawKey<T>) {
+        // Since this interface doesn't provide a meaningful sort key, default to the empty key.
+        // TODO: revisit the sort key type when we switch interfaces.
+        val.1.clear();
+        self.0.decode(idx, &mut val.0)
+    }
+}
+
+impl<'a, T, D: PartEncoder<'a, T>> PartEncoder<'a, RawKey<T>> for Raw<D> {
+    fn encode(&mut self, val: &RawKey<T>) {
+        self.0.encode(&val.0)
+    }
+}
+
+impl<K: Codec> Schema<RawKey<K>> for Raw<Arc<K::Schema>> {
+    type Encoder<'a> = Raw<<K::Schema as Schema<K>>::Encoder<'a>>;
+    type Decoder<'a> = Raw<<K::Schema as Schema<K>>::Decoder<'a>>;
+
+    fn columns(&self) -> Vec<(String, DataType)> {
+        self.0.columns()
+    }
+
+    fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
+        self.0.decoder(cols).map(Raw)
+    }
+
+    fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
+        self.0.encoder(cols).map(Raw)
+    }
+}
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -449,18 +512,18 @@ enum PartState<K, V, T: Timestamp, D> {
     },
     InProgress {
         cap: Capability<T>,
-        fetched: FetchedPart<K, V, T, D>,
+        fetched: FetchedPart<RawKey<K>, V, T, D>,
     },
 }
 
-#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq)]
 struct ReadyPart<T> {
     /// The smallest timely timestamp we might emit for this part in the future.
     time: T,
-    /// The number of tuples we've already emitted from this part.
-    /// In the future, we'd like to use some sort key for the data here, to make consolidation
-    /// more effective... but for now this at least means we won't keep fetching from the same part.
-    record_count: usize,
+    /// A sort key for the data, opaque except for ordering. Choosing the ready part
+    /// with the smallest sort key helps us emit data in rough key order, making consolidation
+    /// more effective.
+    sort_key: Vec<u8>,
     /// The id of the part. Used as a tiebreaker.
     id: usize,
 }
@@ -487,7 +550,7 @@ where
     fn push_fetched(
         &mut self,
         id: usize,
-        fetched: FetchedPart<K, V, T, D>,
+        fetched: FetchedPart<RawKey<K>, V, T, D>,
         with_cap: impl FnOnce(&InputCapability<T>),
     ) {
         match self.incomplete_parts.entry(id) {
@@ -505,7 +568,7 @@ where
                         let cap = cap.delayed(cap.time());
                         self.ready_parts.push(Reverse(ReadyPart {
                             time: cap.time().clone(),
-                            record_count: 0,
+                            sort_key: Vec::new(),
                             id,
                         }));
                         PartState::InProgress { cap, fetched }
@@ -539,7 +602,7 @@ where
         let mut work = 0;
         'poll_loop: while let Some(Reverse(ReadyPart {
             time,
-            record_count: emitted_records,
+            mut sort_key,
             id,
         })) = self.ready_parts.pop()
         {
@@ -550,17 +613,22 @@ where
                 continue;
             };
             let mut record_count = 0;
-            for data in fetched {
+            for ((raw_k, v), t, d) in fetched {
+                let k = raw_k.map(|RawKey(k, bytes)| {
+                    // TODO: this is not meaningful when the part is unsorted
+                    // If we want to provide hard guarantees with this approach, we'll either
+                    // need to sort all parts (either earlier or on fetch) or track which ones are
+                    // unsorted and ignore their keys.
+                    sort_key = bytes;
+                    k
+                });
                 record_count += 1;
-                work += emit_fn(buffer, cap, data);
+                work += emit_fn(buffer, cap, ((k, v), t, d));
                 let should_return = yield_fn(start_time, work);
                 let should_continue = record_count >= TO_EMIT_AT_ONCE;
                 if should_return || should_continue {
-                    self.ready_parts.push(Reverse(ReadyPart {
-                        time,
-                        record_count: emitted_records + record_count,
-                        id,
-                    }));
+                    self.ready_parts
+                        .push(Reverse(ReadyPart { time, sort_key, id }));
                     if should_return {
                         return;
                     } else {
@@ -628,7 +696,11 @@ where
                 .await
                 .expect("location should be valid");
             client
-                .create_batch_fetcher::<K, V, T, D>(shard_id, key_schema, val_schema)
+                .create_batch_fetcher::<RawKey<K>, V, T, D>(
+                    shard_id,
+                    Arc::new(Raw(key_schema)),
+                    val_schema,
+                )
                 .await
         };
 
@@ -644,7 +716,7 @@ where
         // Here to keep the select statement small and readable.
         enum FetchEvent<'a, K, V, T: Timestamp + Codec64, D, R> {
             Input(Event<T, &'a mut R>),
-            Fetched(usize, LeasedBatchPart<T>, FetchedPart<K, V, T, D>),
+            Fetched(usize, LeasedBatchPart<T>, FetchedPart<RawKey<K>, V, T, D>),
             DoWork,
             Done,
         }
@@ -686,7 +758,7 @@ where
                 }
                 FetchEvent::Fetched(part_id, token, fetched) => {
                     active_fetches.push_fetched(part_id, fetched, |cap| {
-                        // We can drop the lease on the fetched part even before we've fully read it.
+                        // We can drop the lease on the fetched part even before we've fully decoded it.
                         let mut tokens_output = tokens_output.activate();
                         tokens_output
                             .session(cap)
