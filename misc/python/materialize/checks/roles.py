@@ -11,9 +11,13 @@ from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
+from materialize.util import MzVersion
 
 
 class CreateRole(Check):
+    def _can_run(self) -> bool:
+        return self.base_version >= MzVersion.parse("0.45.0-dev")
+
     def initialize(self) -> Testdrive:
         return Testdrive("")
 
@@ -43,6 +47,9 @@ class CreateRole(Check):
 
 
 class DropRole(Check):
+    def _can_run(self) -> bool:
+        return self.base_version >= MzVersion.parse("0.45.0-dev")
+
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(
