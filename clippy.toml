@@ -16,6 +16,9 @@ disallowed-methods = [
     { path = "rdkafka::config::ClientConfig::new", reason = "use the `client::create_new_client_config` wrapper in `kafka_util` instead" },
 
     { path = "aws_sdk_s3::Client::new", reason = "use the `mz_aws_s3_util::new_client` function instead" },
+
+    { path = "differential_dataflow::Collection::consolidate", reason = "use the `differential_dataflow::Collection::consolidate_named` function instead" },
+    { path = "timely::worker::Worker::drop_dataflow", reason = "Might break logging dataflows, check with #team-compute." },
 ]
 
 disallowed-macros = [
