@@ -18,6 +18,7 @@ use mz_ore::now::EpochMillis;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::{GlobalId, TimestampManipulation};
+use tracing::info;
 
 use crate::client::{StorageCommand, StorageResponse};
 use crate::controller::{ProtoStorageCommand, ProtoStorageResponse};
@@ -58,6 +59,8 @@ where
         durable_metadata: &BTreeMap<GlobalId, DurableCollectionMetadata>,
         collections: &[(GlobalId, CollectionDescription<T>)],
     ) -> BTreeMap<GlobalId, DurableCollectionMetadata> {
+        info!("applying remap shard migration");
+
         let mut state_to_update = BTreeMap::new();
 
         let mut progress_collections_pending = BTreeSet::new();

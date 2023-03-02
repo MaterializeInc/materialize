@@ -1330,6 +1330,15 @@ where
                             &collection.implied_capability,
                             &dependency_since,
                         ) {
+                            info!(
+                                collection_id = id.to_string(),
+                                storage_dependencies = ?storage_dependencies,
+                                implied_capability = ?collection.implied_capability,
+                                read_holds = ?collection.read_capabilities,
+                                dependency_since = ?dependency_since,
+                                "monkey-patching collection since"
+                            );
+
                             assert!(
                                 timely::order::PartialOrder::less_than(
                                     &dependency_since,
@@ -1363,6 +1372,15 @@ where
                                 dependency_since,
                                 collection.implied_capability,
                             );
+                        } else {
+                            info!(
+                                collection_id = id.to_string(),
+                                storage_dependencies = ?storage_dependencies,
+                                implied_capability = ?collection.implied_capability,
+                                read_holds = ?collection.read_capabilities,
+                                dependency_since = ?dependency_since,
+                                "NOT monkey-patching collection since"
+                            );
                         }
 
                         // Fill in the storage dependencies.
@@ -1371,8 +1389,20 @@ where
                             .storage_dependencies
                             .extend(storage_dependencies.iter().cloned());
 
+                        assert!(
+                            !PartialOrder::less_than(
+                                &collection.read_capabilities.frontier().to_owned(),
+                                &collection.implied_capability
+                            ),
+                            "{id}: at this point, there can be no read holds for any time that is not \
+                            beyond the implied capability \
+                            but we have implied_capability {:?}, read_capabilities {:?}",
+                            collection.implied_capability,
+                            collection.read_capabilities,
+                        );
+
                         let read_hold = collection.implied_capability.clone();
-                        self.install_read_capabilities(&storage_dependencies, read_hold)?;
+                        self.install_read_capabilities(id, &storage_dependencies, read_hold)?;
                     }
                 }
                 DataSource::Introspection(_) | DataSource::Progress | DataSource::Other => {
@@ -1534,7 +1564,7 @@ where
         }
 
         let dependency_since = self.determine_collection_since_joins(&[from_id])?;
-        self.install_read_capabilities(&[from_id], dependency_since.clone())?;
+        self.install_read_capabilities(&id, &[from_id], dependency_since.clone())?;
 
         info!(
             sink_id = id.to_string(),
@@ -2245,9 +2275,15 @@ where
     /// Install read capabilities on the given `storage_dependencies`.
     fn install_read_capabilities(
         &mut self,
+        from_id: &GlobalId,
         storage_dependencies: &[GlobalId],
         read_capability: Antichain<T>,
     ) -> Result<(), StorageError> {
+        info!(
+            "installing read hold for {:?} from {from_id} on {:?}",
+            read_capability, storage_dependencies
+        );
+
         let mut changes = ChangeBatch::new();
         for time in read_capability.iter() {
             changes.update(time.clone(), 1);
