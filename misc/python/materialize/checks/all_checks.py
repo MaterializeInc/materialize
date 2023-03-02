@@ -25,7 +25,6 @@ from materialize.checks.drop_table import *  # noqa: F401 F403
 from materialize.checks.error import *  # noqa: F401 F403
 from materialize.checks.float_types import *  # noqa: F401 F403
 from materialize.checks.having import *  # noqa: F401 F403
-from materialize.checks.identifiers import *  # noqa: F401 F403
 from materialize.checks.insert_select import *  # noqa: F401 F403
 from materialize.checks.join_implementations import *  # noqa: F401 F403
 from materialize.checks.join_types import *  # noqa: F401 F403
@@ -45,7 +44,6 @@ from materialize.checks.rename_source import *  # noqa: F401 F403
 from materialize.checks.rename_table import *  # noqa: F401 F403
 from materialize.checks.rename_view import *  # noqa: F401 F403
 from materialize.checks.replica import *  # noqa: F401 F403
-from materialize.checks.roles import *  # noqa: F401 F403
 from materialize.checks.rollback import *  # noqa: F401 F403
 from materialize.checks.sink import *  # noqa: F401 F403
 from materialize.checks.source_errors import *  # noqa: F401 F403
