@@ -69,7 +69,7 @@ Explained Query:
     Project (#0, #2, #3, #1) // { arity: 4 }
       CrossJoin type=differential // { arity: 4 }
         implementation
-          %1[×] » %0:table_f1[×]A
+          %0:table_f1[×] » %1[×]
         ArrangeBy keys=[[]] // { arity: 1 }
           Get materialize.public.table_f1 // { arity: 1 }
         ArrangeBy keys=[[]] // { arity: 3 }
@@ -78,7 +78,7 @@ Explained Query:
               Project (#0..=#2) // { arity: 3 }
                 Join on=(#0 = #3) type=differential // { arity: 4 }
                   implementation
-                    %1[#0] » %0:l1[#0]KAf
+                    %0:l1[#0]Kf » %1[#0]Kf
                   ArrangeBy keys=[[#0]] // { arity: 3 }
                     Get l1 // { arity: 3 }
                   ArrangeBy keys=[[#0]] // { arity: 1 }
@@ -97,7 +97,7 @@ Explained Query:
       Project (#0..=#2) // { arity: 3 }
         Join on=(#1 = #3) type=differential // { arity: 4 }
           implementation
-            %1:table_f5_f6[#0] » %0:table_f4_f5_f6[#1]KAf
+            %0:table_f4_f5_f6[#1]Kf » %1:table_f5_f6[#0]Kf
           ArrangeBy keys=[[#1]] // { arity: 3 }
             Filter (#1 = #2) // { arity: 3 }
               Get materialize.public.table_f4_f5_f6 // { arity: 3 }

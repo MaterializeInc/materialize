@@ -577,7 +577,7 @@ Explained Query:
     Filter (#0) IS NOT NULL
       Join on=(#0 = #2 AND #1 = #5 AND #3 = #4) type=differential
         implementation
-          %1:u[#0] » %0:t[#0]KA » %2:v[#0, #1]KKA
+          %0:t[#0]KA » %1:u[#0]KA » %2:v[#0, #1]KK
         ArrangeBy keys=[[#0]]
           Get materialize.public.t
         ArrangeBy keys=[[#0]]

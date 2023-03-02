@@ -21,6 +21,9 @@ class Check:
         self._manipulate = self.manipulate()
         self._validate = self.validate()
 
+    def _can_run(self) -> bool:
+        return True
+
     def initialize(self) -> Testdrive:
         return Testdrive("")
 
@@ -31,22 +34,28 @@ class Check:
         assert False
 
     def start_initialize(self, e: Executor) -> None:
-        self._initialize.execute(e)
+        if self._can_run():
+            self._initialize.execute(e)
 
     def join_initialize(self, e: Executor) -> None:
-        self._initialize.join(e)
+        if self._can_run():
+            self._initialize.join(e)
 
     def start_manipulate(self, e: Executor, phase: int) -> None:
-        self._manipulate[phase].execute(e)
+        if self._can_run():
+            self._manipulate[phase].execute(e)
 
     def join_manipulate(self, e: Executor, phase: int) -> None:
-        self._manipulate[phase].join(e)
+        if self._can_run():
+            self._manipulate[phase].join(e)
 
     def start_validate(self, e: Executor) -> None:
-        self._validate.execute(e)
+        if self._can_run():
+            self._validate.execute(e)
 
     def join_validate(self, e: Executor) -> None:
-        self._validate.join(e)
+        if self._can_run():
+            self._validate.join(e)
 
 
 class CheckDisabled(Check):

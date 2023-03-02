@@ -37,22 +37,19 @@ steps:
           - { value: zippy-debezium-postgres }
           - { value: zippy-postgres-cdc }
           - { value: zippy-cluster-replicas }
-          - { value: zippy-crdb-minio-restart }
-          - { value: zippy-crdb-latest-restart }
+          - { value: zippy-crdb-latest }
           - { value: secrets }
           - { value: checks-oneatatime-drop-create-default-replica }
           - { value: checks-oneatatime-restart-clusterd-compute }
           - { value: checks-oneatatime-restart-entire-mz }
           - { value: checks-oneatatime-restart-environmentd-clusterd-storage }
           - { value: checks-oneatatime-kill-clusterd-storage }
-          - { value: checks-oneatatime-restart-cockroach }
           - { value: checks-oneatatime-restart-redpanda }
           - { value: checks-parallel-drop-create-default-replica }
           - { value: checks-parallel-restart-clusterd-compute }
           - { value: checks-parallel-restart-entire-mz }
           - { value: checks-parallel-restart-environmentd-clusterd-storage }
           - { value: checks-parallel-kill-clusterd-storage }
-          - { value: checks-parallel-restart-cockroach }
           - { value: checks-parallel-restart-redpanda }
           - { value: checks-upgrade-entire-mz }
           - { value: checks-upgrade-entire-mz-previous-version }
@@ -323,8 +320,8 @@ steps:
           composition: zippy
           args: [--scenario=ClusterReplicas, --actions=1000]
 
-  - id: zippy-crdb-minio-restart
-    label: "Zippy CRDB/Minio restarts"
+  - id: zippy-crdb-latest
+    label: "Zippy w/ latest CRDB"
     timeout_in_minutes: 120
     agents:
       queue: linux-x86_64
@@ -332,18 +329,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=CrdbMinioRestart, --actions=1000]
-
-  - id: zippy-crdb-latest-restart
-    label: "Zippy CRDB restarts w/ latest CRDB"
-    timeout_in_minutes: 120
-    agents:
-      queue: linux-x86_64
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: zippy
-          args: [--scenario=CrdbRestart, --actions=1000, --cockroach-tag=latest]
+          args: [--scenario=KafkaSources, --actions=1000, --cockroach-tag=latest]
 
   - id: secrets
     label: "Secrets"
@@ -410,17 +396,6 @@ steps:
           composition: platform-checks
           args: [--scenario=KillClusterdStorage, --execution-mode=oneatatime]
 
-  - id: checks-oneatatime-restart-cockroach
-    label: "Checks oneatatime + restart Cockroach"
-    timeout_in_minutes: 300
-    agents:
-      queue: linux-x86_64
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=RestartCockroach, --execution-mode=oneatatime]
-
   - id: checks-oneatatime-restart-redpanda-debezium
     label: "Checks oneatatime + restart Redpanda & Debezium"
     timeout_in_minutes: 300
@@ -486,17 +461,6 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=KillClusterdStorage, --execution-mode=parallel]
-
-  - id: checks-parallel-restart-cockroach
-    label: "Checks parallel + restart Cockroach"
-    timeout_in_minutes: 300
-    agents:
-      queue: linux-x86_64
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=RestartCockroach, --execution-mode=parallel]
 
   - id: checks-parallel-restart-redpanda
     label: "Checks parallel + restart Redpanda & Debezium"

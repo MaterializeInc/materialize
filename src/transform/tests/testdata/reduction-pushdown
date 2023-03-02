@@ -184,13 +184,13 @@ opt
 Project (#0, #0)
   Join on=(#0 = #1) type=differential
     implementation
-      %1[#0] » %0[#0]UKA
+      %0[#0]UKA » %1[#0]UKA
     ArrangeBy keys=[[#0]]
       Distinct group_by=[#0]
         Project (#2)
           Join on=(#0 = #1) type=differential
             implementation
-              %1:y[#0] » %0:x[#0]KA
+              %0:x[#0]K » %1:y[#0]K
             ArrangeBy keys=[[#0]]
               Project (#0)
                 Get x
@@ -201,7 +201,7 @@ Project (#0, #0)
         Project (#1)
           Join on=(#0 = #2) type=differential
             implementation
-              %1:w[#0] » %0:z[#0]KA
+              %0:z[#0]K » %1:w[#0]K
             ArrangeBy keys=[[#0]]
               Get z
             ArrangeBy keys=[[#0]]

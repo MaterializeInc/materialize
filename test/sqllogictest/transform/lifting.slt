@@ -113,7 +113,7 @@ Explained Query:
     Map (1) // { arity: 4 }
       CrossJoin type=differential // { arity: 3 }
         implementation
-          %1:t[×] » %0:t[×]A
+          %0:t[×] » %1:t[×]
         ArrangeBy keys=[[]] // { arity: 1 }
           Project (#2) // { arity: 1 }
             Map ((#0 + 1)) // { arity: 3 }
@@ -132,7 +132,7 @@ Explained Query:
     Map (2, 1) // { arity: 6 }
       CrossJoin type=differential // { arity: 4 }
         implementation
-          %1:t[×] » %0:t[×]A
+          %0:t[×] » %1:t[×]
         ArrangeBy keys=[[]] // { arity: 2 }
           Project (#2, #3) // { arity: 2 }
             Map ((#1 + 1), (#0 + 1)) // { arity: 4 }
@@ -151,7 +151,7 @@ Explained Query:
     Map (3, 2, 1) // { arity: 8 }
       CrossJoin type=differential // { arity: 5 }
         implementation
-          %1:t[×] » %0:t[×]A
+          %0:t[×] » %1:t[×]
         ArrangeBy keys=[[]] // { arity: 3 }
           Project (#2..=#4) // { arity: 3 }
             Map ((#1 + 1), (#0 + 2), (#0 + 1)) // { arity: 5 }
@@ -193,7 +193,7 @@ Explained Query:
     Map ((1 + #0), 1) // { arity: 3 }
       CrossJoin type=differential // { arity: 1 }
         implementation
-          %1:t[×] » %0[×]A
+          %0[×] » %1:t[×]
         ArrangeBy keys=[[]] // { arity: 0 }
           Constant // { arity: 0 }
             - (() x 7)
@@ -647,7 +647,7 @@ Explained Query:
         Project (#0) // { arity: 1 }
           Join on=(#0 = #1) type=differential // { arity: 2 }
             implementation
-              %1[#0] » %0:t_pk[#0]UKAiif
+              %0:t_pk[#0]UKiif » %1[#0]Kiif
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Project (#0) // { arity: 1 }
                 Filter (#0 <= 195) AND (#0 >= 38) // { arity: 2 }
@@ -693,7 +693,7 @@ Explained Query:
         Project (#0) // { arity: 1 }
           Join on=(#0 = #1) type=differential // { arity: 2 }
             implementation
-              %1[#0] » %0:t[#0]KAiif
+              %0:t[#0]Kiif » %1[#0]Kiif
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Project (#0) // { arity: 1 }
                 Filter (#0 <= 195) AND (#0 >= 38) // { arity: 2 }
@@ -747,7 +747,6 @@ select min(a) from t_pk where a between 38 and 195 and a = (select a from t wher
 
 # check that literal errors are not lifted beyond Joins, but also that that doesn't lead to
 # a stack overflow due to LiteralLifting and JoinImplementation fighting against each other
-# Also, this query has a tricky join ordering, see comment in `differential::plan`.
 statement ok
 create table t1 (f1 double precision, f2 double precision not null);
 

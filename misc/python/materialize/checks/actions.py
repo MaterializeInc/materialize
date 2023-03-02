@@ -8,13 +8,12 @@
 # by the Apache License, Version 2.0.
 
 import time
-from typing import TYPE_CHECKING, Any, List, Optional, Type
+from typing import TYPE_CHECKING, Any, Optional
 
 from materialize.checks.executors import Executor
-from materialize.util import MzVersion
 
 if TYPE_CHECKING:
-    from materialize.checks.checks import Check
+    from materialize.checks.scenarios import Scenario
 
 
 class Action:
@@ -51,8 +50,10 @@ class Sleep(Action):
 
 
 class Initialize(Action):
-    def __init__(self, checks: List[Type["Check"]], base_version: MzVersion) -> None:
-        self.checks = [check_class(base_version) for check_class in checks]
+    def __init__(self, scenario: "Scenario") -> None:
+        self.checks = [
+            check_class(scenario.base_version()) for check_class in scenario.checks()
+        ]
 
     def execute(self, e: Executor) -> None:
         for check in self.checks:
@@ -66,14 +67,15 @@ class Initialize(Action):
 class Manipulate(Action):
     def __init__(
         self,
-        checks: List[Type["Check"]],
-        base_version: MzVersion,
+        scenario: "Scenario",
         phase: Optional[int] = None,
     ) -> None:
         assert phase is not None
         self.phase = phase - 1
 
-        self.checks = [check_class(base_version) for check_class in checks]
+        self.checks = [
+            check_class(scenario.base_version()) for check_class in scenario.checks()
+        ]
         assert len(self.checks) >= self.phase
 
     def execute(self, e: Executor) -> None:
@@ -87,8 +89,10 @@ class Manipulate(Action):
 
 
 class Validate(Action):
-    def __init__(self, checks: List[Type["Check"]], base_version: MzVersion) -> None:
-        self.checks = [check_class(base_version) for check_class in checks]
+    def __init__(self, scenario: "Scenario") -> None:
+        self.checks = [
+            check_class(scenario.base_version()) for check_class in scenario.checks()
+        ]
 
     def execute(self, e: Executor) -> None:
         for check in self.checks:

@@ -2526,17 +2526,23 @@ impl AggregateExpr {
 pub enum JoinImplementation {
     /// Perform a sequence of binary differential dataflow joins.
     ///
-    /// The first argument indicates 1) the index of the starting collection
-    /// and 2) if it should be arranged, the keys to arrange it by.
+    /// The first argument indicates
+    /// 1) the index of the starting collection,
+    /// 2) if it should be arranged, the keys to arrange it by, and
+    /// 3) the characteristics of the starting collection (for EXPLAINing).
     /// The sequence that follows lists other relation indexes, and the key for
     /// the arrangement we should use when joining it in.
     /// The JoinInputCharacteristics are for EXPLAINing the characteristics that
     /// were used for join ordering.
     ///
-    /// Each collection index should occur exactly once, either in the first
-    /// position or somewhere in the list.
+    /// Each collection index should occur exactly once, either as the starting collection
+    /// or somewhere in the list.
     Differential(
-        (usize, Option<Vec<MirScalarExpr>>),
+        (
+            usize,
+            Option<Vec<MirScalarExpr>>,
+            Option<JoinInputCharacteristics>,
+        ),
         Vec<(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)>,
     ),
     /// Perform independent delta query dataflows for each input.

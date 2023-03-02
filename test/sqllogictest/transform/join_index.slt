@@ -32,7 +32,7 @@ EXPLAIN WITH(arity, join_impls) select * from foo inner join bar on foo.a = bar.
 Explained Query:
   CrossJoin type=differential // { arity: 4 }
     implementation
-      %1:bar[×] » %0:foo[×]Aef
+      %0:foo[×]ef » %1:bar[×]ef
     ArrangeBy keys=[[]] // { arity: 2 }
       Filter (#0 = 1) // { arity: 2 }
         Get materialize.public.foo // { arity: 2 }
@@ -62,7 +62,7 @@ EXPLAIN WITH(arity, join_impls) select * from foo inner join bar on foo.a = abs(
 Explained Query:
   Join on=(#0 = abs(#2)) type=differential // { arity: 4 }
     implementation
-      %1:bar[abs(#0)] » %0:foo[#0]KAef
+      %0:foo[#0]Kef » %1:bar[abs(#0)]Kef
     ArrangeBy keys=[[#0]] // { arity: 2 }
       Filter (1 = (#0 % 2)) // { arity: 2 }
         Get materialize.public.foo // { arity: 2 }
@@ -97,7 +97,7 @@ EXPLAIN WITH(arity, join_impls) select * from (select * from foo where a = 1) fi
 Explained Query:
   CrossJoin type=differential // { arity: 4 }
     implementation
-      %1:bar[×] » %0:foo[×]Aef
+      %0:foo[×]ef » %1:bar[×]ef
     ArrangeBy keys=[[]] // { arity: 2 }
       Filter (#0 = 1) // { arity: 2 }
         Get materialize.public.foo // { arity: 2 }
@@ -142,16 +142,16 @@ where foo.a = bar.a
 ----
 Explained Query:
   Project (#0, #5) // { arity: 2 }
-    Join on=(#0 = #2 AND #3 = #4) type=differential // { arity: 6 }
-      implementation
-        %1:bar[#1] » %2:baz[#0]UKA » %0:foo[#0]KA
-      ArrangeBy keys=[[#0]] // { arity: 2 }
-        Get materialize.public.foo // { arity: 2 }
-      ArrangeBy keys=[[#1]] // { arity: 2 }
-        Filter (#0) IS NOT NULL AND (#1) IS NOT NULL // { arity: 2 }
+    Filter (#0) IS NOT NULL // { arity: 6 }
+      Join on=(#0 = #2 AND #3 = #4) type=differential // { arity: 6 }
+        implementation
+          %0:foo[#0]KA » %1:bar[#0]KA » %2:baz[#0]UK
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Get materialize.public.foo // { arity: 2 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
           Get materialize.public.bar // { arity: 2 }
-      ArrangeBy keys=[[#0]] // { arity: 2 }
-        Get materialize.public.baz // { arity: 2 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Get materialize.public.baz // { arity: 2 }
 
 Used Indexes:
   - materialize.public.foo_idx
@@ -193,7 +193,7 @@ Explained Query:
     Filter (#0) IS NOT NULL AND (#3) IS NOT NULL // { arity: 6 }
       Join on=(#0 = #2 AND #3 = #4) type=differential // { arity: 6 }
         implementation
-          %1:bar[#0] » %0:foo[#0]KA » %2:baz[#0]KA
+          %0:foo[#0]KA » %1:bar[#0]KA » %2:baz[#0]KA
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Get materialize.public.foo // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 2 }
@@ -236,7 +236,7 @@ Explained Query:
     Filter (#2) IS NOT NULL AND (case when (#0 = 0) then null else #0 end) IS NOT NULL // { arity: 4 }
       Join on=(-(#2) = case when (#0 = 0) then null else #0 end) type=differential // { arity: 4 }
         implementation
-          %1:bar[-(#0)] » %0:foo[case when (#0 = 0) then null else #0 end]KA
+          %0:foo[case when (#0 = 0) then null else #0 end]KA » %1:bar[-(#0)]KA
         ArrangeBy keys=[[case when (#0 = 0) then null else #0 end]] // { arity: 2 }
           Get materialize.public.foo // { arity: 2 }
         ArrangeBy keys=[[-(#0)]] // { arity: 2 }
@@ -279,7 +279,7 @@ Explained Query:
     Filter (#0) IS NOT NULL AND (#4) IS NOT NULL // { arity: 6 }
       Join on=(#0 = #2 AND #4 = (#0 + 4)) type=differential // { arity: 6 }
         implementation
-          %2:baz[#0] » %0:bar[(#0 + 4)]KA » %1:foo[#0]KA
+          %2:baz[#0]KA » %0:bar[(#0 + 4)]KA » %1:foo[#0]KA
         ArrangeBy keys=[[(#0 + 4)]] // { arity: 2 }
           Get materialize.public.bar // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 2 }
@@ -316,7 +316,7 @@ Explained Query:
   Project (#1, #3) // { arity: 2 }
     Join on=(1 = (#0 / #2)) type=differential // { arity: 4 }
       implementation
-        %1:bar[×] » %0:foo[×]A
+        %0:foo[×] » %1:bar[×]
       ArrangeBy keys=[[]] // { arity: 2 }
         Get materialize.public.foo // { arity: 2 }
       ArrangeBy keys=[[]] // { arity: 2 }
@@ -347,7 +347,7 @@ Explained Query:
   Project (#1, #3) // { arity: 2 }
     Join on=(eq(-1, (#3 - #1), (#0 / #2))) type=differential // { arity: 4 }
       implementation
-        %1:bar[×] » %0:foo[×]A
+        %0:foo[×] » %1:bar[×]
       ArrangeBy keys=[[]] // { arity: 2 }
         Get materialize.public.foo // { arity: 2 }
       ArrangeBy keys=[[]] // { arity: 2 }
@@ -371,8 +371,7 @@ and bar.b - foo.b = foo.a / bar.a
 statement ok
 DROP INDEX baz_idx
 
-# materialize#8002: it would be nice if this join used the indexes on foo(a)
-# and bar(a+4)
+# materialize#8002: it would be nice if this join used the indexes on bar(a+4)
 
 query T multiline
 EXPLAIN WITH(arity, join_impls)
@@ -385,10 +384,9 @@ Explained Query:
   Project (#1, #3, #5) // { arity: 3 }
     Join on=(#0 = #2 AND #4 = (#0 + 4)) type=differential // { arity: 6 }
       implementation
-        %2:baz[#0] » %0:foo[(#0 + 4)]KA » %1:bar[#0]KA
-      ArrangeBy keys=[[(#0 + 4)]] // { arity: 2 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
-          Get materialize.public.foo // { arity: 2 }
+        %0:foo[#0]KA » %1:bar[#0]K » %2:baz[#0]K
+      ArrangeBy keys=[[#0]] // { arity: 2 }
+        Get materialize.public.foo // { arity: 2 }
       ArrangeBy keys=[[#0]] // { arity: 2 }
         Filter (#0) IS NOT NULL // { arity: 2 }
           Get materialize.public.bar // { arity: 2 }
