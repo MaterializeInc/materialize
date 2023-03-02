@@ -10,6 +10,9 @@
 //! A source that reads from a persist shard.
 
 use std::any::Any;
+use std::cmp::Reverse;
+use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, BinaryHeap};
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::rc::Rc;
@@ -22,13 +25,6 @@ use differential_dataflow::operators::arrange::ShutdownButton;
 use differential_dataflow::{Data, Hashable};
 use futures::StreamExt;
 use futures_util::stream::FuturesUnordered;
-use mz_ore::cast::CastFrom;
-use mz_ore::collections::CollectionExt;
-use mz_ore::vec::VecExt;
-use mz_persist::location::ExternalError;
-use mz_persist_types::{Codec, Codec64};
-use mz_timely_util::buffer::ConsolidateBuffer;
-use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -38,7 +34,15 @@ use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::sync::{mpsc, Semaphore};
-use tracing::{info, trace};
+use tracing::trace;
+
+use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
+use mz_ore::vec::VecExt;
+use mz_persist::location::ExternalError;
+use mz_persist_types::{Codec, Codec64};
+use mz_timely_util::buffer::ConsolidateBuffer;
+use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 
 use crate::cache::PersistClientCache;
 use crate::fetch::{FetchedPart, LeasedBatchPart, SerdeLeasedBatchPart};
@@ -422,6 +426,153 @@ where
     (descs_stream, shutdown_button)
 }
 
+// TODO: shuffle into persist config
+const MAX_CONCURRENT_FETCHES: usize = 5;
+const TO_EMIT_AT_ONCE: usize = 1024;
+
+/// A datastructure for tracking the state of multiple concurrent fetches and iterating through the
+/// fetched contents in a data-determined order (and not necessarily whatever order we happened to
+/// be assigned the parts in). This should allow us to consolidate down the data more effectively
+/// before passing it on.
+struct ActiveFetches<K, V, T: Timestamp, D> {
+    // Unique part id allocation.
+    next_part_id: usize,
+    // Parts that have been assigned to this worker, but not completely processed.
+    incomplete_parts: BTreeMap<usize, PartState<K, V, T, D>>,
+    // A heap of parts that are ready to be decoded and consolidated.
+    ready_parts: BinaryHeap<Reverse<ReadyPart<T>>>,
+}
+
+enum PartState<K, V, T: Timestamp, D> {
+    Pending {
+        cap: Rc<InputCapability<T>>,
+    },
+    InProgress {
+        cap: Capability<T>,
+        fetched: FetchedPart<K, V, T, D>,
+    },
+}
+
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
+struct ReadyPart<T> {
+    /// The smallest timely timestamp we might emit for this part in the future.
+    time: T,
+    /// The number of tuples we've already emitted from this part.
+    /// In the future, we'd like to use some sort key for the data here, to make consolidation
+    /// more effective... but for now this at least means we won't keep fetching from the same part.
+    record_count: usize,
+    /// The id of the part. Used as a tiebreaker.
+    id: usize,
+}
+
+impl<K, V, T, D> ActiveFetches<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
+    /// Record the capability to be used for a new part file, and return an id for the part.
+    fn push_cap(&mut self, cap: Rc<InputCapability<T>>) -> usize {
+        let id = self.next_part_id;
+        self.next_part_id += 1;
+        let removed = self.incomplete_parts.insert(id, PartState::Pending { cap });
+        assert!(removed.is_none(), "parts should be registered at most once");
+        id
+    }
+
+    /// Stash a fetched part in state. At this point we only need to hang on to a capability for
+    /// the records that we actually may emit from our fetched part; `with_cap` allows the caller
+    /// to use the capability to eg. return the lease on the fetched part before we drop it.
+    fn push_fetched(
+        &mut self,
+        id: usize,
+        fetched: FetchedPart<K, V, T, D>,
+        with_cap: impl FnOnce(&InputCapability<T>),
+    ) {
+        match self.incomplete_parts.entry(id) {
+            Entry::Vacant(_) => {
+                panic!("fetched part did not correspond to an existing pending part");
+            }
+            Entry::Occupied(mut entry) => {
+                let updated = match entry.get_mut() {
+                    PartState::InProgress { .. } => {
+                        panic!("fetched the same part twice");
+                    }
+                    PartState::Pending { cap } => {
+                        with_cap(cap);
+                        // TODO: delay based on the start time of the specific batch
+                        let cap = cap.delayed(cap.time());
+                        self.ready_parts.push(Reverse(ReadyPart {
+                            time: cap.time().clone(),
+                            record_count: 0,
+                            id,
+                        }));
+                        PartState::InProgress { cap, fetched }
+                    }
+                };
+                entry.insert(updated);
+            }
+        }
+    }
+
+    /// True iff [Self::do_work] has work to do.
+    fn has_work(&self) -> bool {
+        !self.ready_parts.is_empty()
+    }
+
+    /// Perform work: reading from fetched data, decoding, and sending outputs, while checking
+    /// `yield_fn` whether more fuel is available.
+    fn do_work<E>(
+        &mut self,
+        buffer: &mut ConsolidateBuffer<T, E, D, Tee<T, (E, T, D)>>,
+        yield_fn: &impl Fn(Instant, usize) -> bool,
+        emit_fn: &mut impl FnMut(
+            &mut ConsolidateBuffer<T, E, D, Tee<T, (E, T, D)>>,
+            &Capability<T>,
+            ((Result<K, String>, Result<V, String>), T, D),
+        ) -> usize,
+    ) where
+        E: Data,
+    {
+        let start_time = Instant::now();
+        let mut work = 0;
+        'poll_loop: while let Some(Reverse(ReadyPart {
+            time,
+            record_count: emitted_records,
+            id,
+        })) = self.ready_parts.pop()
+        {
+            let Entry::Occupied(mut entry) = self.incomplete_parts.entry(id) else {
+                continue;
+            };
+            let PartState::InProgress { cap, fetched } = &mut entry.get_mut() else {
+                continue;
+            };
+            let mut record_count = 0;
+            for data in fetched {
+                record_count += 1;
+                work += emit_fn(buffer, cap, data);
+                let should_return = yield_fn(start_time, work);
+                let should_continue = record_count >= TO_EMIT_AT_ONCE;
+                if should_return || should_continue {
+                    self.ready_parts.push(Reverse(ReadyPart {
+                        time,
+                        record_count: emitted_records + record_count,
+                        id,
+                    }));
+                    if should_return {
+                        return;
+                    } else {
+                        continue 'poll_loop;
+                    }
+                }
+            }
+            entry.remove();
+        }
+    }
+}
+
 pub(crate) fn shard_source_fetch<K, V, E, T, D, G>(
     descs: &Stream<G, (usize, SerdeLeasedBatchPart)>,
     name: &str,
@@ -481,77 +632,81 @@ where
                 .await
         };
 
-        let memory_bound_bytes = clients.cfg.dynamic.compaction_memory_bound_bytes();
-        let semaphore = Semaphore::new(memory_bound_bytes);
+        let semaphore = Semaphore::new(MAX_CONCURRENT_FETCHES);
         let mut parts_in_flight = FuturesUnordered::new();
 
-        enum FileEvent<'a, K, V, T: Timestamp + Codec64, D, R> {
-            Fetched(
-                Arc<InputCapability<T>>,
-                LeasedBatchPart<T>,
-                FetchedPart<K, V, T, D>,
-            ),
+        let mut active_fetches = ActiveFetches {
+            next_part_id: 0,
+            incomplete_parts: Default::default(),
+            ready_parts: Default::default(),
+        };
+
+        // Here to keep the select statement small and readable.
+        enum FetchEvent<'a, K, V, T: Timestamp + Codec64, D, R> {
             Input(Event<T, &'a mut R>),
+            Fetched(usize, LeasedBatchPart<T>, FetchedPart<K, V, T, D>),
+            DoWork,
             Done,
         }
 
         'event_loop: loop {
             let event = tokio::select! {
-                Some(event) = descs_input.next_mut() => FileEvent::Input(event),
-                Some(file_event) = parts_in_flight.next() => file_event,
-                else => FileEvent::Done,
+                Some(event) = descs_input.next_mut() => FetchEvent::Input(event),
+                Some(fetch_event) = parts_in_flight.next() => fetch_event,
+                // We may end up in the select! even if we still have work to do, if we've been asked
+                // to yield. Check for more work in a slightly hacky way.
+                event = async { FetchEvent::DoWork }, if active_fetches.has_work() => event,
+                else => FetchEvent::Done,
             };
 
             match event {
-                FileEvent::Input(Event::Data(cap, data)) => {
-                    let cap = Arc::new(cap);
+                FetchEvent::Input(Event::Data(cap, data)) => {
+                    let cap = Rc::new(cap);
 
                     for (_, part) in data.drain(..) {
-                        let cap = Arc::clone(&cap);
-                        parts_in_flight.push(async {
+                        let cap = Rc::clone(&cap);
+                        let part_id = active_fetches.push_cap(cap);
+
+                        let fetcher = &fetcher;
+                        let semaphore = &semaphore;
+                        parts_in_flight.push(async move {
                             let leased = fetcher.leased_part_from_exchangeable(part);
-                            let reserve_bytes = leased
-                                .encoded_size_bytes
-                                .min(memory_bound_bytes)
-                                .try_into()
-                                .unwrap_or(u32::MAX);
-                            let _permit = semaphore.acquire_many(reserve_bytes);
+                            let _permit = semaphore
+                                .acquire()
+                                .await
+                                .expect("semaphore has been closed");
                             let (leased, result) = fetcher.fetch_leased_part(leased).await;
-                            FileEvent::Fetched(
-                                cap,
+                            FetchEvent::Fetched(
+                                part_id,
                                 leased,
                                 result.expect("shard_id should match across all workers"),
                             )
                         });
                     }
                 }
-                FileEvent::Fetched(cap, token, fetched) => {
-                    // Do very fine-grained output activation/session
-                    // creation to ensure that we don't hold activated
-                    // outputs or sessions across await points, which
-                    // would prevent messages from being flushed from
-                    // the shared timely output buffer.
-                    let mut tokens_output = tokens_output.activate();
-                    let cap: &InputCapability<T> = &cap;
-                    tokens_output
-                        .session(cap)
-                        .give(token.into_exchangeable_part());
-
-                    let mut work = 0;
-                    let start_time = Instant::now();
-
-                    let fetch_cap = cap.delayed(cap.time());
-                    let mut fetched_output = fetched_output.activate();
-                    let mut consolidated = ConsolidateBuffer::new(&mut fetched_output, 0);
-                    for tuple in fetched {
-                        work += emit_fn(&mut consolidated, &fetch_cap, tuple);
-                        if yield_fn(start_time, work) {
-                            info!("I should really be yielding here!");
-                        }
-                    }
+                FetchEvent::Fetched(part_id, token, fetched) => {
+                    active_fetches.push_fetched(part_id, fetched, |cap| {
+                        // We can drop the lease on the fetched part even before we've fully read it.
+                        let mut tokens_output = tokens_output.activate();
+                        tokens_output
+                            .session(cap)
+                            .give(token.into_exchangeable_part());
+                    });
                 }
-                FileEvent::Input(Event::Progress(_)) => {}
-                FileEvent::Done => {
+                FetchEvent::DoWork => {
+                    let mut fetched_output = fetched_output.activate();
+                    let mut output_buffer = ConsolidateBuffer::new(&mut fetched_output, 0);
+                    active_fetches.do_work(&mut output_buffer, &yield_fn, &mut emit_fn);
+                }
+                FetchEvent::Input(Event::Progress(_)) => {
+                    // In the future, to provide hard guarantees around consolidation, we'll need
+                    // to watch for frontier changes to decide whether we've seen all the parts for
+                    // a particular time range.
+                }
+                FetchEvent::Done => {
+                    assert!(active_fetches.incomplete_parts.is_empty());
+                    assert!(active_fetches.ready_parts.is_empty());
+
                     break 'event_loop;
                 }
             }
