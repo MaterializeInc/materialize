@@ -121,12 +121,6 @@ pub struct FronteggAuthentication {
     client: Client,
 }
 
-pub struct ContinuousValidationContext<T: Future<Output = ()>> {
-    pub claims: Claims,
-    pub is_expired: T,
-    pub refreshed_claims_rx: tokio::sync::mpsc::UnboundedReceiver<Claims>,
-}
-
 pub const REFRESH_SUFFIX: &str = "/token/refresh";
 
 impl FronteggAuthentication {
@@ -269,23 +263,22 @@ impl FronteggAuthentication {
     /// Continuously validates and refreshes an access token.
     ///
     /// Validates the provided access token once, as `validate_access_token`
-    /// does. If is valid, returns three things:
-    /// 1. Contained claims.
-    /// 2. A future that will attempt to refresh the access token before it
-    /// expires, resolving iff the token expires or fails to refresh.
-    /// 3. A channel that will send new claims whenever the user's claims
-    /// are updated.
+    /// does. If it is valid, returns a future that will attempt to refresh
+    /// the access token before it expires, resolving iff the token expires
+    /// or fails to refresh.
+    ///
+    /// The claims contained in the provided access token and all updated
+    /// claims will be processed by `claims_processor`.
     pub fn continuously_validate_access_token(
         &self,
         mut token: ApiTokenResponse,
         expected_email: String,
-    ) -> Result<ContinuousValidationContext<impl Future<Output = ()>>, FronteggError> {
+        mut claims_processor: impl FnMut(Claims),
+    ) -> Result<impl Future<Output = ()>, FronteggError> {
         // Do an initial full validity check of the token.
         let mut claims = self.validate_access_token(&token.access_token, Some(&expected_email))?;
-        let ret_claims = claims.clone();
+        claims_processor(claims.clone());
         let frontegg = self.clone();
-
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         // This future resolves once the token expiry time has been reached. It will
         // repeatedly attempt to refresh the token before it expires.
@@ -336,17 +329,12 @@ impl FronteggAuthentication {
                     (refresh_token, refresh_claims) = refresh_request => {
                         token = refresh_token;
                         claims = refresh_claims;
-                        // Ignore errors if the session has hung up.
-                        let _ = tx.send(claims.clone());
+                        claims_processor(claims.clone());
                     },
                 };
             }
         };
-        Ok(ContinuousValidationContext {
-            claims: ret_claims,
-            is_expired: expire_future,
-            refreshed_claims_rx: rx,
-        })
+        Ok(expire_future)
     }
 
     pub fn tenant_id(&self) -> Uuid {

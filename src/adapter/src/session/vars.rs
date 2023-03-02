@@ -555,7 +555,7 @@ pub struct SessionVars {
 
 impl SessionVars {
     /// Creates a new [`SessionVars`].
-    pub fn new(build_info: &'static BuildInfo, is_superuser: bool) -> SessionVars {
+    pub fn new(build_info: &'static BuildInfo) -> SessionVars {
         SessionVars {
             application_name: SessionVar::new(&APPLICATION_NAME),
             build_info,
@@ -583,19 +583,8 @@ impl SessionVars {
             real_time_recency: SessionVar::new(&REAL_TIME_RECENCY),
             emit_timestamp_notice: SessionVar::new(&EMIT_TIMESTAMP_NOTICE),
             emit_trace_id_notice: SessionVar::new(&EMIT_TRACE_ID_NOTICE),
-            is_superuser: Self::is_superuser_var(is_superuser),
+            is_superuser: SessionVar::new(&IS_SUPERUSER),
         }
-    }
-
-    /// Returns a new SessionVars with the cluster variable set to `cluster`.
-    pub fn for_cluster(
-        build_info: &'static BuildInfo,
-        cluster_name: &str,
-        is_superuser: bool,
-    ) -> Self {
-        let mut vars = SessionVars::new(build_info, is_superuser);
-        vars.cluster.session_value = Some(cluster_name.into());
-        vars
     }
 
     /// Returns an iterator over the configuration parameters and their current
@@ -1096,14 +1085,12 @@ impl SessionVars {
         *self.is_superuser.value()
     }
 
-    fn is_superuser_var(is_superuser: bool) -> SessionVar<bool> {
-        let mut is_superuser_var = SessionVar::new(&IS_SUPERUSER);
-        is_superuser_var.session_value = Some(is_superuser);
-        is_superuser_var
+    pub(crate) fn set_cluster(&mut self, cluster: String) {
+        self.cluster.session_value = Some(cluster);
     }
 
-    pub(crate) fn update_is_superuser(&mut self, is_superuser: bool) {
-        self.is_superuser = Self::is_superuser_var(is_superuser);
+    pub(crate) fn set_superuser(&mut self, is_superuser: bool) {
+        self.is_superuser.session_value = Some(is_superuser);
     }
 }
 

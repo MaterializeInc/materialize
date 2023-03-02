@@ -114,6 +114,7 @@ use serde::Deserialize;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::Message;
 use uuid::Uuid;
@@ -618,7 +619,7 @@ fn start_mzcloud(
     tenant_id: Uuid,
     users: BTreeMap<(String, String), String>,
     roles: BTreeMap<String, Vec<String>>,
-    role_updates_rx: tokio::sync::mpsc::UnboundedReceiver<(String, Vec<String>)>,
+    role_updates_rx: UnboundedReceiver<(String, Vec<String>)>,
     now: NowFn,
     expires_in_secs: i64,
 ) -> Result<MzCloudServer, anyhow::Error> {

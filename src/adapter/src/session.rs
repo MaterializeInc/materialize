@@ -87,6 +87,11 @@ impl User {
             .clone()
             .unwrap_or(false)
     }
+
+    /// Returns whether this user is a superuser.
+    pub fn is_superuser(&self) -> bool {
+        self.is_external_admin() || self.name == SYSTEM_USER.name
+    }
 }
 
 /// A session holds per-connection state.
@@ -103,6 +108,8 @@ pub struct Session<T = mz_repr::Timestamp> {
     notices_rx: mpsc::UnboundedReceiver<AdapterNotice>,
     next_transaction_id: TransactionId,
     secret_key: u32,
+    external_metadata_tx: mpsc::UnboundedSender<ExternalUserMetadata>,
+    external_metadata_rx: mpsc::UnboundedReceiver<ExternalUserMetadata>,
 }
 
 impl<T: TimestampManipulation> Session<T> {
@@ -130,12 +137,12 @@ impl<T: TimestampManipulation> Session<T> {
         user: User,
     ) -> Session<T> {
         let (notices_tx, notices_rx) = mpsc::unbounded_channel();
-        let is_superuser = Self::is_superuser_inner(&user);
-        let vars = if INTERNAL_USER_NAMES.contains(&user.name) {
-            SessionVars::for_cluster(build_info, &user.name, is_superuser)
-        } else {
-            SessionVars::new(build_info, is_superuser)
-        };
+        let (external_metadata_tx, external_metadata_rx) = mpsc::unbounded_channel();
+        let mut vars = SessionVars::new(build_info);
+        vars.set_superuser(user.is_superuser());
+        if INTERNAL_USER_NAMES.contains(&user.name) {
+            vars.set_cluster(user.name.clone());
+        }
         Session {
             conn_id,
             transaction: TransactionStatus::Default,
@@ -148,6 +155,8 @@ impl<T: TimestampManipulation> Session<T> {
             notices_rx,
             next_transaction_id: 0,
             secret_key: rand::thread_rng().gen(),
+            external_metadata_tx,
+            external_metadata_rx,
         }
     }
 
@@ -619,7 +628,8 @@ impl<T: TimestampManipulation> Session<T> {
     pub fn reset(&mut self) {
         let _ = self.clear_transaction();
         self.prepared_statements.clear();
-        self.vars = SessionVars::new(self.vars.build_info(), self.is_superuser());
+        self.vars = SessionVars::new(self.vars.build_info());
+        self.vars.set_superuser(self.is_superuser());
     }
 
     /// Returns the user who owns this session.
@@ -657,17 +667,22 @@ impl<T: TimestampManipulation> Session<T> {
 
     /// Returns whether the current session is a superuser.
     pub fn is_superuser(&self) -> bool {
-        Self::is_superuser_inner(&self.user)
+        self.user.is_superuser()
     }
 
-    fn is_superuser_inner(user: &User) -> bool {
-        user.is_external_admin() || user.name == SYSTEM_USER.name
+    /// Returns a channel on which to send external metadata to the session.
+    pub fn retain_external_metadata_transmitter(
+        &mut self,
+    ) -> UnboundedSender<ExternalUserMetadata> {
+        self.external_metadata_tx.clone()
     }
 
-    /// Update the external user metadata stored in the session.
-    pub fn update_external_user_metadata(&mut self, external_user_metadata: ExternalUserMetadata) {
-        self.user.external_metadata = Some(external_user_metadata);
-        self.vars.update_is_superuser(self.is_superuser());
+    /// Drains any external metadata updates and applies the changes from the latest update.
+    pub fn apply_external_metadata_updates(&mut self) {
+        while let Ok(external_user_metadata) = self.external_metadata_rx.try_recv() {
+            self.user.external_metadata = Some(external_user_metadata);
+        }
+        self.vars.set_superuser(self.is_superuser());
     }
 }
 

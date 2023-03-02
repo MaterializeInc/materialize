@@ -41,7 +41,10 @@ use crate::util::{ClientTransmitter, ResultExt};
 use crate::{catalog, metrics};
 
 impl Coordinator {
-    pub(crate) async fn handle_command(&mut self, cmd: Command) {
+    pub(crate) async fn handle_command(&mut self, mut cmd: Command) {
+        if let Some(session) = cmd.session() {
+            session.apply_external_metadata_updates();
+        }
         match cmd {
             Command::Startup {
                 session,
