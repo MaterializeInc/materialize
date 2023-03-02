@@ -1042,15 +1042,13 @@ impl StorageState {
                         Antichain::from_elem(mz_repr::Timestamp::minimum()),
                     );
 
-                    let initial_since = export.description.as_of.frontier.clone();
-
                     self.sink_handles.insert(
                         export.id,
                         SinkHandle::new(
                             export.id,
                             &export.description.from_storage_metadata,
                             export.description.from_storage_metadata.data_shard,
-                            initial_since,
+                            export.description.as_of.frontier.clone(),
                             Arc::clone(&self.persist_clients),
                         ),
                     );
