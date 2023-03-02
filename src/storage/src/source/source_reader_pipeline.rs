@@ -542,8 +542,6 @@ fn health_operator<G: Scope>(
     let mut last_reported_status = overall_status(&healths).cloned();
 
     let button = health_op.build(move |mut _capabilities| async move {
-        let mut buffer = Vec::new();
-
         let persist_client = persist_clients
             .open(storage_metadata.persist_location.clone())
             .await
@@ -557,11 +555,10 @@ fn health_operator<G: Scope>(
             }
         }
 
-        while let Some(event) = input.next().await {
+        while let Some(event) = input.next_mut().await {
             if let AsyncEvent::Data(_cap, rows) = event {
-                rows.swap(&mut buffer);
                 let mut halt_with = None;
-                for (worker_id, health_event) in buffer.drain(..) {
+                for (worker_id, health_event) in rows.drain(..) {
                     if !is_active_worker {
                         warn!(
                             "Health messages for source {source_id} passed to \
@@ -890,8 +887,6 @@ where
 
         source_metrics.resume_upper.set(mz_persist_client::metrics::encode_ts_metric(&resume_upper));
 
-        let mut remap_trace_buffer = Vec::new();
-
         let mut source_upper = MutableAntichain::new_bottom(FromTime::minimum());
 
         // Stash of batches that have not yet been timestamped.
@@ -903,11 +898,8 @@ where
         let work_to_do = tokio::sync::Notify::new();
         loop {
             tokio::select! {
-                Some(event) = remap_input.next() => match event {
-                    AsyncEvent::Data(_cap, data) => {
-                        data.swap(&mut remap_trace_buffer);
-                        remap_updates_stash.append(&mut remap_trace_buffer);
-                    }
+                Some(event) = remap_input.next_mut() => match event {
+                    AsyncEvent::Data(_cap, data) => remap_updates_stash.append(data),
                     // If the remap frontier advanced it's time to carve out a batch that includes
                     // all updates not beyond the upper
                     AsyncEvent::Progress(remap_upper) => {

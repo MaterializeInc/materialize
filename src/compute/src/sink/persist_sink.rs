@@ -548,9 +548,6 @@ where
     // will cause the changes of desired to be committed to persist.
 
     let shutdown_button = write_op.build(move |_capabilities| async move {
-        let mut buffer = Vec::new();
-        let mut batch_descriptions_buffer = Vec::new();
-
         // Contains `desired - persist`, reflecting the updates we would like to commit
         // to `persist` in order to "correct" it to track `desired`. This collection is
         // only modified by updates received from either the `desired` or `persist` inputs.
@@ -591,12 +588,11 @@ where
 
         loop {
             tokio::select! {
-                Some(event) = descriptions_input.next() => {
+                Some(event) = descriptions_input.next_mut() => {
                     match event {
                         Event::Data(cap, data) => {
                             // Ingest new batch descriptions.
-                            data.swap(&mut batch_descriptions_buffer);
-                            for description in batch_descriptions_buffer.drain(..) {
+                            for description in data.drain(..) {
                                 if sink_id.is_user() {
                                     trace!(
                                         "persist_sink {sink_id}/{shard_id}: \
@@ -632,12 +628,11 @@ where
                         }
                     }
                 }
-                Some(event) = desired_input.next() => {
+                Some(event) = desired_input.next_mut() => {
                     match event {
                         Event::Data(_cap, data) => {
                             // Extract desired rows as positive contributions to `correction`.
-                            data.swap(&mut buffer);
-                            if sink_id.is_user() && !buffer.is_empty() {
+                            if sink_id.is_user() && !data.is_empty() {
                                 trace!(
                                     "persist_sink {sink_id}/{shard_id}: \
                                         updates: {:?}, \
@@ -645,14 +640,14 @@ where
                                         desired_frontier: {:?}, \
                                         batch_descriptions_frontier: {:?}, \
                                         persist_frontier: {:?}",
-                                    buffer,
+                                    data,
                                     in_flight_batches,
                                     desired_frontier,
                                     batch_descriptions_frontier,
                                     persist_frontier
                                 );
                             }
-                            correction.append(&mut buffer);
+                            correction.append(data);
 
                             continue;
                         }
@@ -661,12 +656,11 @@ where
                         }
                     }
                 }
-                Some(event) = persist_input.next() => {
+                Some(event) = persist_input.next_mut() => {
                     match event {
                         Event::Data(_cap, data) => {
                             // Extract persist rows as negative contributions to `correction`.
-                            data.swap(&mut buffer);
-                            correction.extend(buffer.drain(..).map(|(d, t, r)| (d, t, -r)));
+                            correction.extend(data.drain(..).map(|(d, t, r)| (d, t, -r)));
 
                             continue;
                         }
@@ -888,9 +882,6 @@ where
 
         let mut cap_set = CapabilitySet::from_elem(capabilities.pop().expect("missing capability"));
 
-        let mut description_buffer = Vec::new();
-        let mut batch_buffer = Vec::new();
-
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
         // determines batch descriptions for all writers.
@@ -929,12 +920,11 @@ where
 
         loop {
             tokio::select! {
-                Some(event) = descriptions_input.next() => {
+                Some(event) = descriptions_input.next_mut() => {
                     match event {
                         Event::Data(_cap, data) => {
                             // Ingest new batch descriptions.
-                            data.swap(&mut description_buffer);
-                            for batch_description in description_buffer.drain(..) {
+                            for batch_description in data.drain(..) {
                                 if sink_id.is_user() {
                                     trace!(
                                         "persist_sink {sink_id}/{shard_id}: \
@@ -964,12 +954,11 @@ where
                         }
                     }
                 }
-                Some(event) = batches_input.next() => {
+                Some(event) = batches_input.next_mut() => {
                     match event {
                         Event::Data(_cap, data) => {
                             // Ingest new written batches
-                            data.swap(&mut batch_buffer);
-                            for batch in batch_buffer.drain(..) {
+                            for batch in data.drain(..) {
                                 let batch = write.batch_from_hollow_batch(batch);
                                 let batch_description = (batch.lower().clone(), batch.upper().clone());
 
