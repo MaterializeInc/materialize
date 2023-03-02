@@ -1941,13 +1941,17 @@ where
                         .extend(update.iter().cloned());
                 }
 
-                let (changes, frontier, cluster_id) = collections_net
-                    .entry(key)
-                    .or_insert_with(|| (ChangeBatch::new(), Antichain::new(), None));
+                let (changes, frontier, _cluster_id) =
+                    collections_net.entry(key).or_insert_with(|| {
+                        (
+                            ChangeBatch::new(),
+                            Antichain::new(),
+                            collection.cluster_id(),
+                        )
+                    });
 
                 changes.extend(update.drain());
                 *frontier = collection.read_capabilities.frontier().to_owned();
-                *cluster_id = collection.cluster_id();
             } else if let Ok(export) = self.export_mut(key) {
                 // Exports are not depended upon by other storage objects. We
                 // only need to report changes in our own read_capability to our
@@ -1961,13 +1965,12 @@ where
 
                 // Make sure we also send `AllowCompaction` commands for sinks,
                 // which drives updating the sink's `as_of`, among other things.
-                let (changes, frontier, cluster_id) = exports_net
+                let (changes, frontier, _cluster_id) = exports_net
                     .entry(key)
-                    .or_insert_with(|| (ChangeBatch::new(), Antichain::new(), None));
+                    .or_insert_with(|| (ChangeBatch::new(), Antichain::new(), export.cluster_id()));
 
                 changes.extend(update.drain());
                 *frontier = export.read_capability.clone();
-                *cluster_id = export.cluster_id();
             } else {
                 // This is confusing and we should probably error.
                 panic!("Unknown collection identifier {}", key);
