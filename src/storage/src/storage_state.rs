@@ -1068,25 +1068,21 @@ impl StorageState {
                 for (id, frontier) in list {
                     match self.exports.get_mut(&id) {
                         Some(export_description) => {
-                            // Update our knowledge of the `as_of`, in case we
-                            // need to internally restart a sink in the future.
+                            // Update our knowledge of the `as_of`, in case we need to internally
+                            // restart a sink in the future.
                             export_description.as_of.downgrade(&frontier);
 
-                            // Sinks maintain a read handle over their input
-                            // data to ensure that we can restart at the `as_of`
-                            // that we store and update in the export
+                            // Sinks maintain a read handle over their input data to ensure that we
+                            // can restart at the `as_of` that we store and update in the export
                             // description.
                             //
-                            // Communication between the storage controller and
-                            // this here worker is asynchronous, so we might
-                            // learn that the controller downgraded a since
-                            // after it has downgraded it's handle. Keeping a
-                            // handle here ensures that we can restart based on
-                            // our local state.
+                            // Communication between the storage controller and this here worker is
+                            // asynchronous, so we might learn that the controller downgraded a
+                            // since after it has downgraded it's handle. Keeping a handle here
+                            // ensures that we can restart based on our local state.
                             //
-                            // NOTE: It's important that we always
-                            // update/downgrade the sink `as_of` and the
-                            // `SinkHandle` in lockstep.
+                            // NOTE: It's important that we only downgrade `SinkHandle` after
+                            // updating the sink `as_of`.
                             let sink_handle =
                                 self.sink_handles.get(&id).expect("missing SinkHandle");
                             sink_handle.downgrade_since(frontier.clone());
