@@ -147,6 +147,7 @@ We adhere to standards for our SQL functions.
 Naming standards:
 * If the function exists in PostgreSQL, then use the PostgreSQL function and argument names.
 * If the function is specific to Materialize internals, then the name should be prefixed with `mz_`. For example, `mz_now()`.
+* If the function does not exist in PostgreSQL, but it is not specific to Materialize internals, then the name does not need to be prefixed with `mz_`.
 
 ## Log message style
 
