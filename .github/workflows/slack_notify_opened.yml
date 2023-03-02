@@ -32,7 +32,7 @@ jobs:
     steps:
       - name: Check membership
         id: is_organization_member
-        uses: jamessingleton/is-organization-member@v1
+        uses: jamessingleton/is-organization-member@fb5924a6287762ee5fc71bf9e95a60842af5528d
         with:
           organization: MaterializeInc
           username: ${{ github.event.issue.user.login }}
@@ -40,7 +40,7 @@ jobs:
       - name: Push to Slack
         if: |
           steps.is_organization_member.outputs.result == false
-        uses: actions-ecosystem/action-slack-notifier@v1
+        uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
         with:
           slack_token: ${{ secrets.SLACK_TOKEN }}
           channel: devex

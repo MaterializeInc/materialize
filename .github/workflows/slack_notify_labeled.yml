@@ -30,7 +30,7 @@ jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions-ecosystem/action-slack-notifier@v1
+      - uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
         if: ${{ github.event.label.name == 'P1' }}
         with:
           slack_token: ${{ secrets.SLACK_TOKEN }}
@@ -39,7 +39,7 @@ jobs:
             `${{ github.event.label.name }}` label has been added to "${{ github.event.issue.title }}" (${{ github.event.issue.html_url }}) (assigned to: ${{ github.event.issue.assignee.login || 'unassigned' }}).
           color: red
           verbose: false
-      - uses: actions-ecosystem/action-slack-notifier@v1
+      - uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
         if: ${{ github.event.label.name == 'C-bug' }}
         with:
           slack_token: ${{ secrets.SLACK_TOKEN }}
@@ -48,7 +48,7 @@ jobs:
             `${{ github.event.label.name }}` label has been added to "${{ github.event.issue.title }}" (${{ github.event.issue.html_url }}) (assigned to: ${{ github.event.issue.assignee.login || 'unassigned' }}).
           color: red
           verbose: false
-      - uses: actions-ecosystem/action-slack-notifier@v1
+      - uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
         if: ${{ github.event.label.name == 'release-blocker' }}
         with:
           slack_token: ${{ secrets.SLACK_TOKEN }}
