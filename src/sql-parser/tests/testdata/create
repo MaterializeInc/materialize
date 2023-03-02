@@ -216,6 +216,10 @@ error: zero-length delimited identifier
 CREATE TABLE "".table_name (col_name int)
              ^
 
+# NOTE: There is a null character in
+# between the quotes in this source file.
+# Apparently, not all tools show it
+# (including e.g. the GitHub PR tool)
 parse-statement
 CREATE TABLE " " (x int)
 ----
