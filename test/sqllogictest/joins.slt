@@ -1000,3 +1000,63 @@ query II colnames
 SELECT * FROM l NATURAL JOIN l AS a LIMIT 0
 ----
 la  lb
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/17897
+# This query fails if JoinImplementation is not in the same fixpoint loop with LiteralLifting.
+
+statement ok
+CREATE TABLE IF NOT EXISTS a (a boolean, b boolean);
+
+statement ok
+CREATE VIEW IF NOT EXISTS b AS SELECT 2 + 2;
+
+statement ok
+CREATE TABLE IF NOT EXISTS c (data jsonb);
+
+query T multiline
+EXPLAIN WITH(arity, join_impls)
+SELECT (SELECT NULL FROM a) AS c1, ref_0."?column?" AS c4 FROM b AS ref_0
+WHERE EXISTS (SELECT FROM c AS ref_7 WHERE EXISTS (SELECT ref_0."?column?" AS c2)) OR ref_0."?column?" IS NOT NULL;
+----
+Explained Query:
+  Return // { arity: 2 }
+    Map (4) // { arity: 2 }
+      CrossJoin type=differential // { arity: 1 }
+        implementation
+          %0[×]A » %1[×]A
+        ArrangeBy keys=[[]] // { arity: 0 }
+          Union // { arity: 0 }
+            Get l0 // { arity: 0 }
+            Negate // { arity: 0 }
+              Get l0 // { arity: 0 }
+            Constant // { arity: 0 }
+              - ()
+        ArrangeBy keys=[[]] // { arity: 1 }
+          Union // { arity: 1 }
+            Get l1 // { arity: 1 }
+            Map (null) // { arity: 1 }
+              Union // { arity: 0 }
+                Negate // { arity: 0 }
+                  Distinct // { arity: 0 }
+                    Project () // { arity: 0 }
+                      Get l1 // { arity: 1 }
+                Constant // { arity: 0 }
+                  - ()
+  With
+    cte l1 =
+      Union // { arity: 1 }
+        Project (#2) // { arity: 1 }
+          Map (null) // { arity: 3 }
+            Get materialize.public.a // { arity: 2 }
+        Map (error("more than one record produced in subquery")) // { arity: 1 }
+          Project () // { arity: 0 }
+            Filter (#0 > 1) // { arity: 1 }
+              Reduce aggregates=[count(*)] // { arity: 1 }
+                Project () // { arity: 0 }
+                  Get materialize.public.a // { arity: 2 }
+    cte l0 =
+      Distinct // { arity: 0 }
+        Project () // { arity: 0 }
+          Get materialize.public.c // { arity: 1 }
+
+EOF
