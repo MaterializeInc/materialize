@@ -625,7 +625,7 @@ where
 
                 self.insert_id(
                     Id::Local(*id),
-                    CollectionBundle::from_collections(oks_v.consolidate(), err_v.consolidate()),
+                    CollectionBundle::from_collections(oks_v.clone(), err_v.clone()),
                 );
                 variables.insert(Id::Local(*id), (oks_v, err_v));
             }
@@ -637,8 +637,16 @@ where
                 let (oks, err) = bundle.collection.clone().unwrap();
                 self.insert_id(Id::Local(*id), bundle);
                 let (oks_v, err_v) = variables.remove(&Id::Local(*id)).unwrap();
-                oks_v.set(&oks);
-                err_v.set(&err);
+                // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
+                use crate::typedefs::RowKeySpine;
+                oks_v.set(&oks.consolidate_named::<RowKeySpine<_, _, _>>("LetRecConsolidation"));
+                // Set err variable to the distinct elements of `err`.
+                // Distinctness is important, as we otherwise might add the same error each iteration,
+                // say if the limit of `oks` has an error. This would result in non-terminatino rather
+                // than a clean report of the error. The trade-off is that we lose informatino about
+                // multiplicities of errors, but .. this seems to be the better call.
+                use differential_dataflow::operators::Threshold;
+                err_v.set(&err.distinct_core());
             }
             // Now extract each of the bindings into the outer scope.
             for id in ids.into_iter() {

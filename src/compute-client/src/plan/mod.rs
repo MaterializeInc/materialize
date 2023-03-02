@@ -1105,6 +1105,8 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     assert!(pre_existing.is_none());
                     lir_values.push(lir_value);
                 }
+                // As we exit the iterative scope, we must leave all arrangements behind,
+                // as they reference a timestamp coordinate that must be stripped off.
                 for id in ids.iter() {
                     arrangements.insert(Id::Local(*id), AvailableCollections::new_raw());
                 }
