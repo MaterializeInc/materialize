@@ -627,8 +627,13 @@ where
 
         // Repeatedly apply hierarchical reduction with a progressively coarser key.
         let mut stage = input.map(move |(key, values)| ((key, values.hashed()), values));
+        let mut validating = true;
         for b in buckets.into_iter() {
-            stage = build_bucketed_stage(debug_name, stage, aggr_funcs.clone(), b);
+            stage = build_bucketed_stage(debug_name, stage, aggr_funcs.clone(), b, validating);
+            // We only want the first stage to perform validation of whether invalid accumulations
+            // were observed in the input. Subsequently, we will either produce an error in the error
+            // stream or produce correct data in the output stream.
+            validating = false;
         }
 
         // Discard the hash from the key and return to the format of the input data.
@@ -644,7 +649,7 @@ where
                 // Negative counts would be surprising, but until we are 100% certain we wont
                 // see them, we should report when we do. We may want to bake even more info
                 // in here in the future.
-                if source.iter().any(|(_val, cnt)| cnt < &0) {
+                if validating && source.iter().any(|(_val, cnt)| cnt < &0) {
                     // XXX: This reports user data, which we perhaps should not do!
                     for (val, cnt) in source.iter() {
                         if cnt < &0 {
@@ -673,11 +678,15 @@ where
 /// holding only the elements that were rejected by this stage. However, the
 /// output collection maintains the `((key, bucket), (passing value)` for this
 /// stage.
+/// `validating` indicates whether we want this stage to perform error detection
+/// for invalid accumulations. Once a stage is clean of such errors, subsequent
+/// stages can skip validation.
 fn build_bucketed_stage<G>(
     debug_name: &str,
     input: Collection<G, ((Row, u64), Vec<Row>), Diff>,
     aggrs: Vec<AggregateFunc>,
     buckets: u64,
+    validating: bool,
 ) -> Collection<G, ((Row, u64), Vec<Row>), Diff>
 where
     G: Scope,
@@ -691,7 +700,7 @@ where
         .reduce_named("Reduced MinsMaxesHierarchical", {
             move |key, source, target| {
                 // Should negative accumulations reach us, we should loudly complain.
-                if source.iter().any(|(_val, cnt)| cnt <= &0) {
+                if validating && source.iter().any(|(_val, cnt)| cnt <= &0) {
                     for (val, cnt) in source.iter() {
                         // XXX: This reports user data, which we perhaps should not do!
                         if *cnt <= 0 {
@@ -702,6 +711,9 @@ where
                             );
                         }
                     }
+                    // After complaining, output the invalid data here so that it gets
+                    // removed from further consideration.
+                    target.extend(source.iter().map(|(values, cnt)| ((*values).clone(), *cnt)));
                 } else {
                     let mut output = Vec::with_capacity(aggrs.len());
                     for (aggr_index, func) in aggrs.iter().enumerate() {
