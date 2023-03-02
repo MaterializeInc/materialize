@@ -230,6 +230,7 @@ We will support the following object types:
 | `VIEW`               | r              | Yes             |
 | `MATERIALIZED  VIEW` | r              | Yes             |
 | `INDEX`              |                | Yes             |
+| `TYPE`               | U              | Yes             |
 | `SOURCE`             | r              | No              |
 | `SINK`               |                | No              |
 | `CONNECTION`         | U              | No              |
@@ -259,6 +260,7 @@ Below is a summary of the default owners and privileges of all builtin objects:
 - The `mz_system` role will own all catalog schemas [`pg_catalog`, `mz_catalog`, `mz_internal`, `information_schema`].
 - The `PUBLIC` pseudo-role will have `U` privileges on all catalog schemas.
 - The `PUBLIC` pseudo-role will have `r` privileges on all objects within all catalog schemas.
+- The `PUBLIC` psuedo-role will have `U` privileges on all type.
 
 Here is a summary of all the privileges, attributes, and ownership needed to perform certain actions:
 
@@ -365,7 +367,6 @@ We will update `DROP <object>` so that it revokes all privileges on `<object>`.
     - `SEQUENCE`
     - `Table column`
     - `TABLESPACE`
-    - `TYPE`
 - Adding the necessary pg views to support all role based `psql` meta-commands.
 
 ### Phase 5 - Utility Commands (Optional)
@@ -431,8 +432,6 @@ This is an optional phase to add some utility commands present in PostgreSQL. We
 
 ## Open questions
 
-- PostgreSQL grants certain privileges on certain object types to all roles. None of those overlap with the set of
-  objects and privileges we have, but do we want to do something similar?
 - Do we want different `SELECT` privileges based on if a new dataflow will be spun up or if we can use an existing one?
     - Pros: We can differentiate between using existing compute resources vs creating new ones when reading.
     - Cons: Users (and the database) are unable to determine if they're allowed to execute a read until after that read
