@@ -445,9 +445,9 @@ static MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<mz_repr::Timestamp>> = Serve
     safe: false,
 };
 
-const IS_SUPERUSER: ServerVar<str> = ServerVar {
+const IS_SUPERUSER: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("is_superuser"),
-    value: "off",
+    value: &false,
     description: "Indicates whether the current session is a super user (PostgreSQL).",
     internal: false,
     safe: true,
@@ -550,7 +550,7 @@ pub struct SessionVars {
     real_time_recency: SessionVar<bool>,
     emit_timestamp_notice: SessionVar<bool>,
     emit_trace_id_notice: SessionVar<bool>,
-    is_superuser: SessionVar<str>,
+    is_superuser: SessionVar<bool>,
 }
 
 impl SessionVars {
@@ -1092,15 +1092,13 @@ impl SessionVars {
     }
 
     /// Returns the value of `is_superuser` configuration parameter.
-    pub fn is_superuser(&self) -> &str {
-        self.is_superuser.value()
+    pub fn is_superuser(&self) -> bool {
+        *self.is_superuser.value()
     }
 
-    fn is_superuser_var(is_superuser: bool) -> SessionVar<str> {
+    fn is_superuser_var(is_superuser: bool) -> SessionVar<bool> {
         let mut is_superuser_var = SessionVar::new(&IS_SUPERUSER);
-        if is_superuser {
-            is_superuser_var.session_value = Some("on".to_string());
-        }
+        is_superuser_var.session_value = Some(is_superuser);
         is_superuser_var
     }
 
