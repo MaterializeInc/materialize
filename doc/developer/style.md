@@ -148,8 +148,6 @@ Naming standards:
 * If the function exists in PostgreSQL, then use the PostgreSQL function and argument names.
 * If the function is specific to Materialize internals, then the name should be prefixed with `mz_`. For example, `mz_now()`.
 
-
-
 ## Log message style
 
 We use the [`tracing` crate](https://docs.rs/tracing/latest/tracing/)'s log
