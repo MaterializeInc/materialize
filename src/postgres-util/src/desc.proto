@@ -24,4 +24,6 @@ message ProtoPostgresColumnDesc {
     int32 type_mod = 3;
     bool nullable = 4;
     bool primary_key = 5;
+    // TODO(migration): remove optional in v0.48
+    optional uint32 col_num = 6;
 }

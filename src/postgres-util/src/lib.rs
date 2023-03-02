@@ -235,6 +235,7 @@ pub async fn publication_info(
                 "SELECT
                         a.attname AS name,
                         a.atttypid AS typoid,
+                        a.attnum AS colnum,
                         a.atttypmod AS typmod,
                         a.attnotnull AS not_null,
                         b.oid IS NOT NULL AS primary_key
@@ -254,11 +255,17 @@ pub async fn publication_info(
             .map(|row| {
                 let name: String = row.get("name");
                 let type_oid = row.get("typoid");
+                let col_num = Some(
+                    row.get::<_, i16>("colnum")
+                        .try_into()
+                        .expect("non-negative values"),
+                );
                 let type_mod: i32 = row.get("typmod");
                 let not_null: bool = row.get("not_null");
                 let primary_key = row.get("primary_key");
                 Ok(PostgresColumnDesc {
                     name,
+                    col_num,
                     type_oid,
                     type_mod,
                     nullable: !not_null,
