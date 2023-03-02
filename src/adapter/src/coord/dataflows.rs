@@ -760,7 +760,6 @@ fn eval_unmaterializable_func(
             pack(t)
         }
         UnmaterializableFunc::CurrentUser => pack(Datum::from(&*session.user().name)),
-        UnmaterializableFunc::IsSuperuser => pack(Datum::from(session.is_superuser())),
         UnmaterializableFunc::MzEnvironmentId => {
             pack(Datum::from(&*state.config().environment_id.to_string()))
         }
