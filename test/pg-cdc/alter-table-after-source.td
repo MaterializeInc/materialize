@@ -270,7 +270,6 @@ INSERT INTO alter_set_with_oids VALUES (2);
 
 
 
-
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER USER postgres WITH replication;
 DROP SCHEMA IF EXISTS public CASCADE;
@@ -373,5 +372,42 @@ INSERT INTO alter_table_rename_column (f1, f2) VALUES ('f1_renamed', 'f2_renamed
 
 ! SELECT * FROM alter_table_rename_column;
 contains:altered
+
+> DROP SOURCE mz_source;
+
+
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER USER postgres WITH replication;
+DROP SCHEMA IF EXISTS public CASCADE;
+DROP PUBLICATION IF EXISTS mz_source;
+
+CREATE SCHEMA public;
+
+CREATE TABLE alter_table_change_attnum (f1 VARCHAR(10), f2 VARCHAR(10));
+ALTER TABLE alter_table_change_attnum REPLICA IDENTITY FULL;
+INSERT INTO alter_table_change_attnum (f1, f2) VALUES ('f1_orig','f2_orig');
+
+CREATE PUBLICATION mz_source FOR ALL TABLES;
+
+> CREATE SOURCE "test_slot_source"
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES ("alter_table_change_attnum") WITH (size = '1');
+
+> SELECT * from alter_table_rename_column;
+f1_orig f2_orig
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER TABLE alter_table_change_attnum DROP COLUMN f2;
+ALTER TABLE alter_table_change_attnum ADD COLUMN f2 VARCHAR(10);
+INSERT INTO alter_table_change_attnum (f1, f2) VALUES ('f1_changed', 'f2_changed');
+
+# We have fooled the system into accepting this schema change
+# Results should be:
+# f1_orig <null>
+# f1_changed f2_changed
+> SELECT * FROM alter_table_change_attnum;
+f1_orig f2_orig
+f1_changed f2_changed
 
 > DROP SOURCE mz_source;
