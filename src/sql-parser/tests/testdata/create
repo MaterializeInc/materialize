@@ -215,3 +215,10 @@ CREATE TABLE "".table_name (col_name int)
 error: zero-length delimited identifier
 CREATE TABLE "".table_name (col_name int)
              ^
+
+parse-statement
+CREATE TABLE " " (x int)
+----
+error: null character in quoted identifier
+CREATE TABLE " " (x int)
+             ^
