@@ -389,7 +389,7 @@ impl fmt::Display for PlanError {
             },
             Self::InvalidPrivatelinkAvailabilityZone { name, ..} => write!(f, "invalid AWS PrivateLink availability zone {}", name.quoted()),
             Self::InvalidSchemaName => write!(f, "no schema has been selected to create in"),
-            Self::ItemAlreadyExists { name, item_type } => write!(f, "catalog item {} : {item_type}, already exists", name.quoted()),
+            Self::ItemAlreadyExists { name, item_type } => write!(f, "{item_type} {} already exists", name.quoted()),
         }
     }
 }

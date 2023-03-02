@@ -291,11 +291,12 @@ pub fn plan_create_table(
         scx.allocate_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?
     };
 
-    // check for an object in the catalog with this same name
-    let partial_name = PartialObjectName::from(scx.catalog.resolve_full_name(&name));
+    // Check for an object in the catalog with this same name
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialObjectName::from(full_name.clone());
     if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
         return Err(PlanError::ItemAlreadyExists {
-            name: name.item,
+            name: full_name.to_string(),
             item_type: item.item_type(),
         });
     }
@@ -1054,6 +1055,17 @@ pub fn plan_create_source(
 
     let if_not_exists = *if_not_exists;
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.clone())?)?;
+
+    // Check for an object in the catalog with this same name
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialObjectName::from(full_name.clone());
+    if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
+    }
+
     let create_sql = normalize::create_statement(scx, Statement::CreateSource(stmt))?;
 
     // Allow users to specify a timeline. If they do not, determine a default
@@ -1730,13 +1742,14 @@ pub fn plan_create_view(
         None
     };
 
-    // check for an object in the catalog with this same name
-    let partial_name = PartialObjectName::from(scx.catalog.resolve_full_name(&name));
+    // Check for an object in the catalog with this same name
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialObjectName::from(full_name.clone());
     if let (IfExistsBehavior::Error, Ok(item)) =
         (*if_exists, scx.catalog.resolve_item(&partial_name))
     {
         return Err(PlanError::ItemAlreadyExists {
-            name: name.item,
+            name: full_name.to_string(),
             item_type: item.item_type(),
         });
     }
@@ -1817,13 +1830,14 @@ pub fn plan_create_materialized_view(
         IfExistsBehavior::Error => (),
     }
 
-    // check for an object in the catalog with this same name
-    let partial_name = PartialObjectName::from(scx.catalog.resolve_full_name(&name));
+    // Check for an object in the catalog with this same name
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialObjectName::from(full_name.clone());
     if let (IfExistsBehavior::Error, Ok(item)) =
         (stmt.if_exists, scx.catalog.resolve_item(&partial_name))
     {
         return Err(PlanError::ItemAlreadyExists {
-            name: name.item,
+            name: full_name.to_string(),
             item_type: item.item_type(),
         });
     }
@@ -1889,11 +1903,12 @@ pub fn plan_create_sink(
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
 
-    // check for an object in the catalog with this same name
-    let partial_name = PartialObjectName::from(scx.catalog.resolve_full_name(&name));
+    // Check for an object in the catalog with this same name
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialObjectName::from(full_name.clone());
     if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
         return Err(PlanError::ItemAlreadyExists {
-            name: name.item,
+            name: full_name.to_string(),
             item_type: item.item_type(),
         });
     }
@@ -2322,11 +2337,12 @@ pub fn plan_create_index(
         }
     };
 
-    // check for an object in the catalog with this same name
-    let partial_name = PartialObjectName::from(scx.catalog.resolve_full_name(&index_name));
+    // Check for an object in the catalog with this same name
+    let full_name = scx.catalog.resolve_full_name(&index_name);
+    let partial_name = PartialObjectName::from(full_name.clone());
     if let (false, Ok(item)) = (*if_not_exists, scx.catalog.resolve_item(&partial_name)) {
         return Err(PlanError::ItemAlreadyExists {
-            name: index_name.item,
+            name: full_name.to_string(),
             item_type: item.item_type(),
         });
     }
@@ -2466,11 +2482,12 @@ pub fn plan_create_type(
 
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
 
-    // check for an object in the catalog with this same name
-    let partial_name = PartialObjectName::from(scx.catalog.resolve_full_name(&name));
+    // Check for an object in the catalog with this same name
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialObjectName::from(full_name.clone());
     if let Ok(item) = scx.catalog.resolve_item(&partial_name) {
         return Err(PlanError::ItemAlreadyExists {
-            name: name.item,
+            name: full_name.to_string(),
             item_type: item.item_type(),
         });
     }
@@ -3281,11 +3298,12 @@ pub fn plan_create_connection(
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
 
-    // check for an object in the catalog with this same name
-    let partial_name = PartialObjectName::from(scx.catalog.resolve_full_name(&name));
+    // Check for an object in the catalog with this same name
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialObjectName::from(full_name.clone());
     if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
         return Err(PlanError::ItemAlreadyExists {
-            name: name.item,
+            name: full_name.to_string(),
             item_type: item.item_type(),
         });
     }

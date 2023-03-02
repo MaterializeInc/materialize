@@ -44,16 +44,16 @@ $ kafka-ingest format=avro topic=data schema=${schema}
 # Test that creating objects of the same name does not work
 
 ! CREATE MATERIALIZED VIEW i AS SELECT 1.5 AS c
-contains:catalog item "i" : index, already exists
+contains:index "i" already exists
 
 ! CREATE INDEX i ON s("Y")
-contains:catalog item "i" : index, already exists
+contains:index "i" already exists
 
 ! CREATE INDEX j on v2(x)
-contains:catalog item "j" : index, already exists
+contains:index "j" already exists
 
 ! CREATE INDEX v ON v2(x)
-contains:catalog item "v" : materialized view, already exists
+contains:materialized view "v" already exists
 
 $ set dummy={
     "type": "record",
@@ -85,18 +85,18 @@ $ set dummy={
 ! CREATE SOURCE v2
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${dummy}'
-contains:catalog item "v2" : materialized view, already exists
+contains:materialized view "v2" already exists
 
 ! CREATE SOURCE i
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${dummy}'
-contains:catalog item "i": index, already exists
+contains:index "i" already exists
 
 ! CREATE INDEX s ON v2(x)
-contains:catalog item "s": source, already exists
+contains:source "s" already exists
 
 ! CREATE MATERIALIZED VIEW s AS SELECT 'bloop' AS d
-contains:catalog item "s": source, already exists
+contains:source "s" already exists
 
 # Test that objects do not get dropped if the drop command does not specify the correct type
 ! DROP SOURCE v
@@ -190,7 +190,7 @@ name                      create_sql
 materialize.public.test1  "CREATE VIEW \"materialize\".\"public\".\"test1\" AS SELECT 42 AS \"a\""
 
 ! CREATE VIEW test1 AS SELECT 43 AS b
-contains:catalog item "test1" : view, already exists
+contains:view "test1" already exists
 
 > SELECT * FROM test1
 a
