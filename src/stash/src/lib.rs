@@ -86,7 +86,6 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use mz_ore::soft_assert;
-use postgres::TransactionError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use timely::progress::Antichain;
@@ -188,7 +187,6 @@ impl StashError {
     pub fn is_unrecoverable(&self) -> bool {
         match &self.inner {
             InternalStashError::Fence(_) => true,
-            InternalStashError::Transaction(e) => !e.retryable(),
             _ => false,
         }
     }
@@ -197,7 +195,6 @@ impl StashError {
 #[derive(Debug)]
 enum InternalStashError {
     Postgres(::tokio_postgres::Error),
-    Transaction(Box<TransactionError>),
     Fence(String),
     PeekSinceUpper(String),
     Other(String),
@@ -211,7 +208,6 @@ impl fmt::Display for StashError {
             InternalStashError::Fence(e) => f.write_str(e),
             InternalStashError::PeekSinceUpper(e) => f.write_str(e),
             InternalStashError::Other(e) => f.write_str(e),
-            InternalStashError::Transaction(e) => e.fmt(f),
         }
     }
 }
