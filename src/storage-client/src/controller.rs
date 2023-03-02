@@ -1917,6 +1917,23 @@ where
         let mut collections_net = BTreeMap::new();
         let mut exports_net = BTreeMap::new();
 
+        let frontiers: BTreeMap<_, _> = self
+            .collections()
+            .map(|(id, state)| (id, state.read_capabilities.frontier()))
+            .collect();
+        for (id, state) in self.collections() {
+            let frontier = frontiers[id];
+            for dep in &state.storage_dependencies {
+                let dep_frontier = frontiers[dep];
+                assert!(
+                    PartialOrder::less_equal(&dep_frontier, &frontier),
+                    "since of dependency {dep} ({:?}) is beyond since of dependant {id} ({:?})",
+                    dep_frontier,
+                    frontier
+                );
+            }
+        }
+
         // Repeatedly extract the maximum id, and updates for it.
         while let Some(key) = updates.keys().rev().next().cloned() {
             let mut update = updates.remove(&key).unwrap();
