@@ -24,7 +24,7 @@ CREATE TABLE not_a_secret (a int);
 statement ok
 CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'broker');
 
-statement error connection "kafka_conn" already exists
+statement error connection "materialize.public.kafka_conn" already exists
 CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'broker');
 
 statement ok
