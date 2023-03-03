@@ -14,6 +14,7 @@ import os
 import shutil
 import signal
 import sys
+import tempfile
 import uuid
 from urllib.parse import urlparse
 
@@ -27,6 +28,17 @@ REQUIRED_SERVICES = ["clusterd"]
 
 DEFAULT_POSTGRES = f"postgres://root@localhost:26257/materialize"
 
+# sets entitlements on the built binary, e.g. environmentd, so you can inspect it with Instruments
+MACOS_ENTITLEMENTS_DATA = """
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+    <dict>
+        <key>com.apple.security.get-task-allow</key>
+        <true/>
+    </dict>
+</plist>
+"""
 
 def main() -> int:
     parser = argparse.ArgumentParser(
@@ -96,6 +108,11 @@ def main() -> int:
         help="Only build, don't run",
         action="store_true",
     )
+    parser.add_argument(
+        "--mac-instruments",
+        help="Enables support for profiling with Instruments on macOS",
+        action="store_true",
+    )
     args = parser.parse_intermixed_args()
 
     # Handle `+toolchain` like rustup.
@@ -113,6 +130,13 @@ def main() -> int:
             path = ROOT / "target" / "release" / args.program
         else:
             path = ROOT / "target" / "debug" / args.program
+
+        if args.mac_instruments:
+            if sys.platform != "darwin":
+                print("Ignoring --mac-instruments since we're not on macOS")
+            else:
+                _macos_codesign(path)
+
         command = [str(path)]
         if args.tokio_console:
             command += ["--tokio-console-listen-addr=127.0.0.1:6669"]
@@ -244,6 +268,20 @@ def _build(args: argparse.Namespace, extra_programs: list[str] = []) -> int:
     completed_proc = spawn.runv(command, env=env)
     return completed_proc.returncode
 
+def _macos_codesign(path: str):
+    env = dict(os.environ)
+    command = ["codesign"]
+    command.extend(["-s", "-", "-f", "--entitlements"])
+
+    # write our entitlements file to a temp path
+    temp = tempfile.NamedTemporaryFile()
+    temp.write(bytes(MACOS_ENTITLEMENTS_DATA, 'utf-8'))
+    temp.flush()
+
+    command.append(temp.name)
+    command.append(path)
+
+    spawn.runv(command, env=env)
 
 def _cargo_command(args: argparse.Namespace, subcommand: str) -> list[str]:
     command = ["cargo"]
