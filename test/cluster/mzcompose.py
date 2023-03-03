@@ -568,8 +568,11 @@ def workflow_test_github_15496(c: Composition) -> None:
             # Run a query that would generate a panic before the fix. Note that
             # we expect the query to succeed for now, but follow-up work might
             # eventually lead us to favor a SQL-level error for such a query, as
-            # tracked by https://github.com/MaterializeInc/materialize/issues/17178
-            > SELECT SUM(data), MAX(data) FROM data;
+            # tracked by issue #17178.
+            # Note that we employ below a query hint to hit the case of not yet
+            # generating a SQL-level error, given the partial fix to bucketed
+            # aggregates introduced in PR #17918.
+            > SELECT SUM(data), MAX(data) FROM data OPTIONS (EXPECTED GROUP SIZE = 1);
             <null> <null>
             """
             )

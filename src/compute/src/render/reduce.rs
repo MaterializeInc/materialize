@@ -63,11 +63,18 @@ where
     T: Timestamp + Lattice,
 {
     // Convenience wrapper to render the right kind of hierarchical plan.
-    let build_hierarchical = |collection: Collection<G, (Row, Row), Diff>,
-                              expr: HierarchicalPlan| match expr {
-        HierarchicalPlan::Monotonic(expr) => build_monotonic(debug_name, collection, expr),
-        HierarchicalPlan::Bucketed(expr) => build_bucketed(debug_name, collection, expr),
-    };
+    let mut err_collection = err_input;
+    let mut build_hierarchical =
+        |collection: Collection<G, (Row, Row), Diff>, expr: HierarchicalPlan| match expr {
+            HierarchicalPlan::Monotonic(expr) => build_monotonic(debug_name, collection, expr),
+            HierarchicalPlan::Bucketed(expr) => {
+                let (bucketed_output, bucketed_errs) = build_bucketed(debug_name, collection, expr);
+                if let Some(errs) = bucketed_errs {
+                    err_collection = err_collection.concat(&errs);
+                }
+                bucketed_output
+            }
+        };
 
     // Convenience wrapper to render the right kind of basic plan.
     let build_basic = |collection: Collection<G, (Row, Row), Diff>, expr: BasicPlan| match expr {
@@ -116,7 +123,7 @@ where
             .into()
         }
     };
-    arrangement_or_bundle.into_bundle(key_arity, err_input)
+    arrangement_or_bundle.into_bundle(key_arity, err_collection)
 }
 
 /// A type wrapping either an arrangement or a single collection.
@@ -604,12 +611,16 @@ fn build_bucketed<G>(
         skips,
         buckets,
     }: BucketedPlan,
-) -> Arrangement<G, Row>
+) -> (
+    Arrangement<G, Row>,
+    Option<Collection<G, DataflowError, Diff>>,
+)
 where
     G: Scope,
     G::Timestamp: Lattice,
 {
-    input.scope().region_named("ReduceHierarchical", |inner| {
+    let mut err_output: Option<Collection<G, _, _>> = None;
+    let arranged_output = input.scope().region_named("ReduceHierarchical", |inner| {
         let input = input.enter(inner);
 
         // Gather the relevant values into a vec of rows ordered by aggregation_index
@@ -629,11 +640,18 @@ where
         let mut stage = input.map(move |(key, values)| ((key, values.hashed()), values));
         let mut validating = true;
         for b in buckets.into_iter() {
-            stage = build_bucketed_stage(debug_name, stage, aggr_funcs.clone(), b, validating);
+            let (stage_output, stage_errs) =
+                build_bucketed_stage(debug_name, stage, aggr_funcs.clone(), b, validating);
+            stage = stage_output;
+            assert!((validating && stage_errs.is_some()) || (!validating && stage_errs.is_none()));
+
             // We only want the first stage to perform validation of whether invalid accumulations
             // were observed in the input. Subsequently, we will either produce an error in the error
             // stream or produce correct data in the output stream.
-            validating = false;
+            if let Some(errs) = stage_errs {
+                validating = false;
+                err_output = Some(errs.leave_region());
+            }
         }
 
         // Discard the hash from the key and return to the format of the input data.
@@ -642,32 +660,43 @@ where
         // Build a series of stages for the reduction
         // Arrange the final result into (key, Row)
         let debug_name = debug_name.to_string();
-        partial.arrange_named::<RowSpine<_,Vec<Row>,_,_>>("Arrange ReduceMinsMaxes")
+        partial
+            .arrange_named::<RowSpine<_, Vec<Row>, _, _>>("Arrange ReduceMinsMaxes")
             .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMinsMaxes", {
-            let mut row_buf = Row::default();
-            move |_key, source, target| {
-                // Negative counts would be surprising, but until we are 100% certain we wont
-                // see them, we should report when we do. We may want to bake even more info
-                // in here in the future.
-                if validating && source.iter().any(|(_val, cnt)| cnt < &0) {
-                    // XXX: This reports user data, which we perhaps should not do!
-                    for (val, cnt) in source.iter() {
-                        if cnt < &0 {
-                            warn!("[customer-data] Negative accumulation in ReduceMinsMaxes: {val:?} with count {cnt:?} in dataflow {debug_name}");
-                            soft_assert_or_log!(false, "Negative accumulation in ReduceMinsMaxes");
+                let mut row_buf = Row::default();
+                move |_key, source, target| {
+                    // Negative counts would be surprising, but until we are 100% certain we wont
+                    // see them, we should report when we do. We may want to bake even more info
+                    // in here in the future.
+                    if validating && source.iter().any(|(_val, cnt)| cnt < &0) {
+                        // XXX: This reports user data, which we perhaps should not do!
+                        for (val, cnt) in source.iter() {
+                            if cnt < &0 {
+                                warn!(
+                                    "[customer-data] Negative accumulation in ReduceMinsMaxes: \
+                                    {val:?} with count {cnt:?} in dataflow {debug_name}"
+                                );
+                                soft_assert_or_log!(
+                                    false,
+                                    "Negative accumulation in ReduceMinsMaxes"
+                                );
+                            }
                         }
+                    } else {
+                        let mut row_packer = row_buf.packer();
+                        for (aggr_index, func) in aggr_funcs.iter().enumerate() {
+                            let iter = source
+                                .iter()
+                                .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
+                            row_packer.push(func.eval(iter, &RowArena::new()));
+                        }
+                        target.push((row_buf.clone(), 1));
                     }
-                } else {
-                    let mut row_packer = row_buf.packer();
-                    for (aggr_index, func) in aggr_funcs.iter().enumerate() {
-                        let iter = source.iter().map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
-                        row_packer.push(func.eval(iter, &RowArena::new()));
-                    }
-                    target.push((row_buf.clone(), 1));
                 }
-            }
-        }).leave_region()
-    })
+            })
+            .leave_region()
+    });
+    (arranged_output, err_output)
 }
 
 /// Build the dataflow for one stage of a reduction tree for multiple hierarchical
@@ -687,7 +716,10 @@ fn build_bucketed_stage<G>(
     aggrs: Vec<AggregateFunc>,
     buckets: u64,
     validating: bool,
-) -> Collection<G, ((Row, u64), Vec<Row>), Diff>
+) -> (
+    Collection<G, ((Row, u64), Vec<Row>), Diff>,
+    Option<Collection<G, DataflowError, Diff>>,
+)
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -695,29 +727,61 @@ where
     let input = input.map(move |((key, hash), values)| ((key, hash % buckets), values));
 
     let debug_name = debug_name.to_string();
-    let negated_output = input
-        .arrange_named::<RowSpine<_, Vec<Row>, _, _>>("Arranged MinsMaxesHierarchical input")
-        .reduce_named("Reduced MinsMaxesHierarchical", {
+    let arranged_input =
+        input.arrange_named::<RowSpine<_, Vec<Row>, _, _>>("Arranged MinsMaxesHierarchical input");
+    let (negated_output, stage_errs) = if validating {
+        let (negated_output, errs) = arranged_input
+        .reduce_abelian::<_,RowSpine<_,Result<_,_>,_,_>>("Reduced Fallibly MinsMaxesHierarchical", {
             move |key, source, target| {
                 // Should negative accumulations reach us, we should loudly complain.
-                if validating && source.iter().any(|(_val, cnt)| cnt <= &0) {
+                if source.iter().any(|(_val, cnt)| cnt <= &0) {
                     for (val, cnt) in source.iter() {
                         // XXX: This reports user data, which we perhaps should not do!
                         if *cnt <= 0 {
-                            warn!("[customer-data] Non-positive accumulation in MinsMaxesHierarchical: key: {key:?}\tvalue: {val:?}\tcount: {cnt:?} in dataflow {debug_name}");
+                            warn!("[customer-data] Non-positive accumulation in MinsMaxesHierarchical: \
+                                key: {key:?}\tvalue: {val:?}\tcount: {cnt:?} in dataflow {debug_name}");
                             soft_assert_or_log!(
                                 false,
                                 "Non-positive accumulation in MinsMaxesHierarchical"
                             );
                         }
                     }
-                    // After complaining, output the invalid data here so that it gets
-                    // removed from further consideration.
-                    target.extend(source.iter().map(|(values, cnt)| ((*values).clone(), *cnt)));
+                    // After complaining, output an error here so that we can eventually
+                    // report it in an error stream.
+                    target.push((Err(format!("Invalid data in source, saw negative accumulation for \
+                        key {key:?} in hierarchical mins-maxes aggregate")), 1));
                 } else {
                     let mut output = Vec::with_capacity(aggrs.len());
                     for (aggr_index, func) in aggrs.iter().enumerate() {
                         let iter = source.iter().map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
+                        output.push(Row::pack_slice(&[func.eval(iter, &RowArena::new())]));
+                    }
+                    // We do exactly the same here as in levels of the hierarchical reduction
+                    // in which we do not output `Result` (see below), except that correct data
+                    // output needs to be surrounded by `Ok` and multiplicities reported normally.
+                    target.push((Ok(output), -1));
+                    target.extend(source.iter().map(|(values, cnt)| (Ok((*values).clone()), *cnt)));
+                }
+            }
+        })
+        .as_collection(|k,v| (k.clone(), v.clone()))
+        .map_fallible("Checked Invalid Accumulations", |(key, result)| {
+            use mz_expr::EvalError;
+            match result {
+                Err(message) => Err(EvalError::Internal(message).into()),
+                Ok(values) => Ok((key, values)),
+            }
+        });
+        (negated_output, Some(errs))
+    } else {
+        let negated_output = arranged_input
+            .reduce_abelian::<_, RowSpine<_, _, _, _>>("Reduced MinsMaxesHierarchical", {
+                move |_key, source, target| {
+                    let mut output = Vec::with_capacity(aggrs.len());
+                    for (aggr_index, func) in aggrs.iter().enumerate() {
+                        let iter = source
+                            .iter()
+                            .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
                         output.push(Row::pack_slice(&[func.eval(iter, &RowArena::new())]));
                     }
                     // We only want to arrange the parts of the input that are not part of the output.
@@ -729,13 +793,16 @@ where
                     target.push((output, -1));
                     target.extend(source.iter().map(|(values, cnt)| ((*values).clone(), *cnt)));
                 }
-            }
-        });
+            })
+            .as_collection(|k, v| (k.clone(), v.clone()));
+        (negated_output, None)
+    };
 
-    negated_output
+    let stage_output = negated_output
         .negate()
         .concat(&input)
-        .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated MinsMaxesHierarchical")
+        .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated MinsMaxesHierarchical");
+    (stage_output, stage_errs)
 }
 
 /// Build the dataflow to compute and arrange multiple hierarchical aggregations
