@@ -406,6 +406,9 @@ This is an optional phase to add some utility commands present in PostgreSQL. We
   if `RBAC_CHECK_ENABLED` is disabled.
 - Organizations can set up all the existing roles with their desired privileges and then toggle `RBAC_CHECKS_ENABLED` on
   and off to test that roles are set up properly.
+- A user role called `mz_default_owner` will be created in all existing deployments. A migrations will
+  assign `mz_default_owner` as the owner of all existing objects. Superusers will be able to re-assign ownership for all
+  of these objects.
 
 ## Testing Plan
 
