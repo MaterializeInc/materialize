@@ -320,6 +320,8 @@ select_stmt ::=
   ( 'LIMIT' integer )?
   ( 'OFFSET' integer )?
   ( ( 'UNION' | 'INTERSECT' | 'EXCEPT' ) ( 'ALL' | 'DISTINCT' )? another_select_stmt )?
+set_session_variable ::=
+  'SET' 'variable_name' ( 'TO' | '=' ) variable_value
 set_transaction_isolation ::=
   'SET' 'TRANSACTION_ISOLATION' ( 'TO' | '=' ) isolation_level
 show_columns ::=
