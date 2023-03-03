@@ -379,17 +379,15 @@ p+p {
     }
 
     code {
-        color: var(--code-pink);
         font-family: "Fira Code", Courier, monospace;
         font-variant-ligatures: none;
         font-size: 1.3rem;
         font-weight: 500;
-        background: var(--card);
+        background: var(--code-block);
         border: 1px solid var(--divider-light);
         box-sizing: border-box;
         border-radius: 2px;
         padding: 0.1rem 0.25rem 0rem;
-        transition: all 0.2s 50ms;
     }
 
     // Merge a highlighted code block followed by a non-highlighted code block,
@@ -491,26 +489,29 @@ p+p {
 
     .note {
         background: var(--note);
-        color: var(--black);
-        border: 1px solid #d9d6c1;
+        border: 1px solid var(--note-border);
 
         a {
-            color: #4f0cff;
-
             &:hover,
             &:focus {
-                color: var(--black) !important;
-                border-bottom-color: var(--black) !important;
+                color: var(--sub) !important;
+            }
+
+            code {
+                &:hover,
+                &:focus {
+                    color: var(--sub) !important;
+                }
             }
         }
 
         &::after {
-            border-color: var(--bg) var(--bg) #d9d6c1 #d9d6c1;
-            background: #d9d6c1;
+            border-color: var(--bg) var(--bg) #fbe2d9 #fbe2d9;
+            background: #fbe2d9;
         }
 
         .gutter {
-            color: #5f5602;
+            color: var(--note-gutter);
         }
     }
 
@@ -977,11 +978,12 @@ body.dark .content {
 
     .note {
         a {
-            color: #4f0cff;
+            color: var(--link);
         }
 
         &::after {
-            border-color: var(--bg) var(--bg) var(--gray-mid) var(--note);
+            border-color: --var(--note-border);
+            // border-color: var(--bg) var(--bg) var(--gray-mid) var(--note);
             background: var(--note);
         }
     }
@@ -1003,16 +1005,6 @@ body.dark .content {
 
     pre code {
         color: var(--sub);
-    }
-
-    a {
-
-        &:hover,
-        &:focus {
-            code {
-                color: var(--important);
-            }
-        }
     }
 }
 
