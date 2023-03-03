@@ -263,21 +263,26 @@ impl FronteggAuthentication {
     /// Continuously validates and refreshes an access token.
     ///
     /// Validates the provided access token once, as `validate_access_token`
-    /// does. If is valid, returns the contained claims and a future that will
-    /// attempt to refresh the access token before it expires, resolving iff
-    /// the token expires or fails to refresh.
+    /// does. If it is valid, returns a future that will attempt to refresh
+    /// the access token before it expires, resolving iff the token expires
+    /// or fails to refresh.
+    ///
+    /// The claims contained in the provided access token and all updated
+    /// claims will be processed by `claims_processor`.
     pub fn continuously_validate_access_token(
         &self,
         mut token: ApiTokenResponse,
         expected_email: String,
-    ) -> Result<(Claims, impl Future<Output = ()>), FronteggError> {
+        mut claims_processor: impl FnMut(Claims),
+    ) -> Result<impl Future<Output = ()>, FronteggError> {
         // Do an initial full validity check of the token.
         let mut claims = self.validate_access_token(&token.access_token, Some(&expected_email))?;
+        claims_processor(claims.clone());
         let frontegg = self.clone();
 
         // This future resolves once the token expiry time has been reached. It will
         // repeatedly attempt to refresh the token before it expires.
-        Ok((claims.clone(), async move {
+        let expire_future = async move {
             let refresh_url = format!("{}{}", frontegg.admin_api_token_url, REFRESH_SUFFIX);
             loop {
                 let expire_in = claims.exp - frontegg.now.as_secs();
@@ -324,10 +329,12 @@ impl FronteggAuthentication {
                     (refresh_token, refresh_claims) = refresh_request => {
                         token = refresh_token;
                         claims = refresh_claims;
+                        claims_processor(claims.clone());
                     },
                 };
             }
-        }))
+        };
+        Ok(expire_future)
     }
 
     pub fn tenant_id(&self) -> Uuid {

@@ -30,7 +30,7 @@ use mz_adapter::session::{
     RowBatchStream, TransactionStatus, VarInput,
 };
 use mz_adapter::{AdapterNotice, ExecuteResponse, PeekResponseUnary, RowsFuture};
-use mz_frontegg_auth::FronteggAuthentication;
+use mz_frontegg_auth::{Claims, FronteggAuthentication};
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::str::StrExt;
@@ -157,7 +157,13 @@ where
         }
     }
 
-    let (external_metadata, is_expired) = if let Some(frontegg) = frontegg {
+    // Construct session.
+    let mut session = adapter_client.new_session(User {
+        name: user.clone(),
+        external_metadata: None,
+    });
+
+    let is_expired = if let Some(frontegg) = frontegg {
         conn.send(BackendMessage::AuthenticationCleartextPassword)
             .await?;
         conn.flush().await?;
@@ -172,18 +178,22 @@ where
                     .await
             }
         };
+        let admin_role = frontegg.admin_role();
+        let external_metadata_rx = session.retain_external_metadata_transmitter();
         match frontegg
             .exchange_password_for_token(&password)
             .await
-            .and_then(|token| frontegg.continuously_validate_access_token(token, user.clone()))
-        {
-            Ok((claims, is_expired)) => {
-                let external_metadata = Some(ExternalUserMetadata {
-                    user_id: claims.best_user_id(),
-                    group_id: claims.tenant_id,
-                    admin: claims.admin(frontegg.admin_role()),
-                });
-                (external_metadata, is_expired.left_future())
+            .and_then(|token| {
+                frontegg.continuously_validate_access_token(token, user.clone(), move |claims| {
+                    let external_metadata = convert_claims_to_external_metadata(claims, admin_role);
+                    // Ignore error if client has hung up.
+                    let _ = external_metadata_rx.send(external_metadata);
+                })
+            }) {
+            Ok(is_expired) => {
+                // Make sure to apply the initial claims.
+                session.apply_external_metadata_updates();
+                is_expired.left_future()
             }
             Err(e) => {
                 warn!("PGwire connection failed authentication: {}", e);
@@ -197,14 +207,9 @@ where
         }
     } else {
         // No frontegg check, so is_expired never resolves.
-        (None, pending().right_future())
+        pending().right_future()
     };
 
-    // Construct session.
-    let mut session = adapter_client.new_session(User {
-        name: user,
-        external_metadata,
-    });
     for (name, value) in params {
         let settings = match name.as_str() {
             "options" => match parse_options(&value) {
@@ -287,6 +292,14 @@ where
                 .await?;
             conn.flush().await
         }
+    }
+}
+
+fn convert_claims_to_external_metadata(claims: Claims, admin_role: &str) -> ExternalUserMetadata {
+    ExternalUserMetadata {
+        user_id: claims.best_user_id(),
+        group_id: claims.tenant_id,
+        admin: claims.admin(admin_role),
     }
 }
 

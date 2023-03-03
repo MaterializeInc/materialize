@@ -114,6 +114,7 @@ use serde::Deserialize;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::Message;
 use uuid::Uuid;
@@ -302,6 +303,7 @@ where
 // postgres-style error.
 enum Assert<E, D = ()> {
     Success,
+    SuccessSuperuserCheck(bool),
     Err(E),
     DbErr(D),
 }
@@ -379,6 +381,14 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                         let row = pg_client.query_one("SELECT current_user", &[]).unwrap();
                         assert_eq!(row.get::<_, String>(0), *user);
                     }
+                    Assert::SuccessSuperuserCheck(is_superuser) => {
+                        let mut pg_client = pg_client.connect(tls.clone()).unwrap();
+                        let row = pg_client.query_one("SELECT current_user", &[]).unwrap();
+                        assert_eq!(row.get::<_, String>(0), *user);
+                        let row = pg_client.query_one("SHOW is_superuser", &[]).unwrap();
+                        let expected = if *is_superuser { "on" } else { "off" };
+                        assert_eq!(row.get::<_, String>(0), *expected);
+                    }
                     Assert::DbErr(check) => {
                         // This sometimes returns a network error, so retry until we get a db error.
                         Retry::default()
@@ -418,6 +428,53 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                 configure,
                 assert,
             } => {
+                fn query_http_api<'a>(
+                    query: &str,
+                    uri: &Uri,
+                    headers: &'a HeaderMap,
+                    configure: &Box<
+                        dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a,
+                    >,
+                    runtime: &Runtime,
+                ) -> hyper::Result<Response<Body>> {
+                    runtime.block_on(
+                        hyper::Client::builder()
+                            .build::<_, Body>(make_http_tls(configure))
+                            .request({
+                                let mut req = Request::post(uri);
+                                for (k, v) in headers.iter() {
+                                    req.headers_mut().unwrap().insert(k, v.clone());
+                                }
+                                req.headers_mut().unwrap().insert(
+                                    "Content-Type",
+                                    HeaderValue::from_static("application/json"),
+                                );
+                                req.body(Body::from(json!({ "query": query }).to_string()))
+                                    .unwrap()
+                            }),
+                    )
+                }
+
+                fn assert_success_response(
+                    res: hyper::Result<Response<Body>>,
+                    expected_rows: Vec<Vec<String>>,
+                    runtime: &Runtime,
+                ) {
+                    #[derive(Deserialize)]
+                    struct Result {
+                        rows: Vec<Vec<String>>,
+                    }
+                    #[derive(Deserialize)]
+                    struct Response {
+                        results: Vec<Result>,
+                    }
+                    let body = runtime
+                        .block_on(body::to_bytes(res.unwrap().into_body()))
+                        .unwrap();
+                    let res: Response = serde_json::from_slice(&body).unwrap();
+                    assert_eq!(res.results[0].rows, expected_rows)
+                }
+
                 println!("http user={} scheme={}", user, scheme);
 
                 let uri = Uri::builder()
@@ -430,39 +487,24 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                     .path_and_query("/api/sql")
                     .build()
                     .unwrap();
-                let res = runtime.block_on(
-                    hyper::Client::builder()
-                        .build::<_, Body>(make_http_tls(configure))
-                        .request({
-                            let mut req = Request::post(uri);
-                            for (k, v) in headers.iter() {
-                                req.headers_mut().unwrap().insert(k, v.clone());
-                            }
-                            req.headers_mut().unwrap().insert(
-                                "Content-Type",
-                                HeaderValue::from_static("application/json"),
-                            );
-                            req.body(Body::from(
-                                json!({"query": "SELECT pg_catalog.current_user()"}).to_string(),
-                            ))
-                            .unwrap()
-                        }),
+                let res = query_http_api(
+                    "SELECT pg_catalog.current_user()",
+                    &uri,
+                    headers,
+                    configure,
+                    &runtime,
                 );
+
                 match assert {
                     Assert::Success => {
-                        #[derive(Deserialize)]
-                        struct Result {
-                            rows: Vec<Vec<String>>,
-                        }
-                        #[derive(Deserialize)]
-                        struct Response {
-                            results: Vec<Result>,
-                        }
-                        let body = runtime
-                            .block_on(body::to_bytes(res.unwrap().into_body()))
-                            .unwrap();
-                        let res: Response = serde_json::from_slice(&body).unwrap();
-                        assert_eq!(res.results[0].rows, vec![vec![user.to_string()]])
+                        assert_success_response(res, vec![vec![user.to_string()]], &runtime);
+                    }
+                    Assert::SuccessSuperuserCheck(is_superuser) => {
+                        assert_success_response(res, vec![vec![user.to_string()]], &runtime);
+                        let res =
+                            query_http_api("SHOW is_superuser", &uri, headers, configure, &runtime);
+                        let expected = if *is_superuser { "on" } else { "off" };
+                        assert_success_response(res, vec![vec![expected.to_string()]], &runtime);
                     }
                     Assert::Err(check) => {
                         let (code, message) = match res {
@@ -507,19 +549,52 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                     r#"{"query": "SELECT pg_catalog.current_user()"}"#.into(),
                 ))
                 .unwrap();
-                match assert {
-                    Assert::Success => loop {
+
+                // Only supports reading a single row.
+                fn assert_success_response(
+                    ws: &mut tungstenite::WebSocket<impl Read + Write>,
+                    mut expected_row_opt: Option<Vec<&str>>,
+                    mut expected_tag_opt: Option<&str>,
+                ) {
+                    while expected_tag_opt.is_some() || expected_row_opt.is_some() {
                         let resp = ws.read_message().unwrap();
                         if let Message::Text(msg) = resp {
                             let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
-                            if let WebSocketResponse::CommandComplete(tag) = msg {
-                                assert_eq!(tag, "SELECT 1");
-                                break;
+                            match (msg, &expected_row_opt, expected_tag_opt) {
+                                (WebSocketResponse::Row(actual_row), Some(expected_row), _) => {
+                                    assert_eq!(actual_row.len(), expected_row.len());
+                                    for (actual_col, expected_col) in
+                                        actual_row.into_iter().zip(expected_row.iter())
+                                    {
+                                        assert_eq!(&actual_col.to_string(), expected_col);
+                                    }
+                                    expected_row_opt = None;
+                                }
+                                (
+                                    WebSocketResponse::CommandComplete(actual_tag),
+                                    _,
+                                    Some(expected_tag),
+                                ) => {
+                                    assert_eq!(actual_tag, expected_tag);
+                                    expected_tag_opt = None;
+                                }
+                                (_, _, _) => {}
                             }
                         } else {
                             panic!("unexpected: {resp}");
                         }
-                    },
+                    }
+                }
+
+                match assert {
+                    Assert::Success => assert_success_response(&mut ws, None, Some("SELECT 1")),
+                    Assert::SuccessSuperuserCheck(is_superuser) => {
+                        assert_success_response(&mut ws, None, Some("SELECT 1"));
+                        ws.write_message(Message::Text(r#"{"query": "SHOW is_superuser"}"#.into()))
+                            .unwrap();
+                        let expected = if *is_superuser { "\"on\"" } else { "\"off\"" };
+                        assert_success_response(&mut ws, Some(vec![expected]), Some("SELECT 1"));
+                    }
                     Assert::Err(check) => {
                         let resp = ws.read_message().unwrap();
                         let (code, message) = match resp {
@@ -543,6 +618,8 @@ fn start_mzcloud(
     encoding_key: EncodingKey,
     tenant_id: Uuid,
     users: BTreeMap<(String, String), String>,
+    roles: BTreeMap<String, Vec<String>>,
+    role_updates_rx: UnboundedReceiver<(String, Vec<String>)>,
     now: NowFn,
     expires_in_secs: i64,
 ) -> Result<MzCloudServer, anyhow::Error> {
@@ -553,6 +630,8 @@ fn start_mzcloud(
         encoding_key: EncodingKey,
         tenant_id: Uuid,
         users: BTreeMap<(String, String), String>,
+        roles: BTreeMap<String, Vec<String>>,
+        role_updates_rx: Arc<Mutex<tokio::sync::mpsc::UnboundedReceiver<(String, Vec<String>)>>>,
         now: NowFn,
         expires_in_secs: i64,
         // Uuid -> email
@@ -564,6 +643,8 @@ fn start_mzcloud(
         encoding_key,
         tenant_id,
         users,
+        roles,
+        role_updates_rx: Arc::new(Mutex::new(role_updates_rx)),
         now,
         expires_in_secs,
         refresh_tokens: Arc::new(Mutex::new(BTreeMap::new())),
@@ -608,6 +689,7 @@ fn start_mzcloud(
                 }
             }
         };
+        let roles = context.roles.get(&email).cloned().unwrap_or_default();
         let refresh_token = Uuid::new_v4().to_string();
         context
             .refresh_tokens
@@ -622,7 +704,7 @@ fn start_mzcloud(
                 sub: Uuid::new_v4(),
                 user_id: None,
                 tenant_id: context.tenant_id,
-                roles: Vec::new(),
+                roles,
                 permissions: Vec::new(),
             },
             &context.encoding_key,
@@ -642,8 +724,13 @@ fn start_mzcloud(
     let runtime = Arc::new(Runtime::new()?);
     let _guard = runtime.enter();
     let service = make_service_fn(move |_conn| {
-        let context = context.clone();
-        let service = service_fn(move |req| handle(context.clone(), req));
+        let mut context = context.clone();
+        let service = service_fn(move |req| {
+            while let Ok((email, roles)) = context.role_updates_rx.lock().unwrap().try_recv() {
+                context.roles.insert(email, roles);
+            }
+            handle(context.clone(), req)
+        });
         async move { Ok::<_, Infallible>(service) }
     });
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
@@ -671,6 +758,25 @@ fn make_header<H: Header>(h: H) -> HeaderMap {
     map
 }
 
+fn wait_for_refresh(frontegg_server: &MzCloudServer, expires_in_secs: u64) {
+    let expected = *frontegg_server.refreshes.lock().unwrap() + 1;
+    Retry::default()
+        .factor(1.0)
+        .max_duration(Duration::from_secs(expires_in_secs + 10))
+        .retry(|_| {
+            let refreshes = *frontegg_server.refreshes.lock().unwrap();
+            if refreshes >= expected {
+                Ok(())
+            } else {
+                Err(format!(
+                    "expected refresh count {}, got {}",
+                    expected, refreshes
+                ))
+            }
+        })
+        .unwrap();
+}
+
 #[test]
 fn test_auth_expiry() {
     // This function verifies that the background expiry refresh task runs. This
@@ -689,15 +795,19 @@ fn test_auth_expiry() {
         (client_id.to_string(), secret.to_string()),
         "user@_.com".to_string(),
     )]);
+    let roles = BTreeMap::from([("user@_.com".to_string(), Vec::new())]);
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
 
     const EXPIRES_IN_SECS: u64 = 20;
     const REFRESH_BEFORE_SECS: u64 = 10;
+    let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
     let frontegg_server = start_mzcloud(
         encoding_key,
         tenant_id,
         users,
+        roles,
+        role_rx,
         SYSTEM_TIME.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
     )
@@ -713,25 +823,6 @@ fn test_auth_expiry() {
     });
     let frontegg_user = "user@_.com";
     let frontegg_password = &format!("mzauth_{client_id}{secret}");
-
-    let wait_for_refresh = || {
-        let expected = *frontegg_server.refreshes.lock().unwrap() + 1;
-        Retry::default()
-            .factor(1.0)
-            .max_duration(Duration::from_secs(EXPIRES_IN_SECS + 10))
-            .retry(|_| {
-                let refreshes = *frontegg_server.refreshes.lock().unwrap();
-                if refreshes >= expected {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "expected refresh count {}, got {}",
-                        expected, refreshes
-                    ))
-                }
-            })
-            .unwrap();
-    };
 
     let config = util::Config::default()
         .with_tls(TlsMode::Require, server_cert, server_key)
@@ -757,8 +848,8 @@ fn test_auth_expiry() {
     );
 
     // Wait for a couple refreshes to happen.
-    wait_for_refresh();
-    wait_for_refresh();
+    wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
+    wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
     assert_eq!(
         pg_client
             .query_one("SELECT current_user", &[])
@@ -771,7 +862,7 @@ fn test_auth_expiry() {
     frontegg_server
         .enable_refresh
         .store(false, Ordering::Relaxed);
-    wait_for_refresh();
+    wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
     // Sleep until the expiry future should resolve.
     std::thread::sleep(Duration::from_secs(EXPIRES_IN_SECS + 1));
     assert!(pg_client.query_one("SELECT current_user", &[]).is_err());
@@ -801,6 +892,10 @@ fn test_auth_base() {
             (system_client_id.to_string(), system_secret.to_string()),
             SYSTEM_USER.name.to_string(),
         ),
+    ]);
+    let roles = BTreeMap::from([
+        ("user@_.com".to_string(), Vec::new()),
+        (SYSTEM_USER.name.to_string(), Vec::new()),
     ]);
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
@@ -846,8 +941,17 @@ fn test_auth_base() {
         &encoding_key,
     )
     .unwrap();
-    let frontegg_server =
-        start_mzcloud(encoding_key, tenant_id, users, now.clone(), 1_000).unwrap();
+    let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
+    let frontegg_server = start_mzcloud(
+        encoding_key,
+        tenant_id,
+        users,
+        roles,
+        role_rx,
+        now.clone(),
+        1_000,
+    )
+    .unwrap();
     let frontegg_auth = FronteggAuthentication::new(FronteggConfig {
         admin_api_token_url: frontegg_server.url,
         decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
@@ -1387,4 +1491,201 @@ fn test_auth_intermediate_ca() {
         ],
     );
     drop(server);
+}
+
+#[test]
+fn test_auth_admin() {
+    mz_ore::test::init_logging();
+
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let tenant_id = Uuid::new_v4();
+    let client_id = Uuid::new_v4();
+    let secret = Uuid::new_v4();
+    let admin_client_id = Uuid::new_v4();
+    let admin_secret = Uuid::new_v4();
+
+    let frontegg_user = "user@_.com";
+    let admin_frontegg_user = "admin@_.com";
+
+    let admin_role = "mzadmin";
+
+    let users = BTreeMap::from([
+        (
+            (client_id.to_string(), secret.to_string()),
+            frontegg_user.to_string(),
+        ),
+        (
+            (admin_client_id.to_string(), admin_secret.to_string()),
+            admin_frontegg_user.to_string(),
+        ),
+    ]);
+    let roles = BTreeMap::from([
+        (frontegg_user.to_string(), Vec::new()),
+        (
+            admin_frontegg_user.to_string(),
+            vec![admin_role.to_string()],
+        ),
+    ]);
+    let encoding_key =
+        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let now = SYSTEM_TIME.clone();
+
+    const EXPIRES_IN_SECS: u64 = 20;
+    const REFRESH_BEFORE_SECS: u64 = 10;
+    let (role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
+    let frontegg_server = start_mzcloud(
+        encoding_key,
+        tenant_id,
+        users,
+        roles,
+        role_rx,
+        now.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .unwrap();
+    let password_prefix = "mzauth_";
+    let frontegg_auth = FronteggAuthentication::new(FronteggConfig {
+        admin_api_token_url: frontegg_server.url.clone(),
+        decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+        tenant_id,
+        now,
+        refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
+        password_prefix: password_prefix.to_string(),
+        admin_role: admin_role.to_string(),
+    });
+
+    let frontegg_password = &format!("{password_prefix}{client_id}{secret}");
+    let frontegg_basic = Authorization::basic(frontegg_user, frontegg_password);
+    let frontegg_header_basic = make_header(frontegg_basic);
+
+    let admin_frontegg_password = &format!("{password_prefix}{admin_client_id}{admin_secret}");
+    let admin_frontegg_basic = Authorization::basic(admin_frontegg_user, admin_frontegg_password);
+    let admin_frontegg_header_basic = make_header(admin_frontegg_basic);
+
+    {
+        let config = util::Config::default()
+            .with_tls(TlsMode::Require, &server_cert, &server_key)
+            .with_frontegg(&frontegg_auth);
+        let server = util::start_server(config).unwrap();
+
+        run_tests(
+            "Non-superuser",
+            &server,
+            &[
+                TestCase::Pgwire {
+                    user: frontegg_user,
+                    password: Some(frontegg_password),
+                    ssl_mode: SslMode::Require,
+                    configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                    assert: Assert::SuccessSuperuserCheck(false),
+                },
+                TestCase::Http {
+                    user: frontegg_user,
+                    scheme: Scheme::HTTPS,
+                    headers: &frontegg_header_basic,
+                    configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                    assert: Assert::SuccessSuperuserCheck(false),
+                },
+                TestCase::Ws {
+                    auth: &WebSocketAuth::Basic {
+                        user: frontegg_user.to_string(),
+                        password: frontegg_password.to_string(),
+                    },
+                    configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                    assert: Assert::SuccessSuperuserCheck(false),
+                },
+            ],
+        );
+    }
+
+    {
+        let config = util::Config::default()
+            .with_tls(TlsMode::Require, &server_cert, &server_key)
+            .with_frontegg(&frontegg_auth);
+        let server = util::start_server(config).unwrap();
+
+        run_tests(
+            "Superuser",
+            &server,
+            &[
+                TestCase::Pgwire {
+                    user: admin_frontegg_user,
+                    password: Some(admin_frontegg_password),
+                    ssl_mode: SslMode::Require,
+                    configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                    assert: Assert::SuccessSuperuserCheck(true),
+                },
+                TestCase::Http {
+                    user: admin_frontegg_user,
+                    scheme: Scheme::HTTPS,
+                    headers: &admin_frontegg_header_basic,
+                    configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                    assert: Assert::SuccessSuperuserCheck(true),
+                },
+                TestCase::Ws {
+                    auth: &WebSocketAuth::Basic {
+                        user: admin_frontegg_user.to_string(),
+                        password: admin_frontegg_password.to_string(),
+                    },
+                    configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                    assert: Assert::SuccessSuperuserCheck(true),
+                },
+            ],
+        );
+    }
+
+    {
+        let config = util::Config::default()
+            .with_tls(TlsMode::Require, &server_cert, &server_key)
+            .with_frontegg(&frontegg_auth);
+        let server = util::start_server(config).unwrap();
+
+        let mut pg_client = server
+            .pg_config()
+            .ssl_mode(SslMode::Require)
+            .user(frontegg_user)
+            .password(frontegg_password)
+            .connect(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+                Ok(b.set_verify(SslVerifyMode::NONE))
+            })))
+            .unwrap();
+
+        assert_eq!(
+            pg_client
+                .query_one("SHOW is_superuser", &[])
+                .unwrap()
+                .get::<_, String>(0),
+            "off"
+        );
+
+        role_tx
+            .send((frontegg_user.to_string(), vec![admin_role.to_string()]))
+            .unwrap();
+        wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
+
+        assert_eq!(
+            pg_client
+                .query_one("SHOW is_superuser", &[])
+                .unwrap()
+                .get::<_, String>(0),
+            "on"
+        );
+
+        role_tx
+            .send((frontegg_user.to_string(), Vec::new()))
+            .unwrap();
+        wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
+
+        assert_eq!(
+            pg_client
+                .query_one("SHOW is_superuser", &[])
+                .unwrap()
+                .get::<_, String>(0),
+            "off"
+        );
+    }
 }

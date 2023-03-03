@@ -119,6 +119,26 @@ pub enum Command {
     },
 }
 
+impl Command {
+    pub fn session(&mut self) -> Option<&mut Session> {
+        match self {
+            Command::Startup { session, .. }
+            | Command::Declare { session, .. }
+            | Command::Describe { session, .. }
+            | Command::VerifyPreparedStatement { session, .. }
+            | Command::Execute { session, .. }
+            | Command::StartTransaction { session, .. }
+            | Command::Commit { session, .. }
+            | Command::DumpCatalog { session, .. }
+            | Command::CopyRows { session, .. }
+            | Command::GetSystemVars { session, .. }
+            | Command::SetSystemVars { session, .. }
+            | Command::Terminate { session, .. } => Some(session),
+            Command::CancelRequest { .. } => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Response<T> {
     pub result: Result<T, AdapterError>,

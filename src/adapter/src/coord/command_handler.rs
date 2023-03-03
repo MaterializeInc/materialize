@@ -41,7 +41,10 @@ use crate::util::{ClientTransmitter, ResultExt};
 use crate::{catalog, metrics};
 
 impl Coordinator {
-    pub(crate) async fn handle_command(&mut self, cmd: Command) {
+    pub(crate) async fn handle_command(&mut self, mut cmd: Command) {
+        if let Some(session) = cmd.session() {
+            session.apply_external_metadata_updates();
+        }
         match cmd {
             Command::Startup {
                 session,
@@ -187,8 +190,6 @@ impl Coordinator {
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
     ) {
-        // TODO(jkosh44) SUPERUSER should be derived and added to the session. Make sure that
-        //  `MZ_SYSTEM` always has SUPERUSER. This will be done in a follow-up PR.
         if self
             .catalog
             .for_session(&session)
