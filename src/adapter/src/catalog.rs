@@ -2052,6 +2052,50 @@ impl CatalogEntry {
         matches!(self.item(), CatalogItem::Source(_))
     }
 
+    /// Reports whether this catalog entry is a subsource.
+    ///
+    /// NOTE: The remap (aka "progress") collection is not a sub source in this sense. If you will,
+    /// the remap collection is a _read dependency_ of the main source and it's subsource while the
+    /// dependency for the "real" subsources is more complicated: The subsources have a _read
+    /// dependency_ on the main source, they could not exist without the main source, which does the
+    /// writing to the subsource's collections. The main source has a _write dependency_ on the
+    /// subsources, which is the dependency that is represented in the catalog dependencies.
+    // NOTE(aljoscha): The above is not how it should be, and we should work towards resolving these
+    // complexities.
+    pub fn is_subsource(&self) -> bool {
+        match &self.item() {
+            CatalogItem::Source(source) => matches!(&source.data_source, DataSourceDesc::Source),
+            _ => false,
+        }
+    }
+
+    /// Returns the `GlobalId` of all of this entry's subsources.
+    ///
+    /// NOTE: The remap (aka "progress") collection is not a sub source in this sense. See comment
+    /// on `is_subsource`.
+    pub fn subsources(&self) -> Vec<GlobalId> {
+        match &self.item() {
+            CatalogItem::Source(source) => match &source.data_source {
+                DataSourceDesc::Ingestion(ingestion) => {
+                    ingestion.subsource_exports.keys().copied().collect()
+                }
+                DataSourceDesc::Introspection(_)
+                | DataSourceDesc::Progress
+                | DataSourceDesc::Source => vec![],
+            },
+            CatalogItem::Table(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => vec![],
+        }
+    }
+
     /// Reports whether this catalog entry is a sink.
     pub fn is_sink(&self) -> bool {
         matches!(self.item(), CatalogItem::Sink(_))

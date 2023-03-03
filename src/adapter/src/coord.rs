@@ -118,7 +118,8 @@ use mz_transform::Optimizer;
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
     self, storage, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog,
-    CatalogItem, ClusterReplicaSizeMap, DataSourceDesc, Source, StorageSinkConnectionState,
+    CatalogEntry, CatalogItem, ClusterReplicaSizeMap, DataSourceDesc, Source,
+    StorageSinkConnectionState,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
@@ -618,11 +619,64 @@ impl Coordinator {
         // this to reinforce that `GlobalId`'s `Ord` implementation does not
         // express the entries' dependency graph.
 
+        // NOTE: The storage controller currently requires that subsources are created immediately
+        // before their main source, with no other collections created in between. This is required
+        // because when creating the subsource the storage controller has next to no information
+        // about the subsource. Only when it sees the main source can it correctly initialize the
+        // collection state for the subsource. If we allowed creating other collections between
+        // creating the subsource and the main source, those collections could depend on the
+        // subsource and assume wrong things about it's state, for example the `since`.
+        //
+        // This is neither good nor desired, and we are working towards removing that
+        // limitation/requirement!
+
+        // We first gather all know subsources, then we "retarget" other collections' dependencies
+        // that use the subsource to the main source.
+        //
+        // After that we don't consider subsources in the `work_set` and do sorting based on the
+        // re-targeted dependencies.
+        //
+        // Finally, when inserting the main source into `entries`, we insert all it's subsources
+        // before the main source.
+        let mut subsources: BTreeMap<GlobalId, CatalogEntry> = self
+            .catalog
+            .entries()
+            .filter_map(|entry| {
+                if entry.is_subsource() {
+                    Some((entry.id(), entry.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // A mapping from subsource ID to the ID of the main source.
+        let subsource_to_mainsource: BTreeMap<GlobalId, GlobalId> = self
+            .catalog
+            .entries()
+            .flat_map(|entry| {
+                let subsources = entry.subsources();
+                subsources
+                    .into_iter()
+                    .map(|subsource_id| (subsource_id, entry.id()))
+            })
+            .collect();
+
         let mut work_set: VecDeque<_> = self
             .catalog
             .entries()
+            .filter(|entry| !entry.is_subsource())
             .cloned()
-            .map(|entry| (entry.uses().iter().cloned().collect::<BTreeSet<_>>(), entry))
+            .map(|entry| {
+                let deps: BTreeSet<_> = entry
+                    .uses()
+                    .iter()
+                    .map(|dep| subsource_to_mainsource.get(dep).unwrap_or(dep).clone())
+                    .filter(|dep| *dep != entry.id())
+                    .collect();
+
+                (deps, entry)
+            })
             .collect();
 
         let mut entries = Vec::with_capacity(work_set.len());
@@ -640,11 +694,21 @@ impl Coordinator {
             if outstanding_deps.is_empty() {
                 let is_new = loaded_items.insert(entry.id());
                 assert!(is_new, "already loaded item {}", entry.id());
+
+                let local_subsources = entry.subsources();
+                for subsource_id in local_subsources.iter() {
+                    let subsource_entry =
+                        subsources.remove(subsource_id).expect("missing subsource");
+                    entries.push(subsource_entry);
+                }
+
                 entries.push(entry);
             } else {
                 work_set.push_back((outstanding_deps, entry));
             }
         }
+
+        assert!(subsources.is_empty(), "did not work off all subsources");
 
         let logs: BTreeSet<_> = BUILTINS::logs()
             .map(|log| self.catalog.resolve_builtin_log(log))
