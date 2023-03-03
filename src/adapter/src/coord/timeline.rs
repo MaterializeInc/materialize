@@ -384,6 +384,7 @@ impl Coordinator {
     /// Assign a timestamp for a write to a local input and increase the local ts.
     /// Writes following reads must ensure that they are assigned a strictly larger
     /// timestamp to ensure they are not visible to any real-time earlier reads.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn get_local_write_ts(&mut self) -> WriteTimestamp {
         self.global_timelines
             .get_mut(&Timeline::EpochMilliseconds)

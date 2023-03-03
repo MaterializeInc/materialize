@@ -4298,6 +4298,7 @@ impl Catalog {
         })
     }
 
+    #[tracing::instrument(name = "catalog::transact_inner", level = "debug", skip_all)]
     fn transact_inner(
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&Session>,
