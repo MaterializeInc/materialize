@@ -42,7 +42,7 @@ FROM measurements;
 
 Note that this query doesn't compute just one value for each partition. Instead, it calculates a value for each input row: the sum of the same sensor's measurements that happened no later than the current input row.
 
-We can also explicitly specify a frame, i.e., how far it extends from the current row, both backwards and forwards. One option is to say `UNBOUNDED PRECEDING` or `UNBOUNDED FOLLOWING`, meaning that the frame extends to the beginning or end of the current partition. Another option is to specify an offset. For example, the following query computes a moving average:
+We can also explicitly specify a frame, i.e., how far it extends from the current row, both backwards and forwards. One option is to say `UNBOUNDED PRECEDING` or `UNBOUNDED FOLLOWING`, meaning that the frame extends to the beginning or end of the current partition. Another option is to specify an offset. For example, the following query computes a moving average (e.g., to have a smoother curve when we want to plot it or when we want less noise for an alerting use case):
 
 ```SQL
 SELECT sensor_id, time, AVG(measurement_value)
@@ -56,7 +56,7 @@ In this query, the frame extends 4 rows backwards, and ends at the current row (
 The exact meaning of the offset depends on the _frame mode_:
 - In `ROWS` mode (such as above), the frame extends for the specified number of rows (or less, for rows near the beginning or end of the partition).
 - In `GROUPS` mode, the frame extends for the specified number of peer groups, where a peer group is a set of rows that are equal on both the `PARTITION BY` and the `ORDER BY`.
-- In `RANGE` mode, the frame extends to those rows whose difference from the current row on the `ORDER BY` column is not greater than the offset (only one ORDER BY column is allowed for this frame mode). For example, the following query computes a moving average with a frame size of 5 minutes:
+- In `RANGE` mode, the frame extends to those rows whose difference from the current row on the `ORDER BY` column is not greater than the offset (only one ORDER BY column is allowed for this frame mode). For example, the following query computes a moving average with a frame size of 5 minutes (which might be more useful than a `ROWS` offset when the measurement values are at irregular times):
 ```SQL
 SELECT sensor_id, time, AVG(measurement_value)
     OVER (ORDER BY time PARTITION BY sensor_id
@@ -119,9 +119,11 @@ We'll use several approaches to solve the many cases mentioned in the “Goals�
 2. We'll use a special-purpose rendering for LAG/LEAD of offset 1 with no IGNORE NULLS, which will be simpler and more efficient than Prefix Sum.
 3. As an extension of 1., we'll use a generalization of DD's prefix sum to arbitrary intervals (i.e., not just prefixes).
 4. We'll transform away window functions in some special cases (e.g., to TopK, or a simple grouped aggregation + self-join)
-5. Initially, we will resort to the old window function implementation in some cases, but this should become less and less over time. I think it will be possible to eventually implement all window function usage with the above 1.-4., but it will take time to get there.
+5. Initially, we will resort to the old window function implementation in some cases, but this should become less and less over time. I think it will be possible to eventually implement all window function usage with the above 1.-4. approaches, but it will take time to get there.
 
-The bulk of this work will be applied in the rendering, but we have to get the window functions from SQL to the rendering somehow. Currently, the direct representation of window functions disappears during the HIR-to-MIR lowering, and is instead replaced by a pattern involving a `Reduce`, a `FlatMap` with an `unnest_list`, plus some `record` trickery inside `MirScalarExpr`. For example:
+### Getting window functions from SQL to the rendering
+
+The bulk of this work will be applied in the rendering, but we have to get the window functions from SQL to the rendering somehow. Currently, the explicit representation of window functions disappears during the HIR-to-MIR lowering, and is instead replaced by a pattern involving a `Reduce`, a `FlatMap` with an `unnest_list`, plus some `record` trickery inside `MirScalarExpr`. For example:
 
 ```c
 materialize=> explain select name, pop, LAG(name) OVER (partition by state order by pop)
@@ -141,7 +143,53 @@ To avoid creating a new enum variant in MirRelationExpr, we will recognize the a
 
 Also, we will want to entirely transform away certain window function patterns; most notable is the ROW_NUMBER-to-TopK transform. For this, we need to canonicalize scalar expressions, which I think we usually do in MIR. This means that transforming away these window function patterns should happen on MIR. This will start by again recognizing the above general windowing pattern, and then performing pattern recognition of the TopK pattern.
 
-We’ll use the word **index** in the below text to mean the values of the ORDER BY column of the OVER clause, i.e., they are simply the values that determine the ordering. (Note that it’s sparse indexing, i.e., not every number occurs from 1 to n, but there are usually (big) gaps.)
+### Prefix Sum
+
+This section defines prefix sum, then discusses various properties/caveats/limitations of DD's prefix sum implementation from the caller's point of view, and then discusses the implementation itself.
+
+#### Definition
+
+Prefix sum is an operation on an ordered list of input elements, computing the sum of every prefix of the input list. Formally, if the input list is
+
+`[x1, x2, x3, ..., xn]`,
+
+then a straightforward definition of prefix sum is
+
+`[x1, x1 + x2, x1 + x2 + x3, ..., x1 + x2 + x3 + ... + xn]`.
+
+However, it will be more convenient for us to use a slightly different definition, where
+- the result for the ith element doesn't include the ith element, only the earlier elements, and
+- there is a zero element (`z`) at the beginning of each sum:
+
+`[z, z + x1, z + x1 + x2, ..., z + x1 + x2 + x3 + ... + x_n-1]`.
+
+The input elements can be of an arbitrary data type, and `+` can be an arbitrary operation that is associative and has a zero element.
+
+Note that commutativity of `+` is not required. Importantly, the result sums include the input elements in their original order, e.g., we cannot get the result `z + x2 + x1` for the 3rd input element, but `x1` and `x2` should be summed in their original order.
+
+#### Properties of DD's prefix sum implementation
+
+[DD's prefix sum implementation](https://github.com/TimelyDataflow/differential-dataflow/blob/master/src/algorithms/prefix_sum.rs) computes the above sum for collections of `((usize, K), D)`, where `D` is the actual data type, the usizes determine the ordering (we will need to generalize this, see the "ORDER BY types" section), and `K` is a key type. For each key, a separate prefix sum is computed. The key will be the expression of the PARTITION BY clause.
+
+A caveat of the implementation is that extra instances of the zero element might be added anywhere in the sum. E.g., instead of `z + x1 + x2 + x3`, we might get `z + x1 + x2 + z + z + x3 + z`. Therefore, the zero element should be both a left zero and a right zero, i.e., `x + z = z + x = x` has to hold for the sum function. This is not a problematic limitation in practice, because we can add a suitable zero to any type by wrapping it in `Option`, and making `None` the zero.
+
+As is common in distributed systems, the sum function has to be associative, because there is no guarantee that the implementation will compute a left-deep sum (e.g., `((z + x1) + x2) + x3`), but might put parenthesis anywhere in the sum, e.g., `(z + (x1 + x2)) + x3`. (But commutativity is not required, as mentioned above.)
+
+The implementation is data-parallel not just across keys, but inside each key as well. TODO: But I wasn't able to actually observe a speedup when adding cores in a simple test, so we should investigate what’s going on with parallelization. There was probably just some technical issue in my test, because all operations in the Prefix Sum implementation look parallelizable, so it should be fine. I'll try to properly test this in the next days.
+
+We’ll use the word **index** in this document to mean the values of the ORDER BY column of the OVER clause, i.e., they are simply the values that determine the ordering. (Note that it’s sparse indexing, i.e., not every number occurs from 1 to n, but there are usually (big) gaps.)
+
+As mentioned above, DD's prefix sum needs the index type to be `usize`. It is actually a fundamental limitation of the algorithm that it only works with integer indexes, and therefore we will have to map other types to integers. We discuss this in the "ORDER BY types" section.
+
+In DD's prefix sum implementation, duplicate indexes are currently forbidden. We will partially lift this limitation, but there are some complications, see in the "Duplicate indexes" section. 
+
+#### Implementation details of DD's prefix sum
+
+TODO
+
+#### Performance
+
+TODO: only briefly here, and point to a later section for more details
 
 ----------------------
 
@@ -162,11 +210,11 @@ SELECT name, pop, CAST(pop AS float) / LAG(pop) OVER (PARTITION BY state ORDER B
 FROM cities;
 ```
 
-For LAG/LEAD with an offset of 1, the sum function will just remember the previous value if it exists, and None if it does not. (And we can have a similar one for LEAD.) This has the following properties:
+For LAG/LEAD with an offset of 1, the sum function will just remember the previous value if it exists, and `None` if it does not. (And we can have a similar one for LEAD.) This has the following properties:
 
 - It's associative.
 - It's not commutative, but that isn't a problem for Prefix Sum.
-- The zero element is None. Note: prefix sum sometimes sums in the zero element not just at the beginning, but randomly in the middle of an addition chain. E.g., when having *a, b, c* in the prefix then we might expect simply *a+b+c* or maybe *z+a+b+c* to be the prefix sum, but actually DD's Prefix Sum implementation might give us something like *z+a+b+z+c+z*.
+- The zero element is `None`. (`None` should be replaced by any `Some` value, and `Some` values should never be replaced by `None`.)
 
 I built [a small prototype outside Materialize](https://github.com/ggevay/window-funcs), where I verified that the output values are correct, and that output is quickly updated for small input changes.
 
@@ -193,7 +241,7 @@ In most situations other than TopK, these functions cannot be implemented effici
 
 #### 2. Window aggregations
 
-For example: Compute a rolling average for each user's transaction costs on windows of 5 adjacent transactions (e.g., to have a smoother curve when we want to plot it):
+For example: Compute a moving average for each user's transaction costs on windows of 6 adjacent transactions:
 ```sql
 SELECT user_id, tx_id, AVG(cost) OVER
 (PARTITION BY user_id ORDER BY timestamp ASC
@@ -203,9 +251,11 @@ FROM transactions;
 
 These operate on so-called **frames**, i.e., a certain subset of a window partition. Frames are specified in relation to the current row. For example, "sum up column `x` for the preceding 5 rows from the current row". For all the frame options, see https://www.postgresql.org/docs/current/sql-expressions.html#SYNTAX-WINDOW-FUNCTIONS
 
-There is a special case where the frame includes the entire window partition: An aggregation where the frame is both UNBOUNDED PRECEDING and UNBOUNDED FOLLOWING at the same time (or there is no ORDER BY, which has a similar effect) should be transformed to a grouped aggregation + self join.
+There is a special case where the frame includes the entire window partition: An aggregation where the frame is both UNBOUNDED PRECEDING and UNBOUNDED FOLLOWING at the same time (or having no ORDER BY achieves a similar effect) should be transformed to a grouped aggregation + self join.
 
 In all other cases, we’ll use prefix sum, for which we need to solve two tasks:
+
+TODO: switch the order of I. and II.
 
 *I.* We have to find the end(s) of the interval that is the frame. I.e., we need to tell **indexes** to Prefix Sum (where the index is a value of the ORDER BY column(s), as mentioned above).
 
@@ -227,8 +277,7 @@ There is also `frame_exclusion`, which sometimes necessitates special handling f
 
 *Solving II.:*
 
-For invertible aggregation functions (e.g., sum, but not min/max) we can use the existing prefix sum with a minor trick: agg(a,b) = agg(0,b) - agg(0,a).
-    - However, the performance of this might not be good, because even if (a,b) is a small interval, the (0,a) and the (0,b) intervals will be big, so there will be many changes of the aggregates of these even for small input changes.
+For invertible aggregation functions (e.g., sum, but not min/max), it would be tempting to use the existing prefix sum with a minor trick: `agg(a,b) = agg(0,b) - agg(0,a)`. However, the performance of this wouldn't be good, because even if `(a,b)` is a small interval, the `(0,a)` and the `(0,b)` intervals will be big, so there will be many changes of the aggregates of these even for small input changes.
 
 To have better performance (and to support non-invertible aggregations, e.g., min/max), we need to extend what the `broadcast` part of prefix sum is doing (`aggregate` can stay the same):
   - `queries` will contain intervals specified by two indexes.
@@ -267,11 +316,7 @@ Also note that if there is no ORDER BY, then groups might be large, but in this 
 
 Alternatively, we could change Prefix Sum so that it correctly handles duplicate indexes.
 
-### Parallelism
-
-DD's Prefix Sum should be data-parallel even inside a window partition. (It’s similar to [a Fenwick tree](https://en.wikipedia.org/wiki/Fenwick_tree), with sums maintained over power-of-2 sized intervals, from which you can compute a prefix sum by putting together LogN intervals.) TODO: But I wasn't able to actually observe a speedup in a simple test when adding cores, so we should investigate what’s going on with parallelization. There was probably just some technical issue, because all operations in the Prefix Sum implementation look parallelizable.
-
-### Types
+### ORDER BY types
 
 We'll have to generalize DD's Prefix Sum to orderings over types other than a single unsigned integer, which is currently hardcoded in the code that forms the intervals. We’ll map other types to a single unsigned integer. Importantly, this mapping should *preserve the ordering* of the type:
 
@@ -329,7 +374,7 @@ This document proposes recognizing the windowing idiom (that the HIR-to-MIR lowe
 
 ## Representing window functions in each of the IRs
 
-Instead of recognizing the HIR-to-MIR lowering's window functions idiom during the MIR-to-LIR lowering, we could have an explicit representation of window functions in MIR. More generally, there are several options for how to represent window functions in HIR, MIR, and LIR. For each of the IRs, I can see 3 options:
+Instead of recognizing the HIR-to-MIR lowering's window functions idiom during the MIR-to-LIR lowering, we could have an explicit representation of window functions in MIR. More generally, there are several options for how to represent window functions in each of HIR, MIR, and LIR. For each of the IRs, I can see 3 options:
 
 1. Create a new relation expression enum variant. This could be a dedicated variant just for window functions, or it could be a many-to-many Reduce, which would initially only handle window functions, but later we could also merge `TopK` into it. (Standard Reduce is N-to-1, TopK is N-to-K, a window function is N-to-N. There are differences also in output columns.)
 2. Hide away window functions in scalar expressions. (the current way in HIR)
