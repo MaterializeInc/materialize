@@ -13,6 +13,7 @@ from textwrap import dedent
 from threading import Thread
 from typing import Tuple
 
+from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
@@ -70,6 +71,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-system-table-indexes",
         "test-replica-targeted-subscribe-abort",
         "test-compute-reconciliation-reuse",
+        "test-mz-subscriptions",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -1077,3 +1079,92 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     # TODO(#17594): Flip these once the bug is fixed.
     assert reused == 0
     assert replaced == 4
+
+
+def workflow_test_mz_subscriptions(c: Composition) -> None:
+    """
+    Test that in-progress subscriptions are reflected in
+    mz_subscriptions.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized", "clusterd1")
+
+    c.sql(
+        """
+        CREATE CLUSTER cluster1 REPLICAS (r (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 1
+        ));
+
+        CREATE TABLE t1 (a int);
+        CREATE TABLE t2 (a int);
+        CREATE TABLE t3 (a int);
+        INSERT INTO t1 VALUES (1);
+        INSERT INTO t2 VALUES (1);
+        INSERT INTO t3 VALUES (1);
+        """
+    )
+
+    def start_subscribe(table: str, cluster: str) -> Cursor:
+        """Start a subscribe on the given table and cluster."""
+        cursor = c.sql_cursor()
+        cursor.execute(f"SET cluster = {cluster}")
+        cursor.execute("BEGIN")
+        cursor.execute(f"DECLARE c CURSOR FOR SUBSCRIBE {table}")
+        cursor.execute("FETCH 1 c")
+        return cursor
+
+    def stop_subscribe(cursor: Cursor) -> None:
+        """Stop a susbscribe started with `start_subscribe`."""
+        cursor.execute("ROLLBACK")
+
+    def check_mz_subscriptions(expected: Tuple) -> None:
+        """
+        Check that the expected subscribes exist in mz_subscriptions.
+        We identify subscribes by user, cluster, and target table only.
+        We explicitly don't check the `GlobalId`, as how that is
+        allocated is an implementation detail and might change in the
+        future.
+        """
+        output = c.sql_query(
+            f"""
+            SELECT s.user, c.name, t.name
+            FROM mz_internal.mz_subscriptions s
+              JOIN mz_clusters c ON (c.id = s.cluster_id)
+              JOIN mz_tables t ON (t.id = s.referenced_object_ids[1])
+            ORDER BY s.created_at
+            """
+        )
+        assert output == expected, f"expected: {expected}, got: {output}"
+
+    subscribe1 = start_subscribe("t1", "default")
+    check_mz_subscriptions((["materialize", "default", "t1"],))
+
+    subscribe2 = start_subscribe("t2", "cluster1")
+    check_mz_subscriptions(
+        (
+            ["materialize", "default", "t1"],
+            ["materialize", "cluster1", "t2"],
+        )
+    )
+
+    stop_subscribe(subscribe1)
+    check_mz_subscriptions((["materialize", "cluster1", "t2"],))
+
+    subscribe3 = start_subscribe("t3", "default")
+    check_mz_subscriptions(
+        (
+            ["materialize", "cluster1", "t2"],
+            ["materialize", "default", "t3"],
+        )
+    )
+
+    stop_subscribe(subscribe3)
+    check_mz_subscriptions((["materialize", "cluster1", "t2"],))
+
+    stop_subscribe(subscribe2)
+    check_mz_subscriptions(())
