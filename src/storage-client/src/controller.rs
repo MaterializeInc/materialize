@@ -1371,8 +1371,20 @@ where
                             .storage_dependencies
                             .extend(storage_dependencies.iter().cloned());
 
+                        assert!(
+                            !PartialOrder::less_than(
+                                &collection.read_capabilities.frontier(),
+                                &collection.implied_capability.borrow()
+                            ),
+                            "{id}: at this point, there can be no read holds for any time that is not \
+                            beyond the implied capability \
+                            but we have implied_capability {:?}, read_capabilities {:?}",
+                            collection.implied_capability,
+                            collection.read_capabilities,
+                        );
+
                         let read_hold = collection.implied_capability.clone();
-                        self.install_read_capabilities(&storage_dependencies, read_hold)?;
+                        self.install_read_capabilities(*id, &storage_dependencies, read_hold)?;
                     }
                 }
                 DataSource::Introspection(_) | DataSource::Progress | DataSource::Other => {
@@ -1534,7 +1546,7 @@ where
         }
 
         let dependency_since = self.determine_collection_since_joins(&[from_id])?;
-        self.install_read_capabilities(&[from_id], dependency_since.clone())?;
+        self.install_read_capabilities(id, &[from_id], dependency_since.clone())?;
 
         info!(
             sink_id = id.to_string(),
@@ -2226,8 +2238,10 @@ where
     }
 
     /// Install read capabilities on the given `storage_dependencies`.
+    #[tracing::instrument(level = "info", skip(self))]
     fn install_read_capabilities(
         &mut self,
+        from_id: GlobalId,
         storage_dependencies: &[GlobalId],
         read_capability: Antichain<T>,
     ) -> Result<(), StorageError> {
