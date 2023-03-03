@@ -2047,9 +2047,52 @@ impl CatalogEntry {
         matches!(self.item(), CatalogItem::Table(_))
     }
 
-    /// Reports whether this catalog entry is a source.
+    /// Reports whether this catalog entry is a source. Note that this includes
+    /// subsources.
     pub fn is_source(&self) -> bool {
         matches!(self.item(), CatalogItem::Source(_))
+    }
+
+    /// Reports whether this catalog entry is a subsource.
+    pub fn is_subsource(&self) -> bool {
+        match &self.item() {
+            CatalogItem::Source(source) => matches!(
+                &source.data_source,
+                DataSourceDesc::Progress | DataSourceDesc::Source
+            ),
+            _ => false,
+        }
+    }
+
+    /// Returns the `GlobalId` of all of this entry's subsources.
+    pub fn subsources(&self) -> Vec<GlobalId> {
+        match &self.item() {
+            CatalogItem::Source(source) => match &source.data_source {
+                DataSourceDesc::Ingestion(ingestion) => ingestion
+                    .subsource_exports
+                    .keys()
+                    .copied()
+                    .chain(std::iter::once(
+                        ingestion
+                            .remap_collection_id
+                            .expect("remap collection must named by this point"),
+                    ))
+                    .collect(),
+                DataSourceDesc::Introspection(_)
+                | DataSourceDesc::Progress
+                | DataSourceDesc::Source => vec![],
+            },
+            CatalogItem::Table(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => vec![],
+        }
     }
 
     /// Reports whether this catalog entry is a sink.
@@ -6776,33 +6819,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
     }
 
     fn subsources(&self) -> Vec<GlobalId> {
-        match &self.item {
-            CatalogItem::Source(source) => match &source.data_source {
-                DataSourceDesc::Ingestion(ingestion) => ingestion
-                    .subsource_exports
-                    .keys()
-                    .copied()
-                    .chain(std::iter::once(
-                        ingestion
-                            .remap_collection_id
-                            .expect("remap collection must named by this point"),
-                    ))
-                    .collect(),
-                DataSourceDesc::Introspection(_)
-                | DataSourceDesc::Progress
-                | DataSourceDesc::Source => vec![],
-            },
-            CatalogItem::Table(_)
-            | CatalogItem::Log(_)
-            | CatalogItem::View(_)
-            | CatalogItem::MaterializedView(_)
-            | CatalogItem::Sink(_)
-            | CatalogItem::Index(_)
-            | CatalogItem::Type(_)
-            | CatalogItem::Func(_)
-            | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => vec![],
-        }
+        self.subsources()
     }
 }
 
