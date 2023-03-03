@@ -35,7 +35,7 @@ $ set schema={
 ! CREATE SOURCE s
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-blah-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
-contains:catalog item 's' already exists
+contains:source "materialize.public.s" already exists
 
 > CREATE SOURCE IF NOT EXISTS s
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-blah-${testdrive.seed}')
@@ -118,7 +118,7 @@ contains:unknown catalog item 'test4'
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-contains:catalog item 's1' already exists
+contains:sink "materialize.public.s1" already exists
 
 > CREATE SINK IF NOT EXISTS s1 FROM s
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v2-${testdrive.seed}')

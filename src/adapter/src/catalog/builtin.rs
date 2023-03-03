@@ -2663,7 +2663,7 @@ WHERE s.database_id IS NULL OR d.name = current_database()",
 pub const PG_COLLATION: BuiltinView = BuiltinView {
     name: "pg_collation",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_catalog.pg_class
+    sql: "CREATE VIEW pg_catalog.pg_collation
 AS SELECT
     NULL::pg_catalog.oid AS oid,
     NULL::pg_catalog.text AS collname,
@@ -2682,7 +2682,7 @@ WHERE false",
 pub const PG_POLICY: BuiltinView = BuiltinView {
     name: "pg_policy",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_catalog.pg_class
+    sql: "CREATE VIEW pg_catalog.pg_policy
 AS SELECT
     NULL::pg_catalog.oid AS oid,
     NULL::pg_catalog.text AS polname,

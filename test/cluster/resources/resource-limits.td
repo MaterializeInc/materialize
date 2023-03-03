@@ -47,7 +47,7 @@ ALTER SYSTEM SET max_objects_per_schema = 2
 > SHOW max_objects_per_schema
 2
 
-! CREATE TABLE t4 (a INT)
+! CREATE TABLE t5 (a INT)
 contains:Objects per schema resource limit of 2 cannot be exceeded. Current amount is 3 instances, tried to create 1 new instances.
 
 ! CREATE VIEW v as SELECT 1
@@ -57,9 +57,6 @@ contains:Objects per schema resource limit of 2 cannot be exceeded. Current amou
 contains:Objects per schema resource limit of 2 cannot be exceeded. Current amount is 3 instances, tried to create 1 new instances.
 
 ! CREATE TYPE t AS (a float8)
-contains:Objects per schema resource limit of 2 cannot be exceeded. Current amount is 3 instances, tried to create 1 new instances.
-
-! CREATE TABLE t4 (a INT)
 contains:Objects per schema resource limit of 2 cannot be exceeded. Current amount is 3 instances, tried to create 1 new instances.
 
 > CREATE SCHEMA s1;
