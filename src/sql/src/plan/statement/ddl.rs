@@ -2520,10 +2520,7 @@ pub(crate) struct PlannedRoleAttributes {
     pub(crate) create_cluster: Option<bool>,
 }
 
-fn plan_role_attributes(
-    scx: &StatementContext,
-    options: Vec<RoleAttribute>,
-) -> Result<PlannedRoleAttributes, PlanError> {
+fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttributes, PlanError> {
     let mut planned_attributes = PlannedRoleAttributes {
         inherit: None,
         create_role: None,
@@ -2574,22 +2571,14 @@ fn plan_role_attributes(
         bail_unsupported!("non inherit roles");
     }
 
-    if planned_attributes.inherit.is_some()
-        || planned_attributes.create_cluster.is_some()
-        || planned_attributes.create_db.is_some()
-        || planned_attributes.create_role.is_some()
-    {
-        scx.require_unsafe_mode("role attributes")?;
-    }
-
     Ok(planned_attributes)
 }
 
 pub fn plan_create_role(
-    scx: &StatementContext,
+    _: &StatementContext,
     CreateRoleStatement { name, options }: CreateRoleStatement,
 ) -> Result<Plan, PlanError> {
-    let attributes = plan_role_attributes(scx, options)?;
+    let attributes = plan_role_attributes(options)?;
     Ok(Plan::CreateRole(CreateRolePlan {
         name: normalize::ident(name),
         attributes: attributes.into(),
@@ -3475,11 +3464,14 @@ pub fn plan_drop_role(
         } else {
             sql_bail!("invalid role name {}", name.to_string().quoted())
         };
-        if name == scx.catalog.active_user() {
-            sql_bail!("current user cannot be dropped");
-        }
         match scx.catalog.resolve_role(&name) {
-            Ok(role) => out.push((role.id(), name)),
+            Ok(role) => {
+                let id = role.id();
+                if &id == scx.catalog.active_role_id() {
+                    sql_bail!("current role cannot be dropped");
+                }
+                out.push((role.id(), name));
+            }
             Err(_) if if_exists => {
                 // TODO(benesch): generate a notice indicating that the
                 // role does not exist.
@@ -4123,10 +4115,8 @@ pub fn plan_alter_role(
     scx: &StatementContext,
     AlterRoleStatement { name, options }: AlterRoleStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    scx.require_unsafe_mode("ALTER ROLE")?;
-
     let role = scx.catalog.get_role(&name.id);
-    let attributes = plan_role_attributes(scx, options)?;
+    let attributes = plan_role_attributes(options)?;
 
     Ok(Plan::AlterRole(AlterRolePlan {
         id: name.id,

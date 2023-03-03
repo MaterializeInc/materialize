@@ -137,6 +137,34 @@ impl Command {
             Command::CancelRequest { .. } => None,
         }
     }
+
+    pub fn send_error(self, e: AdapterError) {
+        fn send<T>(tx: oneshot::Sender<Response<T>>, session: Session, e: AdapterError) {
+            let _ = tx.send(Response::<T> {
+                result: Err(e),
+                session,
+            });
+        }
+        match self {
+            Command::Startup { tx, session, .. } => send(tx, session, e),
+            Command::Declare { tx, session, .. } => send(tx, session, e),
+            Command::Describe { tx, session, .. } => send(tx, session, e),
+            Command::VerifyPreparedStatement { tx, session, .. } => send(tx, session, e),
+            Command::Execute { tx, session, .. } => send(tx, session, e),
+            Command::StartTransaction { tx, session, .. } => send(tx, session, e),
+            Command::Commit { tx, session, .. } => send(tx, session, e),
+            Command::CancelRequest { .. } => {}
+            Command::DumpCatalog { tx, session, .. } => send(tx, session, e),
+            Command::CopyRows { tx, session, .. } => send(tx, session, e),
+            Command::GetSystemVars { tx, session, .. } => send(tx, session, e),
+            Command::SetSystemVars { tx, session, .. } => send(tx, session, e),
+            Command::Terminate { tx, session, .. } => {
+                if let Some(tx) = tx {
+                    send(tx, session, e)
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug)]

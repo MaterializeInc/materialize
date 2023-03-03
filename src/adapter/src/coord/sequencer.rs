@@ -85,11 +85,11 @@ use crate::coord::{
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
-use crate::metrics;
 use crate::notice::AdapterNotice;
+use crate::rbac::UnauthorizedError;
 use crate::session::vars::{
     IsolationLevel, OwnedVarInput, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
-    TRANSACTION_ISOLATION_VAR_NAME,
+    ENABLE_RBAC_CHECKS, TRANSACTION_ISOLATION_VAR_NAME,
 };
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, Var,
@@ -97,7 +97,7 @@ use crate::session::{
 };
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{send_immediate_rows, ClientTransmitter, ComputeSinkId, ResultExt};
-use crate::{guard_write_critical_section, PeekResponseUnary};
+use crate::{guard_write_critical_section, metrics, rbac, PeekResponseUnary};
 
 use super::timestamp_selection::{TimestampExplanation, TimestampSource};
 use super::ReplicaMetadata;
@@ -127,6 +127,10 @@ impl Coordinator {
         event!(Level::TRACE, plan = format!("{:?}", plan));
         let responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
         tx.set_allowed(responses);
+
+        if let Err(e) = rbac::check_plan(&self.catalog.for_session(&session), &session, &plan) {
+            return tx.send(Err(e), session);
+        }
 
         if session.user().name == MZ_INTROSPECTION_ROLE.name {
             if let Err(e) = self.mz_introspection_user_privilege_hack(&session, &plan, &depends_on)
@@ -164,7 +168,13 @@ impl Coordinator {
                 );
             }
             Plan::CreateRole(plan) => {
-                tx.send(self.sequence_create_role(&session, plan).await, session);
+                let res = self.sequence_create_role(&session, plan).await;
+                if res.is_ok() && !self.catalog.system_config().enable_rbac_checks() {
+                    // Notice is intentionally sent here and not in sequence_create_role so that
+                    // no notice is sent during startup.
+                    session.add_notice(AdapterNotice::RbacDisabled);
+                }
+                tx.send(res, session);
             }
             Plan::CreateCluster(plan) => {
                 tx.send(self.sequence_create_cluster(&session, plan).await, session);
@@ -342,7 +352,11 @@ impl Coordinator {
                 tx.send(self.sequence_alter_index_reset_options(plan), session);
             }
             Plan::AlterRole(plan) => {
-                tx.send(self.sequence_alter_role(&session, plan).await, session);
+                let res = self.sequence_alter_role(&session, plan).await;
+                if res.is_ok() && !self.catalog.system_config().enable_rbac_checks() {
+                    session.add_notice(AdapterNotice::RbacDisabled);
+                }
+                tx.send(res, session);
             }
             Plan::AlterSecret(plan) => {
                 tx.send(self.sequence_alter_secret(&session, plan).await, session);
@@ -3863,7 +3877,7 @@ impl Coordinator {
         session: &Session,
         AlterSystemSetPlan { name, value }: AlterSystemSetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.is_user_allowed_to_alter_system(session)?;
+        self.is_user_allowed_to_alter_system(session, Some(&name))?;
         let op = match value {
             VariableValue::Values(values) => catalog::Op::UpdateSystemConfiguration {
                 name,
@@ -3880,8 +3894,8 @@ impl Coordinator {
         session: &Session,
         AlterSystemResetPlan { name }: AlterSystemResetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.is_user_allowed_to_alter_system(session)?;
         let op = catalog::Op::ResetSystemConfiguration { name };
+        self.is_user_allowed_to_alter_system(session, Some(&name))?;
         self.catalog_transact(Some(session), vec![op]).await?;
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
@@ -3891,19 +3905,33 @@ impl Coordinator {
         session: &Session,
         _: AlterSystemResetAllPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.is_user_allowed_to_alter_system(session)?;
+        self.is_user_allowed_to_alter_system(session, None)?;
         let op = catalog::Op::ResetAllSystemConfiguration;
         self.catalog_transact(Some(session), vec![op]).await?;
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
-    fn is_user_allowed_to_alter_system(&self, session: &Session) -> Result<(), AdapterError> {
-        if session.user() == &*SYSTEM_USER {
+    // TODO(jkosh44) Move this into rbac.rs once RBAC is always on.
+    fn is_user_allowed_to_alter_system(
+        &self,
+        session: &Session,
+        var_name: Option<&str>,
+    ) -> Result<(), AdapterError> {
+        if session.user() == &*SYSTEM_USER
+            || (var_name == Some(ENABLE_RBAC_CHECKS.name()) && session.is_superuser())
+        {
             Ok(())
+        } else if var_name == Some(ENABLE_RBAC_CHECKS.name()) {
+            Err(AdapterError::Unauthorized(UnauthorizedError::superuser(
+                format!(
+                    "toggle the '{}' system configuration parameter",
+                    ENABLE_RBAC_CHECKS.name()
+                ),
+            )))
         } else {
-            Err(AdapterError::Unauthorized(format!(
-                "only user '{}' is allowed to execute 'ALTER SYSTEM ...'",
-                SYSTEM_USER.name,
+            Err(AdapterError::Unauthorized(UnauthorizedError::unstructured(
+                "alter system".into(),
+                format!("You must be the '{}' role", SYSTEM_USER.name),
             )))
         }
     }
@@ -4007,9 +4035,10 @@ impl Coordinator {
             | Plan::ReadThenWrite(_)
             | Plan::Raise(_)
             | Plan::RotateKeys(_) => {
-                return Err(AdapterError::Unauthorized(
-                    "user 'mz_introspection' is unauthorized to perform this action".into(),
-                ))
+                return Err(AdapterError::Unauthorized(UnauthorizedError::unstructured(
+                    plan.name().to_string(),
+                    format!("You must not be the '{}' role", MZ_INTROSPECTION_ROLE.name),
+                )))
             }
         }
 
@@ -4024,8 +4053,9 @@ impl Coordinator {
                 && schema != MZ_INTERNAL_SCHEMA
                 && schema != INFORMATION_SCHEMA
             {
-                return Err(AdapterError::Unauthorized(format!(
-                    "user 'mz_introspection' is unauthorized to interact with object {full_name}",
+                return Err(AdapterError::Unauthorized(UnauthorizedError::unstructured(
+                    format!("interact with object {full_name}"),
+                    format!("You must not be the '{}' role", MZ_INTROSPECTION_ROLE.name),
                 )));
             }
         }

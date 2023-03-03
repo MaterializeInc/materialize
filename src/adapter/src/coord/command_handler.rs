@@ -38,13 +38,19 @@ use crate::notice::AdapterNotice;
 use crate::session::vars::OwnedVarInput;
 use crate::session::{PreparedStatement, Session, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
-use crate::{catalog, metrics};
+use crate::{catalog, metrics, rbac};
 
 impl Coordinator {
     pub(crate) async fn handle_command(&mut self, mut cmd: Command) {
         if let Some(session) = cmd.session() {
             session.apply_external_metadata_updates();
         }
+
+        if let Err(e) = rbac::check_command(&self.catalog, &cmd) {
+            cmd.send_error(e.into());
+            return;
+        }
+
         match cmd {
             Command::Startup {
                 session,
@@ -186,13 +192,14 @@ impl Coordinator {
 
     async fn handle_startup(
         &mut self,
-        session: Session,
+        mut session: Session,
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
     ) {
+        // Lookup is done with the system session because the current session has no role set.
         if self
             .catalog
-            .for_session(&session)
+            .for_system_session()
             .resolve_role(&session.user().name)
             .is_err()
         {
@@ -205,6 +212,7 @@ impl Coordinator {
                 name: session.user().name.to_string(),
                 attributes,
             };
+            // `sequence_create_role` is called directly to circumvent rbac checks.
             if let Err(err) = self.sequence_create_role(&session, plan).await {
                 let _ = tx.send(Response {
                     result: Err(err),
@@ -213,6 +221,15 @@ impl Coordinator {
                 return;
             }
         }
+
+        // Lookup is done with the system session because the current session has no role set.
+        let role_id = self
+            .catalog
+            .for_system_session()
+            .resolve_role(&session.user().name)
+            .expect("created above")
+            .id();
+        session.set_role_id(role_id);
 
         if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
             let _ = tx.send(Response {

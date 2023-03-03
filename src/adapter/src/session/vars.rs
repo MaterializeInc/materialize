@@ -453,6 +453,16 @@ const IS_SUPERUSER: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+pub const ENABLE_RBAC_CHECKS: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_rbac_checks"),
+    // TODO(jkosh44) Once RBAC is complete, change this to `true` and write a migration to update
+    //  it to false for existing users.
+    value: &false,
+    description: "Boolean flag indicating whether to apply RBAC checks before executing statements (Materialize).",
+    internal: true,
+    safe: true,
+};
+
 /// Represents the input to a variable.
 ///
 /// Each variable has different rules for how it handles each style of input.
@@ -1119,7 +1129,7 @@ pub struct SystemVars {
     allowed_cluster_replica_sizes: SystemVar<Vec<Ident>>,
 
     // features
-    // (empty)
+    enable_rbac_checks: SystemVar<bool>,
 
     // persist configuration
     persist_blob_target_size: SystemVar<usize>,
@@ -1162,6 +1172,7 @@ impl Default for SystemVars {
             dataflow_max_inflight_bytes: SystemVar::new(&DATAFLOW_MAX_INFLIGHT_BYTES),
             metrics_retention: SystemVar::new(&METRICS_RETENTION),
             mock_audit_event_timestamp: SystemVar::new(&MOCK_AUDIT_EVENT_TIMESTAMP),
+            enable_rbac_checks: SystemVar::new(&ENABLE_RBAC_CHECKS),
         }
     }
 }
@@ -1170,7 +1181,7 @@ impl SystemVars {
     /// Returns an iterator over the configuration parameters and their current
     /// values on disk.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        let vars: [&dyn Var; 21] = [
+        let vars: [&dyn Var; 22] = [
             &self.config_has_synced_once,
             &self.max_aws_privatelink_connections,
             &self.max_tables,
@@ -1192,6 +1203,7 @@ impl SystemVars {
             &self.dataflow_max_inflight_bytes,
             &self.metrics_retention,
             &self.mock_audit_event_timestamp,
+            &self.enable_rbac_checks,
         ];
         vars.into_iter()
     }
@@ -1262,6 +1274,8 @@ impl SystemVars {
             Ok(&self.metrics_retention)
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
             Ok(&self.mock_audit_event_timestamp)
+        } else if name == ENABLE_RBAC_CHECKS.name {
+            Ok(&self.enable_rbac_checks)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -1319,6 +1333,8 @@ impl SystemVars {
             self.metrics_retention.is_default(input)
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
             self.mock_audit_event_timestamp.is_default(input)
+        } else if name == ENABLE_RBAC_CHECKS.name {
+            self.enable_rbac_checks.is_default(input)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -1385,6 +1401,8 @@ impl SystemVars {
             self.metrics_retention.set(input)
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
             self.mock_audit_event_timestamp.set(input)
+        } else if name == ENABLE_RBAC_CHECKS.name {
+            self.enable_rbac_checks.set(input)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -1446,6 +1464,8 @@ impl SystemVars {
             Ok(self.metrics_retention.reset())
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
             Ok(self.mock_audit_event_timestamp.reset())
+        } else if name == ENABLE_RBAC_CHECKS.name {
+            Ok(self.enable_rbac_checks.reset())
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -1558,6 +1578,11 @@ impl SystemVars {
     /// Returns the `mock_audit_event_timestamp` configuration parameter.
     pub fn mock_audit_event_timestamp(&self) -> Option<mz_repr::Timestamp> {
         *self.mock_audit_event_timestamp.value()
+    }
+
+    /// Returns the `enable_rbac_checks` configuration parameter.
+    pub fn enable_rbac_checks(&self) -> bool {
+        *self.enable_rbac_checks.value()
     }
 }
 

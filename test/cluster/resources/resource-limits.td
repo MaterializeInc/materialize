@@ -10,7 +10,7 @@
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
 ! ALTER SYSTEM SET max_tables TO 42
-contains:unauthorized: only user 'mz_system' is allowed to execute 'ALTER SYSTEM ...'
+contains:permission denied to alter system
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_tables = 2

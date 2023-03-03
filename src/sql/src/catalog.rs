@@ -73,8 +73,8 @@ use crate::plan::PlanError;
 /// [`get_item`]: Catalog::resolve_item
 /// [`resolve_item`]: SessionCatalog::resolve_item
 pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
-    /// Returns the name of the user who is issuing the query.
-    fn active_user(&self) -> &str;
+    /// Returns the id of the role that is issuing the query.
+    fn active_role_id(&self) -> &RoleId;
 
     /// Returns the database to use if one is not explicitly specified.
     fn active_database_name(&self) -> Option<&str> {
@@ -143,6 +143,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     fn resolve_role(&self, role_name: &str) -> Result<&dyn CatalogRole, CatalogError>;
 
     /// Gets a role by its ID.
+    fn try_get_role(&self, id: &RoleId) -> Option<&dyn CatalogRole>;
+
+    /// Gets a role by its ID.
     ///
     /// Panics if `id` does not specify a valid role.
     fn get_role(&self, id: &RoleId) -> &dyn CatalogRole;
@@ -209,6 +212,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
 
     /// Returns the set of supported AWS PrivateLink availability zone ids.
     fn aws_privatelink_availability_zones(&self) -> Option<BTreeSet<String>>;
+
+    /// Reports whether rbac_checks are enabled.
+    fn rbac_checks_enabled(&self) -> bool;
 }
 
 /// Configuration associated with a catalog.
@@ -949,8 +955,8 @@ static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
 });
 
 impl SessionCatalog for DummyCatalog {
-    fn active_user(&self) -> &str {
-        "dummy"
+    fn active_role_id(&self) -> &RoleId {
+        &RoleId::User(0)
     }
 
     fn active_database(&self) -> Option<&DatabaseId> {
@@ -994,6 +1000,10 @@ impl SessionCatalog for DummyCatalog {
     }
 
     fn get_role(&self, _: &RoleId) -> &dyn CatalogRole {
+        unimplemented!()
+    }
+
+    fn try_get_role(&self, _: &RoleId) -> Option<&dyn CatalogRole> {
         unimplemented!()
     }
 
@@ -1053,6 +1063,10 @@ impl SessionCatalog for DummyCatalog {
     }
 
     fn aws_privatelink_availability_zones(&self) -> Option<BTreeSet<String>> {
+        unimplemented!()
+    }
+
+    fn rbac_checks_enabled(&self) -> bool {
         unimplemented!()
     }
 }

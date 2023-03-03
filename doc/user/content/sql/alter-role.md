@@ -1,19 +1,12 @@
 ---
-title: "CREATE ROLE"
-description: "`CREATE ROLE` creates a new role."
+title: "ALTER ROLE"
+description: "`ALTER ROLE` alters the attributes of an existing role."
 menu:
   main:
     parent: commands
 ---
 
-`CREATE ROLE` creates a new role.
-
-## Conceptual framework
-
-A role is a user account in a Materialize instance.
-
-When you [connect to a Materialize instance](/integrations/psql), you must specify
-the name of a valid role in the system.
+`ALTER ROLE` alters the attributes of an existing role.
 
 {{< warning >}}
 Roles in Materialize are currently limited in functionality. In the future they
@@ -27,7 +20,7 @@ Attributes currently have no effect.
 
 ## Syntax
 
-{{< diagram "create-role.svg" >}}
+{{< diagram "alter-role.svg" >}}
 
 Field               | Use
 --------------------|-------------------------------------------------------------------------
@@ -57,18 +50,17 @@ the `CREATEDB` and `NOCREATEDB` options conflict.
 ## Examples
 
 ```sql
-CREATE ROLE rj;
+ALTER ROLE rj CREATEDB NOCREATECLUSTER;
 ```
 ```sql
-SELECT name FROM mz_roles;
+SELECT name, create_db, create_cluster FROM mz_roles WHERE name = 'rj';
 ```
 ```nofmt
-materialize
-rj
+rj  true  false
 ```
 
 ## Related pages
 
-- [ALTER ROLE](../alter-role)
+- [CREATE ROLE](../create-role)
 - [DROP ROLE](../drop-role)
 - [DROP USER](../drop-user)
