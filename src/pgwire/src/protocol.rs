@@ -191,6 +191,7 @@ where
                 })
             }) {
             Ok(is_expired) => {
+                // Make sure to apply the initial claims.
                 session.apply_external_metadata_updates();
                 is_expired.left_future()
             }
