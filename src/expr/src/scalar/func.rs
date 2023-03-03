@@ -2312,14 +2312,16 @@ impl BinaryFunc {
         use BinaryFunc::*;
         let in_nullable = input1_type.nullable || input2_type.nullable;
         match self {
-            Eq | NotEq | Lt | Lte | Gt | Gte | ArrayContains => {
-                ScalarType::Bool.nullable(in_nullable)
-            }
-
-            IsLikeMatch { .. } | IsRegexpMatch { .. } => {
-                // The output can be null if the pattern is invalid.
-                ScalarType::Bool.nullable(true)
-            }
+            Eq
+            | NotEq
+            | Lt
+            | Lte
+            | Gt
+            | Gte
+            | ArrayContains
+            // like and regexp produce errors on invalid like-strings or regexes
+            | IsLikeMatch { .. }
+            | IsRegexpMatch { .. } => ScalarType::Bool.nullable(in_nullable),
 
             ToCharTimestamp | ToCharTimestampTz | ConvertFrom | Left | Right | Trim
             | TrimLeading | TrimTrailing | LikeEscape => ScalarType::String.nullable(in_nullable),
@@ -2499,116 +2501,189 @@ impl BinaryFunc {
     /// introduces nulls even when it does not.
     pub fn introduces_nulls(&self) -> bool {
         use BinaryFunc::*;
-        !matches!(
-            self,
-            Eq | NotEq
-                | Lt
-                | Lte
-                | Gt
-                | Gte
-                | AddInt16
-                | AddInt32
-                | AddInt64
-                | AddUInt16
-                | AddUInt32
-                | AddUInt64
-                | AddFloat32
-                | AddFloat64
-                | AddTimestampInterval
-                | AddTimestampTzInterval
-                | AddDateTime
-                | AddDateInterval
-                | AddTimeInterval
-                | AddInterval
-                | BitAndInt16
-                | BitAndInt32
-                | BitAndInt64
-                | BitAndUInt16
-                | BitAndUInt32
-                | BitAndUInt64
-                | BitOrInt16
-                | BitOrInt32
-                | BitOrInt64
-                | BitOrUInt16
-                | BitOrUInt32
-                | BitOrUInt64
-                | BitXorInt16
-                | BitXorInt32
-                | BitXorInt64
-                | BitXorUInt16
-                | BitXorUInt32
-                | BitXorUInt64
-                | BitShiftLeftInt16
-                | BitShiftLeftInt32
-                | BitShiftLeftInt64
-                | BitShiftLeftUInt16
-                | BitShiftLeftUInt32
-                | BitShiftLeftUInt64
-                | BitShiftRightInt16
-                | BitShiftRightInt32
-                | BitShiftRightInt64
-                | BitShiftRightUInt16
-                | BitShiftRightUInt32
-                | BitShiftRightUInt64
-                | SubInterval
-                | MulInterval
-                | DivInterval
-                | AddNumeric
-                | SubInt16
-                | SubInt32
-                | SubInt64
-                | SubUInt16
-                | SubUInt32
-                | SubUInt64
-                | SubFloat32
-                | SubFloat64
-                | SubTimestamp
-                | SubTimestampTz
-                | SubTimestampInterval
-                | SubTimestampTzInterval
-                | SubDate
-                | SubDateInterval
-                | SubTime
-                | SubTimeInterval
-                | SubNumeric
-                | MulInt16
-                | MulInt32
-                | MulInt64
-                | MulUInt16
-                | MulUInt32
-                | MulUInt64
-                | MulFloat32
-                | MulFloat64
-                | MulNumeric
-                | DivInt16
-                | DivInt32
-                | DivInt64
-                | DivUInt16
-                | DivUInt32
-                | DivUInt64
-                | DivFloat32
-                | DivFloat64
-                | ModInt16
-                | ModInt32
-                | ModInt64
-                | ModUInt16
-                | ModUInt32
-                | ModUInt64
-                | ModFloat32
-                | ModFloat64
-                | ModNumeric
-                | RangeContainsElem { .. }
-                | RangeContainsRange { .. }
-                | RangeOverlaps
-                | RangeAfter
-                | RangeBefore
-                | RangeOverleft
-                | RangeOverright
-                | RangeAdjacent
-                | RangeUnion
-                | RangeIntersection
-                | RangeDifference
-        )
+        match self {
+            AddInt16
+            | AddInt32
+            | AddInt64
+            | AddUInt16
+            | AddUInt32
+            | AddUInt64
+            | AddFloat32
+            | AddFloat64
+            | AddInterval
+            | AddTimestampInterval
+            | AddTimestampTzInterval
+            | AddDateInterval
+            | AddDateTime
+            | AddTimeInterval
+            | AddNumeric
+            | BitAndInt16
+            | BitAndInt32
+            | BitAndInt64
+            | BitAndUInt16
+            | BitAndUInt32
+            | BitAndUInt64
+            | BitOrInt16
+            | BitOrInt32
+            | BitOrInt64
+            | BitOrUInt16
+            | BitOrUInt32
+            | BitOrUInt64
+            | BitXorInt16
+            | BitXorInt32
+            | BitXorInt64
+            | BitXorUInt16
+            | BitXorUInt32
+            | BitXorUInt64
+            | BitShiftLeftInt16
+            | BitShiftLeftInt32
+            | BitShiftLeftInt64
+            | BitShiftLeftUInt16
+            | BitShiftLeftUInt32
+            | BitShiftLeftUInt64
+            | BitShiftRightInt16
+            | BitShiftRightInt32
+            | BitShiftRightInt64
+            | BitShiftRightUInt16
+            | BitShiftRightUInt32
+            | BitShiftRightUInt64
+            | SubInt16
+            | SubInt32
+            | SubInt64
+            | SubUInt16
+            | SubUInt32
+            | SubUInt64
+            | SubFloat32
+            | SubFloat64
+            | SubInterval
+            | SubTimestamp
+            | SubTimestampTz
+            | SubTimestampInterval
+            | SubTimestampTzInterval
+            | SubDate
+            | SubDateInterval
+            | SubTime
+            | SubTimeInterval
+            | SubNumeric
+            | MulInt16
+            | MulInt32
+            | MulInt64
+            | MulUInt16
+            | MulUInt32
+            | MulUInt64
+            | MulFloat32
+            | MulFloat64
+            | MulNumeric
+            | MulInterval
+            | DivInt16
+            | DivInt32
+            | DivInt64
+            | DivUInt16
+            | DivUInt32
+            | DivUInt64
+            | DivFloat32
+            | DivFloat64
+            | DivNumeric
+            | DivInterval
+            | ModInt16
+            | ModInt32
+            | ModInt64
+            | ModUInt16
+            | ModUInt32
+            | ModUInt64
+            | ModFloat32
+            | ModFloat64
+            | ModNumeric
+            | RoundNumeric
+            | Eq
+            | NotEq
+            | Lt
+            | Lte
+            | Gt
+            | Gte
+            | LikeEscape
+            | IsLikeMatch { .. }
+            | IsRegexpMatch { .. }
+            | ToCharTimestamp
+            | ToCharTimestampTz
+            | DateBinTimestamp
+            | DateBinTimestampTz
+            | ExtractInterval
+            | ExtractTime
+            | ExtractTimestamp
+            | ExtractTimestampTz
+            | ExtractDate
+            | DatePartInterval
+            | DatePartTime
+            | DatePartTimestamp
+            | DatePartTimestampTz
+            | DateTruncTimestamp
+            | DateTruncTimestampTz
+            | DateTruncInterval
+            | TimezoneTimestamp
+            | TimezoneTimestampTz
+            | TimezoneTime { .. }
+            | TimezoneIntervalTimestamp
+            | TimezoneIntervalTimestampTz
+            | TimezoneIntervalTime
+            | TextConcat
+            | JsonbContainsString
+            | JsonbContainsJsonb
+            | MapContainsKey
+            | MapContainsAllKeys
+            | MapContainsAnyKeys
+            | MapContainsMap
+            | ConvertFrom
+            | Left
+            | Position
+            | Right
+            | RepeatString
+            | Trim
+            | TrimLeading
+            | TrimTrailing
+            | EncodedBytesCharLength
+            | ArrayContains
+            | ArrayRemove
+            | ArrayArrayConcat
+            | ListListConcat
+            | ListElementConcat
+            | ElementListConcat
+            | ListRemove
+            | DigestString
+            | DigestBytes
+            | MzRenderTypmod
+            | Encode
+            | Decode
+            | LogNumeric
+            | Power
+            | PowerNumeric
+            | GetByte
+            | RangeContainsElem { .. }
+            | RangeContainsRange { .. }
+            | RangeOverlaps
+            | RangeAfter
+            | RangeBefore
+            | RangeOverleft
+            | RangeOverright
+            | RangeAdjacent
+            | RangeUnion
+            | RangeIntersection
+            | RangeDifference => false,
+            // can produce nulls inside the resulting array for missing keys, but always produces an outer array
+            MapGetValues => false,
+
+            JsonbGetInt64 { .. }
+            | JsonbGetString { .. }
+            | JsonbGetPath { .. }
+            | JsonbConcat
+            | JsonbDeleteInt64
+            | JsonbDeleteString
+            | MapGetValue
+            | ListLengthMax { .. }
+            | ArrayLength
+            | ArrayLower
+            | ArrayUpper => true,
+        }
     }
 
     pub fn is_infix_op(&self) -> bool {
@@ -6549,11 +6624,11 @@ impl VariadicFunc {
                 .into_iter()
                 .reduce(|l, r| l.union(&r).unwrap())
                 .unwrap(),
-            Concat => ScalarType::String.nullable(true),
+            Concat => ScalarType::String.nullable(in_nullable),
             MakeTimestamp => ScalarType::Timestamp.nullable(true),
-            PadLeading => ScalarType::String.nullable(true),
-            Substr => ScalarType::String.nullable(true),
-            Replace => ScalarType::String.nullable(true),
+            PadLeading => ScalarType::String.nullable(in_nullable),
+            Substr => ScalarType::String.nullable(in_nullable),
+            Replace => ScalarType::String.nullable(in_nullable),
             JsonbBuildArray | JsonbBuildObject => ScalarType::Jsonb.nullable(true),
             ArrayCreate { elem_type } => {
                 debug_assert!(
@@ -6565,7 +6640,7 @@ impl VariadicFunc {
                     _ => ScalarType::Array(Box::new(elem_type.clone())).nullable(false),
                 }
             }
-            ArrayToString { .. } => ScalarType::String.nullable(true),
+            ArrayToString { .. } => ScalarType::String.nullable(in_nullable),
             ArrayIndex { .. } => input_types[0]
                 .scalar_type
                 .unwrap_array_element_type()
@@ -6589,7 +6664,7 @@ impl VariadicFunc {
                 .unwrap_list_nth_layer_type(input_types.len() - 1)
                 .clone()
                 .nullable(true),
-            ListSliceLinear { .. } => input_types[0].scalar_type.clone().nullable(true),
+            ListSliceLinear { .. } => input_types[0].scalar_type.clone().nullable(in_nullable),
             RecordCreate { field_names } => ScalarType::Record {
                 fields: field_names
                     .clone()
@@ -6601,15 +6676,15 @@ impl VariadicFunc {
             .nullable(false),
             SplitPart => ScalarType::String.nullable(in_nullable),
             RegexpMatch => ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
-            HmacString | HmacBytes => ScalarType::Bytes.nullable(true),
+            HmacString | HmacBytes => ScalarType::Bytes.nullable(in_nullable),
             ErrorIfNull => input_types[0].scalar_type.clone().nullable(false),
-            DateBinTimestamp => ScalarType::Timestamp.nullable(true),
-            DateBinTimestampTz => ScalarType::TimestampTz.nullable(true),
+            DateBinTimestamp => ScalarType::Timestamp.nullable(in_nullable),
+            DateBinTimestampTz => ScalarType::TimestampTz.nullable(in_nullable),
             And | Or => ScalarType::Bool.nullable(in_nullable),
             RangeCreate { elem_type } => ScalarType::Range {
                 element_type: Box::new(elem_type.clone()),
             }
-            .nullable(in_nullable),
+            .nullable(false),
         }
     }
 
@@ -6643,11 +6718,35 @@ impl VariadicFunc {
     /// introduces nulls even when it does not.
     pub fn introduces_nulls(&self) -> bool {
         use VariadicFunc::*;
-        // Note the negation
-        !matches!(
-            self,
-            And | Or //todo: add more
-        )
+        match self {
+            Concat
+            | PadLeading
+            | Substr
+            | Replace
+            | JsonbBuildArray
+            | JsonbBuildObject
+            | ArrayCreate { .. }
+            | ArrayToString { .. }
+            | ListCreate { .. }
+            | RecordCreate { .. }
+            | ListSliceLinear
+            | SplitPart
+            | HmacString
+            | HmacBytes
+            | ErrorIfNull
+            | DateBinTimestamp
+            | DateBinTimestampTz
+            | RangeCreate { .. }
+            | And
+            | Or => false,
+            Coalesce
+            | Greatest
+            | Least
+            | MakeTimestamp
+            | ArrayIndex { .. }
+            | ListIndex
+            | RegexpMatch => true,
+        }
     }
 
     pub fn switch_and_or(&self) -> Self {
