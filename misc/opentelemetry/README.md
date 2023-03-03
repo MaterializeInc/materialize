@@ -1,15 +1,15 @@
 # OpenTelemetry development environment
 
 [OpenTelemetry] is a framework for collecting telemetry data (metrics, logs, traces,
-etc) from a program for analysis and alerting. Within our Rust code we use the 
+etc) from a program for analysis and alerting. Within our Rust code we use the
 [`tracing`] crate to report metrics, and then [Jaeger] to collect and visualize them.
 
-> OpenTelemetry support is still in active development and bugs are to be expected. If 
+> OpenTelemetry support is still in active development and bugs are to be expected. If
 > you run into any issues please report them!
 
-To enable tracing when running `environmentd` you need to provide two arguments, an 
-OpenTelemetry compatible endpoint to report the traces, and a filter to specify what 
-"level" of traces you want reported. You can specify these via environment variables, or 
+To enable tracing when running `environmentd` you need to provide two arguments, an
+OpenTelemetry compatible endpoint to report the traces, and a filter to specify what
+"level" of traces you want reported. You can specify these via environment variables, or
 command line arguments. Run `bin/environmentd -- --help` to see all the options.
 
 For local development the following options should suffice:
@@ -51,7 +51,7 @@ After connecting to Materialize, but before running any queries, you should set 
 set emit_trace_id_notice=true;
 ```
 
-After each query a `trace_id` will be emitted, which you can search for in 
+After each query a `trace_id` will be emitted, which you can search for in
 [Jaeger] and see _exactly_ what work `environmentd` did.
 
 
