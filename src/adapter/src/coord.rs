@@ -617,43 +617,32 @@ impl Coordinator {
         // Load catalog entries based on topological dependency sorting. We do
         // this to reinforce that `GlobalId`'s `Ord` implementation does not
         // express the entries' dependency graph.
-        let mut entries_awaiting_dependencies: BTreeMap<
-            GlobalId,
-            Vec<(catalog::CatalogEntry, Vec<GlobalId>)>,
-        > = BTreeMap::new();
-        let mut loaded_items = BTreeSet::new();
-        let mut unsorted_entries: VecDeque<_> = self
+
+        let mut work_set: VecDeque<_> = self
             .catalog
             .entries()
             .cloned()
-            .map(|entry| {
-                let remaining_deps = entry.uses().to_vec();
-                (entry, remaining_deps)
-            })
+            .map(|entry| (entry.uses().iter().cloned().collect::<BTreeSet<_>>(), entry))
             .collect();
-        let mut entries = Vec::with_capacity(unsorted_entries.len());
 
-        while let Some((entry, mut remaining_deps)) = unsorted_entries.pop_front() {
-            remaining_deps.retain(|dep| !loaded_items.contains(dep));
-            // While you cannot assume anything about the ordering of
-            // dependencies based on their GlobalId, it is not secret knowledge
-            // that the most likely final dependency is that with the greatest
-            // ID.
-            match remaining_deps.last() {
-                Some(dep) => {
-                    entries_awaiting_dependencies
-                        .entry(*dep)
-                        .or_default()
-                        .push((entry, remaining_deps));
-                }
-                None => {
-                    let id = entry.id();
-                    if let Some(waiting_on_this_dep) = entries_awaiting_dependencies.remove(&id) {
-                        unsorted_entries.extend(waiting_on_this_dep);
-                    }
-                    loaded_items.insert(id);
-                    entries.push(entry);
-                }
+        let mut entries = Vec::with_capacity(work_set.len());
+        let mut loaded_items = BTreeSet::new();
+
+        while let Some((mut outstanding_deps, entry)) = work_set.pop_front() {
+            info!(
+                "looking at entry {}, outstanding deps: {:?}",
+                entry.id(),
+                outstanding_deps
+            );
+
+            outstanding_deps.retain(|dep| !loaded_items.contains(dep));
+
+            if outstanding_deps.is_empty() {
+                let is_new = loaded_items.insert(entry.id());
+                assert!(is_new, "already loaded item {}", entry.id());
+                entries.push(entry);
+            } else {
+                work_set.push_back((outstanding_deps, entry));
             }
         }
 
