@@ -399,18 +399,13 @@ This is an optional phase to add some utility commands present in PostgreSQL. We
 
 ## Rollout Plan
 
-- All new SQL commands will be gated by unsafe mode (or LaunchDarkly depending on the standard for feature flags when
-  this is implemented).
-- Specifying attributes in `CREATE ROLE` will be gated by unsafe mode (or LaunchDarkly depending on the standard for
-  feature flags when this is implemented).
-- All roles that authenticate through Frontegg will be given the `SUPERUSER` session attribute. This matches the
-  existing behavior where all roles have the `SUPERUSER` attribute.
-- Roles that are not authenticated through Frontegg, will not be given the `SUPERUSER` session attribute. This allows us
-  to test various permissions locally.
-- When we are ready to release this feature, we will do the following:
-    - Remove the unsafe gate from new SQL commands and role attributes.
-    - Modify the Frontegg authentication so that only roles that are Frontegg admins are given the `SUPERUSER` session
-      attribute.
+- There will be a boolean system variable called `RBAC_CHECKS_ENABLED` that can be toggled by any superuser. The flag
+  will determine whether the Coordinator checks role privileges before executing commands.
+- Existing environments will default to `false`, however new environments will default to `true`.
+- All new SQL commands will be available to all users. The SQL commands will update user privileges, but emit a notice
+  if `RBAC_CHECK_ENABLED` is disabled.
+- Organizations can set up all the existing roles with their desired privileges and then toggle `RBAC_CHECKS_ENABLED` on
+  and off to test that roles are set up properly.
 
 ## Testing Plan
 
