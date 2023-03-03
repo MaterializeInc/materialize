@@ -1,13 +1,14 @@
 # Efficient Window Functions
 
 By “window functions”, this document means the `OVER` clause, e.g.,
+
 `SELECT row_number() OVER (PARTITION BY col1 ORDER BY col2) FROM relation;`
 
 **(Note that [temporal windows](https://materialize.com/docs/sql/patterns/temporal-filters/) are entirely different from what we discuss in this doc. Our support for those is already quite fine. There is no need to use SQL’s `OVER` clause for those.)**
 
 # Overview
 
-[Many users want to use window functions](https://www.notion.so/Window-Functions-Use-Cases-6ad1846a7da942dc8fa28997d9c220dd), but our current window function support is very inefficient: We recompute results for an entire window partition for any small change in the partition. So the only situations when our current support works is if the window partitions are either very small, or they rarely change.
+[Many users want to use window functions](https://www.notion.so/Window-Functions-Use-Cases-6ad1846a7da942dc8fa28997d9c220dd), but our current window function support is very inefficient: We recompute results for an entire window partition for any small change in the partition. This means the only situations when our current support works is if the window partitions are either very small, or they rarely change.
 
 ## Window Functions
 
@@ -18,8 +19,8 @@ Window functions were introduced in the SQL:2003 standard. They compute a scalar
 SELECT time, measurement_value, measurement_value - LAG(measurement_value) OVER (ORDER BY time)
 FROM measurements;
 ```
-The `LAG` window function computes the value of a scalar expression (here simply a reference to `measurement_value`) on data from the previous row (instead of the current row, which is normally what a scalar expression does). 
-The `OVER` clause has to directly follow the window function call (`LAG(...)` here). Note that this `ORDER BY` has no influence on the ordering of the result set of the query, it only influences the operation of `LAG`.
+The `LAG` window function computes the value of a scalar expression (here simply a reference to `measurement_value`) on data from the previous row (instead of the current row, which is normally what a scalar expression does).
+The `OVER` clause has to directly follow the window function call (`LAG(...)` here). Note that this `ORDER BY` has no influence on the ordering of the result set of the query, it merely influences the operation of `LAG`.
 
 Note that if the measurements follow each other at regular time intervals, then the same query [can be written without a window function](https://materialize.com/docs/sql/patterns/window-functions/#laglead-for-time-series), with just a self join. However, for arbitrary measurement times there is no good workaround without a window function.
 
@@ -41,7 +42,7 @@ FROM measurements;
 
 Note that this query doesn't compute just one value for each partition. Instead, it calculates a value for each input row: the sum of the same sensor's measurements that happened no later than the current input row.
 
-We can also explicitly specify a frame, i.e., how far it extends from the current row, both backwards and forwards. One option is to say `UNBOUNDED PRECEDING` or `UNBOUNDED FOLLOWING`, meaning that the frame extends to the beginning or end of the current partition. Another option is to specify an offset. For example, the following query computes a moving average: 
+We can also explicitly specify a frame, i.e., how far it extends from the current row, both backwards and forwards. One option is to say `UNBOUNDED PRECEDING` or `UNBOUNDED FOLLOWING`, meaning that the frame extends to the beginning or end of the current partition. Another option is to specify an offset. For example, the following query computes a moving average:
 
 ```SQL
 SELECT sensor_id, time, AVG(measurement_value)
@@ -61,7 +62,7 @@ SELECT sensor_id, time, AVG(measurement_value)
     OVER (ORDER BY time PARTITION BY sensor_id
         RANGE BETWEEN '5 minutes' PRECEDING AND CURRENT ROW)
 FROM measurements;
-``` 
+```
 
 There is also the _frame exclusion_ option, which excludes certain rows near the current row from the frame. `EXCLUDE CURRENT ROW` excludes the current row. `EXCLUDE GROUP` excludes the current row's peer group (also excluding the current row). `EXCLUDE TIES` excludes the current row's peer group, except for the current row itself. `EXCLUDE NO OTHERS` specifies the default behavior, i.e., no exclusions.
 
@@ -75,38 +76,52 @@ We would like to have efficient window function support.
 
 Some window functions are impossible to efficiently support in streaming, because sometimes small input changes cause big result changes. (E.g., if a new first element of a partition appears, then ROW_NUMBERs will change for the whole window partition.) So a realistic goal would be to support at least those cases where a small input change leads to a small output change.
 
-- LAG/LEAD (i.e., previous/next element of the window partition)
-    - We aim for only offset 1 in the first version, which is the default. Bigger offsets not seen in user queries yet, but shouldn’t be a problem to add support later.
-    - IGNORE NULLS should be supported. (already seen in a user query) (easy)
+- LAG/LEAD (i.e., previous/next element of the window partition) (these don't have any frames)
+    - We aim for only offset 1 in the first version (i.e., the previous or the next element), which is the default. Bigger offsets not seen in user queries yet (i.e., when requesting to go back or forward by several rows).
+    - IGNORE NULLS should be supported. (already seen in a user query)
 - Window aggregations
-    - Small frames: small output changes for small input changes.
-    - Large frames: These are often impossible to support efficiently in a streaming setting, because small input changes might lead to big output changes. However, there are some aggregations which don’t necessarily result in big output changes even when applied with a large frame (Prefix Sum will automagically handle these cases efficiently):
+    - Small frames (e.g., summing the previous 5 elements): We should support these efficiently, because a small frame means that small input changes lead to small output changes.
+    - Large frames: These are often impossible to support efficiently in a streaming setting, because small input changes can lead to big output changes. However, there are some aggregations which don't necessarily result in big output changes even when applied with a large frame (Prefix Sum will automagically handle the following cases efficiently):
         - MIN/MAX, if usually the changed input element is not the smallest/largest.
-        - SUMming an expression that is often 0.
+        - SUMming an expression that is 0 for many rows.
         - Window aggregations with an UNBOUNDED PRECEDING frame are fine if changes happen mostly at the end of partitions
-            - e.g., OVER an `ORDER BY time` if new elements are arriving typically with fresh timestamps. Such OVER clauses are popular case in our [use case list](https://www.notion.so/Window-Functions-Use-Cases-6ad1846a7da942dc8fa28997d9c220dd).
-- FIRST_VALUE / LAST_VALUE / NTH_VALUE with various frames. These are similar to window aggregations.
-- ROW_NUMBER, RANK, DENSE_RANK, PERCENT_RANK, CUME_DIST, NTILE: These are impossible to implement efficiently in a streaming setting in many cases, because a small input change will lead to a big output change if the changed record is not near the end of the window partition. However, I can imagine some scenarios where the user knows some special property of the input data that ensures that small input changes will lead to small output changes, so she will use one of these functions and expect it to be efficient:
+            - e.g., OVER an `ORDER BY time` if new elements are arriving typically with fresh timestamps. Such OVER clauses are popular in our [use case list](https://www.notion.so/Window-Functions-Use-Cases-6ad1846a7da942dc8fa28997d9c220dd).
+    - For frames encompassing the entire window partition (i.e., an UNBOUNDED frame and/or no ORDER BY), window aggregations can be simply translated to a standard grouped aggregation + a self-join. In case of these frames, small output changes often lead to big output changes, but similar exceptions exist as listed for "Large frames" above.
+- FIRST_VALUE / LAST_VALUE / (NTH_VALUE) with various frames.
+  - For the case of general frames, these are similar to window aggregations.
+  - For frames encompassing the entire window partition (an UNBOUNDED frame and/or no ORDER BY), FIRST_VALUE / LAST_VALUE are actually requesting the top or the bottom row of the partition. We should compile this to TopK, with k=1.
+- ROW_NUMBER, RANK, DENSE_RANK, PERCENT_RANK, CUME_DIST, NTILE: These functions are often impossible to support efficiently in a streaming setting, because a small input change will lead to a big output change if the changed record is not near the end of the window partition. However, I can imagine some scenarios where the user knows some special property of the input data that ensures that small input changes will lead to small output changes, so she will use one of these functions and expect it to be efficient:
     - If changes mostly come near the end of the window partition. For example, if there is an ORDER BY time, and new records usually have recent timestamps. (Prefix Sum will handle this fine.)
-    - If most changes are not record appearances or disappearances, but existing records changing in a way that they move only a little bit in the ordering. In this case, the output changes only for as many records, that got “jumped over” by the changing record. (Prefix Sum will handle this fine.)
-    - TopK is an important special case: This is when there is a `WHERE ROW_NUMBER() < k`
-        - Instead of doing Prefix Sum, we will transform this into our [efficient TopK implementation](https://github.com/MaterializeInc/materialize/blob/2f56c8b2ff1cc604e5bff9fb1c75a81a9dbe05a6/src/compute-client/src/plan/top_k.rs#L30).
+    - If most changes are not record appearances or disappearances, but existing records changing in a way that they move only a little in the ordering. In this case, the output changes only for as many records, that got “jumped over” by the changing record. (Prefix Sum will handle this fine.)
+    - TopK is an important special case (popular in our [use case list](https://www.notion.so/Window-Functions-Use-Cases-6ad1846a7da942dc8fa28997d9c220dd)): This is when there is a `WHERE ROW_NUMBER() <= k`. Instead of relying on Prefix Sum, we should transform this into our [efficient TopK implementation](https://github.com/MaterializeInc/materialize/blob/2f56c8b2ff1cc604e5bff9fb1c75a81a9dbe05a6/src/compute-client/src/plan/top_k.rs#L30).
 
-## Non-goals / Limitations
+## Non-goals
 
-- We don’t handle such OVER clauses where the ORDER BY inside the OVER is on a String or other complex type. See a discussion on supported types below in the "Types" section.
-- In cases that we handle by Prefix Sum, the groups specified by the composite key of the PARTITION BY and the ORDER BY should be small, see the "Duplicate Indexes" section.
+As noted above, some window function queries on some input data are impossible to efficiently support in a steaming setting: When small input changes lead to big output changes, then no matter how efficient is the implementation, even just emitting the output will take a long time. We are not aiming to efficiently support such use cases. Our docs should be clear about this, mentioning this fundamental fact about window functions near the top of the page.
+
+## Limitations
+
+We don't handle such OVER clauses where the ORDER BY inside the OVER is on a String or other complex type. See a discussion on supported types below in the "Types" section.
+
+In cases that we handle by Prefix Sum, the groups specified by the composite key of the PARTITION BY and the ORDER BY should be small, see the "Duplicate Indexes" section.
 
 # Details
 
 ## Current state
 
-The current way of execution is to put entire partitions into scalars, and execute the window function to all elements by a “scalar aggregation”. This happens in the HIR to MIR lowering, i.e., MIR and LIR don’t know about window functions.
+The current way of executing window functions is to put entire window partitions into scalars, and execute the window function on all elements of a partition by a "scalar aggregation". This translation happens in the HIR to MIR lowering, i.e., MIR and LIR don't know about window functions (except for a special "scalar aggregation" function for each window function). This is very inefficient for large partition sizes (e.g., anything above 100 elements), because any change in a partition means that the entire "scalar" that is representing the partition is changed.
 
 ## Proposal
 
-We will use [DD’s prefix_sum](https://github.com/TimelyDataflow/differential-dataflow/blob/master/src/algorithms/prefix_sum.rs) (with some generalizations) for most of the window functions. The bulk of this work will be applied in the rendering, but we have to get the window functions from SQL to the rendering somehow.
-Currently, the direct representation of window functions disappears during the HIR-to-MIR lowering, and is instead replaced by a pattern involving a `Reduce`, a `FlatMap` with an `unnest_list`, plus some `record` trickery inside `MirScalarExpr`. For example:
+We'll use several approaches to solve the many cases mentioned in the “Goals” section:
+
+1. We'll use [DD's prefix_sum](https://github.com/TimelyDataflow/differential-dataflow/blob/master/src/algorithms/prefix_sum.rs) with some tricky sum functions and some generalizations.
+2. We'll use a special-purpose rendering for LAG/LEAD of offset 1 with no IGNORE NULLS, which will be simpler and more efficient than Prefix Sum.
+3. As an extension of 1., we'll use a generalization of DD's prefix sum to arbitrary intervals (i.e., not just prefixes).
+4. We'll transform away window functions in some special cases (e.g., to TopK, or a simple grouped aggregation + self-join)
+5. Initially, we will resort to the old window function implementation in some cases, but this should become less and less over time. I think it will be possible to eventually implement all window function usage with the above 1.-4., but it will take time to get there.
+
+The bulk of this work will be applied in the rendering, but we have to get the window functions from SQL to the rendering somehow. Currently, the direct representation of window functions disappears during the HIR-to-MIR lowering, and is instead replaced by a pattern involving a `Reduce`, a `FlatMap` with an `unnest_list`, plus some `record` trickery inside `MirScalarExpr`. For example:
 
 ```c
 materialize=> explain select name, pop, LAG(name) OVER (partition by state order by pop)
@@ -124,14 +139,7 @@ from cities;
 
 To avoid creating a new enum variant in MirRelationExpr, we will recognize the above pattern during the MIR-to-LIR lowering, and create a new LIR enum variant for window functions. I estimate this pattern recognition to need about 15-20 if/match statements. It can happen that this pattern recognition approach turns out to be too brittle: we might accidentally leave out cases when the pattern is slightly different due to unrelated MIR transforms, plus we might break it from time to time with unrelated MIR transform changes. If this happens, then we might reconsider creating a new MIR enum variant later. (Which would be easier after the optimizer refactoring/cleanup.) For an extended discussion on alternative representations in HIR/MIR/LIR, see the [Representing window functions in each of the IRs](#Representing-window-functions-in-each-of-the-IRs) section.
 
-Also, we will want to entirely transform away certain window function patterns, most notably, the ROW_NUMBER-to-TopK transform. For this, we need to canonicalize scalar expressions, which I think we usually do in MIR. This means that this transform should happen on MIR. This will start by again recognizing the above general windowing pattern, and then performing pattern recognition of the TopK pattern.
-
-In the rendering, we’ll use several approaches to solve the many cases mentioned in the “Goals” section:
-
-1. We’ll use [DD’s prefix_sum](https://github.com/TimelyDataflow/differential-dataflow/blob/master/src/algorithms/prefix_sum.rs) with some tricky sum functions.
-2. As an extension of 1., we’ll use a generalization of DD’s prefix sum to arbitrary intervals (i.e., not just prefixes).
-3. We'll transform away window functions in some special cases (e.g., to TopK, or a simple grouped aggregation + self-join)
-4. Initially, we will resort to the old window function implementation in some cases, but this should become less and less over time. I think it will be possible to eventually implement all window function usage with the above 1.-3., but it will take time to get there.
+Also, we will want to entirely transform away certain window function patterns; most notable is the ROW_NUMBER-to-TopK transform. For this, we need to canonicalize scalar expressions, which I think we usually do in MIR. This means that transforming away these window function patterns should happen on MIR. This will start by again recognizing the above general windowing pattern, and then performing pattern recognition of the TopK pattern.
 
 We’ll use the word **index** in the below text to mean the values of the ORDER BY column of the OVER clause, i.e., they are simply the values that determine the ordering. (Note that it’s sparse indexing, i.e., not every number occurs from 1 to n, but there are usually (big) gaps.)
 
@@ -223,11 +231,11 @@ For invertible aggregation functions (e.g., sum, but not min/max) we can use the
     - However, the performance of this might not be good, because even if (a,b) is a small interval, the (0,a) and the (0,b) intervals will be big, so there will be many changes of the aggregates of these even for small input changes.
 
 To have better performance (and to support non-invertible aggregations, e.g., min/max), we need to extend what the `broadcast` part of prefix sum is doing (`aggregate` can stay the same):
-    - `queries` will contain intervals specified by two indexes.
-    - `requests`: We can similarly compute a set of requests from `queries`. The change will only be inside the `flat_map`.
-    - `full_ranges`, `zero_ranges`, `used_ranges` stay the same.
-    - `init_states` won’t start at position 0, but at the lower end of the intervals in `queries`
-    - The iteration at the end will be mostly the same.
+  - `queries` will contain intervals specified by two indexes.
+  - `requests`: We can similarly compute a set of requests from `queries`. The change will only be inside the `flat_map`.
+  - `full_ranges`, `zero_ranges`, `used_ranges` stay the same.
+  - `init_states` won’t start at position 0, but at the lower end of the intervals in `queries`
+  - The iteration at the end will be mostly the same.
 
 #### 3. FIRST_VALUE / LAST_VALUE / NTH_VALUE
 
@@ -293,14 +301,7 @@ The main proposal of this document is to use prefix sum (with extensions/general
 
 TODO
 
-## Where to put the idiom recognition?
-
-This document proposes recognizing the windowing idiom (that the HIR-to-MIR lowering creates) in the MIR-to-LIR lowering. An alternative would be to do the idiom recognition in the rendering. In my opinion, the lowering is a more natural place for it, because:
-- We shouldn't have conditional code in the rendering, and this idiom recognition will be a giant piece of conditional code.
-- We want (at least) EXPLAIN PHYSICAL PLAN to show how we'll execute a window function.
-- We need to know the type of the ORDER BY columns, which we don't know in LIR. (Although we could add extra type info to window function calls to get around this issue.)
-
-## Implement Prefix Sum in MIR (involving `LetRec`) instead of a large chunk of custom rendering code
+### Implement Prefix Sum in MIR (involving `LetRec`) instead of a large chunk of custom rendering code
 
 The main plan for implementing Prefix Sum is to implement it directly on DD (and represent it as one node in LIR). An alternative would be to implement Prefix Sum on MIR: Prefix Sum's internal joins, reduces, iterations, etc. would be constructed not by directly calling DD functions in the rendering, but by MIR joins, MIR reduces, MIR LetRec, etc. In this case, the window function handling code would mainly operate in the HIR-to-MIR lowering: it would translate HIR's WindowExpr to MirRelationExpr.
 
@@ -310,13 +311,21 @@ Still, at some future time when we are confident in our optimizer's ability to r
 
 Pros:
 - Prefix Sum could potentially benefit from later performance improvements from an evolving optimizer or rendering.
-- We wouldn't need to specially implement certain optimiziations for window functions, but would instead get them for free from the standard MIR optimizations. For example, [projection pushdown through window functions](https://github.com/MaterializeInc/materialize/issues/17522).
+- We wouldn't need to specially implement certain optimizations for window functions, but would instead get them for free from the standard MIR optimizations. For example, [projection pushdown through window functions](https://github.com/MaterializeInc/materialize/issues/17522).
 - Optimizing Prefix Sum could be integrated with optimizing other parts of the query.
 
 Cons:
 - Creating MIR nodes is more cumbersome than calling DD functions. (column references by position instead of Rust variables, etc.)
 - We would need to add several scalar functions for integer bit manipulations, e.g., for extracting set bits from integers.
 - When directly writing DD code, we have access to all the power of DD, potentially enabling access to better performance than through the compiler pipeline from MIR.
+- We might need such operations that are impossible or extremely cumbersome to express in MIR. For example, the numbering in the "Duplicate Indexes" section.
+
+## Where to put the idiom recognition?
+
+This document proposes recognizing the windowing idiom (that the HIR-to-MIR lowering creates) in the MIR-to-LIR lowering. An alternative would be to do the idiom recognition in the rendering. In my opinion, the lowering is a more natural place for it, because:
+- We shouldn't have conditional code in the rendering, and this idiom recognition will be a giant piece of conditional code.
+- We want (at least) EXPLAIN PHYSICAL PLAN to show how we'll execute a window function.
+- We need to know the type of the ORDER BY columns, which we don't know in LIR. (Although we could add extra type info to window function calls to get around this issue.)
 
 ## Representing window functions in each of the IRs
 
@@ -333,96 +342,92 @@ In HIR, the window functions are currently in the scalar expressions (option 2. 
 1. *Dedicated `HirRelationExpr` variant:*
     - There is a precedent for a similar situation: HIR has aggregation expressions, which (similarly to window expressions) have the property that they are in a scalar expression position, but their value is actually calculated by a dedicated `HirRelationExpr` variant (`Reduce`), and then there is just a column reference in `HirScalarExpr`.
 2. *Hiding in `HirScalarExpr`:*
-    - HIR wants to be close to the SQL syntax, and window functions appear in scalar position in SQL.
+    - This makes sense to me, because HIR wants to be close to the SQL syntax, and window functions appear in scalar position in SQL.
     - It’s already implemented this way, so if there is no strong argument for 1. or 3., then I’d like to just leave it as it is.
-3. *Reusing `Reduce`*
+3. (*Reusing `Reduce`*. In MIR and LIR this option can be considered, but I wouldn't want Reduce to get complicated already in HIR.)
 
 ### MIR
 
-An explicit MIR representation could facilitate the following two things:
-
-- Getting the window function expressions to rendering, where we’ll apply prefix sum. (This would replace recovering window functions from the patterns that get created when the current HIR lowering compiles away window functions.)
-- Having optimizer transforms for some important special cases of window functions, e.g., for TopK patterns. (Alternatively, we could either rely on the same idiom recognition that the MIR-to-LIR lowering will rely on, or we could also apply these transforms in the HIR-to-MIR lowering.)
+The current plan is to *not* have an explicit representation of window functions in MIR, but here we still discuss how such a representation could look like. We decided not to have an explicit representation because it would mean that we would have to immediately teach all existing transforms how to handle window functions, which would be a lot of code to write. Current transforms at least don't do incorrect things with window functions. (However, some transforms might currently not be able to do their thing on the complicated pattern that the HIR lowering creates for window functions, for example [projection pushdown doesn't work for window functions](https://github.com/MaterializeInc/materialize/issues/17522).)
 
 The 3 representation options in MIR are:
 
-1. *Create a dedicated enum variant in `MirRelationExpr`:*
+1. *Create a dedicated enum variant in `MirRelationExpr`*
     - I think this is better than 2., because Map (and MirScalarExprs in general) should have the semantics that they can be evaluated by just looking at one input element, while a window function needs to look at large parts of a window partition. If we were to put window functions into scalar expressions, then we would need to check lots of existing code that is processing MirScalarExprs that they are not getting unpleasantly surprised by window functions.
     - Compared to 3., it might be easier to skip window functions in many transforms. This is both good and bad:
         - We can get a first version done more quickly. (And then potentially add optimizations later.)
         - But we might leave some easy optimization opportunities on the table, which would come from already-existing transform code for `Reduce`.
    - A new `MirRelationExpr` variant would mean we have to modify about 12-14 transforms `LetRec` is pattern-matched in 12 files in the `transform` crate, `TopK` 14 times. See also [the recent LetRec addition](https://github.com/MaterializeInc/materialize/commit/9ac8e060d82487752ba28c42f7b146ff9f730ca3) for an example of how it looks when we add a new `MirRelationExpr` variant. (But note that, currently, LetRec is disabled in all but a few transforms)
    - When considering sharing a new many-to-many Reduce variant between window functions and TopK, we should keep in mind that the output columns are different: TopK keeps exactly the existing columns, but a window function adds an extra column.
-2. An argument can also be made for hiding window functions in `MirScalarExpr`:
+2. (*Hiding window functions in `MirScalarExpr`*)
     - This seems scary to me, because scalar expressions should generally produce exactly one value by looking at exactly one record, which is not true for window functions. It's hard to tell that none of the code that is dealing with scalar expressions would suddenly break.
-    - `MirScalarExpr` can occur in several places (JoinClosure, etc.), so we would have to attend to window functions in the lowerings of each of these.
-    - However, there is a precedent for scalar expressions that don't exactly fit the "1 value from 1 record" paradigm: the temporal stuff.
-3. We could consider putting window functions in `MirRelationExpr::Reduce`. This was suggested by Frank: [https://materializeinc.slack.com/archives/C02PPB50ZHS/p1672685549326199?thread_ts=1671723908.657539&cid=C02PPB50ZHS](https://materializeinc.slack.com/archives/C02PPB50ZHS/p1672685549326199?thread_ts=1671723908.657539&cid=C02PPB50ZHS)
-    - `Reduce` is pattern-matched in 20 files in the `transform` crate. All of these will have to be modified.
-        - This is a bit more than the ~12-14 pattern matches of adding a new enum variant, because there are some transforms specialized to `Reduce`, which we wouldn't need to touch if it were a new enum variant instead.
-    - We could maybe reuse some of the code that is handling `Reduce`? But we have to keep in mind two big differences between grouped aggregation and window functions:
-        - Grouped aggregation produces exactly one row per group.
-            - But Frank is saying that we could generalize `Reduce` to make it many-to-many, [as in DD’s `reduce`](https://github.com/TimelyDataflow/differential-dataflow/blob/master/src/operators/reduce.rs#L71).
-                - Btw. matching up MIR Reduce’s behavior with DD’s Reduce would be important if the translation of MIR’s Reduce would be to just call DD’s Reduce, but this is not the case at all for window functions.
-        - The output columns are different: A grouped aggregation’s output is the grouping key columns and then one column for each aggregate, but a window function retains all columns, and then just appends one column at the end (regardless of the grouping key).
-    - It seems to me that the overlap between current `Reduce` handling and how to handle window functions is not big enough to justify putting the window functions into `Reduce`. There would be ifs every time we handle `Reduce`, and different things would be happening for traditional `Reduce` and window function `Reduce`.
-      - We could later have a separate EPIC to consider unifying window function and Reduce (and potentially TopK) into a many-to-many “super-reduce”.
-    - Example transformations:
+    - `MirScalarExpr` can occur in several places (`JoinClosure`, etc.), so we would have to attend to window functions in the lowerings of each of these.
+3. *We could consider putting window functions in `MirRelationExpr::Reduce`.* This was suggested by Frank: [https://materializeinc.slack.com/archives/C02PPB50ZHS/p1672685549326199?thread_ts=1671723908.657539&cid=C02PPB50ZHS](https://materializeinc.slack.com/archives/C02PPB50ZHS/p1672685549326199?thread_ts=1671723908.657539&cid=C02PPB50ZHS)
+    - `Reduce` is pattern-matched in 20 files in the `transform` crate. All of these will have to be modified. This is a bit more than the ~12-14 pattern matches of adding a new enum variant, because there are some transforms specialized to `Reduce`, which we wouldn't need to touch if it were a new enum variant instead.
+    - The main argument for this is that maybe we could reuse some of the code that is handling `Reduce`. However, there are two big differences between grouped aggregation and window functions, which hinders code re-use in most places:
+      1. The output columns are different: A grouped aggregation’s output is the grouping key columns and then one column for each aggregate, but a window function retains all columns, and then just appends one column at the end (regardless of the grouping key).
+      2. Grouped aggregation produces exactly one row per group, while window functions produce exactly one row per input row. To solve this difference, Frank is saying we could generalize `Reduce`, making it many-to-many, [as in DD's `reduce`](https://github.com/TimelyDataflow/differential-dataflow/blob/master/src/operators/reduce.rs#L71). (To me, it seems that matching up MIR Reduce's behavior with DD’s Reduce would be useful if the translation of MIR's Reduce would be to just call DD’s Reduce, but this is not the case at all for window functions.)
+    - It seems to me that the overlap between current `Reduce` handling and how to handle window functions is not big enough to justify putting the window functions into `Reduce`. There would be ifs every time we handle `Reduce`, and different things would be happening for traditional `Reduce` and window function `Reduce`. We could later have a separate EPIC to consider unifying window function and Reduce (and potentially TopK) into a many-to-many “super-reduce”, as this seems to be a separate work item from window functions.
+    - Examining code reuse possibilities for some example transformations:
       - `ColumnKnowledge`
           - The `optimize` call for the `group_key` could be reused (for the key of the PARTITION BY), but this is just a few lines.
               - But they cannot be pushed to the `output` `Vec<DatumKnowledge>`, because the grouping key columns are not part of the output. Instead, the knowledge from the original columns should be pushed.
-          - The rest of the code is also similar to what needs to happen with window functions, but not exactly the same, due to the more complicated representation of window expressions (`WindowExprType`) vs. aggregate expressions. (`AggregateExpr`). So, it seems to me that code sharing wouldn't really help here.
+          - The rest of the code is also somewhat similar to what needs to happen with window functions, but not exactly the same, due to the more complicated representation of window expressions (`WindowExprType`) vs. aggregate expressions. (`AggregateExpr`). So, it seems to me that code sharing wouldn't really help here.
       - `FoldConstants`: The heavy lifting here is in `fold_reduce_constant`, which is completely different from what is needed for window functions. The rest of the code is similar, but not identical.
       - `JoinImplementation`: This tries to reuse arrangements after a Reduce, which we cannot do for window functions. So we would have to special-case those Reduces that are actually window functions.
       - `MonotonicFlag` is easy either way.
-      - `ReduceElision` could be applied (by adding some ifs due to the different output columns). We would have to implement an `on_unique` for window functions as well. (Although, this one doesn't sound like a terribly useful optimization for window functions, because it’s hard to see how a window function call could end up on a unique column…)
-      - `LiteralLifting`: The two inlinings at the beginning could be reused. (But those are already copy-pasted ~5 times, so they should rather be factored out into a function, and then they could be called when processing a new enum variant for window functions.)
-      - …
+      - `ReduceElision` could be partially re-used, but we would need to add some ifs due to the different output columns. Also, we would have to implement a new `on_unique` for window functions. (Although, this one doesn't sound like a terribly useful optimization for window functions, because it’s hard to see how a window function call could end up on a unique column.)
+      - `LiteralLifting`: The two inlinings at the beginning could be reused. (But those are already copy-pasted ~5 times, so they should rather be factored out into a function, and then they could be called when processing a new enum variant for window functions.) The rest probably not so much.
+      - ...
 
 ### LIR
 
 1. We could add a dedicated LIR `Plan` enum variant. This sounds like the right approach to me, because window functions will have a pretty specific rendering (Prefix Sum) that’s distinct from all other operators, and LIR is supposed to be a close representation of what we are about to render.
 2. (We can pretty much rule out hiding them in scalar expressions at this point, because scalar expressions get absorbed into operators in all kinds of ways, and we don't want to separately handle window functions all over the place.)
-3. Another option is to model it as a variant of `Reduce`.
-    - But I don’t see any advantage of this over an own enum variant. I don’t see any code reuse possibility between the existing `Reduce` rendering and the rendering of window functions by Prefix Sum.
+3. (Another option is to model it as a variant of `Reduce`. But I don’t see any advantage of this over an own enum variant. I don’t see any code reuse possibility between the existing `Reduce` rendering and the rendering of window functions by Prefix Sum.)
 
 # Rollout
 
 ## Testing
 
-- Correctness:
-    - Since there is already some window functions support (it’s just inefficient), there is already `window_funcs.slt` (4845 lines). However, some window functions and window aggregations (and some options, e.g., IGNORE NULLS, some tricky frames) are not supported at all currently, so those are not covered. I’ll add tests to this file for these as well.
-    - Additionally, there is `cockroach/window.slt` (3140 lines), which is currently disabled (with a `halt` at the top of the file). We’ll re-enable this, when our window function support will be (nearly) complete.
-    - (If we were to reuse `MirRelationExpr::Reduce` to represent window functions, then we’ll have to pay extra attention that existing transforms dealing with `Reduce` are not messing up window functions.)
-    - Philip’s random-generated queries testing would be great, because there is a large number of options and window functions, so it’s hard to cover all combinations with manually written queries.
-        - Also, it would be good to have randomly generated other stuff around the window functions, to test that other transforms are not breaking.
-    - We'll need to extensively test the idiom recognition. Fortunately, the first step of the idiom recognition is quite easy: we just need to look at the aggregate function of the `Reduce`, and decide if it is a window function. If this first step finds a window function, then we could add a soft assert that we manage to recognize all the other parts of the pattern. This way, all the above tests would be testing also the idiom recognition (even when a test doesn't involve EXPLAIN).
-      - Also, there could be a sentry warning with the above soft assert, so that we know if a customer is probably running into a performance problem due to falling back to the old window function implementation.
-- Performance testing: Importantly, we need to test that we efficiently support situations when small input changes lead to small output changes.
-    - Writing automated performance tests is tricky though. Currently, we don’t have any automated performance tests.
-    - At least manual testing should definitely be performed before merging the PRs, since the whole point of this work is performance.
-    - We could do it roughly as follows:
-        - We put in lots of input data with one timestamp, as an “initial snapshot”. Processing this should be at least several seconds.
-        - We change a small portion of the input data.
-            - But the total size of the affected partitions should cover most of the input data. This is important, since if window partitions are very small, then the current window function support works fine.
-            - This should complete orders of magnitude faster than the initial snapshot.
-    - More specifically, maybe we could have a Testdrive test that performs the following steps:
-        - Copy some TPC-H data from our TPC-H source into tables.
-        - Create a materialized view with some window functions on the tables.
-        - Do some inserts/updates/deletes on the tables.
-        - Check that updating of the materialized view happens quickly.
-            - Should be possible to set up the input data and the queries in such a way that
-                - updating takes orders of magnitude faster than the initial snapshot.
-                - But not with the current window function support.
-                - The difference from the initial snapshot should be big enough so that the test won’t be flaky.
-    - (I already tested a [simple prototype for LAG outside Materialize](https://github.com/ggevay/window-funcs).)
-- We should measure the memory needs of Prefix Sum, so that we can advise users when sizing replicas.
+### Correctness
+
+Since there is already some window functions support (it’s just inefficient), there is already `window_funcs.slt` (it's a lot of tests, 4845 lines). However, some window functions and window aggregations (and some options, e.g., IGNORE NULLS, some tricky frames) are not supported at all currently, so those are not covered. I’ll add tests to this file for these as well. I will also add more tests that will cover the interesting corner cases of the new rendering specifically.
+
+Additionally, there is `cockroach/window.slt` (3140 lines), which is currently disabled (with a `halt` at the top of the file). We’ll re-enable this, when our window function support will be (nearly) complete.
+
+Fuzzing would be great, because there is a large number of window functions and frames and options, so it's hard to cover all combinations with manually written queries. Also, in randomly generated queries we could add many other things around window functions, thus testing that window functions work in various contexts.
+
+We'll need to extensively test the idiom recognition that recognizes the pattern that the HIR lowering creates for window functions. Fortunately, the first step of the idiom recognition is quite easy: we just need to look at the aggregate function of the `Reduce`, and decide if it is a window function. Then, if this first step finds a window function, we could soft-assert that we manage to recognize all the other parts of the pattern. This way, all the above tests would be testing also the idiom recognition (even when a test doesn't involve EXPLAIN).
+
+Also, there could be a sentry warning with the above soft assert, so that we know if a customer is probably running into a performance problem due to falling back to the old window function implementation.
+
+(If we were to reuse `MirRelationExpr::Reduce` to represent window functions, then we’ll have to pay extra attention that existing transforms dealing with `Reduce` are not messing up window functions.)
+
+### Performance
+
+Importantly, we need to test that we efficiently support situations when small input changes lead to small output changes.
+
+Writing automated performance tests is tricky though. We have not yet developed the infrastructure for it, as we currently don’t have any automated performance tests.
+
+At least manual testing should definitely be performed before merging the PRs, since the whole point of this work is performance. We could do it roughly as follows: We put in lots of input data with one timestamp, as an “initial snapshot”. Processing this should be at least several seconds. Then, we change a small portion of the input data. Importantly, even though the input data change is small, the total size of the affected partitions should cover most of the input data. This is needed for this test because the current window function support works fine for small window partitions. Processing the input data changes should complete orders of magnitude faster than the initial snapshot.
+
+An automated way to implement the above could be as follows (say, in Testdrive):
+1. Copy some TPC-H data from our TPC-H source into tables.
+2. Create a materialized view with some window functions on the tables.
+3. Do some inserts/updates/deletes on the tables.
+4. Check that updating of the materialized view happens quickly. It should be possible to set up the input data and the queries in such a way that
+    - updating takes orders of magnitude faster than the initial snapshot. (But not with the current window function support.)
+    - The difference from the initial snapshot should be big enough so that the test won’t be flaky. (I already tested a [simple prototype for LAG outside Materialize](https://github.com/ggevay/window-funcs).)
+
+We should also measure the memory requirements of our new rendering, so that we can advise users on sizing replicas.
 
 ## Lifecycle
 
-There are many window functions, and many frame options. We will gradually add the new, efficient implementations for an increasing set of window function + frame setting combinations across several PRs. We will make sure the new implementation is correct and performs well before merging each of the PRs.
+There are many window functions, and many frame options. We will gradually add the new, efficient implementations for an increasing set of window function + frame setting combinations across several PRs. I created a breakdown into EPICs and lower-level issues [here](https://github.com/MaterializeInc/materialize/issues/16367). We will make sure the new implementation is correct and performs well before merging each of the PRs.
 
 # Open questions
 
-- How to have automated performance tests? Can we check in Testdrive that some materialized view (that has window functions) is being updated fast enough?
-- We should check that there is correct parallelization inside window partitions, see above.
+How to have automated performance tests? Can we check in Testdrive that some materialized view (that has window functions) is being updated fast enough? (For the first version, manual performance tests are fine.)
+
+We should check that there is correct parallelization inside window partitions, see above.
