@@ -213,7 +213,7 @@ The level of support for these tools will improve as we extend the coverage of `
 
 | Service | Support level              | Notes                                                                           |             |
 | ------- | -------------------------- | ------------------------------------------------------------------------------- | ----------- |
-| Cube.js | {{< supportLevel alpha >}} | Connect using the [Materialize driver](https://cube.dev/docs/config/databases). | [](#notify) |
+| Cube.js | {{< supportLevel alpha >}} | Connect using the [Materialize driver](https://cube.dev/docs/config/databases). See the [Cube guide](/integrations/cube) for a step-by-step breakdown of the integration. | [](#notify) |
 
 ### Reverse ETL
 
