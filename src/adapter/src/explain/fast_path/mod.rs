@@ -11,11 +11,11 @@
 
 use std::collections::BTreeMap;
 
-use mz_expr::explain::ExplainMultiPlan;
+use mz_expr::explain::{ExplainContext, ExplainMultiPlan};
 use mz_repr::explain::{AnnotatedPlan, Explain, ExplainError, UnsupportedFormat};
 
 use crate::coord::peek::FastPathPlan;
-use crate::explain::{ExplainContext, Explainable};
+use crate::explain::Explainable;
 
 impl<'a> Explain<'a> for Explainable<'a, FastPathPlan> {
     type Context = ExplainContext<'a>;
