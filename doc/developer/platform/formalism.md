@@ -40,7 +40,7 @@ are faithful to the "real" TVC between `since` and `upper`.
 
 Materialize identifies each TVC by a unique `GlobalId`, and maintains a mutable map of `GlobalId`s to the current pTVC representing that `GlobalID`'s TVC.
 
-Internally, Materialize is separated into two layers: *storage* and *compute*.
+Internally, Materialize is separated into three layers: *storage*, *compute*, and *adapter*.
 The storage layer records updates from (e.g.) external data sources. The
 compute layer provides materialized views: new TVCs which are derived from
 other TVCs in some way. The ability to write and read to these layers is given
@@ -55,8 +55,7 @@ SQL statements using a stateful *timeline* object. To map table names to
 `GlobalIds` and capabilities, Materialize maintains a *source* mapping. SQL
 indices are maintained by the compute layer.
 
-Finally: Materialize's adapter supports SQL transactions, but there are
-significant constraints on how these transactions can mix reads and writes.
+Finally: Materialize's adapter supports SQL transactions.
 
 # In depth
 
@@ -113,6 +112,9 @@ For integers, a frontier could be the singleton set `F = {5}`; the set of times
 after `F` are `{6, 7, 8, ...}`.
 
 The latest frontier is the empty set `{}`. No time is later than `{}`.
+
+A *stateful timeline* is a *timeline* and a *frontier* of the latest times of
+all completed events within the timeline.
 
 Throughout this document, "time" generally refers to a Materialize time in some
 timeline. We say "wall-clock time" to describe time in the real world. Times
@@ -506,7 +508,7 @@ views is *also* a pTVC. Storage and compute cooperate to ensure pTVC
 correctness always holds.
 
 Users query Materialize using SQL. That SQL is interpreted by an *adapter*,
-which transforms SQL queries into updates or reads of specific TVCs at specific
+which transforms SQL queries into updates, reads, or creation of specific TVCs at specific
 times. Those times (where not explicitly specified) are chosen by a *timestamp
 oracle*. The adapter sends writes to storage, and reads values from compute.
 
@@ -670,7 +672,7 @@ In Materialize today, the DML commands are timestamped, and the DDL commands are
 That DDL commands are not timestamped in the same sense as a pTVC is a known potential source of apparent consistency issues.
 While it may be beneficial to think of Adapter's state as a pTVC, changes to its state are not meant to cascade through established views definitions.
 
-Commands acknowledged by the Adapter layer are durably recorded in a total order.
+Commands acknowledged by the Adapter layer to a user are durably recorded in a total order.
 Any user can rely on all future behavior of the system reflecting any acknowledged command.
 
 ## Timestamp Oracle
@@ -695,13 +697,6 @@ The timestamps from the timestamp oracle do not need to strictly increase, and
 any events that have the same timestamp are *concurrent*. Concurrent events (at
 the same timestamp) first modify collections and then read collections. All
 writes at a timestamp are visible to all reads at the same timestamp.
-
-SELECT statements observe all data mutations up through and including their
-timestamp. For this reason, we strictly advance the timestamp for each write
-that occurs after a read, to ensure that the write is not visible to the read.
-The adapter uses `Append` in response to the first read after a
-write, to ensure that prior writes are readable and to strictly advance the
-write frontier.
 
 Some DML operations, like UPDATE and DELETE, require a read-write transaction which prevents other writes from intervening.
 In these and other non-trivial cases, we rely on the total order of timestamps to provide the apparent total order of system execution.
@@ -747,12 +742,12 @@ The dataflow remains active until a corresponding `DROP INDEX` command is receiv
 The Adapter layer provides interactive transactions through the `BEGIN`, `COMMIT`, and `ROLLBACK` commands.
 There are various restrictions on these transactions, primarily because the Storage and Compute layers require you to durably write before you can read from them.
 This makes read-after-write transactions challenging to perform efficiently, and they are not currently supported.
-Write-after-read transactions are implemented by performing all reads at the current timestamp and then writing at a strictly later timestamp.
-Other read-only transactions may co-occur with a write-after-read transaction (logically preceding the transaction, as its writes are only visible at its write timestamp).
-Other write-only transactions may precede or follow a write-after-read transaction, but may not occur *between* the read and write times of that transaction.
-Multiple write-after-read transactions may not co-occur (their [read, write) half-open timestamp intervals must be disjoint).
+Read-then-write transactions are implemented by performing all reads at some timestamp greater than or equal to all previous timestamps and then writing at a strictly later timestamp.
+Other read-only transactions may co-occur with a read-then-write transaction (logically preceding the transaction, as its writes are only visible at its write timestamp).
+Other write-only transactions may precede or follow a read-then-write transaction, but may not occur *between* the read and write times of that transaction.
+Multiple read-then-write transactions may not co-occur (their [read, write) half-open timestamp intervals must be disjoint).
 
-It is possible that multiple write-after-read transactions on disjoint collections could be made concurrent, but the technical requirements are open at the moment.
+It is possible that multiple read-then-write transactions on disjoint collections could be made concurrent, but the technical requirements are open at the moment.
 
 Read-after-write, and general transactions are technically possible using advanced timestamps that allow for Adapter-private further resolution.
 All MZ collections support compensating update actions, and one can tentatively deploy updates and eventually potentially retract them, as long as others are unable to observe violations of atomicity.
@@ -765,4 +760,4 @@ These lower layers should provide similar "transactional" interfaces that valida
 
 As Materialize runs, the Adapter may see fit to "allow compaction" of collections Materialize maintains.
 It does so by downgrading its held read capabilities for the collection (identifier by `GlobalId`).
-Downgraded capabilities restrict the ability of Adapter to form commands to Storage and Compute, and may force the timestamp oracle's timestamps forward. Generally, the Adapter should not downgrade its read capabilities past the timestamp oracle's current timestamp, thereby avoiding this constraint.
+Downgraded capabilities restrict the ability of Adapter to form commands to Storage and Compute, and may force the timestamp oracle's timestamps forward.
