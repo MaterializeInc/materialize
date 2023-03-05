@@ -365,37 +365,48 @@ The implementation suggested in this document would be scalable to huge window p
 
 ## Rendering alternatives
 
-The main proposal of this document is to use prefix sum (with extensions/generalizations) for the efficient rendering of window functions, but there are some alternatives to this.
+The main proposal of this document is to use DD's prefix sum (with extensions/generalizations) for the efficient rendering of window functions, but there are some alternatives to this.
 
-### Creating a custom DD operator with a custom data structure
+### Custom datastructures instead of prefix sum
 
-TODO
+Instead of relying on DD operators to implement prefix sum, we could create a new DD operator specifically for window functions. This new operator would have a specialized data structure inside, e.g., something like a BTreeSet (with some extra info precomputed for the subtree under each node for certain window functions). When an input element is added/removed, we find it in the data structure in *log p* time, where _p_ is the partition size, traverse the neighborhood of the changed element and update the data structure and the output. This might have a serious efficiency advantage over relying on DD's prefix sum.
+
+Some examples:
+- LAG/LEAD with offset 1 is trivial: we find the changed element (in *log p* time), check just the previous and next element and update the output appropriately.
+- LAG/LEAD with offset _k_: we store the number of elements in each node, and then we are able to navigate _k_ elements back or forward in *log k* time (after finding the changed element in *log p* time). (We need two navigations from the changed element to collect the necessary info for updating the output: _k_ elements backward and _k_ elements forward.)
+- LAG/LEAD with IGNORE NULLS: We additionally store the number of non-null elements in the subtree, and then we are able to navigate from the changed element to the target element in *log d* time, where _d_ is the number of rows that we would step from the changed element to the target element if we were to be stepping one-by-one.
+- Window aggregations with a frame size of _k_ with ROWS frame mode: We find the changed element in *log p* time, and then we gather info from and update the previous and next _k_ elements, and emit _~2k_ updates. GROUPS frame mode is similar, but more updates and emissions are needed. RANGE mode is also similar, but instead of stepping _k_ elements, we step until we reach a sufficient offset in the ORDER BY key.
+
+Importantly, computation times and memory requirements here don't involve the bit length of the input indexes.
+
+This sounds tempting due to its efficiency (and simplicity for certain window functions), but there are some drawbacks:
+- Partition sizes would not be scalable beyond a single machine, since each partition is stored in a single data structure. (Contrast this with prefix sum implemented by DD's data-parallel operations.)
+- This approach wouldn't compose nicely with WITH MUTUALLY RECURSIVE. DD's prefix sum will be incremental not just with respect to changing input data, but also with respect to changes from one iteration of a recursive query to the next. This is because DD's operations and data structures (arrangements) are written in a way to incrementalize across Timely's complex timestamps (where the timestamps involve source timestamps as well as iteration numbers). Our custom data structure would incrementalize only across source timestamps, by simply updating it in-place when a source timestamp closes. But between each iteration, it would need to be fully rebuilt.
 
 ### Implement Prefix Sum in MIR (involving `LetRec`) instead of a large chunk of custom rendering code
 
 The main plan for implementing Prefix Sum is to implement it directly on DD (and represent it as one node in LIR). An alternative would be to implement Prefix Sum on MIR: Prefix Sum's internal joins, reduces, iterations, etc. would be constructed not by directly calling DD functions in the rendering, but by MIR joins, MIR reduces, MIR LetRec, etc. In this case, the window function handling code would mainly operate in the HIR-to-MIR lowering: it would translate HIR's WindowExpr to MirRelationExpr.
 
-Critically, the Prefix Sum algorithm involves iteration, needed for operating on the data-dependent number of levels of the tree data structure that is storing the sums. Iteration is possible to express in MIR using `LetRec`, which is our recently built infrastructure for WITH MUTUALLY RECURSIVE. However, [this infrastructure is in an experimental state at the moment](https://github.com/MaterializeInc/materialize/issues/17012). For example, the optimizer currently mostly skips the recursive parts of queries, leaving them unoptimized. This is a long way from the robust optimization that would be needed to support such a highly complex algorithm as our Prefix Sum. Therefore, I would not tie the success of the window function effort to `LetRec` at this time.
+Critically, the Prefix Sum algorithm involves iteration (with a data-dependent number of steps). Iteration is possible to express in MIR using `LetRec`, which is our infrastructure for WITH MUTUALLY RECURSIVE. However, [this infrastructure is just currently being built, and is in an experimental state at the moment](https://github.com/MaterializeInc/materialize/issues/17012). For example, the optimizer currently mostly skips the recursive parts of queries, leaving them unoptimized. This is a long way from the robust optimization that would be needed to support such a highly complex algorithm as our Prefix Sum. Therefore, I would not tie the success of the window function effort to `LetRec` at this time.
 
 Still, at some future time when we are confident in our optimizer's ability to robustly handle `LetRec`, we might revisit this decision. I'll list some pro and contra arguments for implementing Prefix Sum in MIR, putting aside the above immaturity of `LetRec`:
 
 Pros:
 - Prefix Sum could potentially benefit from later performance improvements from an evolving optimizer or rendering.
 - We wouldn't need to specially implement certain optimizations for window functions, but would instead get them for free from the standard MIR optimizations. For example, [projection pushdown through window functions](https://github.com/MaterializeInc/materialize/issues/17522).
-- Optimizing Prefix Sum could be integrated with optimizing other parts of the query.
+- Optimization decisions for Prefix Sum would be integrated with optimizing other parts of the query.
 
 Cons:
 - Creating MIR nodes is more cumbersome than calling DD functions. (column references by position instead of Rust variables, etc.)
 - We would need to add several scalar functions for integer bit manipulations, e.g., for extracting set bits from integers.
 - When directly writing DD code, we have access to all the power of DD, potentially enabling access to better performance than through the compiler pipeline from MIR.
-- We might need such operations that are impossible or extremely cumbersome to express in MIR. For example, the numbering in the "Duplicate Indexes" section.
 
 ## Where to put the idiom recognition?
 
 This document proposes recognizing the windowing idiom (that the HIR-to-MIR lowering creates) in the MIR-to-LIR lowering. An alternative would be to do the idiom recognition in the rendering. In my opinion, the lowering is a more natural place for it, because:
 - We shouldn't have conditional code in the rendering, and this idiom recognition will be a giant piece of conditional code.
 - We want (at least) EXPLAIN PHYSICAL PLAN to show how we'll execute a window function.
-- We need to know the type of the ORDER BY columns, which we don't know in LIR. (Although we could add extra type info to window function calls to get around this issue.)
+- We need to know the type of the ORDER BY columns, which we don't know in LIR. (Although we could add extra type info just to window function calls during the MIR-to-LIR lowering to get around this issue.)
 
 ## Representing window functions in each of the IRs
 
@@ -486,9 +497,7 @@ An automated way to implement the above could be as follows (say, in Testdrive):
 1. Copy some TPC-H data from our TPC-H source into tables.
 2. Create a materialized view with some window functions on the tables.
 3. Do some inserts/updates/deletes on the tables.
-4. Check that updating of the materialized view happens quickly. It should be possible to set up the input data and the queries in such a way that
-    - updating takes orders of magnitude faster than the initial snapshot. (But not with the current window function support.)
-    - The difference from the initial snapshot should be big enough so that the test won’t be flaky. (I already tested a [simple prototype for LAG outside Materialize](https://github.com/ggevay/window-funcs).)
+4. Check that updating of the materialized view happens quickly. It should be possible to set up the input data and the queries in such a way that updating takes orders of magnitude faster than reacting to the initial snapshot. (But not with the current window function support.) The difference from the initial snapshot should be big enough so that the test won’t be flaky. (I already tested a [simple prototype for LAG outside Materialize](https://github.com/ggevay/window-funcs).)
 
 We should also measure the memory requirements of our new rendering, so that we can advise users on sizing replicas.
 
@@ -498,6 +507,8 @@ There are many window functions, and many frame options. We will gradually add t
 
 # Open questions
 
-How to have automated performance tests? Can we check in Testdrive that some materialized view (that has window functions) is being updated fast enough? (For the first version, manual performance tests are fine.)
+Do we have enough arguments for choosing prefix sum over custom data structures? (See the "Custom datastructures instead of prefix sum" section.)
 
 We should check that there is correct parallelization inside window partitions, see above.
+
+How to have automated performance tests? How can we check in Testdrive that some materialized view (that has window functions) is being updated fast enough? (This is not critical for the first version; we'll use manual performance tests.)
