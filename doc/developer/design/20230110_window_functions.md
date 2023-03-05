@@ -433,33 +433,45 @@ The current plan is to *not* have an explicit representation of window functions
 
 The 3 representation options in MIR are:
 
-1. *Create a dedicated enum variant in `MirRelationExpr`*
-    - I think this is better than 2., because Map (and MirScalarExprs in general) should have the semantics that they can be evaluated by just looking at one input element, while a window function needs to look at large parts of a window partition. If we were to put window functions into scalar expressions, then we would need to check lots of existing code that is processing MirScalarExprs that they are not getting unpleasantly surprised by window functions.
-    - Compared to 3., it might be easier to skip window functions in many transforms. This is both good and bad:
-        - We can get a first version done more quickly. (And then potentially add optimizations later.)
-        - But we might leave some easy optimization opportunities on the table, which would come from already-existing transform code for `Reduce`.
-   - A new `MirRelationExpr` variant would mean we have to modify about 12-14 transforms `LetRec` is pattern-matched in 12 files in the `transform` crate, `TopK` 14 times. See also [the recent LetRec addition](https://github.com/MaterializeInc/materialize/commit/9ac8e060d82487752ba28c42f7b146ff9f730ca3) for an example of how it looks when we add a new `MirRelationExpr` variant. (But note that, currently, LetRec is disabled in all but a few transforms)
-   - When considering sharing a new many-to-many Reduce variant between window functions and TopK, we should keep in mind that the output columns are different: TopK keeps exactly the existing columns, but a window function adds an extra column.
-2. (*Hiding window functions in `MirScalarExpr`*)
-    - This seems scary to me, because scalar expressions should generally produce exactly one value by looking at exactly one record, which is not true for window functions. It's hard to tell that none of the code that is dealing with scalar expressions would suddenly break.
-    - `MirScalarExpr` can occur in several places (`JoinClosure`, etc.), so we would have to attend to window functions in the lowerings of each of these.
-3. *We could consider putting window functions in `MirRelationExpr::Reduce`.* This was suggested by Frank: [https://materializeinc.slack.com/archives/C02PPB50ZHS/p1672685549326199?thread_ts=1671723908.657539&cid=C02PPB50ZHS](https://materializeinc.slack.com/archives/C02PPB50ZHS/p1672685549326199?thread_ts=1671723908.657539&cid=C02PPB50ZHS)
-    - `Reduce` is pattern-matched in 20 files in the `transform` crate. All of these will have to be modified. This is a bit more than the ~12-14 pattern matches of adding a new enum variant, because there are some transforms specialized to `Reduce`, which we wouldn't need to touch if it were a new enum variant instead.
-    - The main argument for this is that maybe we could reuse some of the code that is handling `Reduce`. However, there are two big differences between grouped aggregation and window functions, which hinders code re-use in most places:
-      1. The output columns are different: A grouped aggregation’s output is the grouping key columns and then one column for each aggregate, but a window function retains all columns, and then just appends one column at the end (regardless of the grouping key).
-      2. Grouped aggregation produces exactly one row per group, while window functions produce exactly one row per input row. To solve this difference, Frank is saying we could generalize `Reduce`, making it many-to-many, [as in DD's `reduce`](https://github.com/TimelyDataflow/differential-dataflow/blob/master/src/operators/reduce.rs#L71). (To me, it seems that matching up MIR Reduce's behavior with DD’s Reduce would be useful if the translation of MIR's Reduce would be to just call DD’s Reduce, but this is not the case at all for window functions.)
-    - It seems to me that the overlap between current `Reduce` handling and how to handle window functions is not big enough to justify putting the window functions into `Reduce`. There would be ifs every time we handle `Reduce`, and different things would be happening for traditional `Reduce` and window function `Reduce`. We could later have a separate EPIC to consider unifying window function and Reduce (and potentially TopK) into a many-to-many “super-reduce”, as this seems to be a separate work item from window functions.
-    - Examining code reuse possibilities for some example transformations:
-      - `ColumnKnowledge`
-          - The `optimize` call for the `group_key` could be reused (for the key of the PARTITION BY), but this is just a few lines.
-              - But they cannot be pushed to the `output` `Vec<DatumKnowledge>`, because the grouping key columns are not part of the output. Instead, the knowledge from the original columns should be pushed.
-          - The rest of the code is also somewhat similar to what needs to happen with window functions, but not exactly the same, due to the more complicated representation of window expressions (`WindowExprType`) vs. aggregate expressions. (`AggregateExpr`). So, it seems to me that code sharing wouldn't really help here.
-      - `FoldConstants`: The heavy lifting here is in `fold_reduce_constant`, which is completely different from what is needed for window functions. The rest of the code is similar, but not identical.
-      - `JoinImplementation`: This tries to reuse arrangements after a Reduce, which we cannot do for window functions. So we would have to special-case those Reduces that are actually window functions.
-      - `MonotonicFlag` is easy either way.
-      - `ReduceElision` could be partially re-used, but we would need to add some ifs due to the different output columns. Also, we would have to implement a new `on_unique` for window functions. (Although, this one doesn't sound like a terribly useful optimization for window functions, because it’s hard to see how a window function call could end up on a unique column.)
-      - `LiteralLifting`: The two inlinings at the beginning could be reused. (But those are already copy-pasted ~5 times, so they should rather be factored out into a function, and then they could be called when processing a new enum variant for window functions.) The rest probably not so much.
-      - ...
+*1. Create a dedicated enum variant in `MirRelationExpr`*
+
+I think this is better than 2., because Map (and MirScalarExprs in general) should have the semantics that they can be evaluated by just looking at one input element, while a window function needs to look at large parts of a window partition. If we were to put window functions into scalar expressions, then we would need to check lots of existing code that is processing MirScalarExprs that they are not getting unpleasantly surprised by window functions.
+
+Compared to 3., it might be easier to skip window functions in many transforms. This is both good and bad:
+  - We can get a first version done more quickly. (And then potentially add optimizations later.)
+  - But we might leave some easy optimization opportunities on the table, which would come from already-existing transform code for `Reduce`.
+
+A new `MirRelationExpr` variant would mean we have to modify about 12-14 transforms `LetRec` is pattern-matched in 12 files in the `transform` crate, `TopK` 14 times. See also [the recent LetRec addition](https://github.com/MaterializeInc/materialize/commit/9ac8e060d82487752ba28c42f7b146ff9f730ca3) for an example of how it looks when we add a new `MirRelationExpr` variant. (But note that, currently, LetRec is disabled in all but a few transforms)
+
+When considering sharing a new many-to-many Reduce variant between window functions and TopK, we should keep in mind that the output columns are different: TopK keeps exactly the existing columns, but a window function adds an extra column.
+
+*(2. Hiding window functions in `MirScalarExpr`*)
+
+This seems scary to me, because scalar expressions should generally produce exactly one value by looking at exactly one record, which is not true for window functions. It's hard to tell that none of the code that is dealing with scalar expressions would suddenly break.
+
+Also note that `MirScalarExpr` can occur in several places (`JoinClosure`, etc.), so we would have to attend to window functions in the lowerings of each of these.
+
+*3. We could consider putting window functions in `MirRelationExpr::Reduce`.* This was suggested by Frank: [https://materializeinc.slack.com/archives/C02PPB50ZHS/p1672685549326199?thread_ts=1671723908.657539&cid=C02PPB50ZHS](https://materializeinc.slack.com/archives/C02PPB50ZHS/p1672685549326199?thread_ts=1671723908.657539&cid=C02PPB50ZHS)
+
+`Reduce` is pattern-matched in 20 files in the `transform` crate. All of these will have to be modified. This is a bit more than the ~12-14 pattern matches of adding a new enum variant, because there are some transforms specialized to `Reduce`, which we wouldn't need to touch if it were a new enum variant instead.
+
+The main argument for this is that maybe we could reuse some of the code that is handling `Reduce`. However, there are two big differences between grouped aggregation and window functions, which hinders code re-use in most places:
+  1. The output columns are different: A grouped aggregation’s output is the grouping key columns and then one column for each aggregate, but a window function retains all columns, and then just appends one column at the end (regardless of the grouping key).
+  2. Grouped aggregation produces exactly one row per group, while window functions produce exactly one row per input row. To solve this difference, Frank is saying we could generalize `Reduce`, making it many-to-many, [as in DD's `reduce`](https://github.com/TimelyDataflow/differential-dataflow/blob/master/src/operators/reduce.rs#L71). (To me, it seems that matching up MIR Reduce's behavior with DD’s Reduce would be useful if the translation of MIR's Reduce would be to just call DD’s Reduce, but this is not the case at all for window functions.)
+
+It seems to me that the overlap between current `Reduce` handling and how to handle window functions is not big enough to justify putting the window functions into `Reduce`. There would be ifs every time we handle `Reduce`, and different things would be happening for traditional `Reduce` and window function `Reduce`. We could later have a separate EPIC to consider unifying window function and Reduce (and potentially TopK) into a many-to-many “super-reduce”, as this seems to be a separate work item from window functions.
+
+Examining code reuse possibilities for some example transformations:
+- `ColumnKnowledge`
+    - The `optimize` call for the `group_key` could be reused (for the key of the PARTITION BY), but this is just a few lines.
+        - But they cannot be pushed to the `output` `Vec<DatumKnowledge>`, because the grouping key columns are not part of the output. Instead, the knowledge from the original columns should be pushed.
+    - The rest of the code is also somewhat similar to what needs to happen with window functions, but not exactly the same, due to the more complicated representation of window expressions (`WindowExprType`) vs. aggregate expressions. (`AggregateExpr`). So, it seems to me that code sharing wouldn't really help here.
+- `FoldConstants`: The heavy lifting here is in `fold_reduce_constant`, which is completely different from what is needed for window functions. The rest of the code is similar, but not identical.
+- `JoinImplementation`: This tries to reuse arrangements after a Reduce, which we cannot do for window functions. So we would have to special-case those Reduces that are actually window functions.
+- `MonotonicFlag` is easy either way.
+- `ReduceElision` could be partially re-used, but we would need to add some ifs due to the different output columns. Also, we would have to implement a new `on_unique` for window functions. (Although, this one doesn't sound like a terribly useful optimization for window functions, because it’s hard to see how a window function call could end up on a unique column.)
+- `LiteralLifting`: The two inlinings at the beginning could be reused. (But those are already copy-pasted ~5 times, so they should rather be factored out into a function, and then they could be called when processing a new enum variant for window functions.) The rest probably not so much.
+- ...
 
 ### LIR
 
