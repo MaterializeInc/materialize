@@ -26,7 +26,7 @@ use timely::progress::Antichain;
 use tokio::sync::mpsc;
 use tokio::time::Interval;
 use tokio_postgres::error::SqlState;
-use tokio_postgres::{Client, Statement};
+use tokio_postgres::{Client, Config, Statement};
 use tracing::{error, event, info, warn, Level};
 
 use mz_ore::metric;
@@ -312,11 +312,21 @@ impl StashFactory {
         schema: Option<String>,
         tls: MakeTlsConnector,
     ) -> Result<Stash, StashError> {
+        let mut config: Config = url.parse()?;
+        // We'd like to use the crdb_connect_timeout SystemVar here (because it can
+        // be set in LaunchDarkly), but our current APIs only expose that after the
+        // catalog exists, which needs a working stash. Hard code something with a
+        // too-high timeout to hedge against a too-low number that causes bootstrap
+        // problems until then.
+        const DEFAULT_STASH_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+        config.connect_timeout(DEFAULT_STASH_CONNECT_TIMEOUT);
+        let config = Arc::new(tokio::sync::Mutex::new(config));
+
         let (sinces_tx, mut sinces_rx) = mpsc::unbounded_channel();
 
         let mut conn = Stash {
             txn_mode,
-            url: url.clone(),
+            config: Arc::clone(&config),
             schema,
             tls: tls.clone(),
             client: None,
@@ -364,7 +374,7 @@ impl StashFactory {
                 while let Some(_) = sinces_rx.recv().await {}
             });
         } else {
-            Consolidator::start(url, tls, sinces_rx);
+            Consolidator::start(config, tls, sinces_rx);
         }
 
         Ok(conn)
@@ -413,7 +423,7 @@ impl Metrics {
 /// migration path.
 pub struct Stash {
     txn_mode: TransactionMode,
-    url: String,
+    config: Arc<tokio::sync::Mutex<Config>>,
     schema: Option<String>,
     tls: MakeTlsConnector,
     client: Option<Client>,
@@ -430,7 +440,7 @@ pub struct Stash {
 impl std::fmt::Debug for Stash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Postgres")
-            .field("url", &self.url)
+            .field("config", &self.config)
             .field("epoch", &self.epoch)
             .field("nonce", &self.nonce)
             .finish_non_exhaustive()
@@ -496,9 +506,15 @@ impl Stash {
             .await
     }
 
+    pub async fn set_connect_timeout(&mut self, connect_timeout: Duration) {
+        // TODO: This should be set in the constructor, but we don't have access
+        // to LaunchDarkly at that time.
+        self.config.lock().await.connect_timeout(connect_timeout);
+    }
+
     /// Sets `client` to a new connection to the Postgres server.
     async fn connect(&mut self) -> Result<(), StashError> {
-        let (mut client, connection) = tokio_postgres::connect(&self.url, self.tls.clone()).await?;
+        let (mut client, connection) = self.config.lock().await.connect(self.tls.clone()).await?;
         mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
             if let Err(e) = connection.await {
                 tracing::error!("postgres stash connection error: {}", e);
@@ -1065,7 +1081,7 @@ impl Stash {
 /// the operations here are idempotent (can safely be run concurrently with a
 /// second stash).
 struct Consolidator {
-    url: String,
+    config: Arc<tokio::sync::Mutex<Config>>,
     tls: MakeTlsConnector,
     sinces_rx: mpsc::UnboundedReceiver<(Id, Antichain<Timestamp>)>,
     consolidations: BTreeMap<Id, Antichain<Timestamp>>,
@@ -1079,12 +1095,12 @@ struct Consolidator {
 
 impl Consolidator {
     pub fn start(
-        url: String,
+        config: Arc<tokio::sync::Mutex<Config>>,
         tls: MakeTlsConnector,
         sinces_rx: mpsc::UnboundedReceiver<(Id, Antichain<Timestamp>)>,
     ) {
         let cons = Self {
-            url,
+            config,
             tls,
             sinces_rx,
             client: None,
@@ -1220,7 +1236,7 @@ impl Consolidator {
     }
 
     async fn connect(&mut self) -> Result<(), StashError> {
-        let (client, connection) = tokio_postgres::connect(&self.url, self.tls.clone()).await?;
+        let (client, connection) = self.config.lock().await.connect(self.tls.clone()).await?;
         mz_ore::task::spawn(
             || "tokio-postgres stash consolidation connection",
             async move {

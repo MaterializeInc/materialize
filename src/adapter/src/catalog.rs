@@ -2402,6 +2402,14 @@ impl Catalog {
             )
             .await?;
 
+        // Now that LD is loaded, set the intended stash timeout.
+        // TODO: Move this into the stash constructor.
+        catalog
+            .storage()
+            .await
+            .set_connect_timeout(catalog.system_config().crdb_connect_timeout())
+            .await;
+
         catalog.load_builtin_types().await?;
 
         let persisted_builtin_ids = catalog.storage().await.load_system_gids().await?;
