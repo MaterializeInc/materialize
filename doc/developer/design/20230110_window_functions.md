@@ -185,11 +185,36 @@ In DD's prefix sum implementation, duplicate indexes are currently forbidden. We
 
 #### Implementation details of DD's prefix sum
 
+(The reader might skip this section on a first read, and refer back to it later when delving into performance considerations, or extensions/generalizations of prefix sum needed for framed window functions and LAG/LEAD with an offset >1.)
+
+[DD's prefix sum implementation](https://github.com/TimelyDataflow/differential-dataflow/blob/master/src/algorithms/prefix_sum.rs) is somewhat similar to a [Fenwick tree](https://en.wikipedia.org/wiki/Fenwick_tree), but relies on DD's unordered collection operations rather than a flat array, and has sparse indexing. It precomputes the sums for certain power-of-2 sized intervals (`fn aggregate`), and then computes the sum for any (not precomputed) prefix interval by dividing the interval into a logarithmic number of such intervals for which there is a precomputed sum, and adding these precomputed sums together (`fn broadcast`).
+
+##### The `aggregate` function
+
+The intervals included in the sum precomputations will be specified in the index domain, e.g., a certain precomputed interval might cover those input elements whose index is larger or equal than 8 and smaller than 12. The size of this interval is 4, but this size is to be understood in the index domain; there might be less than 4 actual input elements whose index falls into this interval.
+
+We now discuss the set of intervals for which `aggregate` precomputes a sum (we'll denote this set by _A_). Importantly, we precompute the sum for only such intervals that cover at least one input element. We will define a set _A'_, of which _A_ will be the subset of such intervals that cover at least one input element. We give 3 alternative, but equivalent definitions (let's denote the bit length of indexes by _b_):
+
+*1. (Direct definition.)*
+For each _i ∈ 0 ..= b-1_, for each _j ∈ 0 .. 2^(b-i)_, let _A'_ include the interval _j * 2^i .. j*2^i + 2^i_.
+
+*2. (A recursive definition, useful for understanding the actual implementation of `aggregate`.)*
+We start the recursion by adding to _A'_ all intervals of length 1, i.e., one "interval" at each of 0 .. 2^b. Then we take _b-1_ steps, and in each of these steps we add those intervals that are twice as large as the intervals added in the previous step. Specifically, we take the set of intervals added in the previous step, and merge pairs of neighboring intervals (the pairs don't overlap). E.g., we merge the first two intervals, the 3. and 4., the 5. and 6., etc. To also compute the actual sums, when merging two intervals, we can sum their precomputed sums to compute the sum for the merged interval.
+
+The actual implementation of `aggregate` proceeds in similar steps, but it builds _A_ directly, rather than _A'_: rather than starting from all possible 1-length intervals, it starts from only those indexes that actually occur in the input data. This means that each merge step will find that it has to merge either 1 or 2 intervals, because one of the intervals that would have participated in the merge if we were building _A'_ rather than _A_ might actually be absent, due to not containing any such index that occurs in the input data. When "merging" only 1 interval rather than 2, the sum of the "merged" interval will be the same value as that 1 constituent interval.
+
+*3. (Index bit vector prefixes. This one is useful for certain performance considerations.)*
+This definition directly defines _A_ rather than _A'_. Let's consider the indexes that occur in the input data as bit vectors. For each of _len ∈ 0 ..= b-1_, let's define the set *D_len* to be the set of distinct prefixes of length _len_ of all the index bit vectors. In other words, for each _len_, we take the first _len_ bits of each of the indexes, and form *D_len* by deduplicating all these index prefixes. Let *D* be the union of all *D_len* sets.
+
+_A_ will have exactly one interval for each element of *D*. The actual mapping (i.e., what element of _A_ belongs to each element of *D_len*) is not so important, since we will rely on just the sizes of the *D_len* sets for certain performance considerations. (The actual mapping is as follows: For each *len*, for each *d ∈ D_len*, *A* includes the interval whose size is *b-len* and starts at _d * 2^(b-len)_.)
+
+For the performance of `aggregate`, the size distribution of the *D_len* sets is important, since the implementation (explained above at the recursive definition) performs one step for each _len_, and the time and memory requirements of each of these steps are proportional to the size of *D_len*. Critically, this means that large *D_len*s (whose size is similar to the number of input elements) contribute a per-input-element overhead, while small *D_len*s only contribute a per-partition overhead. We can compare this to the performance characteristics of a hierarchical aggregation: in that algorithm, the first several steps have almost the same size as the input, while the last few steps are small.
+
+So the question now is how quickly do the *D_len* sets get small while proceeding through the steps. Interestingly, the size distribution of the `D_len` sets depends on where are the variations in the bit vectors of the indexes in the input. For example, if all indexes start with 10 zero bits, then each of *D_0, D_1, D_2, ..., D_9* will have only one element, and thus the last 10 steps of `aggregate` will contribute only a per-partition overhead. However, if all indexes _end_ with 10 zero bits, then each of *D_b-1, D_b-2, D_b-3, ..., D_b-10* will have a similar size as the input data. TODO: refer to the performance/optimization section for a discussion on how these bit vectors typically look, and how to make them not have many trailing zeros. Or maybe move the last two paragraphs to that section.) 
+
+##### The `broadcast` function
+
 TODO
-
-#### Performance
-
-TODO: only briefly here, and point to a later section for more details
 
 ----------------------
 
