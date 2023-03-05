@@ -181,7 +181,7 @@ We’ll use the word **index** in this document to mean the values of the ORDER 
 
 As mentioned above, DD's prefix sum needs the index type to be `usize`. It is actually a fundamental limitation of the algorithm that it only works with integer indexes, and therefore we will have to map other types to integers. We discuss this in the "ORDER BY types" section.
 
-In DD's prefix sum implementation, duplicate indexes are currently forbidden. We will partially lift this limitation, but there are some complications, see in the "Duplicate indexes" section. 
+In DD's prefix sum implementation, duplicate indexes are currently forbidden. We will partially lift this limitation, but there are some complications, see in the "Duplicate indexes" section.
 
 #### Implementation details of DD's prefix sum
 
@@ -210,7 +210,7 @@ _A_ will have exactly one interval for each element of *D*. The actual mapping (
 
 For the performance of `aggregate`, the size distribution of the *D_len* sets is important, since the implementation (explained above at the recursive definition) performs one step for each _len_, and the time and memory requirements of each of these steps are proportional to the size of *D_len*. Critically, this means that large *D_len*s (whose size is similar to the number of input elements) contribute a per-input-element overhead, while small *D_len*s only contribute a per-partition overhead. We can compare this to the performance characteristics of a hierarchical aggregation: in that algorithm, the first several steps have almost the same size as the input, while the last few steps are small.
 
-So the question now is how quickly do the *D_len* sets get small while proceeding through the steps. Interestingly, the size distribution of the `D_len` sets depends on where are the variations in the bit vectors of the indexes in the input. For example, if all indexes start with 10 zero bits, then each of *D_0, D_1, D_2, ..., D_9* will have only one element, and thus the last 10 steps of `aggregate` will contribute only a per-partition overhead. However, if all indexes _end_ with 10 zero bits, then each of *D_b-1, D_b-2, D_b-3, ..., D_b-10* will have a similar size as the input data. TODO: refer to the performance/optimization section for a discussion on how these bit vectors typically look, and how to make them not have many trailing zeros. Or maybe move the last two paragraphs to that section.) 
+So the question now is how quickly do the *D_len* sets get small while proceeding through the steps. Interestingly, the size distribution of the `D_len` sets depends on where are the variations in the bit vectors of the indexes in the input. For example, if all indexes start with 10 zero bits, then each of *D_0, D_1, D_2, ..., D_9* will have only one element, and thus the last 10 steps of `aggregate` will contribute only a per-partition overhead. However, if all indexes _end_ with 10 zero bits, then each of *D_b-1, D_b-2, D_b-3, ..., D_b-10* will have a similar size as the input data. TODO: refer to the performance/optimization section for a discussion on how these bit vectors typically look, and how to make them not have many trailing zeros. Or maybe move the last two paragraphs to that section.
 
 ##### The `broadcast` function
 
@@ -369,19 +369,29 @@ The main proposal of this document is to use DD's prefix sum (with extensions/ge
 
 ### Custom datastructures instead of prefix sum
 
-Instead of relying on DD operators to implement prefix sum, we could create a new DD operator specifically for window functions. This new operator would have a specialized data structure inside, e.g., something like a BTreeSet (with some extra info precomputed for the subtree under each node for certain window functions). When an input element is added/removed, we find it in the data structure in *log p* time, where _p_ is the partition size, traverse the neighborhood of the changed element and update the data structure and the output. This might have a serious efficiency advantage over relying on DD's prefix sum.
+Instead of relying on DD operators to implement prefix sum, we could create a new DD operator specifically for window functions. This new operator would have a specialized data structure inside, e.g., something like a BTreeMap (with some extra info precomputed for the subtree under each node for certain window functions). When an input element is added/removed, we find it in the data structure in *log p* time, where _p_ is the partition size, traverse the neighborhood of the changed element and update the data structure and the output. This might have a serious efficiency advantage over relying on DD's prefix sum.
 
 Some examples:
 - LAG/LEAD with offset 1 is trivial: we find the changed element (in *log p* time), check just the previous and next element and update the output appropriately.
 - LAG/LEAD with offset _k_: we store the number of elements in each node, and then we are able to navigate _k_ elements back or forward in *log k* time (after finding the changed element in *log p* time). (We need two navigations from the changed element to collect the necessary info for updating the output: _k_ elements backward and _k_ elements forward.)
 - LAG/LEAD with IGNORE NULLS: We additionally store the number of non-null elements in the subtree, and then we are able to navigate from the changed element to the target element in *log d* time, where _d_ is the number of rows that we would step from the changed element to the target element if we were to be stepping one-by-one.
-- Window aggregations with a frame size of _k_ with ROWS frame mode: We find the changed element in *log p* time, and then we gather info from and update the previous and next _k_ elements, and emit _~2k_ updates. GROUPS frame mode is similar, but more updates and emissions are needed. RANGE mode is also similar, but instead of stepping _k_ elements, we step until we reach a sufficient offset in the ORDER BY key.
+- Window aggregations with a frame size of _k_ with ROWS frame mode: We find the changed element in *log p* time, and then we gather info from and update the previous and next _k_ elements, and emit _~2k_ updates. GROUPS frame mode is similar, but more updates and emissions are needed. The number of updates and emissions would still be approximately equal to each other. RANGE mode is also similar, but instead of stepping _k_ elements, we step until we reach a sufficient offset in the ORDER BY key. The number of steps would be similar to the number of updated output elements here too.
+- Window functions with an UNBOUNDED PRECEDING frame: We simply store the actual prefix sum for each element, in addition to the tree data structure. (No need to put it inside the tree, can be a separate BTreeMap.) The number of elements that need to be updated in this data structure is the same as the number of output elements that are changing.
+- FIRST_VALUE/LAST_VALUE with a frame size of _k_: Each tree node should store the number of elements in its subtree. We find the updated element in *log p* steps, and then find the target value in *log k* steps.
 
-Importantly, computation times and memory requirements here don't involve the bit length of the input indexes.
+Pros:
+- Efficiency, due to several reasons:
+  - Computation times and memory requirements here don't involve the bit length of the input indexes (_b_). Instead, the logarithm of the partition sizes (_p_) is involved. Having _log p_ instead of _log b_ can often be a factor of several times.
+  - The above _log p_ is hidden inside sequential code (inside the logic of a DD operator instead of calling DD operators), while in the case of prefix sum, there are _log b_ DD operators chained together. This means that in the case of prefix sum, the _log b_ is _multiplied_ by an extra logarithmic factor that comes from manipulating arrangements as part of each DD operation.
+- Simplicity. (no need for: a mapping of various types to integers, handling peer groups separately, complicated optimizations to make the performance acceptable)
+- Able to handle peer groups of non-trivial sizes. (A peer group is a group of records which agree on both the PARTITION BY key and the ORDER BY key.) As discussed in the "Duplicate indexes" section, the prefix sum approach can handle only very small peer groups, because ordering within a peer group has to involve the entire input records, but prefix sum's indexes have to be small, i.e., they can only involve the ORDER BY key. A custom tree datastructure would have no trouble ordering by the entire records instead of just the ORDER BY keys.
+- Would work with arbitrary types in the ORDER BY (e.g., string).
 
-This sounds tempting due to its efficiency (and simplicity for certain window functions), but there are some drawbacks:
-- Partition sizes would not be scalable beyond a single machine, since each partition is stored in a single data structure. (Contrast this with prefix sum implemented by DD's data-parallel operations.)
-- This approach wouldn't compose nicely with WITH MUTUALLY RECURSIVE. DD's prefix sum will be incremental not just with respect to changing input data, but also with respect to changes from one iteration of a recursive query to the next. This is because DD's operations and data structures (arrangements) are written in a way to incrementalize across Timely's complex timestamps (where the timestamps involve source timestamps as well as iteration numbers). Our custom data structure would incrementalize only across source timestamps, by simply updating it in-place when a source timestamp closes. But between each iteration, it would need to be fully rebuilt.
+Cons:
+- Partition sizes would not be scalable beyond a single machine, since each partition is stored in a single instance of the data structure. (Contrast this with prefix sum implemented by DD's data-parallel operations.)
+- This approach wouldn't compose nicely with WITH MUTUALLY RECURSIVE. DD's prefix sum would be incremental not just with respect to changing input data, but also with respect to changes from one iteration of a recursive query to the next. This is because DD's operations and data structures (arrangements) are written in a way to incrementalize across Timely's complex timestamps (where the timestamps involve source timestamps as well as iteration numbers). Our custom data structure would incrementalize only across source timestamps, by simply updating it in-place when a source timestamp closes. But between each iteration, it would need to be fully rebuilt.
+
+*One interesting option would be to allow the user to switch between prefix sum and a custom datastructure rendering*. The custom datastructure rendering is fine if 1) partitions won't be larger than, say, 1000000 elements, and 2) WITH MUTUALLY RECURSIVE is not present in the query. Maybe both huge partitions and window functions _inside_ WITH MUTUALLY RECURSIVE are rare enough that the default could be the custom datastructure rendering. The switching could be realized by a new keyword after the PARTITION BY clause.
 
 ### Implement Prefix Sum in MIR (involving `LetRec`) instead of a large chunk of custom rendering code
 
@@ -399,6 +409,7 @@ Pros:
 Cons:
 - Creating MIR nodes is more cumbersome than calling DD functions. (column references by position instead of Rust variables, etc.)
 - We would need to add several scalar functions for integer bit manipulations, e.g., for extracting set bits from integers.
+- Computing the scalar expressions would be much slower as long as we don't have [vectorization for them](https://github.com/MaterializeInc/materialize/issues/14513).
 - When directly writing DD code, we have access to all the power of DD, potentially enabling access to better performance than through the compiler pipeline from MIR.
 
 ## Where to put the idiom recognition?
@@ -429,7 +440,7 @@ In HIR, the window functions are currently in the scalar expressions (option 2. 
 
 ### MIR
 
-The current plan is to *not* have an explicit representation of window functions in MIR, but here we still discuss how such a representation could look like. We decided not to have an explicit representation because it would mean that we would have to immediately teach all existing transforms how to handle window functions, which would be a lot of code to write. Current transforms at least don't do incorrect things with window functions. (However, some transforms might currently not be able to do their thing on the complicated pattern that the HIR lowering creates for window functions, for example [projection pushdown doesn't work for window functions](https://github.com/MaterializeInc/materialize/issues/17522).)
+The current plan is to *not* have an explicit representation of window functions in MIR for now, but here we still discuss how such a representation could look like. We decided not to have an explicit representation because it would mean that we would have to immediately teach all existing transforms how to handle window functions, which would be a lot of code to write. Current transforms at least don't do incorrect things with window functions. (However, some transforms might currently not be able to do their thing on the complicated pattern that the HIR lowering creates for window functions, for example [projection pushdown doesn't work for window functions](https://github.com/MaterializeInc/materialize/issues/17522).)
 
 The 3 representation options in MIR are:
 
@@ -459,7 +470,7 @@ The main argument for this is that maybe we could reuse some of the code that is
   1. The output columns are different: A grouped aggregation’s output is the grouping key columns and then one column for each aggregate, but a window function retains all columns, and then just appends one column at the end (regardless of the grouping key).
   2. Grouped aggregation produces exactly one row per group, while window functions produce exactly one row per input row. To solve this difference, Frank is saying we could generalize `Reduce`, making it many-to-many, [as in DD's `reduce`](https://github.com/TimelyDataflow/differential-dataflow/blob/master/src/operators/reduce.rs#L71). (To me, it seems that matching up MIR Reduce's behavior with DD’s Reduce would be useful if the translation of MIR's Reduce would be to just call DD’s Reduce, but this is not the case at all for window functions.)
 
-It seems to me that the overlap between current `Reduce` handling and how to handle window functions is not big enough to justify putting the window functions into `Reduce`. There would be ifs every time we handle `Reduce`, and different things would be happening for traditional `Reduce` and window function `Reduce`. We could later have a separate EPIC to consider unifying window function and Reduce (and potentially TopK) into a many-to-many “super-reduce”, as this seems to be a separate work item from window functions.
+It seems to me that the overlap between the current `Reduce` handling and how to handle window functions is not big enough to justify putting the window functions into `Reduce`. There would be ifs every time we handle `Reduce`, and different things would be happening for traditional `Reduce` and window function `Reduce`. We could later have a separate EPIC to consider unifying window function and Reduce (and potentially TopK) into a many-to-many “super-reduce”, as this seems to be a separate work item from window functions.
 
 Examining code reuse possibilities for some example transformations:
 - `ColumnKnowledge`
@@ -519,7 +530,7 @@ There are many window functions, and many frame options. We will gradually add t
 
 # Open questions
 
-Do we have enough arguments for choosing prefix sum over custom data structures? (See the "Custom datastructures instead of prefix sum" section.)
+Do we have enough arguments for choosing prefix sum over custom data structures? Or maybe we could implement the custom datastructure rendering approach first, and later implement the prefix sum approach, and then give the option to the user to switch to the prefix sum rendering? (See the "Custom datastructures instead of prefix sum" section.)
 
 We should check that there is correct parallelization inside window partitions, see above.
 
