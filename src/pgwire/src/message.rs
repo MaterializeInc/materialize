@@ -424,6 +424,7 @@ impl ErrorResponse {
             AdapterNotice::UnimplementedIsolationLevel { .. } => SqlState::WARNING,
             AdapterNotice::DroppedSubscribe { .. } => SqlState::WARNING,
             AdapterNotice::BadStartupSetting { .. } => SqlState::WARNING,
+            AdapterNotice::RbacDisabled => SqlState::WARNING,
         };
         ErrorResponse {
             severity: Severity::for_adapter_notice(&notice),
@@ -581,6 +582,7 @@ impl Severity {
             AdapterNotice::UnimplementedIsolationLevel { .. } => Severity::Notice,
             AdapterNotice::DroppedSubscribe { .. } => Severity::Notice,
             AdapterNotice::BadStartupSetting { .. } => Severity::Notice,
+            AdapterNotice::RbacDisabled => Severity::Notice,
         }
     }
 }

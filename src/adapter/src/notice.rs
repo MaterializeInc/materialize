@@ -79,6 +79,7 @@ pub enum AdapterNotice {
         name: String,
         reason: String,
     },
+    RbacDisabled,
 }
 
 impl AdapterNotice {
@@ -178,6 +179,14 @@ impl fmt::Display for AdapterNotice {
             }
             AdapterNotice::BadStartupSetting { name, reason } => {
                 write!(f, "startup setting {name} not set: {reason}")
+            }
+            AdapterNotice::RbacDisabled => {
+                write!(
+                    f,
+                    "RBAC is under development: currently no role attributes or privileges \
+                will be considered when executing statements, although these attributes are saved \
+                and will be considered in a later release"
+                )
             }
         }
     }

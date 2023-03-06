@@ -23,5 +23,6 @@ You cannot drop the current role.
 
 ## Related pages
 
+- [ALTER ROLE](../alter-role)
 - [CREATE ROLE](../create-role)
 - [DROP USER](../drop-user)
