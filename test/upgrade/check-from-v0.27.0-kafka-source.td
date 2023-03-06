@@ -47,5 +47,3 @@ materialize_public_kafka_source  linked
   WHERE details->>'name' = 'materialize_public_kafka_source' OR details->>'cluster_name' = 'materialize_public_kafka_source'
 create  cluster          "{\"name\":\"materialize_public_kafka_source\"}"  ${expected-user}
 create  cluster-replica  "{\"cluster_name\":\"materialize_public_kafka_source\",\"logical_size\":\"4\",\"replica_name\":\"linked\"}"  ${expected-user}
-
-> DROP SOURCE kafka_source;
