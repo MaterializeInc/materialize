@@ -529,6 +529,7 @@ mod test {
 }
 
 pub mod hybrid {
+    use differential_dataflow::lattice::{Lattice, Maximum};
     use serde::{Deserialize, Serialize};
     use std::borrow::Cow;
     use std::fmt::Debug;
@@ -571,6 +572,32 @@ pub mod hybrid {
     }
 
     impl<A: order::TotalOrder, B: order::TotalOrder> order::TotalOrder for Hybrid<A, B> {}
+
+    impl<A: Lattice + Clone, B: Lattice + Timestamp + Maximum> Lattice for Hybrid<A, B> {
+        fn join(&self, other: &Self) -> Self {
+            if self.0 == other.0 {
+                Hybrid(self.0.clone(), self.1.join(&other.1))
+            } else if self.0.less_than(&other.0) {
+                other.clone()
+            } else if other.0.less_than(&self.0) {
+                self.clone()
+            } else {
+                Hybrid(self.0.join(&other.0), B::minimum())
+            }
+        }
+
+        fn meet(&self, other: &Self) -> Self {
+            if self.0 == other.0 {
+                Hybrid(self.0.clone(), self.1.meet(&other.1))
+            } else if self.0.less_than(&other.0) {
+                self.clone()
+            } else if other.0.less_than(&self.0) {
+                other.clone()
+            } else {
+                Hybrid(self.0.meet(&other.0), B::maximum())
+            }
+        }
+    }
 
     impl<A: Timestamp, B: Timestamp> Timestamp for Hybrid<A, B> {
         type Summary = Hybrid<A::Summary, B::Summary>;
@@ -636,6 +663,20 @@ pub mod hybrid {
                     left.less_equal(&right),
                     (left_outer, left_inner) <= (right_outer, right_inner)
                 );
+            });
+
+            // Lattice operations are consistent with ordering
+            proptest!(|(left_outer: u64, left_inner: u32, right_outer: u64, right_inner: u32)| {
+                let left = Hybrid(left_outer, left_inner);
+                let right = Hybrid(right_outer, right_inner);
+
+                let join = left.join(&right);
+                assert!(join >= left);
+                assert!(join >= right);
+
+                let meet = left.meet(&right);
+                assert!(meet <= left);
+                assert!(meet <= right);
             });
 
             // Adding summaries gives you the same result as applying them in order.
