@@ -13,4 +13,5 @@
 //! The split between this module and the `mz_adapter::session` is organic and
 //! should be revisited with more intention in the future.
 
+pub mod user;
 pub mod vars;

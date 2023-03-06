@@ -103,13 +103,13 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_postgres::error::{DbError, SqlState};
 use tracing::info;
 
-use mz_adapter::catalog::{INTERNAL_USER_NAMES, INTROSPECTION_USER, SYSTEM_USER};
 use mz_adapter::{TimestampContext, TimestampExplanation};
 use mz_ore::assert_contains;
 use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
 use mz_ore::retry::Retry;
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 use mz_repr::Timestamp;
+use mz_sql::session::user::{INTERNAL_USER_NAMES, INTROSPECTION_USER, SYSTEM_USER};
 
 use crate::util::{MzTimestamp, PostgresErrorExt, Server, KAFKA_ADDRS};
 
