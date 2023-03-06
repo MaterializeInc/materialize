@@ -103,6 +103,7 @@ INSERT INTO alter_column VALUES (3, 'bc');
 
 ! SELECT * from alter_column;
 contains:altered
+
 > DROP SOURCE mz_source;
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -129,11 +130,11 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_nullability ALTER COLUMN f1 DROP NOT NULL;
 INSERT INTO alter_nullability VALUES (NULL);
 
-> SELECT * FROM alter_nullability WHERE f1 IS NOT NULL;
-1
+! SELECT * FROM alter_nullability WHERE f1 IS NOT NULL;
+contains:altered
 
-> SELECT * FROM alter_nullability WHERE f1 IS NULL;
-<null>
+! SELECT * FROM alter_nullability WHERE f1 IS NULL;
+contains:altered
 
 > DROP SOURCE mz_source;
 
@@ -397,17 +398,13 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 > SELECT * from alter_table_change_attnum;
 f1_orig f2_orig
 
+# Ensure simpl name swap doesn't fool schema detection
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_table_change_attnum DROP COLUMN f2;
 ALTER TABLE alter_table_change_attnum ADD COLUMN f2 VARCHAR(10);
 INSERT INTO alter_table_change_attnum (f1, f2) VALUES ('f1_changed', 'f2_changed');
 
-# We have fooled the system into accepting this schema change
-# Results should be:
-# f1_orig <null>
-# f1_changed f2_changed
-> SELECT * FROM alter_table_change_attnum;
-f1_orig f2_orig
-f1_changed f2_changed
+! SELECT * FROM alter_table_change_attnum;
+contains:altered
 
 > DROP SOURCE mz_source;
