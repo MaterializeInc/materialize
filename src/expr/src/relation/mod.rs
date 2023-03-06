@@ -2769,7 +2769,23 @@ impl RowSetFinishing {
             })
             .unwrap_or(limit);
 
-        let mut ret = Vec::with_capacity(return_size);
+        // Bail early if we know our results won't fit into our Vec
+        // 
+        // Note: this check is a _lower bound_ as to how much memory
+        // we'll need for results. Calculating the actual answer would
+        // require us to iterate through all of the rows
+        if return_size * std::mem::size_of::<Row>() > max_result_size {
+            return Err(format!(
+                "result would exceed max size of {}",
+                ByteSize::b(u64::cast_from(max_result_size))
+            ));
+        }
+
+        // The return Vec can sometimes be quite large, so we'll use the
+        // failable allocation APIs to prevent a panic
+        let mut ret = Vec::new();
+        ret.try_reserve(return_size).map_err(|e| e.to_string())?;
+
         let mut remaining = limit;
         let mut row_buf = Row::default();
         let mut datum_vec = mz_repr::DatumVec::new();
