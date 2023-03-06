@@ -513,8 +513,8 @@
     unmaterializable: true
 
   - signature: 'uuid_generate_v5(namespace: uuid, name: text) -> uuid'
-    description: 'Generates a version 5 UUID (using SHA-1) in the given namespace using
-      the specified input name. [See the postgres docs for more details](https://www.postgresql.org/docs/current/uuid-ossp.html)'
+    description: 'Generates a [version 5 UUID](https://www.rfc-editor.org/rfc/rfc4122#page-7) (using SHA-1) in the given namespace using
+      the specified input name.'
 
 - type: JSON
   functions:
