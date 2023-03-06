@@ -9,7 +9,7 @@ such as TPC-H.
 The `--help` option can be used to show supported options:
 
 ```
-./mzcompose run feature-benchmark --help
+bin/mzcompose --find feature-benchmark run default --help
 ```
 
 To run the default benchmark scenarios:
@@ -237,7 +237,7 @@ Available `Action`s:
 * `Lambda(lambda e: e.RestartMz())` - restarts the Mz service
 
 
-## Running the same scenario with multiple times within the same run
+## Running the same scenario multiple times within the same run
 
 It is possible to use the python `parameterized` module to cause the same scenario to be executed multiple times. For example, with different scale factors:
 
@@ -271,7 +271,7 @@ cycles with the benchmark running.
 
 # Bisection
 
-It is possible to use `git bisect` to determine the specific revision when a performance regression occurred
+It is possible to use `git bisect` to determine the specific revision when a performance regression occurred.
 
 ## Running
 
