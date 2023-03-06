@@ -278,7 +278,6 @@ where
             )
         });
 
-        let mut emitted_to_until = false;
         let mut batch_parts = vec![];
 
         let mut lease_returner = subscription.clone_lease_returner();
@@ -297,8 +296,18 @@ where
             // `as_of`.
             yield ListenEvent::Progress(as_of.clone());
 
-            loop {
+            let mut done = false;
+            while !done {
                 for event in subscription.next().await {
+                    if let ListenEvent::Progress(ref progress) = event {
+                        // If `until.less_equal(progress)`, it means that all subsequent batches will
+                        // contain only times greater or equal to `until`, which means they can be
+                        // dropped in their entirety. The current batch must be emitted, but we can
+                        // stop afterwards.
+                        if PartialOrder::less_equal(&until, progress) {
+                            done = true;
+                        }
+                    }
                     yield event;
                 }
             }
@@ -306,7 +315,7 @@ where
         tokio::pin!(subscription_stream);
 
         'emitting_parts:
-        while !emitted_to_until {
+        loop {
             tokio::select! {
                 // Order here is not required for correctness, but minimizes
                 // the work we need to do (e.g. check if the dataflow has been
@@ -345,20 +354,12 @@ where
                 // subscription and pass them on.
                 //
                 // NB: StreamExt::next is cancel safe
-                Some(event) = subscription_stream.next(), if inflight_bytes < max_inflight_bytes => {
+                event = subscription_stream.next(), if inflight_bytes < max_inflight_bytes => {
                     match event {
-                        ListenEvent::Updates(mut parts) => {
+                        Some(ListenEvent::Updates(mut parts)) => {
                             batch_parts.append(&mut parts);
                         }
-                        ListenEvent::Progress(progress) => {
-                            // If `until.less_equal(progress)`, it means that all subsequent batches will
-                            // contain only times greater or equal to `until`, which means they can be
-                            // dropped in their entirety. The current batch must be emitted, but we can
-                            // stop afterwards.
-                            if PartialOrder::less_equal(&until, &progress) {
-                                emitted_to_until = true;
-                            }
-
+                        Some(ListenEvent::Progress(progress)) => {
                             let session_cap = cap_set.delayed(&current_ts);
                             let mut descs_output = descs_output.activate();
                             let mut descs_session = descs_output.session(&session_cap);
@@ -408,6 +409,12 @@ where
                                     break 'emitting_parts;
                                 }
                             }
+                        }
+                        // We never expect any further output from our subscribe, 
+                        // so propagate that information downstream.
+                        None => {
+                            cap_set.downgrade(&[]);
+                            break 'emitting_parts;
                         }
                     }
                 }
