@@ -273,7 +273,6 @@ where
         });
 
         let mut emitted_to_until = false;
-        let mut parts_buffer = vec![];
         let mut batch_parts = vec![];
 
         let mut lease_returner = subscription.clone_lease_returner();
@@ -322,11 +321,10 @@ where
                 // to advance our SeqNo hold as we continue to emit batches.
                 //
                 // NB: AsyncInputHandle::next is cancel safe
-                Some(completed_fetch) = completed_fetches.next() => {
+                Some(completed_fetch) = completed_fetches.next_mut() => {
                     match completed_fetch {
-                        Event::Data(_cap, parts) => {
-                            parts.swap(&mut parts_buffer);
-                            for part in parts_buffer.drain(..) {
+                        Event::Data(_cap, data) => {
+                            for part in data.drain(..) {
                                 lease_returner.return_leased_part(lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part));
                             }
                         }
@@ -454,11 +452,10 @@ where
         // been fetched to avoid racing with GC and panicking on a missing blob.
         // We can drop our handle when the feedback edge from `shard_source_fetches`
         // advances to the empty frontier, indicating that all parts have been read.
-        while let Some(completed_fetch) = completed_fetches.next().await {
+        while let Some(completed_fetch) = completed_fetches.next_mut().await {
             match completed_fetch {
-                Event::Data(_cap, parts) => {
-                    parts.swap(&mut parts_buffer);
-                    for part in parts_buffer.drain(..) {
+                Event::Data(_cap, data) => {
+                    for part in data.drain(..) {
                         lease_returner.return_leased_part(lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part));
                     }
                 }
@@ -533,7 +530,7 @@ where
                 // `LeasedBatchPart`es cannot be dropped at this point w/o
                 // panicking, so swap them to an owned version.
                 for (_idx, part) in data.drain(..) {
-                    let (token, fetched) = fetcher
+                    let (leased_part, fetched) = fetcher
                         .fetch_leased_part(fetcher.leased_part_from_exchangeable(part))
                         .await;
                     let fetched = fetched.expect("shard_id should match across all workers");
