@@ -22,7 +22,9 @@ for details.
 {{< /warning >}}
 
 {{< warning >}}
-Attributes currently have no effect.
+RBAC is under development: currently no role attributes or privileges will be
+considered when executing statements, although these attributes are saved and
+will be considered in a later release.
 {{< /warning >}}
 
 ## Syntax
