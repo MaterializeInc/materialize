@@ -5,6 +5,8 @@ alter_rename ::=
   'ALTER' ('CONNECTION' | 'INDEX' | 'SOURCE' | 'SINK' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'SECRET' ) name 'RENAME TO' new_name
 alter_index ::=
   'ALTER' 'INDEX' name 'SET' 'ENABLED'
+alter_role ::=
+    'ALTER' 'ROLE' role_name 'WITH'? ('INHERIT' | 'CREATEROLE' | 'NOCREATEROLE' | 'CREATEDB' | 'NOCREATEDB' | 'CREATECLUSTER' | 'NOCREATECLUSTER')*
 alter_secret ::=
   'ALTER' 'SECRET' 'IF EXISTS'? name AS value
 alter_sink ::=
@@ -76,7 +78,7 @@ create_materialized_view ::=
     ('IN CLUSTER' cluster_name)?
     'AS' select_stmt
 create_role ::=
-    'CREATE' 'ROLE' role_name 'WITH'?
+    'CREATE' 'ROLE' role_name 'WITH'? ('INHERIT' | 'CREATEROLE' | 'NOCREATEROLE' | 'CREATEDB' | 'NOCREATEDB' | 'CREATECLUSTER' | 'NOCREATECLUSTER')*
 create_secret ::=
     'CREATE' 'SECRET' ('IF NOT EXISTS')? name 'AS' value
 create_schema ::=

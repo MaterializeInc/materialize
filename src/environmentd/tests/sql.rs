@@ -468,10 +468,13 @@ fn test_empty_subscribe_notice() {
         .max_duration(Duration::from_secs(10))
         .retry(|_| {
             let Some(e) = rx.try_next().unwrap() else {
-                return Err("No notice received")
+                return Err("No notice received".to_string())
             };
-            assert!(e.message().contains("guaranteed to be empty"));
-            Ok(())
+            if e.message().contains("guaranteed to be empty") {
+                Ok(())
+            } else {
+                Err(format!("wrong notice received: {e:?}"))
+            }
         })
         .unwrap();
 }

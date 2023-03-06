@@ -2506,13 +2506,6 @@ generate_extracted_config!(
     (ValueType, ResolvedDataType)
 );
 
-pub fn describe_create_role(
-    _: &StatementContext,
-    _: CreateRoleStatement,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
 pub(crate) struct PlannedRoleAttributes {
     pub(crate) inherit: Option<bool>,
     pub(crate) create_role: Option<bool>,
@@ -2520,10 +2513,7 @@ pub(crate) struct PlannedRoleAttributes {
     pub(crate) create_cluster: Option<bool>,
 }
 
-fn plan_role_attributes(
-    scx: &StatementContext,
-    options: Vec<RoleAttribute>,
-) -> Result<PlannedRoleAttributes, PlanError> {
+fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttributes, PlanError> {
     let mut planned_attributes = PlannedRoleAttributes {
         inherit: None,
         create_role: None,
@@ -2574,22 +2564,21 @@ fn plan_role_attributes(
         bail_unsupported!("non inherit roles");
     }
 
-    if planned_attributes.inherit.is_some()
-        || planned_attributes.create_cluster.is_some()
-        || planned_attributes.create_db.is_some()
-        || planned_attributes.create_role.is_some()
-    {
-        scx.require_unsafe_mode("role attributes")?;
-    }
-
     Ok(planned_attributes)
 }
 
+pub fn describe_create_role(
+    _: &StatementContext,
+    _: CreateRoleStatement,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
 pub fn plan_create_role(
-    scx: &StatementContext,
+    _: &StatementContext,
     CreateRoleStatement { name, options }: CreateRoleStatement,
 ) -> Result<Plan, PlanError> {
-    let attributes = plan_role_attributes(scx, options)?;
+    let attributes = plan_role_attributes(options)?;
     Ok(Plan::CreateRole(CreateRolePlan {
         name: normalize::ident(name),
         attributes: attributes.into(),
@@ -4123,10 +4112,8 @@ pub fn plan_alter_role(
     scx: &StatementContext,
     AlterRoleStatement { name, options }: AlterRoleStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    scx.require_unsafe_mode("ALTER ROLE")?;
-
     let role = scx.catalog.get_role(&name.id);
-    let attributes = plan_role_attributes(scx, options)?;
+    let attributes = plan_role_attributes(options)?;
 
     Ok(Plan::AlterRole(AlterRolePlan {
         id: name.id,

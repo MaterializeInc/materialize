@@ -164,7 +164,13 @@ impl Coordinator {
                 );
             }
             Plan::CreateRole(plan) => {
-                tx.send(self.sequence_create_role(&session, plan).await, session);
+                let res = self.sequence_create_role(&session, plan).await;
+                if res.is_ok() {
+                    // Notice is intentionally sent here and not in sequence_create_role so that
+                    // no notice is sent during startup.
+                    session.add_notice(AdapterNotice::RbacDisabled);
+                }
+                tx.send(res, session);
             }
             Plan::CreateCluster(plan) => {
                 tx.send(self.sequence_create_cluster(&session, plan).await, session);
@@ -342,7 +348,11 @@ impl Coordinator {
                 tx.send(self.sequence_alter_index_reset_options(plan), session);
             }
             Plan::AlterRole(plan) => {
-                tx.send(self.sequence_alter_role(&session, plan).await, session);
+                let res = self.sequence_alter_role(&session, plan).await;
+                if res.is_ok() {
+                    session.add_notice(AdapterNotice::RbacDisabled);
+                }
+                tx.send(res, session);
             }
             Plan::AlterSecret(plan) => {
                 tx.send(self.sequence_alter_secret(&session, plan).await, session);
