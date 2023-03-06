@@ -12,5 +12,9 @@
 > SELECT COUNT(*) FROM t2;
 500000
 
-! SELECT * FROM to_be_altered;
-contains:altered
+> SELECT * FROM to_be_altered_ok;
+1
+<null>
+
+! SELECT * FROM to_be_altered_fail;
+contains:has been altered
