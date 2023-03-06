@@ -110,8 +110,8 @@ def main() -> int:
         action="store_true",
     )
     parser.add_argument(
-        "--mac-instruments",
-        help="Enables support for profiling with Instruments on macOS",
+        "--disable-mac-codesigning",
+        help="Disables the limited codesigning we do on macOS to support Instruments",
         action="store_true",
     )
     args = parser.parse_intermixed_args()
@@ -132,11 +132,13 @@ def main() -> int:
         else:
             path = ROOT / "target" / "debug" / args.program
 
-        if args.mac_instruments:
+        if args.disable_mac_codesigning:
             if sys.platform != "darwin":
-                print("Ignoring --mac-instruments since we're not on macOS")
+                print("Ignoring --disable-mac-codesigning since we're not on macOS")
             else:
-                _macos_codesign(path)
+                print("Disabled macOS Codesigning")
+        elif sys.platform == "darwin":
+            _macos_codesign(path)
 
         command = [str(path)]
         if args.tokio_console:
