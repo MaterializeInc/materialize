@@ -2757,31 +2757,30 @@ impl RowSetFinishing {
         // let return_size = std::cmp::min(total, limit);
         //
         // but it breaks early if the limit is reached, instead of scanning the entire code.
-        let return_size = rows[offset_nth_row..]
+        let (num_rows, num_bytes) = rows[offset_nth_row..]
             .iter()
-            .try_fold(0, |sum, (_, count)| {
-                let new_sum = sum + count.get();
-                if new_sum > limit {
+            .try_fold((0, 0), |(num_rows, num_bytes), (row, count)| {
+                let new_rows = num_rows + count.get();
+                let new_bytes = num_bytes + row.byte_len();
+
+                // if we have more rows or more bytes than we can handle, bail
+                if new_rows > limit || new_bytes > max_result_size {
                     None
                 } else {
-                    Some(new_sum)
+                    Some((new_rows, new_bytes))
                 }
             })
-            .unwrap_or(limit);
+            .unwrap_or((limit, usize::MAX));
 
         // Bail early if we know our results won't fit into our Vec
-        //
-        // Note: this check is a _lower bound_ as to how much memory
-        // we'll need for results. Calculating the actual answer would
-        // require us to iterate through all of the rows
-        if return_size.saturating_mul(std::mem::size_of::<Row>()) >= max_result_size {
+        if num_bytes > max_result_size {
             return Err(format!(
                 "result would exceed max size of {}",
                 ByteSize::b(u64::cast_from(max_result_size))
             ));
         }
 
-        let mut ret = Vec::with_capacity(return_size);
+        let mut ret = Vec::with_capacity(num_rows);
         let mut remaining = limit;
         let mut row_buf = Row::default();
         let mut datum_vec = mz_repr::DatumVec::new();
