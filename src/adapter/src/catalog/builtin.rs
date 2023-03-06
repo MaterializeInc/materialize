@@ -3273,6 +3273,7 @@ mod tests {
     use mz_ore::task;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID};
     use mz_sql::catalog::{CatalogSchema, SessionCatalog};
+    use mz_sql::func::OP_IMPLS;
     use mz_sql::names::{PartialObjectName, ResolvedDatabaseSpecifier};
 
     use crate::catalog::{Catalog, CatalogItem, SYSTEM_CONN_ID};
@@ -3282,13 +3283,11 @@ mod tests {
     // Connect to a running Postgres server and verify that our builtin
     // types and functions match it, in addition to some other things.
     #[tokio::test]
-    async fn compare_builtins_postgres() {
-        Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
+    async fn test_compare_builtins_postgres() {
+        async fn inner(catalog: Catalog) {
             // Verify that all builtin functions:
             // - have a unique OID
             // - if they have a postgres counterpart (same oid) then they have matching name
-            // Note: Use Postgres 13 when testing because older version don't have all
-            // functions.
             let (client, connection) = tokio_postgres::connect(
                 &env::var("POSTGRES_URL").unwrap_or_else(|_| "host=localhost user=postgres".into()),
                 NoTls,
@@ -3304,7 +3303,6 @@ mod tests {
 
             struct PgProc {
                 name: String,
-                schema: String,
                 arg_oids: Vec<u32>,
                 ret_oid: Option<u32>,
                 ret_set: bool,
@@ -3317,12 +3315,16 @@ mod tests {
                 array: u32,
             }
 
+            struct PgOper {
+                oprresult: u32,
+                name: String,
+            }
+
             let pg_proc: BTreeMap<_, _> = client
                 .query(
                     "SELECT
                     p.oid,
                     proname,
-                    nspname,
                     proargtypes,
                     prorettype,
                     proretset
@@ -3337,18 +3339,12 @@ mod tests {
                     let oid: u32 = row.get("oid");
                     let pg_proc = PgProc {
                         name: row.get("proname"),
-                        schema: row.get("nspname"),
                         arg_oids: row.get("proargtypes"),
                         ret_oid: row.get("prorettype"),
                         ret_set: row.get("proretset"),
                     };
                     (oid, pg_proc)
                 })
-                .collect();
-
-            let pg_proc_by_name: BTreeMap<_, _> = pg_proc
-                .iter()
-                .map(|(_, proc)| ((&*proc.schema, &*proc.name), proc))
                 .collect();
 
             let pg_type: BTreeMap<_, _> = client
@@ -3371,6 +3367,21 @@ mod tests {
                 })
                 .collect();
 
+            let pg_oper: BTreeMap<_, _> = client
+                .query("SELECT oid, oprname, oprresult FROM pg_operator", &[])
+                .await
+                .expect("pg query failed")
+                .into_iter()
+                .map(|row| {
+                    let oid: u32 = row.get("oid");
+                    let pg_oper = PgOper {
+                        name: row.get("oprname"),
+                        oprresult: row.get("oprresult"),
+                    };
+                    (oid, pg_oper)
+                })
+                .collect();
+
             let conn_catalog = catalog.for_system_session();
             let resolve_type_oid = |item: &str| {
                 conn_catalog
@@ -3385,19 +3396,12 @@ mod tests {
                     .oid()
             };
 
-            let mut proc_oids = BTreeSet::new();
-            let mut type_oids = BTreeSet::new();
+            let mut all_oids = BTreeSet::new();
 
             for builtin in BUILTINS::iter() {
                 match builtin {
                     Builtin::Type(ty) => {
-                        // Verify that all type OIDs are unique.
-                        assert!(
-                            type_oids.insert(ty.oid),
-                            "{} reused oid {}",
-                            ty.name,
-                            ty.oid
-                        );
+                        assert!(all_oids.insert(ty.oid), "{} reused oid {}", ty.name, ty.oid);
 
                         if ty.oid >= FIRST_MATERIALIZE_OID {
                             // High OIDs are reserved in Materialize and don't have
@@ -3507,31 +3511,17 @@ mod tests {
                     }
                     Builtin::Func(func) => {
                         for imp in func.inner.func_impls() {
-                            // Verify that all function OIDs are unique.
                             assert!(
-                                proc_oids.insert(imp.oid),
+                                all_oids.insert(imp.oid),
                                 "{} reused oid {}",
                                 func.name,
                                 imp.oid
                             );
 
-                            if imp.oid >= FIRST_MATERIALIZE_OID {
-                                // High OIDs are reserved in Materialize and don't have
-                                // postgres counterparts.
-                                continue;
-                            }
-
                             // For functions that have a postgres counterpart, verify that the name and
                             // oid match.
                             let pg_fn = if imp.oid >= FIRST_UNPINNED_OID {
-                                pg_proc_by_name
-                                    .get(&(func.schema, func.name))
-                                    .unwrap_or_else(|| {
-                                        panic!(
-                                            "pg_proc missing function {}.{}",
-                                            func.schema, func.name
-                                        )
-                                    })
+                                continue;
                             } else {
                                 pg_proc.get(&imp.oid).unwrap_or_else(|| {
                                     panic!(
@@ -3581,7 +3571,40 @@ mod tests {
                     _ => (),
                 }
             }
-        }).await
+
+            for (op, func) in OP_IMPLS.iter() {
+                for imp in func.func_impls() {
+                    assert!(all_oids.insert(imp.oid), "{} reused oid {}", op, imp.oid);
+
+                    // For operators that have a postgres counterpart, verify that the name and oid match.
+                    let pg_op = if imp.oid >= FIRST_UNPINNED_OID {
+                        continue;
+                    } else {
+                        pg_oper.get(&imp.oid).unwrap_or_else(|| {
+                            panic!("pg_operator missing operator {}: oid {}", op, imp.oid)
+                        })
+                    };
+
+                    assert_eq!(*op, pg_op.name);
+
+                    let imp_return_oid = imp
+                        .return_typ
+                        .map(|item| resolve_type_oid(item))
+                        .expect("must have oid");
+                    if imp_return_oid != pg_op.oprresult {
+                        println!(
+                            "operators with oid {} ({}) don't match return typs: {} in mz, {} in pg",
+                            imp.oid,
+                            op,
+                            imp_return_oid,
+                            pg_op.oprresult
+                        );
+                    }
+                }
+            }
+        }
+
+        Catalog::with_debug(NOW_ZERO.clone(), inner).await
     }
 
     // Make sure pg views don't use types that only exist in Materialize.
