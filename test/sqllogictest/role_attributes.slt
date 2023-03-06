@@ -1,0 +1,382 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+reset-server
+
+# Enable rbac checks.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO true;
+----
+COMPLETE 0
+
+# Give materialize the CREATEROLE attribute.
+simple conn=mz_system,user=mz_system
+ALTER ROLE materialize CREATEROLE;
+----
+COMPLETE 0
+
+statement ok
+CREATE ROLE joe
+
+statement ok
+CREATE ROLE foo
+
+# Test all permutations of available attributes
+
+# NOCREATEROLE NOCREATEDB NOCREATECLUSTER
+
+simple conn=joe,user=joe
+CREATE ROLE bar;
+----
+db error: ERROR: permission denied to create role
+DETAIL: You must have the CREATEROLE attribute to create role
+
+simple conn=joe,user=joe
+ALTER ROLE foo CREATECLUSTER;
+----
+db error: ERROR: permission denied to alter role
+DETAIL: You must have the CREATEROLE attribute to alter role
+
+simple conn=joe,user=joe
+DROP ROLE foo;
+----
+db error: ERROR: permission denied to drop roles
+DETAIL: You must have the CREATEROLE attribute to drop roles
+
+simple conn=joe,user=joe
+CREATE DATABASE foo;
+----
+db error: ERROR: permission denied to create database
+DETAIL: You must have the CREATEDB attribute to create database
+
+simple conn=joe,user=joe
+CREATE CLUSTER foo REPLICAS (r1 (size '1'));
+----
+db error: ERROR: permission denied to create cluster
+DETAIL: You must have the CREATECLUSTER attribute to create cluster
+
+# CREATEROLE NOCREATEDB NOCREATECLUSTER
+
+statement ok
+ALTER ROLE joe CREATEROLE NOCREATEDB NOCREATECLUSTER;
+
+simple conn=joe,user=joe
+CREATE ROLE bar;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER ROLE foo CREATECLUSTER;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+DROP ROLE foo;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE DATABASE foo;
+----
+db error: ERROR: permission denied to create database
+DETAIL: You must have the CREATEDB attribute to create database
+
+simple conn=joe,user=joe
+CREATE CLUSTER foo REPLICAS (r1 (size '1'));
+----
+db error: ERROR: permission denied to create cluster
+DETAIL: You must have the CREATECLUSTER attribute to create cluster
+
+statement ok
+DROP ROLE bar;
+
+statement ok
+CREATE ROLE foo;
+
+# NOCREATEROLE CREATEDB NOCREATECLUSTER
+
+statement ok
+ALTER ROLE joe NOCREATEROLE CREATEDB NOCREATECLUSTER;
+
+simple conn=joe,user=joe
+CREATE ROLE bar;
+----
+db error: ERROR: permission denied to create role
+DETAIL: You must have the CREATEROLE attribute to create role
+
+simple conn=joe,user=joe
+ALTER ROLE foo CREATECLUSTER;
+----
+db error: ERROR: permission denied to alter role
+DETAIL: You must have the CREATEROLE attribute to alter role
+
+simple conn=joe,user=joe
+DROP ROLE foo;
+----
+db error: ERROR: permission denied to drop roles
+DETAIL: You must have the CREATEROLE attribute to drop roles
+
+simple conn=joe,user=joe
+CREATE DATABASE foo;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE CLUSTER foo REPLICAS (r1 (size '1'));
+----
+db error: ERROR: permission denied to create cluster
+DETAIL: You must have the CREATECLUSTER attribute to create cluster
+
+statement ok
+DROP DATABASE foo;
+
+# NOCREATEROLE NOCREATEDB CREATECLUSTER
+
+statement ok
+ALTER ROLE joe NOCREATEROLE NOCREATEDB CREATECLUSTER;
+
+simple conn=joe,user=joe
+CREATE ROLE bar;
+----
+db error: ERROR: permission denied to create role
+DETAIL: You must have the CREATEROLE attribute to create role
+
+simple conn=joe,user=joe
+ALTER ROLE foo CREATECLUSTER;
+----
+db error: ERROR: permission denied to alter role
+DETAIL: You must have the CREATEROLE attribute to alter role
+
+simple conn=joe,user=joe
+DROP ROLE foo;
+----
+db error: ERROR: permission denied to drop roles
+DETAIL: You must have the CREATEROLE attribute to drop roles
+
+simple conn=joe,user=joe
+CREATE DATABASE foo;
+----
+db error: ERROR: permission denied to create database
+DETAIL: You must have the CREATEDB attribute to create database
+
+simple conn=joe,user=joe
+CREATE CLUSTER foo REPLICAS (r1 (size '1'));
+----
+COMPLETE 0
+
+statement ok
+DROP CLUSTER foo;
+
+# CREATEROLE CREATEDB NOCREATECLUSTER
+
+statement ok
+ALTER ROLE joe CREATEROLE CREATEDB NOCREATECLUSTER;
+
+simple conn=joe,user=joe
+CREATE ROLE bar;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER ROLE foo CREATECLUSTER;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+DROP ROLE foo;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE DATABASE foo;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE CLUSTER foo REPLICAS (r1 (size '1'));
+----
+db error: ERROR: permission denied to create cluster
+DETAIL: You must have the CREATECLUSTER attribute to create cluster
+
+statement ok
+DROP ROLE bar;
+
+statement ok
+CREATE ROLE foo;
+
+statement ok
+DROP DATABASE foo;
+
+# CREATEROLE NOCREATEDB CREATECLUSTER
+
+statement ok
+ALTER ROLE joe CREATEROLE NOCREATEDB CREATECLUSTER
+
+simple conn=joe,user=joe
+CREATE ROLE bar;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER ROLE foo CREATECLUSTER;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+DROP ROLE foo;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE DATABASE foo;
+----
+db error: ERROR: permission denied to create database
+DETAIL: You must have the CREATEDB attribute to create database
+
+simple conn=joe,user=joe
+CREATE CLUSTER foo REPLICAS (r1 (size '1'));
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE bar;
+
+statement ok
+CREATE ROLE foo;
+
+statement ok
+DROP CLUSTER foo;
+
+# NOCREATEROLE CREATEDB CREATECLUSTER
+
+statement ok
+ALTER ROLE joe NOCREATEROLE CREATEDB CREATECLUSTER;
+
+simple conn=joe,user=joe
+CREATE ROLE bar;
+----
+db error: ERROR: permission denied to create role
+DETAIL: You must have the CREATEROLE attribute to create role
+
+simple conn=joe,user=joe
+ALTER ROLE foo CREATECLUSTER;
+----
+db error: ERROR: permission denied to alter role
+DETAIL: You must have the CREATEROLE attribute to alter role
+
+simple conn=joe,user=joe
+DROP ROLE foo;
+----
+db error: ERROR: permission denied to drop roles
+DETAIL: You must have the CREATEROLE attribute to drop roles
+
+simple conn=joe,user=joe
+CREATE DATABASE foo;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE CLUSTER foo REPLICAS (r1 (size '1'));
+----
+COMPLETE 0
+
+statement ok
+DROP DATABASE foo;
+
+statement ok
+DROP CLUSTER foo;
+
+# CREATEROLE CREATEDB CREATECLUSTER
+
+statement ok
+ALTER ROLE joe CREATEROLE CREATEDB CREATECLUSTER
+
+simple conn=joe,user=joe
+CREATE ROLE bar;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER ROLE foo CREATECLUSTER;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+DROP ROLE foo;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE DATABASE foo;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE CLUSTER foo REPLICAS (r1 (size '1'));
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE bar;
+
+statement ok
+CREATE ROLE foo;
+
+statement ok
+DROP DATABASE foo;
+
+statement ok
+DROP CLUSTER foo;
+
+# Test that superusers can do anything
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE bar;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER ROLE foo CREATECLUSTER;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP ROLE foo;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE DATABASE foo;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER foo REPLICAS (r1 (size '1'));
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE bar;
+
+statement ok
+CREATE ROLE foo;
+
+statement ok
+DROP DATABASE foo;
+
+statement ok
+DROP CLUSTER foo;
+
+# Disable rbac checks.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0

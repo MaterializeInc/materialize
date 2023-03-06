@@ -6679,6 +6679,10 @@ impl SessionCatalog for ConnCatalog<'_> {
     fn aws_privatelink_availability_zones(&self) -> Option<BTreeSet<String>> {
         self.state.aws_privatelink_availability_zones.clone()
     }
+
+    fn rbac_checks_enabled(&self) -> bool {
+        self.state.system_config().enable_rbac_checks()
+    }
 }
 
 impl mz_sql::catalog::CatalogDatabase for Database {

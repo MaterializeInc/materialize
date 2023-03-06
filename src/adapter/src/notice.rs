@@ -96,6 +96,7 @@ impl AdapterNotice {
             AdapterNotice::DroppedActiveDatabase { name: _ } => Some("Choose a new active database by executing SET DATABASE = <name>.".into()),
             AdapterNotice::DroppedActiveCluster { name: _ } => Some("Choose a new active cluster by executing SET CLUSTER = <name>.".into()),
             AdapterNotice::ClusterReplicaStatusChanged { status, .. } if *status == ClusterStatus::NotReady => Some("The cluster replica may be restarting or going offline.".into()),
+            AdapterNotice::RbacDisabled => Some("To enable RBAC run `ALTER SYSTEM SET enable_rbac_checks TO true` as a superuser.".into()),
             _ => None
         }
     }
@@ -183,9 +184,7 @@ impl fmt::Display for AdapterNotice {
             AdapterNotice::RbacDisabled => {
                 write!(
                     f,
-                    "RBAC is under development: currently no role attributes or privileges \
-                will be considered when executing statements, although these attributes are saved \
-                and will be considered in a later release"
+                    "RBAC is disabled so no role attributes will be considered when executing statements"
                 )
             }
         }

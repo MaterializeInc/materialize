@@ -26,8 +26,8 @@ use mz_sql::plan::PlanError;
 use mz_storage_client::controller::StorageError;
 use mz_transform::TransformError;
 
-use crate::catalog;
 use crate::session::Var;
+use crate::{catalog, rbac};
 
 /// Errors that can occur in the coordinator.
 #[derive(Debug)]
@@ -167,7 +167,7 @@ pub enum AdapterError {
     /// An error occurred in the MIR stage of the optimizer.
     Transform(TransformError),
     /// A user tried to perform an action that they were unauthorized to do.
-    Unauthorized(String),
+    Unauthorized(rbac::UnauthorizedError),
     /// The specified function cannot be called
     UncallableFunction {
         func: UnmaterializableFunc,
@@ -270,6 +270,7 @@ impl AdapterError {
             )),
             AdapterError::PlanError(e) => e.detail(),
             AdapterError::ConcurrentRoleDrop(_) => Some("Please disconnect and re-connect with a valid role.".into()),
+            AdapterError::Unauthorized(unauthorized) => Some(unauthorized.detail()),
             _ => None,
         }
     }
@@ -495,8 +496,8 @@ impl fmt::Display for AdapterError {
             AdapterError::UncallableFunction { func, context } => {
                 write!(f, "cannot call {} in {}", func, context)
             }
-            AdapterError::Unauthorized(msg) => {
-                write!(f, "unauthorized: {msg}")
+            AdapterError::Unauthorized(unauthorized) => {
+                write!(f, "{unauthorized}")
             }
             AdapterError::UnknownCursor(name) => {
                 write!(f, "cursor {} does not exist", name.quoted())
@@ -647,6 +648,12 @@ impl From<TimestampError> for AdapterError {
 impl From<mz_sql_parser::parser::ParserError> for AdapterError {
     fn from(e: mz_sql_parser::parser::ParserError) -> Self {
         AdapterError::ParseError(e)
+    }
+}
+
+impl From<rbac::UnauthorizedError> for AdapterError {
+    fn from(e: rbac::UnauthorizedError) -> Self {
+        AdapterError::Unauthorized(e)
     }
 }
 

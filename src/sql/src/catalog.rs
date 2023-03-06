@@ -212,6 +212,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
 
     /// Returns the set of supported AWS PrivateLink availability zone ids.
     fn aws_privatelink_availability_zones(&self) -> Option<BTreeSet<String>>;
+
+    /// Reports whether rbac_checks are enabled.
+    fn rbac_checks_enabled(&self) -> bool;
 }
 
 /// Configuration associated with a catalog.
@@ -1060,6 +1063,10 @@ impl SessionCatalog for DummyCatalog {
     }
 
     fn aws_privatelink_availability_zones(&self) -> Option<BTreeSet<String>> {
+        unimplemented!()
+    }
+
+    fn rbac_checks_enabled(&self) -> bool {
         unimplemented!()
     }
 }
