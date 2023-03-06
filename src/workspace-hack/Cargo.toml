@@ -107,7 +107,7 @@ tracing-subscriber = { version = "0.3.16", features = ["env-filter", "json"] }
 tungstenite = { version = "0.18.0", features = ["native-tls"] }
 uncased = { version = "0.9.7" }
 url = { version = "2.3.1", features = ["serde"] }
-uuid = { version = "1.2.2", features = ["serde", "v4"] }
+uuid = { version = "1.2.2", features = ["serde", "v4", "v5"] }
 zeroize = { version = "1.5.7", features = ["serde"] }
 
 [build-dependencies]
@@ -206,7 +206,7 @@ tracing-subscriber = { version = "0.3.16", features = ["env-filter", "json"] }
 tungstenite = { version = "0.18.0", features = ["native-tls"] }
 uncased = { version = "0.9.7" }
 url = { version = "2.3.1", features = ["serde"] }
-uuid = { version = "1.2.2", features = ["serde", "v4"] }
+uuid = { version = "1.2.2", features = ["serde", "v4", "v5"] }
 zeroize = { version = "1.5.7", features = ["serde"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]

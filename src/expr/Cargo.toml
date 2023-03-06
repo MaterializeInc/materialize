@@ -46,7 +46,7 @@ serde_regex = "1.1.0"
 sha1 = "0.10.5"
 sha2 = "0.10.6"
 uncased = "0.9.7"
-uuid = "1.2.2"
+uuid = {version = "1.2.2", features = ["v5"]}
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git", features = ["boxed_union"]}
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }

@@ -512,6 +512,10 @@
     description: A string containing a `uuid` uniquely identifying this Materialize environment.
     unmaterializable: true
 
+  - signature: 'uuid_generate_v5(namespace: uuid, name: text) -> uuid'
+    description: 'Generates a [version 5 UUID](https://www.rfc-editor.org/rfc/rfc4122#page-7) (using SHA-1) in the given namespace using
+      the specified input name.'
+
 - type: JSON
   functions:
   - signature: 'jsonb_array_elements(j: jsonb) -> Col<jsonb>'

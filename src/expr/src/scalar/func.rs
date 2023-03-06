@@ -1226,6 +1226,13 @@ fn power<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     Ok(Datum::from(a.powf(b)))
 }
 
+fn uuid_generate_v5<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let a = a.unwrap_uuid();
+    let b = b.unwrap_str();
+    let res = uuid::Uuid::new_v5(&a, b.as_bytes());
+    Datum::Uuid(res)
+}
+
 fn power_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let mut a = a.unwrap_numeric().0;
     let b = b.unwrap_numeric().0;
@@ -1983,6 +1990,7 @@ pub enum BinaryFunc {
     RangeUnion,
     RangeIntersection,
     RangeDifference,
+    UuidGenerateV5,
 }
 
 impl BinaryFunc {
@@ -2305,6 +2313,7 @@ impl BinaryFunc {
             BinaryFunc::RangeUnion => eager!(range_union, temp_storage),
             BinaryFunc::RangeIntersection => eager!(range_intersection, temp_storage),
             BinaryFunc::RangeDifference => eager!(range_difference, temp_storage),
+            BinaryFunc::UuidGenerateV5 => Ok(eager!(uuid_generate_v5)),
         }
     }
 
@@ -2457,6 +2466,8 @@ impl BinaryFunc {
             }
 
             GetByte => ScalarType::Int32.nullable(in_nullable),
+
+            UuidGenerateV5 => ScalarType::Uuid.nullable(true),
 
             RangeContainsElem { .. }
             | RangeContainsRange { .. }
@@ -2792,6 +2803,7 @@ impl BinaryFunc {
             | ArrayRemove
             | ListRemove
             | LikeEscape
+            | UuidGenerateV5
             | GetByte => false,
         }
     }
@@ -3018,6 +3030,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::RangeUnion => f.write_str("+"),
             BinaryFunc::RangeIntersection => f.write_str("*"),
             BinaryFunc::RangeDifference => f.write_str("-"),
+            BinaryFunc::UuidGenerateV5 => f.write_str("uuid_generate_v5"),
         }
     }
 }
@@ -3423,6 +3436,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::RangeUnion => RangeUnion(()),
             BinaryFunc::RangeIntersection => RangeIntersection(()),
             BinaryFunc::RangeDifference => RangeDifference(()),
+            BinaryFunc::UuidGenerateV5 => UuidGenerateV5(()),
         };
         ProtoBinaryFunc { kind: Some(kind) }
     }
@@ -3621,6 +3635,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 RangeUnion(()) => Ok(BinaryFunc::RangeUnion),
                 RangeIntersection(()) => Ok(BinaryFunc::RangeIntersection),
                 RangeDifference(()) => Ok(BinaryFunc::RangeDifference),
+                UuidGenerateV5(()) => Ok(BinaryFunc::UuidGenerateV5),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoBinaryFunc::kind"))

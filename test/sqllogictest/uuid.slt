@@ -64,3 +64,18 @@ query T
 SELECT '63616665-6630-3064-6465-616462656568'::uuid >= '86565626-4616-5646-4603-036656661636'::uuid;
 ----
 false
+
+query T
+select uuid_generate_v5('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'foo')
+----
+1b849fbd-9d94-5320-bbfc-c743414612d5
+
+query T
+select uuid_generate_v5(NULL, 'foo')
+----
+NULL
+
+query T
+select uuid_generate_v5('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', NULL)
+----
+NULL
