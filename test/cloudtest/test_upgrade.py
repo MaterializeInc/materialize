@@ -21,6 +21,9 @@ from materialize.checks.scenarios import Scenario
 from materialize.cloudtest.application import MaterializeApplication
 from materialize.cloudtest.k8s.environmentd import EnvironmentdStatefulSet
 from materialize.cloudtest.wait import wait
+from materialize.util import MzVersion
+
+LAST_RELEASED_VERSION = str(util.released_materialize_versions()[0])
 
 
 class ReplaceEnvironmentdStatefulSet(Action):
@@ -65,6 +68,9 @@ class LiftClusterLimits(Action):
 class CloudtestUpgrade(Scenario):
     """A Platform Checks scenario that performs an upgrade in cloudtest/K8s"""
 
+    def base_version(self) -> MzVersion:
+        return MzVersion.parse_mz(LAST_RELEASED_VERSION)
+
     def actions(self) -> List[Action]:
         return [
             LiftClusterLimits(),
@@ -79,9 +85,8 @@ class CloudtestUpgrade(Scenario):
 @pytest.mark.long
 def test_upgrade(aws_region: Optional[str]) -> None:
     """Test upgrade from the last released verison to the current source by running all the Platform Checks"""
-    last_released_version = str(util.released_materialize_versions()[0])
 
-    mz = MaterializeApplication(tag=last_released_version, aws_region=aws_region)
+    mz = MaterializeApplication(tag=LAST_RELEASED_VERSION, aws_region=aws_region)
     wait(condition="condition=Ready", resource="pod/cluster-u1-replica-1-0")
 
     executor = CloudtestExecutor(application=mz)
