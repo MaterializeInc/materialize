@@ -3475,11 +3475,14 @@ pub fn plan_drop_role(
         } else {
             sql_bail!("invalid role name {}", name.to_string().quoted())
         };
-        if name == scx.catalog.active_user() {
-            sql_bail!("current user cannot be dropped");
-        }
         match scx.catalog.resolve_role(&name) {
-            Ok(role) => out.push((role.id(), name)),
+            Ok(role) => {
+                let id = role.id();
+                if &id == scx.catalog.active_role_id() {
+                    sql_bail!("current role cannot be dropped");
+                }
+                out.push((role.id(), name));
+            }
             Err(_) if if_exists => {
                 // TODO(benesch): generate a notice indicating that the
                 // role does not exist.

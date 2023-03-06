@@ -390,6 +390,7 @@ impl ErrorResponse {
             AdapterError::Storage(_) | AdapterError::Compute(_) | AdapterError::Orchestrator(_) => {
                 SqlState::INTERNAL_ERROR
             }
+            AdapterError::ConcurrentRoleDrop(_) => SqlState::UNDEFINED_OBJECT,
         };
         ErrorResponse {
             severity,

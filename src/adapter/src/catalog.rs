@@ -82,8 +82,8 @@ use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{
     Builtin, BuiltinLog, BuiltinRole, BuiltinTable, BuiltinType, Fingerprint, BUILTINS,
-    BUILTIN_PREFIXES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA,
-    PG_CATALOG_SCHEMA,
+    BUILTIN_PREFIXES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_SYSTEM_ROLE,
+    MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
@@ -531,7 +531,7 @@ impl CatalogState {
                 .ok()
                 .map(|db| db.id()),
             search_path: Vec::new(),
-            user: SYSTEM_USER.clone(),
+            role_id: self.resolve_builtin_role(&MZ_SYSTEM_ROLE),
             prepared_statements: None,
         };
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
@@ -1046,6 +1046,13 @@ impl CatalogState {
         schema.items[builtin.name()].clone()
     }
 
+    /// Optimized lookup for a builtin role
+    ///
+    /// Panics if the builtin role doesn't exist in the catalog
+    pub fn resolve_builtin_role(&self, builtin: &'static BuiltinRole) -> RoleId {
+        self.roles_by_name[builtin.name]
+    }
+
     pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {
         &self.config
     }
@@ -1294,7 +1301,7 @@ pub struct ConnCatalog<'a> {
     cluster: String,
     database: Option<DatabaseId>,
     search_path: Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
-    user: User,
+    role_id: RoleId,
     prepared_statements: Option<Cow<'a, BTreeMap<String, PreparedStatement>>>,
 }
 
@@ -1314,7 +1321,7 @@ impl ConnCatalog<'_> {
             cluster: self.cluster,
             database: self.database,
             search_path: self.search_path,
-            user: self.user,
+            role_id: self.role_id,
             prepared_statements: self.prepared_statements.map(|s| Cow::Owned(s.into_owned())),
         }
     }
@@ -3592,12 +3599,12 @@ impl Catalog {
             cluster: session.vars().cluster().into(),
             database,
             search_path,
-            user: session.user().clone(),
+            role_id: session.role_id().clone(),
             prepared_statements: Some(Cow::Borrowed(session.prepared_statements())),
         }
     }
 
-    pub fn for_sessionless_user(&self, user: User) -> ConnCatalog {
+    pub fn for_sessionless_user(&self, role_id: RoleId) -> ConnCatalog {
         ConnCatalog {
             state: Cow::Borrowed(&self.state),
             conn_id: SYSTEM_CONN_ID,
@@ -3607,7 +3614,7 @@ impl Catalog {
                 .ok()
                 .map(|db| db.id()),
             search_path: Vec::new(),
-            user,
+            role_id,
             prepared_statements: None,
         }
     }
@@ -3615,7 +3622,8 @@ impl Catalog {
     // Leaving the system's search path empty allows us to catch issues
     // where catalog object names have not been normalized correctly.
     pub fn for_system_session(&self) -> ConnCatalog {
-        self.for_sessionless_user(SYSTEM_USER.clone())
+        let role_id = self.resolve_builin_role(&MZ_SYSTEM_ROLE);
+        self.for_sessionless_user(role_id)
     }
 
     async fn storage<'a>(&'a self) -> MutexGuard<'a, storage::Connection> {
@@ -3780,6 +3788,11 @@ impl Catalog {
     /// Resolves a `BuiltinSource`.
     pub fn resolve_builtin_storage_collection(&self, builtin: &'static BuiltinSource) -> GlobalId {
         self.state.resolve_builtin_source(builtin)
+    }
+
+    /// Resolves a `BuiltinRole`.
+    pub fn resolve_builin_role(&self, builtin: &'static BuiltinRole) -> RoleId {
+        self.state.resolve_builtin_role(builtin)
     }
 
     /// Resolves `name` to a function [`CatalogEntry`].
@@ -6507,8 +6520,8 @@ impl ExprHumanizer for ConnCatalog<'_> {
 }
 
 impl SessionCatalog for ConnCatalog<'_> {
-    fn active_user(&self) -> &str {
-        &self.user.name
+    fn active_role_id(&self) -> &RoleId {
+        &self.role_id
     }
 
     fn get_prepared_statement_desc(&self, name: &str) -> Option<&StatementDesc> {
@@ -6588,6 +6601,10 @@ impl SessionCatalog for ConnCatalog<'_> {
             Some(id) => Ok(&self.state.roles_by_id[id]),
             None => Err(SqlCatalogError::UnknownRole(role_name.into())),
         }
+    }
+
+    fn try_get_role(&self, id: &RoleId) -> Option<&dyn CatalogRole> {
+        Some(self.state.roles_by_id.get(id)?)
     }
 
     fn get_role(&self, id: &RoleId) -> &dyn mz_sql::catalog::CatalogRole {
