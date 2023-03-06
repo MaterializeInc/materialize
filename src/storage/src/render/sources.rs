@@ -30,7 +30,7 @@ use mz_storage_client::types::sources::{encoding::*, *};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 
 use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
-use crate::source::types::{DecodeResult, SourceOutput};
+use crate::source::types::{ByteStream, DecodeResult, SourceOutput};
 use crate::source::{self, DelimitedValueSourceConnection, RawSourceCreationConfig};
 
 /// A type-level enum that holds one of two types of sources depending on their message type
@@ -41,7 +41,7 @@ enum SourceType<G: Scope> {
     /// A delimited source
     Delimited(Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>, ()>>),
     /// A bytestream source
-    ByteStream(Stream<G, SourceOutput<(), Option<Vec<u8>>, ()>>),
+    ByteStream(Stream<G, SourceOutput<(), ByteStream, ()>>),
     /// A source that produces Row's natively, and skips any `render_decode` stream adapters, and
     /// can produce retractions
     Row(Stream<G, SourceOutput<(), Row, Diff>>),
