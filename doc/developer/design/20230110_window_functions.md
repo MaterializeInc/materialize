@@ -103,7 +103,7 @@ As noted above, some window function queries on some input data are impossible t
 
 We don't handle such OVER clauses where the ORDER BY inside the OVER is on a String or other complex type. See a discussion on supported types below in the "Types" section.
 
-In cases that we handle by Prefix Sum, the groups specified by the composite key of the PARTITION BY and the ORDER BY should be small, see the "Duplicate Indexes" section.
+In cases that we handle by Prefix Sum, peer groups (i.e., groups of rows that agree on both the PARTITION BY and the ORDER BY keys) should be small, see the "Duplicate Indexes" section.
 
 # Details
 
@@ -181,7 +181,7 @@ We’ll use the word **index** in this document to mean the values of the ORDER 
 
 As mentioned above, DD's prefix sum needs the index type to be `usize`. It is actually a fundamental limitation of the algorithm that it only works with integer indexes, and therefore we will have to map other types to integers. We discuss this in the "ORDER BY types" section.
 
-In DD's prefix sum implementation, duplicate indexes are currently forbidden. We will partially lift this limitation, but there are some complications, see in the "Duplicate indexes" section.
+In DD's prefix sum implementation, duplicate indexes are currently forbidden. We will discuss this in the "Duplicate indexes" section.
 
 #### Implementation details of DD's prefix sum
 
@@ -331,15 +331,17 @@ Alternatively, we could make these a bit faster (except for NTH_VALUE) if we jus
 
 ----------------------
 
-### Duplicate indexes
+### Duplicate indexes (peer groups)
 
-There might be rows which agree on both the PARTITION BY key and the ORDER BY key (the index). Such duplicate indexes are not handled by Prefix Sum. To eliminate these duplicates, we will number the elements inside each group with 0, 1, 2, …, and this will be an additional component of the prefix sum indexes.
+There might be rows which agree on both the PARTITION BY key and the ORDER BY key (the index). These groups of rows are called _peer groups_. Framed window functions in GROUPS or RANGE frame mode compute the same output for all the rows inside a peer group. This is easy to handle, since we can simply deduplicate the indexes, and compute one result for each index (and then join with the original data on the index).
 
-For this to perform well, we are assuming that groups are small.
-This is not an unreasonable assumption, because a group is identified here by a value of the PARTITION BY expression + a value of the ORDER BY expression.
-Also note that if there is no ORDER BY, then groups might be large, but in this case we don’t employ Prefix Sum, but we transform away the window functions to grouped aggregation + self-join (as noted above).
+However, in ROWS frame mode as well as for all non-framed window functions (e.g., LAG/LEAD) we need to treat each element of a peer group separately. To make the output deterministic, we need to sort the rows inside a peer group by the entire row (as we do in all other sorting situations in Materialize). A straightforward way to achieve this would be to make all the components of the row part of the index of the prefix sum, but this is unfortunately impossible: First, [we will support only certain types in a prefix sum index](#ORDER-BY-types) (e.g., we don't support string), and second, recall that the bit length of the index is critical for the performance of prefix sum, so adding several more columns to it would be catastrophic for performance.
 
-Alternatively, we could change Prefix Sum so that it correctly handles duplicate indexes.
+The only option that I can see to partially solve this problem is to use a `reduce` to number the elements inside each peer group with 0, 1, 2, ...  before prefix sum, and add just this numbering column as an additional component to the prefix sum indexes. This has some sad issues:
+- It makes the bit length longer, affecting performance.
+- It adds identical bit patterns at the ends of indexes if (most) peer groups have actually just 1 element. This is particularly bad for performance, as explained in ... TODO
+- The biggest problem is that this handles only small peer groups, since ... TODO
+  Even though, it might be ok in many cases to assume that peer groups are small (this should hold much more commonly than the assumption of the current window function implementation, which is that _window partitions_ are small), this still hurts the generality of the whole prefix sum approach. (Note that there is one common situation where peer groups are large: if there is no ORDER BY in the OVER clause. However, this particular case is not a big problem, since we are planning to handle these cases by transforming away the window function to a grouped aggregation + a join, instead of using prefix sum.)
 
 ### ORDER BY types
 
