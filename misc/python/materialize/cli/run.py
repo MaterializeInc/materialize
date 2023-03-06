@@ -40,6 +40,7 @@ MACOS_ENTITLEMENTS_DATA = """
 </plist>
 """
 
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="run",
@@ -268,20 +269,22 @@ def _build(args: argparse.Namespace, extra_programs: list[str] = []) -> int:
     completed_proc = spawn.runv(command, env=env)
     return completed_proc.returncode
 
-def _macos_codesign(path: str):
+
+def _macos_codesign(path: str) -> None:
     env = dict(os.environ)
     command = ["codesign"]
     command.extend(["-s", "-", "-f", "--entitlements"])
 
     # write our entitlements file to a temp path
     temp = tempfile.NamedTemporaryFile()
-    temp.write(bytes(MACOS_ENTITLEMENTS_DATA, 'utf-8'))
+    temp.write(bytes(MACOS_ENTITLEMENTS_DATA, "utf-8"))
     temp.flush()
 
     command.append(temp.name)
     command.append(path)
 
     spawn.runv(command, env=env)
+
 
 def _cargo_command(args: argparse.Namespace, subcommand: str) -> list[str]:
     command = ["cargo"]
