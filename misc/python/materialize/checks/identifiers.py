@@ -273,9 +273,9 @@ pg_catalog
 {dq_print(ident["schema"])}
 
 > SHOW SINKS FROM {dq(ident["schema"])};
-{dq_print(ident["sink0"])} kafka 4
-{dq_print(ident["sink1"])} kafka 4
-{dq_print(ident["sink2"])} kafka 4
+{dq_print(ident["sink0"])} kafka ${{arg.default-storage-size}}
+{dq_print(ident["sink1"])} kafka ${{arg.default-storage-size}}
+{dq_print(ident["sink2"])} kafka ${{arg.default-storage-size}}
 
 > SELECT * FROM {dq(ident["schema"])}.{dq(ident["mv0"])};
 3
