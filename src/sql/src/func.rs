@@ -3315,7 +3315,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(Timestamp, Interval) => AddTimestampInterval, 2066;
             params!(Interval, Timestamp) => {
                 Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimestampInterval)))
-            }, 2066;
+            }, 2553;
             params!(TimestampTz, Interval) => AddTimestampTzInterval, 1327;
             params!(Interval, TimestampTz) => {
                 Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimestampTzInterval)))
@@ -3627,7 +3627,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
                     lhs,
                     JsonbContainsJsonb
                 ))
-            }), 3246;
+            }), 3250;
             params!(Jsonb, String) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(rhs.call_unary(UnaryFunc::CastStringToJsonb(func::CastStringToJsonb))
                       .call_binary(lhs, BinaryFunc::JsonbContainsJsonb))
@@ -3676,7 +3676,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
         "<" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::Lt, 1754;
             params!(Bool, Bool) => BinaryFunc::Lt, 58;
-            params!(Int16, Int16) => BinaryFunc::Lt, 94;
+            params!(Int16, Int16) => BinaryFunc::Lt, 95;
             params!(Int32, Int32) => BinaryFunc::Lt, 97;
             params!(Int64, Int64) => BinaryFunc::Lt, 412;
             params!(UInt16, UInt16) => BinaryFunc::Lt, oid::FUNC_LT_UINT16_OID;
@@ -3763,9 +3763,9 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16, Int16) => BinaryFunc::Gte, 524;
             params!(Int32, Int32) => BinaryFunc::Gte, 525;
             params!(Int64, Int64) => BinaryFunc::Gte, 415;
-            params!(UInt16, UInt16) => BinaryFunc::Gte, oid::FUNC_GT_UINT16_OID;
-            params!(UInt32, UInt32) => BinaryFunc::Gte, oid::FUNC_GT_UINT32_OID;
-            params!(UInt64, UInt64) => BinaryFunc::Gte, oid::FUNC_GT_UINT64_OID;
+            params!(UInt16, UInt16) => BinaryFunc::Gte, oid::FUNC_GTE_UINT16_OID;
+            params!(UInt32, UInt32) => BinaryFunc::Gte, oid::FUNC_GTE_UINT32_OID;
+            params!(UInt64, UInt64) => BinaryFunc::Gte, oid::FUNC_GTE_UINT64_OID;
             params!(Float32, Float32) => BinaryFunc::Gte, 625;
             params!(Float64, Float64) => BinaryFunc::Gte, 675;
             params!(Oid, Oid) => BinaryFunc::Gte, 612;
