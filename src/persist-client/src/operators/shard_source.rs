@@ -100,6 +100,8 @@ where
 
     let chosen_worker = usize::cast_from(name.hashed()) % scope.peers();
 
+    // we can safely pass along a zero summary from this feedback edge,
+    // as the input is disconnected from the operator's output
     let (completed_fetches_feedback_handle, completed_fetches_feedback_stream) =
         scope.feedback(<<G as ScopeParent>::Timestamp as Timestamp>::Summary::default());
 
@@ -196,6 +198,10 @@ where
         // We must ensure all completed fetches are fed into
         // the worker responsible for managing part leases
         Exchange::new(move |_| u64::cast_from(chosen_worker)),
+        // Disconnect the completed fetches feedback edge from the output
+        // capabilities of the operator. The feedback edge influences only
+        // when the operator can be safely shut down, and does not affect
+        // its output.
         vec![Antichain::new()],
     );
 
