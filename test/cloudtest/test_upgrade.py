@@ -54,11 +54,11 @@ class LiftClusterLimits(Action):
                 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
                 $ postgres-execute connection=mz_system
-                ALTER SYSTEM SET max_tables = 100;
+                ALTER SYSTEM SET max_tables = 1000;
 
-                ALTER SYSTEM SET max_sources = 100;
+                ALTER SYSTEM SET max_sources = 1000;
 
-                ALTER SYSTEM SET max_materialized_views = 100;
+                ALTER SYSTEM SET max_materialized_views = 1000;
                 ALTER SYSTEM SET max_objects_per_schema = 1000;
                 """
             )
