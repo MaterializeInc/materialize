@@ -18,10 +18,10 @@ use mz_compute_client::protocol::response::{SubscribeBatch, SubscribeResponse};
 use mz_controller::clusters::ClusterId;
 use mz_repr::adt::numeric;
 use mz_repr::{Datum, GlobalId, Row};
+use mz_sql::session::user::User;
 
 use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
-use crate::session::User;
 
 /// A description of an active subscribe from coord's perspective
 pub struct ActiveSubscribe {

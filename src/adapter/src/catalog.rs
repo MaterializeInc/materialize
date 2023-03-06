@@ -68,6 +68,7 @@ use mz_sql::plan::{
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
     Plan, PlanContext, SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
 };
+use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
     OwnedVarInput, SystemVars, Var, VarError, VarInput, CONFIG_HAS_SYNCED_ONCE,
 };
@@ -95,7 +96,7 @@ use crate::catalog::storage::{BootstrapArgs, Transaction};
 use crate::client::ConnectionId;
 use crate::config::{SynchronizedParameters, SystemParameterFrontend};
 use crate::coord::DEFAULT_LOGICAL_COMPACTION_WINDOW;
-use crate::session::{PreparedStatement, Session, User, DEFAULT_DATABASE_NAME};
+use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
 use crate::{AdapterError, DUMMY_AVAILABILITY_ZONE};
 
@@ -110,28 +111,6 @@ pub mod builtin;
 pub mod storage;
 
 pub const SYSTEM_CONN_ID: ConnectionId = 0;
-
-pub static SYSTEM_USER: Lazy<User> = Lazy::new(|| User {
-    name: "mz_system".into(),
-    external_metadata: None,
-});
-
-pub static INTROSPECTION_USER: Lazy<User> = Lazy::new(|| User {
-    name: "mz_introspection".into(),
-    external_metadata: None,
-});
-
-pub static INTERNAL_USER_NAMES: Lazy<BTreeSet<String>> = Lazy::new(|| {
-    [&SYSTEM_USER, &INTROSPECTION_USER]
-        .into_iter()
-        .map(|user| user.name.clone())
-        .collect()
-});
-
-pub static HTTP_DEFAULT_USER: Lazy<User> = Lazy::new(|| User {
-    name: "anonymous_http_user".into(),
-    external_metadata: None,
-});
 
 const CREATE_SQL_TODO: &str = "TODO";
 

@@ -59,6 +59,7 @@ use mz_sql::plan::{
     SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan,
     VariableValue, View,
 };
+use mz_sql::session::user::SYSTEM_USER;
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, Var, VarError, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
     TRANSACTION_ISOLATION_VAR_NAME,
@@ -75,7 +76,6 @@ use crate::catalog::builtin::{
 use crate::catalog::{
     self, Catalog, CatalogItem, CatalogState, Cluster, Connection, DataSourceDesc,
     SerializedReplicaLocation, StorageSinkConnectionState, LINKED_CLUSTER_REPLICA_NAME,
-    SYSTEM_USER,
 };
 use crate::command::{Command, ExecuteResponse, Response};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, DeferredPlan, PendingWriteTxn};
@@ -1993,7 +1993,7 @@ impl Coordinator {
             .vars()
             .iter()
             .chain(catalog.system_config().iter())
-            .filter(|v| !v.experimental() && v.visible(session.user().is_system_user()))
+            .filter(|v| !v.experimental() && v.visible(session.user()))
             .filter(|v| v.safe() || catalog.unsafe_mode())
     }
 
@@ -2007,9 +2007,7 @@ impl Coordinator {
             .get(&plan.name)
             .or_else(|_| self.catalog.system_config().get(&plan.name))?;
 
-        if variable.visible(session.user().is_system_user())
-            && (variable.safe() || self.catalog.unsafe_mode())
-        {
+        if variable.visible(session.user()) && (variable.safe() || self.catalog.unsafe_mode()) {
             let row = Row::pack_slice(&[Datum::String(&variable.value())]);
             Ok(send_immediate_rows(vec![row]))
         } else {

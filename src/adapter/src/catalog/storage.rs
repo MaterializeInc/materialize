@@ -29,6 +29,7 @@ use mz_sql::names::{
     DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, RoleId, SchemaId,
     SchemaSpecifier,
 };
+use mz_sql::session::user::SYSTEM_USER;
 use mz_stash::{AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
 use mz_storage_client::types::sources::Timeline;
 
@@ -37,7 +38,7 @@ use crate::catalog::builtin::{
     BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES, BUILTIN_ROLES,
 };
 use crate::catalog::error::{Error, ErrorKind};
-use crate::catalog::{is_reserved_name, SerializedRole, SystemObjectMapping, SYSTEM_USER};
+use crate::catalog::{is_reserved_name, SerializedRole, SystemObjectMapping};
 use crate::catalog::{SerializedReplicaConfig, DEFAULT_CLUSTER_REPLICA_NAME};
 use crate::coord::timeline;
 

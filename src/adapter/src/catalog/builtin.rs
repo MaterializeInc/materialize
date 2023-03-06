@@ -33,10 +33,11 @@ use mz_repr::{RelationDesc, RelationType, ScalarType};
 use mz_sql::catalog::{
     CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, RoleAttributes, TypeReference,
 };
+use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::healthcheck::{MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC};
 
-use crate::catalog::{DEFAULT_CLUSTER_REPLICA_NAME, INTROSPECTION_USER, SYSTEM_USER};
+use crate::catalog::DEFAULT_CLUSTER_REPLICA_NAME;
 
 pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
 pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
