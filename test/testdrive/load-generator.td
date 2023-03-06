@@ -18,6 +18,15 @@ bids                    subsource      <null>
 organizations           subsource      <null>
 users                   subsource      <null>
 
+# Adding test to check for tables() work
+> CREATE SCHEMA a;
+> CREATE SOURCE a.auction_bids FROM LOAD GENERATOR AUCTION FOR TABLES (bids as a.bids);
+
+> SHOW SOURCES FROM a;
+auction_bids            load-generator ${arg.default-storage-size}
+auction_bids_progress   subsource      <null>
+bids                    subsource      <null>
+
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 # Validate that the ID column of the load generator data is usable as a key.
@@ -77,3 +86,15 @@ $ set-regex match=\d+ replacement=<NUMBER>
 $ set-regex match=(\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
 > EXPLAIN TIMESTAMP FOR SELECT * FROM auction_house_progress
 "                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.auction_house_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
+
+# Check that for all tables clause is rejected with no subsources
+! CREATE SOURCE counter6
+  FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 8, TICK INTERVAL '0.001s')
+  FOR ALL TABLES;
+contains: FOR ALL TABLES is only valid for multi-output sources
+
+# Check that for tables() clause is rejected with no subsources
+! CREATE SOURCE counter6
+  FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 8, TICK INTERVAL '0.001s')
+  FOR TABLES(t1);
+contains: FOR TABLES (..) is only valid for multi-output sources

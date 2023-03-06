@@ -42,3 +42,15 @@ contains: non-existent-broker:9092
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-fawlty-csr-source-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION fawlty_csr_conn
 contains: failed to fetch schema subject
+
+# Check that for all tables clause is rejected
+! CREATE SOURCE bad_definition1
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'any_topic')
+  FORMAT BYTES FOR ALL TABLES WITH (SIZE = '1');
+contains: FOR ALL TABLES is only valid for multi-output sources
+
+# Check that for tables() clause is rejected
+! CREATE SOURCE bad_definition2
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'any_topic')
+  FORMAT BYTES FOR TABLES(t1);
+contains: FOR TABLES (..) is only valid for multi-output sources
