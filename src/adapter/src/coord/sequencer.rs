@@ -42,8 +42,8 @@ use mz_ore::task;
 use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
-use mz_sql::catalog::CatalogItem as SqlCatalogItem;
 use mz_sql::catalog::{CatalogCluster, CatalogError, CatalogItemType, CatalogTypeDetails};
+use mz_sql::catalog::{CatalogItem as SqlCatalogItem, SessionCatalog};
 use mz_sql::names::QualifiedObjectName;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
@@ -127,6 +127,23 @@ impl Coordinator {
         event!(Level::TRACE, plan = format!("{:?}", plan));
         let responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
         tx.set_allowed(responses);
+
+        let role_id = session.role_id();
+        if self
+            .catalog
+            .for_session(&session)
+            .try_get_role(role_id)
+            .is_none()
+        {
+            // PostgreSQL allows users that have their role dropped to perform some actions,
+            // such as `SET ROLE` and certain `SELECT` queries. We haven't implemented
+            // `SET ROLE` and feel it's safer to force to user to re-authenticate if their
+            // role is dropped.
+            return tx.send(
+                Err(AdapterError::ConcurrentRoleDrop(role_id.clone())),
+                session,
+            );
+        };
 
         if session.user().name == MZ_INTROSPECTION_ROLE.name {
             if let Err(e) = self.mz_introspection_user_privilege_hack(&session, &plan, &depends_on)

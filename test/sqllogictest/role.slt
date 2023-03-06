@@ -101,7 +101,7 @@ statement ok
 DROP ROLE IF EXISTS nlb
 
 # No dropping the current role.
-statement error current user cannot be dropped
+statement error current role cannot be dropped
 DROP ROLE materialize
 
 # No creating roles that already exist.

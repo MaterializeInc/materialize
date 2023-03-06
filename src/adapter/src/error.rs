@@ -21,6 +21,7 @@ use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
 use mz_repr::explain::ExplainError;
 use mz_repr::NotNullViolation;
+use mz_sql::names::RoleId;
 use mz_sql::plan::PlanError;
 use mz_storage_client::controller::StorageError;
 use mz_transform::TransformError;
@@ -213,6 +214,8 @@ pub enum AdapterError {
     Compute(anyhow::Error),
     /// An error in the orchestrator layer
     Orchestrator(anyhow::Error),
+    /// The active role was dropped while a user was logged in.
+    ConcurrentRoleDrop(RoleId),
 }
 
 impl AdapterError {
@@ -266,6 +269,7 @@ impl AdapterError {
                 unstable_dependencies.join("\n    "),
             )),
             AdapterError::PlanError(e) => e.detail(),
+            AdapterError::ConcurrentRoleDrop(_) => Some("Please disconnect and re-connect with a valid role.".into()),
             _ => None,
         }
     }
@@ -536,6 +540,9 @@ impl fmt::Display for AdapterError {
             AdapterError::Storage(e) => e.fmt(f),
             AdapterError::Compute(e) => e.fmt(f),
             AdapterError::Orchestrator(e) => e.fmt(f),
+            AdapterError::ConcurrentRoleDrop(role_id) => {
+                write!(f, "role {role_id} was concurrently dropped")
+            }
         }
     }
 }

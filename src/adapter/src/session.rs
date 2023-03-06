@@ -26,6 +26,7 @@ use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_pgrepr::Format;
 use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType, TimestampManipulation};
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
+use mz_sql::names::RoleId;
 use mz_sql::plan::{Params, PlanContext, StatementDesc};
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_client::types::sources::Timeline;
@@ -51,6 +52,8 @@ const DUMMY_CONNECTION_ID: ConnectionId = 0;
 #[derive(Debug, Clone)]
 pub struct User {
     /// The name of the user within the system.
+    ///
+    /// When possible prefer using some [`RoleId`] over this field.
     pub name: String,
     /// Metadata about this user in an external system.
     pub external_metadata: Option<ExternalUserMetadata>,
@@ -103,6 +106,19 @@ pub struct Session<T = mz_repr::Timestamp> {
     transaction: TransactionStatus<T>,
     pcx: Option<PlanContext>,
     user: User,
+    /// The role ID of the current user.
+    ///
+    /// Invariant: role_id must be `Some` after the user has
+    /// successfully connected to and authenticated with Materialize.
+    ///
+    /// Prefer using this value over [`Self.user.name`].
+    //
+    // It would be better for this not to be an Option, but the
+    // `Session` is initialized before the user has connected to
+    // Materialize and is able to look up the `RoleId`. The `Session`
+    // is also used to return an error when no role exists and
+    // therefore there is no valid `RoleId`.
+    role_id: Option<RoleId>,
     vars: SessionVars,
     notices_tx: mpsc::UnboundedSender<AdapterNotice>,
     notices_rx: mpsc::UnboundedReceiver<AdapterNotice>,
@@ -128,7 +144,10 @@ impl<T: TimestampManipulation> Session<T> {
     /// Dummy sessions are intended for use when executing queries on behalf of
     /// the system itself, rather than on behalf of a user.
     pub fn dummy() -> Session<T> {
-        Self::new_internal(&DUMMY_BUILD_INFO, DUMMY_CONNECTION_ID, SYSTEM_USER.clone())
+        let mut dummy =
+            Self::new_internal(&DUMMY_BUILD_INFO, DUMMY_CONNECTION_ID, SYSTEM_USER.clone());
+        dummy.set_role_id(RoleId::User(0));
+        dummy
     }
 
     fn new_internal(
@@ -150,6 +169,7 @@ impl<T: TimestampManipulation> Session<T> {
             prepared_statements: BTreeMap::new(),
             portals: BTreeMap::new(),
             user,
+            role_id: None,
             vars,
             notices_tx,
             notices_rx,
@@ -533,7 +553,7 @@ impl<T: TimestampManipulation> Session<T> {
     /// responsibility to ensure that the correct number of parameters is
     /// provided.
     ///
-    // The `results_formats` parameter sets the desired format of the results,
+    /// The `results_formats` parameter sets the desired format of the results,
     /// and is stored on the portal.
     pub fn set_portal(
         &mut self,
@@ -678,6 +698,19 @@ impl<T: TimestampManipulation> Session<T> {
             self.user.external_metadata = Some(external_user_metadata);
         }
         self.vars.set_superuser(self.is_superuser());
+    }
+
+    /// Initializes the session's role ID.
+    pub fn set_role_id(&mut self, role_id: RoleId) {
+        self.role_id = Some(role_id);
+    }
+
+    /// Returns the session's role ID.
+    ///
+    /// # Panics
+    /// If the session has not connected successfully.
+    pub fn role_id(&self) -> &RoleId {
+        self.role_id.as_ref().expect("role_id invariant violated")
     }
 }
 

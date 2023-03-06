@@ -186,13 +186,14 @@ impl Coordinator {
 
     async fn handle_startup(
         &mut self,
-        session: Session,
+        mut session: Session,
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
     ) {
+        // Lookup is done with the system session because the current session has no role set.
         if self
             .catalog
-            .for_session(&session)
+            .for_system_session()
             .resolve_role(&session.user().name)
             .is_err()
         {
@@ -213,6 +214,15 @@ impl Coordinator {
                 return;
             }
         }
+
+        // Lookup is done with the system session because the current session has no role set.
+        let role_id = self
+            .catalog
+            .for_system_session()
+            .resolve_role(&session.user().name)
+            .expect("created above")
+            .id();
+        session.set_role_id(role_id);
 
         if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
             let _ = tx.send(Response {
