@@ -117,10 +117,10 @@ where
         Arc::clone(&key_schema),
         Arc::clone(&val_schema),
     );
-    let (parts, part_tokens) = shard_source_fetch(
+    let (parts, completed_fetches_stream) = shard_source_fetch(
         &descs, name, clients, location, shard_id, key_schema, val_schema,
     );
-    part_tokens.connect_loop(completed_fetches_feedback_handle);
+    completed_fetches_stream.connect_loop(completed_fetches_feedback_handle);
 
     (parts, descs_token)
 }
@@ -252,16 +252,16 @@ where
         //
         // NB: reading from a channel (token_is_dropped) is cancel-safe.
         //     create_subscribe is NOT cancel-safe, but we will not retry it if it is dropped.
-        let (subscription, as_of) = match futures::future::select(create_subscribe, token_is_dropped).await {
-            Either::Left(((subscription, as_of), _)) => {
-                (subscription, as_of)
-            }
-            Either::Right(_) => {
+        let (subscription, as_of) = match futures::future::select(token_is_dropped, create_subscribe).await {
+            Either::Left(_) => {
                 // the token dropped before we finished creating our Subscribe.
                 // we can return immediately, as we could not have emitted any
                 // parts to fetch.
                 cap_set.downgrade(&[]);
                 return;
+            }
+            Either::Right(((subscription, as_of), _)) => {
+                (subscription, as_of)
             }
         };
 
@@ -328,7 +328,11 @@ where
                                     lease_returner.return_leased_part(lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part));
                                 }
                             }
-                            Event::Progress(_) => {}
+                            Event::Progress(frontier) => {
+                                if frontier.is_empty() {
+                                    return;
+                                }
+                            }
                         }
                     }
                     // Read and emit the next batch from our Subscribe.
@@ -494,7 +498,7 @@ where
         Exchange::new(|&(i, _): &(usize, _)| u64::cast_from(i)),
     );
     let (mut fetched_output, fetched_stream) = builder.new_output();
-    let (mut tokens_output, tokens_stream) = builder.new_output();
+    let (mut completed_fetches_output, completed_fetches_stream) = builder.new_output();
 
     // NB: we intentionally do _not_ pass along the shutdown button here so that
     // we can be assured we always emit the full contents of a batch. If we used
@@ -547,5 +551,5 @@ where
         }
     });
 
-    (fetched_stream, tokens_stream)
+    (fetched_stream, completed_fetches_stream)
 }
