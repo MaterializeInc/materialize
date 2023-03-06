@@ -410,7 +410,7 @@ where
                                 }
                             }
                         }
-                        // We never expect any further output from our subscribe, 
+                        // We never expect any further output from our subscribe,
                         // so propagate that information downstream.
                         None => {
                             cap_set.downgrade(&[]);
