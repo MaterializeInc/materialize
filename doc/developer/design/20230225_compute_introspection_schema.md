@@ -53,7 +53,7 @@ the semantically meaningful value is (often) the sum of all the
 per-worker values. For example, a user interested in the total size of
 each arrangement would normally want to issue a query like `SELECT
 operator_id, sum(records), sum(batches) FROM mz_arrangement_sizes
-GROUP BY worker_id`.
+GROUP BY operator_id`.
 
 There are also a few relations where `sum` is not the most interesting
 aggregate; for example, the `min` across workers in
