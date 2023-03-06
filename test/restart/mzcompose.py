@@ -68,6 +68,7 @@ def workflow_github_17578(c: Composition) -> None:
             with_subsources bids
             with_subsources organizations
             with_subsources users
+            with_subsources with_subsources_progress
             """
         ),
     )
@@ -94,6 +95,7 @@ def workflow_github_17578(c: Composition) -> None:
             with_subsources bids
             with_subsources organizations
             with_subsources users
+            with_subsources with_subsources_progress
             """
         ),
     )
@@ -264,6 +266,21 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
             test r1 1 true
             test r2 2 true
             test r3 2 true
+            """
+        ),
+    )
+
+    # Assert that the persisted allowed_cluster_replica_sizes (a setting that
+    # supports multiple values) is correctly restored on restart.
+    c.kill("materialized")
+    c.up("materialized")
+
+    c.testdrive(
+        service="testdrive_no_reset",
+        input=dedent(
+            """
+            > SHOW allowed_cluster_replica_sizes
+            "\\"1\\", \\"2\\""
             """
         ),
     )

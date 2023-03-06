@@ -35,6 +35,7 @@ mz-proto = { path = "../proto" }
 num-traits = "0.2.15"
 num_enum = "0.5.7"
 ordered-float = { version = "3.4.0", features = ["serde"] }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 regex = "1.7.0"
 ryu = "1.0.12"
@@ -43,6 +44,7 @@ serde_json = { version = "1.0.89", features = ["arbitrary_precision"] }
 serde_regex = "1.1.0"
 smallvec = { version = "1.10.0", features = ["serde", "union"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.2.2", features = ["serde"] }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }

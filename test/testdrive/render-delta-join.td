@@ -36,6 +36,7 @@ count
 
 > EXPLAIN WITH(join_impls) VIEW delta_join;
 "delta_join:  Project (#0, #1, #0, #3, #0, #5)    Filter (#0) IS NOT NULL      Join on=(eq(#0, #2, #4)) type=delta        implementation          %0:t1 » %1:t2[#0]KA » %2:t3[#0]KA          %1:t2 » %0:t1[#0]KA » %2:t3[#0]KA          %2:t3 » %0:t1[#0]KA » %1:t2[#0]KA        ArrangeBy keys=[[#0]]          Get t1        ArrangeBy keys=[[#0]]          Get t2        ArrangeBy keys=[[#0]]          Get t3Used Indexes:  - i1  - i2  - i3"
+
 > SELECT count(*) AS count FROM delta_join;
 count
 ----

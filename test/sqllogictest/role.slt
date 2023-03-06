@@ -1,0 +1,153 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# Verify initial roles.
+query TTBBBB
+SELECT id, name, inherit, create_role, create_db, create_cluster FROM mz_roles WHERE id LIKE 's%'
+----
+s1 mz_system true true true true
+s2 mz_introspection true false false false
+
+query TBBBB
+SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles WHERE id LIKE 'u%'
+----
+materialize true false false false
+
+statement error non inherit roles not yet supported
+CREATE ROLE foo NOINHERIT
+
+statement error LOGIN attribute is not supported, for more information consult the documentation at
+CREATE ROLE foo LOGIN
+
+statement error SUPERUSER attribute is not supported, for more information consult the documentation at
+CREATE ROLE foo SUPERUSER
+
+statement error conflicting or redundant options
+CREATE ROLE foo CREATEROLE CREATEROLE INHERIT
+
+statement error conflicting or redundant options
+CREATE ROLE foo CREATEROLE NOCREATEROLE CREATEDB
+
+# Create role and verify its existence.
+statement ok
+CREATE ROLE rj
+
+statement error CREATE USER is not supported, for more information consult the documentation at
+CREATE USER fms
+
+query TBBBB
+SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles
+----
+rj true false false false
+mz_system true true true true
+materialize true false false false
+mz_introspection true false false false
+
+# Dropping multiple roles should not have any effect if one of the role names
+# is bad...
+statement error unknown role 'bad'
+DROP ROLE rj, bad
+
+query T
+SELECT name FROM mz_roles
+----
+rj
+mz_system
+materialize
+mz_introspection
+
+# ...unless IF EXISTS is specified.
+statement ok
+DROP ROLE IF EXISTS rj, bad
+
+query T
+SELECT name FROM mz_roles
+----
+mz_system
+materialize
+mz_introspection
+
+# Verify that the single name version of DROP ROLE works too.
+statement ok
+CREATE ROLE nlb
+
+query T
+SELECT name FROM mz_roles
+----
+nlb
+mz_system
+materialize
+mz_introspection
+
+statement ok
+DROP ROLE nlb
+
+query T
+SELECT name FROM mz_roles
+----
+mz_system
+materialize
+mz_introspection
+
+statement ok
+DROP ROLE IF EXISTS nlb
+
+# No dropping the current role.
+statement error current user cannot be dropped
+DROP ROLE materialize
+
+# No creating roles that already exist.
+statement error role 'materialize' already exists
+CREATE ROLE materialize
+
+# No creating roles that look like system roles.
+statement error role name "mz_system" is reserved
+CREATE ROLE mz_system
+
+statement error role name "mz_foo" is reserved
+CREATE ROLE mz_foo
+
+# Create role with attributes
+statement ok
+CREATE ROLE foo CREATEROLE CREATEDB NOCREATECLUSTER
+
+query TBBBB
+SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles WHERE name = 'foo'
+----
+foo true true true false
+
+statement error non inherit roles not yet supported
+ALTER ROLE foo NOINHERIT
+
+statement error role name "mz_system" is reserved
+ALTER ROLE mz_system NOCREATEDB
+
+statement error conflicting or redundant options
+ALTER ROLE foo CREATEROLE NOCREATEROLE
+
+statement error conflicting or redundant options
+ALTER ROLE foo CREATEDB CREATEDB
+
+statement ok
+ALTER ROLE foo NOCREATEDB
+
+query TBBBB
+SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles WHERE name = 'foo'
+----
+foo true true false false
+
+statement ok
+ALTER ROLE foo CREATECLUSTER
+
+query TBBBB
+SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles WHERE name = 'foo'
+----
+foo true true false true

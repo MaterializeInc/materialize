@@ -24,5 +24,4 @@ _role_name_ | The role you want to drop. For available roles, see [`mz_roles`](/
 ## Related pages
 
 - [CREATE ROLE](../create-role)
-- [CREATE USER](../create-user)
 - [DROP ROLE](../drop-role)

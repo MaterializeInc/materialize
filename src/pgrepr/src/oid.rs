@@ -80,6 +80,10 @@ pub const TYPE_DATERANGE_OID: u32 = 3912;
 pub const TYPE_DATERANGE_ARRAY_OID: u32 = 3913;
 pub const TYPE_NUMRANGE_OID: u32 = 3906;
 pub const TYPE_NUMRANGE_ARRAY_OID: u32 = 3907;
+pub const TYPE_TSRANGE_OID: u32 = 3908;
+pub const TYPE_TSRANGE_ARRAY_OID: u32 = 3909;
+pub const TYPE_TSTZRANGE_OID: u32 = 3910;
+pub const TYPE_TSTZRANGE_ARRAY_OID: u32 = 3911;
 
 /// The first OID in PostgreSQL's system catalog that is not pinned during
 /// bootstrapping.
@@ -274,3 +278,4 @@ pub const FUNC_MZ_NOW_OID: u32 = 16_560;
 pub const FUNC_MAX_MZ_TIMESTAMP_OID: u32 = 16_561;
 pub const FUNC_MIN_MZ_TIMESTAMP_OID: u32 = 16_562;
 pub const FUNC_DATE_FROM_TEXT: u32 = 16_563;
+pub const FUNC_CEILING_F32_OID: u32 = 16_564;

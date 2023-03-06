@@ -302,3 +302,145 @@ SELECT DISTINCT
 FROM dependencies D
 JOIN mz_objects O ON (D.import_id = O.id);
 ```
+
+## Why isn't my source ingesting data?
+
+First, look for errors in [`mz_source_statuses`](/sql/system-catalog/mz_internal/#mz_source_statuses):
+
+```sql
+SELECT * FROM mz_internal.mz_source_statuses
+WHERE name = <SOURCE_NAME>;
+```
+
+If your source reports a status of `stalled` or `failed`, you likely have a
+configuration issue. The returned `error` field will provide details.
+
+If your source reports a status of `starting` for more than a few minutes,
+[contact support](/support).
+
+If your source reports a status of `running`, but you are not receiving data
+when you query the source, the source may still be ingesting its initial
+snapshot. See the next section.
+
+## Has my source ingested its initial snapshot?
+
+Query the `snapshot_comitted` field of the
+[`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics) table:
+
+```sql
+SELECT bool_and(snapshot_committed) as snapshot_committed
+FROM mz_internal.mz_source_statistics
+WHERE id = <SOURCE ID>;
+```
+
+You generally want to aggregate the `snapshot_committed` field across all worker
+threads, as done in the above query. The snapshot is only considered committed
+for the source as a whole once all worker threads have committed their
+components of the snapshot.
+
+Even if your source has not yet committed its initial snapshot, you can still
+monitor its progress. See the next section.
+
+## How do I monitor source ingestion progress?
+
+Repeatedly query the
+[`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics)
+table and look for ingestion statistics that advance over time:
+
+```sql
+SELECT
+    SUM(bytes_received) AS bytes_received,
+    SUM(messages_received) AS messages_received,
+    SUM(updates_staged) AS updates_staged,
+    SUM(updates_committed) AS updates_committed
+FROM mz_internal.mz_source_statistics
+WHERE id = <SOURCE ID>;
+```
+
+(You can also look at statistics for individual worker threads to evaluate
+whether ingestion progress is skewed, but it's generally simplest to start
+by looking at the aggregate statistics for the whole source.)
+
+The `bytes_received` and `messages_received` statistics should roughly
+correspond with the external system's measure of progress. For example, the
+`bytes_received` and `messages_received` fields for a Kafka source should
+roughly correspond to what the upstream Kafka broker reports as the number of
+bytes (including the key) and number of messages transmitted, respectively.
+
+During the initial snapshot, `updates_committed` will remain at zero until all
+messages in the snapshot have been staged. Only then will `updates_committed`
+advance. This is expected, and not a cause for concern.
+
+After the initial snapshot, there should be relatively little skew between
+`updates_staged` and `updates_committed`. A large gap is usually an indication
+that the source has fallen behind, and that you likely need to scale up your
+source.
+
+`messages_received` does not necessarily correspond with `updates_staged`
+and `updates_commmited`. For example, an `UPSERT` envelope can have _more_
+updates than messages, because messages can cause both deletions and insertions
+(i.e. when they update a value for a key), which are both counted in the
+`updates_*` statistics. There can also be _fewer_ updates than messages, as
+many messages for a single key can be consolidated if they occur within a (small)
+internally configured window. That said, `messages_received` making
+steady progress, while `updates_staged`/`updates_committed` doesn't is also
+evidence that a source has fallen behind, and may need to be scaled up.
+
+Beware that these statistics periodically reset to zero, as internal components
+of the system restart. This is expected behavior. As a result, you should
+restrict your attention to how these statistics evolve over time, and not their
+absolute values at any moment in time.
+
+## Why isn't my sink exporting data?
+First, look for errors in [`mz_sink_statuses`](/sql/system-catalog/mz_internal/#mz_sink_statuses):
+
+```sql
+SELECT * FROM mz_internal.mz_sink_statuses
+WHERE name = <SINK_NAME>;
+```
+
+If your sink reports a status of `stalled` or `failed`, you likely have a
+configuration issue. The returned `error` field will provide details.
+
+If your sink reports a status of `starting` for more than a few minutes,
+[contact support](/support).
+
+## How do I monitor sink ingestion progress?
+
+Repeatedly query the
+[`mz_sink_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics)
+table and look for ingestion statistics that advance over time:
+
+```sql
+SELECT
+    SUM(messages_staged) AS messages_staged,
+    SUM(messages_committed) AS messages_committed,
+    SUM(bytes_staged) AS bytes_staged,
+    SUM(bytes_committed) AS bytes_committed
+FROM mz_internal.mz_sink_statistics
+WHERE id = <SINK ID>;
+```
+
+(You can also look at statistics for individual worker threads to evaluate
+whether ingestion progress is skewed, but it's generally simplest to start
+by looking at the aggregate statistics for the whole source.)
+
+The `messages_staged` and `bytes_staged` statistics should roughly correspond
+with what materialize has written (but not necessarily committed) to the
+external service. For example, the `bytes_staged` and `messages_staged` fields
+for a Kafka sink should roughly correspond with how many messages materialize
+has written to the Kafka topic, and how big they are (including the key), but
+the Kafka transaction for those messages might not have been committed yet.
+
+`messages_committed` and `bytes_committed` correspond to the number of messages
+committed to the external service. These numbers can be _smaller_ than the
+`*_staged` statistics, because Materialize might fail to write transactions and
+retry them.
+
+If any of these statistics are not making progress, your sink might be stalled
+or need to be scaled up.
+
+If the `*_staged` statistics are making progress, but the `*_committed` ones
+are not, there may be a configuration issues with the external service that is
+preventing Materialize from committing transactions. Check the `reason`
+column in `mz_sink_statuses`, which can provide more information.

@@ -15,7 +15,6 @@ use std::time::SystemTime;
 
 use anyhow::{bail, Context};
 use md5::{Digest, Md5};
-use mz_sql::ast::ExplainStage;
 use postgres_array::Array;
 use regex::Regex;
 use tokio_postgres::error::DbError;
@@ -26,6 +25,8 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
 use mz_pgrepr::{Interval, Jsonb, Numeric, UInt2, UInt4, UInt8};
+use mz_repr::adt::range::Range;
+use mz_sql::ast::ExplainStage;
 use mz_sql_parser::ast::{Raw, Statement};
 
 use crate::action::{ControlFlow, State};
@@ -623,6 +624,38 @@ pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error>
                 .map(|v| v.to_string()),
             Type::UUID_ARRAY => row
                 .get::<_, Option<Array<ArrayElement<uuid::Uuid>>>>(i)
+                .map(|v| v.to_string()),
+            Type::INT4_RANGE => row.get::<_, Option<Range<i32>>>(i).map(|v| v.to_string()),
+            Type::INT4_RANGE_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<Range<i32>>>>>(i)
+                .map(|v| v.to_string()),
+            Type::INT8_RANGE => row.get::<_, Option<Range<i64>>>(i).map(|v| v.to_string()),
+            Type::INT8_RANGE_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<Range<i64>>>>>(i)
+                .map(|v| v.to_string()),
+            Type::NUM_RANGE => row
+                .get::<_, Option<Range<NumericStandardNotation>>>(i)
+                .map(|v| v.to_string()),
+            Type::NUM_RANGE_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<Range<NumericStandardNotation>>>>>(i)
+                .map(|v| v.to_string()),
+            Type::DATE_RANGE => row
+                .get::<_, Option<Range<chrono::NaiveDate>>>(i)
+                .map(|v| v.to_string()),
+            Type::DATE_RANGE_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<Range<chrono::NaiveDate>>>>>(i)
+                .map(|v| v.to_string()),
+            Type::TS_RANGE => row
+                .get::<_, Option<Range<chrono::NaiveDateTime>>>(i)
+                .map(|v| v.to_string()),
+            Type::TS_RANGE_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<Range<chrono::NaiveDateTime>>>>>(i)
+                .map(|v| v.to_string()),
+            Type::TSTZ_RANGE => row
+                .get::<_, Option<Range<chrono::DateTime<chrono::Utc>>>>(i)
+                .map(|v| v.to_string()),
+            Type::TSTZ_RANGE_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<Range<chrono::DateTime<chrono::Utc>>>>>>(i)
                 .map(|v| v.to_string()),
             _ => match ty.oid() {
                 mz_pgrepr::oid::TYPE_UINT2_OID => {

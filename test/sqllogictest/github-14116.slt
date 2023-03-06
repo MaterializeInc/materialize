@@ -34,7 +34,7 @@ Explained Query:
   Return // { arity: 3 }
     CrossJoin type=differential // { arity: 3 }
       implementation
-        %1[×] » %0:test1[×]A
+        %0:test1[×] » %1[×]
       ArrangeBy keys=[[]] // { arity: 2 }
         Get materialize.public.test1 // { arity: 2 }
       ArrangeBy keys=[[]] // { arity: 1 }

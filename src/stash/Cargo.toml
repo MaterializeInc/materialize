@@ -12,6 +12,7 @@ harness = false
 
 [dependencies]
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.25"
 mz-ore = { path = "../ore", features = ["metrics", "network", "async", "test"] }
 mz-postgres-util = { path = "../postgres-util" }

@@ -542,7 +542,7 @@ where
         };
 
         while PartialOrder::less_than(&self.source_upper.frontier(), &new_source_upper) {
-            let (ts, upper) = self
+            let (ts, mut upper) = self
                 .clock_stream
                 .by_ref()
                 .skip_while(|(_ts, upper)| {
@@ -554,6 +554,11 @@ where
                 .next()
                 .await
                 .expect("clock stream ended without reaching the empty frontier");
+
+            // If source is closed, close remap shard as well.
+            if new_source_upper.is_empty() {
+                upper = Antichain::new();
+            }
 
             let mut updates = vec![];
             for src_ts in self.source_upper.frontier().iter().cloned() {
@@ -597,10 +602,6 @@ where
             Ok(()) => Ok(self.sync(new_upper.borrow()).await),
             Err(mismatch) => Err(mismatch),
         }
-    }
-
-    pub async fn compact(&mut self, new_since: Antichain<IntoTime>) {
-        self.remap_handle.compact(new_since).await;
     }
 }
 
@@ -668,7 +669,7 @@ mod tests {
                 blob_uri: "mem://".to_owned(),
                 consensus_uri: "mem://".to_owned(),
             },
-            remap_shard: shard,
+            remap_shard: Some(shard),
             data_shard: ShardId::new(),
             status_shard: None,
             relation_desc: RelationDesc::empty(),
@@ -680,10 +681,13 @@ mod tests {
             (ts, upper)
         }));
 
+        let write_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())));
+
         let remap_handle = crate::source::reclock::compat::PersistHandle::new(
             Arc::clone(&*PERSIST_CACHE),
             metadata,
             as_of.clone(),
+            write_frontier,
             GlobalId::Explain,
             "unittest",
             0,
@@ -776,8 +780,30 @@ mod tests {
 
     #[tokio::test]
     async fn test_reclock_frontier() {
+        let persist_location = PersistLocation {
+            blob_uri: "mem://".to_owned(),
+            consensus_uri: "mem://".to_owned(),
+        };
+
+        let remap_shard = ShardId::new();
+
+        let persist_client = PERSIST_CACHE
+            .open(persist_location)
+            .await
+            .expect("error creating persist client");
+
+        let mut remap_read_handle = persist_client
+            .open_leased_reader::<SourceData, (), Timestamp, Diff>(
+                remap_shard,
+                "test_since_hold",
+                Arc::new(PROGRESS_DESC.clone()),
+                Arc::new(UnitSchema),
+            )
+            .await
+            .expect("error opening persist shard");
+
         let (mut operator, mut follower) =
-            make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
+            make_test_operator(remap_shard, Antichain::from_elem(0.into())).await;
 
         let query = Antichain::from_elem(Partitioned::minimum());
         // This is the initial source frontier so we should get the initial ts upper
@@ -892,7 +918,9 @@ mod tests {
         );
 
         // Compact but not enough to change the bindings
-        operator.compact(Antichain::from_elem(900.into())).await;
+        remap_read_handle
+            .downgrade_since(&Antichain::from_elem(900.into()))
+            .await;
         follower.compact(Antichain::from_elem(900.into()));
         let query = partitioned_frontier([(1, MzOffset::from(9))]);
         assert_eq!(
@@ -901,7 +929,9 @@ mod tests {
         );
 
         // Compact enough to compact bindings
-        operator.compact(Antichain::from_elem(1500.into())).await;
+        remap_read_handle
+            .downgrade_since(&Antichain::from_elem(1500.into()))
+            .await;
         follower.compact(Antichain::from_elem(1500.into()));
         let query = partitioned_frontier([(1, MzOffset::from(9))]);
         // Now reclocking the same offset maps to the compacted binding, which is the same result
@@ -1035,10 +1065,30 @@ mod tests {
 
     #[tokio::test]
     async fn test_compaction() {
-        let binding_shard = ShardId::new();
+        let persist_location = PersistLocation {
+            blob_uri: "mem://".to_owned(),
+            consensus_uri: "mem://".to_owned(),
+        };
+
+        let remap_shard = ShardId::new();
+
+        let persist_client = PERSIST_CACHE
+            .open(persist_location)
+            .await
+            .expect("error creating persist client");
+
+        let mut remap_read_handle = persist_client
+            .open_leased_reader::<SourceData, (), Timestamp, Diff>(
+                remap_shard,
+                "test_since_hold",
+                Arc::new(PROGRESS_DESC.clone()),
+                Arc::new(UnitSchema),
+            )
+            .await
+            .expect("error opening persist shard");
 
         let (mut operator, mut follower) =
-            make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
+            make_test_operator(remap_shard, Antichain::from_elem(0.into())).await;
 
         // Reclock offsets 1 and 2 to timestamp 1000
         let batch = vec![
@@ -1069,7 +1119,9 @@ mod tests {
         assert_eq!(reclocked_msgs, &[(3, 2000.into()), (4, 2000.into())]);
 
         // Compact enough so that offsets >= 3 remain uncompacted
-        operator.compact(Antichain::from_elem(1000.into())).await;
+        remap_read_handle
+            .downgrade_since(&Antichain::from_elem(1000.into()))
+            .await;
         follower.compact(Antichain::from_elem(1000.into()));
 
         // Reclock offsets 3 and 4 again to see we get the uncompacted result
@@ -1096,7 +1148,7 @@ mod tests {
 
         // Starting a new operator with an `as_of` is the same as having compacted
         let (_operator, follower) =
-            make_test_operator(binding_shard, Antichain::from_elem(1000.into())).await;
+            make_test_operator(remap_shard, Antichain::from_elem(1000.into())).await;
 
         // Reclocking offsets 3 and 4 should succeed
         let batch = vec![
@@ -1144,8 +1196,6 @@ mod tests {
             .collect_vec();
         assert_eq!(reclocked_msgs, &[(1, 1000.into()), (2, 1000.into())]);
 
-        // Also compact operator A. Since operator B has its own read handle it shouldn't affect it
-        op_a.compact(Antichain::from_elem(1000.into())).await;
         follower_a.compact(Antichain::from_elem(1000.into()));
 
         // Advance the time by a lot
@@ -1179,10 +1229,30 @@ mod tests {
 
     #[tokio::test]
     async fn test_inversion() {
-        let binding_shard = ShardId::new();
+        let persist_location = PersistLocation {
+            blob_uri: "mem://".to_owned(),
+            consensus_uri: "mem://".to_owned(),
+        };
+
+        let remap_shard = ShardId::new();
+
+        let persist_client = PERSIST_CACHE
+            .open(persist_location)
+            .await
+            .expect("error creating persist client");
+
+        let mut remap_read_handle = persist_client
+            .open_leased_reader::<SourceData, (), Timestamp, Diff>(
+                remap_shard,
+                "test_since_hold",
+                Arc::new(PROGRESS_DESC.clone()),
+                Arc::new(UnitSchema),
+            )
+            .await
+            .expect("error opening persist shard");
 
         let (mut operator, mut follower) =
-            make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
+            make_test_operator(remap_shard, Antichain::from_elem(0.into())).await;
 
         // SETUP
         // Reclock offsets 1 and 2 to timestamp 1000
@@ -1280,6 +1350,9 @@ mod tests {
         );
 
         // After compaction it should still work
+        remap_read_handle
+            .downgrade_since(&Antichain::from_elem(1000.into()))
+            .await;
         follower.compact(Antichain::from_elem(1000.into()));
         assert_eq!(
             follower
@@ -1288,6 +1361,9 @@ mod tests {
             partitioned_frontier([(0, MzOffset::from(5))])
         );
         // compact as close as we can
+        remap_read_handle
+            .downgrade_since(&Antichain::from_elem(2000.into()))
+            .await;
         follower.compact(Antichain::from_elem(2000.into()));
         assert_eq!(
             follower
@@ -1298,6 +1374,9 @@ mod tests {
 
         // If we compact too far, we get an error. Note we compact
         // to the previous UPPER we were checking.
+        remap_read_handle
+            .downgrade_since(&Antichain::from_elem(2001.into()))
+            .await;
         follower.compact(Antichain::from_elem(2001.into()));
 
         assert_eq!(

@@ -246,6 +246,7 @@ class Composition:
                 stdout=stdout,
                 input=stdin,
                 text=True,
+                bufsize=1,
             )
         except subprocess.CalledProcessError as e:
             if e.stdout:

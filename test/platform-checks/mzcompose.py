@@ -35,7 +35,16 @@ SERVICES = [
         name="clusterd_compute_1"
     ),  # Started by some Scenarios, defined here only for the teardown
     Materialized(external_cockroach=True),
-    TestdriveService(default_timeout="300s", no_reset=True, seed=1),
+    TestdriveService(
+        default_timeout="300s",
+        no_reset=True,
+        seed=1,
+        entrypoint_extra=[
+            f"--var=replicas=1",
+            f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}",
+        ],
+    ),
 ]
 
 

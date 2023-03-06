@@ -102,7 +102,6 @@ use jsonwebtoken::DecodingKey;
 use once_cell::sync::Lazy;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
-use tower_http::cors::{self, AllowOrigin};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use url::Url;
@@ -274,7 +273,7 @@ pub struct Args {
     #[clap(
         long,
         env = "FRONTEGG_TENANT",
-        requires_all = &["frontegg-jwk", "frontegg-api-token-url"],
+        requires_all = &["frontegg-jwk", "frontegg-api-token-url", "frontegg-admin-role"],
         value_name = "UUID",
     )]
     frontegg_tenant: Option<Uuid>,
@@ -285,6 +284,9 @@ pub struct Args {
     /// The full URL (including path) to the Frontegg api-token endpoint.
     #[clap(long, env = "FRONTEGG_API_TOKEN_URL", requires = "frontegg-tenant")]
     frontegg_api_token_url: Option<String>,
+    /// The name of the admin role in Frontegg.
+    #[clap(long, env = "FRONTEGG_ADMIN_ROLE", requires = "frontegg-tenant")]
+    frontegg_admin_role: Option<String>,
     /// A common string prefix that is expected to be present at the beginning
     /// of all Frontegg passwords.
     #[clap(long, env = "FRONTEGG_PASSWORD_PREFIX", requires = "frontegg-tenant")]
@@ -613,9 +615,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         args.frontegg_tenant,
         args.frontegg_api_token_url,
         args.frontegg_jwk,
+        args.frontegg_admin_role,
     ) {
-        (None, None, None) => None,
-        (Some(tenant_id), Some(admin_api_token_url), Some(jwk)) => {
+        (None, None, None, None) => None,
+        (Some(tenant_id), Some(admin_api_token_url), Some(jwk), Some(admin_role)) => {
             Some(FronteggAuthentication::new(FronteggConfig {
                 admin_api_token_url,
                 decoding_key: DecodingKey::from_rsa_pem(jwk.as_bytes())?,
@@ -623,45 +626,27 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 now: mz_ore::now::SYSTEM_TIME.clone(),
                 refresh_before_secs: 60,
                 password_prefix: args.frontegg_password_prefix.unwrap_or_default(),
+                admin_role,
             }))
         }
         _ => unreachable!("clap enforced"),
     };
 
     // Configure CORS.
-    let cors_allowed_origin = if args
-        .cors_allowed_origin
-        .iter()
-        .any(|val| val.as_bytes() == b"*")
-    {
-        cors::Any.into()
-    } else if !args.cors_allowed_origin.is_empty() {
-        let allowed = args.cors_allowed_origin.clone();
-        AllowOrigin::predicate(move |origin: &HeaderValue, _request_parts: _| {
-            for val in &allowed {
-                // For each specified allow cors origin, check if it starts with
-                // a *. and allow anything from that glob. Otherwise check for
-                // an exact match.
-                if (val.as_bytes().starts_with(b"*.")
-                    && origin.as_bytes().ends_with(&val.as_bytes()[1..]))
-                    || origin == val
-                {
-                    return true;
-                }
-            }
-            false
-        })
+    let allowed_origins = if !args.cors_allowed_origin.is_empty() {
+        args.cors_allowed_origin
     } else {
         let port = args.http_listen_addr.port();
-        AllowOrigin::list([
+        vec![
             HeaderValue::from_str(&format!("http://localhost:{}", port)).unwrap(),
             HeaderValue::from_str(&format!("http://127.0.0.1:{}", port)).unwrap(),
             HeaderValue::from_str(&format!("http://[::1]:{}", port)).unwrap(),
             HeaderValue::from_str(&format!("https://localhost:{}", port)).unwrap(),
             HeaderValue::from_str(&format!("https://127.0.0.1:{}", port)).unwrap(),
             HeaderValue::from_str(&format!("https://[::1]:{}", port)).unwrap(),
-        ])
+        ]
     };
+    let cors_allowed_origin = mz_http_util::build_cors_allowed_origin(&allowed_origins);
 
     // Configure controller.
     let (orchestrator, secrets_controller, cloud_resource_controller): (

@@ -22,7 +22,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::jsonb::JsonbRef;
-use mz_repr::adt::range::Range;
+use mz_repr::adt::range::{Range, RangeInner};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::strconv::{self, Nestable};
 use mz_repr::{Datum, RelationType, Row, RowArena, ScalarType};
@@ -482,7 +482,27 @@ impl Value {
             Value::Uuid(u) => u.to_sql(&PgType::UUID, buf),
             Value::Numeric(a) => a.to_sql(&PgType::NUMERIC, buf),
             Value::MzTimestamp(t) => t.to_string().to_sql(&PgType::TEXT, buf),
-            Value::Range(_) => Err("binary encodings of range types not yet implemented".into()),
+            Value::Range(range) => {
+                buf.put_u8(range.pg_flag_bits());
+
+                let elem_type = match ty {
+                    Type::Range { element_type } => element_type,
+                    _ => unreachable!(),
+                };
+
+                if let Some(RangeInner { lower, upper }) = &range.inner {
+                    for bound in [&lower.bound, &upper.bound] {
+                        if let Some(bound) = bound {
+                            let base = buf.len();
+                            buf.put_i32(0);
+                            bound.encode_binary(elem_type, buf)?;
+                            let len = pg_len("encoded range bound", buf.len() - base - 4)?;
+                            buf[base..base + 4].copy_from_slice(&len.to_be_bytes());
+                        }
+                    }
+                }
+                Ok(postgres_types::IsNull::No)
+            }
         }
         .expect("encode_binary should never trigger a to_sql failure");
         if let IsNull::Yes = is_null {

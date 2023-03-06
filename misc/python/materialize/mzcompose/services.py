@@ -79,16 +79,6 @@ class Materialized(Service):
 
         command = ["--unsafe-mode"]
 
-        # TODO(benesch): remove this special case when v0.39 ships.
-        # latest being 'v0.38.0' until then
-        if image is not None and any(
-            image.endswith(version)
-            for version in ["v0.36.2", "v0.37.3", "v0.38.0", "latest"]
-        ):
-            persist_blob_url = "file:///mzdata/persist/blob"
-            command.append("--orchestrator=process")
-            command.append("--orchestrator-process-secrets-directory=/mzdata/secrets")
-
         if not environment_id:
             environment_id = DEFAULT_MZ_ENVIRONMENT_ID
         command += [f"--environment-id={environment_id}"]
@@ -150,7 +140,7 @@ class Materialized(Service):
                     "test": ["CMD", "curl", "-f", "localhost:6878/api/readyz"],
                     "interval": "1s",
                     # A fully loaded Materialize can take a long time to start.
-                    "start_period": "300s",
+                    "start_period": "600s",
                 },
             }
         )
@@ -287,7 +277,7 @@ class Redpanda(Service):
     def __init__(
         self,
         name: str = "redpanda",
-        version: str = "v22.3.8",
+        version: str = "v22.3.13",
         auto_create_topics: bool = False,
         image: Optional[str] = None,
         aliases: Optional[List[str]] = None,

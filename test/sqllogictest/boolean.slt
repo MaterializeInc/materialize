@@ -10,17 +10,23 @@
 mode cockroach
 
 statement ok
-CREATE TABLE bools (b text)
+CREATE TABLE bools (b bool)
 
 statement ok
-INSERT INTO bools VALUES
+INSERT INTO bools VALUES (TRUE), (FALSE), (NULL);
+
+statement ok
+CREATE TABLE bools_text (b text)
+
+statement ok
+INSERT INTO bools_text VALUES
     ('t'), ('tr'), ('tR'), ('tRuE'), ('TRUE'), ('    tr    '),
     ('f'), ('fa'), ('faL'), ('fAlsE'), ('FALSE'), ('           fal '),
     ('on'), ('off'), ('On'), ('Off'), ('ON'), ('oFf'),
     ('1'), ('0'), ('               1'), ('0        ')
 
 query TB rowsort
-SELECT replace(b, ' ', 'x'), b::bool FROM bools
+SELECT replace(b, ' ', 'x'), b::bool FROM bools_text
 ----
 xxxxxxxxxxxxxxx1  true
 xxxxxxxxxxxfalx   false
@@ -91,75 +97,99 @@ SELECT NOT FALSE
 ----
 true
 
+query BBB rowsort
+SELECT a.b, b.b, a.b AND b.b FROM bools AS a CROSS JOIN bools AS b;
+----
+true  true  true
+true  false false
+true  NULL  NULL
+false true  false
+false false false
+false NULL  false
+NULL  true  NULL
+NULL  false false
+NULL  NULL  NULL
+
+# Boolean AND error cases
+
+query error division by zero
+SELECT (1/0 > 0) AND TRUE;
+
+# Postgres returns the error instead
 query B
-SELECT TRUE AND FALSE
+SELECT (1/0 > 0) AND FALSE;
 ----
 false
 
-query B
-SELECT TRUE AND TRUE
-----
-true
+query error division by zero
+SELECT (1/0 > 0) AND NULL;
+
+query error division by zero
+SELECT TRUE AND (1/0 > 0);
 
 query B
-SELECT FALSE AND FALSE
+SELECT FALSE AND (1/0 > 0);
 ----
 false
 
-query B
-SELECT TRUE AND NULL
-----
-NULL
+query error division by zero
+SELECT NULL AND (1/0 > 0);
 
-query B
-SELECT NULL AND TRUE
-----
-NULL
+# Check we consistently pick the same error
+# Postgres returns the first error instead
 
-query B
-SELECT FALSE AND null
-----
-false
+query error smallint out of range
+SELECT (32768::int2 > 0) AND (1/0 > 0);
 
-query B
-SELECT NULL AND FALSE
-----
-false
+query error smallint out of range
+SELECT (1/0 > 0) AND (32768::int2 > 0);
 
+query BBB rowsort
+SELECT a.b, b.b, a.b OR b.b FROM bools AS a CROSS JOIN bools AS b;
+----
+true  true  true
+true  false true
+true  NULL  true
+false true  true
+false false false
+false NULL  NULL
+NULL  true  true
+NULL  false NULL
+NULL  NULL  NULL
+
+# Boolean OR error cases
+
+# Postgres returns the error instead
 query B
-SELECT TRUE OR FALSE
+SELECT (1/0 > 0) OR TRUE;
 ----
 true
 
+query error division by zero
+SELECT (1/0 > 0) OR FALSE;
+
+query error division by zero
+SELECT (1/0 > 0) OR NULL;
+
 query B
-SELECT TRUE OR TRUE
+SELECT TRUE OR (1/0 > 0);
 ----
 true
 
-query B
-SELECT FALSE OR FALSE
-----
-false
+query error division by zero
+SELECT FALSE OR (1/0 > 0);
 
-query B
-SELECT TRUE OR NULL
-----
-true
+query error division by zero
+SELECT NULL OR (1/0 > 0);
 
-query B
-SELECT NULL OR TRUE
-----
-true
+# Check we consistently pick the same error
+# Postgres returns the first error instead
 
-query B
-SELECT FALSE OR null
-----
-NULL
+query error smallint out of range
+SELECT (32768::int2 > 0) OR (1/0 > 0);
 
-query B
-SELECT NULL OR FALSE
-----
-NULL
+query error smallint out of range
+SELECT (1/0 > 0) OR (32768::int2 > 0);
 
 query B
 SELECT TRUE AND NOT TRUE

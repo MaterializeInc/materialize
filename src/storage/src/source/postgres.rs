@@ -32,7 +32,7 @@ use tokio_postgres::replication::LogicalReplicationStream;
 use tokio_postgres::types::PgLsn;
 use tokio_postgres::Client;
 use tokio_postgres::SimpleQueryMessage;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use mz_expr::MirScalarExpr;
 use mz_ore::display::DisplayExt;
@@ -796,7 +796,7 @@ fn validate_tables(
         match pub_tables.get(id) {
             Some(pub_schema) => {
                 if pub_schema != &info.desc {
-                    error!(
+                    warn!(
                         "Error validating table in publication. Expected: {:?} Actual: {:?}",
                         &info.desc, pub_schema
                     );
@@ -804,7 +804,7 @@ fn validate_tables(
                 }
             }
             None => {
-                error!(
+                warn!(
                     "publication missing table: {} with id {}",
                     info.desc.name, id
                 );
@@ -1111,7 +1111,7 @@ async fn produce_replication<'a>(
                             if let Some(info) = source_tables.get(&rel_id) {
                                 // Start with the cheapest check first, this will catch the majority of alters
                                 if info.desc.columns.len() != relation.columns().len() {
-                                    error!(
+                                    warn!(
                                         "alter table detected on {} with id {}",
                                         info.desc.name, info.desc.oid
                                     );
@@ -1125,7 +1125,7 @@ async fn produce_replication<'a>(
                                 let same_namespace =
                                     info.desc.namespace == relation.namespace().unwrap();
                                 if !same_name || !same_namespace {
-                                    error!(
+                                    warn!(
                                         "table name changed on {}.{} with id {} to {}.{}",
                                         info.desc.namespace,
                                         info.desc.name,
@@ -1149,7 +1149,7 @@ async fn produce_replication<'a>(
                                     let same_typmod = src.type_mod == rel.type_modifier();
 
                                     if !same_name || !same_typoid || !same_typmod {
-                                        error!(
+                                        warn!(
                                             "alter table error: name {}, oid {}, old_schema {:?}, new_schema {:?}",
                                             info.desc.name,
                                             info.desc.oid,

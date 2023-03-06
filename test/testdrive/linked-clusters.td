@@ -95,7 +95,7 @@ contains:cannot modify linked cluster "materialize_public_lg2"
 contains:cannot modify linked cluster "materialize_public_lg2"
 ! CREATE CLUSTER REPLICA materialize_public_lg2.new SIZE 'small'
 contains:cannot create more than one replica of a cluster containing sources or sinks
-! CREATE MATERIALIZED VIEW v IN CLUSTER materialize_public_lg2 AS SELECT 1
+! CREATE MATERIALIZED VIEW w IN CLUSTER materialize_public_lg2 AS SELECT 1
 contains:cannot modify linked cluster "materialize_public_lg2"
 ! CREATE INDEX IN CLUSTER materialize_public_lg2 ON v (a)
 contains:cannot modify linked cluster "materialize_public_lg2"

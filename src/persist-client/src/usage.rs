@@ -17,7 +17,7 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use mz_ore::cast::CastFrom;
 use mz_persist::location::Blob;
 use tokio::sync::Semaphore;
-use tracing::info;
+use tracing::{error, info};
 
 use crate::cfg::PersistConfig;
 use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
@@ -268,10 +268,36 @@ impl StorageUsageClient {
         blob_usage: &ShardBlobUsage,
     ) -> ShardUsage {
         let mut start = Instant::now();
-        let mut states_iter = self
+        let states_iter = self
             .state_versions
             .fetch_all_live_states::<u64>(shard_id)
-            .await
+            .await;
+        let states_iter = match states_iter {
+            Some(x) => x,
+            None => {
+                // It's unexpected for a shard to exist in blob but not in
+                // consensus, but it could happen. For example, if an initial
+                // rollup has been written but the initial CaS hasn't yet
+                // succeeded (or if a `bin/environmentd --reset` is interrupted
+                // in dev). Be loud because it's unexpected, but handle it
+                // because it can happen.
+                error!(
+                    concat!(
+                    "shard {} existed in blob but not in consensus. This should be quite rare in ",
+                    "prod, but is semi-expected in development if `bin/environmentd --reset` gets ",
+                    "interrupted"),
+                    shard_id
+                );
+                return ShardUsage {
+                    current_state_batches_bytes: 0,
+                    current_state_rollups_bytes: 0,
+                    referenced_not_current_state_bytes: 0,
+                    not_leaked_not_referenced_bytes: 0,
+                    leaked_bytes: blob_usage.total_bytes(),
+                };
+            }
+        };
+        let mut states_iter = states_iter
             .check_ts_codec()
             .expect("ts should be a u64 in all prod shards");
         let now = Instant::now();
@@ -398,7 +424,13 @@ impl<T: std::fmt::Debug> From<ShardUsageCumulativeMaybeRacy<'_, T>> for ShardUsa
                 // anything into state. As a result, we know that anything it
                 // hasn't linked into state is now leaked and eligible for
                 // reclamation by a (future) leaked blob detector.
-                not_leaked_bytes += x.referenced_batches_bytes.get(writer_id).map_or(0, |x| *x);
+                let writer_referenced = x.referenced_batches_bytes.get(writer_id).map_or(0, |x| *x);
+                // It's possible, due to races, that a writer has more
+                // referenced batches in state than we saw for that writer in
+                // blob. Cap it at the number of bytes we saw in blob, otherwise
+                // we could hit the "blob inputs should be cumulative" panic
+                // below.
+                not_leaked_bytes += std::cmp::min(*bytes, writer_referenced);
             }
         }
         // For now, assume rollups aren't leaked. We could compute which rollups
@@ -549,8 +581,11 @@ impl std::fmt::Display for HumanBytes {
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
+    use mz_persist::location::{Atomicity, SeqNo};
     use timely::progress::Antichain;
 
+    use crate::internal::paths::{PartialRollupKey, RollupId};
     use crate::tests::new_test_client;
     use crate::ShardId;
 
@@ -951,5 +986,51 @@ mod tests {
             blob_usage_rollups: 0,
         }
         .run("1 0/1 0/1 0/1 0/1");
+    }
+
+    /// A regression test for (part of) #17752, which led to seeing the "blob
+    /// inputs should be cumulative" should be cumulative panic in
+    /// staging/canary.
+    #[test]
+    fn usage_regression_referenced_greater_than_blob() {
+        TestCase {
+            current_state_batches_bytes: 0,
+            current_state_bytes: 0,
+            referenced_other_bytes: 0,
+            referenced_batches_bytes: vec![('a', 5)],
+            live_writers: vec![],
+            blob_usage_by_writer: vec![('a', 3)],
+            blob_usage_rollups: 0,
+        }
+        .run("3 0/3 0/3 3/0 0/0");
+    }
+
+    /// Regression test for (part of) #17752, where an interrupted
+    /// `bin/environmentd --reset` resulted in panic in persist usage code.
+    ///
+    /// This also tests a (hypothesized) race that's possible in prod where an
+    /// initial rollup is written for a shard, but the initial CaS hasn't yet
+    /// succeeded.
+    #[tokio::test]
+    async fn usage_regression_shard_in_blob_not_consensus() {
+        mz_ore::test::init_logging();
+        let client = new_test_client().await;
+        let shard_id = ShardId::new();
+
+        // Somewhat unsatisfying, we manually construct a rollup blob key.
+        let key = PartialRollupKey::new(SeqNo(1), &RollupId::new());
+        let key = key.complete(&shard_id);
+        let () = client
+            .blob
+            .set(&key, Bytes::from(vec![0, 1, 2]), Atomicity::RequireAtomic)
+            .await
+            .unwrap();
+        let usage = StorageUsageClient::open(client);
+        let shards_usage = usage.shards_usage().await;
+        assert_eq!(shards_usage.by_shard.len(), 1);
+        assert_eq!(
+            shards_usage.by_shard.get(&shard_id).unwrap().leaked_bytes,
+            3
+        );
     }
 }

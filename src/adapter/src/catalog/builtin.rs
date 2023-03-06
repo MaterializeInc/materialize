@@ -31,7 +31,7 @@ use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, Timely
 use mz_pgrepr::oid;
 use mz_repr::{RelationDesc, RelationType, ScalarType};
 use mz_sql::catalog::{
-    CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, TypeReference,
+    CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, RoleAttributes, TypeReference,
 };
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::healthcheck::{MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC};
@@ -158,6 +158,7 @@ pub struct BuiltinRole {
     ///
     /// IMPORTANT: Must start with a prefix from [`BUILTIN_PREFIXES`].
     pub name: &'static str,
+    pub attributes: RoleAttributes,
 }
 
 #[derive(Clone, Debug)]
@@ -1132,6 +1133,54 @@ pub const TYPE_NUM_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
     },
 };
 
+pub const TYPE_TS_RANGE: BuiltinType<NameReference> = BuiltinType {
+    name: "tsrange",
+    schema: PG_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_TSRANGE_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Range {
+            element_reference: TYPE_TIMESTAMP.name,
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_TS_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_tsrange",
+    schema: PG_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_TSRANGE_ARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_TS_RANGE.name,
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_TSTZ_RANGE: BuiltinType<NameReference> = BuiltinType {
+    name: "tstzrange",
+    schema: PG_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_TSTZRANGE_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Range {
+            element_reference: TYPE_TIMESTAMPTZ.name,
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_TSTZ_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_tstzrange",
+    schema: PG_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_TSTZRANGE_ARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_TSTZ_RANGE.name,
+        },
+        array_id: None,
+    },
+};
+
 pub const MZ_DATAFLOW_OPERATORS: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_operators",
     schema: MZ_INTERNAL_SCHEMA,
@@ -1491,7 +1540,11 @@ pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false)),
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("inherit", ScalarType::Bool.nullable(false))
+        .with_column("create_role", ScalarType::Bool.nullable(false))
+        .with_column("create_db", ScalarType::Bool.nullable(false))
+        .with_column("create_cluster", ScalarType::Bool.nullable(false)),
     is_retained_metrics_relation: false,
 });
 pub static MZ_PSEUDO_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1518,6 +1571,19 @@ pub static MZ_FUNCTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         )
         .with_column("return_type_id", ScalarType::String.nullable(true))
         .with_column("returns_set", ScalarType::Bool.nullable(false)),
+    is_retained_metrics_relation: false,
+});
+pub static MZ_OPERATORS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_operators",
+    schema: MZ_CATALOG_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column(
+            "argument_type_ids",
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
+        )
+        .with_column("return_type_id", ScalarType::String.nullable(true)),
     is_retained_metrics_relation: false,
 });
 
@@ -1853,6 +1919,31 @@ FROM mz_internal.mz_worker_compute_frontiers
 GROUP BY export_id",
 };
 
+pub const MZ_DATAFLOW_CHANNEL_OPERATORS: BuiltinView = BuiltinView {
+    name: "mz_dataflow_channel_operators",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_dataflow_channel_operators AS
+WITH
+channel_addresses(id, worker_id, address, from_index, to_index) AS (
+     SELECT id, worker_id, address, from_index, to_index
+     FROM mz_internal.mz_dataflow_channels mdc
+     INNER JOIN mz_internal.mz_dataflow_addresses mda
+     USING (id, worker_id)
+),
+operator_addresses(channel_id, worker_id, from_address, to_address) AS (
+     SELECT id AS channel_id, worker_id,
+            address || from_index AS from_address,
+            address || to_index AS to_address
+     FROM channel_addresses
+)
+SELECT channel_id AS id, oa.worker_id, from_ops.id AS from_operator_id, to_ops.id AS to_operator_id
+FROM operator_addresses oa INNER JOIN mz_internal.mz_dataflow_addresses mda_from ON oa.from_address = mda_from.address AND oa.worker_id = mda_from.worker_id
+                           INNER JOIN mz_internal.mz_dataflow_operators from_ops ON mda_from.id = from_ops.id AND oa.worker_id = from_ops.worker_id
+                           INNER JOIN mz_internal.mz_dataflow_addresses mda_to ON oa.to_address = mda_to.address AND oa.worker_id = mda_to.worker_id
+                           INNER JOIN mz_internal.mz_dataflow_operators to_ops ON mda_to.id = to_ops.id AND oa.worker_id = to_ops.worker_id
+"
+};
+
 pub const MZ_COMPUTE_IMPORT_FRONTIERS: BuiltinView = BuiltinView {
     name: "mz_compute_import_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
@@ -2173,11 +2264,24 @@ pub const PG_PROC: BuiltinView = BuiltinView {
     mz_functions.name AS proname,
     mz_schemas.oid AS pronamespace,
     NULL::pg_catalog.oid AS proowner,
-    NULL::pg_catalog.text AS proargdefaults
+    NULL::pg_catalog.text AS proargdefaults,
+    ret_type.oid AS prorettype
 FROM mz_catalog.mz_functions
 JOIN mz_catalog.mz_schemas ON mz_functions.schema_id = mz_schemas.id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
+JOIN mz_catalog.mz_types AS ret_type ON mz_functions.return_type_id = ret_type.id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
+};
+
+pub const PG_OPERATOR: BuiltinView = BuiltinView {
+    name: "pg_operator",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_operator AS SELECT
+    mz_operators.oid,
+    mz_operators.name AS oprname,
+    ret_type.oid AS oprresult
+FROM mz_catalog.mz_operators
+JOIN mz_catalog.mz_types AS ret_type ON mz_operators.return_type_id = ret_type.id",
 };
 
 pub const PG_RANGE: BuiltinView = BuiltinView {
@@ -2223,6 +2327,17 @@ pub const PG_SETTINGS: BuiltinView = BuiltinView {
 FROM (VALUES
     ('max_index_keys'::pg_catalog.text, '1000'::pg_catalog.text)
 ) AS _ (name, setting)",
+};
+
+pub const PG_AUTH_MEMBERS: BuiltinView = BuiltinView {
+    name: "pg_auth_members",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_auth_members AS SELECT
+    NULL::pg_catalog.oid as roleid,
+    NULL::pg_catalog.oid as member,
+    NULL::pg_catalog.oid as grantor,
+    NULL::pg_catalog.bool as admin_option
+WHERE false",
 };
 
 pub const MZ_SCHEDULING_ELAPSED: BuiltinView = BuiltinView {
@@ -2548,7 +2663,7 @@ WHERE s.database_id IS NULL OR d.name = current_database()",
 pub const PG_COLLATION: BuiltinView = BuiltinView {
     name: "pg_collation",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_catalog.pg_class
+    sql: "CREATE VIEW pg_catalog.pg_collation
 AS SELECT
     NULL::pg_catalog.oid AS oid,
     NULL::pg_catalog.text AS collname,
@@ -2567,7 +2682,7 @@ WHERE false",
 pub const PG_POLICY: BuiltinView = BuiltinView {
     name: "pg_policy",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_catalog.pg_class
+    sql: "CREATE VIEW pg_catalog.pg_policy
 AS SELECT
     NULL::pg_catalog.oid AS oid,
     NULL::pg_catalog.text AS polname,
@@ -2600,18 +2715,19 @@ pub const PG_AUTHID: BuiltinView = BuiltinView {
 AS SELECT
     r.oid AS oid,
     r.name AS rolname,
+    -- We determine superuser status each time a role logs in, so there's no way to accurately
+    -- depict this in the catalog. Except for mz_system, which is always a superuser. For all other
+    -- roles we hardcode NULL.
     CASE
         WHEN r.name = 'mz_system' THEN true
-        ELSE false
+        ELSE NULL::pg_catalog.bool
     END AS rolsuper,
-    -- MZ doesn't have role inheritence
-    false AS rolinherit,
-    -- All roles can create other roles
-    true AS rolcreaterole,
-    -- All roles can create other dbs
-    true AS rolcreatedb,
-    -- All roles can login
-    true AS rolcanlogin,
+    inherit AS rolinherit,
+    create_role AS rolcreaterole,
+    create_db AS rolcreatedb,
+    -- We determine login status each time a role logs in, so there's no way to accurately depict
+    -- this in the catalog. Instead we just hardcode NULL.
+    NULL::pg_catalog.bool AS rolcanlogin,
     -- MZ doesn't support replication in the same way Postgres does
     false AS rolreplication,
     -- MZ doesn't how row level security
@@ -2816,10 +2932,12 @@ ON mz_catalog.mz_secrets (schema_id)",
 
 pub static MZ_SYSTEM_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*SYSTEM_USER.name,
+    attributes: RoleAttributes::new().with_all(),
 });
 
 pub static MZ_INTROSPECTION_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*INTROSPECTION_USER.name,
+    attributes: RoleAttributes::new(),
 });
 
 pub static MZ_SYSTEM_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| BuiltinCluster {
@@ -2924,6 +3042,10 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Type(&TYPE_DATE_RANGE_ARRAY),
         Builtin::Type(&TYPE_NUM_RANGE),
         Builtin::Type(&TYPE_NUM_RANGE_ARRAY),
+        Builtin::Type(&TYPE_TS_RANGE),
+        Builtin::Type(&TYPE_TS_RANGE_ARRAY),
+        Builtin::Type(&TYPE_TSTZ_RANGE),
+        Builtin::Type(&TYPE_TSTZ_RANGE_ARRAY),
     ];
     for (schema, funcs) in &[
         (PG_CATALOG_SCHEMA, &*mz_sql::func::PG_CATALOG_BUILTINS),
@@ -2986,6 +3108,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_ROLES),
         Builtin::Table(&MZ_PSEUDO_TYPES),
         Builtin::Table(&MZ_FUNCTIONS),
+        Builtin::Table(&MZ_OPERATORS),
         Builtin::Table(&MZ_CLUSTERS),
         Builtin::Table(&MZ_CLUSTER_LINKS),
         Builtin::Table(&MZ_SECRETS),
@@ -3010,6 +3133,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY),
         Builtin::View(&MZ_CLUSTER_REPLICA_UTILIZATION),
         Builtin::View(&MZ_COMPUTE_FRONTIERS),
+        Builtin::View(&MZ_DATAFLOW_CHANNEL_OPERATORS),
         Builtin::View(&MZ_COMPUTE_IMPORT_FRONTIERS),
         Builtin::View(&MZ_MESSAGE_COUNTS),
         Builtin::View(&MZ_RAW_COMPUTE_OPERATOR_DURATIONS),
@@ -3032,10 +3156,12 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_TYPE),
         Builtin::View(&PG_ATTRIBUTE),
         Builtin::View(&PG_PROC),
+        Builtin::View(&PG_OPERATOR),
         Builtin::View(&PG_RANGE),
         Builtin::View(&PG_ENUM),
         Builtin::View(&PG_ATTRDEF),
         Builtin::View(&PG_SETTINGS),
+        Builtin::View(&PG_AUTH_MEMBERS),
         Builtin::View(&PG_CONSTRAINT),
         Builtin::View(&PG_TABLES),
         Builtin::View(&PG_ACCESS_METHODS),

@@ -78,8 +78,8 @@
   - signature: 'sum(x: T) -> U'
     description: Sum of `T`'s values
       <br><br>
-      Returns `bigint` if `x` is `int`, `numeric` if `x` is `bigint`, else returns
-      same type as `x`.
+      Returns `bigint` if `x` is `int` or `smallint`, `numeric` if `x` is `bigint` or `uint8`,
+      `uint8` if `x` is `uint4` or `uint2`, else returns same type as `x`.
 
   - signature: 'variance(x: T) -> U'
     description: Historical alias for `variance_samp`. *(imprecise)*
@@ -133,6 +133,9 @@
 
   - signature: 'ceil(x: N) -> N'
     description: The smallest integer >= `x`
+
+  - signature: 'ceiling(x: N) -> N'
+    description: "Alias of `ceil`"
 
   - signature: 'exp(x: N) -> N'
     description: Exponential of `x` (e raised to the given power)
@@ -505,8 +508,8 @@
 
 - type: UUID
   functions:
-  - signature: mz_environment_id() -> uuid
-    description: The `uuid` uniquely identifying this Materialize environment.
+  - signature: mz_environment_id() -> text
+    description: A string containing a `uuid` uniquely identifying this Materialize environment.
     unmaterializable: true
 
 - type: JSON

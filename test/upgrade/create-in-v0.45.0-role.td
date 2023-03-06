@@ -7,13 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> CREATE ROLE superuser_login SUPERUSER LOGIN;
+> CREATE ROLE superuser_login;
 
-> CREATE ROLE "space role" LOGIN SUPERUSER;
-
-# If this begins to succeeed, this means additional tests need to be added
-! CREATE ROLE nosuperuser_login NOSUPERUSER LOGIN;
-contains:non-superusers not yet supported
-
-! CREATE ROLE superuser_nologin SUPERUSER NOLOGIN;
-contains:non-login users not yet supported
+> CREATE ROLE "space role";

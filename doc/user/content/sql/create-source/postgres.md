@@ -29,7 +29,7 @@ Field | Use
 _src_name_  | The name for the source.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists. _Default._
 **IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this source. If not specified, the `SIZE` option must be specified.
-**CONNECTION** _connection_name_ | The name of the PostgreSQL connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgres) documentation page.
+**CONNECTION** _connection_name_ | The name of the PostgreSQL connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgresql) documentation page.
 **FOR ALL TABLES** | Create subsources for all tables in the publication.
 **FOR TABLES (** _table_list_ **)** | Create subsources for specific tables in the publication.
 
@@ -155,7 +155,7 @@ Before creating a PostgreSQL source, you must set up logical replication in the 
 
 A connection describes how to connect and authenticate to an external system you want Materialize to read data from.
 
-Once created, a connection is **reusable** across multiple `CREATE SOURCE` statements. For more details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgres) documentation page.
+Once created, a connection is **reusable** across multiple `CREATE SOURCE` statements. For more details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgresql) documentation page.
 
 ```sql
 CREATE SECRET pgpass AS '<POSTGRES_PASSWORD>';
@@ -170,7 +170,7 @@ CREATE CONNECTION pg_connection TO POSTGRES (
 );
 ```
 
-If your PostgreSQL server is not exposed to the public internet, you can tunnel the connection through an AWS PrivateLink service or an SSH bastion host:
+If your PostgreSQL server is not exposed to the public internet, you can [tunnel the connection](/sql/create-connection/#network-security-connections) through an AWS PrivateLink service or an SSH bastion host.
 
 {{< tabs tabID="1" >}}
 {{< tab "AWS PrivateLink">}}
@@ -194,6 +194,8 @@ CREATE CONNECTION pg_connection TO POSTGRES (
     DATABASE 'postgres'
 );
 ```
+
+For step-by-step instructions on creating AWS PrivateLink connections and configuring an AWS PrivateLink service to accept connections from Materialize, check [this guide](/ops/network-security/privatelink/).
 {{< /tab >}}
 {{< tab "SSH tunnel">}}
 ```sql
@@ -213,7 +215,7 @@ CREATE CONNECTION pg_connection TO POSTGRES (
 );
 ```
 
-For step-by-step instructions on creating SSH tunnel connections and configuring an SSH bastion server to accept connections from Materialize, check out [this guide](/ops/network-security/ssh-tunnel/).
+For step-by-step instructions on creating SSH tunnel connections and configuring an SSH bastion server to accept connections from Materialize, check [this guide](/ops/network-security/ssh-tunnel/).
 {{< /tab >}}
 {{< /tabs >}}
 

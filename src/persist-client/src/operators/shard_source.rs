@@ -465,15 +465,11 @@ where
                 .await
         };
 
-        let mut buffer = Vec::new();
-
-        while let Some(event) = descs_input.next().await {
+        while let Some(event) = descs_input.next_mut().await {
             if let Event::Data(cap, data) = event {
                 // `LeasedBatchPart`es cannot be dropped at this point w/o
                 // panicking, so swap them to an owned version.
-                data.swap(&mut buffer);
-
-                for (_idx, part) in buffer.drain(..) {
+                for (_idx, part) in data.drain(..) {
                     let (token, fetched) = fetcher
                         .fetch_leased_part(fetcher.leased_part_from_exchangeable(part))
                         .await;

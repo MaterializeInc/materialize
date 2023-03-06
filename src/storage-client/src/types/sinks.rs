@@ -169,15 +169,14 @@ pub struct SinkAsOf<T = mz_repr::Timestamp> {
 }
 
 impl<T: PartialOrder + Clone> SinkAsOf<T> {
-    pub fn maybe_fast_forward(&self, other_since: &Antichain<T>) -> Self {
+    /// Forwards the since frontier of this `SinkAsOf`. If it is already
+    /// sufficiently far advanced the downgrade is a no-op.
+    pub fn downgrade(&mut self, other_since: &Antichain<T>) {
         if PartialOrder::less_equal(&self.frontier, other_since) {
-            SinkAsOf {
-                frontier: other_since.to_owned(),
-                // If we're using the since, never read the snapshot
-                strict: true,
-            }
-        } else {
-            self.to_owned()
+            // TODO(aljoscha): Should this be meet_assign?
+            self.frontier.clone_from(other_since);
+            // If we're using the since, never read the snapshot
+            self.strict = true;
         }
     }
 }

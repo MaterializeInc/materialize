@@ -39,7 +39,7 @@ use crate::session::vars::IsolationLevel;
 use crate::AdapterNotice;
 
 pub use self::vars::{
-    ClientSeverity, SessionVars, Var, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
+    ClientSeverity, SessionVars, Var, VarInput, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
     SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
 };
 
@@ -63,6 +63,8 @@ pub struct ExternalUserMetadata {
     pub user_id: Uuid,
     /// The ID of the user's active group in the external system.
     pub group_id: Uuid,
+    /// Indicates if the user is an admin in the external system.
+    pub admin: bool,
 }
 
 impl PartialEq for User {
@@ -75,6 +77,20 @@ impl User {
     /// Returns whether this is an internal user.
     pub fn is_internal(&self) -> bool {
         INTERNAL_USER_NAMES.contains(&self.name)
+    }
+
+    /// Returns whether this user is an admin in an external system.
+    pub fn is_external_admin(&self) -> bool {
+        self.external_metadata
+            .as_ref()
+            .map(|metadata| metadata.admin)
+            .clone()
+            .unwrap_or(false)
+    }
+
+    /// Returns whether this user is a superuser.
+    pub fn is_superuser(&self) -> bool {
+        self.is_external_admin() || self.name == SYSTEM_USER.name
     }
 }
 
@@ -92,6 +108,8 @@ pub struct Session<T = mz_repr::Timestamp> {
     notices_rx: mpsc::UnboundedReceiver<AdapterNotice>,
     next_transaction_id: TransactionId,
     secret_key: u32,
+    external_metadata_tx: mpsc::UnboundedSender<ExternalUserMetadata>,
+    external_metadata_rx: mpsc::UnboundedReceiver<ExternalUserMetadata>,
 }
 
 impl<T: TimestampManipulation> Session<T> {
@@ -119,11 +137,12 @@ impl<T: TimestampManipulation> Session<T> {
         user: User,
     ) -> Session<T> {
         let (notices_tx, notices_rx) = mpsc::unbounded_channel();
-        let vars = if INTERNAL_USER_NAMES.contains(&user.name) {
-            SessionVars::for_cluster(build_info, &user.name)
-        } else {
-            SessionVars::new(build_info)
-        };
+        let (external_metadata_tx, external_metadata_rx) = mpsc::unbounded_channel();
+        let mut vars = SessionVars::new(build_info);
+        vars.set_superuser(user.is_superuser());
+        if INTERNAL_USER_NAMES.contains(&user.name) {
+            vars.set_cluster(user.name.clone());
+        }
         Session {
             conn_id,
             transaction: TransactionStatus::Default,
@@ -136,6 +155,8 @@ impl<T: TimestampManipulation> Session<T> {
             notices_rx,
             next_transaction_id: 0,
             secret_key: rand::thread_rng().gen(),
+            external_metadata_tx,
+            external_metadata_rx,
         }
     }
 
@@ -214,7 +235,7 @@ impl<T: TimestampManipulation> Session<T> {
 
         if let Some(isolation_level) = isolation_level {
             self.vars
-                .set("transaction_isolation", IsolationLevel::from(isolation_level).as_str(), true)
+                .set("transaction_isolation", VarInput::Flat(IsolationLevel::from(isolation_level).as_str()), true)
                 .expect("transaction_isolation should be a valid var and isolation level is a valid value");
         }
 
@@ -608,6 +629,7 @@ impl<T: TimestampManipulation> Session<T> {
         let _ = self.clear_transaction();
         self.prepared_statements.clear();
         self.vars = SessionVars::new(self.vars.build_info());
+        self.vars.set_superuser(self.is_superuser());
     }
 
     /// Returns the user who owns this session.
@@ -641,6 +663,26 @@ impl<T: TimestampManipulation> Session<T> {
             None => false,
             Some(txn) => txn.write_lock_guard.is_some(),
         }
+    }
+
+    /// Returns whether the current session is a superuser.
+    pub fn is_superuser(&self) -> bool {
+        self.user.is_superuser()
+    }
+
+    /// Returns a channel on which to send external metadata to the session.
+    pub fn retain_external_metadata_transmitter(
+        &mut self,
+    ) -> UnboundedSender<ExternalUserMetadata> {
+        self.external_metadata_tx.clone()
+    }
+
+    /// Drains any external metadata updates and applies the changes from the latest update.
+    pub fn apply_external_metadata_updates(&mut self) {
+        while let Ok(external_user_metadata) = self.external_metadata_rx.try_recv() {
+            self.user.external_metadata = Some(external_user_metadata);
+        }
+        self.vars.set_superuser(self.is_superuser());
     }
 }
 

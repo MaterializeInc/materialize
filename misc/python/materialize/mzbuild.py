@@ -691,6 +691,7 @@ class Repository:
             # things snappy. Not required for correctness.
             dirs[:] = set(dirs) - {
                 ".git",
+                ".mypy_cache",
                 "target",
                 "target-ra",
                 "target-xcompile",

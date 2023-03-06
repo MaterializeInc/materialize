@@ -677,6 +677,7 @@ impl Type {
                 Type::MzTimestamp => &MZ_TIMESTAMP_ARRAY,
                 Type::Range { element_type } => match **element_type {
                     Type::Int4 => &postgres_types::Type::INT4_RANGE_ARRAY,
+                    Type::Int8 => &postgres_types::Type::INT8_RANGE_ARRAY,
                     Type::Numeric { .. } => &postgres_types::Type::NUM_RANGE_ARRAY,
                     Type::Timestamp { .. } => &postgres_types::Type::TS_RANGE_ARRAY,
                     Type::TimestampTz { .. } => &postgres_types::Type::TSTZ_RANGE_ARRAY,

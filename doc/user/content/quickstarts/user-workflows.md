@@ -1,10 +1,11 @@
 ---
-title: "Abandoned Cart"
-description: "How to build a data pipeline to power customer workflows using Materialize"
+title: "Build a reactive workflow"
+description: "How to build a data pipeline to power business workflows using Materialize"
 menu:
-    main:
-        parent: quickstarts
-weight: 20
+  main:
+    parent: 'quickstarts'
+    weight: 30
+    name: 'Build a reactive workflow'
 draft: true
 aliases:
   - /demos/abandoned-cart

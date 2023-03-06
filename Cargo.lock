@@ -1713,7 +1713,7 @@ checksum = "0e25ea47919b1560c4e3b7fe0aaab9becf5b84a10325ddf7db0f0ba5e1026499"
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#e9e1157b7ab7d2548df699c9b95b578e0e64772a"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#cc88469a4834faa179725d52e2beb7ab677bdb37"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1790,7 +1790,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#e9e1157b7ab7d2548df699c9b95b578e0e64772a"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#cc88469a4834faa179725d52e2beb7ab677bdb37"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -3554,6 +3554,7 @@ dependencies = [
  "mz-timely-util",
  "once_cell",
  "prometheus",
+ "regex",
  "scopeguard",
  "serde",
  "smallvec",
@@ -3598,7 +3599,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.44.0-dev"
+version = "0.45.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3746,7 +3747,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.44.0-dev"
+version = "0.45.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -3936,11 +3937,16 @@ dependencies = [
  "askama",
  "axum",
  "headers",
+ "http",
+ "hyper",
  "include_dir",
  "mz-ore",
  "prometheus",
  "serde",
  "serde_json",
+ "tokio",
+ "tower",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
  "workspace-hack",
@@ -4274,7 +4280,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.44.0-dev"
+version = "0.45.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4324,6 +4330,7 @@ dependencies = [
  "anyhow",
  "arrow2",
  "bytes",
+ "parquet2",
  "workspace-hack",
 ]
 
@@ -4510,6 +4517,7 @@ dependencies = [
  "num_enum",
  "once_cell",
  "ordered-float",
+ "postgres-protocol",
  "proptest",
  "proptest-derive",
  "prost",
@@ -4524,6 +4532,7 @@ dependencies = [
  "smallvec",
  "thiserror",
  "timely",
+ "tokio-postgres",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -4758,6 +4767,7 @@ dependencies = [
  "anyhow",
  "criterion",
  "differential-dataflow",
+ "fail",
  "futures",
  "mz-ore",
  "mz-postgres-util",
@@ -7302,7 +7312,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#6a736009d0276b181f0a069174390b99c8bd9ae1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#f2ea9600f06eac46d2b43fcdbb3257593d3759ec"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7320,12 +7330,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#6a736009d0276b181f0a069174390b99c8bd9ae1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#f2ea9600f06eac46d2b43fcdbb3257593d3759ec"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#6a736009d0276b181f0a069174390b99c8bd9ae1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#f2ea9600f06eac46d2b43fcdbb3257593d3759ec"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7341,7 +7351,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#6a736009d0276b181f0a069174390b99c8bd9ae1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#f2ea9600f06eac46d2b43fcdbb3257593d3759ec"
 dependencies = [
  "columnation",
  "serde",
@@ -7350,7 +7360,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#6a736009d0276b181f0a069174390b99c8bd9ae1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#f2ea9600f06eac46d2b43fcdbb3257593d3759ec"
 
 [[package]]
 name = "tiny-keccak"

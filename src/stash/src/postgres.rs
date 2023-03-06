@@ -43,10 +43,11 @@ use crate::{
 const SCHEMA: &str = "
 CREATE TABLE fence (
     epoch bigint PRIMARY KEY,
-    nonce bytea
+    nonce bytea,
+    version bigint DEFAULT 1 NOT NULL
 );
--- Epochs are guaranteed to be non-zero, so start counting at 1
-INSERT INTO fence VALUES (1, '');
+-- Epochs and versions are guaranteed to be non-zero, so start counting at 1.
+INSERT INTO fence (epoch, nonce, version) VALUES (1, '', 1);
 
 -- bigserial is not ideal for Cockroach, but we have a stable number of
 -- collections, so our use of it here is fine and compatible with Postgres.
@@ -81,7 +82,7 @@ CREATE TABLE uppers (
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(300);
 
 struct PreparedStatements {
-    select_epoch: Statement,
+    fetch_epoch: Statement,
     iter_key: Statement,
     since: Statement,
     upper: Statement,
@@ -93,8 +94,24 @@ struct PreparedStatements {
 }
 
 impl PreparedStatements {
-    async fn from(client: &Client) -> Result<Self, StashError> {
-        let select_epoch = client.prepare("SELECT epoch, nonce FROM fence").await?;
+    async fn from(client: &Client, mode: TransactionMode) -> Result<Self, StashError> {
+        let fetch_epoch = client
+            .prepare(match mode {
+                TransactionMode::Readonly | TransactionMode::Savepoint => {
+                    // For readonly and savepoint stashes, don't attempt to
+                    // increment the version and instead hard code it to 0 which
+                    // will always fail the version check, since the version
+                    // starts at 1 and goes up. Savepoint however will never
+                    // retry COMMITs (and otherwise they'd retry forever because
+                    // 0 will never succeed). Readonly can safely retry the
+                    // original transaction.
+                    "SELECT epoch, nonce, 0 AS version FROM fence"
+                }
+                TransactionMode::Writeable => {
+                    "UPDATE fence SET version=version+1 RETURNING epoch, nonce, version"
+                }
+            })
+            .await?;
         let iter_key = client
             .prepare(
                 "SELECT value, time, diff FROM data
@@ -123,7 +140,7 @@ impl PreparedStatements {
             .prepare("UPDATE sinces SET since = $1 WHERE collection_id = $2")
             .await?;
         Ok(PreparedStatements {
-            select_epoch,
+            fetch_epoch,
             iter_key,
             since,
             upper,
@@ -165,9 +182,9 @@ impl<'a> CountedStatements<'a> {
         }
     }
 
-    pub fn select_epoch(&self) -> &Statement {
-        self.inc("select_epoch");
-        &self.stmts.select_epoch
+    pub fn fetch_epoch(&self) -> &Statement {
+        self.inc("fetch_epoch");
+        &self.stmts.fetch_epoch
     }
     pub fn iter_key(&self) -> &Statement {
         self.inc("iter_key");
@@ -230,7 +247,7 @@ impl<'a> CountedStatements<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum TransactionMode {
     /// Transact operations occurs in a normal transaction.
     Writeable,
@@ -523,6 +540,22 @@ impl Stash {
                 }
                 tx.batch_execute(SCHEMA).await?;
             }
+
+            // Migration added in 0.45.0. This block can be removed anytime after that
+            // release.
+            {
+                // We can't add the column for other txn modes, and they don't
+                // even require it since they use the read-only fetch_epoch
+                // query.
+                if matches!(self.txn_mode, TransactionMode::Writeable) {
+                    tx
+                    .batch_execute(
+                        "ALTER TABLE fence ADD COLUMN IF NOT EXISTS version bigint DEFAULT 1 NOT NULL;",
+                    )
+                    .await?;
+                }
+            }
+
             let epoch = if matches!(self.txn_mode, TransactionMode::Writeable) {
                 // The `data`, `sinces`, and `uppers` tables can create and delete
                 // rows at a high frequency, generating many tombstoned rows. If
@@ -562,7 +595,7 @@ impl Stash {
             self.epoch = Some(epoch);
         }
 
-        self.statements = Some(PreparedStatements::from(&client).await?);
+        self.statements = Some(PreparedStatements::from(&client, self.txn_mode).await?);
 
         // In savepoint mode start a transaction that will never be committed.
         // Use a low priority so the rw stash won't ever block waiting for the
@@ -613,7 +646,7 @@ impl Stash {
             self.client = None;
         }
 
-        loop {
+        'transact_inner: loop {
             // Execute the operation in a transaction or savepoint.
             match self.transact_inner(&f).await {
                 Ok(r) => return Ok(r),
@@ -622,38 +655,76 @@ impl Stash {
                     // reconnect (and also not need to worry about any
                     // in-progress transaction state cleanup).
                     self.client = None;
-                    match &e.inner {
-                        InternalStashError::Postgres(pgerr)
-                            if !matches!(self.txn_mode, TransactionMode::Savepoint) =>
-                        {
-                            // Some errors aren't retryable.
-                            if let Some(dberr) = pgerr.as_db_error() {
-                                if matches!(
-                                    dberr.code(),
-                                    &SqlState::UNDEFINED_TABLE
-                                        | &SqlState::WRONG_OBJECT_TYPE
-                                        | &SqlState::READ_ONLY_SQL_TRANSACTION
-                                ) {
-                                    return Err(e);
+
+                    attempt += 1;
+                    let cause = e.cause();
+                    self.metrics
+                        .transaction_errors
+                        .with_label_values(&[cause])
+                        .inc();
+                    info!(
+                        "tokio-postgres stash error, retry attempt {attempt}: {}, code: {:?}",
+                        e,
+                        e.code(),
+                    );
+
+                    // Savepoint is never retryable because we can't restore all
+                    // previous savepoints.
+                    //
+                    // TODO: This could be taught to retry if needed to make the
+                    // upgrade checker of stash-debug more resilient. Would need
+                    // to adjust fetch_epoch to attempt to increment the version
+                    // if we do that.
+                    if matches!(self.txn_mode, TransactionMode::Savepoint) {
+                        match e {
+                            TransactionError::Commit { .. } => {
+                                return Err("indeterminate COMMIT".into())
+                            }
+                            TransactionError::Epoch(err)
+                            | TransactionError::Connect(err)
+                            | TransactionError::Txn(err) => return Err(err),
+                        }
+                    }
+
+                    if e.retryable() {
+                        // Retry only known safe errors. Others need to cause a
+                        // fatal crash in environmentd because a transaction
+                        // could have committed without us receiving the commit
+                        // confirmation
+                        retry.next().await;
+                    } else {
+                        match e {
+                            TransactionError::Commit {
+                                committed_if_version,
+                                result,
+                            } => {
+                                // COMMIT is indeterminate. Check if it succeeded in a
+                                // new transaction.
+                                loop {
+                                    match self.determine_commit(committed_if_version).await {
+                                        Ok(succeeded) => {
+                                            if succeeded {
+                                                return Ok(result);
+                                            } else {
+                                                // COMMIT failed, retry the transaction.
+                                                continue 'transact_inner;
+                                            }
+                                        }
+                                        Err(err) => {
+                                            // If there was an error during COMMIT
+                                            // check, we might be able to retry it.
+                                            if err.is_unrecoverable() {
+                                                return Err(err);
+                                            }
+                                            // Implied `continue`.
+                                        }
+                                    }
                                 }
                             }
-                            attempt += 1;
-                            let cause = if pgerr.is_closed() {
-                                "closed"
-                            } else if let Some(&SqlState::T_R_SERIALIZATION_FAILURE) = pgerr.code()
-                            {
-                                "retry"
-                            } else {
-                                "other"
-                            };
-                            self.metrics
-                                .transaction_errors
-                                .with_label_values(&[cause])
-                                .inc();
-                            info!("tokio-postgres stash error, retry attempt {attempt}: {pgerr}");
-                            retry.next().await;
+                            TransactionError::Epoch(err)
+                            | TransactionError::Connect(err)
+                            | TransactionError::Txn(err) => return Err(err),
                         }
-                        _ => return Err(e),
                     }
                 }
             }
@@ -661,7 +732,7 @@ impl Stash {
     }
 
     #[tracing::instrument(name = "stash::transact_inner", level = "debug", skip_all)]
-    async fn transact_inner<F, T>(&mut self, f: &F) -> Result<T, StashError>
+    async fn transact_inner<F, T>(&mut self, f: &F) -> Result<T, TransactionError<T>>
     where
         F: for<'a> Fn(
             &'a CountedStatements<'a>,
@@ -674,7 +745,7 @@ impl Stash {
             None => true,
         };
         if reconnect {
-            self.connect().await?;
+            self.connect().await.map_err(TransactionError::Connect)?;
         }
         // client is guaranteed to be Some here.
         let client = self.client.as_mut().unwrap();
@@ -686,24 +757,33 @@ impl Stash {
             TransactionMode::Readonly => ("BEGIN READ  ONLY", "COMMIT"),
             TransactionMode::Savepoint => ("SAVEPOINT stash", "RELEASE SAVEPOINT stash"),
         };
-        client.batch_execute(tx_start).await?;
+        client
+            .batch_execute(tx_start)
+            .await
+            .map_err(|err| TransactionError::Txn(err.into()))?;
         // Pipeline the epoch query and closure.
         let epoch_fut = client
-            .query_one(stmts.select_epoch(), &[])
+            .query_one(stmts.fetch_epoch(), &[])
             .map_err(|err| err.into());
         let f_fut = f(&stmts, client, &self.collections);
-        let (row, res) = future::try_join(epoch_fut, f_fut).await?;
-        let current_epoch = NonZeroI64::new(row.get(0)).unwrap();
+        let (epoch_row, res) = future::try_join(epoch_fut, f_fut)
+            .await
+            .map_err(TransactionError::Txn)?;
+        let current_epoch = NonZeroI64::new(epoch_row.get("epoch")).unwrap();
         if Some(current_epoch) != self.epoch {
-            return Err(InternalStashError::Fence(format!(
-                "unexpected fence epoch {}, expected {:?}",
-                current_epoch, self.epoch
-            ))
-            .into());
+            return Err(TransactionError::Epoch(
+                InternalStashError::Fence(format!(
+                    "unexpected fence epoch {}, expected {:?}",
+                    current_epoch, self.epoch
+                ))
+                .into(),
+            ));
         }
-        let current_nonce: Vec<u8> = row.get(1);
+        let current_nonce: Vec<u8> = epoch_row.get("nonce");
         if current_nonce != self.nonce {
-            return Err(InternalStashError::Fence("unexpected fence nonce".into()).into());
+            return Err(TransactionError::Epoch(
+                InternalStashError::Fence("unexpected fence nonce".into()).into(),
+            ));
         }
         if let Some(counts) = stmts.counts {
             event!(
@@ -711,8 +791,173 @@ impl Stash {
                 counts = format!("{:?}", counts.lock().unwrap()),
             );
         }
-        client.batch_execute(tx_end).await?;
+
+        let committed_if_version: i64 = epoch_row.get("version");
+
+        // We can't use the failpoint macro here because we need to move `res`
+        // into the error return, but because `res` is generic and a T, we can't
+        // create one. Calling `res.clone()` would require `T: Clone` which
+        // forces `Data` to have `Clone` which we maybe don't want (unclear).
+        // Thus, use the hidden function that the macro calls.
+
+        // Have both a pre and post commit failpoint to simulate each kind of
+        // error.
+        if let Some(_) = fail::eval("stash_commit_pre", |_| "") {
+            return Err(TransactionError::Commit {
+                committed_if_version,
+                result: res,
+            });
+        }
+
+        if let Err(_) = client.batch_execute(tx_end).await {
+            return Err(TransactionError::Commit {
+                committed_if_version,
+                result: res,
+            });
+        }
+
+        if let Some(_) = fail::eval("stash_commit_post", |_| "") {
+            return Err(TransactionError::Commit {
+                committed_if_version,
+                result: res,
+            });
+        }
+
         Ok(res)
+    }
+
+    /// Reports whether a COMMIT that returned an error actually succeeded. An
+    /// Err return from this function is retryable normally (if
+    /// `!err.is_unrecoverable()`).
+    #[tracing::instrument(name = "stash::determine_commit", level = "debug", skip_all)]
+    async fn determine_commit(&mut self, committed_if_version: i64) -> Result<bool, StashError> {
+        // Always reconnect.
+        self.connect().await?;
+
+        let client = self.client.as_mut().unwrap();
+        let row = client
+            .query_one("SELECT epoch, nonce, version FROM fence", &[])
+            .await?;
+
+        // TODO: figure out if version should be non zero or not. Probably not?
+        let epoch = NonZeroI64::new(row.get("epoch")).unwrap();
+        let nonce: Vec<u8> = row.get("nonce");
+        let version: i64 = row.get("version");
+        if Some(epoch) != self.epoch || nonce != self.nonce {
+            return Err(InternalStashError::Fence("unexpected epoch or nonce".into()).into());
+        }
+        Ok(version == committed_if_version)
+    }
+}
+
+pub(crate) enum TransactionError<T> {
+    /// A failure occurred pre-transaction.
+    Connect(StashError),
+    /// The epoch check failed.
+    Epoch(StashError),
+    /// The transaction function failed and the commit was never started.
+    Txn(StashError),
+    /// The commit was started and failed but may have been committed. This is
+    /// an indeterminate error.
+    Commit {
+        // If the version field (in a new transaction) is this value, then the
+        // COMMIT succeeded, otherwise it failed.
+        committed_if_version: i64,
+        result: T,
+    },
+}
+
+impl<T> std::fmt::Display for TransactionError<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TransactionError::Connect(err)
+            | TransactionError::Epoch(err)
+            | TransactionError::Txn(err) => write!(f, "{err}"),
+            TransactionError::Commit {
+                committed_if_version,
+                ..
+            } => write!(
+                f,
+                "TransactionError::Commit{{ committed_if_version: {committed_if_version} }}"
+            ),
+        }
+    }
+}
+
+impl<T> TransactionError<T> {
+    fn pgerr(&self) -> Option<&tokio_postgres::Error> {
+        match self {
+            TransactionError::Connect(err)
+            | TransactionError::Epoch(err)
+            | TransactionError::Txn(err) => {
+                if let InternalStashError::Postgres(err) = &err.inner {
+                    Some(err)
+                } else {
+                    None
+                }
+            }
+            TransactionError::Commit { .. } => None,
+        }
+    }
+
+    fn code(&self) -> Option<&SqlState> {
+        self.pgerr().and_then(|err| err.code())
+    }
+
+    fn is_closed(&self) -> bool {
+        match self.pgerr() {
+            Some(err) => err.is_closed(),
+            None => false,
+        }
+    }
+
+    fn cause(&self) -> &str {
+        if self.is_closed() {
+            "closed"
+        } else if let Some(&SqlState::T_R_SERIALIZATION_FAILURE) = self.code() {
+            "retry"
+        } else {
+            "other"
+        }
+    }
+
+    /// Reports whether this error can safely be retried.
+    pub fn retryable(&self) -> bool {
+        // Only attempt to retry postgres-related errors. Others come from stash
+        // code and can't be retried.
+        if self.pgerr().is_none() {
+            return false;
+        }
+
+        // Check some known permanent failure codes.
+        if matches!(
+            self.code(),
+            Some(&SqlState::UNDEFINED_TABLE)
+                | Some(&SqlState::WRONG_OBJECT_TYPE)
+                | Some(&SqlState::READ_ONLY_SQL_TRANSACTION)
+        ) {
+            return false;
+        }
+
+        match self {
+            // Always retry if the initial connection failed.
+            TransactionError::Connect(_) => true,
+            // Never retry if the epoch check failed.
+            TransactionError::Epoch(_) => false,
+            // Retry inner transaction failures.
+            TransactionError::Txn(_) => true,
+            TransactionError::Commit { .. } => {
+                // If the failure occurred during the commit attempt, only retry
+                // if we got an explicit code from the database notifying us
+                // that this is possible. A connection error or perhaps any
+                // other error could have left the stash in an unknown state.
+                // Until we are idempotent or able to recover from this, our
+                // only choice is to issue a fatal failure, forcing the caller
+                // to restart its process and reinitialize its memory from fully
+                // reading the stash.
+                matches!(self.code(), Some(&SqlState::T_R_SERIALIZATION_FAILURE))
+            }
+        }
     }
 }
 

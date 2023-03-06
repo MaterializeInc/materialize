@@ -103,7 +103,6 @@ where
 
     let persist_clients = Arc::clone(&storage_state.persist_clients);
     let button = persist_op.build(move |_capabilities| async move {
-        let mut buffer = Vec::new();
         let mut stashed_batches = BTreeMap::new();
 
         let mut write = persist_clients
@@ -148,15 +147,13 @@ where
             });
         })();
 
-        while let Some(event) = input.next().await {
+        while let Some(event) = input.next_mut().await {
             match event {
                 Event::Data(_cap, data) => {
-                    data.swap(&mut buffer);
-
                     // TODO: come up with a better default batch size here
                     // (100 was chosen arbitrarily), and avoid having to make a batch
                     // per-timestamp.
-                    for (row, ts, diff) in buffer.drain(..) {
+                    for (row, ts, diff) in data.drain(..) {
                         if write.upper().less_equal(&ts) {
                             let builder = stashed_batches.entry(ts).or_insert_with(|| {
                                 BatchBuilderAndCounts::new(

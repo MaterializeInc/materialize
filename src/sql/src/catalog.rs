@@ -43,6 +43,7 @@ use crate::names::{
     ResolvedDatabaseSpecifier, RoleId, SchemaSpecifier,
 };
 use crate::normalize;
+use crate::plan::statement::ddl::PlannedRoleAttributes;
 use crate::plan::statement::StatementDesc;
 use crate::plan::PlanError;
 
@@ -140,6 +141,11 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
 
     /// Resolves the named role.
     fn resolve_role(&self, role_name: &str) -> Result<&dyn CatalogRole, CatalogError>;
+
+    /// Gets a role by its ID.
+    ///
+    /// Panics if `id` does not specify a valid role.
+    fn get_role(&self, id: &RoleId) -> &dyn CatalogRole;
 
     /// Resolves the named cluster.
     ///
@@ -272,6 +278,103 @@ pub trait CatalogSchema {
     fn has_items(&self) -> bool;
 }
 
+/// Attributes belonging to a [`CatalogRole`].
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+pub struct RoleAttributes {
+    /// Indicates whether the role has inheritance of privileges.
+    pub inherit: bool,
+    /// Indicates whether the role is allowed to create more roles.
+    pub create_role: bool,
+    /// Indicates whether the role is allowed to create databases.
+    pub create_db: bool,
+    /// Indicates whether the role is allowed to create clusters.
+    pub create_cluster: bool,
+    // Force use of constructor.
+    _private: (),
+}
+
+impl RoleAttributes {
+    /// Creates a new [`RoleAttributes`] with default attributes.
+    pub fn new() -> RoleAttributes {
+        RoleAttributes {
+            inherit: true,
+            create_role: false,
+            create_db: false,
+            create_cluster: false,
+            _private: (),
+        }
+    }
+
+    /// Adds the create role attribute.
+    pub fn with_create_role(mut self) -> RoleAttributes {
+        self.create_role = true;
+        self
+    }
+
+    /// Adds the create db attribute.
+    pub fn with_create_db(mut self) -> RoleAttributes {
+        self.create_db = true;
+        self
+    }
+
+    /// Adds the create cluster attribute.
+    pub fn with_create_cluster(mut self) -> RoleAttributes {
+        self.create_cluster = true;
+        self
+    }
+
+    /// Adds all attributes.
+    pub fn with_all(mut self) -> RoleAttributes {
+        self.inherit = true;
+        self.create_role = true;
+        self.create_db = true;
+        self.create_cluster = true;
+        self
+    }
+}
+
+impl From<PlannedRoleAttributes> for RoleAttributes {
+    fn from(
+        PlannedRoleAttributes {
+            inherit,
+            create_role,
+            create_db,
+            create_cluster,
+        }: PlannedRoleAttributes,
+    ) -> RoleAttributes {
+        let default_attributes = RoleAttributes::new();
+        RoleAttributes {
+            inherit: inherit.unwrap_or(default_attributes.inherit),
+            create_role: create_role.unwrap_or(default_attributes.create_role),
+            create_db: create_db.unwrap_or(default_attributes.create_db),
+            create_cluster: create_cluster.unwrap_or(default_attributes.create_cluster),
+            _private: (),
+        }
+    }
+}
+
+impl From<(&dyn CatalogRole, PlannedRoleAttributes)> for RoleAttributes {
+    fn from(
+        (
+            role,
+            PlannedRoleAttributes {
+                inherit,
+                create_role,
+                create_db,
+                create_cluster,
+            },
+        ): (&dyn CatalogRole, PlannedRoleAttributes),
+    ) -> RoleAttributes {
+        RoleAttributes {
+            inherit: inherit.unwrap_or_else(|| role.is_inherit()),
+            create_role: create_role.unwrap_or_else(|| role.create_role()),
+            create_db: create_db.unwrap_or_else(|| role.create_db()),
+            create_cluster: create_cluster.unwrap_or_else(|| role.create_cluster()),
+            _private: (),
+        }
+    }
+}
+
 /// A role in a [`SessionCatalog`].
 pub trait CatalogRole {
     /// Returns a fully-specified name of the role.
@@ -279,6 +382,18 @@ pub trait CatalogRole {
 
     /// Returns a stable ID for the role.
     fn id(&self) -> RoleId;
+
+    /// Indicates whether the role has inheritance of privileges.
+    fn is_inherit(&self) -> bool;
+
+    /// Indicates whether the role has the role creation attribute.
+    fn create_role(&self) -> bool;
+
+    /// Indicates whether the role has the database creation attribute.
+    fn create_db(&self) -> bool;
+
+    /// Indicates whether the role has the cluster creation attribute.
+    fn create_cluster(&self) -> bool;
 }
 
 /// A cluster in a [`SessionCatalog`].
@@ -875,6 +990,10 @@ impl SessionCatalog for DummyCatalog {
     }
 
     fn get_schema(&self, _: &ResolvedDatabaseSpecifier, _: &SchemaSpecifier) -> &dyn CatalogSchema {
+        unimplemented!()
+    }
+
+    fn get_role(&self, _: &RoleId) -> &dyn CatalogRole {
         unimplemented!()
     }
 

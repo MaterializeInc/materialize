@@ -116,7 +116,7 @@ CREATE SOURCE kafka_repl
 
 Any materialized view defined on top of this source will be incrementally updated as new change events stream in through Kafka, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original database.
 
-For more details and a step-by-step guide on using Kafka+Debezium for Change Data Capture (CDC), check out [Using Debezium](/integrations/debezium/).
+For more details and a step-by-step guide on using Kafka+Debezium for Change Data Capture (CDC), check [Using Debezium](/integrations/debezium/).
 
 ### Exposing source metadata
 
@@ -300,7 +300,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 {{< /tab >}}
 {{< /tabs >}}
 
-If your Kafka broker is not exposed to the public internet, you can tunnel the connection through an AWS PrivateLink service or an SSH bastion host:
+If your Kafka broker is not exposed to the public internet, you can [tunnel the connection](/sql/create-connection/#network-security-connections) through an AWS PrivateLink service or an SSH bastion host:
 
 {{< tabs tabID="1" >}}
 {{< tab "AWS PrivateLink">}}
@@ -321,7 +321,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 );
 ```
 
-For step-by-step instructions on creating AWS PrivateLink connections and configuring an AWS PrivateLink service to accept connections from Materialize, check out [this guide](/ops/network-security/privatelink/).
+For step-by-step instructions on creating AWS PrivateLink connections and configuring an AWS PrivateLink service to accept connections from Materialize, check [this guide](/ops/network-security/privatelink/).
 {{< /tab >}}
 {{< tab "SSH tunnel">}}
 
@@ -342,7 +342,7 @@ BROKERS (
 );
 ```
 
-For step-by-step instructions on creating SSH tunnel connections and configuring an SSH bastion server to accept connections from Materialize, check out [this guide](/ops/network-security/ssh-tunnel/).
+For step-by-step instructions on creating SSH tunnel connections and configuring an SSH bastion server to accept connections from Materialize, check [this guide](/ops/network-security/ssh-tunnel/).
 {{< /tab >}}
 {{< /tabs >}}
 
@@ -369,16 +369,16 @@ CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
 CREATE SECRET IF NOT EXISTS csr_username AS '<CSR_USERNAME>';
 CREATE SECRET IF NOT EXISTS csr_password AS '<CSR_PASSWORD>';
 
-CREATE CONNECTION csr_connection
-  FOR CONFLUENT SCHEMA REGISTRY
+CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
   URL '<CONFLUENT_REGISTRY_URL>',
   USERNAME = SECRET csr_username,
-  PASSWORD = SECRET csr_password;
+  PASSWORD = SECRET csr_password
+);
 ```
 {{< /tab >}}
 {{< /tabs >}}
 
-If your Confluent Schema Registry server is not exposed to the public internet, you can tunnel the connection through an AWS PrivateLink service or an SSH bastion host:
+If your Confluent Schema Registry server is not exposed to the public internet, you can [tunnel the connection](/sql/create-connection/#network-security-connections) through an AWS PrivateLink service or an SSH bastion host:
 
 {{< tabs tabID="1" >}}
 {{< tab "AWS PrivateLink">}}
@@ -397,7 +397,7 @@ CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
 );
 ```
 
-For step-by-step instructions on creating AWS PrivateLink connections and configuring an AWS PrivateLink service to accept connections from Materialize, check out [this guide](/ops/network-security/privatelink/).
+For step-by-step instructions on creating AWS PrivateLink connections and configuring an AWS PrivateLink service to accept connections from Materialize, check [this guide](/ops/network-security/privatelink/).
 {{< /tab >}}
 {{< tab "SSH tunnel">}}
 ```sql
@@ -415,7 +415,7 @@ CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
 );
 ```
 
-For step-by-step instructions on creating SSH tunnel connections and configuring an SSH bastion server to accept connections from Materialize, check out [this guide](/ops/network-security/ssh-tunnel/).
+For step-by-step instructions on creating SSH tunnel connections and configuring an SSH bastion server to accept connections from Materialize, check [this guide](/ops/network-security/ssh-tunnel/).
 {{< /tab >}}
 {{< /tabs >}}
 

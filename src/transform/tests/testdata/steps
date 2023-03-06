@@ -108,13 +108,13 @@ Applied Fixpoint { transforms: [PredicatePushdown { recursion_guard: RecursionGu
 No change: Fixpoint { transforms: [SemijoinIdempotence, ReductionPushdown, ReduceElision, LiteralLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, RelationCSE { normalize_lets: NormalizeLets { inline_mfp: false } }, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Fusion, FlatMapToMap, Join, NormalizeLets { inline_mfp: false }, Reduce, UnionNegate, UnionBranchCancellation, NormalizeLets { inline_mfp: false }, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }] }], limit: 100 }, ProjectionPushdown, NormalizeLets { inline_mfp: false }, Fusion, Fixpoint { transforms: [CanonicalizeMfp, ThresholdElision, Join, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Fusion, UnionNegate, UnionBranchCancellation, RelationCSE { normalize_lets: NormalizeLets { inline_mfp: true } }, FoldConstants { limit: Some(10000) }], limit: 100 }, LiteralConstraints
 ====
 Applied Fixpoint { transforms: [JoinImplementation { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, ColumnKnowledge { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }, Demand { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, LiteralLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }], limit: 100 }:
-(Join [(ArrangeBy (get u1) [[#0]]) (ArrangeBy (get x) [[(CallBinary AddInt64 #0 (1 Int64))]])] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] (Differential [1 [(CallBinary AddInt64 #0 (1 Int64))]] [[0 [#0] (false 1 true (false false false 0 false) 0)]]))
+(Join [(ArrangeBy (get u1) [[#0]]) (ArrangeBy (get x) [[(CallBinary AddInt64 #0 (1 Int64))]])] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] (Differential [0 [#0] (false 1 false (false false false 0 false) 0)] [[1 [(CallBinary AddInt64 #0 (1 Int64))] (false 1 false (false false false 0 false) 1)]]))
 
 ====
 No change: CanonicalizeMfp, RelationCSE { normalize_lets: NormalizeLets { inline_mfp: false } }, FoldConstants { limit: Some(10000) }, ThresholdElision
 ====
 Final:
-(Join [(ArrangeBy (get u1) [[#0]]) (ArrangeBy (get x) [[(CallBinary AddInt64 #0 (1 Int64))]])] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] (Differential [1 [(CallBinary AddInt64 #0 (1 Int64))]] [[0 [#0] (false 1 true (false false false 0 false) 0)]]))
+(Join [(ArrangeBy (get u1) [[#0]]) (ArrangeBy (get x) [[(CallBinary AddInt64 #0 (1 Int64))]])] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] (Differential [0 [#0] (false 1 false (false false false 0 false) 0)] [[1 [(CallBinary AddInt64 #0 (1 Int64))] (false 1 false (false false false 0 false) 1)]]))
 
 ====
 ====

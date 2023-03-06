@@ -85,6 +85,7 @@ use anyhow::bail;
 use chrono::{DateTime, Utc};
 use http::StatusCode;
 use itertools::Itertools;
+use mz_adapter::catalog::SYSTEM_USER;
 use reqwest::blocking::Client;
 use reqwest::Url;
 use tokio_postgres::error::SqlState;
@@ -174,7 +175,7 @@ fn test_persistence() {
             .into_iter()
             .map(|row| row.get(0))
             .collect::<Vec<String>>(),
-        vec!["u1", "u2", "u3", "u4", "u5", "u6"]
+        vec!["u1", "u2", "u3", "u4", "u5", "u6", "u7"]
     );
 }
 
@@ -910,4 +911,22 @@ fn test_max_statement_batch_size() {
             }
         }
     }
+}
+
+#[test]
+fn test_mz_system_user_admin() {
+    let config = util::Config::default();
+    let server = util::start_server(config).unwrap();
+    let mut client = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+    assert_eq!(
+        "on".to_string(),
+        client
+            .query_one("SHOW is_superuser;", &[])
+            .unwrap()
+            .get::<_, String>(0)
+    );
 }

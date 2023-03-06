@@ -7,11 +7,12 @@ menu:
     weight: 30
 ---
 
-If you're using the Source-Available version of Materialize, the best place to get help and support from Materialize employees and other users is the [Materialize Community](https://materialize.com/s/chat).
+## Getting help
 
-If you're already a paying customer, refer to our [customer support portal](https://support.materialize.com/).
+If you run into a snag or need support during the trial period, join the [Materialize Slack community](https://materialize.com/s/chat) or [open an issue](https://github.com/MaterializeInc/materialize/issues/new/choose). Slack is the best place to get timely help from Materialize employees and other users!
 
-Check the current status of our services on our [status page](https://status.materialize.com). We announce both planned and unplanned maintenance windows.
+If you're a paying customer, you can also refer to our [customer support portal](https://support.materialize.com/).
 
-You can also use our [status page API](https://status.materialize.com/api) to
-programmatically access the information on our status page.
+## Checking service status
+
+Check the current status of our services on the [status page](https://status.materialize.com), where we announce both planned and unplanned maintenance windows. You can also use the [status page API](https://status.materialize.com/api) to programmatically access the information on the status page.

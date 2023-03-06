@@ -48,6 +48,7 @@ steps:
     timeout_in_minutes: 2880
     agents:
       queue: linux-x86_64-large
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
@@ -59,6 +60,7 @@ steps:
     timeout_in_minutes: 2880
     agents:
       queue: linux-x86_64-large
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
@@ -69,6 +71,7 @@ steps:
     timeout_in_minutes: 2880
     agents:
       queue: linux-x86_64-large
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
@@ -79,6 +82,7 @@ steps:
     timeout_in_minutes: 2880
     agents:
       queue: linux-x86_64-large
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
@@ -89,7 +93,21 @@ steps:
     timeout_in_minutes: 2880
     agents:
       queue: linux-x86_64-large
+    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
           args: [--scenario=NoKilling, --actions=100000]
+
+  - wait: ~
+    continue_on_failure: true
+
+  - id: analyze
+    label: Analyze tests
+    plugins:
+      - junit-annotate#v2.0.2:
+          artifacts: "*junit_*.xml"
+          job-uuid-file-pattern: _([^_]*).xml
+    priority: 1
+    agents:
+      queue: linux-x86_64

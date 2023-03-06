@@ -25,6 +25,7 @@ with_subsources auctions
 with_subsources bids
 with_subsources organizations
 with_subsources users
+with_subsources with_subsources_progress
 
 # make sure dropping works
 > DROP SOURCE with_subsources CASCADE

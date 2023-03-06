@@ -116,6 +116,8 @@ pub struct RawSourceCreationConfig {
     pub persist_clients: Arc<PersistClientCache>,
     /// Place to share statistics updates with storage state.
     pub source_statistics: StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics>,
+    /// Enables reporting the remap operator's write frontier.
+    pub shared_remap_upper: Rc<RefCell<Antichain<mz_repr::Timestamp>>>,
 }
 
 /// Creates a source dataflow operator graph from a connection that has a
@@ -211,13 +213,8 @@ where
         })
     };
 
-    let (remap_stream, remap_token) = remap_operator(
-        scope,
-        config.clone(),
-        source_upper_rx,
-        &resume_stream,
-        timestamp_desc,
-    );
+    let (remap_stream, remap_token) =
+        remap_operator(scope, config.clone(), source_upper_rx, timestamp_desc);
 
     let ((reclocked_stream, reclocked_err_stream), _reclock_token) =
         reclock_operator(scope, config, reclock_follower, source_rx, remap_stream);
@@ -293,6 +290,7 @@ where
         now: _,
         persist_clients: _,
         source_statistics,
+        shared_remap_upper: _,
     } = config;
 
     let mut builder = AsyncOperatorBuilder::new(name.clone(), scope.clone());
@@ -544,8 +542,6 @@ fn health_operator<G: Scope>(
     let mut last_reported_status = overall_status(&healths).cloned();
 
     let button = health_op.build(move |mut _capabilities| async move {
-        let mut buffer = Vec::new();
-
         let persist_client = persist_clients
             .open(storage_metadata.persist_location.clone())
             .await
@@ -559,11 +555,10 @@ fn health_operator<G: Scope>(
             }
         }
 
-        while let Some(event) = input.next().await {
+        while let Some(event) = input.next_mut().await {
             if let AsyncEvent::Data(_cap, rows) = event {
-                rows.swap(&mut buffer);
                 let mut halt_with = None;
-                for (worker_id, health_event) in buffer.drain(..) {
+                for (worker_id, health_event) in rows.drain(..) {
                     if !is_active_worker {
                         warn!(
                             "Health messages for source {source_id} passed to \
@@ -684,7 +679,6 @@ fn remap_operator<G, FromTime>(
     scope: &G,
     config: RawSourceCreationConfig,
     mut source_upper_rx: UnboundedReceiver<Event<FromTime, ()>>,
-    resume_stream: &Stream<G, ()>,
     remap_relation_desc: RelationDesc,
 ) -> (Stream<G, (FromTime, mz_repr::Timestamp, Diff)>, Rc<dyn Any>)
 where
@@ -705,6 +699,7 @@ where
         now,
         persist_clients,
         source_statistics: _,
+        shared_remap_upper,
     } = config;
 
     let chosen_worker = usize::cast_from(id.hashed() % u64::cast_from(worker_count));
@@ -714,17 +709,11 @@ where
     let mut remap_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
     let (mut remap_output, remap_stream) = remap_op.new_output();
 
-    let mut resume_input = remap_op.new_input_connection(
-        resume_stream,
-        Pipeline,
-        // We don't need this to participate in progress
-        // tracking, we just need to periodically
-        // introspect its frontier.
-        vec![Antichain::new()],
-    );
-
     let button = remap_op.build(move |capabilities| async move {
         if !active_worker {
+            // This worker is not writing, so make sure it's "taken out" of the
+            // calculation by advancing to the empty frontier.
+            shared_remap_upper.borrow_mut().clear();
             return;
         }
 
@@ -738,6 +727,7 @@ where
             Arc::clone(&persist_clients),
             storage_metadata.clone(),
             as_of.clone(),
+            shared_remap_upper,
             id,
             "remap",
             worker_id,
@@ -771,9 +761,6 @@ where
             cap_set.downgrade(initial_batch.upper);
         }
 
-        // The last frontier we compacted the remap shard to, starting at [0].
-        let mut last_compaction_since = Antichain::from_elem(Timestamp::minimum());
-
         let mut ticker = tokio::time::interval(timestamp_interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -802,6 +789,12 @@ where
                         session.give_vec(&mut remap_trace_batch.updates);
                     }
 
+                    // If the last remap trace closed the input, we no longer
+                    // need to (or can) advance the timestamper.
+                    if remap_trace_batch.upper.is_empty() {
+                        return;
+                    }
+
                     cap_set.downgrade(remap_trace_batch.upper);
 
                     let mut remap_trace_batch = timestamper.advance().await;
@@ -816,35 +809,6 @@ where
                     }
 
                     cap_set.downgrade(remap_trace_batch.upper);
-
-                    // Make sure we do this after writing any timestamp bindings to
-                    // the remap shard that might be needed for the reported source
-                    // uppers.
-                    if source_upper.is_empty() {
-                        cap_set.downgrade(&[]);
-                        return;
-                    }
-                }
-                Some(AsyncEvent::Progress(resume_upper)) = resume_input.next() => {
-                    trace!("timely-{worker_id} remap({id}) received resume upper: {}", resume_upper.pretty());
-                    // Compact the remap shard, but only if it has actually made progress. Note
-                    // that resumption frontier progress does not drive this operator forward, only
-                    // source upper updates from the source_reader_operator does.
-                    //
-                    // Also note this can happen BEFORE we inspect the input. This is somewhat
-                    // of an oddity in the timely world, but this frontier can ONLY advance
-                    // past the input AFTER the output capability of this operator itself has
-                    // been downgraded (which drives the data shard upper), AND the
-                    // remap shard has been advanced below.
-                    let upper_ts = resume_upper.as_option().copied();
-                    if let Some(upper_ts) = upper_ts {
-                        // Choose a `since` as aggresively as possible
-                        let compaction_since = Antichain::from_elem(upper_ts.saturating_sub(1));
-                        if PartialOrder::less_than(&last_compaction_since, &compaction_since) {
-                            timestamper.compact(compaction_since.clone()).await;
-                            last_compaction_since = compaction_since;
-                        }
-                    }
                 }
                 Some(Event::Progress(progress)) = source_upper_rx.recv() => {
                     source_upper.update_iter(progress);
@@ -896,6 +860,7 @@ where
         now: _,
         persist_clients: _,
         source_statistics: _,
+        shared_remap_upper: _,
     } = config;
 
     let bytes_read_counter = base_metrics.bytes_read.clone();
@@ -922,8 +887,6 @@ where
 
         source_metrics.resume_upper.set(mz_persist_client::metrics::encode_ts_metric(&resume_upper));
 
-        let mut remap_trace_buffer = Vec::new();
-
         let mut source_upper = MutableAntichain::new_bottom(FromTime::minimum());
 
         // Stash of batches that have not yet been timestamped.
@@ -935,11 +898,8 @@ where
         let work_to_do = tokio::sync::Notify::new();
         loop {
             tokio::select! {
-                Some(event) = remap_input.next() => match event {
-                    AsyncEvent::Data(_cap, data) => {
-                        data.swap(&mut remap_trace_buffer);
-                        remap_updates_stash.append(&mut remap_trace_buffer);
-                    }
+                Some(event) = remap_input.next_mut() => match event {
+                    AsyncEvent::Data(_cap, data) => remap_updates_stash.append(data),
                     // If the remap frontier advanced it's time to carve out a batch that includes
                     // all updates not beyond the upper
                     AsyncEvent::Progress(remap_upper) => {

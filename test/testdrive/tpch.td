@@ -30,6 +30,7 @@ name         type       size
 --------------------------------
  customer  subsource       <null>
  gen       load-generator  ${source-size}
+ gen_progress  subsource       <null>
  lineitem  subsource       <null>
  nation    subsource       <null>
  orders    subsource       <null>

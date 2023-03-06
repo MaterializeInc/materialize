@@ -308,6 +308,7 @@ impl SinkHandle {
         sink_id: GlobalId,
         from_metadata: &CollectionMetadata,
         shard_id: ShardId,
+        initial_since: Antichain<Timestamp>,
         persist_clients: Arc<PersistClientCache>,
     ) -> SinkHandle {
         let (downgrade_tx, mut rx) = watch::channel(Antichain::from_elem(Timestamp::minimum()));
@@ -330,6 +331,14 @@ impl SinkHandle {
                 )
                 .await
                 .expect("opening reader for shard");
+
+            assert!(
+                !PartialOrder::less_than(&initial_since, read_handle.since()),
+                "could not acquire a SinkHandle that can hold the \
+                initial since {:?}, the since is already at {:?}",
+                initial_since,
+                read_handle.since()
+            );
 
             let mut downgrade_to = read_handle.since().clone();
             'downgrading: loop {
@@ -540,8 +549,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 // NOTE: If we want to share the load of async processing we
                 // have to change `handle_storage_command` and change this
                 // assert.
-                assert!(
-                    self.timely_worker.index() == 0,
+                assert_eq!(
+                    self.timely_worker.index(),
+                    0,
                     "only worker #0 is doing async processing"
                 );
                 internal_cmd_tx.broadcast(InternalStorageCommand::CreateIngestionDataflow {
@@ -658,14 +668,16 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     self.storage_state
                         .source_statistics
                         .insert(*export_id, stats);
+                }
 
+                for id in ingestion_description.subsource_ids() {
                     // If there is already a shared upper, we re-use it, to make
                     // sure that parties that are already using the shared upper
                     // can continue doing so.
                     let source_upper = self
                         .storage_state
                         .source_uppers
-                        .entry(export_id.clone())
+                        .entry(id.clone())
                         .or_insert_with(|| {
                             Rc::new(RefCell::new(if is_closed {
                                 Antichain::new()
@@ -798,15 +810,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
         }
 
         if !new_uppers.is_empty() {
-            // Sinks maintain a read handle over their input data, in case environmentd is unable
-            // to maintain the global read hold. It's tempting to use environmentd's AllowCompaction
-            // messages to maintain an even more conservative hold... but environmentd only sends
-            // clusterd AllowCompaction messages for its own id, not for its dependencies.
-            for (id, upper) in &new_uppers {
-                if let Some(handle) = &self.storage_state.sink_handles.get(id) {
-                    handle.downgrade_since(upper.clone());
-                }
-            }
             self.send_storage_response(response_tx, StorageResponse::FrontierUppers(new_uppers));
         }
     }
@@ -1010,11 +1013,9 @@ impl StorageState {
                         .insert(ingestion.id, ingestion.description.clone());
 
                     // Initialize shared frontier reporting.
-                    for (export_id, _export) in ingestion.description.source_exports.iter() {
-                        self.reported_frontiers.insert(
-                            *export_id,
-                            Antichain::from_elem(mz_repr::Timestamp::minimum()),
-                        );
+                    for id in ingestion.description.subsource_ids() {
+                        self.reported_frontiers
+                            .insert(id, Antichain::from_elem(mz_repr::Timestamp::minimum()));
                     }
 
                     // This needs to be done by one worker, which will
@@ -1047,6 +1048,7 @@ impl StorageState {
                             export.id,
                             &export.description.from_storage_metadata,
                             export.description.from_storage_metadata.data_shard,
+                            export.description.as_of.frontier.clone(),
                             Arc::clone(&self.persist_clients),
                         ),
                     );
@@ -1064,6 +1066,31 @@ impl StorageState {
             }
             StorageCommand::AllowCompaction(list) => {
                 for (id, frontier) in list {
+                    match self.exports.get_mut(&id) {
+                        Some(export_description) => {
+                            // Update our knowledge of the `as_of`, in case we need to internally
+                            // restart a sink in the future.
+                            export_description.as_of.downgrade(&frontier);
+
+                            // Sinks maintain a read handle over their input data to ensure that we
+                            // can restart at the `as_of` that we store and update in the export
+                            // description.
+                            //
+                            // Communication between the storage controller and this here worker is
+                            // asynchronous, so we might learn that the controller downgraded a
+                            // since after it has downgraded it's handle. Keeping a handle here
+                            // ensures that we can restart based on our local state.
+                            //
+                            // NOTE: It's important that we only downgrade `SinkHandle` after
+                            // updating the sink `as_of`.
+                            let sink_handle =
+                                self.sink_handles.get(&id).expect("missing SinkHandle");
+                            sink_handle.downgrade_since(frontier.clone());
+                        }
+                        None if self.ingestions.contains_key(&id) => continue,
+                        None => panic!("AllowCompaction command for non-existent {id}"),
+                    }
+
                     if frontier.is_empty() {
                         // Indicates that we may drop `id`, as there are no more valid times to read.
                         //

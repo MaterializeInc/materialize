@@ -27,10 +27,10 @@ use mz_adapter::catalog::INTERNAL_USER_NAMES;
 use mz_adapter::session::User;
 use mz_adapter::session::{
     EndTransactionAction, ExternalUserMetadata, InProgressRows, Portal, PortalState,
-    RowBatchStream, TransactionStatus,
+    RowBatchStream, TransactionStatus, VarInput,
 };
 use mz_adapter::{AdapterNotice, ExecuteResponse, PeekResponseUnary, RowsFuture};
-use mz_frontegg_auth::FronteggAuthentication;
+use mz_frontegg_auth::{Claims, FronteggAuthentication};
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::str::StrExt;
@@ -157,7 +157,13 @@ where
         }
     }
 
-    let (external_metadata, is_expired) = if let Some(frontegg) = frontegg {
+    // Construct session.
+    let mut session = adapter_client.new_session(User {
+        name: user.clone(),
+        external_metadata: None,
+    });
+
+    let is_expired = if let Some(frontegg) = frontegg {
         conn.send(BackendMessage::AuthenticationCleartextPassword)
             .await?;
         conn.flush().await?;
@@ -172,17 +178,22 @@ where
                     .await
             }
         };
+        let admin_role = frontegg.admin_role();
+        let external_metadata_rx = session.retain_external_metadata_transmitter();
         match frontegg
             .exchange_password_for_token(&password)
             .await
-            .and_then(|token| frontegg.continuously_validate_access_token(token, user.clone()))
-        {
-            Ok((claims, is_expired)) => {
-                let external_metadata = Some(ExternalUserMetadata {
-                    user_id: claims.best_user_id(),
-                    group_id: claims.tenant_id,
-                });
-                (external_metadata, is_expired.left_future())
+            .and_then(|token| {
+                frontegg.continuously_validate_access_token(token, user.clone(), move |claims| {
+                    let external_metadata = convert_claims_to_external_metadata(claims, admin_role);
+                    // Ignore error if client has hung up.
+                    let _ = external_metadata_rx.send(external_metadata);
+                })
+            }) {
+            Ok(is_expired) => {
+                // Make sure to apply the initial claims.
+                session.apply_external_metadata_updates();
+                is_expired.left_future()
             }
             Err(e) => {
                 warn!("PGwire connection failed authentication: {}", e);
@@ -196,17 +207,36 @@ where
         }
     } else {
         // No frontegg check, so is_expired never resolves.
-        (None, pending().right_future())
+        pending().right_future()
     };
 
-    // Construct session.
-    let mut session = adapter_client.new_session(User {
-        name: user,
-        external_metadata,
-    });
     for (name, value) in params {
-        let local = false;
-        let _ = session.vars_mut().set(&name, &value, local);
+        let settings = match name.as_str() {
+            "options" => match parse_options(&value) {
+                Ok(opts) => opts,
+                Err(()) => {
+                    session.add_notice(AdapterNotice::BadStartupSetting {
+                        name,
+                        reason: "could not parse".into(),
+                    });
+                    continue;
+                }
+            },
+            _ => vec![(name, value)],
+        };
+        for (key, val) in settings {
+            const LOCAL: bool = false;
+            // TODO: Issuing an error here is better than what we did before
+            // (silently ignore errors on set), but erroring the connection
+            // might be the better behavior. We maybe need to support more
+            // options sent by psql and drivers before we can safely do this.
+            if let Err(err) = session.vars_mut().set(&key, VarInput::Flat(&val), LOCAL) {
+                session.add_notice(AdapterNotice::BadStartupSetting {
+                    name: key,
+                    reason: err.to_string(),
+                });
+            }
+        }
     }
 
     let mut buf = vec![BackendMessage::AuthenticationOk];
@@ -230,8 +260,7 @@ where
     conn.flush().await?;
 
     // Register session with adapter.
-    let (adapter_client, startup) = match adapter_client.startup(session, frontegg.is_some()).await
-    {
+    let (adapter_client, startup) = match adapter_client.startup(session).await {
         Ok(startup) => startup,
         Err(e) => {
             return conn
@@ -264,6 +293,84 @@ where
             conn.flush().await
         }
     }
+}
+
+fn convert_claims_to_external_metadata(claims: Claims, admin_role: &str) -> ExternalUserMetadata {
+    ExternalUserMetadata {
+        user_id: claims.best_user_id(),
+        group_id: claims.tenant_id,
+        admin: claims.admin(admin_role),
+    }
+}
+
+/// Returns (name, value) session settings pairs from an options value.
+///
+/// From Postgres, see pg_split_opts in postinit.c and process_postgres_switches
+/// in postgres.c.
+fn parse_options(value: &str) -> Result<Vec<(String, String)>, ()> {
+    let opts = split_options(value);
+    let mut pairs = Vec::with_capacity(opts.len());
+    for opt in opts {
+        let (key, val) = parse_option(&opt)?;
+        pairs.push((key.to_owned(), val.to_owned()));
+    }
+    Ok(pairs)
+}
+
+/// Returns the parsed key and value from option of the form `--key=value`, `-c
+/// key=value`, or `-ckey=value`. Keys replace `-` with `_`. Returns an error if
+/// there was some other prefix.
+fn parse_option(option: &str) -> Result<(&str, &str), ()> {
+    let (key, value) = option.split_once('=').ok_or(())?;
+    for prefix in &["-c ", "-c", "--"] {
+        if let Some(key) = key.strip_prefix(prefix) {
+            return Ok((key, value));
+        }
+    }
+    Err(())
+}
+
+/// Splits value by any number of spaces except those preceeded by `\`.
+fn split_options(value: &str) -> Vec<String> {
+    let mut strs = Vec::new();
+    // Need to build a string because of the escaping, so we can't simply
+    // subslice into value, and this isn't called enough to need to make it
+    // smart so it only builds a string if needed.
+    let mut current = String::new();
+    let mut was_slash = false;
+    for c in value.chars() {
+        was_slash = match c {
+            ' ' => {
+                if was_slash {
+                    current.push(' ');
+                } else if !current.is_empty() {
+                    // To ignore multiple spaces in a row, only push if current
+                    // is not empty.
+                    strs.push(std::mem::take(&mut current));
+                }
+                false
+            }
+            '\\' => {
+                if was_slash {
+                    // Two slashes in a row will add a slash and not escape the
+                    // next char.
+                    current.push('\\');
+                    false
+                } else {
+                    true
+                }
+            }
+            _ => {
+                current.push(c);
+                false
+            }
+        };
+    }
+    // A `\` at the end will be ignored.
+    if !current.is_empty() {
+        strs.push(current);
+    }
+    strs
 }
 
 #[derive(Debug)]
@@ -1260,6 +1367,7 @@ where
 
             ExecuteResponse::AlteredIndexLogicalCompaction
             | ExecuteResponse::AlteredObject(..)
+            | ExecuteResponse::AlteredRole
             | ExecuteResponse::AlteredSystemConfiguration
             | ExecuteResponse::CreatedCluster { .. }
             | ExecuteResponse::CreatedClusterReplica { .. }
@@ -1850,4 +1958,182 @@ enum FetchResult {
     Canceled,
     Error(String),
     Notice(AdapterNotice),
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_parse_options() {
+        struct TestCase {
+            input: &'static str,
+            expect: Result<Vec<(&'static str, &'static str)>, ()>,
+        }
+        let tests = vec![
+            TestCase {
+                input: "",
+                expect: Ok(vec![]),
+            },
+            TestCase {
+                input: "--key",
+                expect: Err(()),
+            },
+            TestCase {
+                input: "--key=val",
+                expect: Ok(vec![("key", "val")]),
+            },
+            TestCase {
+                input: r#"--key=val -ckey2=val2 -c\ key3=val3"#,
+                expect: Ok(vec![("key", "val"), ("key2", "val2"), ("key3", "val3")]),
+            },
+            TestCase {
+                input: "--key=val -ckey2 val2",
+                expect: Err(()),
+            },
+            // Unclear what this should do.
+            TestCase {
+                input: "--key=",
+                expect: Ok(vec![("key", "")]),
+            },
+        ];
+        for test in tests {
+            let got = parse_options(test.input);
+            let expect = test.expect.map(|r| {
+                r.into_iter()
+                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                    .collect()
+            });
+            assert_eq!(got, expect, "input: {}", test.input);
+        }
+    }
+
+    #[test]
+    fn test_parse_option() {
+        struct TestCase {
+            input: &'static str,
+            expect: Result<(&'static str, &'static str), ()>,
+        }
+        let tests = vec![
+            TestCase {
+                input: "",
+                expect: Err(()),
+            },
+            TestCase {
+                input: "--",
+                expect: Err(()),
+            },
+            TestCase {
+                input: "--c",
+                expect: Err(()),
+            },
+            TestCase {
+                input: "a=b",
+                expect: Err(()),
+            },
+            TestCase {
+                input: "--a=b",
+                expect: Ok(("a", "b")),
+            },
+            TestCase {
+                input: "--ca=b",
+                expect: Ok(("ca", "b")),
+            },
+            TestCase {
+                input: "-ca=b",
+                expect: Ok(("a", "b")),
+            },
+            TestCase {
+                input: "-c a=b",
+                expect: Ok(("a", "b")),
+            },
+            TestCase {
+                input: "-c a=b -c d=e",
+                expect: Ok(("a", "b -c d=e")),
+            },
+            // Unclear what this should error, but at least test it.
+            TestCase {
+                input: "--=",
+                expect: Ok(("", "")),
+            },
+        ];
+        for test in tests {
+            let got = parse_option(test.input);
+            assert_eq!(got, test.expect, "input: {}", test.input);
+        }
+    }
+
+    #[test]
+    fn test_split_options() {
+        struct TestCase {
+            input: &'static str,
+            expect: Vec<&'static str>,
+        }
+        let tests = vec![
+            TestCase {
+                input: "",
+                expect: vec![],
+            },
+            TestCase {
+                input: "  ",
+                expect: vec![],
+            },
+            TestCase {
+                input: " a ",
+                expect: vec!["a"],
+            },
+            TestCase {
+                input: "  ab     cd   ",
+                expect: vec!["ab", "cd"],
+            },
+            TestCase {
+                input: r#"  ab\     cd   "#,
+                expect: vec!["ab ", "cd"],
+            },
+            TestCase {
+                input: r#"  ab\\     cd   "#,
+                expect: vec![r#"ab\"#, "cd"],
+            },
+            TestCase {
+                input: r#"  ab\\\     cd   "#,
+                expect: vec![r#"ab\ "#, "cd"],
+            },
+            TestCase {
+                input: r#"  ab\\\ cd   "#,
+                expect: vec![r#"ab\ cd"#],
+            },
+            TestCase {
+                input: r#"  ab\\\cd   "#,
+                expect: vec![r#"ab\cd"#],
+            },
+            TestCase {
+                input: r#"a\"#,
+                expect: vec!["a"],
+            },
+            TestCase {
+                input: r#"a\ "#,
+                expect: vec!["a "],
+            },
+            TestCase {
+                input: r#"\"#,
+                expect: vec![],
+            },
+            TestCase {
+                input: r#"\ "#,
+                expect: vec![r#" "#],
+            },
+            TestCase {
+                input: r#" \ "#,
+                expect: vec![r#" "#],
+            },
+            TestCase {
+                input: r#"\  "#,
+                expect: vec![r#" "#],
+            },
+        ];
+        for test in tests {
+            let got = split_options(test.input);
+            assert_eq!(got, test.expect, "input: {}", test.input);
+        }
+    }
 }

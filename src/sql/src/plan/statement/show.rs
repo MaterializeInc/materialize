@@ -38,7 +38,7 @@ use crate::names::{
 use crate::parse;
 use crate::plan::scope::Scope;
 use crate::plan::statement::{dml, StatementContext, StatementDesc};
-use crate::plan::{query, HirRelationExpr, Params, Plan, PlanError, SendRowsPlan};
+use crate::plan::{query, transform_ast, HirRelationExpr, Params, Plan, PlanError, SendRowsPlan};
 
 pub fn describe_show_create_view(
     _: &StatementContext,
@@ -621,7 +621,8 @@ impl<'a> ShowSelect<'a> {
             Statement::Select(select) => select,
             _ => panic!("ShowSelect::new called with non-SELECT statement"),
         };
-        let (stmt, _) = names::resolve(scx.catalog, stmt)?;
+        let (mut stmt, _) = names::resolve(scx.catalog, stmt)?;
+        transform_ast::transform(scx, &mut stmt)?;
         Ok(ShowSelect { scx, stmt })
     }
 

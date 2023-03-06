@@ -91,7 +91,7 @@ where
             let new_upper = calc.calculate_resumption_frontier(&mut calc_state).await;
 
             if PartialOrder::less_than(&upper, &new_upper) {
-                tracing::info!(
+                tracing::debug!(
                     resumption_frontier = ?new_upper,
                     "resumption({id}) {worker_id}/{worker_count}: calculated \
                     new resumption frontier",

@@ -20,6 +20,7 @@ use std::task::{Context, Poll, Waker};
 
 use differential_dataflow::operators::arrange::agent::ShutdownButton;
 use futures_util::task::ArcWake;
+use futures_util::FutureExt;
 use polonius_the_crab::{polonius, WithLifetime};
 use timely::communication::{message::RefOrMut, Pull};
 use timely::dataflow::channels::pact::ParallelizationContractCore;
@@ -69,6 +70,15 @@ impl ArcWake for TimelyWaker {
 
 /// Async handle to an operator's input stream
 pub struct AsyncInputHandle<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> {
+    state: NextFutState<T, D, P>,
+    /// A scratch container used to gain mutable access to batches
+    buffer: D,
+}
+
+/// This struct holds the state that is captured by the `NextFut` future. This definition is
+/// mandatory for the implementation of `AsyncInputHandle::next_mut` which needs to perform a
+/// disjoint capture on this state and the buffer that is about to be swapped.
+struct NextFutState<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> {
     /// The underying synchronous input handle
     sync_handle: ManuallyDrop<InputHandleCore<T, D, P>>,
     /// Frontier information of input streams shared with the operator. Each frontier is paired
@@ -84,17 +94,52 @@ pub struct AsyncInputHandle<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>
 }
 
 impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> AsyncInputHandle<T, D, P> {
-    /// Produces a future that will resolve to the next event of this input stream
+    /// Produces a future that will resolve to the next event of this input stream with shared
+    /// access to the data.
     ///
     /// # Cancel safety
     ///
     /// The returned future is cancel-safe
-    pub fn next(&mut self) -> impl Future<Output = Option<Event<'_, T, D>>> + '_ {
-        NextFut { handle: Some(self) }
+    pub fn next(&mut self) -> impl Future<Output = Option<Event<T, &D>>> + '_ {
+        let fut = NextFut {
+            state: Some(&mut self.state),
+        };
+        fut.map(|event| {
+            Some(match event? {
+                Event::Data(cap, data) => match data {
+                    RefOrMut::Ref(data) => Event::Data(cap, data),
+                    RefOrMut::Mut(data) => Event::Data(cap, &*data),
+                },
+                Event::Progress(frontier) => Event::Progress(frontier),
+            })
+        })
+    }
+
+    /// Produces a future that will resolve to the next event of this input stream with mutable
+    /// access to the data.
+    ///
+    /// # Cancel safety
+    ///
+    /// The returned future is cancel-safe
+    pub fn next_mut(&mut self) -> impl Future<Output = Option<Event<T, &mut D>>> + '_ {
+        let fut = NextFut {
+            state: Some(&mut self.state),
+        };
+        fut.map(|event| {
+            Some(match event? {
+                Event::Data(cap, data) => {
+                    data.swap(&mut self.buffer);
+                    Event::Data(cap, &mut self.buffer)
+                }
+                Event::Progress(frontier) => Event::Progress(frontier),
+            })
+        })
     }
 }
 
-impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> Drop for AsyncInputHandle<T, D, P> {
+impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> Drop
+    for NextFutState<T, D, P>
+{
     fn drop(&mut self) {
         // SAFETY: We're in a Drop impl so this runs only once
         let mut sync_handle = unsafe { ManuallyDrop::take(&mut self.sync_handle) };
@@ -106,13 +151,13 @@ impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> Drop for AsyncInputH
 
 /// The future returned by `AsyncInputHandle::next`
 struct NextFut<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> {
-    handle: Option<&'handle mut AsyncInputHandle<T, D, P>>,
+    state: Option<&'handle mut NextFutState<T, D, P>>,
 }
 
 /// An event of an input stream
-pub enum Event<'a, T: Timestamp, D> {
+pub enum Event<T: Timestamp, D> {
     /// A data event
-    Data(InputCapability<T>, RefOrMut<'a, D>),
+    Data(InputCapability<T>, D),
     /// A progress event
     Progress(Antichain<T>),
 }
@@ -120,11 +165,11 @@ pub enum Event<'a, T: Timestamp, D> {
 impl<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> Future
     for NextFut<'handle, T, D, P>
 {
-    type Output = Option<Event<'handle, T, D>>;
+    type Output = Option<Event<T, RefOrMut<'handle, D>>>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let handle: &'handle mut AsyncInputHandle<T, D, P> =
-            self.handle.take().expect("future polled after completion");
+        let state: &'handle mut NextFutState<T, D, P> =
+            self.state.take().expect("future polled after completion");
 
         // This type serves as a type-level function that "shows" the `polonius` function how to
         // create a version of the output type with a specific lifetime 'lt. It does this by
@@ -136,14 +181,13 @@ impl<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> Future
         // The polonius function encodes a safe but rejected pattern by the current borrow checker.
         // Explaining is beyond the scope of this comment but the docs have a great explanation:
         // https://docs.rs/polonius-the-crab/latest/polonius_the_crab/index.html
-        match polonius::<NextHTB<T, D>, _, _, _>(handle, |handle| {
-            handle.sync_handle.next().ok_or(())
-        }) {
+        match polonius::<NextHTB<T, D>, _, _, _>(state, |state| state.sync_handle.next().ok_or(()))
+        {
             Ok((cap, data)) => Poll::Ready(Some(Event::Data(cap, data))),
-            Err((handle, ())) => {
+            Err((state, ())) => {
                 // There is no more data but there may be a pending frontier notification
-                let mut shared_frontiers = handle.shared_frontiers.borrow_mut();
-                let (ref frontier, ref mut pending) = shared_frontiers[handle.index];
+                let mut shared_frontiers = state.shared_frontiers.borrow_mut();
+                let (ref frontier, ref mut pending) = shared_frontiers[state.index];
                 if *pending {
                     *pending = false;
                     Poll::Ready(Some(Event::Progress(frontier.clone())))
@@ -154,13 +198,13 @@ impl<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> Future
                 } else {
                     drop(shared_frontiers);
                     // Nothing else to produce so install the provided waker in the reactor
-                    handle
+                    state
                         .reactor_registry
                         .upgrade()
                         .expect("handle outlived its operator")
                         .borrow_mut()
                         .push(cx.waker().clone());
-                    self.handle = Some(handle);
+                    self.state = Some(state);
                     Poll::Pending
                 }
             }
@@ -232,11 +276,14 @@ impl<G: Scope> OperatorBuilder<G> {
         let sync_handle = self.builder.new_input_connection(stream, pact, connection);
 
         AsyncInputHandle {
-            sync_handle: ManuallyDrop::new(sync_handle),
-            shared_frontiers: Rc::clone(&self.shared_frontiers),
-            reactor_registry: Rc::downgrade(&self.registered_wakers),
-            index,
-            drain_pipe: Rc::clone(&self.drain_pipe),
+            state: NextFutState {
+                sync_handle: ManuallyDrop::new(sync_handle),
+                shared_frontiers: Rc::clone(&self.shared_frontiers),
+                reactor_registry: Rc::downgrade(&self.registered_wakers),
+                index,
+                drain_pipe: Rc::clone(&self.drain_pipe),
+            },
+            buffer: D::default(),
         }
     }
 

@@ -422,6 +422,7 @@ impl ErrorResponse {
             AdapterNotice::QueryTrace { .. } => SqlState::WARNING,
             AdapterNotice::UnimplementedIsolationLevel { .. } => SqlState::WARNING,
             AdapterNotice::DroppedSubscribe { .. } => SqlState::WARNING,
+            AdapterNotice::BadStartupSetting { .. } => SqlState::WARNING,
         };
         ErrorResponse {
             severity: Severity::for_adapter_notice(&notice),
@@ -578,6 +579,7 @@ impl Severity {
             AdapterNotice::QueryTrace { .. } => Severity::Notice,
             AdapterNotice::UnimplementedIsolationLevel { .. } => Severity::Notice,
             AdapterNotice::DroppedSubscribe { .. } => Severity::Notice,
+            AdapterNotice::BadStartupSetting { .. } => Severity::Notice,
         }
     }
 }

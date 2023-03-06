@@ -528,7 +528,7 @@ where
             }
             StorageCommand::CreateSources(ingestions) => {
                 for ingestion in ingestions {
-                    for &export_id in ingestion.description.source_exports.keys() {
+                    for export_id in ingestion.description.subsource_ids() {
                         let mut frontier = MutableAntichain::new();
                         // TODO(guswynn): cluster-unification: fix this dangerous use of `as`, by
                         // merging the types that compute and storage use.

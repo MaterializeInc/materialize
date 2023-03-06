@@ -27,7 +27,6 @@ use uuid::Uuid;
 use mz_ccsr::Schema as CcsrSchema;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError};
 use mz_cloud_resources::AwsExternalIdPrefix;
-use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
 use mz_repr::{strconv, GlobalId};
@@ -68,7 +67,7 @@ fn subsource_gen<'a, T>(
             Some(name) => match name {
                 DeferredObjectName::Deferred(name) => name.clone(),
                 DeferredObjectName::Named(..) => {
-                    sql_bail!("Cannot manually ID qualify subsources")
+                    unreachable!("already errored on this condition")
                 }
             },
             None => {
@@ -106,33 +105,61 @@ pub async fn purify_create_source(
     PlanError,
 > {
     let CreateSourceStatement {
+        name,
         connection,
         format,
         envelope,
         include_metadata: _,
-        referenced_subsources: requested_subsources,
+        referenced_subsources,
         progress_subsource,
         ..
     } = &mut stmt;
 
-    if progress_subsource.is_some() {
-        bail_unsupported!("PROGRESS subsources not yet supported");
+    fn named_subsource_err(name: &Option<DeferredObjectName<Aug>>) -> Result<(), PlanError> {
+        match name {
+            Some(DeferredObjectName::Named(_)) => {
+                sql_bail!("Cannot manually ID qualify subsources")
+            }
+            _ => Ok(()),
+        }
     }
 
     // Disallow manually targetting subsources, this syntax is reserved for purification only
-    if let Some(ReferencedSubsources::Subset(subsources)) = requested_subsources {
+    named_subsource_err(progress_subsource)?;
+    if let Some(ReferencedSubsources::Subset(subsources)) = referenced_subsources {
         for CreateSourceSubsource {
             subsource,
             reference: _,
         } in subsources
         {
-            if let Some(DeferredObjectName::Named(_)) = subsource {
-                sql_bail!("Cannot manually ID qualify subsources");
-            }
+            named_subsource_err(subsource)?;
         }
     }
 
+    let mut subsource_id_counter = 0;
+    let mut get_transient_subsource_id = move || {
+        subsource_id_counter += 1;
+        subsource_id_counter
+    };
+
     let mut subsources = vec![];
+
+    let progress_desc = match &connection {
+        CreateSourceConnection::Kafka(_) => &mz_storage_client::types::sources::KAFKA_PROGRESS_DESC,
+        CreateSourceConnection::Kinesis { .. } => {
+            &mz_storage_client::types::sources::KINESIS_PROGRESS_DESC
+        }
+        CreateSourceConnection::S3 { .. } => &mz_storage_client::types::sources::S3_PROGRESS_DESC,
+        CreateSourceConnection::Postgres { .. } => {
+            &mz_storage_client::types::sources::PG_PROGRESS_DESC
+        }
+        CreateSourceConnection::LoadGenerator { .. } => {
+            &mz_storage_client::types::sources::LOAD_GEN_PROGRESS_DESC
+        }
+        CreateSourceConnection::TestScript { .. } => {
+            &mz_storage_client::types::sources::TEST_SCRIPT_PROGRESS_DESC
+        }
+    };
 
     match connection {
         CreateSourceConnection::Kafka(KafkaSourceConnection {
@@ -289,7 +316,7 @@ pub async fn purify_create_source(
             let mut targeted_subsources = vec![];
 
             let mut validated_requested_subsources = vec![];
-            match requested_subsources {
+            match referenced_subsources {
                 Some(ReferencedSubsources::All) => {
                     for table in &publication_tables {
                         let upstream_name = UnresolvedObjectName::qualified(&[
@@ -396,8 +423,7 @@ pub async fn purify_create_source(
             let mut unsupported_cols = vec![];
 
             // Now that we have an explicit list of validated requested subsources we can create them
-            for (i, (upstream_name, subsource_name, table)) in
-                validated_requested_subsources.into_iter().enumerate()
+            for (upstream_name, subsource_name, table) in validated_requested_subsources.into_iter()
             {
                 // Figure out the schema of the subsource
                 let mut columns = vec![];
@@ -430,7 +456,8 @@ pub async fn purify_create_source(
                 }
 
                 // Create the targeted AST node for the original CREATE SOURCE statement
-                let transient_id = GlobalId::Transient(u64::cast_from(i));
+                let transient_id = GlobalId::Transient(get_transient_subsource_id());
+
                 let subsource =
                     scx.allocate_resolved_object_name(transient_id, subsource_name.clone())?;
 
@@ -467,7 +494,7 @@ pub async fn purify_create_source(
                 });
             }
 
-            *requested_subsources = Some(ReferencedSubsources::Subset(targeted_subsources));
+            *referenced_subsources = Some(ReferencedSubsources::Subset(targeted_subsources));
 
             // Remove any old detail references
             options.retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
@@ -494,7 +521,7 @@ pub async fn purify_create_source(
             let mut targeted_subsources = vec![];
 
             let mut validated_requested_subsources = vec![];
-            match requested_subsources {
+            match referenced_subsources {
                 Some(ReferencedSubsources::All) => {
                     let available_subsources = match &available_subsources {
                         Some(available_subsources) => available_subsources,
@@ -547,15 +574,16 @@ pub async fn purify_create_source(
             };
 
             // Now that we have an explicit list of validated requested subsources we can create them
-            for (i, (upstream_name, subsource_name, desc)) in
-                validated_requested_subsources.into_iter().enumerate()
+            for (upstream_name, subsource_name, desc) in validated_requested_subsources.into_iter()
             {
                 let (columns, table_constraints) = scx.relation_desc_into_table_defs(desc)?;
 
                 // Create the targeted AST node for the original CREATE SOURCE statement
-                let transient_id = GlobalId::Transient(u64::cast_from(i));
+                let transient_id = GlobalId::Transient(get_transient_subsource_id());
+
                 let subsource =
                     scx.allocate_resolved_object_name(transient_id, subsource_name.clone())?;
+
                 targeted_subsources.push(CreateSourceSubsource {
                     reference: upstream_name,
                     subsource: Some(DeferredObjectName::Named(subsource)),
@@ -579,10 +607,65 @@ pub async fn purify_create_source(
                 subsources.push((transient_id, subsource));
             }
             if available_subsources.is_some() {
-                *requested_subsources = Some(ReferencedSubsources::Subset(targeted_subsources));
+                *referenced_subsources = Some(ReferencedSubsources::Subset(targeted_subsources));
             }
         }
     }
+
+    // Generate progress subsource
+
+    // Create the targeted AST node for the original CREATE SOURCE statement
+    let transient_id = GlobalId::Transient(subsource_id_counter);
+
+    let scx = StatementContext::new(None, &*catalog);
+
+    // Take name from input or generate name
+    let (name, subsource) = match progress_subsource {
+        Some(name) => match name {
+            DeferredObjectName::Deferred(name) => (
+                name.clone(),
+                scx.allocate_resolved_object_name(transient_id, name.clone())?,
+            ),
+            DeferredObjectName::Named(_) => unreachable!("already checked for this value"),
+        },
+        None => {
+            let (item, prefix) = name.0.split_last().unwrap();
+            let mut suggested_name = prefix.to_vec();
+            suggested_name.push(format!("{}_progress", item).into());
+
+            let partial = normalize::unresolved_object_name(UnresolvedObjectName(suggested_name))?;
+            let qualified = scx.allocate_qualified_name(partial)?;
+            let found_name = scx.catalog.find_available_name(qualified);
+            let full_name = scx.catalog.resolve_full_name(&found_name);
+
+            (
+                UnresolvedObjectName::from(full_name.clone()),
+                crate::names::ResolvedObjectName::Object {
+                    id: transient_id,
+                    qualifiers: found_name.qualifiers,
+                    full_name,
+                    print_id: true,
+                },
+            )
+        }
+    };
+
+    let (columns, constraints) = scx.relation_desc_into_table_defs(progress_desc)?;
+
+    *progress_subsource = Some(DeferredObjectName::Named(subsource));
+
+    // Create the subsource statement
+    let subsource = CreateSubsourceStatement {
+        name,
+        columns,
+        constraints,
+        if_not_exists: false,
+        with_options: vec![CreateSubsourceOption {
+            name: CreateSubsourceOptionName::Progress,
+            value: Some(WithOptionValue::Value(Value::Boolean(true))),
+        }],
+    };
+    subsources.push((transient_id, subsource));
 
     purify_source_format(&*catalog, format, connection, envelope, &connection_context).await?;
 

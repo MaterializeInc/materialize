@@ -10,6 +10,7 @@
 //! Logic for  processing client [`Command`]s. Each [`Command`] is initiated by a
 //! client via some external Materialize API (ex: HTTP and psql).
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use opentelemetry::trace::TraceContextExt;
@@ -22,7 +23,7 @@ use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::ScalarType;
 use mz_sql::ast::{InsertSource, Query, Raw, SetExpr, Statement};
-use mz_sql::catalog::SessionCatalog as _;
+use mz_sql::catalog::{RoleAttributes, SessionCatalog};
 use mz_sql::plan::{CreateRolePlan, Params};
 
 use crate::client::ConnectionId;
@@ -33,22 +34,24 @@ use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::peek::PendingPeek;
 use crate::coord::{ConnMeta, Coordinator, CreateSourceStatementReady, Message, PendingTxn};
 use crate::error::AdapterError;
-use crate::metrics;
 use crate::notice::AdapterNotice;
+use crate::session::vars::OwnedVarInput;
 use crate::session::{PreparedStatement, Session, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
+use crate::{catalog, metrics};
 
 impl Coordinator {
-    pub(crate) async fn handle_command(&mut self, cmd: Command) {
+    pub(crate) async fn handle_command(&mut self, mut cmd: Command) {
+        if let Some(session) = cmd.session() {
+            session.apply_external_metadata_updates();
+        }
         match cmd {
             Command::Startup {
                 session,
-                create_user_if_not_exists,
                 cancel_tx,
                 tx,
             } => {
-                self.handle_startup(session, create_user_if_not_exists, cancel_tx, tx)
-                    .await;
+                self.handle_startup(session, cancel_tx, tx).await;
             }
 
             Command::Execute {
@@ -95,7 +98,7 @@ impl Coordinator {
             }
 
             Command::DumpCatalog { session, tx } => {
-                // TODO(benesch): when we have RBAC, dumping the catalog should
+                // TODO(benesch/jkosh44): when we have RBAC, dumping the catalog should
                 // require superuser permissions.
 
                 let _ = tx.send(Response {
@@ -112,6 +115,29 @@ impl Coordinator {
                 tx,
             } => {
                 let result = self.sequence_copy_rows(&mut session, id, columns, rows);
+                let _ = tx.send(Response { result, session });
+            }
+
+            Command::GetSystemVars { session, tx } => {
+                let mut vars = BTreeMap::new();
+                for var in self.catalog.system_config().iter() {
+                    vars.insert(var.name().to_string(), var.value());
+                }
+                let _ = tx.send(Response {
+                    result: Ok(vars),
+                    session,
+                });
+            }
+
+            Command::SetSystemVars { vars, session, tx } => {
+                let ops = vars
+                    .into_iter()
+                    .map(|(name, value)| catalog::Op::UpdateSystemConfiguration {
+                        name,
+                        value: OwnedVarInput::Flat(value),
+                    })
+                    .collect();
+                let result = self.catalog_transact(Some(&session), ops).await;
                 let _ = tx.send(Response { result, session });
             }
 
@@ -161,7 +187,6 @@ impl Coordinator {
     async fn handle_startup(
         &mut self,
         session: Session,
-        create_user_if_not_exists: bool,
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
     ) {
@@ -171,15 +196,14 @@ impl Coordinator {
             .resolve_role(&session.user().name)
             .is_err()
         {
-            if !create_user_if_not_exists {
-                let _ = tx.send(Response {
-                    result: Err(AdapterError::UnknownLoginRole(session.user().name.clone())),
-                    session,
-                });
-                return;
-            }
+            // If the user has made it to this point, that means they have been fully authenticated.
+            // This includes preventing any user, except a pre-defined set of system users, from
+            // connecting to an internal port. Therefore it's ok to always create a new role for
+            // the user.
+            let attributes = RoleAttributes::new();
             let plan = CreateRolePlan {
                 name: session.user().name.to_string(),
+                attributes,
             };
             if let Err(err) = self.sequence_create_role(&session, plan).await {
                 let _ = tx.send(Response {
@@ -373,6 +397,7 @@ impl Coordinator {
                     | Statement::AlterSink(_)
                     | Statement::AlterSource(_)
                     | Statement::AlterObjectRename(_)
+                    | Statement::AlterRole(_)
                     | Statement::AlterSystemSet(_)
                     | Statement::AlterSystemReset(_)
                     | Statement::AlterSystemResetAll(_)
