@@ -177,7 +177,12 @@ NOTE: Since we won't support `SET ROLE` yet, these functions will all behave ide
 
 #### Implementation Details
 
-- The catalog will store role membership.
+- The catalog will store role membership in a new table called `mz_auth_members` modeled
+  after [`pg-auth-members`](https://www.postgresql.org/docs/current/catalog-pg-auth-members.html), which has the
+  following columns:
+    - `roleid`: `RoleId`
+    - `member`: `RoleId`
+    - `grantor`: `RoleId`
 - When attributes are checked in the sequencer, we will check the attributes of all roles that the current role is a
   member of.
 
