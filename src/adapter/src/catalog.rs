@@ -52,7 +52,7 @@ use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogError as SqlCatalogError,
+    CatalogCluster, CatalogDatabase, CatalogError as SqlCatalogError, CatalogFeature,
     CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogItemType,
     CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId, IdReference,
     NameReference, RoleAttributes, SessionCatalog, TypeReference,
@@ -6678,6 +6678,14 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn aws_privatelink_availability_zones(&self) -> Option<BTreeSet<String>> {
         self.state.aws_privatelink_availability_zones.clone()
+    }
+
+    fn get_feature(&self, name: CatalogFeature) -> bool {
+        use CatalogFeature::*;
+        let config = &self.state.system_configuration;
+        match name {
+            EnableWithMutuallyRecursive => config.enable_with_mutually_recursive(),
+        }
     }
 }
 

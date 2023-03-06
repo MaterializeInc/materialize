@@ -212,6 +212,16 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
 
     /// Returns the set of supported AWS PrivateLink availability zone ids.
     fn aws_privatelink_availability_zones(&self) -> Option<BTreeSet<String>>;
+
+    /// Returns `true` iff the given `feature` is supported at the moment.
+    fn get_feature(&self, feature: CatalogFeature) -> bool;
+}
+
+/// Defines features that the [SessionCatalog] may optionally support.
+#[derive(Debug)]
+pub enum CatalogFeature {
+    /// True iff `WITH MUTUALLY RECURSIVE` syntax is enabled.
+    EnableWithMutuallyRecursive,
 }
 
 /// Configuration associated with a catalog.
