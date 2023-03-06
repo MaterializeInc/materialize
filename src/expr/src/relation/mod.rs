@@ -2770,7 +2770,7 @@ impl RowSetFinishing {
             .unwrap_or(limit);
 
         // Bail early if we know our results won't fit into our Vec
-        // 
+        //
         // Note: this check is a _lower bound_ as to how much memory
         // we'll need for results. Calculating the actual answer would
         // require us to iterate through all of the rows
