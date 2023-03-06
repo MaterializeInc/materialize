@@ -2748,39 +2748,31 @@ impl RowSetFinishing {
 
         let limit = self.limit.unwrap_or(usize::MAX);
 
-        // The code below is logically equivalent to:
-        //
-        // let mut total = 0;
-        // for (_, count) in &rows[offset_nth_row..] {
-        //     total += count.get();
-        // }
-        // let return_size = std::cmp::min(total, limit);
-        //
-        // but it breaks early if the limit is reached, instead of scanning the entire code.
-        let (num_rows, num_bytes) = rows[offset_nth_row..]
-            .iter()
-            .try_fold((0, 0), |(num_rows, num_bytes), (row, count)| {
-                let new_rows = num_rows + count.get();
-                let new_bytes = num_bytes + row.byte_len();
+        // Count how many rows we'd expand into, returning early from the whole function
+        // if we don't have enough memory to expand the result, or break early from the
+        // iteration once we pass our limit.
+        let mut num_rows = 0;
+        let mut num_bytes = 0;
+        for (row, count) in &rows[offset_nth_row..] {
+            num_rows += count.get();
+            num_bytes += row.byte_len();
 
-                // if we have more rows or more bytes than we can handle, bail
-                if new_rows > limit || new_bytes > max_result_size {
-                    None
-                } else {
-                    Some((new_rows, new_bytes))
-                }
-            })
-            .unwrap_or((limit, usize::MAX));
+            // Bail early if we know our results won't fit into our Vec.
+            if num_bytes > max_result_size {
+                return Err(format!(
+                    "result would exceed max size of {}",
+                    ByteSize::b(u64::cast_from(max_result_size))
+                ));
+            }
 
-        // Bail early if we know our results won't fit into our Vec
-        if num_bytes > max_result_size {
-            return Err(format!(
-                "result would exceed max size of {}",
-                ByteSize::b(u64::cast_from(max_result_size))
-            ));
+            // Stop iterating if we've passed limit.
+            if num_rows > limit {
+                break;
+            }
         }
+        let return_size = std::cmp::min(num_rows, limit);
 
-        let mut ret = Vec::with_capacity(num_rows);
+        let mut ret = Vec::with_capacity(return_size);
         let mut remaining = limit;
         let mut row_buf = Row::default();
         let mut datum_vec = mz_repr::DatumVec::new();
