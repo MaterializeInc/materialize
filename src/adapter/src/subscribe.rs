@@ -11,6 +11,7 @@
 
 use std::collections::BTreeSet;
 
+use mz_ore::now::EpochMillis;
 use tokio::sync::mpsc;
 
 use mz_compute_client::protocol::response::{SubscribeBatch, SubscribeResponse};
@@ -20,11 +21,12 @@ use mz_repr::{Datum, GlobalId, Row};
 
 use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
+use crate::session::User;
 
 /// A description of an active subscribe from coord's perspective
 pub struct ActiveSubscribe {
-    /// The type of the session that created the subscribe.
-    pub session_type: &'static str,
+    /// The user of the session that created the subscribe.
+    pub user: User,
     /// The connection id of the session that created the subscribe.
     pub conn_id: ConnectionId,
     /// Channel to send responses to the client.
@@ -39,6 +41,8 @@ pub struct ActiveSubscribe {
     pub cluster_id: ClusterId,
     /// All `GlobalId`s that the subscribe depend on.
     pub depends_on: BTreeSet<GlobalId>,
+    /// The time when the subscribe was started.
+    pub start_time: EpochMillis,
 }
 
 impl ActiveSubscribe {

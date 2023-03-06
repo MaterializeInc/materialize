@@ -263,7 +263,7 @@ impl Coordinator {
                 if let Some(active_subscribe) = self.active_subscribes.get_mut(&sink_id) {
                     let remove = active_subscribe.process_response(response);
                     if remove {
-                        self.remove_active_subscribe(&sink_id);
+                        self.remove_active_subscribe(sink_id).await;
                     }
                 }
             }

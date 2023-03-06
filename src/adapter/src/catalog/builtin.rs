@@ -1788,6 +1788,25 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS: Lazy<BuiltinTable> = Lazy::new(|| Built
     is_retained_metrics_relation: false,
 });
 
+pub static MZ_SUBSCRIPTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_subscriptions",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("user", ScalarType::String.nullable(false))
+        .with_column("cluster_id", ScalarType::String.nullable(false))
+        .with_column("created_at", ScalarType::TimestampTz.nullable(false))
+        .with_column(
+            "referenced_object_ids",
+            ScalarType::List {
+                element_type: Box::new(ScalarType::String),
+                custom_id: None,
+            }
+            .nullable(false),
+        ),
+    is_retained_metrics_relation: false,
+});
+
 // These will be replaced with per-replica tables once source/sink multiplexing on
 // a single cluster is supported.
 pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -3124,6 +3143,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_STORAGE_USAGE_BY_SHARD),
         Builtin::Table(&MZ_EGRESS_IPS),
         Builtin::Table(&MZ_AWS_PRIVATELINK_CONNECTIONS),
+        Builtin::Table(&MZ_SUBSCRIPTIONS),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECTS),
         Builtin::View(&MZ_ARRANGEMENT_SHARING),

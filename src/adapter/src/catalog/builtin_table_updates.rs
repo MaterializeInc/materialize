@@ -34,21 +34,22 @@ use mz_storage_client::types::sinks::{KafkaSinkConnection, StorageSinkConnection
 use mz_storage_client::types::sources::{GenericSourceConnection, PostgresSourceConnection};
 
 use crate::catalog::builtin::{
-    MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_LINKS,
-    MZ_CLUSTER_REPLICAS, MZ_CLUSTER_REPLICA_FRONTIERS, MZ_CLUSTER_REPLICA_HEARTBEATS,
-    MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS,
-    MZ_DATABASES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS,
-    MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES,
-    MZ_OPERATORS, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS,
-    MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_TABLES, MZ_TYPES,
+    MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTERS,
+    MZ_CLUSTER_LINKS, MZ_CLUSTER_REPLICAS, MZ_CLUSTER_REPLICA_FRONTIERS,
+    MZ_CLUSTER_REPLICA_HEARTBEATS, MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES,
+    MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS, MZ_DATABASES, MZ_EGRESS_IPS,
+    MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS,
+    MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS,
+    MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES,
+    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPES,
     MZ_VIEWS,
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connection, DataSourceDesc, Database, Error, ErrorKind, Func, Index,
     MaterializedView, Sink, StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
+use crate::subscribe::ActiveSubscribe;
 
-use super::builtin::{MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_CLUSTER_REPLICA_SIZES};
 use super::AwsPrincipalContext;
 
 /// An update to a built-in table.
@@ -1060,5 +1061,34 @@ impl CatalogState {
             .map(|row| BuiltinTableUpdate { id, row, diff })
             .collect();
         updates
+    }
+
+    pub fn pack_subscribe_update(
+        &self,
+        id: GlobalId,
+        subscribe: &ActiveSubscribe,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        packer.push(Datum::String(&id.to_string()));
+        packer.push(Datum::String(&subscribe.user.name));
+        packer.push(Datum::String(&subscribe.cluster_id.to_string()));
+
+        let start_dt = mz_ore::now::to_datetime(subscribe.start_time);
+        packer.push(Datum::TimestampTz(start_dt.try_into().expect("must fit")));
+
+        let depends_on: Vec<_> = subscribe
+            .depends_on
+            .iter()
+            .map(|id| id.to_string())
+            .collect();
+        packer.push_list(depends_on.iter().map(|s| Datum::String(s)));
+
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_SUBSCRIPTIONS),
+            row,
+            diff,
+        }
     }
 }
