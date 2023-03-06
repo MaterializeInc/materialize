@@ -334,6 +334,9 @@ pub async fn purify_create_source(
             let mut validated_requested_subsources = vec![];
             match referenced_subsources {
                 Some(ReferencedSubsources::All) => {
+                    if publication_tables.is_empty() {
+                        sql_bail!("FOR ALL TABLES is only valid for non-empty publications");
+                    }
                     for table in &publication_tables {
                         let upstream_name = UnresolvedObjectName::qualified(&[
                             &connection.database,
@@ -345,6 +348,9 @@ pub async fn purify_create_source(
                     }
                 }
                 Some(ReferencedSubsources::Subset(subsources)) => {
+                    if publication_tables.is_empty() {
+                        sql_bail!("FOR TABLES (..) is only valid for non-empty publications");
+                    }
                     // The user manually selected a subset of upstream tables so we need to
                     // validate that the names actually exist and are not ambiguous
 
@@ -363,7 +369,9 @@ pub async fn purify_create_source(
                     validated_requested_subsources
                         .extend(subsource_gen(subsources, &publication_catalog)?);
                 }
-                None => {}
+                None => {
+                    sql_bail!("multi-output sources require a FOR TABLES (..) or FOR ALL TABLES statement");
+                }
             };
 
             let mut text_cols_dict: BTreeMap<u32, BTreeSet<String>> = BTreeMap::new();
