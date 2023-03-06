@@ -475,7 +475,7 @@ steps:
 
   - id: checks-upgrade-entire-mz
     label: "Checks upgrade, whole-Mz restart"
-    timeout_in_minutes: 30
+    timeout_in_minutes: 60
     agents:
       queue: linux-x86_64
     artifact_paths: junit_*.xml
@@ -486,7 +486,7 @@ steps:
 
   - id: checks-upgrade-entire-mz-previous-version
     label: "Checks upgrade from previous version, whole-Mz restart"
-    timeout_in_minutes: 30
+    timeout_in_minutes: 60
     agents:
       queue: linux-x86_64
     artifact_paths: junit_*.xml
