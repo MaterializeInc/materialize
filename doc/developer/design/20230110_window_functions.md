@@ -205,12 +205,7 @@ The actual implementation of `aggregate` proceeds in similar steps, but it build
 
 *3. (Index bit vector prefixes. This one is useful for certain performance considerations.)*
 This definition directly defines _A_ rather than _A'_. Let's consider the indexes that occur in the input data as bit vectors. For each of _len ∈ 0 ..= b-1_, let's define the set *D_len* to be the set of distinct prefixes of length _len_ of all the index bit vectors. In other words, for each _len_, we take the first _len_ bits of each of the indexes, and form *D_len* by deduplicating all these index prefixes. Let *D* be the union of all *D_len* sets.
-
-_A_ will have exactly one interval for each element of *D*. The actual mapping (i.e., what element of _A_ belongs to each element of *D_len*) is not so important, since we will rely on just the sizes of the *D_len* sets for certain performance considerations. (The actual mapping is as follows: For each *len*, for each *d ∈ D_len*, *A* includes the interval whose size is *b-len* and starts at _d * 2^(b-len)_.)
-
-For the performance of `aggregate`, the size distribution of the *D_len* sets is important, since the implementation (explained above at the recursive definition) performs one step for each _len_, and the time and memory requirements of each of these steps are proportional to the size of *D_len*. Critically, this means that large *D_len*s (whose size is similar to the number of input elements) contribute a per-input-element overhead, while small *D_len*s only contribute a per-partition overhead. We can compare this to the performance characteristics of a hierarchical aggregation: in that algorithm, the first several steps have almost the same size as the input, while the last few steps are small.
-
-So the question now is how quickly do the *D_len* sets get small while proceeding through the steps. Interestingly, the size distribution of the `D_len` sets depends on where are the variations in the bit vectors of the indexes in the input. For example, if all indexes start with 10 zero bits, then each of *D_0, D_1, D_2, ..., D_9* will have only one element, and thus the last 10 steps of `aggregate` will contribute only a per-partition overhead. However, if all indexes _end_ with 10 zero bits, then each of *D_b-1, D_b-2, D_b-3, ..., D_b-10* will have a similar size as the input data. TODO: refer to the performance/optimization section for a discussion on how these bit vectors typically look, and how to make them not have many trailing zeros. Or maybe move the last two paragraphs to that section.
+_A_ will have exactly one interval for each element of *D*. The actual mapping (i.e., what element of _A_ belongs to each element of *D_len*) is not so important, since we will rely on just the sizes of the *D_len* sets for certain performance considerations. (The actual mapping is as follows: For each *len*, for each *d ∈ D_len*, *A* includes the interval whose size is *b-len* and starts at _d * 2^(b-len)_.) See a performance discussion relying on this definition [here](#Performance-and-optimizations).
 
 ##### The `broadcast` function
 
@@ -292,7 +287,7 @@ TODO: switch the order of I. and II.
 - GROUPS: (One could say that this is probably not so often used, so no need to initially support it. However, the problem is that the solution for ROWS will probably build on this, and that is the default, so that one is often used.) We have to somehow translate the offset to a difference in the “index” of the prefix sum:
     - Naive solution: Since this is a difference in DENSE_RANK between the current row and the ends of the interval, we could compute a DENSE_RANK, and then join with that to find the “index” (the value of the ORDER BY column).
         - However, this would be slow, because DENSE_RANK is inherently not well incrementalizable: Small input changes can lead to lots of changes in the ranks.
-    - **(Tricky part)** A better solution is to calculate a count aggregation on all ranges (with prefix sum’s `aggregate`) (let's call this `counts`), and then do a logarithmic search for the index with a nested `iterate`:
+    - **(Tricky part)** (TODO: this needs more details) A better solution is to calculate a count aggregation on all ranges (with prefix sum’s `aggregate`) (let's call this `counts`), and then do a logarithmic search for the index with a nested `iterate`:
         - We start with `(index, offset)` pairs for all the possible current elements in parallel, where the pair means that we need to move `index` down by `offset` (down when looking for the lower end of the interval, or up when looking for the upper end), i.e., we need to lower `index` while lowering `offset` to 0.
         - Then, at every step of an `iterate`, we can use a range from `counts` on each  `(index, offset)` pair: `index` is lowered by the size of the range, and `offset` is lowered by the aggregated count of the range.
             - We want to use the biggest such range in `counts` that doesn't make `offset` negative. We can do this by an inner `iterate`.
@@ -337,11 +332,13 @@ There might be rows which agree on both the PARTITION BY key and the ORDER BY ke
 
 However, in ROWS frame mode as well as for all non-framed window functions (e.g., LAG/LEAD) we need to treat each element of a peer group separately. To make the output deterministic, we need to sort the rows inside a peer group by the entire row (as we do in all other sorting situations in Materialize). A straightforward way to achieve this would be to make all the components of the row part of the index of the prefix sum, but this is unfortunately impossible: First, [we will support only certain types in a prefix sum index](#ORDER-BY-types) (e.g., we don't support string), and second, recall that the bit length of the index is critical for the performance of prefix sum, so adding several more columns to it would be catastrophic for performance.
 
-The only option that I can see to partially solve this problem is to use a `reduce` to number the elements inside each peer group with 0, 1, 2, ...  before prefix sum, and add just this numbering column as an additional component to the prefix sum indexes. This has some sad issues:
+We could partially solve this problem by having a `reduce` number the elements inside each peer group with 0, 1, 2, ... before prefix sum, and adding just this numbering column as an additional component to the prefix sum indexes. But this has some sad issues:
 - It makes the bit length longer, affecting performance.
-- It adds identical bit patterns at the ends of indexes if (most) peer groups have actually just 1 element. This is particularly bad for performance, as explained in ... TODO
-- The biggest problem is that this handles only small peer groups, since ... TODO
+- It adds identical bit patterns at the ends of indexes if (most) peer groups have actually just 1 element. This is particularly bad for performance, as explained [here](#Performance-and-optimizations).
+- The biggest problem is that this handles only small peer groups, since it's not incremental inside peer groups, i.e., it recomputes the numbering for an entire pee group when any  group element changes.
   Even though, it might be ok in many cases to assume that peer groups are small (this should hold much more commonly than the assumption of the current window function implementation, which is that _window partitions_ are small), this still hurts the generality of the whole prefix sum approach. (Note that there is one common situation where peer groups are large: if there is no ORDER BY in the OVER clause. However, this particular case is not a big problem, since we are planning to handle these cases by transforming away the window function to a grouped aggregation + a join, instead of using prefix sum.)
+
+There is a complicated way to somewhat mitigate this problem, see [here](#Special-rendering-for-the-first-and-last-peer-group).
 
 ### ORDER BY types
 
@@ -351,13 +348,43 @@ We'll have to generalize DD's Prefix Sum to orderings over types other than a si
 - Date/Time types are just a few integers. We’ll concatenate their bits.
 - I don’t know how to handle strings, so these are out of scope for now. (Not seen in user queries yet.)
 
+TODO: this needs more details
+
+### Performance and optimizations
+
+For the performance of `aggregate`, the size distribution of the *D_len* sets is important (see in the [prefix sum implementation section](#Implementation-details-of-DD's-prefix-sum)), since the implementation of `aggregate` performs one step for each _len_, and the time and memory requirements of each of these steps are proportional to the size of *D_len*. Critically, this means that large *D_len* sets (whose size is similar to the number of input elements) contribute a per-input-element overhead, while small *D_len* sets only contribute a per-partition overhead. We can compare this to the performance characteristics of a hierarchical aggregation: in that algorithm, the first several steps have almost the same size as the input, while the last few steps are small.
+
+So the question now is how quickly do the *D_len* sets get small as `aggregate` proceeds through its steps. Interestingly, the size distribution of the `D_len` sets depends on where are the variations in the bit vectors of the indexes in the input. For example, if all indexes start with 10 zero bits, then the last 10 *D_len* sets each will have only one element, and thus the last 10 steps of `aggregate` will contribute only a per-partition overhead. However, if all indexes _end_ with 10 zero bits, then each of the _first_ 10 *D_len* sets will have a similar size as the input data.
+
+TODO: discuss how the numbering affects trailing zero bits
+
+Optimizations: TODO:
+
+#### Special rendering for LAG/LEAD
+
+Instead of prefix sum, ...
+
+Performance would be similar to a 16-stage hierarchical aggregation
+
+#### Dynamically switch to old implementation for small window partitions
+
+to eliminate the problem of the huge per-partition overhead (memory and time)
+
+#### Each `aggregate` step should step several bits instead of just 1 bit
+
+This would reduce the time overhead of `aggregate`. It would also reduce the memory overhead of `aagregate` by reducing the memory need of the internal operations, but it wouldn't reduce the total output size of `aggregate`.
+
+#### Special rendering for the first and last peer group
+
+Solves the numbering problem mentioned in the duplicate indexes section for framed window functions. Doesn't solve it for LAG/LEAD, but for those we could have a special rendering that avoids prefix sum, see above. However, that special rendering can't handle the IGNORE NULLs option.
+
 # Alternatives
 
 I will now discuss alternatives to various aspects of the design.
 
 ## Not supporting window functions
 
-An easy way out would be to not support window functions at all. This alternative was seriously considered before, because supporting window functions seemed very hard, if not impossible. However, it turned out that [many users are requesting window function support](https://www.notion.so/materialize/Window-Functions-Use-Cases-6ad1846a7da942dc8fa28997d9c220dd). Also, we came up with efficient execution approaches that make supporting window functions feasible. Therefore, I think it is now clear that we should support window functions.
+An easy way out would be to not support window functions at all. This alternative was seriously considered before, because supporting window functions seemed very hard, if not impossible. However, it turned out that [many users are requesting window function support](https://www.notion.so/materialize/Window-Functions-Use-Cases-6ad1846a7da942dc8fa28997d9c220dd). Also, we came up with execution approaches that make supporting window functions feasible. Therefore, I think it is now clear that we should support window functions.
 
 ## Staying with the current implementation
 
@@ -385,7 +412,7 @@ Pros:
 - Efficiency, due to several reasons:
   - Computation times and memory requirements here don't involve the bit length of the input indexes (_b_). Instead, the logarithm of the partition sizes (_p_) is involved. Having _log p_ instead of _log b_ can often be a factor of several times.
   - The above _log p_ is hidden inside sequential code (inside the logic of a DD operator instead of calling DD operators), while in the case of prefix sum, there are _log b_ DD operators chained together. This means that in the case of prefix sum, the _log b_ is _multiplied_ by an extra logarithmic factor that comes from manipulating arrangements as part of each DD operation.
-- Simplicity. (no need for: a mapping of various types to integers, handling peer groups separately, complicated optimizations to make the performance acceptable)
+- Simplicity. (no need for: a mapping of various types to integers, handling peer groups separately, [complicated optimizations to make the performance acceptable](#Performance-and-optimizations))
 - Able to handle peer groups of non-trivial sizes. (A peer group is a group of records which agree on both the PARTITION BY key and the ORDER BY key.) As discussed in the "Duplicate indexes" section, the prefix sum approach can handle only very small peer groups, because ordering within a peer group has to involve the entire input records, but prefix sum's indexes have to be small, i.e., they can only involve the ORDER BY key. A custom tree datastructure would have no trouble ordering by the entire records instead of just the ORDER BY keys.
 - Would work with arbitrary types in the ORDER BY (e.g., string).
 
@@ -393,7 +420,7 @@ Cons:
 - Partition sizes would not be scalable beyond a single machine, since each partition is stored in a single instance of the data structure. (Contrast this with prefix sum implemented by DD's data-parallel operations.)
 - This approach wouldn't compose nicely with WITH MUTUALLY RECURSIVE. DD's prefix sum would be incremental not just with respect to changing input data, but also with respect to changes from one iteration of a recursive query to the next. This is because DD's operations and data structures (arrangements) are written in a way to incrementalize across Timely's complex timestamps (where the timestamps involve source timestamps as well as iteration numbers). Our custom data structure would incrementalize only across source timestamps, by simply updating it in-place when a source timestamp closes. But between each iteration, it would need to be fully rebuilt.
 
-*One interesting option would be to allow the user to switch between prefix sum and a custom datastructure rendering*. The custom datastructure rendering is fine if 1) partitions won't be larger than, say, 1000000 elements, and 2) WITH MUTUALLY RECURSIVE is not present in the query. Maybe both huge partitions and window functions _inside_ WITH MUTUALLY RECURSIVE are rare enough that the default could be the custom datastructure rendering. The switching could be realized by a new keyword after the PARTITION BY clause.
+*An interesting option would be to allow the user to switch between prefix sum and a custom datastructure rendering*. The custom datastructure rendering is fine if 1) partitions won't be larger than, say, 10,000,000 elements, and 2) WITH MUTUALLY RECURSIVE is not present in the query. Maybe both huge partitions and window functions _inside_ WITH MUTUALLY RECURSIVE are rare enough that the default could be the custom datastructure rendering. The switching could be realized by a new keyword after the PARTITION BY clause.
 
 ### Implement Prefix Sum in MIR (involving `LetRec`) instead of a large chunk of custom rendering code
 
