@@ -220,7 +220,7 @@ async fn pg_source_table_metadata_rewrite(
 
         // Get the current publication tables from the upstream PG source.
         let current_publication_tables =
-            match mz_postgres_util::publication_info(&config, publication).await {
+            match mz_postgres_util::publication_info(&config, publication, None).await {
                 Ok(v) => v,
                 Err(_) => {
                     warn!(
