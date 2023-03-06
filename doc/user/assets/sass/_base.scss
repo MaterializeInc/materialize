@@ -85,7 +85,7 @@ body.dark {
     --link: #9e7cf7;
 
     --code-block: var(--card-light);
-    --code-simple: #ededed;
+    --code-simple: #d4d4d4;
     --code-red: #fc6e6c;
     --code-pink: #f97fe6;
     --code-blue: #4b73f8;
@@ -114,7 +114,7 @@ body.light {
     --link: var(--purple);
 
     --code-block: var(--code-block-light);
-    --code-simple: #000000;
+    --code-simple: #505050;
     --code-red: #c41a16;
     --code-pink: #a90d91;
     --code-blue: #1c01ce;
@@ -174,48 +174,63 @@ input[type="submit"] {
     font-family: inherit;
 }
 
-// a {
-//     color: var(--sub);
-
-//     &:not(.link-with-code) {
-//         text-decoration: none;
-//     }
-
-//     &:hover,
-//     &:focus {
-//         text-decoration: underline;
-
-//         &,
-//         code {
-//             color: var(--important);
-//         }
-//     }
-// }
-
-a {
-    &:not(.link-with-code) {
-        &:not(.btn) {
-            &:hover,
-            &:focus {
-                text-decoration: underline;
-                color: var(--link);
-            }
-        }
-        .btn {
-            color: var(--white);
-            text-decoration: none;
-        }
-    }
-
-    color: var(--sub);
+/**
+    The following section handles these cases:
+    1. Buttons with links
+    2. Links
+    3. Links with <code/>
+    4. Link in the index (<nav/>) with <code/>
+    5. Links inside notes
+    6. Links inside notes iwth <code/>
+**/
+.btn,
+.btn-ghost {
+    color: var(--white);
     text-decoration: none;
 
     &:hover,
     &:focus {
         text-decoration: underline;
-        color: var(--link);
+        color: var(--white);
     }
 }
+
+nav {
+    .link-with-code {
+        color: var(--sub);
+
+        &:hover,
+        &:focus {
+            text-decoration: underline;
+            color: var(--link);
+        }
+    }
+}
+
+p > a,
+.note > a,
+.link-with-code {
+    color: var(--link);
+
+    &:hover,
+    &:focus {
+        text-decoration: underline;
+        color: var(--sub);
+    }
+}
+
+a {
+    &:hover,
+    &:focus {
+        text-decoration: underline;
+        color: var(--link);
+    }
+
+    color: var(--sub);
+    text-decoration: none;
+}
+
+/*-------- Finish links color--------*/
 
 [class*="btn"] {
     display: inline-flex;

@@ -74,10 +74,14 @@ p+p {
         }
     }
 
+    a > code {
+        color: inherit;
+    }
+
     code {
         font-size: inherit;
-        color: inherit;
-        background: none;
+        color: var(--code-simple);
+        background: var(--card-light);
         border: none;
     }
 
@@ -388,6 +392,8 @@ p+p {
         box-sizing: border-box;
         border-radius: 2px;
         padding: 0.1rem 0.25rem 0rem;
+        color: var(--code-simple);
+        background: var(--card-light);
     }
 
     // Merge a highlighted code block followed by a non-highlighted code block,
