@@ -596,6 +596,10 @@ impl Connection {
         Ok(conn)
     }
 
+    pub async fn set_connect_timeout(&mut self, connect_timeout: Duration) {
+        self.stash.set_connect_timeout(connect_timeout).await;
+    }
+
     /// Returns the timestamp at which the storage layer booted.
     ///
     /// This is the timestamp that will have been used to write any data during
