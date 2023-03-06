@@ -302,146 +302,148 @@ where
 
         'emitting_parts:
         while !emitted_to_until {
-            // While we have budget left for fetching more parts, read from the
-            // subscription and pass them on.
-            while inflight_bytes < max_inflight_bytes {
-                tokio::select! {
-                    // If the token has been dropped, we begin a graceful shutdown
-                    // by downgrading to the empty frontier and proceeding to the
-                    // next state, where we await our feedback edge's progression.
-                    //
-                    // NB: Reading from a channel is cancel safe.
-                    _ = token_tx.closed() => {
-                        cap_set.downgrade(&[]);
-                        break 'emitting_parts;
-                    }
-                    // Return the leases of any parts that the following stage,
-                    // `shard_source_fetch` has finished reading. This allows us
-                    // to advance our SeqNo hold as we continue to emit batches.
-                    //
-                    // NB: AsyncInputHandle::next is cancel safe
-                    Some(completed_fetch) = completed_fetches.next() => {
-                        match completed_fetch {
-                            Event::Data(_cap, parts) => {
-                                parts.swap(&mut parts_buffer);
-                                for part in parts_buffer.drain(..) {
-                                    lease_returner.return_leased_part(lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part));
-                                }
-                            }
-                            Event::Progress(frontier) => {
-                                if frontier.is_empty() {
-                                    return;
-                                }
+            tokio::select! {
+                // Order here is not required for correctness, but minimizes
+                // the work we need to do (e.g. check if the dataflow has been
+                // dropped before reading more data from CRDB)
+                biased;
+
+                // If the token has been dropped, we begin a graceful shutdown
+                // by downgrading to the empty frontier and proceeding to the
+                // next state, where we await our feedback edge's progression.
+                //
+                // NB: Reading from a channel is cancel safe.
+                _ = token_tx.closed() => {
+                    cap_set.downgrade(&[]);
+                    break 'emitting_parts;
+                }
+                // Return the leases of any parts that the following stage,
+                // `shard_source_fetch` has finished reading. This allows us
+                // to advance our SeqNo hold as we continue to emit batches.
+                //
+                // NB: AsyncInputHandle::next is cancel safe
+                Some(completed_fetch) = completed_fetches.next() => {
+                    match completed_fetch {
+                        Event::Data(_cap, parts) => {
+                            parts.swap(&mut parts_buffer);
+                            for part in parts_buffer.drain(..) {
+                                lease_returner.return_leased_part(lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part));
                             }
                         }
-                    }
-                    // Read and emit the next batch from our Subscribe.
-                    //
-                    // NB: StreamExt::next is cancel safe
-                    Some(event) = subscription_stream.next() => {
-                        match event {
-                            ListenEvent::Updates(mut parts) => {
-                                batch_parts.append(&mut parts);
-                            }
-                            ListenEvent::Progress(progress) => {
-                                // If `until.less_equal(progress)`, it means that all subsequent batches will
-                                // contain only times greater or equal to `until`, which means they can be
-                                // dropped in their entirety. The current batch must be emitted, but we can
-                                // stop afterwards.
-                                if PartialOrder::less_equal(&until, &progress) {
-                                    emitted_to_until = true;
-                                }
-
-                                let session_cap = cap_set.delayed(&current_ts);
-                                let mut descs_output = descs_output.activate();
-                                let mut descs_session = descs_output.session(&session_cap);
-
-                                // NB: in order to play nice with downstream operators whose invariants
-                                // depend on seeing the full contents of an individual batch, we must
-                                // atomically emit all parts here (e.g. no awaits).
-                                let bytes_emitted = {
-                                    let mut bytes_emitted = 0;
-                                    for part_desc in std::mem::take(&mut batch_parts) {
-                                        bytes_emitted += part_desc.encoded_size_bytes();
-                                        // Give the part to a random worker. This isn't
-                                        // round robin in an attempt to avoid skew issues:
-                                        // if your parts alternate size large, small, then
-                                        // you'll end up only using half of your workers.
-                                        //
-                                        // There's certainly some other things we could be
-                                        // doing instead here, but this has seemed to work
-                                        // okay so far. Continue to revisit as necessary.
-                                        let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
-                                        descs_session.give((worker_idx, part_desc.into_exchangeable_part()));
-                                    }
-                                    bytes_emitted
-                                };
-
-                                // Only track in-flight parts if flow control is enabled. Otherwise we
-                                // would leak memory, as tracked parts would never be drained.
-                                if flow_control_bytes.is_some() && bytes_emitted > 0 {
-                                    inflight_parts.push((progress.clone(), bytes_emitted));
-                                    inflight_bytes += bytes_emitted;
-                                    trace!(
-                                        "shard {} putting {} bytes inflight. total: {}. batch frontier {:?}",
-                                        shard_id,
-                                        bytes_emitted,
-                                        inflight_bytes,
-                                        progress,
-                                    );
-                                }
-
-                                cap_set.downgrade(progress.iter());
-                                match progress.into_option() {
-                                    Some(ts) => {
-                                        current_ts = ts;
-                                    }
-                                    None => {
-                                        cap_set.downgrade(&[]);
-                                        break 'emitting_parts;
-                                    }
-                                }
+                        Event::Progress(frontier) => {
+                            if frontier.is_empty() {
+                                return;
                             }
                         }
-                    }
-                    else => {
-                        break 'emitting_parts;
                     }
                 }
-            }
+                // While we have budget left for fetching more parts, read from the
+                // subscription and pass them on.
+                //
+                // NB: StreamExt::next is cancel safe
+                Some(event) = subscription_stream.next(), if inflight_bytes < max_inflight_bytes => {
+                    match event {
+                        ListenEvent::Updates(mut parts) => {
+                            batch_parts.append(&mut parts);
+                        }
+                        ListenEvent::Progress(progress) => {
+                            // If `until.less_equal(progress)`, it means that all subsequent batches will
+                            // contain only times greater or equal to `until`, which means they can be
+                            // dropped in their entirety. The current batch must be emitted, but we can
+                            // stop afterwards.
+                            if PartialOrder::less_equal(&until, &progress) {
+                                emitted_to_until = true;
+                            }
 
-            // We've exhausted our budget, listen for updates to the
-            // flow_control input's frontier until we free up new budget.
-            // Progress ChangeBatches are consumed even if you don't interact
-            // with the handle, so even if we never make it to this block (e.g.
-            // budget of usize::MAX), because the stream has no data, we don't
-            // cause unbounded buffering in timely.
-            while inflight_bytes >= max_inflight_bytes {
-                // We can never get here when flow control is disabled, as we are not tracking
-                // in-flight bytes in this case.
-                assert!(flow_control_bytes.is_some());
+                            let session_cap = cap_set.delayed(&current_ts);
+                            let mut descs_output = descs_output.activate();
+                            let mut descs_session = descs_output.session(&session_cap);
 
-                // Get an upper bound until which we should produce data
-                let flow_control_upper = match flow_control_input.next().await {
-                    Some(Event::Progress(frontier)) => frontier,
-                    Some(Event::Data(_, _)) => unreachable!("flow_control_input should not contain data"),
-                    None => Antichain::new(),
-                };
+                            // NB: in order to play nice with downstream operators whose invariants
+                            // depend on seeing the full contents of an individual batch, we must
+                            // atomically emit all parts here (e.g. no awaits).
+                            let bytes_emitted = {
+                                let mut bytes_emitted = 0;
+                                for part_desc in std::mem::take(&mut batch_parts) {
+                                    bytes_emitted += part_desc.encoded_size_bytes();
+                                    // Give the part to a random worker. This isn't
+                                    // round robin in an attempt to avoid skew issues:
+                                    // if your parts alternate size large, small, then
+                                    // you'll end up only using half of your workers.
+                                    //
+                                    // There's certainly some other things we could be
+                                    // doing instead here, but this has seemed to work
+                                    // okay so far. Continue to revisit as necessary.
+                                    let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
+                                    descs_session.give((worker_idx, part_desc.into_exchangeable_part()));
+                                }
+                                bytes_emitted
+                            };
 
-                let retired_parts = inflight_parts.drain_filter_swapping(|(upper, _size)| {
-                    PartialOrder::less_equal(&*upper, &flow_control_upper)
-                });
+                            // Only track in-flight parts if flow control is enabled. Otherwise we
+                            // would leak memory, as tracked parts would never be drained.
+                            if flow_control_bytes.is_some() && bytes_emitted > 0 {
+                                inflight_parts.push((progress.clone(), bytes_emitted));
+                                inflight_bytes += bytes_emitted;
+                                trace!(
+                                    "shard {} putting {} bytes inflight. total: {}. batch frontier {:?}",
+                                    shard_id,
+                                    bytes_emitted,
+                                    inflight_bytes,
+                                    progress,
+                                );
+                            }
 
-                for (_upper, size_in_bytes) in retired_parts {
-                    inflight_bytes -= size_in_bytes;
-                    trace!(
-                        "shard {} returning {} bytes. total: {}. batch frontier {:?} less_equal to {:?}",
-                        shard_id,
-                        size_in_bytes,
-                        inflight_bytes,
-                        _upper,
-                        flow_control_upper,
-                    );
+                            cap_set.downgrade(progress.iter());
+                            match progress.into_option() {
+                                Some(ts) => {
+                                    current_ts = ts;
+                                }
+                                None => {
+                                    cap_set.downgrade(&[]);
+                                    break 'emitting_parts;
+                                }
+                            }
+                        }
+                    }
+                }
+                // We've exhausted our budget, listen for updates to the flow_control
+                // input's frontier until we free up new budget. Progress ChangeBatches
+                // are consumed even if you don't interact with the handle, so even if
+                // we never make it to this block (e.g. budget of usize::MAX), because
+                // the stream has no data, we don't cause unbounded buffering in timely.
+                //
+                // NB: AsyncInputHandle::next is cancel safe
+                flow_control_upper = flow_control_input.next(), if inflight_bytes >= max_inflight_bytes => {
+                    // We can never get here when flow control is disabled, as we are not tracking
+                    // in-flight bytes in this case.
+                    assert!(flow_control_bytes.is_some());
+
+                    // Get an upper bound until which we should produce data
+                    let flow_control_upper = match flow_control_upper {
+                        Some(Event::Progress(frontier)) => frontier,
+                        Some(Event::Data(_, _)) => unreachable!("flow_control_input should not contain data"),
+                        None => Antichain::new(),
+                    };
+
+                    let retired_parts = inflight_parts.drain_filter_swapping(|(upper, _size)| {
+                        PartialOrder::less_equal(&*upper, &flow_control_upper)
+                    });
+
+                    for (_upper, size_in_bytes) in retired_parts {
+                        inflight_bytes -= size_in_bytes;
+                        trace!(
+                            "shard {} returning {} bytes. total: {}. batch frontier {:?} less_equal to {:?}",
+                            shard_id,
+                            size_in_bytes,
+                            inflight_bytes,
+                            _upper,
+                            flow_control_upper,
+                        );
+                    }
+                }
+                else => {
+                    break 'emitting_parts;
                 }
             }
         }
