@@ -60,6 +60,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-github-15930",
         "test-github-15496",
         "test-github-17510",
+        "test-github-17509",
         "test-remote-storage",
         "test-drop-default-cluster",
         "test-upsert",
@@ -699,6 +700,85 @@ def workflow_test_github_17510(c: Composition) -> None:
         # ensure that an error was put into the logs
         c1 = c.invoke("logs", "clusterd_nopanic", capture=True)
         assert "Invalid negative unsigned aggregation in ReduceAccumulable" in c1.stdout
+
+
+def workflow_test_github_17509(c: Composition) -> None:
+    """
+    Test that a bucketed hierarchical reduction over a source with an invalid accumulation produces
+    a clean error when an arrangement hierarchy is built, in addition to logging an error, when soft
+    assertions are turned off.
+
+    This is a partial regression test for https://github.com/MaterializeInc/materialize/issues/17509.
+    It is still possible to trigger the behavior described in the issue by opting into
+    a smaller group size with a query hint (e.g., OPTIONS (EXPECTED GROUP SIZE = 1)).
+    """
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Clusterd(
+            name="clusterd_nopanic",
+            environment_extra=[
+                "MZ_SOFT_ASSERTIONS=0",
+            ],
+        ),
+        Testdrive(no_reset=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.up("clusterd_nopanic")
+
+        # set up a test cluster and run a testdrive regression script
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (
+                r1 (
+                    STORAGECTL ADDRESSES ['clusterd_nopanic:2100'],
+                    STORAGE ADDRESSES ['clusterd_nopanic:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd_nopanic:2101'],
+                    COMPUTE ADDRESSES ['clusterd_nopanic:2102'],
+                    WORKERS 2
+                )
+            );
+            """
+        )
+        c.testdrive(
+            dedent(
+                f"""
+            # Set data for test up
+            > SET cluster = cluster1;
+
+            > CREATE TABLE base (data bigint, diff bigint);
+
+            > CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
+
+            > INSERT INTO base VALUES (1, 1);
+
+            > INSERT INTO base VALUES (1, -1), (1, -1);
+
+            # The query below would return a null previously, but now fails cleanly.
+            ! SELECT MAX(data) FROM data;
+            contains:Invalid data in source, saw negative accumulation for key
+
+            ! SELECT data, MAX(data) FROM data GROUP BY data;
+            contains:Invalid data in source, saw negative accumulation for key
+
+            # Repairing the error must be possible.
+            > INSERT INTO base VALUES (1, 2), (2, 1);
+
+            > SELECT MAX(data) FROM data;
+            2
+
+            > SELECT data, MAX(data) FROM data GROUP BY data;
+            1 1
+            2 2
+            """
+            )
+        )
+
+        # ensure that an error was put into the logs
+        c1 = c.invoke("logs", "clusterd_nopanic", capture=True)
+        assert "Non-positive accumulation in MinsMaxesHierarchical" in c1.stdout
+        assert "Negative accumulation in ReduceMinsMaxes" not in c1.stdout
 
 
 def workflow_test_upsert(c: Composition) -> None:
