@@ -188,9 +188,12 @@ pub fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, Pos
     Ok(tls_connector)
 }
 
-/// Fetches table schema information from an upstream Postgres source for all
+/// Fetches table schema information from an upstream Postgres source for
 /// tables that are part of a publication, given a connection string and the
 /// publication name.
+///
+/// If `oid_filter` is `None`, returns all tables, otherwise returns only the
+/// details for the identified oid.
 ///
 /// # Errors
 ///
@@ -199,6 +202,7 @@ pub fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, Pos
 pub async fn publication_info(
     config: &Config,
     publication: &str,
+    oid_filter: Option<u32>,
 ) -> Result<Vec<PostgresTableDesc>, PostgresError> {
     let client = config.connect("postgres_publication_info").await?;
 
@@ -221,8 +225,9 @@ pub async fn publication_info(
                 JOIN pg_publication_tables AS p ON
                         c.relname = p.tablename AND n.nspname = p.schemaname
             WHERE
-                p.pubname = $1",
-            &[&publication],
+                p.pubname = $1
+                AND ($2::oid IS NULL OR c.oid = $2::oid)",
+            &[&publication, &oid_filter],
         )
         .await?;
 

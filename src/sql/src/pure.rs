@@ -269,11 +269,12 @@ pub async fn purify_create_source(
             let config = connection
                 .config(&*connection_context.secrets_reader)
                 .await?;
-            let publication_tables = mz_postgres_util::publication_info(&config, &publication)
-                .await
-                .map_err(|cause| PlanError::FetchingPostgresPublicationInfoFailed {
-                    cause: Arc::new(cause),
-                })?;
+            let publication_tables =
+                mz_postgres_util::publication_info(&config, &publication, None)
+                    .await
+                    .map_err(|cause| PlanError::FetchingPostgresPublicationInfoFailed {
+                        cause: Arc::new(cause),
+                    })?;
 
             // An index from table name -> schema name -> database name -> PostgresTableDesc
             let mut tables_by_name = BTreeMap::new();

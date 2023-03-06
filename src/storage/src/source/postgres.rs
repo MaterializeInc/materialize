@@ -512,6 +512,7 @@ async fn postgres_replication_loop_inner(
         let publication_tables = mz_postgres_util::publication_info(
             &task_info.connection_config,
             &task_info.publication,
+            None,
         )
         .await
         .err_indefinite()?;
@@ -801,6 +802,8 @@ fn validate_tables(
     for (id, info) in source_tables.iter() {
         match pub_tables.get(id) {
             Some(pub_schema) => {
+                // Keep this method in sync with the check in response to
+                // Relation messages in the replication stream.
                 if pub_schema != &info.desc {
                     warn!(
                         "Error validating table in publication. Expected: {:?} Actual: {:?}",
@@ -1114,6 +1117,7 @@ async fn produce_replication<'a>(
                         Relation(relation) => {
                             last_data_message = Instant::now();
                             let rel_id = relation.rel_id();
+                            let mut valid_schema_change = true;
                             if let Some(info) = source_tables.get(&rel_id) {
                                 // Start with the cheapest check first, this will catch the majority of alters
                                 if info.desc.columns.len() != relation.columns().len() {
@@ -1121,11 +1125,7 @@ async fn produce_replication<'a>(
                                         "alter table detected on {} with id {}",
                                         info.desc.name, info.desc.oid
                                     );
-                                    return Err(Definite(anyhow!(
-                                        "source table {} with oid {} has been altered",
-                                        info.desc.name,
-                                        info.desc.oid
-                                    )))?;
+                                    valid_schema_change = false;
                                 }
                                 let same_name = info.desc.name == relation.name().unwrap();
                                 let same_namespace =
@@ -1139,12 +1139,9 @@ async fn produce_replication<'a>(
                                         relation.namespace().unwrap(),
                                         relation.name().unwrap()
                                     );
-                                    return Err(Definite(anyhow!(
-                                        "source table {} with oid {} has been altered",
-                                        info.desc.name,
-                                        info.desc.oid
-                                    )))?;
+                                    valid_schema_change = false;
                                 }
+
                                 // Relation messages do not include nullability/primary_key data so we
                                 // check the name, type_oid, and type_mod explicitly and error if any
                                 // of them differ
@@ -1162,12 +1159,83 @@ async fn produce_replication<'a>(
                                             info.desc.columns,
                                             relation.columns()
                                         );
-                                        return Err(Definite(anyhow!(
-                                            "source table {} with oid {} has been altered",
-                                            info.desc.name,
-                                            info.desc.oid
-                                        )))?;
+
+                                        valid_schema_change = false;
                                     }
+                                }
+
+                                // Because the replication stream doesn't
+                                // include columns' attnums, we need to check
+                                // the current local schema against the current
+                                // remote schema to ensure e.g. we haven't
+                                // received a schema update with the same
+                                // terminal column name which is actually a
+                                // different column.
+                                let current_publication_info = mz_postgres_util::publication_info(
+                                    &client_config,
+                                    publication,
+                                    Some(rel_id),
+                                )
+                                .await
+                                .err_indefinite()?;
+
+                                // Keep this method in sync with the check in
+                                // validate_tables.
+                                //
+                                // Note that:
+                                // - This check does not obviate the local vs.
+                                //   message schema check, e.g. it's possible
+                                //   that this schema is multiple "versions"
+                                //   ahead of the one from the notice and could
+                                //   have been returned to a compatible state,
+                                //   even if the message schema expressed some
+                                //   form of incompatibility.
+                                // - Because equality is transitive, we do not
+                                //   need to check the current remote schema
+                                //   against the message's relation--if the
+                                //   current local schema == message schema &&
+                                //   current local schema == current remote
+                                //   schema, then we can infer that the message
+                                //   schema would have been equal to the current
+                                //   remote schema.
+                                // - This check might cause us to error more
+                                //   eager than necessary. Because our only
+                                //   remediation strategy currently is "drop and
+                                //   recreate" the source, this seems somewhat
+                                //   immaterial. If we develop more graceful
+                                //   strategies in the future, we can revisit
+                                //   this.
+                                //
+                                // TODO: We do not need to error if any column
+                                // was nullable and now is not; this doesn't
+                                // affect the semantics and erroring out on it
+                                // is over-eager.
+                                let remote_schema_eq =
+                                    Some(&info.desc) == current_publication_info.get(0);
+                                if !remote_schema_eq {
+                                    warn!(
+                                        "alter table error: name {}, oid {}, current local schema {:?}, current remote schema {:?}",
+                                        info.desc.name,
+                                        info.desc.oid,
+                                        info.desc.columns,
+                                        current_publication_info.get(0)
+                                    );
+
+                                    valid_schema_change = false;
+                                }
+
+                                if !valid_schema_change {
+                                    return Err(Definite(anyhow!(
+                                        "source table {} with oid {} has been altered",
+                                        info.desc.name,
+                                        info.desc.oid
+                                    )))?;
+                                } else {
+                                    warn!(
+                                        "source table {} with oid {} has been altered, but we could not determine how",
+                                        info.desc.name,
+                                        info.desc.oid
+                                    )
                                 }
                             }
                         }
