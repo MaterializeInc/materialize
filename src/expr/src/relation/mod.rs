@@ -2760,7 +2760,7 @@ impl RowSetFinishing {
             // Check that result fits into max_result_size.
             if num_bytes > max_result_size {
                 return Err(format!(
-                    "result would exceed max size of {}",
+                    "result exceeds max size of {}",
                     ByteSize::b(u64::cast_from(max_result_size))
                 ));
             }
