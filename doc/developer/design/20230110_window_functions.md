@@ -205,7 +205,13 @@ _A_ will have exactly one interval for each element of *D*. The actual mapping (
 
 ##### The `broadcast` function
 
-TODO
+The `broadcast` function takes the precomputed sums from `aggregate` and a set of "queries", which are the set of indexes for which we are interested in the prefix sum ending at that index.
+
+Just by looking at the bit patterns in the queries, it computes the set of intervals (`requests`) from which it will put together the final sums. Many precomputed intervals might participate in the final sum calculation for more than one query, and therefore `requests` are deduplicated.
+
+For a general prefix sum, it can happen that some intervals in `requests` don't occur among the pre-aggregated intervals, meaning that the sum for these intervals is 0. Therefore, there is an outer join to add these 0s. However, this case cannot occur when we use prefix sum for window functions, because our `queries` and the original set of indexes from which `aggregate` started are actually the same sets. Therefore, this outer join can be left out.
+
+The final step is another iteration, which starts from the set of all those pre-aggregated intervals that start at the 0 index, and at each step it extends each of its intervals by stitching to the end of each of its current intervals all those (requested) pre-aggregates intervals that start there. This iteration needs as many steps as the largest number of 1 bits among all the indexes.
 
 ----------------------
 
@@ -286,7 +292,7 @@ TODO: switch the order of I. and II.
         - We start with `(index, offset)` pairs for all the possible current elements in parallel, where the pair means that we need to move `index` down by `offset` (down when looking for the lower end of the interval, or up when looking for the upper end), i.e., we need to lower `index` while lowering `offset` to 0.
         - Then, at every step of an `iterate`, we can use a range from `counts` on each  `(index, offset)` pair: `index` is lowered by the size of the range, and `offset` is lowered by the aggregated count of the range.
             - We want to use the biggest such range in `counts` that doesn't make `offset` negative. We can do this by an inner `iterate`.
-- ROWS: similar to GROUPS, but use indexes that include the hash. (see at [Peer groups](#Peer-groups))
+- ROWS: similar to GROUPS, but use indexes that [include the hash](#Peer-groups).
 
 There is also `frame_exclusion`, which sometimes necessitates special handling for the group that contains the current row. In such cases, we will put together the result value of the window function from 3 parts: 1. prefix sum (generalized to arbitrary intervals) for groups that are earlier than the current row’s group, 2. prefix sum for groups that are later than the current row’s group, 3. current row’s group (without prefix sum).
 
@@ -358,29 +364,35 @@ Fortunately, many important types _can_ be mapped to fixed-length integers, whic
 
 ### Performance and optimizations
 
-For the performance of `aggregate`, the size distribution of the *D_len* sets is important (see in the [prefix sum implementation section](#Implementation-details-of-DD's-prefix-sum)), since the implementation of `aggregate` performs one step for each _len_, and the time and memory requirements of each of these steps are proportional to the size of *D_len*. Critically, this means that large *D_len* sets (whose size is similar to the number of input elements) contribute a per-input-element overhead, while small *D_len* sets only contribute a per-partition overhead. We can compare this to the performance characteristics of a hierarchical aggregation: in that algorithm, the first several steps have almost the same size as the input, while the last few steps are small.
+For the performance of `aggregate`, the size distribution of the *D_len* sets is important (see in the [prefix sum implementation section](#Implementation-details-of-DD's-prefix-sum)), since the implementation of `aggregate` performs one step for each _len_, and the time and memory requirements of each of these steps are proportional to the size of *D_len*. This means that large *D_len* sets (whose size is similar to the number of input elements) contribute a per-input-element overhead, while small *D_len* sets only contribute a per-partition overhead. We can compare this to the performance characteristics of a hierarchical aggregation: in that algorithm, the first several steps have almost the same size as the input, while the last few steps are small.
 
-TODO: The following paragraph is not 100% correct.
-
-So the question now is how quickly do the *D_len* sets get small as `aggregate` proceeds through its steps. Interestingly, the size distribution of the `D_len` sets depends on where are the variations in the bit vectors of the indexes in the input. For example, if all indexes start with 10 zero bits, then the last 10 *D_len* sets each will have only one element, and thus the last 10 steps of `aggregate` will contribute only a per-partition overhead. However, if all indexes _end_ with 10 zero bits, then each of the _first_ 10 *D_len* sets will have a similar size as the input data.
-
-TODO: mention somewhere that we won't put entire rows inside the prefix sum, but only the index + the value of the expression appearing in the window function.
-
-Optimizations: TODO:
-
-#### Special rendering for LAG/LEAD
-
-Instead of prefix sum, ...
-
-Performance would be similar to a 16-stage hierarchical aggregation
+So the question now is how quickly do the *D_len* sets get small as `aggregate` proceeds through its steps. Interestingly, the size distribution of the `D_len` sets depends on how closely the input indexes are clustered together. For example, if all indexes start with 10 zero bits, then the last 10 *D_len* sets each will have only one element, and thus the last 10 steps of `aggregate` will contribute only a per-partition overhead. However, if all indexes _end_ with 10 zero bits (and thus each of them are at least 1024 apart from its closest neighbor), then each of the _first_ 10 *D_len* sets will have a similar size as the input data. Unfortunately, this means that putting a 32-bit hash on each of the indexes will slow down the algorithm considerably. Therefore, performance will be better for those window functions where no hash is needed (e.g., GROUPS or RANGE frame mode).
 
 #### Dynamically switch to old implementation for small window partitions
 
-to eliminate the problem of the huge per-partition overhead (memory and time)
+As explained above, each step of the iteration in `aggregate` contributes at least a per-partition overhead. Typical indexes might be around 100 bits: for example, a 64-bit timestamp, plus a 32-bit hash. Therefore, small partitions will have a considerable overhead. Fortunately, these data structures won't store the entire rows, just the indexes and the values appearing in the window function's expression.
+
+To solve this problem, we will dynamically choose between the old, non-incremental rendering and prefix sum for each partition based on its size: For small partitions (say, maximum 64 elements), we will use the old rendering.
+
+We could implement this as follows:
+1. A Reduce with a Count keeps track of partition sizes.
+2. These counts are joined with the input, adding a `group_size` field to each input element. (Actually, `group_size` shouldn't be the group's actual size, but just a boolean indicating `actual_size < 30`, so that it doesn't change often.)
+3. This goes into a [splitting operator](https://github.com/TimelyDataflow/timely-dataflow/pull/439) that sends an input element on one of its two outputs based on the `group_size` field.
+4. These two outputs go into prefix sum and the old window function rendering, which are running at the same time, with each receiving elements belonging to only a subset of all groups.
+5. The results from these two alternative implementations are unioned.
+
+Note that this dynamic switching would be problematic if we wanted to switch implementations for large groups, due to the oscillation problem: if we are unfortunate, as plus and minus diffs come in, a change of implementation might happen at every input record, and thus we move a large number of records between the two implementations at every input record. However, this is not a problem for small partitions, since the old window function implementation is simply to recompute the window function output for all the elements of a window partition at every change, which requires similar computation time as switching between the implementations.
 
 #### Each `aggregate` step should step several bits instead of just 1 bit
 
 This would reduce the time overhead of `aggregate`. It would also reduce the memory overhead of `aagregate` by reducing the memory need of the internal operations, but it wouldn't reduce the total output size of `aggregate`.
+
+#### Special rendering for LAG/LEAD
+
+TODO
+Instead of prefix sum, we could have a special rendering for LAG/LEAD,
+
+Performance would be similar to a 16-stage hierarchical aggregation
 
 # Alternatives
 
