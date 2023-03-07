@@ -156,6 +156,81 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
 }
 impl_display_t!(Statement);
 
+impl<T: AstInfo> Statement<T> {
+    /// Returns a human readable name of the plan. Meant for use in messages sent back to a user.
+    pub fn name(&self) -> &str {
+        match self {
+            Statement::Select(_) => "select",
+            Statement::Insert(_) => "insert",
+            Statement::Copy(_) => "copy",
+            Statement::Update(_) => "update",
+            Statement::Delete(_) => "delete",
+            Statement::CreateConnection(_) => "create connection",
+            Statement::CreateDatabase(_) => "create database",
+            Statement::CreateSchema(_) => "create schema",
+            Statement::CreateSource(_) => "create source",
+            Statement::CreateSubsource(_) => "create subsource",
+            Statement::CreateSink(_) => "create sink",
+            Statement::CreateView(_) => "create view",
+            Statement::CreateMaterializedView(_) => "create materialized view",
+            Statement::CreateTable(_) => "create table",
+            Statement::CreateIndex(_) => "create index",
+            Statement::CreateType(_) => "create type",
+            Statement::CreateRole(_) => "create role",
+            Statement::CreateCluster(_) => "create cluster",
+            Statement::CreateClusterReplica(_) => "create cluster replica",
+            Statement::CreateSecret(_) => "create secret",
+            Statement::AlterObjectRename(_) => "rename object",
+            Statement::AlterIndex(_) => "alter index",
+            Statement::AlterSecret(_) => "alter secret",
+            Statement::AlterSink(_) => "alter sink",
+            Statement::AlterSource(_) => "alter source",
+            Statement::AlterSystemSet(_) => "alter system",
+            Statement::AlterSystemReset(_) => "alter system",
+            Statement::AlterSystemResetAll(_) => "alter system",
+            Statement::AlterConnection(_) => "alter connection",
+            Statement::AlterRole(_) => "alter role",
+            Statement::Discard(_) => "discard",
+            Statement::DropDatabase(_) => "drop database",
+            Statement::DropSchema(_) => "drop schema",
+            Statement::DropObjects(stmt) => match stmt.object_type {
+                ObjectType::Table => "drop table",
+                ObjectType::View => "drop view",
+                ObjectType::MaterializedView => "drop materialized view",
+                ObjectType::Source => "drop source",
+                ObjectType::Sink => "drop sink",
+                ObjectType::Index => "drop index",
+                ObjectType::Type => "drop type",
+                ObjectType::Role => "drop role",
+                ObjectType::Cluster => "drop cluster",
+                ObjectType::ClusterReplica => "drop cluster",
+                ObjectType::Object => "drop object",
+                ObjectType::Secret => "drop secret",
+                ObjectType::Connection => "drop connection",
+            },
+            Statement::DropRoles(_) => "drop roles",
+            Statement::DropClusters(_) => "drop clusters",
+            Statement::DropClusterReplicas(_) => "drop cluster replicas",
+            Statement::SetVariable(_) => "set variable",
+            Statement::ResetVariable(_) => "reset variable",
+            Statement::Show(_) => "show",
+            Statement::StartTransaction(_) => "start transaction",
+            Statement::SetTransaction(_) => "set transaction",
+            Statement::Commit(_) => "commit",
+            Statement::Rollback(_) => "rollback",
+            Statement::Subscribe(_) => "subscribe",
+            Statement::Explain(_) => "explain",
+            Statement::Declare(_) => "declare",
+            Statement::Fetch(_) => "fetch",
+            Statement::Close(_) => "close",
+            Statement::Prepare(_) => "prepare",
+            Statement::Execute(_) => "execute",
+            Statement::Deallocate(_) => "deallocate",
+            Statement::Raise(_) => "raise",
+        }
+    }
+}
+
 /// `SELECT`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SelectStatement<T: AstInfo> {

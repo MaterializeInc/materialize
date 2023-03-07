@@ -42,7 +42,7 @@ use crate::{catalog, metrics, rbac};
 
 impl Coordinator {
     pub(crate) async fn handle_command(&mut self, mut cmd: Command) {
-        if let Some(session) = cmd.session() {
+        if let Some(session) = cmd.session_mut() {
             session.apply_external_metadata_updates();
         }
         if let Err(e) = rbac::check_command(&self.catalog, &cmd) {
