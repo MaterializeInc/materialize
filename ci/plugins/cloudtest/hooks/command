@@ -22,6 +22,9 @@ fi
 
 date +"%Y-%m-%d %H:%M:%S" > step_start_timestamp
 
+ci_collapsed_heading ":docker: Purging all existing docker containers and volumes, regardless of origin"
+docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
+
 ci_collapsed_heading "kind: Make sure kind is running..."
 bin/ci-builder run stable test/cloudtest/setup
 
