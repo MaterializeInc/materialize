@@ -164,28 +164,9 @@ async fn download_objects_task(
     }
     let mut seen_buckets: BTreeMap<String, BucketInfo> = BTreeMap::new();
 
-    loop {
-        let msg = tokio::select! {
-            msg = rx.recv() => {
-                if let Some(msg) = msg {
-                    msg
-                } else {
-                    break;
-                }
-            }
-            status = shutdown_rx.changed() => {
-                if status.is_ok() {
-                    if let DataflowStatus::Stopped = *shutdown_rx.borrow() {
-                        debug!("source_id={} download_objects received dataflow shutdown message", source_id);
-                        break;
-                    }
-                }
-                continue;
-            }
-        };
-
-        match msg {
-            Ok(msg) => {
+    while *shutdown_rx.borrow_and_update() == DataflowStatus::Running {
+        match rx.recv().await {
+            Some(Ok(msg)) => {
                 if let Some(bi) = seen_buckets.get_mut(&msg.bucket) {
                     if bi.keys.contains(&msg.key) {
                         bi.metrics.objects_duplicate.inc();
@@ -247,14 +228,19 @@ async fn download_objects_task(
                     }
                 };
             }
-            Err(e) => {
+            Some(Err(e)) => {
                 if tx.send(Err(e)).await.is_err() {
                     rx.close();
                     break;
                 }
             }
+            None => break,
         }
     }
+    debug!(
+        "source_id={} download_objects received dataflow shutdown message",
+        source_id
+    );
     debug!("source_id={} exiting download objects task", source_id);
 }
 
@@ -428,28 +414,16 @@ async fn read_sqs_task(
     let mut metrics: BTreeMap<String, ScanBucketMetrics> = BTreeMap::new();
 
     let mut allowed_errors = 10;
-    'outer: loop {
-        let sqs_fut = client
+    'outer: while *shutdown_rx.borrow_and_update() == DataflowStatus::Running {
+        let response = client
             .receive_message()
             .max_number_of_messages(10)
             .queue_url(&queue_url)
             .visibility_timeout(500)
             // the maximum possible time for a long poll
             .wait_time_seconds(20)
-            .send();
-        let response = tokio::select! {
-            response = sqs_fut => response,
-            status = shutdown_rx.changed() => {
-                if status.is_ok() {
-                    if let DataflowStatus::Stopped = *shutdown_rx.borrow() {
-                        debug!("source_id={} scan_sqs received dataflow shutdown message", source_id);
-                        break;
-                    }
-                }
-                continue;
-            }
-        };
-
+            .send()
+            .await;
         match response {
             Ok(response) => {
                 let messages = if let Some(m) = response.messages {
@@ -519,6 +493,10 @@ async fn read_sqs_task(
             }
         }
     }
+    debug!(
+        "source_id={} scan_sqs received dataflow shutdown message",
+        source_id
+    );
     debug!("source_id={} exiting sqs reader queue={}", source_id, queue);
 }
 
