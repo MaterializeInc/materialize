@@ -199,46 +199,6 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_durations_1) EXCEPT (SELECT * 
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_1));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_1) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_1));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_1) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_1));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_1) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_peek_durations) EXCEPT (SELECT * FROM mz_internal.mz_raw_peek_durations_1));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_peek_durations_1) EXCEPT (SELECT * FROM mz_internal.mz_raw_peek_durations));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_worker_compute_delays) EXCEPT (SELECT * FROM mz_internal.mz_raw_worker_compute_delays_1));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_worker_compute_delays_1) EXCEPT (SELECT * FROM mz_internal.mz_raw_worker_compute_delays));
-----
-
-query T
 SELECT * FROM ((SELECT * FROM mz_internal.mz_records_per_dataflow) EXCEPT (SELECT * FROM mz_internal.mz_records_per_dataflow_1));
 ----
 
@@ -490,46 +450,6 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_durations) EXCEPT (SELECT * FR
 
 query T
 SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_durations_4) EXCEPT (SELECT * FROM mz_internal.mz_peek_durations));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_4));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_4) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_4));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_4) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_4));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_4) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_peek_durations) EXCEPT (SELECT * FROM mz_internal.mz_raw_peek_durations_4));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_peek_durations_4) EXCEPT (SELECT * FROM mz_internal.mz_raw_peek_durations));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_worker_compute_delays) EXCEPT (SELECT * FROM mz_internal.mz_raw_worker_compute_delays_4));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_worker_compute_delays_4) EXCEPT (SELECT * FROM mz_internal.mz_raw_worker_compute_delays));
 ----
 
 query T
@@ -792,46 +712,6 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_durations) EXCEPT (SELECT * FR
 
 query T
 SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_durations_5) EXCEPT (SELECT * FROM mz_internal.mz_peek_durations));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_5));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_5) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_5));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_5) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_5));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal_5) EXCEPT (SELECT * FROM mz_internal.mz_raw_compute_operator_durations_internal));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_peek_durations) EXCEPT (SELECT * FROM mz_internal.mz_raw_peek_durations_5));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_peek_durations_5) EXCEPT (SELECT * FROM mz_internal.mz_raw_peek_durations));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_worker_compute_delays) EXCEPT (SELECT * FROM mz_internal.mz_raw_worker_compute_delays_5));
-----
-
-query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_raw_worker_compute_delays_5) EXCEPT (SELECT * FROM mz_internal.mz_raw_worker_compute_delays));
 ----
 
 query T

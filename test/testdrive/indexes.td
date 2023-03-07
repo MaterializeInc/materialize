@@ -281,15 +281,14 @@ mz_arrangement_records_internal_s2_primary_idx              mz_arrangement_recor
 mz_arrangement_sharing_internal_s2_primary_idx              mz_arrangement_sharing_internal             mz_introspection    {operator_id,worker_id}
 mz_clusters_ind                                             mz_clusters                                 mz_introspection    {id}
 mz_compute_exports_s2_primary_idx                           mz_compute_exports                          mz_introspection    {export_id,worker_id}
+mz_compute_operator_durations_internal_s2_primary_idx       mz_compute_operator_durations_internal      mz_introspection    {id,worker_id,duration_ns}
 mz_dataflow_addresses_s2_primary_idx                        mz_dataflow_addresses                       mz_introspection    {id,worker_id}
 mz_dataflow_channels_s2_primary_idx                         mz_dataflow_channels                        mz_introspection    {id,worker_id}
 mz_dataflow_operator_reachability_internal_s2_primary_idx   mz_dataflow_operator_reachability_internal  mz_introspection    {address,port,worker_id,update_type,time}
 mz_dataflow_operators_s2_primary_idx                        mz_dataflow_operators                       mz_introspection    {id,worker_id}
 mz_message_counts_received_internal_s2_primary_idx          mz_message_counts_received_internal         mz_introspection    {channel_id,from_worker_id,to_worker_id}
 mz_message_counts_sent_internal_s2_primary_idx              mz_message_counts_sent_internal             mz_introspection    {channel_id,from_worker_id,to_worker_id}
-mz_raw_compute_operator_durations_internal_s2_primary_idx   mz_raw_compute_operator_durations_internal  mz_introspection    {id,worker_id,duration_ns}
-mz_raw_peek_durations_s2_primary_idx                        mz_raw_peek_durations                       mz_introspection    {worker_id,duration_ns}
-mz_raw_worker_compute_delays_s2_primary_idx                 mz_raw_worker_compute_delays                mz_introspection    {export_id,import_id,worker_id,delay_ns}
+mz_peek_durations_s2_primary_idx                            mz_peek_durations                           mz_introspection    {worker_id,duration_ns}
 mz_scheduling_elapsed_internal_s2_primary_idx               mz_scheduling_elapsed_internal              mz_introspection    {id,worker_id}
 mz_scheduling_parks_internal_s2_primary_idx                 mz_scheduling_parks_internal                mz_introspection    {worker_id,slept_for,requested}
 mz_show_all_objects_ind                                     mz_objects                                  mz_introspection    {schema_id}
@@ -309,6 +308,7 @@ mz_show_types_ind                                           mz_types            
 mz_show_views_ind                                           mz_views                                    mz_introspection    {schema_id}
 mz_source_status_history_ind                                mz_source_status_history                    mz_introspection    {source_id}
 mz_source_statuses_ind                                      mz_source_statuses                          mz_introspection    {id}
+mz_worker_compute_delays_s2_primary_idx                     mz_worker_compute_delays                    mz_introspection    {export_id,import_id,worker_id,delay_ns}
 mz_worker_compute_dependencies_s2_primary_idx               mz_worker_compute_dependencies              mz_introspection    {export_id,import_id,worker_id}
 mz_worker_compute_frontiers_s2_primary_idx                  mz_worker_compute_frontiers                 mz_introspection    {export_id,worker_id,time}
 mz_worker_compute_import_frontiers_s2_primary_idx           mz_worker_compute_import_frontiers          mz_introspection    {export_id,import_id,worker_id,time}
