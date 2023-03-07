@@ -58,31 +58,3 @@ SET CLUSTER = 'default';
 ```sql
 SET TRANSACTION_ISOLATION TO 'STRICT SERIALIZABLE';
 ```
-
-<!-- We only support UTC value -->
-<!--?build_info                                 | Text          | -             | Returns the value of the `mz_version` configuration parameter. | -->
-<!--?real_time_recency                          | Text          | -             | Feature flag indicating whether real time recency is enabled (Materialize) -->
-
-<!--
-emit_timestamp_notice                       | Text          | -             | Boolean flag indicating whether to send a NOTICE specifying query timestamps (Materialize).
-emit_trace_id_notice                        | Text          | -             | Boolean flag indicating whether to send a NOTICE specifying the trace id when available (Materialize).
-mock_audit_event_timestamp                  | Text          | -             | Mocked timestamp to use for audit events for testing purposes
-?max_aws_privatelink_connections            | Text          | -             | The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize).
-max_tables                                  | Text          | -             | The maximum number of tables in the region, across all schemas (Materialize).
-max_sources                                 | Text          | -             | The maximum number of sources in the region, across all schemas (Materialize).
-max_sinks                                   | Text          | -             | The maximum number of sinks in the region, across all schemas (Materialize).
-max_materialized_views                      | Text          | -             | The maximum number of sinks in the region, across all schemas (Materialize).
-max_clusters                                | Text          | -             | The maximum number of clusters in the region (Materialize).
-max_replicas_per_cluster                    | Text          | -             | The maximum number of replicas of a single cluster (Materialize).
-max_databases                               | Text          | -             | The maximum number of databases in the region (Materialize).
-max_schemas_per_database                    | Text          | -             | The maximum number of schemas in a database (Materialize).
-max_objects_per_schema                      | Text          | -             | The maximum number of objects in a schema (Materialize).
-max_secrets                                 | Text          | -             | The maximum number of objects in a schema (Materialize).
-max_roles                                   | Text          | -             | The maximum number of roles in the region (Materialize).
-max_result_size                             | Text          | -             | The maximum size in bytes for a single query's result (Materialize).
-metrics_retention                           | Text          | -             | The time to retain cluster utilization metrics (Materialize).
-allowed_cluster_replica_sizes               | Text          | -             | The allowed sizes when creating a new cluster replica (Materialize).
-persist_blob_target_size                    | Text          | -             | A target maximum size of persist blob payloads in bytes (Materialize).
-persist_compaction_minimum_timeout          | Text          | -             | The minimum amount of time to allow a persist compaction request to run before timing it out.
-crdb_connect_timeout                        | Text          | -             | The connection timeout to Cockroach used by persist.
--->
