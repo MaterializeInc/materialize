@@ -21,6 +21,7 @@ sys.path.append(os.path.dirname(__file__))
 from scenarios import *  # noqa: F401 F403
 from scenarios import Scenario
 from scenarios_concurrency import *  # noqa: F401 F403
+from scenarios_optbench import *  # noqa: F401 F403
 
 from materialize.feature_benchmark.aggregation import Aggregation, MinAggregation
 from materialize.feature_benchmark.benchmark import Benchmark, Report, SingleReport
