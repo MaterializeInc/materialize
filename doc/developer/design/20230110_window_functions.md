@@ -327,21 +327,22 @@ Alternatively, we could make these a bit faster (except for NTH_VALUE) if we jus
 
 ### Duplicate indexes (peer groups)
 
-There might be rows which agree on both the PARTITION BY key and the ORDER BY key (the index). These groups of rows are called _peer groups_. Framed window functions in GROUPS or RANGE frame mode compute the same output for all the rows inside a peer group. This is easy to handle, since we can simply deduplicate the indexes, and compute one result for each index (and then join with the original data on the index).
+TODO: change title to "peer groups" first
+
+There might be rows which agree on both the PARTITION BY key and the ORDER BY key (the index). These groups of rows are called _peer groups_.
+
+Framed window functions in GROUPS or RANGE frame mode as well as the RANK, DENSE_RANK, PERCENT_RANK, and CUME_DIST functions compute the same output for all the rows inside a peer group.
+This is easy to handle, since we can simply deduplicate the indexes and compute one result for each index (and then join with the original data on the index). Note that the sums of each peer group (i.e., the input to `aggregate`) need to be precomputed by a standard grouped aggregation. (FIRST_VALUE and LAST_VALUE are handled specially as explained above.)
+
+However, for framed window functions in ROWS frame mode as well as for LAG/LEAD and ROW_NUMBER we need to treat each element of a peer group separately. To make the output deterministic, we need to sort the rows inside a peer group by the entire row (as we do in all other sorting situations in Materialize). A straightforward way to achieve this would be to make all the components of the row part of the index of the prefix sum, but this is unfortunately impossible: First, [we will support only certain types in a prefix sum index](#ORDER-BY-types) (e.g., we don't support string), and second, recall that the bit length of the index is critical for the performance of prefix sum, so adding all columns to the index would be catastrophic for performance.
+
+One idea to solve this problem is to have a `reduce` number the elements inside each peer group with 0, 1, 2, ... before prefix sum, and adding just this numbering column as an additional component to the prefix sum indexes. But the problem with this is that this would handle only small peer groups, since it's not incremental inside peer groups, i.e., it recomputes the numbering for an entire pee group when any group element changes. Even though, it might be ok in many cases to assume that peer groups are small (this should hold much more commonly than the assumption of the current window function implementation, which is that _window partitions_ are small), this would still hurt the generality of the whole prefix sum approach.
 
 TODO: add Moritz's hashing idea here:
 We can fix a deterministic order of rows _inside_ a peer group by hashing the rows, and making the hash part of the prefix sum index. The hashes will have an arbitrary, but deterministic order. The order being arbitrary doesn't matter, because the user didn't request any specific ordering on fields that don't appear in the ORDER BY clause.
 Hash collisions will be resolved by an extra Reduce beforehand grouping by collision groups, adding a few more bits (e.g., 6) to differentiate records within a collision group.
 
-However, in ROWS frame mode as well as for all non-framed window functions (e.g., LAG/LEAD) we need to treat each element of a peer group separately. To make the output deterministic, we need to sort the rows inside a peer group by the entire row (as we do in all other sorting situations in Materialize). A straightforward way to achieve this would be to make all the components of the row part of the index of the prefix sum, but this is unfortunately impossible: First, [we will support only certain types in a prefix sum index](#ORDER-BY-types) (e.g., we don't support string), and second, recall that the bit length of the index is critical for the performance of prefix sum, so adding several more columns to it would be catastrophic for performance.
-
-We could partially solve this problem by having a `reduce` number the elements inside each peer group with 0, 1, 2, ... before prefix sum, and adding just this numbering column as an additional component to the prefix sum indexes. But this has some sad issues:
-- It makes the bit length longer, affecting performance.
-- It adds identical bit patterns at the ends of indexes if (most) peer groups have actually just 1 element. This is particularly bad for performance, as explained [here](#Performance-and-optimizations).
-- The biggest problem is that this handles only small peer groups, since it's not incremental inside peer groups, i.e., it recomputes the numbering for an entire pee group when any  group element changes.
-  Even though, it might be ok in many cases to assume that peer groups are small (this should hold much more commonly than the assumption of the current window function implementation, which is that _window partitions_ are small), this still hurts the generality of the whole prefix sum approach. (Note that there is one common situation where peer groups are large: if there is no ORDER BY in the OVER clause. However, this particular case is not a big problem, since we are planning to handle these cases by transforming away the window function to a grouped aggregation + a join, instead of using prefix sum.)
-
-There is a complicated way to somewhat mitigate this problem, see [here](#Special-rendering-for-the-first-and-last-peer-group).
+(Note that there is one common situation where peer groups are large: if there is no ORDER BY in the OVER clause. However, this particular case is not a big problem, since we are planning to handle these cases by transforming away the window function to a grouped aggregation + a join, instead of using prefix sum.)
 
 ### ORDER BY types
 
@@ -357,16 +358,16 @@ Fortunately, many important types _can_ be mapped to fixed-length integers, whic
 - MzTimestamp is an u64.
 - Float types (surprisingly) [can also be supported](https://lemire.me/blog/2020/12/14/converting-floating-point-numbers-to-integers-while-preserving-order/).
 - null can be handled by adding an extra bit at the beginning.
-- Range is fine if the constituent types are supported, as it is basically two instances of an underlying type, plus some special values, for which a few extra bits have to be added.
+- Range is fine if the constituent types are supported, as it is basically two instances of an underlying type, plus various special values, for which a few extra bits have to be added.
 - Uuid is simply 128 bits.
 
 ### Performance and optimizations
 
 For the performance of `aggregate`, the size distribution of the *D_len* sets is important (see in the [prefix sum implementation section](#Implementation-details-of-DD's-prefix-sum)), since the implementation of `aggregate` performs one step for each _len_, and the time and memory requirements of each of these steps are proportional to the size of *D_len*. Critically, this means that large *D_len* sets (whose size is similar to the number of input elements) contribute a per-input-element overhead, while small *D_len* sets only contribute a per-partition overhead. We can compare this to the performance characteristics of a hierarchical aggregation: in that algorithm, the first several steps have almost the same size as the input, while the last few steps are small.
 
-So the question now is how quickly do the *D_len* sets get small as `aggregate` proceeds through its steps. Interestingly, the size distribution of the `D_len` sets depends on where are the variations in the bit vectors of the indexes in the input. For example, if all indexes start with 10 zero bits, then the last 10 *D_len* sets each will have only one element, and thus the last 10 steps of `aggregate` will contribute only a per-partition overhead. However, if all indexes _end_ with 10 zero bits, then each of the _first_ 10 *D_len* sets will have a similar size as the input data.
+TODO: The following paragraph is not 100% correct.
 
-TODO: discuss how the numbering affects trailing zero bits
+So the question now is how quickly do the *D_len* sets get small as `aggregate` proceeds through its steps. Interestingly, the size distribution of the `D_len` sets depends on where are the variations in the bit vectors of the indexes in the input. For example, if all indexes start with 10 zero bits, then the last 10 *D_len* sets each will have only one element, and thus the last 10 steps of `aggregate` will contribute only a per-partition overhead. However, if all indexes _end_ with 10 zero bits, then each of the _first_ 10 *D_len* sets will have a similar size as the input data.
 
 TODO: mention somewhere that we won't put entire rows inside the prefix sum, but only the index + the value of the expression appearing in the window function.
 
@@ -385,10 +386,6 @@ to eliminate the problem of the huge per-partition overhead (memory and time)
 #### Each `aggregate` step should step several bits instead of just 1 bit
 
 This would reduce the time overhead of `aggregate`. It would also reduce the memory overhead of `aagregate` by reducing the memory need of the internal operations, but it wouldn't reduce the total output size of `aggregate`.
-
-#### Special rendering for the first and last peer group
-
-Solves the numbering problem mentioned in the duplicate indexes section for framed window functions. Doesn't solve it for LAG/LEAD, but for those we could have a special rendering that avoids prefix sum, see above. However, that special rendering can't handle the IGNORE NULLs option.
 
 # Alternatives
 
