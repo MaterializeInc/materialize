@@ -142,6 +142,12 @@ pub struct TransformArgs<'a> {
 
 /// Types capable of transforming relation expressions.
 pub trait Transform: std::fmt::Debug {
+    /// Indicates if the transform can be safely applied to expressions containing
+    /// `LetRec` AST nodes.
+    fn recursion_safe(&self) -> bool {
+        false
+    }
+
     /// Transform a relation into a functionally equivalent relation.
     fn transform(
         &self,
@@ -154,12 +160,6 @@ pub trait Transform: std::fmt::Debug {
     /// and one wants to judge progress before some defect occurs.
     fn debug(&self) -> String {
         format!("{:?}", self)
-    }
-
-    /// Indicates if the transform can be safely applied to expressions containing
-    /// `LetRec` AST nodes.
-    fn recursion_safe(&self) -> bool {
-        false
     }
 }
 

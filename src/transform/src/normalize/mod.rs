@@ -44,10 +44,6 @@ impl Normalize {
 }
 
 impl crate::Transform for Normalize {
-    fn recursion_safe(&self) -> bool {
-        false
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
