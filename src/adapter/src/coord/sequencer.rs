@@ -3925,7 +3925,7 @@ impl Coordinator {
             Err(AdapterError::Unauthorized(
                 rbac::UnauthorizedError::privilege(
                     "alter system".into(),
-                    format!("You must be the '{}' role", SYSTEM_USER.name),
+                    Some(format!("You must be the '{}' role", SYSTEM_USER.name)),
                 ),
             ))
         }

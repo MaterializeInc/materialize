@@ -270,7 +270,7 @@ impl AdapterError {
             )),
             AdapterError::PlanError(e) => e.detail(),
             AdapterError::ConcurrentRoleDrop(_) => Some("Please disconnect and re-connect with a valid role.".into()),
-            AdapterError::Unauthorized(unauthorized) => Some(unauthorized.detail()),
+            AdapterError::Unauthorized(unauthorized) => unauthorized.detail(),
             _ => None,
         }
     }
