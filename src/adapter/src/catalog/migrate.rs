@@ -121,6 +121,11 @@ pub(crate) async fn migrate(
 
 // Add the `col_num` to all PG column descriptions.
 //
+// Note that this will also populate column and table constraints from the
+// upstream database that were never used, so we must clear them out because
+// they were not used to generate the DDL for the subsources and it is now too
+// late to apply them.
+//
 // TODO(migration): delete in version v.50 (released in v0.48 + 1 additional
 // release)
 async fn pg_source_table_metadata_rewrite(
@@ -219,7 +224,7 @@ async fn pg_source_table_metadata_rewrite(
             .expect("valid config");
 
         // Get the current publication tables from the upstream PG source.
-        let current_publication_tables =
+        let mut current_publication_tables =
             match mz_postgres_util::publication_info(&config, publication, None).await {
                 Ok(v) => v,
                 Err(_) => {
@@ -234,13 +239,13 @@ async fn pg_source_table_metadata_rewrite(
 
         // Convert current tables into map because we only care that the tables
         // we know about about are the same.
-        let cur_tables: BTreeMap<_, _> = current_publication_tables
-            .iter()
+        let mut cur_tables: BTreeMap<_, _> = current_publication_tables
+            .iter_mut()
             .map(|t| (t.oid, t))
             .collect();
 
         for prev_table in publication_details.tables.into_iter() {
-            match cur_tables.get(&prev_table.oid) {
+            match cur_tables.get_mut(&prev_table.oid) {
                 Some(cur_table) => {
                     // We must undergo this torturous equality check because we
                     // want to check equality for all fields except for the new
@@ -264,6 +269,15 @@ async fn pg_source_table_metadata_rewrite(
                         schema in the warning where this occurs will have the wrong col_num."
                         );
                         return;
+                    }
+                    // No table in any previous version of Materialize was
+                    // defined with any keys, nor are we planning to test their
+                    // data sets to see if they can be retroactively applied.
+                    cur_table.keys.clear();
+                    // No column in any previous version of Materialize had a
+                    // NOT NULL constraint meaningfully applied.
+                    for c in cur_table.columns.iter_mut() {
+                        c.nullable = true;
                     }
                 }
                 None => {
