@@ -303,6 +303,8 @@ op_cast ::=
   val '::' type
 prepare ::=
   'PREPARE' name 'AS' statement
+reset_session_variable ::=
+  'RESET' variable_name
 rollback ::=
   'ROLLBACK'
 select_stmt ::=
