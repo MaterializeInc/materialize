@@ -550,6 +550,7 @@ steps:
   - id: cloudtest
     label: Cloudtest
     depends_on: build-x86_64
+    parallelism: 2
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     inputs: [test/cloudtest, misc/python/materialize/cloudtest]
