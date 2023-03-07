@@ -317,7 +317,7 @@ where
             .install_batch(opentelemetry::runtime::Tokio)
             .unwrap();
         let (filter, filter_handle) = reload::Layer::new(if otel_config.start_enabled {
-            Targets::new()
+            let targets = Targets::default()
                 // By default we turn off tracing from the following crates, because they
                 // have long-lived Spans, which OpenTelemetry does not handle well. We
                 // specifically apply the otel_config _after_ these defaults, to allow the
@@ -325,9 +325,14 @@ where
                 //
                 // Note: users should feel free to add more crates here if we find more
                 // with long lived Spans.
-                .with_targets([("h2", LevelFilter::OFF), ("hyper", LevelFilter::OFF)])
-                // Apply our config last though so it could override our defaults
-                .with_targets(otel_config.filter)
+                .with_targets([("h2", LevelFilter::OFF), ("hyper", LevelFilter::OFF)]);
+
+            // Apply the user provided config
+            match otel_config.filter.default_level() {
+                Some(defaul_level) => targets.with_default(defaul_level),
+                _ => targets,
+            }
+            .with_targets(otel_config.filter)
         } else {
             // The default `Targets` has everything disabled.
             Targets::default()
