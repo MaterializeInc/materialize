@@ -14,6 +14,7 @@
 name               visible
 --------------------------
 _pg_expandarray    false
+
 > SET search_path=information_schema,public
 > SELECT DISTINCT name, pg_table_is_visible(oid) AS visible FROM mz_catalog.mz_functions where name = '_pg_expandarray'
 name               visible
