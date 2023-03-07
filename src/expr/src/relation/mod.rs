@@ -2755,9 +2755,9 @@ impl RowSetFinishing {
         let mut num_bytes = 0;
         for (row, count) in &rows[offset_nth_row..] {
             num_rows += count.get();
-            num_bytes += row.byte_len();
+            num_bytes += count.get().saturating_mul(row.byte_len());
 
-            // Bail early if we know our results won't fit into our Vec.
+            // Check that result fits into max_result_size.
             if num_bytes > max_result_size {
                 return Err(format!(
                     "result would exceed max size of {}",
