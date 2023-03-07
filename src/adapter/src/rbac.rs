@@ -28,7 +28,7 @@ pub enum Attribute {
 }
 
 impl Attribute {
-    /// Checks if a role has the privilege granted by the attribute.
+    /// Reports whether a role has the privilege granted by the attribute.
     fn check_role(&self, role: &dyn CatalogRole) -> bool {
         match self {
             Attribute::CreateRole => role.create_role(),
