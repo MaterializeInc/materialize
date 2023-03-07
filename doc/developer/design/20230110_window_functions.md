@@ -345,13 +345,20 @@ There is a complicated way to somewhat mitigate this problem, see [here](#Specia
 
 ### ORDER BY types
 
-We'll have to generalize DD's Prefix Sum to orderings over types other than a single unsigned integer, which is currently hardcoded in the code that forms the intervals. We’ll map other types to a single unsigned integer. Importantly, this mapping should *preserve the ordering* of the type:
+Our prefix sum algorithm operates with indexes that are fixed-length bit vectors, which is a fundamental limitation of the algorithm. (The current implementation has `usize` hardcoded. We will generalize this to longer bit vectors, but they will still have to be fixed-length.) Therefore, any type that we would like to support in the ORDER BY clause of a window function executed by prefix sum will need to be mapped to fixed-length bit vectors. This unfortunately means that variable-length types, such as String, Array, List, Map, Bytes, won't be supported by prefix sum. For such types, we will fall back to the old, naive rendering (ideally, with a warning printed to the user, and possibly a Sentry log).
 
-- Signed integer types are fine, we just need to fiddle with the sign to map them to an unsigned int in a way that preserves the ordering.
-- Date/Time types are just a few integers. We’ll concatenate their bits.
-- I don’t know how to handle strings, so these are out of scope for now. (Not seen in user queries yet.)
+Fortunately, many important types _can_ be mapped to fixed-length integers, which we will discuss now. Importantly, the mapping should *preserve the ordering* of the type, i.e., if `a < b`, then `f(a) < f(b)` should also hold, where `f` is the mapping. Note that a type that is composed of a fixed number of fields of other types for which we already have a mapping can simply be mapped by concatenating the bits of the fields. This also allows us to support a composite ORDER BY key.
 
-TODO: this needs more details
+- Unsigned integer types (of any length) are fine.
+- Signed integer types: we just need to fiddle with the sign to map them to an unsigned int in a way that preserves the ordering.
+- Date is an i32.
+- Time is two i32s.
+- Timestamp types can be converted to Unix timestamps, which is an i64.
+- MzTimestamp is an u64.
+- Float types (surprisingly) [can also be supported](https://lemire.me/blog/2020/12/14/converting-floating-point-numbers-to-integers-while-preserving-order/).
+- null can be handled by adding an extra bit at the beginning.
+- Range is fine if the constituent types are supported, as it is basically two instances of an underlying type, plus some special values, for which a few extra bits have to be added.
+- Uuid is simply 128 bits.
 
 ### Performance and optimizations
 
@@ -418,7 +425,7 @@ Pros:
   - Computation times and memory requirements here don't involve the bit length of the input indexes (_b_). Instead, the logarithm of the partition sizes (_p_) is involved. Having _log p_ instead of _log b_ can often be a factor of several times.
   - The above _log p_ is hidden inside sequential code (inside the logic of a DD operator instead of calling DD operators), while in the case of prefix sum, there are _log b_ DD operators chained together. This means that in the case of prefix sum, the _log b_ is _multiplied_ by an extra logarithmic factor that comes from manipulating arrangements as part of each DD operation.
 - No need for certain complications: a mapping of various types to integers, handling peer groups by hashing, [complicated optimizations](#Performance-and-optimizations).
-- Would work with arbitrary types in the ORDER BY (e.g., string).
+- Would work with arbitrary types in the ORDER BY (e.g., string). TODO: make these links to sections
 
 Cons:
 - Partition sizes would not be scalable beyond a single machine, since each partition is stored in a single instance of the data structure. (Contrast this with prefix sum implemented by DD's data-parallel operations.)
@@ -478,14 +485,15 @@ In HIR, the window functions are currently in the scalar expressions (option 2. 
 
 The current plan is to *not* have an explicit representation of window functions in MIR for now. Here, we first discuss some reasons for this. Then, we discuss how such a representation could look like, as it is still on the table for a future evolution of window function handling, when
 - the currently ongoing optimizer refactoring is completed;
-- all window functions are ported to the prefix sum rendering;
 - we have data indicating that the pattern recognition is indeed too brittle.
 
 We decided not to have an explicit representation because it would mean that we would have to immediately teach all existing transforms how to handle window functions, which would be a lot of code to write. Current transforms at least don't do incorrect things with window functions. (However, some transforms might currently not be able to do their thing on the complicated pattern that the HIR lowering creates for window functions, for example [projection pushdown doesn't work for window functions](https://github.com/MaterializeInc/materialize/issues/17522).)
 
 I'm hoping that MIR transforms won't create too many variations of the window function pattern that HIR lowering creates. The pattern involves FlatMap, which not many transforms actually manipulate much. Also, the data is in a very weird form during the pattern (the whole row hidden inside a (nested) record), so some transforms cannot handle that, e.g. ProjectionPushdown.
 
-Having an explicit MIR representation instead of the current pattern would also mean that we would have to put in extra work to allow falling back to the old window function rendering code in such cases that are not yet covered by the prefix sum rendering. More specifically, we would need to port the code that creates the pattern from the HIR lowering to an MIR transformation (or to MIR lowering). This code would create the old pattern from the explicit MIR representation instead of from the HIR representation. Note that this problem will disappear later when we will have completed the porting of all window functions to the prefix sum rendering, because then all need for the old pattern would disappear with an explicit MIR representation.
+Having an explicit MIR representation instead of the current pattern would also mean that we would have to put in extra work to allow falling back to the old window function rendering code in such cases that are not yet covered by the prefix sum rendering. More specifically, we would need to port the code that creates the pattern from the HIR lowering to an MIR transformation (or to MIR lowering). This code would create the old pattern from the explicit MIR representation instead of from the HIR representation.
+
+Note that the above problem of porting the pattern creation code would disappear if we were to port _all_ window functions to the prefix sum rendering, because then all need for the old pattern would disappear with an explicit MIR representation. However, prefix sum doesn't handle types that cannot be mapped to a fixed-length integer types (e.g., string), for which the old rendering will be needed as a fallback. This means that, unfortunately, we might never be able to remove the old rendering.
 
 The 3 representation options in MIR are:
 
