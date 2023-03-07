@@ -46,6 +46,7 @@ use crate::normalize;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
 use crate::plan::statement::StatementDesc;
 use crate::plan::PlanError;
+use crate::vars::SystemVars;
 
 /// A catalog keeps track of SQL objects and session state available to the
 /// planner.
@@ -224,6 +225,10 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// for this method was ensuring that features are temporary turned on so
     /// catalog rehydration does not break due to unsupported SQL syntax.
     fn set_feature(&mut self, feature: CatalogFeature, value: bool) -> bool;
+
+    /// Returns system vars
+    fn system_vars(&self) -> &SystemVars;
+
 }
 
 /// Defines features that the [SessionCatalog] may optionally support.

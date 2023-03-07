@@ -14,9 +14,7 @@ use chrono::{DateTime, Utc};
 use mz_controller::clusters::ClusterStatus;
 use mz_ore::str::StrExt;
 use mz_repr::strconv;
-use mz_sql::ast::NoticeSeverity;
-
-use crate::session::vars::IsolationLevel;
+use mz_sql::{ast::NoticeSeverity, vars::IsolationLevel};
 
 /// Notices that can occur in the adapter layer.
 ///

@@ -68,6 +68,7 @@ use mz_sql::plan::{
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
     Plan, PlanContext, SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
 };
+use mz_sql::vars::{OwnedVarInput, SystemVars, Var, VarInput, CONFIG_HAS_SYNCED_ONCE};
 use mz_sql::{plan, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{CreateSinkOption, CreateSourceOption, Statement, WithOptionValue};
 use mz_ssh_util::keys::SshKeyPairSet;
@@ -92,7 +93,6 @@ use crate::catalog::storage::{BootstrapArgs, Transaction};
 use crate::client::ConnectionId;
 use crate::config::{SynchronizedParameters, SystemParameterFrontend};
 use crate::coord::DEFAULT_LOGICAL_COMPACTION_WINDOW;
-use crate::session::vars::{OwnedVarInput, SystemVars, Var, VarInput, CONFIG_HAS_SYNCED_ONCE};
 use crate::session::{PreparedStatement, Session, User, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
 use crate::{AdapterError, DUMMY_AVAILABILITY_ZONE};
@@ -876,7 +876,7 @@ impl CatalogState {
 
     /// Get system configuration `name`.
     pub fn get_system_configuration(&self, name: &str) -> Result<&dyn Var, AdapterError> {
-        self.system_configuration.get(name)
+        Ok(self.system_configuration.get(name)?)
     }
 
     /// Insert system configuration `name` with `value`.
@@ -888,7 +888,7 @@ impl CatalogState {
         name: &str,
         value: VarInput,
     ) -> Result<bool, AdapterError> {
-        self.system_configuration.set(name, value)
+        Ok(self.system_configuration.set(name, value)?)
     }
 
     /// Reset system configuration `name`.
@@ -896,7 +896,7 @@ impl CatalogState {
     /// Return a `bool` value indicating whether the configuration was modified
     /// by the call.
     fn remove_system_configuration(&mut self, name: &str) -> Result<bool, AdapterError> {
-        self.system_configuration.reset(name)
+        Ok(self.system_configuration.reset(name)?)
     }
 
     /// Remove all system configurations.
@@ -6710,6 +6710,10 @@ impl SessionCatalog for ConnCatalog<'_> {
             EnableWithMutuallyRecursive => config.set_enable_with_mutually_recursive(value),
         }
     }
+
+    fn system_vars(&self) -> &SystemVars {
+        &self.state.system_configuration
+    }
 }
 
 impl mz_sql::catalog::CatalogDatabase for Database {
@@ -6898,6 +6902,7 @@ mod tests {
         ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
     };
     use mz_sql::plan::StatementContext;
+    use mz_sql::vars::VarInput;
     use mz_sql::DEFAULT_SCHEMA;
     use mz_sql_parser::ast::Expr;
     use mz_stash::DebugStashFactory;
@@ -6905,7 +6910,6 @@ mod tests {
     use crate::catalog::{
         Catalog, CatalogItem, Index, MaterializedView, Op, Table, SYSTEM_CONN_ID,
     };
-    use crate::session::vars::VarInput;
     use crate::session::{Session, DEFAULT_DATABASE_NAME};
 
     /// System sessions have an empty `search_path` so it's necessary to
