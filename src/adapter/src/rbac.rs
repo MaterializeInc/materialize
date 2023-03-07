@@ -29,7 +29,7 @@ pub enum Attribute {
 
 impl Attribute {
     /// Checks if a role has the privilege granted by the attribute.
-    fn check_role(&self, role: &(impl CatalogRole + ?Sized)) -> bool {
+    fn check_role(&self, role: &dyn CatalogRole) -> bool {
         match self {
             Attribute::CreateRole => role.create_role(),
             Attribute::CreateDB => role.create_db(),
@@ -52,11 +52,11 @@ impl ToString for Attribute {
 #[derive(Debug)]
 pub struct UnauthorizedError {
     action: String,
-    inner: UnauthorizedErrorInner,
+    kind: UnauthorizedErrorKind,
 }
 
 #[derive(Debug)]
-enum UnauthorizedErrorInner {
+enum UnauthorizedErrorKind {
     Superuser,
     Attribute(Attribute),
     // TODO(jkosh44) replace with structured errors once RBAC is done.
@@ -73,35 +73,35 @@ impl UnauthorizedError {
     pub fn superuser(action: String) -> UnauthorizedError {
         UnauthorizedError {
             action,
-            inner: UnauthorizedErrorInner::Superuser,
+            kind: UnauthorizedErrorKind::Superuser,
         }
     }
 
     pub fn attribute(action: String, attribute: Attribute) -> UnauthorizedError {
         UnauthorizedError {
             action,
-            inner: UnauthorizedErrorInner::Attribute(attribute),
+            kind: UnauthorizedErrorKind::Attribute(attribute),
         }
     }
 
     pub fn unstructured(action: String, reason: String) -> UnauthorizedError {
         UnauthorizedError {
             action,
-            inner: UnauthorizedErrorInner::Unstructured { reason },
+            kind: UnauthorizedErrorKind::Unstructured { reason },
         }
     }
 
     pub fn detail(&self) -> String {
-        match &self.inner {
-            UnauthorizedErrorInner::Superuser => {
+        match &self.kind {
+            UnauthorizedErrorKind::Superuser => {
                 format!("You must be a superuser to {}", self.action)
             }
-            UnauthorizedErrorInner::Attribute(attribute) => format!(
+            UnauthorizedErrorKind::Attribute(attribute) => format!(
                 "You must have the {} attribute to {}",
                 attribute.to_string(),
                 self.action
             ),
-            UnauthorizedErrorInner::Unstructured { reason } => {
+            UnauthorizedErrorKind::Unstructured { reason } => {
                 format!("{} to {}", reason, self.action)
             }
         }
