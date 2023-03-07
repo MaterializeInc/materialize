@@ -1,4 +1,4 @@
-# Efficient Window Functions
+# Scalable Window Functions
 
 By “window functions”, this document means the `OVER` clause, e.g.,
 
@@ -8,7 +8,7 @@ By “window functions”, this document means the `OVER` clause, e.g.,
 
 # Overview
 
-[Many users want to use window functions](https://www.notion.so/Window-Functions-Use-Cases-6ad1846a7da942dc8fa28997d9c220dd), but our current window function support is very inefficient: We recompute results for an entire window partition for any small change in the partition. This means the only situations when our current support works is if the window partitions are either very small, or they rarely change.
+[Many users want to use window functions](https://www.notion.so/Window-Functions-Use-Cases-6ad1846a7da942dc8fa28997d9c220dd), but our current window function support is not scalable: We recompute results for an entire window partition for any small change in the partition. This means the only situations when our current support works is if the window partitions are either very small, or they rarely change.
 
 ## Window Functions
 
@@ -72,7 +72,7 @@ For more details, see Postgres' documentation on window functions:
 
 ## Goals
 
-We would like to have efficient window function support.
+We would like to have scalable window function support.
 
 Some window functions are impossible to efficiently support in streaming, because sometimes small input changes cause big result changes. (E.g., if a new first element of a partition appears, then ROW_NUMBERs will change for the whole window partition.) So a realistic goal would be to support at least those cases where a small input change leads to a small output change.
 
@@ -80,7 +80,7 @@ Some window functions are impossible to efficiently support in streaming, becaus
     - We aim for only offset 1 in the first version (i.e., the previous or the next element), which is the default. Bigger offsets have not been seen in user queries yet (i.e., when requesting to go back or forward by several rows).
     - IGNORE NULLS should be supported. (already seen in a user query)
 - Window aggregations
-    - Small frames (e.g., summing the previous 5 elements): We should support these efficiently, because a small frame means that small input changes lead to small output changes.
+    - Small frames, i.e., only a few rows (e.g., summing the previous 5 elements): We should support these efficiently, because a small frame means that small input changes lead to small output changes.
     - Large frames: These are often impossible to support efficiently in a streaming setting, because small input changes can lead to big output changes. However, there are some aggregations which don't necessarily result in big output changes even when applied with a large frame (Prefix Sum will automagically handle the following cases efficiently):
         - MIN/MAX, if usually the changed input element is not the smallest/largest.
         - SUMming an expression that is 0 for many rows.
@@ -101,7 +101,7 @@ As noted above, some window function queries on some input data are impossible t
 
 ## Limitations
 
-We don't handle such OVER clauses where the ORDER BY inside the OVER is on a String or other such type that can't be mapped to a fixed-length integer. See a discussion on supported types below in the "Types" section.
+We don't handle such OVER clauses where the ORDER BY inside the OVER is on a String or other such type that can't be mapped to a fixed-length integer. See a discussion on supported types [below](#order-by-types).
 
 # Details
 
@@ -111,7 +111,7 @@ The current way of executing window functions is to put entire window partitions
 
 ## Proposal
 
-We'll use several approaches to solve the many cases mentioned in the “Goals” section:
+We'll use several approaches to solve the many cases mentioned in [Goals](#goals):
 
 1. We'll use [DD's prefix_sum](https://github.com/TimelyDataflow/differential-dataflow/blob/master/src/algorithms/prefix_sum.rs) with some tricky sum functions and some generalizations.
 2. We'll use a special-purpose rendering for LAG/LEAD of offset 1 with no IGNORE NULLS, which will be simpler and more efficient than Prefix Sum.
@@ -167,17 +167,17 @@ Note that commutativity of `+` is not required. Importantly, the result sums inc
 
 #### Properties of DD's prefix sum implementation
 
-[DD's prefix sum implementation](https://github.com/TimelyDataflow/differential-dataflow/blob/master/src/algorithms/prefix_sum.rs) computes the above sum for collections of `((usize, K), D)`, where `D` is the actual data type, the usizes determine the ordering (we will need to generalize this, see the "ORDER BY types" section), and `K` is a key type. For each key, a separate prefix sum is computed. The key will be the expression of the PARTITION BY clause.
+[DD's prefix sum implementation](https://github.com/TimelyDataflow/differential-dataflow/blob/master/src/algorithms/prefix_sum.rs) computes the above sum for collections of `((usize, K), D)`, where `D` is the actual data type, the usizes determine the ordering (we will need to generalize this, see the [ORDER BY types section](#order-by-types)), and `K` is a key type. For each key, a separate prefix sum is computed. The key will be the expression of the PARTITION BY clause.
 
 A caveat of the implementation is that extra instances of the zero element might be added anywhere in the sum. E.g., instead of `z + x1 + x2 + x3`, we might get `z + x1 + x2 + z + z + x3 + z`. Therefore, the zero element should be both a left zero and a right zero, i.e., `x + z = z + x = x` has to hold for the sum function. This is not a problematic limitation in practice, because we can add a suitable zero to any type by wrapping it in `Option`, and making `None` the zero.
 
 As is common in distributed systems, the sum function has to be associative, because there is no guarantee that the implementation will compute a left-deep sum (e.g., `((z + x1) + x2) + x3`), but might put parenthesis anywhere in the sum, e.g., `(z + (x1 + x2)) + x3`. (But commutativity is not required, as mentioned above.)
 
-The implementation is data-parallel not just across keys, but inside each key as well. TODO: But I wasn't able to actually observe a speedup when adding cores in a simple test, so we should investigate what’s going on with parallelization. There was probably just some technical issue in my test, because all operations in the Prefix Sum implementation look parallelizable, so it should be fine. I'll try to properly test this in the next days.
+The implementation is data-parallel not just across keys, but inside each key as well. However, I wasn't able to actually observe a speedup when adding cores in a simple test, so we should investigate what’s going on with parallelization. There was probably just some technical issue in my test, because all operations in the Prefix Sum implementation look parallelizable, so it should be fine. I'll try to properly test this in the next days.
 
 We’ll use the word **index** in this document to mean the values of the ORDER BY column of the OVER clause, i.e., they are simply the values that determine the ordering. (Note that it’s sparse indexing, i.e., not every number occurs from 1 to n, but there are usually (big) gaps.)
 
-As mentioned above, DD's prefix sum needs the index type to be `usize`. It is actually a fundamental limitation of the algorithm that it only works with integer indexes, and therefore we will have to map other types to integers. We discuss this in the "ORDER BY types" section.
+As mentioned above, DD's prefix sum needs the index type to be `usize`. It is actually a fundamental limitation of the algorithm that it only works with integer indexes, and therefore we will have to map other types to integers. We discuss this in the ["ORDER BY types" section](#order-by-types).
 
 #### Implementation details of DD's prefix sum
 
@@ -245,7 +245,7 @@ For LAG/LEAD with *k > 1* (which computes the given expression not for the previ
 ##### 1.b. ROW_NUMBER, RANK, DENSE_RANK, PERCENT_RANK, CUME_DIST, NTILE
 
 For example: List the two biggest cities of each state:
-(Note that we can't directly write `ROW_NUMBER() <= 2`, because window functions are not allowed in WHERE clause.)
+(Note that we can't directly write `ROW_NUMBER() <= 2`, because window functions are not allowed in WHERE clause, since window functions are executed _after_ WHERE, GROUP BY, HAVING.)
 
 ```sql
 SELECT state, name
@@ -276,8 +276,6 @@ There is a special case where the frame includes the entire window partition: An
 
 In all other cases, we’ll use prefix sum, for which we need to solve two tasks:
 
-TODO: switch the order of I. and II.
-
 *I.* We have to find the end(s) of the interval that is the frame. I.e., we need to tell **indexes** to Prefix Sum (where the index is a value of the ORDER BY column(s), as mentioned above).
 
 *II.* We’ll need to generalize Prefix Sum to not just prefixes, but arbitrary intervals. (A prefix interval is identified by one index, a general interval is identified by two indexes.)
@@ -286,12 +284,8 @@ TODO: switch the order of I. and II.
 - RANGE: this is the obvious one (but probably not the most often used): The offset is just a difference in the (sparse) “index” of the prefix sum (i.e., the ORDER BY column).
     - Btw. we might translate some inequality self-joins to this one!
 - GROUPS: (One could say that this is probably not so often used, so no need to initially support it. However, the problem is that the solution for ROWS will probably build on this, and that is the default, so that one is often used.) We have to somehow translate the offset to a difference in the “index” of the prefix sum:
-    - Naive solution: Since this is a difference in DENSE_RANK between the current row and the ends of the interval, we could compute a DENSE_RANK, and then join with that to find the “index” (the value of the ORDER BY column).
-        - However, this would be slow, because DENSE_RANK is inherently not well incrementalizable: Small input changes can lead to lots of changes in the ranks.
-    - **(Tricky part)** (TODO: this needs more details) A better solution is to calculate a count aggregation on all ranges (with prefix sum’s `aggregate`) (let's call this `counts`), and then do a logarithmic search for the index with a nested `iterate`:
-        - We start with `(index, offset)` pairs for all the possible current elements in parallel, where the pair means that we need to move `index` down by `offset` (down when looking for the lower end of the interval, or up when looking for the upper end), i.e., we need to lower `index` while lowering `offset` to 0.
-        - Then, at every step of an `iterate`, we can use a range from `counts` on each  `(index, offset)` pair: `index` is lowered by the size of the range, and `offset` is lowered by the aggregated count of the range.
-            - We want to use the biggest such range in `counts` that doesn't make `offset` negative. We can do this by an inner `iterate`.
+    - Naive solution: Since this is a difference in DENSE_RANK between the current row and the ends of the interval, we could compute a DENSE_RANK, and then join with that to find the “index” (the value of the ORDER BY column). However, this would be slow, because DENSE_RANK is inherently not well incrementalizable: Small input changes can lead to lots of changes in the ranks.
+    - A better solution is to calculate a count aggregation on all ranges (with prefix sum’s `aggregate`) (let's call this `counts`), and then do a logarithmic search for the index with a nested `iterate`: We start with `(index, offset)` pairs for all the possible current elements in parallel, where the pair means that we need to move `index` down by `offset` (down when looking for the lower end of the interval, or up when looking for the upper end), i.e., we need to lower `index` while lowering `offset` to 0. Then, at every step of an `iterate`, we can use a range from `counts` on each  `(index, offset)` pair: `index` is lowered by the size of the range, and `offset` is lowered by the aggregated count of the range. We want to use the biggest such range in `counts` that doesn't make `offset` negative. We can do this by an inner `iterate`.
 - ROWS: similar to GROUPS, but use indexes that [include the hash](#Peer-groups).
 
 There is also `frame_exclusion`, which sometimes necessitates special handling for the group that contains the current row. In such cases, we will put together the result value of the window function from 3 parts: 1. prefix sum (generalized to arbitrary intervals) for groups that are earlier than the current row’s group, 2. prefix sum for groups that are later than the current row’s group, 3. current row’s group (without prefix sum).
@@ -383,16 +377,19 @@ We could implement this as follows:
 
 Note that this dynamic switching would be problematic if we wanted to switch implementations for large groups, due to the oscillation problem: if we are unfortunate, as plus and minus diffs come in, a change of implementation might happen at every input record, and thus we move a large number of records between the two implementations at every input record. However, this is not a problem for small partitions, since the old window function implementation is simply to recompute the window function output for all the elements of a window partition at every change, which requires similar computation time as switching between the implementations.
 
-#### Each `aggregate` step should step several bits instead of just 1 bit
+#### Each iteration in `aggregate` should step several bits instead of just 1 bit
 
-This would reduce the time overhead of `aggregate`. It would also reduce the memory overhead of `aagregate` by reducing the memory need of the internal operations, but it wouldn't reduce the total output size of `aggregate`.
+In the current implementation, iterations in `aggregate` chop off just 1 bit. This means that the logic of the `reduce` gets 1 or 2 input elements. An optimization will be to chop off several bits, and then the logic of the `reduce` will get more elements, but we will need fewer iterations. The `reduce` logic will still produce the exact same output as performing the original steps bit by bit would have produced, i.e., in the `reduce` logic there will be a mini-`aggregate` written in sequential code (without DD operators), which will perform the same computations as the original large `aggregate`, but on just those few elements that go into one invocation of the `reduce` logic. (The `reduce` logic needs to be able to output multiple elements.)
+
+How many bits we should chop off in one step involves a similar trade-off as a hierarchical aggregation: For example, if we chop off 8 bits, that is too much, because then the `reduce` logic might get 256 elements in one invocation, and one invocation of the `reduce` logic is not incremental. I estimate the optimal value to be 5-6 bits.
+
+This will reduce the time overhead of `aggregate`. It will also reduce the memory overhead of `aggregate` by reducing the memory need of the internal operations, but it won't reduce the total output size of `aggregate`.
 
 #### Special rendering for LAG/LEAD
 
-TODO
-Instead of prefix sum, we could have a special rendering for LAG/LEAD,
+Instead of prefix sum, we will have a special rendering for LAG/LEAD: A similar iteration to `aggregate` will chop off 6 bits of the indexes in each step, but the `reduce` logic will simply perform the LAG/LEAD on those elements that went into one invocation of the logic (instead of summing intervals). It can perform the LAG on all but the first element of the list of elements that go into a single invocation of the logic. The first element it will just send onwards to later steps. Therefore, the output will include two kinds of values: one will be final LAG values, and the other will be values that are still waiting for their LAG results. These special values will be met up with the last elements of the input list of the `reduce` logic of the next step.
 
-Performance would be similar to a 16-stage hierarchical aggregation
+I estimate this to be somewhat faster than the `aggregate` step of prefix sum, but the real gain will be in eliminating the `broadcast` step of prefix sum. The performance will be similar to a 16-stage hierarchical aggregation.
 
 # Alternatives
 
@@ -428,8 +425,8 @@ Pros:
 - Efficiency, due to several reasons:
   - Computation times and memory requirements here don't involve the bit length of the input indexes (_b_). Instead, the logarithm of the partition sizes (_p_) is involved. Having _log p_ instead of _log b_ can often be a factor of several times.
   - The above _log p_ is hidden inside sequential code (inside the logic of a DD operator instead of calling DD operators), while in the case of prefix sum, there are _log b_ DD operators chained together. This means that in the case of prefix sum, the _log b_ is _multiplied_ by an extra logarithmic factor that comes from manipulating arrangements as part of each DD operation.
-- No need for certain complications: a mapping of various types to integers, handling peer groups by hashing, [complicated optimizations](#Performance-and-optimizations).
-- Would work with arbitrary types in the ORDER BY (e.g., string). TODO: make these links to sections
+- No need for certain complications: [a mapping of various types to integers](#order-by-types), [handling peer groups by hashing](#peer-groups), [complicated optimizations](#Performance-and-optimizations).
+- Would work with arbitrary [types in the ORDER BY](#order-by-types) (e.g., string).
 
 Cons:
 - Partition sizes would not be scalable beyond a single machine, since each partition is stored in a single instance of the data structure. (Contrast this with prefix sum implemented by DD's data-parallel operations.)
@@ -457,7 +454,7 @@ Cons:
 - Creating MIR nodes is more cumbersome than calling DD functions. (column references by position instead of Rust variables, etc.)
 - We would need to add several scalar functions for integer bit manipulations, e.g., for extracting set bits from integers.
 - Computing the scalar expressions would be much slower as long as we don't have [vectorization for them](https://github.com/MaterializeInc/materialize/issues/14513).
-- When directly writing DD code, we have access to all the power of DD, potentially enabling access to better performance than through the compiler pipeline from MIR.
+- When directly writing DD code, we have access to all the power of DD, potentially enabling access to better performance than through the compiler pipeline from MIR. For example, the complicated `reduce` logics in the [Optimization section](#performance-and-optimizations) wouldn't be possible to implement on MIR.
 
 ## Where to put the idiom recognition?
 
@@ -587,8 +584,8 @@ There are many window functions, and many frame options. We will gradually add t
 
 # Open questions
 
-Do we have enough arguments for choosing prefix sum over custom data structures? Or maybe we could implement the custom datastructure rendering approach first, and later implement the prefix sum approach, and then give the option to the user to switch to the prefix sum rendering? (See the "Custom datastructures instead of prefix sum" section.)
+Is it ok that the order within a peer group will be determined by hashes that might be hard to keep stable between versions?
 
-We should check that there is correct parallelization inside window partitions, see above.
+We should check that there is correct parallelization inside window partitions.
 
 How to have automated performance tests? How can we check in Testdrive that some materialized view (that has window functions) is being updated fast enough? (This is not critical for the first version; we'll use manual performance tests.)
