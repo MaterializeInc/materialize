@@ -46,6 +46,7 @@ use tracing_subscriber::layer::{Layer, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{reload, Registry};
+use tracing_subscriber::filter::LevelFilter;
 
 #[cfg(feature = "tokio-console")]
 use crate::netio::SocketAddr;
@@ -316,12 +317,29 @@ where
             .install_batch(opentelemetry::runtime::Tokio)
             .unwrap();
         let (filter, filter_handle) = reload::Layer::new(if otel_config.start_enabled {
-            otel_config.filter
+            Targets::new()
+                // By default we turn off tracing from the following crates, because they
+                // have long-lived Spans, which OpenTelemetry does not handle well. We 
+                // specifically apply the otel_config _after_ these defaults, to allow the 
+                // otel_config to override this setting, if it's desired.
+                //
+                // Note: users should feel free to add more crates here if we find more 
+                // with long lived Spans.
+                .with_targets([
+                    ("h2", LevelFilter::OFF),
+                    ("hyper", LevelFilter::OFF),
+                ])
+                // Apply our config last though so it could override our defaults
+                .with_targets(otel_config.filter)
         } else {
             // The default `Targets` has everything disabled.
             Targets::default()
         });
         let layer = tracing_opentelemetry::layer()
+            // OpenTelemetry does not handle long-lived Spans well, and they end up continuously
+            // eating memory until OOM. So we set a max number of events that are allowed to be
+            // logged to a Span, once this max is passed, old events will get dropped
+            .max_events_per_span(256)
             .with_tracer(tracer)
             .with_filter(filter);
         let reloader = Arc::new(move |targets| Ok(filter_handle.reload(targets)?));
@@ -542,5 +560,30 @@ impl From<OpenTelemetryContext> for BTreeMap<String, String> {
 impl From<BTreeMap<String, String>> for OpenTelemetryContext {
     fn from(map: BTreeMap<String, String>) -> Self {
         Self { inner: map }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tracing::Level;
+    use tracing_subscriber::filter::{
+        Targets,
+        LevelFilter,
+    };
+
+    #[test]
+    fn overriding_targets() {
+        let user_defined = Targets::new()
+            .with_target("my_crate", Level::INFO);
+
+        let default = Targets::new()
+            .with_target("my_crate", LevelFilter::OFF);
+        assert!(!default.would_enable("my_crate", &Level::INFO));
+        
+        // The user_defined filters should override the default, since it's applied after.
+        let filters = Targets::new()
+            .with_targets(default)
+            .with_targets(user_defined);
+        assert!(filters.would_enable("my_crate", &Level::INFO));
     }
 }

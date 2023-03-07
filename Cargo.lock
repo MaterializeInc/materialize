@@ -5374,7 +5374,7 @@ dependencies = [
 [[package]]
 name = "opentelemetry"
 version = "0.17.0"
-source = "git+https://github.com/MaterializeInc/opentelemetry-rust.git#fe99cd1c96bb4d0e00001b1575f897fd1e57a378"
+source = "git+https://github.com/MaterializeInc/opentelemetry-rust.git#c22fdfe5c90680f534ef958fb4c2f810a2fe2c56"
 dependencies = [
  "opentelemetry-api",
  "opentelemetry-sdk",
@@ -5383,7 +5383,7 @@ dependencies = [
 [[package]]
 name = "opentelemetry-api"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/opentelemetry-rust.git#fe99cd1c96bb4d0e00001b1575f897fd1e57a378"
+source = "git+https://github.com/MaterializeInc/opentelemetry-rust.git#c22fdfe5c90680f534ef958fb4c2f810a2fe2c56"
 dependencies = [
  "fnv",
  "futures-channel",
@@ -5429,7 +5429,7 @@ dependencies = [
 [[package]]
 name = "opentelemetry-sdk"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/opentelemetry-rust.git#fe99cd1c96bb4d0e00001b1575f897fd1e57a378"
+source = "git+https://github.com/MaterializeInc/opentelemetry-rust.git#c22fdfe5c90680f534ef958fb4c2f810a2fe2c56"
 dependencies = [
  "async-trait",
  "crossbeam-channel",
@@ -7705,7 +7705,7 @@ dependencies = [
 [[package]]
 name = "tracing-opentelemetry"
 version = "0.17.4"
-source = "git+https://github.com/MaterializeInc/tracing.git?branch=v0.1.x#fa05cdc3a9757027b8cc93ed7989f8ee42d37f8d"
+source = "git+https://github.com/MaterializeInc/tracing.git?branch=v0.1.x#14b55d9aa9abec24cbb7f6d7ef4bc640398395d3"
 dependencies = [
  "once_cell",
  "opentelemetry",
