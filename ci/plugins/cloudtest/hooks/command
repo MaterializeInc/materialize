@@ -13,7 +13,12 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-run_args=("--junitxml=junit_cloudtest_$BUILDKITE_JOB_ID.xml")
+run_args=(
+    "--junitxml=junit_cloudtest_$BUILDKITE_JOB_ID.xml"
+    "--splits=${BUILDKITE_PARALLEL_JOB_COUNT:-1}"
+    "--group=$((${BUILDKITE_PARALLEL_JOB:-0}+1))"
+)
+
 if read_list BUILDKITE_PLUGIN_CLOUDTEST_ARGS; then
     for arg in "${result[@]}"; do
         run_args+=("$arg")
