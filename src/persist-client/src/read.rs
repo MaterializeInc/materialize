@@ -35,6 +35,7 @@ use crate::fetch::{
     fetch_leased_part, BatchFetcher, FetchedPart, LeasedBatchPart, SerdeLeasedBatchPart,
     SerdeLeasedBatchPartMetadata,
 };
+use crate::internal::encoding::Schemas;
 use crate::internal::machine::Machine;
 use crate::internal::metrics::{Metrics, MetricsRetryStream};
 use crate::internal::state::{HollowBatch, Since};
@@ -392,6 +393,7 @@ where
             Arc::clone(&self.handle.metrics),
             &self.handle.metrics.read.listen,
             Some(&self.handle.reader_id),
+            self.handle.schemas.clone(),
         )
         .await;
         self.handle.process_returned_leased_part(part);
@@ -512,6 +514,7 @@ where
     pub(crate) gc: GarbageCollector<K, V, T, D>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
     pub(crate) reader_id: LeasedReaderId,
+    pub(crate) schemas: Schemas<K, V>,
 
     since: Antichain<T>,
     pub(crate) last_heartbeat: EpochMillis,
@@ -535,6 +538,7 @@ where
         gc: GarbageCollector<K, V, T, D>,
         blob: Arc<dyn Blob + Send + Sync>,
         reader_id: LeasedReaderId,
+        schemas: Schemas<K, V>,
         since: Antichain<T>,
         last_heartbeat: EpochMillis,
     ) -> Self {
@@ -545,6 +549,7 @@ where
             gc: gc.clone(),
             blob,
             reader_id: reader_id.clone(),
+            schemas,
             since,
             last_heartbeat,
             explicitly_expired: false,
@@ -776,6 +781,7 @@ where
             gc,
             Arc::clone(&self.blob),
             new_reader_id,
+            self.schemas.clone(),
             reader_state.since,
             heartbeat_ts,
         )
@@ -955,6 +961,7 @@ where
                 Arc::clone(&self.metrics),
                 &self.metrics.read.snapshot,
                 Some(&self.reader_id),
+                self.schemas.clone(),
             )
             .await;
             self.process_returned_leased_part(part);

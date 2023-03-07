@@ -29,6 +29,7 @@ use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
+use crate::internal::encoding::Schemas;
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, ReadMetrics};
 use crate::internal::paths::PartialBatchKey;
@@ -48,6 +49,7 @@ where
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) shard_id: ShardId,
+    pub(crate) schemas: Schemas<K, V>,
 
     // Ensures that `BatchFetcher` is of the same type as the `ReadHandle` it's
     // derived from.
@@ -66,6 +68,7 @@ where
             blob: Arc::clone(&handle.blob),
             metrics: Arc::clone(&handle.metrics),
             shard_id: handle.machine.shard_id(),
+            schemas: handle.schemas.clone(),
             _phantom: PhantomData,
         };
         handle.expire().await;
@@ -105,6 +108,7 @@ where
             Arc::clone(&self.metrics),
             &self.metrics.read.batch_fetcher,
             None,
+            self.schemas.clone(),
         )
         .await;
         (part, Ok(fetched_part))
@@ -165,6 +169,7 @@ pub(crate) async fn fetch_leased_part<K, V, T, D>(
     metrics: Arc<Metrics>,
     read_metrics: &ReadMetrics,
     reader_id: Option<&LeasedReaderId>,
+    schemas: Schemas<K, V>,
 ) -> (LeasedBatchPart<T>, FetchedPart<K, V, T, D>)
 where
     K: Debug + Codec,
@@ -214,6 +219,7 @@ where
         metrics,
         ts_filter,
         part: encoded_part,
+        schemas,
         _phantom: PhantomData,
     };
 
@@ -408,20 +414,22 @@ where
 
 /// A [Blob] object that has been fetched, but not yet decoded.
 #[derive(Debug)]
-pub struct FetchedPart<K, V, T, D> {
+pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     metrics: Arc<Metrics>,
     ts_filter: FetchBatchFilter<T>,
     part: EncodedPart<T>,
+    schemas: Schemas<K, V>,
 
     _phantom: PhantomData<fn() -> (K, V, D)>,
 }
 
-impl<K, V, T: Clone, D> Clone for FetchedPart<K, V, T, D> {
+impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedPart<K, V, T, D> {
     fn clone(&self) -> Self {
         Self {
             metrics: Arc::clone(&self.metrics),
             ts_filter: self.ts_filter.clone(),
             part: self.part.clone(),
+            schemas: self.schemas.clone(),
             _phantom: self._phantom.clone(),
         }
     }

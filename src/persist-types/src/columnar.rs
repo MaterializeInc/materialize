@@ -203,7 +203,7 @@ pub trait PartDecoder<'a, T> {
 }
 
 /// A description of the structure of a [crate::Codec] implementor.
-pub trait Schema<T>: Debug {
+pub trait Schema<T>: Debug + Send + Sync {
     /// The associated [PartEncoder] implementor.
     type Encoder<'a>: PartEncoder<'a, T>;
     /// The associated [PartDecoder] implementor.

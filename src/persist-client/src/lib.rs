@@ -105,7 +105,7 @@ use crate::critical::{CriticalReaderId, SinceHandle};
 use crate::error::InvalidUsage;
 use crate::fetch::BatchFetcher;
 use crate::internal::compact::Compactor;
-use crate::internal::encoding::parse_id;
+use crate::internal::encoding::{parse_id, Schemas};
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::state_versions::StateVersions;
@@ -334,8 +334,8 @@ impl PersistClient {
         &self,
         shard_id: ShardId,
         purpose: &str,
-        _key_schema: Arc<K::Schema>,
-        _val_schema: Arc<V::Schema>,
+        key_schema: Arc<K::Schema>,
+        val_schema: Arc<V::Schema>,
     ) -> Result<ReadHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -369,6 +369,10 @@ impl PersistClient {
             )
             .await;
         maintenance.start_performing(&machine, &gc);
+        let schemas = Schemas {
+            key: key_schema,
+            val: val_schema,
+        };
         let reader = ReadHandle::new(
             self.cfg.clone(),
             Arc::clone(&self.metrics),
@@ -376,6 +380,7 @@ impl PersistClient {
             gc,
             Arc::clone(&self.blob),
             reader_id,
+            schemas,
             reader_state.since,
             heartbeat_ts,
         )
@@ -393,8 +398,8 @@ impl PersistClient {
     pub async fn create_batch_fetcher<K, V, T, D>(
         &self,
         shard_id: ShardId,
-        _key_schema: Arc<K::Schema>,
-        _val_schema: Arc<V::Schema>,
+        key_schema: Arc<K::Schema>,
+        val_schema: Arc<V::Schema>,
     ) -> BatchFetcher<K, V, T, D>
     where
         K: Debug + Codec,
@@ -418,11 +423,15 @@ impl PersistClient {
         let _ = state_versions
             .maybe_init_shard::<K, V, T, D>(&shard_metrics)
             .await;
-
+        let schemas = Schemas {
+            key: key_schema,
+            val: val_schema,
+        };
         let fetcher = BatchFetcher {
             blob: Arc::clone(&self.blob),
             metrics: Arc::clone(&self.metrics),
             shard_id,
+            schemas,
             _phantom: PhantomData,
         };
 
@@ -529,8 +538,8 @@ impl PersistClient {
         &self,
         shard_id: ShardId,
         purpose: &str,
-        _key_schema: Arc<K::Schema>,
-        _val_schema: Arc<V::Schema>,
+        key_schema: Arc<K::Schema>,
+        val_schema: Arc<V::Schema>,
     ) -> Result<WriteHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -553,12 +562,17 @@ impl PersistClient {
         .await?;
         let gc = GarbageCollector::new(machine.clone());
         let writer_id = WriterId::new();
+        let schemas = Schemas {
+            key: key_schema,
+            val: val_schema,
+        };
         let compact = self.cfg.compaction_enabled.then(|| {
             Compactor::new(
                 self.cfg.clone(),
                 Arc::clone(&self.metrics),
                 Arc::clone(&self.cpu_heavy_runtime),
                 writer_id.clone(),
+                schemas.clone(),
                 gc.clone(),
             )
         });
@@ -581,6 +595,7 @@ impl PersistClient {
             Arc::clone(&self.blob),
             Arc::clone(&self.cpu_heavy_runtime),
             writer_id,
+            schemas,
             shard_upper.0,
             heartbeat_ts,
         )
