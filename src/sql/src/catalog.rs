@@ -26,12 +26,12 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
+use mz_build_info::BuildInfo;
 use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::MirScalarExpr;
-use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
+use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::explain::ExprHumanizer;
-use mz_repr::{ColumnName, GlobalId, RelationDesc, ScalarType};
+use mz_repr::{ColumnName, GlobalId, RelationDesc};
 use mz_sql_parser::ast::Expr;
 use mz_sql_parser::ast::UnresolvedObjectName;
 use mz_storage_client::types::connections::Connection;
@@ -561,7 +561,7 @@ impl TypeReference for IdReference {
 
 /// A type stored in the catalog.
 ///
-/// The variants correspond one-to-one with [`ScalarType`], but with type
+/// The variants correspond one-to-one with [`mz_repr::ScalarType`], but with type
 /// modifiers removed and with embedded types replaced with references to other
 /// types in the catalog.
 #[allow(missing_docs)]
@@ -930,153 +930,6 @@ impl fmt::Display for CatalogError {
 }
 
 impl Error for CatalogError {}
-
-/// A dummy [`SessionCatalog`] implementation.
-///
-/// This implementation is suitable for use in tests that plan queries which are
-/// not demanding of the catalog, as many methods are unimplemented.
-#[derive(Debug)]
-pub struct DummyCatalog;
-
-static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
-    start_time: DateTime::<Utc>::MIN_UTC,
-    start_instant: Instant::now(),
-    nonce: 0,
-    environment_id: EnvironmentId::for_tests(),
-    session_id: Uuid::from_u128(0),
-    unsafe_mode: true,
-    persisted_introspection: true,
-    build_info: &DUMMY_BUILD_INFO,
-    timestamp_interval: Duration::from_secs(1),
-    now: NOW_ZERO.clone(),
-});
-
-impl SessionCatalog for DummyCatalog {
-    fn active_role_id(&self) -> &RoleId {
-        &RoleId::User(0)
-    }
-
-    fn active_database(&self) -> Option<&DatabaseId> {
-        None
-    }
-
-    fn active_cluster(&self) -> &str {
-        "dummy"
-    }
-
-    fn search_path(&self) -> &[(ResolvedDatabaseSpecifier, SchemaSpecifier)] {
-        &[]
-    }
-
-    fn get_prepared_statement_desc(&self, _: &str) -> Option<&StatementDesc> {
-        None
-    }
-
-    fn resolve_database(&self, _: &str) -> Result<&dyn CatalogDatabase, CatalogError> {
-        unimplemented!()
-    }
-
-    fn get_database(&self, _: &DatabaseId) -> &dyn CatalogDatabase {
-        unimplemented!()
-    }
-
-    fn resolve_schema(&self, _: Option<&str>, _: &str) -> Result<&dyn CatalogSchema, CatalogError> {
-        unimplemented!()
-    }
-
-    fn resolve_schema_in_database(
-        &self,
-        _: &ResolvedDatabaseSpecifier,
-        _: &str,
-    ) -> Result<&dyn CatalogSchema, CatalogError> {
-        unimplemented!()
-    }
-
-    fn get_schema(&self, _: &ResolvedDatabaseSpecifier, _: &SchemaSpecifier) -> &dyn CatalogSchema {
-        unimplemented!()
-    }
-
-    fn get_role(&self, _: &RoleId) -> &dyn CatalogRole {
-        unimplemented!()
-    }
-
-    fn try_get_role(&self, _: &RoleId) -> Option<&dyn CatalogRole> {
-        unimplemented!()
-    }
-
-    fn is_system_schema(&self, _: &str) -> bool {
-        false
-    }
-
-    fn resolve_role(&self, _: &str) -> Result<&dyn CatalogRole, CatalogError> {
-        unimplemented!();
-    }
-
-    fn resolve_item(&self, _: &PartialObjectName) -> Result<&dyn CatalogItem, CatalogError> {
-        unimplemented!();
-    }
-
-    fn resolve_function(&self, _: &PartialObjectName) -> Result<&dyn CatalogItem, CatalogError> {
-        unimplemented!();
-    }
-
-    fn resolve_cluster<'a, 'b>(
-        &'a self,
-        _: Option<&'b str>,
-    ) -> Result<&'a dyn CatalogCluster, CatalogError> {
-        unimplemented!();
-    }
-
-    fn get_item(&self, _: &GlobalId) -> &dyn CatalogItem {
-        unimplemented!();
-    }
-
-    fn try_get_item(&self, _: &GlobalId) -> Option<&dyn CatalogItem> {
-        unimplemented!();
-    }
-
-    fn item_exists(&self, _: &QualifiedObjectName) -> bool {
-        false
-    }
-
-    fn get_cluster(&self, _: ClusterId) -> &dyn CatalogCluster {
-        unimplemented!();
-    }
-
-    fn resolve_full_name(&self, _: &QualifiedObjectName) -> FullObjectName {
-        unimplemented!()
-    }
-
-    fn config(&self) -> &CatalogConfig {
-        &DUMMY_CONFIG
-    }
-
-    fn now(&self) -> EpochMillis {
-        0
-    }
-
-    fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName {
-        name
-    }
-
-    fn aws_privatelink_availability_zones(&self) -> Option<BTreeSet<String>> {
-        unimplemented!()
-    }
-}
-
-impl ExprHumanizer for DummyCatalog {
-    fn humanize_id(&self, _: GlobalId) -> Option<String> {
-        None
-    }
-
-    fn humanize_id_unqualified(&self, _: GlobalId) -> Option<String> {
-        None
-    }
-
-    fn humanize_scalar_type(&self, _: &ScalarType) -> String {
-        unimplemented!()
-    }
-}
 
 /// Provides a method of generating a 3-layer catalog on the fly, and then
 /// resolving objects within it.
