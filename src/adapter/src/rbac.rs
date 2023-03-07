@@ -104,8 +104,7 @@ impl UnauthorizedError {
             }
             UnauthorizedErrorKind::Attribute(attribute) => Some(format!(
                 "You must have the {} attribute to {}",
-                attribute.to_string(),
-                self.action
+                attribute, self.action
             )),
             UnauthorizedErrorKind::Privilege { reason } => reason
                 .as_ref()
