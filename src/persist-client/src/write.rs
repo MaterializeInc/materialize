@@ -29,10 +29,12 @@ use tokio::task::JoinHandle;
 use tracing::{debug_span, instrument, warn, Instrument};
 use uuid::Uuid;
 
-use crate::batch::{validate_truncate_batch, Added, Batch, BatchBuilder, BatchBuilderConfig};
+use crate::batch::{
+    validate_truncate_batch, Added, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
+};
 use crate::error::{InvalidUsage, UpperMismatch};
 use crate::internal::compact::Compactor;
-use crate::internal::encoding::SerdeWriterEnrichedHollowBatch;
+use crate::internal::encoding::{Schemas, SerdeWriterEnrichedHollowBatch};
 use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{HollowBatch, Upper};
@@ -133,6 +135,7 @@ where
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
     pub(crate) cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
     pub(crate) writer_id: WriterId,
+    pub(crate) schemas: Schemas<K, V>,
 
     pub(crate) upper: Antichain<T>,
     pub(crate) last_heartbeat: EpochMillis,
@@ -157,6 +160,7 @@ where
         blob: Arc<dyn Blob + Send + Sync>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         writer_id: WriterId,
+        schemas: Schemas<K, V>,
         upper: Antichain<T>,
         last_heartbeat: EpochMillis,
     ) -> Self {
@@ -169,6 +173,7 @@ where
             blob,
             cpu_heavy_runtime,
             writer_id: writer_id.clone(),
+            schemas,
             upper,
             last_heartbeat,
             explicitly_expired: false,
@@ -523,9 +528,10 @@ where
     /// enough that we can reasonably chunk them up: O(KB) is definitely fine,
     /// O(MB) come talk to us.
     pub fn builder(&mut self, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
-        BatchBuilder::new(
+        let builder = BatchBuilderInternal::new(
             BatchBuilderConfig::from(&self.cfg),
             Arc::clone(&self.metrics),
+            self.schemas.clone(),
             self.metrics.user.clone(),
             lower,
             Arc::clone(&self.blob),
@@ -535,7 +541,11 @@ where
             Antichain::from_elem(T::minimum()),
             None,
             false,
-        )
+        );
+        BatchBuilder {
+            builder,
+            stats_schemas: self.schemas.clone(),
+        }
     }
 
     /// Uploads the given `updates` as one `Batch` to the blob store and returns

@@ -643,7 +643,7 @@ impl<T> PartDecoder<'_, T> for TodoSchema<T> {
     }
 }
 
-impl<T: Debug> Schema<T> for TodoSchema<T> {
+impl<T: Debug + Send + Sync> Schema<T> for TodoSchema<T> {
     type Encoder<'a> = Self;
     type Decoder<'a> = Self;
 

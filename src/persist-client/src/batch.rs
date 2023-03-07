@@ -34,6 +34,7 @@ use mz_persist_types::{Codec, Codec64};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::InvalidUsage;
+use crate::internal::encoding::Schemas;
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{BatchWriteMetrics, Metrics};
 use crate::internal::paths::{PartId, PartialBatchKey};
@@ -211,12 +212,63 @@ where
     V: Codec,
     T: Timestamp + Lattice + Codec64,
 {
+    pub(crate) stats_schemas: Schemas<K, V>,
+    pub(crate) builder: BatchBuilderInternal<K, V, T, D>,
+}
+
+impl<K, V, T, D> BatchBuilder<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64,
+{
+    /// Finish writing this batch and return a handle to the written batch.
+    ///
+    /// This fails if any of the updates in this batch are beyond the given
+    /// `upper`.
+    pub async fn finish(
+        self,
+        registered_upper: Antichain<T>,
+    ) -> Result<Batch<K, V, T, D>, InvalidUsage<T>> {
+        self.builder
+            .finish(&self.stats_schemas, registered_upper)
+            .await
+    }
+
+    /// Adds the given update to the batch.
+    ///
+    /// The update timestamp must be greater or equal to `lower` that was given
+    /// when creating this [BatchBuilder].
+    pub async fn add(
+        &mut self,
+        key: &K,
+        val: &V,
+        ts: &T,
+        diff: &D,
+    ) -> Result<Added, InvalidUsage<T>> {
+        self.builder
+            .add(&self.stats_schemas, key, val, ts, diff)
+            .await
+    }
+}
+
+// TODO: Merge this back into BatchBuilder once we no longer need this separate
+// schemas nonsense for compaction.
+#[derive(Debug)]
+pub(crate) struct BatchBuilderInternal<K, V, T, D>
+where
+    K: Codec,
+    V: Codec,
+    T: Timestamp + Lattice + Codec64,
+{
     lower: Antichain<T>,
     max_ts: T,
 
     shard_id: ShardId,
     blob: Arc<dyn Blob + Send + Sync>,
     metrics: Arc<Metrics>,
+    _schemas: Schemas<K, V>,
     consolidate: bool,
 
     buffer: BatchBuffer<D>,
@@ -236,7 +288,7 @@ where
     _phantom: PhantomData<(K, V, T, D)>,
 }
 
-impl<K, V, T, D> BatchBuilder<K, V, T, D>
+impl<K, V, T, D> BatchBuilderInternal<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
@@ -246,6 +298,7 @@ where
     pub(crate) fn new(
         cfg: BatchBuilderConfig,
         metrics: Arc<Metrics>,
+        schemas: Schemas<K, V>,
         batch_write_metrics: BatchWriteMetrics,
         lower: Antichain<T>,
         blob: Arc<dyn Blob + Send + Sync>,
@@ -277,6 +330,7 @@ where
                 consolidate,
             ),
             metrics,
+            _schemas: schemas,
             consolidate,
             max_kvt_in_run: None,
             parts_written: 0,
@@ -301,8 +355,9 @@ where
     /// This fails if any of the updates in this batch are beyond the given
     /// `upper`.
     #[instrument(level = "debug", name = "batch::finish", skip_all, fields(shard = %self.shard_id))]
-    pub async fn finish(
+    pub async fn finish<StatsK: Codec, StatsV: Codec>(
         mut self,
+        stats_schemas: &Schemas<StatsK, StatsV>,
         registered_upper: Antichain<T>,
     ) -> Result<Batch<K, V, T, D>, InvalidUsage<T>> {
         if PartialOrder::less_than(&registered_upper, &self.lower) {
@@ -332,7 +387,7 @@ where
         }
 
         let remainder = self.buffer.drain();
-        self.flush_part(remainder).await;
+        self.flush_part(stats_schemas, remainder).await;
 
         let parts = self.parts.finish().await;
 
@@ -355,8 +410,9 @@ where
     ///
     /// The update timestamp must be greater or equal to `lower` that was given
     /// when creating this [BatchBuilder].
-    pub async fn add(
+    pub async fn add<StatsK: Codec, StatsV: Codec>(
         &mut self,
+        stats_schemas: &Schemas<StatsK, StatsV>,
         key: &K,
         val: &V,
         ts: &T,
@@ -373,7 +429,7 @@ where
 
         match self.buffer.push(key, val, ts, diff.clone()) {
             Some(part_to_flush) => {
-                self.flush_part(part_to_flush).await;
+                self.flush_part(stats_schemas, part_to_flush).await;
                 Ok(Added::RecordAndParts)
             }
             None => Ok(Added::Record),
@@ -385,7 +441,11 @@ where
     /// chunk `current_part` to be no greater than
     /// [BatchBuilderConfig::blob_target_size], and must absolutely be less than
     /// [mz_persist::indexed::columnar::KEY_VAL_DATA_MAX_LEN]
-    async fn flush_part(&mut self, columnar: ColumnarRecords) {
+    async fn flush_part<StatsK: Codec, StatsV: Codec>(
+        &mut self,
+        stats_schemas: &Schemas<StatsK, StatsV>,
+        columnar: ColumnarRecords,
+    ) {
         let num_updates = columnar.len();
         if num_updates == 0 {
             return;
@@ -434,7 +494,12 @@ where
 
         let start = Instant::now();
         self.parts
-            .write(columnar, self.inline_upper.clone(), self.since.clone())
+            .write(
+                stats_schemas,
+                columnar,
+                self.inline_upper.clone(),
+                self.since.clone(),
+            )
             .await;
         self.metrics
             .compaction
@@ -612,8 +677,9 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         }
     }
 
-    pub(crate) async fn write(
+    pub(crate) async fn write<K: Codec, V: Codec>(
         &mut self,
+        _schemas: &Schemas<K, V>,
         updates: ColumnarRecords,
         upper: Antichain<T>,
         since: Antichain<T>,
@@ -768,14 +834,16 @@ mod tests {
             .await;
 
         // A new builder has no writing or finished parts.
-        let mut builder = write.builder(Antichain::from_elem(0));
+        let builder = write.builder(Antichain::from_elem(0));
+        let x = builder.stats_schemas;
+        let mut builder = builder.builder;
         assert_eq!(builder.parts.writing_parts.len(), 0);
         assert_eq!(builder.parts.finished_parts.len(), 0);
 
         // We set blob_target_size to 0, so the first update gets forced out
         // into a batch.
         builder
-            .add(&data[0].0 .0, &data[0].0 .1, &data[0].1, &data[0].2)
+            .add(&x, &data[0].0 .0, &data[0].0 .1, &data[0].1, &data[0].2)
             .await
             .expect("invalid usage");
         assert_eq!(builder.parts.writing_parts.len(), 1);
@@ -784,7 +852,7 @@ mod tests {
         // We set batch_builder_max_outstanding_parts to 2, so we are allowed to
         // pipeline a second part.
         builder
-            .add(&data[1].0 .0, &data[1].0 .1, &data[1].1, &data[1].2)
+            .add(&x, &data[1].0 .0, &data[1].0 .1, &data[1].1, &data[1].2)
             .await
             .expect("invalid usage");
         assert_eq!(builder.parts.writing_parts.len(), 2);
@@ -793,7 +861,7 @@ mod tests {
         // But now that we have 3 parts, the add call back-pressures until the
         // first one finishes.
         builder
-            .add(&data[2].0 .0, &data[2].0 .1, &data[2].1, &data[2].2)
+            .add(&x, &data[2].0 .0, &data[2].0 .1, &data[2].1, &data[2].2)
             .await
             .expect("invalid usage");
         assert_eq!(builder.parts.writing_parts.len(), 2);
@@ -802,7 +870,7 @@ mod tests {
         // Finish off the batch and verify that the keys and such get plumbed
         // correctly by reading the data back.
         let batch = builder
-            .finish(Antichain::from_elem(4))
+            .finish(&x, Antichain::from_elem(4))
             .await
             .expect("invalid usage");
         assert_eq!(batch.batch.parts.len(), 3);

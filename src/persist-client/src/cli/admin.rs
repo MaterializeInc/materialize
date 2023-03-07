@@ -23,12 +23,14 @@ use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{
     Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData,
 };
+use mz_persist_types::codec_impls::TodoSchema;
 use prometheus::proto::{MetricFamily, MetricType};
 use tracing::{info, warn};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::cli::inspect::StateArgs;
 use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
+use crate::internal::encoding::Schemas;
 use crate::internal::gc::{GarbageCollector, GcReq};
 use crate::internal::machine::Machine;
 use crate::internal::metrics::{MetricsBlob, MetricsConsensus};
@@ -219,6 +221,10 @@ pub async fn force_compaction(
                 info!("skipping compaction because --commit is not set");
                 continue;
             }
+            let schemas = Schemas {
+                key: Arc::new(TodoSchema::default()),
+                val: Arc::new(TodoSchema::default()),
+            };
             let res =
                 Compactor::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>::compact(
                     CompactConfig::from(&cfg),
@@ -227,6 +233,7 @@ pub async fn force_compaction(
                     Arc::new(CpuHeavyRuntime::new()),
                     req,
                     writer_id.clone(),
+                    schemas,
                 )
                 .await?;
             info!(

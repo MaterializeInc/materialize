@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
@@ -44,6 +45,21 @@ use crate::internal::trace::Trace;
 use crate::read::LeasedReaderId;
 use crate::write::WriterEnrichedHollowBatch;
 use crate::{PersistConfig, ShardId, WriterId};
+
+#[derive(Debug)]
+pub struct Schemas<K: Codec, V: Codec> {
+    pub key: Arc<K::Schema>,
+    pub val: Arc<V::Schema>,
+}
+
+impl<K: Codec, V: Codec> Clone for Schemas<K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            key: Arc::clone(&self.key),
+            val: Arc::clone(&self.val),
+        }
+    }
+}
 
 pub(crate) fn parse_id(id_prefix: char, id_type: &str, encoded: &str) -> Result<[u8; 16], String> {
     let uuid_encoded = match encoded.strip_prefix(id_prefix) {

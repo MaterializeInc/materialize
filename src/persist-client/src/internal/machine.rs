@@ -1005,10 +1005,13 @@ pub mod datadriven {
     use differential_dataflow::trace::Description;
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 
-    use crate::batch::{validate_truncate_batch, BatchBuilder, BatchBuilderConfig};
+    use crate::batch::{
+        validate_truncate_batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
+    };
     use crate::fetch::fetch_batch_part;
     use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
     use crate::internal::datadriven::DirectiveArgs;
+    use crate::internal::encoding::Schemas;
     use crate::internal::gc::GcReq;
     use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
     use crate::read::{Listen, ListenEvent};
@@ -1203,9 +1206,14 @@ pub mod datadriven {
         if let Some(target_size) = target_size {
             cfg.blob_target_size = target_size;
         };
-        let mut builder = BatchBuilder::new(
+        let schemas = Schemas {
+            key: Arc::new(StringSchema),
+            val: Arc::new(UnitSchema),
+        };
+        let builder = BatchBuilderInternal::new(
             cfg,
             Arc::clone(&datadriven.client.metrics),
+            schemas.clone(),
             datadriven.client.metrics.user.clone(),
             lower,
             Arc::clone(&datadriven.client.blob),
@@ -1216,6 +1224,10 @@ pub mod datadriven {
             Some(upper.clone()),
             consolidate,
         );
+        let mut builder = BatchBuilder {
+            builder,
+            stats_schemas: schemas,
+        };
         for ((k, ()), t, d) in updates {
             builder.add(&k, &(), &t, &d).await.expect("invalid batch");
         }
@@ -1360,6 +1372,10 @@ pub mod datadriven {
             inputs,
         };
         let writer_id = writer_id.unwrap_or_else(WriterId::new);
+        let schemas = Schemas {
+            key: Arc::new(StringSchema),
+            val: Arc::new(UnitSchema),
+        };
         let res = Compactor::<String, (), u64, i64>::compact(
             CompactConfig::from(&cfg),
             Arc::clone(&datadriven.client.blob),
@@ -1367,6 +1383,7 @@ pub mod datadriven {
             Arc::clone(&datadriven.client.cpu_heavy_runtime),
             req,
             writer_id,
+            schemas,
         )
         .await?;
 
