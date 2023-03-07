@@ -989,7 +989,6 @@ body.dark .content {
 
         &::after {
             border-color: --var(--note-border);
-            // border-color: var(--bg) var(--bg) var(--gray-mid) var(--note);
             background: var(--note);
         }
     }
