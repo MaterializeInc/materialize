@@ -23,7 +23,7 @@ use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::operators::Reduce;
 use differential_dataflow::Collection;
-use mz_expr::MirScalarExpr;
+use mz_expr::{EvalError, MirScalarExpr};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
@@ -39,11 +39,12 @@ use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena};
 use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::reduce::ReduceExt;
 
 use crate::render::context::{Arrangement, CollectionBundle, Context};
 use crate::render::reduce::monoids::ReductionMonoid;
 use crate::render::ArrangementFlavor;
-use crate::typedefs::{RowKeySpine, RowSpine};
+use crate::typedefs::{ErrValSpine, RowKeySpine, RowSpine};
 
 /// Render a dataflow based on the provided plan.
 ///
@@ -62,6 +63,7 @@ where
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
 {
+    let mut err_collection = err_input;
     // Convenience wrapper to render the right kind of hierarchical plan.
     let mut err_collection = err_input;
     let mut build_hierarchical =
@@ -89,7 +91,11 @@ where
         // can go ahead and render them directly.
         ReducePlan::Distinct => build_distinct(debug_name, collection).into(),
         ReducePlan::DistinctNegated => build_distinct_retractions(debug_name, collection).into(),
-        ReducePlan::Accumulable(expr) => build_accumulable(debug_name, collection, expr).into(),
+        ReducePlan::Accumulable(expr) => {
+            let (arranged_output, errs) = build_accumulable(debug_name, collection, expr);
+            err_collection = err_collection.concat(&errs);
+            arranged_output.into()
+        }
         ReducePlan::Hierarchical(expr) => build_hierarchical(collection, expr).into(),
         ReducePlan::Basic(expr) => build_basic(collection, expr).into(),
         // Otherwise, we need to render something different for each type of
@@ -99,10 +105,10 @@ where
             let mut to_collate = vec![];
 
             if let Some(accumulable) = expr.accumulable {
-                to_collate.push((
-                    ReductionType::Accumulable,
-                    build_accumulable(debug_name, collection.clone(), accumulable),
-                ));
+                let (arranged_output, errs) =
+                    build_accumulable(debug_name, collection.clone(), accumulable);
+                err_collection = err_collection.concat(&errs);
+                to_collate.push((ReductionType::Accumulable, arranged_output));
             }
             if let Some(hierarchical) = expr.hierarchical {
                 to_collate.push((
@@ -1140,7 +1146,7 @@ fn build_accumulable<G>(
         simple_aggrs,
         distinct_aggrs,
     }: AccumulablePlan,
-) -> Arrangement<G, Row>
+) -> (Arrangement<G, Row>, Collection<G, DataflowError, Diff>)
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -1403,25 +1409,17 @@ where
     };
 
     let debug_name = debug_name.to_string();
-    collection
+    let debug_err_name = debug_name.clone();
+    let debug_err_full_aggrs = full_aggrs.clone();
+    let (arranged_output, arranged_errs) = collection
         .arrange_named::<RowKeySpine<_, _, (Vec<Accum>, Diff)>>("ArrangeAccumulable")
-        .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceAccumulable", {
+        .reduce_pair::<_, RowSpine<_, _, _, _>, _, ErrValSpine<_, _, _>>("ReduceAccumulable", "AccumulableErrorCheck", {
             let mut row_buf = Row::default();
             move |_key, input, output| {
-                let (ref accum, total) = input[0].1;
+                let (ref accums, total) = input[0].1;
                 let mut row_packer = row_buf.packer();
 
-                for (aggr, accum) in full_aggrs.iter().zip(accum) {
-                    // This should perhaps be un-recoverable, as we risk panicking in the ReduceCollation
-                    // operator, when this key is presented but matching aggregates are not found. We will
-                    // suppress the output for inputs without net-positive records, which *should* avoid
-                    // that panic.
-                    if total == 0 && !accum.is_zero() {
-                        warn!("[customer-data] ReduceAccumulable observed net-zero records \
-                            with non-zero accumulation: {aggr:?}: {accum:?} in dataflow {debug_name}");
-                        soft_assert_or_log!(false, "Net-zero records with non-zero accumulation in ReduceAccumulable");
-                    }
-
+                for (aggr, accum) in full_aggrs.iter().zip(accums) {
                     // The finished value depends on the aggregation function in a variety of ways.
                     // For all aggregates but count, if only null values were
                     // accumulated, then the output is null.
@@ -1587,7 +1585,26 @@ where
                 }
                 output.push((row_buf.clone(), 1));
             }
-        })
+        },
+        move |key, input, output| {
+            let (ref accums, total) = input[0].1;
+            for (aggr, accum) in debug_err_full_aggrs.iter().zip(accums) {
+                // We first test here if inputs without net-positive records are present,
+                // producing an error to the logs and to the query output if that is the case.
+                if total == 0 && !accum.is_zero() {
+                    warn!("[customer-data] ReduceAccumulable observed net-zero records \
+                        with non-zero accumulation: {aggr:?}: {accum:?} in dataflow {debug_err_name}");
+                    soft_assert_or_log!(false, "Net-zero records with non-zero accumulation in ReduceAccumulable");
+                    let message = format!("Invalid data in source, saw net-zero records for key {key} \
+                        with non-zero accumulation in accumulable aggregate");
+                    output.push((EvalError::Internal(message).into(), 1));
+                }
+            }
+        });
+    (
+        arranged_output,
+        arranged_errs.as_collection(|_key, error| error.clone()),
+    )
 }
 
 /// Monoids for in-place compaction of monotonic streams.

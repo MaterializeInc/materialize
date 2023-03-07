@@ -60,6 +60,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-github-15799",
         "test-github-15930",
         "test-github-15496",
+        "test-github-17177",
         "test-github-17510",
         "test-github-17509",
         "test-remote-storage",
@@ -584,6 +585,80 @@ def workflow_test_github_15496(c: Composition) -> None:
         # ensure that an error was put into the logs
         c1 = c.invoke("logs", "clusterd_nopanic", capture=True)
         assert "Mismatched aggregates for key in ReduceCollation" in c1.stdout
+
+
+def workflow_test_github_17177(c: Composition) -> None:
+    """
+    Test that an accumulable reduction over a source with an invalid accumulation not only
+    emits errors to the logs when soft assertions are turned off, but also produces a clean
+    query-level error.
+
+    Regression test for https://github.com/MaterializeInc/materialize/issues/17177.
+    """
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Clusterd(
+            name="clusterd_nopanic",
+            environment_extra=[
+                "MZ_SOFT_ASSERTIONS=0",
+            ],
+        ),
+        Testdrive(no_reset=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.up("clusterd_nopanic")
+
+        # set up a test cluster and run a testdrive regression script
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (
+                r1 (
+                    STORAGECTL ADDRESSES ['clusterd_nopanic:2100'],
+                    STORAGE ADDRESSES ['clusterd_nopanic:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd_nopanic:2101'],
+                    COMPUTE ADDRESSES ['clusterd_nopanic:2102'],
+                    WORKERS 2
+                )
+            );
+            """
+        )
+        c.testdrive(
+            dedent(
+                f"""
+            # Set data for test up
+            > SET cluster = cluster1;
+
+            > CREATE TABLE base (data float, diff bigint);
+
+            > CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
+
+            > INSERT INTO base VALUES (1.00, 1);
+
+            > INSERT INTO base VALUES (1.01, -1);
+
+            # The query below would not fail previously, but now now should produce
+            # a SQL-level error that is observable by users.
+            ! SELECT SUM(data) FROM data;
+            contains:Invalid data in source, saw net-zero records for key
+
+            # It should be possible to fix the data in the source and make the error
+            # go away.
+            > INSERT INTO base VALUES (1.01, 1);
+
+            > SELECT SUM(data) FROM data;
+            1
+            """
+            )
+        )
+
+        # ensure that an error was put into the logs
+        c1 = c.invoke("logs", "clusterd_nopanic", capture=True)
+        assert (
+            "Net-zero records with non-zero accumulation in ReduceAccumulable"
+            in c1.stdout
+        )
 
 
 def workflow_test_github_17510(c: Composition) -> None:
