@@ -2752,10 +2752,10 @@ impl RowSetFinishing {
         // if we don't have enough memory to expand the result, or break early from the
         // iteration once we pass our limit.
         let mut num_rows = 0;
-        let mut num_bytes = 0;
+        let mut num_bytes: usize = 0;
         for (row, count) in &rows[offset_nth_row..] {
             num_rows += count.get();
-            num_bytes += count.get().saturating_mul(row.byte_len());
+            num_bytes = num_bytes.saturating_add(count.get().saturating_mul(row.byte_len()));
 
             // Check that result fits into max_result_size.
             if num_bytes > max_result_size {
