@@ -7,17 +7,22 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
 anyhow = "1.0.66"
+askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
 axum = { version = "0.6.1", features = ["headers"] }
 headers = "0.3.8"
-serde = "1.0.152"
-serde_json = { version = "1.0.89" }
-tracing = "0.1.37"
-tracing-subscriber = "0.3.16"
+http = "0.2.8"
+hyper = { version = "0.14.23", features = ["http1", "server"] }
 include_dir = "0.7.3"
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "tracing_"] }
 prometheus = { version = "0.13.3", default-features = false, features = ["process"] }
+serde = "1.0.152"
+serde_json = { version = "1.0.89" }
+tokio = { version = "1.24.2", features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "retry", "timeout", "util"] }
+tower-http = { version = "0.3.5", features = ["auth", "cors", "map-response-body", "trace", "util"] }
+tracing = "0.1.37"
+tracing-subscriber = "0.3.16"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [package.metadata.cargo-udeps.ignore]

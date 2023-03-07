@@ -23,6 +23,7 @@ use dec::OrderedDecimal;
 use differential_dataflow::lattice::Lattice;
 use globset::{Glob, GlobBuilder};
 use itertools::Itertools;
+use once_cell::sync::Lazy;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
@@ -77,6 +78,29 @@ pub struct IngestionDescription<S = (), C = GenericSourceConnection> {
     pub source_exports: BTreeMap<GlobalId, SourceExport<S>>,
     /// The ID of the instance in which to install the source.
     pub instance_id: StorageInstanceId,
+    /// The ID of this ingestion's remap/progress collection.
+    pub remap_collection_id: GlobalId,
+}
+
+impl<S> IngestionDescription<S> {
+    /// Return an iterator over the `GlobalId`s of `self`'s subsources.
+    pub fn subsource_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        // Expand self so that any new fields added generate a compiler error to
+        // increase the likelihood of developers seeing this function.
+        let IngestionDescription {
+            desc: _,
+            source_imports: _,
+            ingestion_metadata: _,
+            source_exports,
+            instance_id: _,
+            remap_collection_id,
+        } = &self;
+
+        source_exports
+            .keys()
+            .copied()
+            .chain(std::iter::once(*remap_collection_id))
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -124,28 +148,30 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
 
         let remap_relation_desc = self.desc.connection.timestamp_desc();
 
-        let CollectionMetadata {
+        if let CollectionMetadata {
             persist_location,
-            remap_shard,
+            remap_shard: Some(remap_shard),
             data_shard: _,
             // The status shard only contains non-definite status updates
             status_shard: _,
             relation_desc: _,
-        } = &self.ingestion_metadata;
-        let remap_handle = client_cache
-            .open(persist_location.clone())
-            .await
-            .expect("error creating persist client")
-            // TODO: Any way to plumb the GlobalId to this?
-            .open_writer::<SourceData, (), T, Diff>(
-                *remap_shard,
-                "resumption remap",
-                Arc::new(remap_relation_desc),
-                Arc::new(UnitSchema),
-            )
-            .await
-            .unwrap();
-        handles.push(remap_handle);
+        } = &self.ingestion_metadata
+        {
+            let remap_handle = client_cache
+                .open(persist_location.clone())
+                .await
+                .expect("error creating persist client")
+                // TODO: Any way to plumb the GlobalId to this?
+                .open_writer::<SourceData, (), T, Diff>(
+                    *remap_shard,
+                    "resumption remap",
+                    Arc::new(remap_relation_desc),
+                    Arc::new(UnitSchema),
+                )
+                .await
+                .unwrap();
+            handles.push(remap_handle);
+        }
 
         handles
     }
@@ -195,14 +221,23 @@ where
                 .boxed(),
             any::<S>().boxed(),
             any::<StorageInstanceId>().boxed(),
+            any::<GlobalId>(),
         )
             .prop_map(
-                |(desc, source_imports, source_exports, ingestion_metadata, instance_id)| Self {
+                |(
                     desc,
                     source_imports,
                     source_exports,
                     ingestion_metadata,
                     instance_id,
+                    remap_collection_id,
+                )| Self {
+                    desc,
+                    source_imports,
+                    source_exports,
+                    ingestion_metadata,
+                    instance_id,
+                    remap_collection_id,
                 },
             )
             .boxed()
@@ -217,6 +252,7 @@ impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMeta
             ingestion_metadata: Some(self.ingestion_metadata.into_proto()),
             desc: Some(self.desc.into_proto()),
             instance_id: Some(self.instance_id.into_proto()),
+            remap_collection_id: Some(self.remap_collection_id.into_proto()),
         }
     }
 
@@ -233,6 +269,9 @@ impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMeta
             instance_id: proto
                 .instance_id
                 .into_rust_if_some("ProtoIngestionDescription::instance_id")?,
+            remap_collection_id: proto
+                .remap_collection_id
+                .into_rust_if_some("ProtoIngestionDescription::remap_collection_id")?,
         })
     }
 }
@@ -1395,6 +1434,18 @@ pub struct KafkaSourceConnection {
     pub include_headers: Option<IncludedColumnPos>,
 }
 
+pub static KAFKA_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+    RelationDesc::empty()
+        .with_column(
+            "partition",
+            ScalarType::Range {
+                element_type: Box::new(ScalarType::Numeric { max_scale: None }),
+            }
+            .nullable(false),
+        )
+        .with_column("offset", ScalarType::UInt64.nullable(true))
+});
+
 impl SourceConnection for KafkaSourceConnection {
     fn name(&self) -> &'static str {
         "kafka"
@@ -1405,15 +1456,7 @@ impl SourceConnection for KafkaSourceConnection {
     }
 
     fn timestamp_desc(&self) -> RelationDesc {
-        RelationDesc::empty()
-            .with_column(
-                "partition",
-                ScalarType::Range {
-                    element_type: Box::new(ScalarType::Int32),
-                }
-                .nullable(false),
-            )
-            .with_column("offset", ScalarType::UInt64.nullable(true))
+        KAFKA_PROGRESS_DESC.clone()
     }
 
     fn num_outputs(&self) -> usize {
@@ -1892,6 +1935,14 @@ pub struct KinesisSourceConnection {
     pub aws: AwsConfig,
 }
 
+pub static KINESIS_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+    //  In the future, kinesis will have a more complex ts
+    // RelationDesc::empty()
+    //     .with_column("shard_id", ScalarType::Int32.nullable(false))
+    //     .with_column("sequence_number", ScalarType::UInt64.nullable(true))
+    RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true))
+});
+
 impl SourceConnection for KinesisSourceConnection {
     fn name(&self) -> &'static str {
         "kinesis"
@@ -1902,11 +1953,7 @@ impl SourceConnection for KinesisSourceConnection {
     }
 
     fn timestamp_desc(&self) -> RelationDesc {
-        //  In the future, kinesis will have a more complex ts
-        // RelationDesc::empty()
-        //     .with_column("shard_id", ScalarType::Int32.nullable(false))
-        //     .with_column("sequence_number", ScalarType::UInt64.nullable(true))
-        RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true))
+        KINESIS_PROGRESS_DESC.clone()
     }
 
     fn num_outputs(&self) -> usize {
@@ -1988,6 +2035,9 @@ impl Arbitrary for PostgresSourceConnection {
     }
 }
 
+pub static PG_PROGRESS_DESC: Lazy<RelationDesc> =
+    Lazy::new(|| RelationDesc::empty().with_column("lsn", ScalarType::UInt64.nullable(true)));
+
 impl SourceConnection for PostgresSourceConnection {
     fn name(&self) -> &'static str {
         "postgres"
@@ -1998,7 +2048,7 @@ impl SourceConnection for PostgresSourceConnection {
     }
 
     fn timestamp_desc(&self) -> RelationDesc {
-        RelationDesc::empty().with_column("lsn", ScalarType::UInt64.nullable(true))
+        PG_PROGRESS_DESC.clone()
     }
 
     fn num_outputs(&self) -> usize {
@@ -2118,6 +2168,9 @@ pub struct LoadGeneratorSourceConnection {
     pub tick_micros: Option<u64>,
 }
 
+pub static LOAD_GEN_PROGRESS_DESC: Lazy<RelationDesc> =
+    Lazy::new(|| RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true)));
+
 impl SourceConnection for LoadGeneratorSourceConnection {
     fn name(&self) -> &'static str {
         "load-generator"
@@ -2128,7 +2181,7 @@ impl SourceConnection for LoadGeneratorSourceConnection {
     }
 
     fn timestamp_desc(&self) -> RelationDesc {
-        RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true))
+        LOAD_GEN_PROGRESS_DESC.clone()
     }
 
     fn num_outputs(&self) -> usize {
@@ -2151,7 +2204,15 @@ impl SourceConnection for LoadGeneratorSourceConnection {
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum LoadGenerator {
     Auction,
-    Counter,
+    Counter {
+        /// How many values will be emitted
+        /// before old ones are retracted, or `None` for
+        /// an append-only collection.
+        ///
+        /// This is verified by the planner to be nonnegative. We encode it as
+        /// an `i64` to make the code in `Counter::by_seed` simpler.
+        max_cardinality: Option<i64>,
+    },
     Datums,
     Tpch {
         count_supplier: i64,
@@ -2188,7 +2249,7 @@ impl LoadGenerator {
                 }
                 DataEncodingInner::RowCodec(desc)
             }
-            LoadGenerator::Counter => DataEncodingInner::RowCodec(
+            LoadGenerator::Counter { .. } => DataEncodingInner::RowCodec(
                 RelationDesc::empty().with_column("counter", ScalarType::Int64.nullable(false)),
             ),
             LoadGenerator::Tpch { .. } => DataEncodingInner::RowCodec(RelationDesc::empty()),
@@ -2246,7 +2307,7 @@ impl LoadGenerator {
                         .with_key(vec![0]),
                 ),
             ],
-            LoadGenerator::Counter => vec![],
+            LoadGenerator::Counter { max_cardinality: _ } => vec![],
             LoadGenerator::Datums => vec![],
             LoadGenerator::Tpch { .. } => {
                 let identifier = ScalarType::Int64.nullable(false);
@@ -2382,7 +2443,11 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
         ProtoLoadGeneratorSourceConnection {
             generator: Some(match &self.load_generator {
                 LoadGenerator::Auction => ProtoGenerator::Auction(()),
-                LoadGenerator::Counter => ProtoGenerator::Counter(()),
+                LoadGenerator::Counter { max_cardinality } => {
+                    ProtoGenerator::Counter(ProtoCounterLoadGenerator {
+                        max_cardinality: *max_cardinality,
+                    })
+                }
                 LoadGenerator::Tpch {
                     count_supplier,
                     count_part,
@@ -2409,7 +2474,9 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
         Ok(LoadGeneratorSourceConnection {
             load_generator: match generator {
                 ProtoGenerator::Auction(()) => LoadGenerator::Auction,
-                ProtoGenerator::Counter(()) => LoadGenerator::Counter,
+                ProtoGenerator::Counter(ProtoCounterLoadGenerator { max_cardinality }) => {
+                    LoadGenerator::Counter { max_cardinality }
+                }
                 ProtoGenerator::Tpch(ProtoTpchLoadGenerator {
                     count_supplier,
                     count_part,
@@ -2435,6 +2502,9 @@ pub struct TestScriptSourceConnection {
     pub desc_json: String,
 }
 
+pub static TEST_SCRIPT_PROGRESS_DESC: Lazy<RelationDesc> =
+    Lazy::new(|| RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true)));
+
 impl SourceConnection for TestScriptSourceConnection {
     fn name(&self) -> &'static str {
         "testscript"
@@ -2445,7 +2515,7 @@ impl SourceConnection for TestScriptSourceConnection {
     }
 
     fn timestamp_desc(&self) -> RelationDesc {
-        RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true))
+        TEST_SCRIPT_PROGRESS_DESC.clone()
     }
 
     fn num_outputs(&self) -> usize {
@@ -2488,6 +2558,10 @@ pub struct S3SourceConnection {
     pub compression: Compression,
 }
 
+pub static S3_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+    RelationDesc::empty().with_column("byte_offset", ScalarType::UInt64.nullable(true))
+});
+
 impl SourceConnection for S3SourceConnection {
     fn name(&self) -> &'static str {
         "s3"
@@ -2498,7 +2572,7 @@ impl SourceConnection for S3SourceConnection {
     }
 
     fn timestamp_desc(&self) -> RelationDesc {
-        RelationDesc::empty().with_column("byte_offset", ScalarType::UInt64.nullable(true))
+        S3_PROGRESS_DESC.clone()
     }
 
     fn num_outputs(&self) -> usize {

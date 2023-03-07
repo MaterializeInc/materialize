@@ -1,0 +1,122 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/17616
+mode cockroach
+
+# reset
+statement ok
+DROP TABLE IF EXISTS t1 CASCADE
+
+statement ok
+DROP TABLE IF EXISTS t2 CASCADE
+
+# schema
+statement ok
+CREATE TABLE t1(f1 INT, f2 INT, f3 INT)
+
+statement ok
+CREATE TABLE t2(f2 INT, f3 INT)
+
+# data
+statement ok
+INSERT INTO t1 VALUES (1, 2, 3)
+
+statement ok
+INSERT INTO t2 VALUES (2, 3)
+
+query T multiline
+EXPLAIN DECORRELATED PLAN WITH(arity) FOR
+SELECT
+  sq1.*
+FROM
+  (
+    SELECT * FROM t1
+  ) AS sq0,
+  LATERAL(
+    SELECT
+      ( sq0.f2 * f2 ) as c0,
+      ( SELECT 3 ) as c1,
+      ( sq0.f2 * f2 ) * 2 as c2
+    FROM t2
+  ) AS sq1
+----
+Return // { arity: 3 }
+  Project (#3..=#5) // { arity: 3 }
+    Filter true // { arity: 6 }
+      Project (#0..=#2, #4..=#6) // { arity: 6 }
+        Join on=(#1 = #3) // { arity: 7 }
+          Get l0 // { arity: 3 }
+          Project (#0, #3..=#5) // { arity: 4 }
+            Map ((#3 * 2)) // { arity: 6 }
+              Project (#0..=#2, #7, #8) // { arity: 5 }
+                Map ((#0 * #1), #6) // { arity: 9 }
+                  Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) // { arity: 7 }
+                    Get l1 // { arity: 3 }
+                    Union // { arity: 4 }
+                      Get l4 // { arity: 4 }
+                      CrossJoin // { arity: 4 }
+                        Project (#0..=#2) // { arity: 3 }
+                          Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) // { arity: 6 }
+                            Union // { arity: 3 }
+                              Negate // { arity: 3 }
+                                Distinct group_by=[#0..=#2] // { arity: 3 }
+                                  Get l4 // { arity: 4 }
+                              Distinct group_by=[#0..=#2] // { arity: 3 }
+                                Get l2 // { arity: 3 }
+                            Get l2 // { arity: 3 }
+                        Constant // { arity: 1 }
+                          - (null)
+With
+  cte l4 =
+    Union // { arity: 4 }
+      Get l3 // { arity: 4 }
+      Map (error("more than one record produced in subquery")) // { arity: 4 }
+        Project (#0..=#2) // { arity: 3 }
+          Filter (#3 > 1) // { arity: 4 }
+            Reduce group_by=[#0..=#2] aggregates=[count(*)] // { arity: 4 }
+              Get l3 // { arity: 4 }
+  cte l3 =
+    Project (#0..=#3) // { arity: 4 }
+      Map (3) // { arity: 4 }
+        Get l2 // { arity: 3 }
+  cte l2 =
+    Distinct group_by=[#0..=#2] // { arity: 3 }
+      Get l1 // { arity: 3 }
+  cte l1 =
+    CrossJoin // { arity: 3 }
+      Distinct group_by=[#1] // { arity: 1 }
+        Get l0 // { arity: 3 }
+      Get materialize.public.t2 // { arity: 2 }
+  cte l0 =
+    CrossJoin // { arity: 3 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.public.t1 // { arity: 3 }
+
+EOF
+
+
+
+query III rowsort
+SELECT
+  sq1.*
+FROM
+  (
+    SELECT * FROM t1
+  ) AS sq0,
+  LATERAL(
+    SELECT
+      ( sq0.f2 * f2 ) as c0,
+      ( SELECT 3 ) as c1,
+      ( sq0.f2 * f2 ) * 2 as c2
+    FROM t2
+  ) AS sq1
+----
+4  3  8

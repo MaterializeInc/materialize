@@ -26,27 +26,30 @@ use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
-use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
+use mz_sql::func::FuncImplCatalogDetails;
+use mz_sql::names::{ResolvedDatabaseSpecifier, RoleId, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::types::connections::KafkaConnection;
 use mz_storage_client::types::sinks::{KafkaSinkConnection, StorageSinkConnection};
 use mz_storage_client::types::sources::{GenericSourceConnection, PostgresSourceConnection};
 
 use crate::catalog::builtin::{
-    MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_LINKS,
-    MZ_CLUSTER_REPLICAS, MZ_CLUSTER_REPLICA_FRONTIERS, MZ_CLUSTER_REPLICA_HEARTBEATS,
-    MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS,
-    MZ_DATABASES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS,
-    MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES,
+    MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTERS,
+    MZ_CLUSTER_LINKS, MZ_CLUSTER_REPLICAS, MZ_CLUSTER_REPLICA_FRONTIERS,
+    MZ_CLUSTER_REPLICA_HEARTBEATS, MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES,
+    MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS, MZ_DATABASES, MZ_EGRESS_IPS,
+    MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS,
+    MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS,
     MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES,
-    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPES,
+    MZ_VIEWS,
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connection, DataSourceDesc, Database, Error, ErrorKind, Func, Index,
-    MaterializedView, Role, Sink, StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
+    MaterializedView, Sink, StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
+use crate::subscribe::ActiveSubscribe;
 
-use super::builtin::{MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_CLUSTER_REPLICA_SIZES};
 use super::AwsPrincipalContext;
 
 /// An update to a built-in table.
@@ -61,7 +64,7 @@ pub struct BuiltinTableUpdate {
 }
 
 impl CatalogState {
-    pub(super) fn pack_depends_update(
+    pub fn pack_depends_update(
         &self,
         depender: GlobalId,
         dependee: GlobalId,
@@ -118,13 +121,18 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_role_update(&self, role: &Role, diff: Diff) -> BuiltinTableUpdate {
+    pub(super) fn pack_role_update(&self, id: RoleId, diff: Diff) -> BuiltinTableUpdate {
+        let role = self.get_role(&id);
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_ROLES),
             row: Row::pack_slice(&[
                 Datum::String(&role.id.to_string()),
                 Datum::UInt32(role.oid),
                 Datum::String(&role.name),
+                Datum::from(role.attributes.inherit),
+                Datum::from(role.attributes.create_role),
+                Datum::from(role.attributes.create_db),
+                Datum::from(role.attributes.create_cluster),
             ]),
             diff,
         }
@@ -276,6 +284,13 @@ impl CatalogState {
                 self.pack_connection_update(id, oid, schema_id, name, connection, diff)
             }
         };
+
+        if !entry.item().is_temporary() {
+            // Populate or clean up the `mz_object_dependencies` table.
+            for dependee in entry.item().uses() {
+                updates.push(self.pack_depends_update(id, *dependee, diff))
+            }
+        }
 
         if let Ok(desc) = entry.desc(&self.resolve_full_name(entry.name(), entry.conn_id())) {
             let defaults = match entry.item() {
@@ -813,6 +828,47 @@ impl CatalogState {
         updates
     }
 
+    pub fn pack_op_update(
+        &self,
+        operator: &str,
+        func_impl_details: FuncImplCatalogDetails,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        let arg_type_ids = func_impl_details
+            .arg_typs
+            .iter()
+            .map(|typ| self.get_entry_in_system_schemas(typ).id().to_string())
+            .collect::<Vec<_>>();
+
+        let mut row = Row::default();
+        row.packer()
+            .push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: arg_type_ids.len(),
+                }],
+                arg_type_ids.iter().map(|id| Datum::String(id)),
+            )
+            .expect("arg_type_ids is 1 dimensional, and it's length is used for the array length");
+        let arg_type_ids = row.unpack_first();
+
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_OPERATORS),
+            row: Row::pack_slice(&[
+                Datum::UInt32(func_impl_details.oid),
+                Datum::String(operator),
+                arg_type_ids,
+                Datum::from(
+                    func_impl_details
+                        .return_typ
+                        .map(|typ| self.get_entry_in_system_schemas(typ).id().to_string())
+                        .as_deref(),
+                ),
+            ]),
+            diff,
+        }
+    }
+
     fn pack_secret_update(
         &self,
         id: GlobalId,
@@ -1005,5 +1061,34 @@ impl CatalogState {
             .map(|row| BuiltinTableUpdate { id, row, diff })
             .collect();
         updates
+    }
+
+    pub fn pack_subscribe_update(
+        &self,
+        id: GlobalId,
+        subscribe: &ActiveSubscribe,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        packer.push(Datum::String(&id.to_string()));
+        packer.push(Datum::String(&subscribe.user.name));
+        packer.push(Datum::String(&subscribe.cluster_id.to_string()));
+
+        let start_dt = mz_ore::now::to_datetime(subscribe.start_time);
+        packer.push(Datum::TimestampTz(start_dt.try_into().expect("must fit")));
+
+        let depends_on: Vec<_> = subscribe
+            .depends_on
+            .iter()
+            .map(|id| id.to_string())
+            .collect();
+        packer.push_list(depends_on.iter().map(|s| Datum::String(s)));
+
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_SUBSCRIPTIONS),
+            row,
+            diff,
+        }
     }
 }

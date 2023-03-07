@@ -39,7 +39,9 @@ pub use tpch::Tpch;
 pub fn as_generator(g: &LoadGenerator, tick_micros: Option<u64>) -> Box<dyn Generator> {
     match g {
         LoadGenerator::Auction => Box::new(Auction {}),
-        LoadGenerator::Counter => Box::new(Counter {}),
+        LoadGenerator::Counter { max_cardinality } => Box::new(Counter {
+            max_cardinality: max_cardinality.clone(),
+        }),
         LoadGenerator::Datums => Box::new(Datums {}),
         LoadGenerator::Tpch {
             count_supplier,

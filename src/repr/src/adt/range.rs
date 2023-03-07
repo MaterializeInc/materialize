@@ -14,9 +14,13 @@ use std::fmt::{self, Debug, Display};
 use std::hash::{Hash, Hasher};
 
 use bitflags::bitflags;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use dec::OrderedDecimal;
+use postgres_protocol::types;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use tokio_postgres::types::FromSql;
+use tokio_postgres::types::Type as PgType;
 
 use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};
@@ -26,16 +30,27 @@ use crate::Datum;
 
 use super::date::Date;
 use super::numeric::Numeric;
+use super::timestamp::CheckedTimestamp;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.range.rs"));
 
 bitflags! {
-    pub(crate) struct Flags: u8 {
+    pub(crate) struct InternalFlags: u8 {
         const EMPTY = 1;
         const LB_INCLUSIVE = 1 << 1;
         const LB_INFINITE = 1 << 2;
         const UB_INCLUSIVE = 1 << 3;
         const UB_INFINITE = 1 << 4;
+    }
+}
+
+bitflags! {
+    pub(crate) struct PgFlags: u8 {
+        const EMPTY = 0b0000_0001;
+        const LB_INCLUSIVE = 0b0000_0010;
+        const UB_INCLUSIVE = 0b0000_0100;
+        const LB_INFINITE = 0b0000_1000;
+        const UB_INFINITE = 0b0001_0000;
     }
 }
 
@@ -160,6 +175,18 @@ impl<'a> RangeOps<'a> for OrderedDecimal<Numeric> {
     }
 }
 
+impl<'a> RangeOps<'a> for CheckedTimestamp<NaiveDateTime> {
+    fn err_type_name() -> &'static str {
+        "timestamp"
+    }
+}
+
+impl<'a> RangeOps<'a> for CheckedTimestamp<DateTime<Utc>> {
+    fn err_type_name() -> &'static str {
+        "timestamptz"
+    }
+}
+
 // Totally generic range implementations.
 impl<D> Range<D> {
     /// Create a new range.
@@ -171,6 +198,56 @@ impl<D> Range<D> {
         Range {
             inner: inner.map(|(lower, upper)| RangeInner { lower, upper }),
         }
+    }
+
+    /// Get the flag bits appropriate to use in our internal (i.e. row) encoding
+    /// of range values.
+    ///
+    /// Note that this differs from the flags appropriate to encode with
+    /// Postgres, which has `UB_INFINITE` and `LB_INCLUSIVE` in the alternate
+    /// position.
+    pub fn internal_flag_bits(&self) -> u8 {
+        let mut flags = InternalFlags::empty();
+
+        match &self.inner {
+            None => {
+                flags.set(InternalFlags::EMPTY, true);
+            }
+            Some(RangeInner { lower, upper }) => {
+                flags.set(InternalFlags::EMPTY, false);
+                flags.set(InternalFlags::LB_INFINITE, lower.bound.is_none());
+                flags.set(InternalFlags::UB_INFINITE, upper.bound.is_none());
+                flags.set(InternalFlags::LB_INCLUSIVE, lower.inclusive);
+                flags.set(InternalFlags::UB_INCLUSIVE, upper.inclusive);
+            }
+        }
+
+        flags.bits()
+    }
+
+    /// Get the flag bits appropriate to use in PG-compatible encodings of range
+    /// values.
+    ///
+    /// Note that this differs from the flags appropriate for our internal
+    /// encoding, which has `UB_INFINITE` and `LB_INCLUSIVE` in the alternate
+    /// position.
+    pub fn pg_flag_bits(&self) -> u8 {
+        let mut flags = PgFlags::empty();
+
+        match &self.inner {
+            None => {
+                flags.set(PgFlags::EMPTY, true);
+            }
+            Some(RangeInner { lower, upper }) => {
+                flags.set(PgFlags::EMPTY, false);
+                flags.set(PgFlags::LB_INFINITE, lower.bound.is_none());
+                flags.set(PgFlags::UB_INFINITE, upper.bound.is_none());
+                flags.set(PgFlags::LB_INCLUSIVE, lower.inclusive);
+                flags.set(PgFlags::UB_INCLUSIVE, upper.inclusive);
+            }
+        }
+
+        flags.bits()
     }
 
     /// Converts `self` from having bounds of type `D` to type `O`, converting
@@ -293,6 +370,106 @@ where
             }
             _ => false,
         }
+    }
+
+    pub fn union(&self, other: &Range<B>) -> Result<Range<B>, InvalidRangeError> {
+        // Handle self or other being empty
+        let (s, o) = match (self.inner, other.inner) {
+            (None, None) => return Ok(Range { inner: None }),
+            (inner @ Some(_), None) | (None, inner @ Some(_)) => return Ok(Range { inner }),
+            (Some(s), Some(o)) => {
+                // if not overlapping or adjacent, then result would not present continuity, so error.
+                if !(self.overlaps(other) || self.adjacent(other)) {
+                    return Err(InvalidRangeError::DiscontiguousUnion);
+                }
+                (s, o)
+            }
+        };
+
+        let lower = std::cmp::min(s.lower, o.lower);
+        let upper = std::cmp::max(s.upper, o.upper);
+
+        Ok(Range {
+            inner: Some(RangeInner { lower, upper }),
+        })
+    }
+
+    pub fn intersection(&self, other: &Range<B>) -> Range<B> {
+        // Handle self or other being empty
+        let (s, o) = match (self.inner, other.inner) {
+            (Some(s), Some(o)) => {
+                if !self.overlaps(other) {
+                    return Range { inner: None };
+                }
+
+                (s, o)
+            }
+            _ => return Range { inner: None },
+        };
+
+        let lower = std::cmp::max(s.lower, o.lower);
+        let upper = std::cmp::min(s.upper, o.upper);
+
+        Range {
+            inner: Some(RangeInner { lower, upper }),
+        }
+    }
+
+    // Function requires canonicalization so must be taken into `Range<Datum>`,
+    // which can be taken back into `Range<DatumNested>` by the caller if need
+    // be.
+    pub fn difference(&self, other: &Range<B>) -> Result<Range<Datum<'a>>, InvalidRangeError> {
+        use std::cmp::Ordering::*;
+
+        // Difference op does nothing if no overlap.
+        if !self.overlaps(other) {
+            return Ok(self.into_bounds(Datum::from));
+        }
+
+        let (s, o) = match (self.inner, other.inner) {
+            (None, _) | (_, None) => unreachable!("already returned from overlap check"),
+            (Some(s), Some(o)) => (s, o),
+        };
+
+        let ll = s.lower.cmp(&o.lower);
+        let uu = s.upper.cmp(&o.upper);
+
+        let r = match (ll, uu) {
+            // `self` totally contains `other`
+            (Less, Greater) => return Err(InvalidRangeError::DiscontiguousDifference),
+            // `other` totally contains `self`
+            (Greater | Equal, Less | Equal) => Range { inner: None },
+            (Greater | Equal, Greater) => {
+                let lower = RangeBound {
+                    inclusive: !o.upper.inclusive,
+                    bound: o.upper.bound,
+                };
+                Range {
+                    inner: Some(RangeInner {
+                        lower,
+                        upper: s.upper,
+                    }),
+                }
+            }
+            (Less, Less | Equal) => {
+                let upper = RangeBound {
+                    inclusive: !o.lower.inclusive,
+                    bound: o.lower.bound,
+                };
+                Range {
+                    inner: Some(RangeInner {
+                        lower: s.lower,
+                        upper,
+                    }),
+                }
+            }
+        };
+
+        let mut r = r.into_bounds(Datum::from);
+
+        r.canonicalize()?;
+
+        Ok(r)
     }
 }
 
@@ -532,7 +709,7 @@ impl<'a, const UPPER: bool> RangeBound<Datum<'a>, UPPER> {
                 d @ Datum::Int32(_) => self.canonicalize_inner::<i32>(d)?,
                 d @ Datum::Int64(_) => self.canonicalize_inner::<i64>(d)?,
                 d @ Datum::Date(_) => self.canonicalize_inner::<Date>(d)?,
-                Datum::Numeric(..) => {}
+                Datum::Numeric(..) | Datum::Timestamp(..) | Datum::TimestampTz(..) => {}
                 d => unreachable!("{d:?} not yet supported in ranges"),
             },
         })
@@ -571,6 +748,8 @@ pub enum InvalidRangeError {
     MisorderedRangeBounds,
     CanonicalizationOverflow(String),
     InvalidRangeBoundFlags,
+    DiscontiguousUnion,
+    DiscontiguousDifference,
 }
 
 impl Display for InvalidRangeError {
@@ -583,6 +762,12 @@ impl Display for InvalidRangeError {
                 write!(f, "{} out of range", t)
             }
             InvalidRangeError::InvalidRangeBoundFlags => f.write_str("invalid range bound flags"),
+            InvalidRangeError::DiscontiguousUnion => {
+                f.write_str("result of range union would not be contiguous")
+            }
+            InvalidRangeError::DiscontiguousDifference => {
+                f.write_str("result of range difference would not be contiguous")
+            }
         }
     }
 }
@@ -608,6 +793,8 @@ impl RustType<ProtoInvalidRangeError> for InvalidRangeError {
             InvalidRangeError::MisorderedRangeBounds => MisorderedRangeBounds(()),
             InvalidRangeError::CanonicalizationOverflow(s) => CanonicalizationOverflow(s.clone()),
             InvalidRangeError::InvalidRangeBoundFlags => InvalidRangeBoundFlags(()),
+            InvalidRangeError::DiscontiguousUnion => DiscontiguousUnion(()),
+            InvalidRangeError::DiscontiguousDifference => DiscontiguousDifference(()),
         };
         ProtoInvalidRangeError { kind: Some(kind) }
     }
@@ -619,6 +806,8 @@ impl RustType<ProtoInvalidRangeError> for InvalidRangeError {
                 MisorderedRangeBounds(()) => InvalidRangeError::MisorderedRangeBounds,
                 CanonicalizationOverflow(s) => InvalidRangeError::CanonicalizationOverflow(s),
                 InvalidRangeBoundFlags(()) => InvalidRangeError::InvalidRangeBoundFlags,
+                DiscontiguousUnion(()) => InvalidRangeError::DiscontiguousUnion,
+                DiscontiguousDifference(()) => InvalidRangeError::DiscontiguousDifference,
             }),
             None => Err(TryFromProtoError::missing_field(
                 "`ProtoInvalidRangeError::kind`",
@@ -645,5 +834,65 @@ pub fn parse_range_bound_flags<'a>(flags: &'a str) -> Result<(bool, bool), Inval
     match flags.next() {
         Some(_) => Err(InvalidRangeError::InvalidRangeBoundFlags),
         None => Ok((lower, upper)),
+    }
+}
+
+impl<'a, T: FromSql<'a>> FromSql<'a> for Range<T> {
+    fn from_sql(ty: &PgType, raw: &'a [u8]) -> Result<Range<T>, Box<dyn Error + Sync + Send>> {
+        let inner_typ = match ty {
+            &PgType::INT4_RANGE => PgType::INT4,
+            &PgType::INT8_RANGE => PgType::INT8,
+            &PgType::DATE_RANGE => PgType::DATE,
+            &PgType::NUM_RANGE => PgType::NUMERIC,
+            &PgType::TS_RANGE => PgType::TIMESTAMP,
+            &PgType::TSTZ_RANGE => PgType::TIMESTAMPTZ,
+            _ => unreachable!(),
+        };
+
+        let inner = match types::range_from_sql(raw)? {
+            types::Range::Empty => None,
+            types::Range::Nonempty(lower, upper) => {
+                let mut bounds = Vec::with_capacity(2);
+
+                for bound_outer in [lower, upper].into_iter() {
+                    let bound = match bound_outer {
+                        types::RangeBound::Exclusive(bound)
+                        | types::RangeBound::Inclusive(bound) => bound
+                            .map(|bound| T::from_sql(&inner_typ, bound))
+                            .transpose()?,
+                        types::RangeBound::Unbounded => None,
+                    };
+                    let inclusive = matches!(bound_outer, types::RangeBound::Inclusive(_));
+                    bounds.push(RangeBound { bound, inclusive });
+                }
+
+                let lower = bounds.remove(0);
+                let upper = bounds.remove(0);
+                assert!(bounds.is_empty());
+
+                Some(RangeInner {
+                    lower,
+                    // Rewrite bound in terms of appropriate `UPPER`
+                    upper: RangeBound {
+                        bound: upper.bound,
+                        inclusive: upper.inclusive,
+                    },
+                })
+            }
+        };
+
+        Ok(Range { inner })
+    }
+
+    fn accepts(ty: &PgType) -> bool {
+        matches!(
+            ty,
+            &PgType::INT4_RANGE
+                | &PgType::INT8_RANGE
+                | &PgType::DATE_RANGE
+                | &PgType::NUM_RANGE
+                | &PgType::TS_RANGE
+                | &PgType::TSTZ_RANGE
+        )
     }
 }

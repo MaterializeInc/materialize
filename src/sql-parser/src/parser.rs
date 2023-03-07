@@ -32,6 +32,8 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::option::OptionExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
+use IsLateral::*;
+use IsOptional::*;
 
 use crate::ast::*;
 use crate::keywords::*;
@@ -56,17 +58,26 @@ macro_rules! parser_err {
 }
 
 /// Parses a SQL string containing zero or more SQL statements.
+/// Statements larger than [`MAX_STATEMENT_BATCH_SIZE`] are rejected.
+///
+/// The outer Result is for errors related to the statement size. The inner Result is for
+/// errors during the parsing.
 #[tracing::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
-pub fn parse_statements(sql: &str) -> Result<Vec<Statement<Raw>>, ParserError> {
+pub fn parse_statements_with_limit(
+    sql: &str,
+) -> Result<Result<Vec<Statement<Raw>>, ParserError>, String> {
     if sql.bytes().count() > MAX_STATEMENT_BATCH_SIZE {
-        return Err(ParserError::new(
-            MAX_STATEMENT_BATCH_SIZE,
-            format!(
-                "statement batch size cannot exceed {}",
-                ByteSize::b(u64::cast_from(MAX_STATEMENT_BATCH_SIZE))
-            ),
+        return Err(format!(
+            "statement batch size cannot exceed {}",
+            ByteSize::b(u64::cast_from(MAX_STATEMENT_BATCH_SIZE))
         ));
     }
+    Ok(parse_statements(sql))
+}
+
+/// Parses a SQL string containing zero or more SQL statements.
+#[tracing::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
+pub fn parse_statements(sql: &str) -> Result<Vec<Statement<Raw>>, ParserError> {
     let tokens = lexer::lex(sql)?;
     Parser::new(sql, tokens).parse_statements()
 }
@@ -103,20 +114,18 @@ pub fn parse_data_type(sql: &str) -> Result<RawDataType, ParserError> {
     }
 }
 
-/// Parses a SQL string containing a `SET` variable value.
-pub fn parse_set_variable_value(sql: &str) -> Result<SetVariableValue, ParserError> {
-    let tokens = lexer::lex(sql)?;
-    let mut parser = Parser::new(sql, tokens);
-    let value = parser.parse_set_variable_value()?;
-    if parser.next_token().is_some() {
-        parser_err!(
-            parser,
-            parser.peek_prev_pos(),
-            "extra token after SET variable value"
-        )
-    } else {
-        Ok(value)
-    }
+/// Parses a string containing a comma-separated list of identifiers and
+/// returns their underlying string values.
+///
+/// This is analogous to the `SplitIdentifierString` function in PostgreSQL.
+pub fn split_identifier_string(s: &str) -> Result<Vec<String>, ParserError> {
+    let tokens = lexer::lex(s)?;
+    let mut parser = Parser::new(s, tokens);
+    let values = parser.parse_comma_separated(Parser::parse_set_variable_value)?;
+    Ok(values
+        .into_iter()
+        .map(|v| v.into_unquoted_value())
+        .collect())
 }
 
 macro_rules! maybe {
@@ -132,13 +141,11 @@ enum IsOptional {
     Optional,
     Mandatory,
 }
-use IsOptional::*;
 
 enum IsLateral {
     Lateral,
     NotLateral,
 }
-use IsLateral::*;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParserError {
@@ -321,7 +328,7 @@ impl<'a> Parser<'a> {
         self.parse_subexpr(Precedence::Zero)
     }
 
-    /// Parse tokens until the precedence changes
+    /// Parse tokens until the precedence decreases
     fn parse_subexpr(&mut self, precedence: Precedence) -> Result<Expr<Raw>, ParserError> {
         let expr = self.checked_recur_mut(|parser| parser.parse_prefix())?;
         self.parse_subexpr_seeded(precedence, expr)
@@ -482,7 +489,7 @@ impl<'a> Parser<'a> {
         // The approach taken here avoids backtracking by deferring the decision
         // of whether to parse as a subquery or a nested expression until we get
         // to the point marked (2) above. Once there, we know that the presence
-        // of a set operator implies that the parentheses belonged to a the
+        // of a set operator implies that the parentheses belonged to the
         // subquery; otherwise, they belonged to the expression.
         //
         // See also PostgreSQL's comments on the matter:
@@ -1628,7 +1635,7 @@ impl<'a> Parser<'a> {
             self.parse_create_sink()
         } else if self.peek_keyword(TYPE) {
             self.parse_create_type()
-        } else if self.peek_keyword(ROLE) || self.peek_keyword(USER) {
+        } else if self.peek_keyword(ROLE) {
             self.parse_create_role()
         } else if self.peek_keyword(CLUSTER) {
             self.next_token();
@@ -1656,6 +1663,12 @@ impl<'a> Parser<'a> {
             || self.peek_keywords(&[OR, REPLACE, MATERIALIZED, VIEW])
         {
             self.parse_create_materialized_view()
+        } else if self.peek_keywords(&[USER]) {
+            parser_err!(
+                self,
+                self.peek_pos(),
+                "CREATE USER is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details"
+            )
         } else {
             let index = self.index;
 
@@ -2803,7 +2816,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_load_generator_option(&mut self) -> Result<LoadGeneratorOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[SCALE, TICK])? {
+        let name = match self.expect_one_of_keywords(&[SCALE, TICK, MAX])? {
             SCALE => {
                 self.expect_keyword(FACTOR)?;
                 LoadGeneratorOptionName::ScaleFactor
@@ -2811,6 +2824,10 @@ impl<'a> Parser<'a> {
             TICK => {
                 self.expect_keyword(INTERVAL)?;
                 LoadGeneratorOptionName::TickInterval
+            }
+            MAX => {
+                self.expect_keyword(CARDINALITY)?;
+                LoadGeneratorOptionName::MaxCardinality
             }
             _ => unreachable!(),
         };
@@ -3015,29 +3032,47 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_role(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let is_user = match self.expect_one_of_keywords(&[ROLE, USER])? {
-            ROLE => false,
-            USER => true,
-            _ => unreachable!(),
-        };
+        self.expect_keyword(ROLE)?;
         let name = self.parse_identifier()?;
         let _ = self.parse_keyword(WITH);
+        let options = self.parse_role_attributes();
+        Ok(Statement::CreateRole(CreateRoleStatement { name, options }))
+    }
+
+    fn parse_role_attributes(&mut self) -> Vec<RoleAttribute> {
         let mut options = vec![];
         loop {
-            match self.parse_one_of_keywords(&[SUPERUSER, NOSUPERUSER, LOGIN, NOLOGIN]) {
+            match self.parse_one_of_keywords(&[
+                SUPERUSER,
+                NOSUPERUSER,
+                LOGIN,
+                NOLOGIN,
+                INHERIT,
+                NOINHERIT,
+                CREATECLUSTER,
+                NOCREATECLUSTER,
+                CREATEDB,
+                NOCREATEDB,
+                CREATEROLE,
+                NOCREATEROLE,
+            ]) {
                 None => break,
-                Some(SUPERUSER) => options.push(CreateRoleOption::SuperUser),
-                Some(NOSUPERUSER) => options.push(CreateRoleOption::NoSuperUser),
-                Some(LOGIN) => options.push(CreateRoleOption::Login),
-                Some(NOLOGIN) => options.push(CreateRoleOption::NoLogin),
+                Some(SUPERUSER) => options.push(RoleAttribute::SuperUser),
+                Some(NOSUPERUSER) => options.push(RoleAttribute::NoSuperUser),
+                Some(LOGIN) => options.push(RoleAttribute::Login),
+                Some(NOLOGIN) => options.push(RoleAttribute::NoLogin),
+                Some(INHERIT) => options.push(RoleAttribute::Inherit),
+                Some(NOINHERIT) => options.push(RoleAttribute::NoInherit),
+                Some(CREATECLUSTER) => options.push(RoleAttribute::CreateCluster),
+                Some(NOCREATECLUSTER) => options.push(RoleAttribute::NoCreateCluster),
+                Some(CREATEDB) => options.push(RoleAttribute::CreateDB),
+                Some(NOCREATEDB) => options.push(RoleAttribute::NoCreateDB),
+                Some(CREATEROLE) => options.push(RoleAttribute::CreateRole),
+                Some(NOCREATEROLE) => options.push(RoleAttribute::NoCreateRole),
                 Some(_) => unreachable!(),
             }
         }
-        Ok(Statement::CreateRole(CreateRoleStatement {
-            is_user,
-            name,
-            options,
-        }))
+        options
     }
 
     fn parse_create_secret(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -3149,13 +3184,13 @@ impl<'a> Parser<'a> {
 
     fn parse_replica_option(&mut self) -> Result<ReplicaOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[
-            ADDRESSES,
             AVAILABILITY,
             COMPUTE,
             COMPUTECTL,
             IDLE,
             INTROSPECTION,
             SIZE,
+            STORAGE,
             STORAGECTL,
             WORKERS,
         ])? {
@@ -3181,9 +3216,13 @@ impl<'a> Parser<'a> {
                 _ => unreachable!(),
             },
             SIZE => ReplicaOptionName::Size,
+            STORAGE => {
+                self.expect_keyword(ADDRESSES)?;
+                ReplicaOptionName::StorageAddresses
+            }
             STORAGECTL => {
-                self.expect_keyword(ADDRESS)?;
-                ReplicaOptionName::StoragectlAddress
+                self.expect_keyword(ADDRESSES)?;
+                ReplicaOptionName::StoragectlAddresses
             }
             WORKERS => ReplicaOptionName::Workers,
             _ => unreachable!(),
@@ -3637,6 +3676,7 @@ impl<'a> Parser<'a> {
             SECRET,
             SYSTEM,
             CONNECTION,
+            ROLE,
         ])? {
             SINK => return self.parse_alter_sink(),
             SOURCE => return self.parse_alter_source(),
@@ -3650,6 +3690,7 @@ impl<'a> Parser<'a> {
             SECRET => return self.parse_alter_secret(),
             SYSTEM => return self.parse_alter_system(),
             CONNECTION => return self.parse_alter_connection(),
+            ROLE => return self.parse_alter_role(),
             _ => unreachable!(),
         };
 
@@ -3826,10 +3867,10 @@ impl<'a> Parser<'a> {
             SET => {
                 let name = self.parse_identifier()?;
                 self.expect_keyword_or_token(TO, &Token::Eq)?;
-                let value = self.parse_set_variable_value()?;
+                let to = self.parse_set_variable_to()?;
                 Ok(Statement::AlterSystemSet(AlterSystemSetStatement {
                     name,
-                    value,
+                    to,
                 }))
             }
             RESET => {
@@ -3870,6 +3911,13 @@ impl<'a> Parser<'a> {
             }
             _ => unreachable!(),
         })
+    }
+
+    fn parse_alter_role(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let name = self.parse_identifier()?;
+        let _ = self.parse_keyword(WITH);
+        let options = self.parse_role_attributes();
+        Ok(Statement::AlterRole(AlterRoleStatement { name, options }))
     }
 
     /// Parse a copy statement
@@ -4678,7 +4726,7 @@ impl<'a> Parser<'a> {
             let next_token = self.peek_token();
             let op = self.parse_set_operator(&next_token);
             let next_precedence = match op {
-                // UNION and EXCEPT have the same binding power and evaluate left-to-right
+                // UNION and EXCEPT have the same precedence and evaluate left-to-right
                 Some(SetOperator::Union) | Some(SetOperator::Except) => SetPrecedence::UnionExcept,
                 // INTERSECT has higher precedence than UNION/EXCEPT
                 Some(SetOperator::Intersect) => SetPrecedence::Intersect,
@@ -4831,11 +4879,11 @@ impl<'a> Parser<'a> {
             }
         }
         if normal {
-            let value = self.parse_set_variable_value()?;
+            let to = self.parse_set_variable_to()?;
             Ok(Statement::SetVariable(SetVariableStatement {
                 local: modifier == Some(LOCAL),
                 variable,
-                value,
+                to,
             }))
         } else if
         // SET TRANSACTION transaction_mode
@@ -4854,49 +4902,24 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_set_variable_to(&mut self) -> Result<SetVariableTo, ParserError> {
+        if self.parse_keyword(DEFAULT) {
+            Ok(SetVariableTo::Default)
+        } else {
+            Ok(SetVariableTo::Values(
+                self.parse_comma_separated(Parser::parse_set_variable_value)?,
+            ))
+        }
+    }
+
     fn parse_set_variable_value(&mut self) -> Result<SetVariableValue, ParserError> {
-        let parse_ident_or_keyword = |parser: &mut Self| match parser.next_token() {
-            Some(Token::Keyword(keyword)) => Ok(keyword.into_ident()),
-            Some(Token::Ident(ident)) => Ok(Ident::new(ident)),
-            other => parser.expected(parser.peek_prev_pos(), "identifier or keyword", other),
-        };
-
-        let curr_pos = self.peek_pos();
-        let curr_token = self.peek_token();
-
-        Ok(match self.parse_value() {
-            Ok(value) => match self.peek_token() {
-                Some(Token::Comma) => {
-                    self.next_token();
-                    let mut values = vec![value];
-                    values.append(&mut self.parse_comma_separated(Self::parse_value)?);
-                    SetVariableValue::Literals(values)
-                }
-                _ => SetVariableValue::Literal(value),
-            },
-            Err(_) => match curr_token {
-                Some(Token::Keyword(DEFAULT)) => SetVariableValue::Default,
-                Some(Token::Ident(ident)) => match self.peek_token() {
-                    Some(Token::Comma) => {
-                        self.next_token();
-                        let mut idents = vec![Ident::new(ident)];
-                        idents.append(&mut self.parse_comma_separated(parse_ident_or_keyword)?);
-                        SetVariableValue::Idents(idents)
-                    }
-                    _ => SetVariableValue::Ident(Ident::new(ident)),
-                },
-                Some(Token::Keyword(keyword)) => match self.peek_token() {
-                    Some(Token::Comma) => {
-                        self.next_token();
-                        let mut idents = vec![keyword.into_ident()];
-                        idents.append(&mut self.parse_comma_separated(parse_ident_or_keyword)?);
-                        SetVariableValue::Idents(idents)
-                    }
-                    _ => SetVariableValue::Ident(keyword.into_ident()),
-                },
-                other => self.expected(curr_pos, "variable value", other)?,
-            },
-        })
+        if let Some(value) = self.maybe_parse(Parser::parse_value) {
+            Ok(SetVariableValue::Literal(value))
+        } else if let Some(ident) = self.maybe_parse(Parser::parse_identifier) {
+            Ok(SetVariableValue::Ident(ident))
+        } else {
+            self.expected(self.peek_pos(), "variable value", self.peek_token())
+        }
     }
 
     fn parse_reset(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -5660,6 +5683,8 @@ impl<'a> Parser<'a> {
             self.expect_keyword(FOR)?;
         }
 
+        let no_errors = self.parse_keyword(BROKEN);
+
         // VIEW name | MATERIALIZED VIEW name | query
         let explainee = if self.parse_keyword(VIEW) {
             Explainee::View(self.parse_raw_name()?)
@@ -5673,6 +5698,7 @@ impl<'a> Parser<'a> {
             stage: stage.unwrap_or(ExplainStage::OptimizedPlan),
             config_flags,
             format,
+            no_errors,
             explainee,
         }))
     }

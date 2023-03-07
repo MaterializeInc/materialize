@@ -86,5 +86,5 @@ fn main() {
             &["proto/src/proto.proto", "proto/src/tokio_postgres.proto"],
             &[".."],
         )
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"))
 }

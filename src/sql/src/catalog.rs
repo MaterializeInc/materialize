@@ -26,12 +26,12 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
+use mz_build_info::BuildInfo;
 use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::MirScalarExpr;
-use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
-use mz_repr::explain::{DummyHumanizer, ExprHumanizer};
-use mz_repr::{ColumnName, GlobalId, RelationDesc, ScalarType};
+use mz_ore::now::{EpochMillis, NowFn};
+use mz_repr::explain::ExprHumanizer;
+use mz_repr::{ColumnName, GlobalId, RelationDesc};
 use mz_sql_parser::ast::Expr;
 use mz_sql_parser::ast::UnresolvedObjectName;
 use mz_storage_client::types::connections::Connection;
@@ -43,6 +43,7 @@ use crate::names::{
     ResolvedDatabaseSpecifier, RoleId, SchemaSpecifier,
 };
 use crate::normalize;
+use crate::plan::statement::ddl::PlannedRoleAttributes;
 use crate::plan::statement::StatementDesc;
 use crate::plan::PlanError;
 
@@ -72,8 +73,8 @@ use crate::plan::PlanError;
 /// [`get_item`]: Catalog::resolve_item
 /// [`resolve_item`]: SessionCatalog::resolve_item
 pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
-    /// Returns the name of the user who is issuing the query.
-    fn active_user(&self) -> &str;
+    /// Returns the id of the role that is issuing the query.
+    fn active_role_id(&self) -> &RoleId;
 
     /// Returns the database to use if one is not explicitly specified.
     fn active_database_name(&self) -> Option<&str> {
@@ -87,6 +88,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
 
     /// Returns the cluster to use if one is not explicitly specified.
     fn active_cluster(&self) -> &str;
+
+    /// Returns the resolved search paths for the current user. (Invalid search paths are skipped.)
+    fn search_path(&self) -> &[(ResolvedDatabaseSpecifier, SchemaSpecifier)];
 
     /// Returns the descriptor of the named prepared statement on the session, or
     /// None if the prepared statement does not exist.
@@ -137,6 +141,14 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
 
     /// Resolves the named role.
     fn resolve_role(&self, role_name: &str) -> Result<&dyn CatalogRole, CatalogError>;
+
+    /// Gets a role by its ID.
+    fn try_get_role(&self, id: &RoleId) -> Option<&dyn CatalogRole>;
+
+    /// Gets a role by its ID.
+    ///
+    /// Panics if `id` does not specify a valid role.
+    fn get_role(&self, id: &RoleId) -> &dyn CatalogRole;
 
     /// Resolves the named cluster.
     ///
@@ -269,6 +281,103 @@ pub trait CatalogSchema {
     fn has_items(&self) -> bool;
 }
 
+/// Attributes belonging to a [`CatalogRole`].
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+pub struct RoleAttributes {
+    /// Indicates whether the role has inheritance of privileges.
+    pub inherit: bool,
+    /// Indicates whether the role is allowed to create more roles.
+    pub create_role: bool,
+    /// Indicates whether the role is allowed to create databases.
+    pub create_db: bool,
+    /// Indicates whether the role is allowed to create clusters.
+    pub create_cluster: bool,
+    // Force use of constructor.
+    _private: (),
+}
+
+impl RoleAttributes {
+    /// Creates a new [`RoleAttributes`] with default attributes.
+    pub fn new() -> RoleAttributes {
+        RoleAttributes {
+            inherit: true,
+            create_role: false,
+            create_db: false,
+            create_cluster: false,
+            _private: (),
+        }
+    }
+
+    /// Adds the create role attribute.
+    pub fn with_create_role(mut self) -> RoleAttributes {
+        self.create_role = true;
+        self
+    }
+
+    /// Adds the create db attribute.
+    pub fn with_create_db(mut self) -> RoleAttributes {
+        self.create_db = true;
+        self
+    }
+
+    /// Adds the create cluster attribute.
+    pub fn with_create_cluster(mut self) -> RoleAttributes {
+        self.create_cluster = true;
+        self
+    }
+
+    /// Adds all attributes.
+    pub fn with_all(mut self) -> RoleAttributes {
+        self.inherit = true;
+        self.create_role = true;
+        self.create_db = true;
+        self.create_cluster = true;
+        self
+    }
+}
+
+impl From<PlannedRoleAttributes> for RoleAttributes {
+    fn from(
+        PlannedRoleAttributes {
+            inherit,
+            create_role,
+            create_db,
+            create_cluster,
+        }: PlannedRoleAttributes,
+    ) -> RoleAttributes {
+        let default_attributes = RoleAttributes::new();
+        RoleAttributes {
+            inherit: inherit.unwrap_or(default_attributes.inherit),
+            create_role: create_role.unwrap_or(default_attributes.create_role),
+            create_db: create_db.unwrap_or(default_attributes.create_db),
+            create_cluster: create_cluster.unwrap_or(default_attributes.create_cluster),
+            _private: (),
+        }
+    }
+}
+
+impl From<(&dyn CatalogRole, PlannedRoleAttributes)> for RoleAttributes {
+    fn from(
+        (
+            role,
+            PlannedRoleAttributes {
+                inherit,
+                create_role,
+                create_db,
+                create_cluster,
+            },
+        ): (&dyn CatalogRole, PlannedRoleAttributes),
+    ) -> RoleAttributes {
+        RoleAttributes {
+            inherit: inherit.unwrap_or_else(|| role.is_inherit()),
+            create_role: create_role.unwrap_or_else(|| role.create_role()),
+            create_db: create_db.unwrap_or_else(|| role.create_db()),
+            create_cluster: create_cluster.unwrap_or_else(|| role.create_cluster()),
+            _private: (),
+        }
+    }
+}
+
 /// A role in a [`SessionCatalog`].
 pub trait CatalogRole {
     /// Returns a fully-specified name of the role.
@@ -276,6 +385,18 @@ pub trait CatalogRole {
 
     /// Returns a stable ID for the role.
     fn id(&self) -> RoleId;
+
+    /// Indicates whether the role has inheritance of privileges.
+    fn is_inherit(&self) -> bool;
+
+    /// Indicates whether the role has the role creation attribute.
+    fn create_role(&self) -> bool;
+
+    /// Indicates whether the role has the database creation attribute.
+    fn create_db(&self) -> bool;
+
+    /// Indicates whether the role has the cluster creation attribute.
+    fn create_cluster(&self) -> bool;
 }
 
 /// A cluster in a [`SessionCatalog`].
@@ -440,7 +561,7 @@ impl TypeReference for IdReference {
 
 /// A type stored in the catalog.
 ///
-/// The variants correspond one-to-one with [`ScalarType`], but with type
+/// The variants correspond one-to-one with [`mz_repr::ScalarType`], but with type
 /// modifiers removed and with embedded types replaced with references to other
 /// types in the catalog.
 #[allow(missing_docs)]
@@ -809,162 +930,6 @@ impl fmt::Display for CatalogError {
 }
 
 impl Error for CatalogError {}
-
-/// A dummy [`SessionCatalog`] implementation.
-///
-/// This implementation is suitable for use in tests that plan queries which are
-/// not demanding of the catalog, as many methods are unimplemented.
-#[derive(Debug)]
-pub struct DummyCatalog;
-
-static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
-    start_time: DateTime::<Utc>::MIN_UTC,
-    start_instant: Instant::now(),
-    nonce: 0,
-    environment_id: EnvironmentId::for_tests(),
-    session_id: Uuid::from_u128(0),
-    unsafe_mode: true,
-    persisted_introspection: true,
-    build_info: &DUMMY_BUILD_INFO,
-    timestamp_interval: Duration::from_secs(1),
-    now: NOW_ZERO.clone(),
-});
-
-impl SessionCatalog for DummyCatalog {
-    fn active_user(&self) -> &str {
-        "dummy"
-    }
-
-    fn active_database(&self) -> Option<&DatabaseId> {
-        Some(&DatabaseId(0))
-    }
-
-    fn active_cluster(&self) -> &str {
-        "dummy"
-    }
-
-    fn get_prepared_statement_desc(&self, _: &str) -> Option<&StatementDesc> {
-        None
-    }
-
-    fn resolve_database(&self, _: &str) -> Result<&dyn CatalogDatabase, CatalogError> {
-        unimplemented!()
-    }
-
-    fn get_database(&self, _: &DatabaseId) -> &dyn CatalogDatabase {
-        &DummyDatabase
-    }
-
-    fn resolve_schema(&self, _: Option<&str>, _: &str) -> Result<&dyn CatalogSchema, CatalogError> {
-        unimplemented!()
-    }
-
-    fn resolve_schema_in_database(
-        &self,
-        _: &ResolvedDatabaseSpecifier,
-        _: &str,
-    ) -> Result<&dyn CatalogSchema, CatalogError> {
-        unimplemented!()
-    }
-
-    fn get_schema(&self, _: &ResolvedDatabaseSpecifier, _: &SchemaSpecifier) -> &dyn CatalogSchema {
-        unimplemented!()
-    }
-
-    fn is_system_schema(&self, _: &str) -> bool {
-        false
-    }
-
-    fn resolve_role(&self, _: &str) -> Result<&dyn CatalogRole, CatalogError> {
-        unimplemented!();
-    }
-
-    fn resolve_item(&self, _: &PartialObjectName) -> Result<&dyn CatalogItem, CatalogError> {
-        unimplemented!();
-    }
-
-    fn resolve_function(&self, _: &PartialObjectName) -> Result<&dyn CatalogItem, CatalogError> {
-        unimplemented!();
-    }
-
-    fn resolve_cluster<'a, 'b>(
-        &'a self,
-        _: Option<&'b str>,
-    ) -> Result<&'a dyn CatalogCluster, CatalogError> {
-        unimplemented!();
-    }
-
-    fn get_item(&self, _: &GlobalId) -> &dyn CatalogItem {
-        unimplemented!();
-    }
-
-    fn try_get_item(&self, _: &GlobalId) -> Option<&dyn CatalogItem> {
-        unimplemented!();
-    }
-
-    fn item_exists(&self, _: &QualifiedObjectName) -> bool {
-        false
-    }
-
-    fn get_cluster(&self, _: ClusterId) -> &dyn CatalogCluster {
-        unimplemented!();
-    }
-
-    fn resolve_full_name(&self, _: &QualifiedObjectName) -> FullObjectName {
-        unimplemented!()
-    }
-
-    fn config(&self) -> &CatalogConfig {
-        &DUMMY_CONFIG
-    }
-
-    fn now(&self) -> EpochMillis {
-        (self.config().now)()
-    }
-
-    fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName {
-        name
-    }
-
-    fn aws_privatelink_availability_zones(&self) -> Option<BTreeSet<String>> {
-        unimplemented!()
-    }
-}
-
-impl ExprHumanizer for DummyCatalog {
-    fn humanize_id(&self, id: GlobalId) -> Option<String> {
-        DummyHumanizer.humanize_id(id)
-    }
-
-    fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String> {
-        DummyHumanizer.humanize_id_unqualified(id)
-    }
-
-    fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
-        DummyHumanizer.humanize_scalar_type(ty)
-    }
-}
-
-/// A dummy [`CatalogDatabase`] implementation.
-///
-/// This implementation is suitable for use in tests that plan queries which are
-/// not demanding of the catalog, as many methods are unimplemented.
-#[derive(Debug)]
-pub struct DummyDatabase;
-
-impl CatalogDatabase for DummyDatabase {
-    fn name(&self) -> &str {
-        "dummy"
-    }
-
-    fn id(&self) -> DatabaseId {
-        DatabaseId(0)
-    }
-
-    fn has_schemas(&self) -> bool {
-        true
-    }
-}
 
 /// Provides a method of generating a 3-layer catalog on the fly, and then
 /// resolving objects within it.

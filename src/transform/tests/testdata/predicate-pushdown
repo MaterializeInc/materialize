@@ -184,3 +184,49 @@ Filter (#1 < #2)
   FlatMap generate_series(#0)
     Filter (#0 > #1)
       Get x
+
+build apply=PredicatePushdown
+(filter
+  (threshold
+    (union [
+      (get x)
+      (negate
+        (filter (get x) [(call_binary lt #0 (7 Int64))]))]))
+  [(call_binary gt #0 #1)]
+)
+----
+Threshold
+  Union
+    Filter (#0 > #1)
+      Get x
+    Negate
+      Filter (#0 < 7) AND (#0 > #1)
+        Get x
+
+build apply=PredicatePushdown
+(filter
+  (reduce
+    (constant [[0 1][0 2]] [int32 int32])
+    [#0] [(count true false)])
+  [(call_binary gt #0 5)]
+)
+----
+Reduce group_by=[#0] aggregates=[count(*)]
+  Filter (#0 > 5)
+    Constant
+      - (0, 1)
+      - (0, 2)
+
+build apply=PredicatePushdown
+(filter
+  (top_k
+    (constant [["a" 1]["b" 2]] [string int32])
+    [#1] [(#1 true)] 1 0)
+  [(call_binary gt #1 5)]
+)
+----
+TopK group_by=[#1] order_by=[#1 desc nulls_first] limit=1 monotonic=false
+  Filter (#1 > 5)
+    Constant
+      - ("a", 1)
+      - ("b", 2)

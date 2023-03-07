@@ -33,6 +33,6 @@ impl HirRelationExpr {
         self,
         _config: &OptimizerConfig,
     ) -> Result<mz_expr::MirRelationExpr, PlanError> {
-        Ok(self.lower())
+        self.lower()
     }
 }

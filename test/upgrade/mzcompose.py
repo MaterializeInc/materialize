@@ -14,9 +14,6 @@ operational after an upgrade.
 import random
 from typing import Dict, List, Tuple
 
-from semver import Version
-
-from materialize import util
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
     Cockroach,
@@ -28,11 +25,12 @@ from materialize.mzcompose.services import (
     Testdrive,
     Zookeeper,
 )
+from materialize.util import MzVersion, released_materialize_versions
 
 # All released Materialize versions, in order from most to least recent.
-all_versions = util.released_materialize_versions()
+all_versions = released_materialize_versions()
 
-mz_options: Dict[Version, str] = {}
+mz_options: Dict[MzVersion, str] = {}
 
 SERVICES = [
     TestCerts(),
@@ -78,8 +76,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--min-version",
         metavar="VERSION",
-        type=Version.parse,
-        default=Version.parse("0.39.0"),
+        type=MzVersion.parse,
+        default=MzVersion.parse("0.39.0"),
         help="the minimum version to test from",
     )
     parser.add_argument(
@@ -111,7 +109,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if args.tests in ["all", "non-ssl"]:
         for version in tested_versions:
             priors = [v for v in all_versions if v <= version]
-            test_upgrade_from_version(c, f"v{version}", priors, filter=args.filter)
+            test_upgrade_from_version(c, f"{version}", priors, filter=args.filter)
 
         test_upgrade_from_version(c, "current_source", priors=[], filter=args.filter)
 
@@ -121,7 +119,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             for version in tested_versions:
                 priors = [v for v in all_versions if v <= version]
                 test_upgrade_from_version(
-                    c, f"v{version}", priors, filter=args.filter, style="ssl-"
+                    c, f"{version}", priors, filter=args.filter, style="ssl-"
                 )
             # we don't test current_source -> current_source for `ssl-` tests
 
@@ -129,7 +127,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 def test_upgrade_from_version(
     c: Composition,
     from_version: str,
-    priors: List[Version],
+    priors: List[MzVersion],
     filter: str,
     style: str = "",
 ) -> None:
@@ -140,12 +138,14 @@ def test_upgrade_from_version(
     for prior in priors:
         for prior_patch_version in range(0, prior.patch):
             prior_patch_versions.append(
-                Version(major=prior.major, minor=prior.minor, patch=prior_patch_version)
+                MzVersion(
+                    major=prior.major, minor=prior.minor, patch=prior_patch_version
+                )
             )
 
     priors = priors + prior_patch_versions
     priors.sort()
-    priors = [f"v{prior}" for prior in priors]
+    priors = [f"{prior}" for prior in priors]
 
     if len(priors) == 0:
         priors = ["*"]
@@ -162,7 +162,7 @@ def test_upgrade_from_version(
             options=[
                 opt
                 for start_version, opt in mz_options.items()
-                if from_version[1:] >= start_version
+                if MzVersion.parse_mz(from_version) >= start_version
             ],
             volumes_extra=["secrets:/share/secrets"],
             external_cockroach=True,

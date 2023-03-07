@@ -78,8 +78,8 @@
   - signature: 'sum(x: T) -> U'
     description: Sum of `T`'s values
       <br><br>
-      Returns `bigint` if `x` is `int`, `numeric` if `x` is `bigint`, else returns
-      same type as `x`.
+      Returns `bigint` if `x` is `int` or `smallint`, `numeric` if `x` is `bigint` or `uint8`,
+      `uint8` if `x` is `uint4` or `uint2`, else returns same type as `x`.
 
   - signature: 'variance(x: T) -> U'
     description: Historical alias for `variance_samp`. *(imprecise)*
@@ -133,6 +133,9 @@
 
   - signature: 'ceil(x: N) -> N'
     description: The smallest integer >= `x`
+
+  - signature: 'ceiling(x: N) -> N'
+    description: "Alias of `ceil`"
 
   - signature: 'exp(x: N) -> N'
     description: Exponential of `x` (e raised to the given power)
@@ -505,9 +508,13 @@
 
 - type: UUID
   functions:
-  - signature: mz_environment_id() -> uuid
-    description: The `uuid` uniquely identifying this Materialize environment.
+  - signature: mz_environment_id() -> text
+    description: A string containing a `uuid` uniquely identifying this Materialize environment.
     unmaterializable: true
+
+  - signature: 'uuid_generate_v5(namespace: uuid, name: text) -> uuid'
+    description: 'Generates a [version 5 UUID](https://www.rfc-editor.org/rfc/rfc4122#page-7) (using SHA-1) in the given namespace using
+      the specified input name.'
 
 - type: JSON
   functions:
@@ -711,6 +718,11 @@
       Returns the names of the schemas on the search path.
       The `include_implicit` parameter controls whether implicit schemas like
       `mz_catalog` and `pg_catalog` are included in the output.
+    unmaterializable: true
+  - signature: 'current_setting(setting_name: text[, missing_ok: bool]) -> text'
+    description: >-
+      Returns the value of the named setting or error if it does not exist.
+      If `missing_ok` is true, return NULL if it does not exist.
     unmaterializable: true
   - signature: 'obj_description(oid: oid, catalog: text) -> text'
     description: PostgreSQL compatibility shim. Currently always returns `NULL`.

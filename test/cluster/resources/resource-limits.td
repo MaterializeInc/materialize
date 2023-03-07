@@ -47,7 +47,7 @@ ALTER SYSTEM SET max_objects_per_schema = 2
 > SHOW max_objects_per_schema
 2
 
-! CREATE TABLE t4 (a INT)
+! CREATE TABLE t5 (a INT)
 contains:Objects per schema resource limit of 2 cannot be exceeded. Current amount is 3 instances, tried to create 1 new instances.
 
 ! CREATE VIEW v as SELECT 1
@@ -57,9 +57,6 @@ contains:Objects per schema resource limit of 2 cannot be exceeded. Current amou
 contains:Objects per schema resource limit of 2 cannot be exceeded. Current amount is 3 instances, tried to create 1 new instances.
 
 ! CREATE TYPE t AS (a float8)
-contains:Objects per schema resource limit of 2 cannot be exceeded. Current amount is 3 instances, tried to create 1 new instances.
-
-! CREATE TABLE t4 (a INT)
 contains:Objects per schema resource limit of 2 cannot be exceeded. Current amount is 3 instances, tried to create 1 new instances.
 
 > CREATE SCHEMA s1;
@@ -121,10 +118,22 @@ ALTER SYSTEM SET max_replicas_per_cluster = 100
 #> CREATE CLUSTER REPLICA c1.r2 SIZE '1'
 
 $ postgres-execute connection=mz_system
-ALTER SYSTEM SET allowed_cluster_replica_sizes = '2', '4'
+ALTER SYSTEM SET allowed_cluster_replica_sizes = '2', 4
 
 > SHOW allowed_cluster_replica_sizes
-"'2', '4'"
+"\"2\", \"4\""
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET allowed_cluster_replica_sizes = "2, 4"
+
+> SHOW allowed_cluster_replica_sizes
+"\"2, 4\""
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET allowed_cluster_replica_sizes = '2, 4'
+
+> SHOW allowed_cluster_replica_sizes
+"\"2, 4\""
 
 ! CREATE CLUSTER REPLICA c1.r3 SIZE '1'
 contains:unknown cluster replica size 1
@@ -181,9 +190,9 @@ ALTER SYSTEM SET max_roles = 2;
 > SHOW max_roles
 2
 
-> CREATE ROLE joe LOGIN SUPERUSER
+> CREATE ROLE joe
 
-! CREATE ROLE mike LOGIN SUPERUSER
+! CREATE ROLE mike
 contains:Role resource limit of 2 cannot be exceeded. Current amount is 2 instances, tried to create 1 new instances.
 
 $ postgres-execute connection=mz_system
@@ -192,7 +201,7 @@ ALTER SYSTEM SET max_roles = 3;
 > SHOW max_roles
 3
 
-> CREATE ROLE mike LOGIN SUPERUSER
+> CREATE ROLE mike
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_secrets = 1

@@ -110,10 +110,16 @@ k2 2 1
 # maintenance it needs.
 perform-maintenance
 ----
+v14 ok
 v15 ok
 v15 ok
 v15 ok
 v15 ok
+v15 ok
+v15 ok
+v16 ok
+v16 ok
+v16 ok
 v16 ok
 v16 ok
 v16 ok

@@ -403,6 +403,16 @@ impl<'a> FromSql<'a> for Slt {
                 }
                 Self(Value::Record(tuple))
             }
+            PgType::INT4_RANGE
+            | PgType::INT8_RANGE
+            | PgType::DATE_RANGE
+            | PgType::NUM_RANGE
+            | PgType::TS_RANGE
+            | PgType::TSTZ_RANGE => {
+                use mz_repr::adt::range::Range;
+                let range: Range<Slt> = Range::from_sql(ty, raw)?;
+                Self(Value::Range(range.into_bounds(|b| Box::new(b.0))))
+            }
 
             _ => match ty.kind() {
                 PgKind::Array(arr_type) => {
@@ -485,6 +495,18 @@ impl<'a> FromSql<'a> for Slt {
                 | PgType::TIMESTAMP
                 | PgType::TIMESTAMPTZ
                 | PgType::UUID
+                | PgType::INT4_RANGE
+                | PgType::INT4_RANGE_ARRAY
+                | PgType::INT8_RANGE
+                | PgType::INT8_RANGE_ARRAY
+                | PgType::DATE_RANGE
+                | PgType::DATE_RANGE_ARRAY
+                | PgType::NUM_RANGE
+                | PgType::NUM_RANGE_ARRAY
+                | PgType::TS_RANGE
+                | PgType::TS_RANGE_ARRAY
+                | PgType::TSTZ_RANGE
+                | PgType::TSTZ_RANGE_ARRAY
         )
     }
 }
@@ -860,6 +882,7 @@ impl RunnerInner {
             connection_context,
             tracing_handle: TracingHandle::disabled(),
             storage_usage_collection_interval: Duration::from_secs(3600),
+            storage_usage_retention_period: None,
             segment_api_key: None,
             egress_ips: vec![],
             aws_account_id: None,

@@ -14,7 +14,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_sql::ast::{AstInfo, Statement, StatementKind};
 
-use crate::session::Session;
+use crate::session::User;
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
@@ -69,8 +69,8 @@ impl Metrics {
     }
 }
 
-pub(crate) fn session_type_label_value(session: &Session) -> &'static str {
-    match session.is_system() {
+pub(crate) fn session_type_label_value(user: &User) -> &'static str {
+    match user.is_internal() {
         true => "system",
         false => "user",
     }
@@ -104,6 +104,7 @@ where
         StatementKind::CreateSecret => "create_secret",
         StatementKind::AlterObjectRename => "alter_object_rename",
         StatementKind::AlterIndex => "alter_index",
+        StatementKind::AlterRole => "alter_role",
         StatementKind::AlterSecret => "alter_secret",
         StatementKind::AlterSink => "alter_sink",
         StatementKind::AlterSource => "alter_source",

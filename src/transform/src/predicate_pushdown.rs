@@ -337,6 +337,44 @@ impl PredicatePushdown {
                             // remove all predicates that were pushed down from the current Filter node
                             std::mem::swap(&mut retain, predicates);
                         }
+                        MirRelationExpr::TopK {
+                            input,
+                            group_key,
+                            order_key: _,
+                            limit: _,
+                            offset: _,
+                            monotonic: _,
+                        } => {
+                            let mut retain = Vec::new();
+                            let mut push_down = Vec::new();
+
+                            let group_key_cols = BTreeSet::from_iter(group_key.iter().cloned());
+
+                            for predicate in predicates.drain(..) {
+                                // Do not push down literal errors unless it is only errors.
+                                if (!predicate.is_literal_err() || all_errors)
+                                    && predicate.support().is_subset(&group_key_cols)
+                                {
+                                    push_down.push(predicate);
+                                } else {
+                                    retain.push(predicate);
+                                }
+                            }
+
+                            // remove all predicates that were pushed down from the current Filter node
+                            std::mem::swap(&mut retain, predicates);
+
+                            if !push_down.is_empty() {
+                                *input = Box::new(input.take_dangerous().filter(push_down));
+                            }
+
+                            self.action(input, get_predicates)?;
+                        }
+                        MirRelationExpr::Threshold { input } => {
+                            let predicates = std::mem::take(predicates);
+                            *relation = input.take_dangerous().filter(predicates).threshold();
+                            self.action(relation, get_predicates)?;
+                        }
                         MirRelationExpr::Project { input, outputs } => {
                             let predicates = predicates.drain(..).map(|mut predicate| {
                                 predicate.permute(outputs);
@@ -368,7 +406,7 @@ impl PredicatePushdown {
                                 input.arity(),
                                 all_errors,
                             )?;
-                            let scalars = std::mem::replace(scalars, Vec::new());
+                            let scalars = std::mem::take(scalars);
                             let mut result = input.take_dangerous();
                             if !pushdown.is_empty() {
                                 result = result.filter(pushdown);
@@ -396,7 +434,7 @@ impl PredicatePushdown {
                             self.action(input, get_predicates)?;
                         }
                         MirRelationExpr::Union { base, inputs } => {
-                            let predicates = std::mem::replace(predicates, Vec::new());
+                            let predicates = std::mem::take(predicates);
                             *base = Box::new(base.take_dangerous().filter(predicates.clone()));
                             self.action(base, get_predicates)?;
                             for input in inputs {
@@ -405,7 +443,7 @@ impl PredicatePushdown {
                             }
                         }
                         MirRelationExpr::Negate { input: inner } => {
-                            let predicates = std::mem::replace(predicates, Vec::new());
+                            let predicates = std::mem::take(predicates);
                             *relation = inner.take_dangerous().filter(predicates).negate();
                             self.action(relation, get_predicates)?;
                         }

@@ -266,7 +266,7 @@ pub enum ComputeLog {
     PeekCurrent,
     PeekDuration,
     FrontierDelay,
-    SourceFrontierCurrent,
+    ImportFrontierCurrent,
 }
 
 impl RustType<ProtoComputeLog> for ComputeLog {
@@ -280,7 +280,7 @@ impl RustType<ProtoComputeLog> for ComputeLog {
                 ComputeLog::PeekCurrent => PeekCurrent(()),
                 ComputeLog::PeekDuration => PeekDuration(()),
                 ComputeLog::FrontierDelay => FrontierDelay(()),
-                ComputeLog::SourceFrontierCurrent => SourceFrontierCurrent(()),
+                ComputeLog::ImportFrontierCurrent => ImportFrontierCurrent(()),
             }),
         }
     }
@@ -294,7 +294,7 @@ impl RustType<ProtoComputeLog> for ComputeLog {
             Some(PeekCurrent(())) => Ok(ComputeLog::PeekCurrent),
             Some(PeekDuration(())) => Ok(ComputeLog::PeekDuration),
             Some(FrontierDelay(())) => Ok(ComputeLog::FrontierDelay),
-            Some(SourceFrontierCurrent(())) => Ok(ComputeLog::SourceFrontierCurrent),
+            Some(ImportFrontierCurrent(())) => Ok(ComputeLog::ImportFrontierCurrent),
             None => Err(TryFromProtoError::missing_field("ProtoComputeLog::kind")),
         }
     }
@@ -317,7 +317,7 @@ pub static DEFAULT_LOG_VARIANTS: Lazy<Vec<LogVariant>> = Lazy::new(|| {
         LogVariant::Compute(ComputeLog::DataflowCurrent),
         LogVariant::Compute(ComputeLog::DataflowDependency),
         LogVariant::Compute(ComputeLog::FrontierCurrent),
-        LogVariant::Compute(ComputeLog::SourceFrontierCurrent),
+        LogVariant::Compute(ComputeLog::ImportFrontierCurrent),
         LogVariant::Compute(ComputeLog::FrontierDelay),
         LogVariant::Compute(ComputeLog::PeekCurrent),
         LogVariant::Compute(ComputeLog::PeekDuration),
@@ -741,7 +741,7 @@ impl LogVariant {
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("time", ScalarType::MzTimestamp.nullable(false)),
 
-            LogVariant::Compute(ComputeLog::SourceFrontierCurrent) => RelationDesc::empty()
+            LogVariant::Compute(ComputeLog::ImportFrontierCurrent) => RelationDesc::empty()
                 .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("import_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
@@ -814,7 +814,7 @@ impl LogVariant {
             LogVariant::Compute(ComputeLog::DataflowCurrent) => vec![],
             LogVariant::Compute(ComputeLog::DataflowDependency) => vec![],
             LogVariant::Compute(ComputeLog::FrontierCurrent) => vec![],
-            LogVariant::Compute(ComputeLog::SourceFrontierCurrent) => vec![],
+            LogVariant::Compute(ComputeLog::ImportFrontierCurrent) => vec![],
             LogVariant::Compute(ComputeLog::FrontierDelay) => vec![],
             LogVariant::Compute(ComputeLog::PeekCurrent) => vec![],
             LogVariant::Compute(ComputeLog::PeekDuration) => vec![],

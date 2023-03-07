@@ -465,17 +465,28 @@ impl Optimizer {
     pub fn physical_optimizer() -> Self {
         // Implementation transformations
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
-            // It's important that
-            // - there is a run of LiteralConstraints before JoinImplementation lifts away the
-            //   Filters from the Gets;
-            // - there is no RelationCSE between this LiteralConstraints and JoinImplementation,
-            //   because that could move an IndexedFilter behind a Get.
+            // Considerations for the relationship between JoinImplementation and other transforms:
+            // - there should be a run of LiteralConstraints before JoinImplementation lifts away
+            //   the Filters from the Gets;
+            // - there should be no RelationCSE between this LiteralConstraints and
+            //   JoinImplementation, because that could move an IndexedFilter behind a Get.
+            // - The last RelationCSE before JoinImplementation should be with inline_mfp = true.
+            // - Currently, JoinImplementation has to be in the same fixpoint loop with
+            //   LiteralLifting, because the latter sometimes creates `Unimplemented` joins
+            //   (despite LiteralLifting already having been run in the logical optimizer).
+            //
+            // Also note that FoldConstants and LiteralLifting are not confluent. They can
+            // oscillate between e.g.:
+            //         Constant
+            //           - (4)
+            // and
+            //         Map (4)
+            //           Constant
+            //             - ()
             Box::new(crate::literal_constraints::LiteralConstraints),
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![
-                    // The last RelationCSE before JoinImplementation should be with
-                    // inline_mfp = true.
                     Box::new(crate::join_implementation::JoinImplementation::default()),
                     Box::new(crate::column_knowledge::ColumnKnowledge::default()),
                     Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),

@@ -213,8 +213,9 @@ message ProtoPostgresSourcePublicationDetails {
 }
 
 message ProtoLoadGeneratorSourceConnection {
+    reserved 1;
     oneof generator {
-        google.protobuf.Empty counter = 1;
+        ProtoCounterLoadGenerator counter = 6;
         google.protobuf.Empty auction = 3;
         ProtoTpchLoadGenerator tpch = 4;
         google.protobuf.Empty datums = 5;
@@ -226,6 +227,11 @@ message ProtoTestScriptSourceConnection {
     string desc_json = 1;
 }
 
+message ProtoCounterLoadGenerator {
+    // Must be non-negative,
+    // but kept as int64 to make downstream logic simpler
+    optional int64 max_cardinality = 1;
+}
 
 message ProtoTpchLoadGenerator {
     int64 count_supplier = 1;
@@ -273,4 +279,5 @@ message ProtoIngestionDescription {
     ProtoSourceDesc desc = 4;
     reserved 5;
     mz_storage_client.types.instances.ProtoStorageInstanceId instance_id = 6;
+    mz_repr.global_id.ProtoGlobalId remap_collection_id = 7;
 }

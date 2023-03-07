@@ -206,3 +206,86 @@ COMPLETE 0
 
 statement error parameter "idle_in_transaction_session_timeout" requires a "duration" value
 SET idle_in_transaction_session_timeout TO '-10ms'
+
+statement error unrecognized configuration parameter
+SELECT current_setting('unknown')
+
+statement error does not exist
+SELECT current_setting(true)
+
+query T
+SELECT current_setting('unknown', true)
+----
+NULL
+
+query T
+SELECT current_setting('unknown', 'true')
+----
+NULL
+
+statement error does not exist
+SELECT current_setting('datestyle', 3)
+
+statement error unrecognized configuration parameter
+SELECT current_setting('unknown', false)
+
+query T
+SELECT current_setting('dateSTYLE')
+----
+ISO, MDY
+
+statement ok
+SET cluster_replica = 'r1'
+
+query T
+SELECT current_setting('cluster') || '.' || current_setting('cluster_replica')
+----
+default.r1
+
+query T
+SELECT current_setting('max_tables')
+----
+100
+
+# Test multi-valued variable planning.
+
+simple
+set datestyle = iso,mdy;
+show datestyle;
+set datestyle = iso, mdy;
+show datestyle;
+set datestyle = "iso,mdy";
+show datestyle;
+set datestyle = "iso, mdy";
+show datestyle;
+set datestyle = 'iso,mdy';
+show datestyle;
+set datestyle = 'iso, mdy';
+show datestyle;
+set datestyle = '"iso", "mdy", "iso", "mdy"', "mdy", "iso", "ISO", "IsO", "mDy";
+show datestyle;
+----
+COMPLETE 0
+ISO, MDY
+COMPLETE 1
+COMPLETE 0
+ISO, MDY
+COMPLETE 1
+COMPLETE 0
+ISO, MDY
+COMPLETE 1
+COMPLETE 0
+ISO, MDY
+COMPLETE 1
+COMPLETE 0
+ISO, MDY
+COMPLETE 1
+COMPLETE 0
+ISO, MDY
+COMPLETE 1
+COMPLETE 0
+ISO, MDY
+COMPLETE 1
+
+statement error parameter "database" requires a "string" value
+set database = one, two

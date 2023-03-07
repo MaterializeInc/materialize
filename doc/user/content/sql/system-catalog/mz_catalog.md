@@ -12,6 +12,12 @@ These relations which contain metadata about objects within the Materialize inst
 This incudes descriptions of each database, schema, source, table, view, sink, and
 index in the system.
 
+{{< warning >}}
+Views that directly reference these objects cannot include `NATURAL JOIN` or
+`*` expressions. Instead, project the required columns and convert all `NATURAL JOIN`s
+to `USING` joins.
+{{< /warning >}}
+
 ### `mz_array_types`
 
 The `mz_array_types` table contains a row for each array type in the system.

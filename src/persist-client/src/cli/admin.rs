@@ -117,13 +117,16 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn info_log_non_zero_metrics(metric_families: &[MetricFamily]) {
+pub(crate) fn info_log_non_zero_metrics(metric_families: &[MetricFamily]) {
     for mf in metric_families {
         for m in mf.get_metric() {
             let val = match mf.get_field_type() {
                 MetricType::COUNTER => m.get_counter().get_value(),
                 MetricType::GAUGE => m.get_gauge().get_value(),
-                x => unimplemented!("unhandled metric type: {:?}", x),
+                x => {
+                    warn!("unhandled {} metric type: {:?}", mf.get_name(), x);
+                    continue;
+                }
             };
             if val == 0.0 {
                 continue;
@@ -238,9 +241,12 @@ pub async fn force_compaction(
                     .sum::<usize>(),
                 start.elapsed(),
             );
-            let apply_res = machine
+            let (apply_res, maintenance) = machine
                 .merge_res(&FueledMergeRes { output: res.output })
                 .await;
+            if !maintenance.is_empty() {
+                info!("ignoring non-empty requested maintenance: {maintenance:?}")
+            }
             match apply_res {
                 ApplyMergeResult::AppliedExact | ApplyMergeResult::AppliedSubset => {
                     info!("attempt {} req {}: {:?}", attempt, idx, apply_res);
@@ -442,7 +448,10 @@ async fn force_gc(
         shard_id,
         new_seqno_since: machine.applier.state().seqno_since(),
     };
-    GarbageCollector::gc_and_truncate(&mut machine, gc_req).await;
+    let maintenance = GarbageCollector::gc_and_truncate(&mut machine, gc_req).await;
+    if !maintenance.is_empty() {
+        info!("ignoring non-empty requested maintenance: {maintenance:?}")
+    }
 
     Ok(Box::new(machine))
 }

@@ -10,9 +10,11 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
+use std::iter::Peekable;
 use std::marker::PhantomData;
 use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
 use std::ops::{Deref, DerefMut};
+use std::slice;
 use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
@@ -202,6 +204,65 @@ impl<T: Ord> Ord for HollowBatch<T> {
     }
 }
 
+impl<T> HollowBatch<T> {
+    pub(crate) fn runs(&self) -> HollowBatchRunIter<T> {
+        HollowBatchRunIter {
+            batch: self,
+            inner: self.runs.iter().peekable(),
+            emitted_implicit: false,
+        }
+    }
+}
+
+pub(crate) struct HollowBatchRunIter<'a, T> {
+    batch: &'a HollowBatch<T>,
+    inner: Peekable<slice::Iter<'a, usize>>,
+    emitted_implicit: bool,
+}
+
+impl<'a, T> Iterator for HollowBatchRunIter<'a, T> {
+    type Item = &'a [HollowBatchPart];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.batch.parts.is_empty() {
+            return None;
+        }
+
+        if !self.emitted_implicit {
+            self.emitted_implicit = true;
+            return Some(match self.inner.peek() {
+                None => &self.batch.parts,
+                Some(run_end) => &self.batch.parts[0..**run_end],
+            });
+        }
+
+        if let Some(run_start) = self.inner.next() {
+            return Some(match self.inner.peek() {
+                Some(run_end) => &self.batch.parts[*run_start..**run_end],
+                None => &self.batch.parts[*run_start..],
+            });
+        }
+
+        None
+    }
+}
+
+/// A pointer to a rollup stored externally.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct HollowRollup {
+    /// Pointer usable to retrieve the rollup.
+    pub key: PartialRollupKey,
+    /// The encoded size of this rollup, if known.
+    pub encoded_size_bytes: Option<usize>,
+}
+
+/// A pointer to a blob stored externally.
+#[derive(Debug)]
+pub enum HollowBlobRef<'a, T> {
+    Batch(&'a HollowBatch<T>),
+    Rollup(&'a HollowRollup),
+}
+
 /// A sentinel for a state transition that was a no-op.
 ///
 /// Critically, this also indicates that the no-op state transition was not
@@ -219,7 +280,7 @@ pub struct StateCollections<T> {
     pub(crate) last_gc_req: SeqNo,
 
     // - Invariant: There is a rollup with `seqno <= self.seqno_since`.
-    pub(crate) rollups: BTreeMap<SeqNo, PartialRollupKey>,
+    pub(crate) rollups: BTreeMap<SeqNo, HollowRollup>,
 
     pub(crate) leased_readers: BTreeMap<LeasedReaderId, LeasedReaderState<T>>,
     pub(crate) critical_readers: BTreeMap<CriticalReaderId, CriticalReaderState<T>>,
@@ -249,21 +310,21 @@ where
 {
     pub fn add_and_remove_rollups(
         &mut self,
-        add_rollup: (SeqNo, &PartialRollupKey),
+        add_rollup: (SeqNo, &HollowRollup),
         remove_rollups: &[(SeqNo, PartialRollupKey)],
     ) -> ControlFlow<NoOpStateTransition<bool>, bool> {
-        let (rollup_seqno, rollup_key) = add_rollup;
+        let (rollup_seqno, rollup) = add_rollup;
         let applied = match self.rollups.get(&rollup_seqno) {
-            Some(x) => x == rollup_key,
+            Some(x) => x.key == rollup.key,
             None => {
-                self.rollups.insert(rollup_seqno, rollup_key.to_owned());
+                self.rollups.insert(rollup_seqno, rollup.to_owned());
                 true
             }
         };
         for (seqno, key) in remove_rollups {
             let removed_key = self.rollups.remove(seqno);
             debug_assert!(
-                removed_key.as_ref().map_or(true, |x| x == key),
+                removed_key.as_ref().map_or(true, |x| &x.key == key),
                 "{} vs {:?}",
                 key,
                 removed_key
@@ -1020,11 +1081,25 @@ where
         self.collections.trace.num_updates()
     }
 
-    pub fn batch_size_metrics(&self) -> (usize, usize) {
-        self.collections.trace.batch_size_metrics()
+    pub fn size_metrics(&self) -> StateSizeMetrics {
+        let mut ret = StateSizeMetrics::default();
+        self.map_blobs(|x| match x {
+            HollowBlobRef::Batch(x) => {
+                let mut batch_size = 0;
+                for x in x.parts.iter() {
+                    batch_size += x.encoded_size_bytes;
+                }
+                ret.largest_batch_bytes = std::cmp::max(ret.largest_batch_bytes, batch_size);
+                ret.state_batches_bytes += batch_size;
+            }
+            HollowBlobRef::Rollup(x) => {
+                ret.state_rollups_bytes += x.encoded_size_bytes.unwrap_or_default()
+            }
+        });
+        ret
     }
 
-    pub fn latest_rollup(&self) -> (&SeqNo, &PartialRollupKey) {
+    pub fn latest_rollup(&self) -> (&SeqNo, &HollowRollup) {
         // We maintain the invariant that every version of state has at least
         // one rollup.
         self.collections
@@ -1188,6 +1263,22 @@ where
             None
         }
     }
+
+    pub(crate) fn map_blobs<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
+        self.collections
+            .trace
+            .map_batches(|x| f(HollowBlobRef::Batch(x)));
+        for x in self.collections.rollups.values() {
+            f(HollowBlobRef::Rollup(x));
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct StateSizeMetrics {
+    pub largest_batch_bytes: usize,
+    pub state_batches_bytes: usize,
+    pub state_rollups_bytes: usize,
 }
 
 #[derive(Default)]

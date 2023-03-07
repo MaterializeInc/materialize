@@ -6,18 +6,9 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-# Copyright Materialize, Inc. and contributors. All rights reserved.
-#
-# Use of this software is governed by the Business Source License
-# included in the LICENSE file at the root of this repository.
-#
-# As of the Change Date specified in that file, in accordance with
-# the Business Source License, use of this software will be governed
-# by the Apache License, Version 2.0.
 
 from typing import List
 
-from materialize import util
 from materialize.checks.actions import Action, Initialize, Manipulate, Sleep, Validate
 from materialize.checks.mzcompose_actions import (
     KillClusterdCompute,
@@ -27,43 +18,44 @@ from materialize.checks.mzcompose_actions import (
     UseClusterdCompute,
 )
 from materialize.checks.scenarios import Scenario
+from materialize.util import MzVersion, released_materialize_versions
 
-released_versions = util.released_materialize_versions()
+released_versions = released_materialize_versions()
 
 # Usually, the latest patch version of the current release
-last_version = f"v{released_versions[0]}"
+last_version = released_versions[0]
 
 # Usually, the last patch version of the previous release
-previous_version = f"v{released_versions[1]}"
+previous_version = released_versions[1]
 
 
 class UpgradeEntireMz(Scenario):
     """Upgrade the entire Mz instance from the last released version."""
 
-    def tag(self) -> str:
+    def base_version(self) -> MzVersion:
         return last_version
 
     def actions(self) -> List[Action]:
-        print(f"Upgrading from tag {self.tag()}")
+        print(f"Upgrading from tag {self.base_version()}")
         return [
-            StartMz(tag=self.tag()),
-            Initialize(self.checks),
-            Manipulate(self.checks, phase=1),
+            StartMz(tag=self.base_version()),
+            Initialize(self),
+            Manipulate(self, phase=1),
             KillMz(),
             StartMz(tag=None),
-            Manipulate(self.checks, phase=2),
-            Validate(self.checks),
+            Manipulate(self, phase=2),
+            Validate(self),
             # A second restart while already on the new version
             KillMz(),
             StartMz(tag=None),
-            Validate(self.checks),
+            Validate(self),
         ]
 
 
 class UpgradeEntireMzPreviousVersion(UpgradeEntireMz):
     """Upgrade the entire Mz instance from the previous released version."""
 
-    def tag(self) -> str:
+    def base_version(self) -> MzVersion:
         return previous_version
 
 
@@ -79,13 +71,16 @@ class UpgradeEntireMzPreviousVersion(UpgradeEntireMz):
 class UpgradeClusterdComputeLast(Scenario):
     """Upgrade compute's clusterd separately after upgrading environmentd"""
 
+    def base_version(self) -> MzVersion:
+        return last_version
+
     def actions(self) -> List[Action]:
         return [
-            StartMz(tag=last_version),
-            StartClusterdCompute(tag=last_version),
-            UseClusterdCompute(),
-            Initialize(self.checks),
-            Manipulate(self.checks, phase=1),
+            StartMz(tag=self.base_version()),
+            StartClusterdCompute(tag=self.base_version()),
+            UseClusterdCompute(self),
+            Initialize(self),
+            Manipulate(self, phase=1),
             KillMz(),
             StartMz(tag=None),
             # No useful work can be done while clusterd is old-version
@@ -96,25 +91,28 @@ class UpgradeClusterdComputeLast(Scenario):
             Sleep(10),
             KillClusterdCompute(),
             StartClusterdCompute(tag=None),
-            Manipulate(self.checks, phase=2),
-            Validate(self.checks),
+            Manipulate(self, phase=2),
+            Validate(self),
             # A second restart while already on the new version
             KillMz(),
             StartMz(tag=None),
-            Validate(self.checks),
+            Validate(self),
         ]
 
 
 class UpgradeClusterdComputeFirst(Scenario):
     """Upgrade compute's clusterd separately before environmentd"""
 
+    def base_version(self) -> MzVersion:
+        return last_version
+
     def actions(self) -> List[Action]:
         return [
-            StartMz(tag=last_version),
-            StartClusterdCompute(tag=last_version),
-            UseClusterdCompute(),
-            Initialize(self.checks),
-            Manipulate(self.checks, phase=1),
+            StartMz(tag=self.base_version()),
+            StartClusterdCompute(tag=self.base_version()),
+            UseClusterdCompute(self),
+            Initialize(self),
+            Manipulate(self, phase=1),
             KillClusterdCompute(),
             StartClusterdCompute(tag=None),
             # No useful work can be done while clusterd is new-version
@@ -125,9 +123,9 @@ class UpgradeClusterdComputeFirst(Scenario):
             Sleep(10),
             KillMz(),
             StartMz(tag=None),
-            Manipulate(self.checks, phase=2),
-            Validate(self.checks),
+            Manipulate(self, phase=2),
+            Validate(self),
             KillMz(),
             StartMz(tag=None),
-            Validate(self.checks),
+            Validate(self),
         ]

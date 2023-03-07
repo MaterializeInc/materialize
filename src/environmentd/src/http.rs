@@ -239,10 +239,7 @@ impl InternalHttpServer {
                 routing::get(catalog::handle_internal_catalog),
             )
             .layer(DefaultBodyLimit::max(MAX_REQUEST_SIZE))
-            .layer(Extension(AuthedUser {
-                user: SYSTEM_USER.clone(),
-                create_if_not_exists: false,
-            }))
+            .layer(Extension(AuthedUser(SYSTEM_USER.clone())))
             .layer(Extension(adapter_client_rx.shared()));
         InternalHttpServer { router }
     }
@@ -270,24 +267,16 @@ enum ConnProtocol {
 }
 
 #[derive(Clone, Debug)]
-struct AuthedUser {
-    user: User,
-    create_if_not_exists: bool,
-}
+struct AuthedUser(User);
 
 pub struct AuthedClient(pub SessionClient);
 
 impl AuthedClient {
     async fn new(adapter_client: &Client, user: AuthedUser) -> Result<Self, AdapterError> {
-        let AuthedUser {
-            user,
-            create_if_not_exists,
-        } = user;
+        let AuthedUser(user) = user;
         let adapter_client = adapter_client.new_conn()?;
         let session = adapter_client.new_session(user);
-        let (adapter_client, _) = adapter_client
-            .startup(session, create_if_not_exists)
-            .await?;
+        let (adapter_client, _) = adapter_client.startup(session).await?;
         Ok(AuthedClient(adapter_client))
     }
 }
@@ -471,7 +460,7 @@ async fn auth(
 
     // Then, handle Frontegg authentication if required.
     let user = match (frontegg, creds) {
-        // If no Frontegg authentication, user the requested user or the default
+        // If no Frontegg authentication, use the requested user or the default
         // HTTP user.
         (None, Credentials::User(user)) => User {
             name: user.unwrap_or_else(|| HTTP_DEFAULT_USER.name.to_string()),
@@ -501,6 +490,7 @@ async fn auth(
                 external_metadata: Some(ExternalUserMetadata {
                     user_id: claims.best_user_id(),
                     group_id: claims.tenant_id,
+                    admin: claims.admin(frontegg.admin_role()),
                 }),
                 name: claims.email,
             }
@@ -510,13 +500,7 @@ async fn auth(
     if mz_adapter::catalog::is_reserved_name(user.name.as_str()) {
         return Err(AuthError::InvalidLogin(user.name));
     }
-    Ok(AuthedUser {
-        user,
-        // The internal server adds this as false, but here the external server
-        // is either in local dev or in production, so we always want to auto
-        // create users.
-        create_if_not_exists: true,
-    })
+    Ok(AuthedUser(user))
 }
 
 /// Configuration for [`base_router`].

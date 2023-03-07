@@ -43,15 +43,17 @@ class StdDevAggregation(Aggregation):
         self._num_stdevs = num_stdevs
 
     def aggregate(self) -> float:
-        stdev: float = np.std(self._data)
-        mean: float = np.mean(self._data)
+        stdev: float = np.std(self._data, dtype=float)
+        mean: float = np.mean(self._data, dtype=float)
         val = mean - (stdev * self._num_stdevs)
         return val
 
 
 class NormalDistributionAggregation(Aggregation):
     def aggregate(self) -> statistics.NormalDist:
-        return statistics.NormalDist(mu=np.mean(self._data), sigma=np.std(self._data))
+        return statistics.NormalDist(
+            mu=np.mean(self._data, dtype=float), sigma=np.std(self._data, dtype=float)
+        )
 
 
 class NoAggregation(Aggregation):

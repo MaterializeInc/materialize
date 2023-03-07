@@ -27,6 +27,8 @@
 /src/build-info                     @benesch
 /src/ccsr                           @benesch
 /src/cloud-resources                @MaterializeInc/cloud
+/src/cluster                        @MaterializeInc/compute @MaterializeInc/storage
+/src/cluster-client                 @MaterializeInc/compute @MaterializeInc/storage
 /src/clusterd                       @MaterializeInc/compute @MaterializeInc/storage
 /src/compute                        @MaterializeInc/compute
 /src/compute-client                 @MaterializeInc/compute

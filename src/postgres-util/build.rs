@@ -91,5 +91,5 @@ fn main() {
         // broad, but it's better.
         .emit_rerun_if_changed(false)
         .compile_with_config(config, &["postgres-util/src/desc.proto"], &[".."])
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"))
 }

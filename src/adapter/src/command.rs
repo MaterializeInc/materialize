@@ -11,6 +11,7 @@
 // https://github.com/rust-lang/rust-clippy/pull/9037 makes it into stable
 #![allow(clippy::extra_unused_lifetimes)]
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -38,7 +39,6 @@ use crate::util::Transmittable;
 pub enum Command {
     Startup {
         session: Session,
-        create_user_if_not_exists: bool,
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
     },
@@ -102,10 +102,41 @@ pub enum Command {
         tx: oneshot::Sender<Response<ExecuteResponse>>,
     },
 
+    GetSystemVars {
+        session: Session,
+        tx: oneshot::Sender<Response<BTreeMap<String, String>>>,
+    },
+
+    SetSystemVars {
+        vars: BTreeMap<String, String>,
+        session: Session,
+        tx: oneshot::Sender<Response<()>>,
+    },
+
     Terminate {
         session: Session,
         tx: Option<oneshot::Sender<Response<()>>>,
     },
+}
+
+impl Command {
+    pub fn session(&mut self) -> Option<&mut Session> {
+        match self {
+            Command::Startup { session, .. }
+            | Command::Declare { session, .. }
+            | Command::Describe { session, .. }
+            | Command::VerifyPreparedStatement { session, .. }
+            | Command::Execute { session, .. }
+            | Command::StartTransaction { session, .. }
+            | Command::Commit { session, .. }
+            | Command::DumpCatalog { session, .. }
+            | Command::CopyRows { session, .. }
+            | Command::GetSystemVars { session, .. }
+            | Command::SetSystemVars { session, .. }
+            | Command::Terminate { session, .. } => Some(session),
+            Command::CancelRequest { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -177,6 +208,8 @@ pub enum ExecuteResponse {
     AlteredObject(ObjectType),
     /// The index was altered.
     AlteredIndexLogicalCompaction,
+    /// The role was altered.
+    AlteredRole,
     /// The system configuration was altered.
     AlteredSystemConfiguration,
     /// The query was canceled.
@@ -311,6 +344,7 @@ impl ExecuteResponse {
         match self {
             AlteredObject(o) => Some(format!("ALTER {}", o)),
             AlteredIndexLogicalCompaction => Some("ALTER INDEX".into()),
+            AlteredRole => Some("ALTER ROLE".into()),
             AlteredSystemConfiguration => Some("ALTER SYSTEM".into()),
             Canceled => None,
             ClosedCursor => Some("CLOSE CURSOR".into()),
@@ -390,6 +424,7 @@ impl ExecuteResponse {
             AlterIndexSetOptions | AlterIndexResetOptions => {
                 vec![AlteredObject, AlteredIndexLogicalCompaction]
             }
+            AlterRole => vec![AlteredRole],
             AlterSystemSet | AlterSystemReset | AlterSystemResetAll => {
                 vec![AlteredSystemConfiguration]
             }

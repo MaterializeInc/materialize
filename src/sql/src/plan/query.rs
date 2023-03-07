@@ -108,7 +108,7 @@ pub fn plan_root_query(
     mut query: Query<Aug>,
     lifetime: QueryLifetime,
 ) -> Result<PlannedQuery<HirRelationExpr>, PlanError> {
-    transform_ast::transform_query(scx, &mut query)?;
+    transform_ast::transform(scx, &mut query)?;
     let mut qcx = QueryContext::root(scx, lifetime);
     let (mut expr, scope, mut finishing) = plan_query(&mut qcx, &query)?;
 
@@ -189,9 +189,14 @@ pub fn plan_insert_query(
         );
     }
     let desc = table.desc(&scx.catalog.resolve_full_name(table.name()))?;
-    let defaults = table
+    let mut defaults = table
         .table_details()
-        .expect("attempted to insert into non-table");
+        .expect("attempted to insert into non-table")
+        .to_vec();
+
+    for default in &mut defaults {
+        transform_ast::transform(scx, default)?;
+    }
 
     if table.id().is_system() {
         sql_bail!(
@@ -238,7 +243,7 @@ pub fn plan_insert_query(
     // Plan the source.
     let expr = match source {
         InsertSource::Query(mut query) => {
-            transform_ast::transform_query(scx, &mut query)?;
+            transform_ast::transform(scx, &mut query)?;
 
             match query {
                 // Special-case simple VALUES clauses as PostgreSQL does.
@@ -307,7 +312,7 @@ pub fn plan_insert_query(
         if let Some(src_idx) = col_to_source.get(&col_idx) {
             project_key.push(*src_idx);
         } else {
-            let hir = plan_default_expr(scx, default, &col_typ.scalar_type)?;
+            let hir = plan_default_expr(scx, &default, &col_typ.scalar_type)?;
             project_key.push(expr_arity + map_exprs.len());
             map_exprs.push(hir);
         }
@@ -335,7 +340,8 @@ pub fn plan_insert_query(
         let mut output_columns = vec![];
         let mut new_exprs = vec![];
         let mut new_type = RelationType::empty();
-        for si in returning {
+        for mut si in returning {
+            transform_ast::transform(scx, &mut si)?;
             for (select_item, column_name) in expand_select_item(ecx, &si, &table_func_names)? {
                 let expr = match &select_item {
                     ExpandedSelectItem::InputOrdinal(i) => HirScalarExpr::column(*i),
@@ -444,12 +450,19 @@ pub fn plan_copy_from_rows(
     columns: Vec<usize>,
     rows: Vec<mz_repr::Row>,
 ) -> Result<HirRelationExpr, PlanError> {
+    let scx = StatementContext::new(Some(pcx), catalog);
+
     let table = catalog.get_item(&id);
     let desc = table.desc(&catalog.resolve_full_name(table.name()))?;
 
-    let defaults = table
+    let mut defaults = table
         .table_details()
-        .expect("attempted to insert into non-table");
+        .expect("attempted to insert into non-table")
+        .to_vec();
+
+    for default in &mut defaults {
+        transform_ast::transform(&scx, default)?;
+    }
 
     let column_types = columns
         .iter()
@@ -484,14 +497,12 @@ pub fn plan_copy_from_rows(
     // Maps from table column index to position in the source query
     let col_to_source: BTreeMap<_, _> = columns.iter().enumerate().map(|(a, b)| (b, a)).collect();
 
-    let scx = StatementContext::new(Some(pcx), catalog);
-
     let column_details = desc.iter_types().zip_eq(defaults).enumerate();
     for (col_idx, (col_typ, default)) in column_details {
         if let Some(src_idx) = col_to_source.get(&col_idx) {
             project_key.push(*src_idx);
         } else {
-            let hir = plan_default_expr(&scx, default, &col_typ.scalar_type)?;
+            let hir = plan_default_expr(&scx, &default, &col_typ.scalar_type)?;
             project_key.push(typ.arity() + map_exprs.len());
             map_exprs.push(hir);
         }
@@ -514,11 +525,7 @@ pub fn plan_delete_query(
     scx: &StatementContext,
     mut delete_stmt: DeleteStatement<Aug>,
 ) -> Result<ReadThenWritePlan, PlanError> {
-    transform_ast::run_transforms(
-        scx,
-        |t, delete_stmt| t.visit_delete_statement_mut(delete_stmt),
-        &mut delete_stmt,
-    )?;
+    transform_ast::transform(scx, &mut delete_stmt)?;
 
     let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
     plan_mutation_query_inner(
@@ -535,11 +542,7 @@ pub fn plan_update_query(
     scx: &StatementContext,
     mut update_stmt: UpdateStatement<Aug>,
 ) -> Result<ReadThenWritePlan, PlanError> {
-    transform_ast::run_transforms(
-        scx,
-        |t, update_stmt| t.visit_update_statement_mut(update_stmt),
-        &mut update_stmt,
-    )?;
+    transform_ast::transform(scx, &mut update_stmt)?;
 
     let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
 
@@ -816,7 +819,7 @@ pub fn plan_up_to(
     let scope = Scope::empty();
     let desc = RelationDesc::empty();
     let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
-    transform_ast::transform_expr(scx, &mut up_to)?;
+    transform_ast::transform(scx, &mut up_to)?;
     let ecx = &ExprContext {
         qcx: &qcx,
         name: "UP TO",
@@ -843,7 +846,7 @@ pub fn plan_as_of(
                 let scope = Scope::empty();
                 let desc = RelationDesc::empty();
                 let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
-                transform_ast::transform_expr(scx, expr)?;
+                transform_ast::transform(scx, expr)?;
                 let ecx = &ExprContext {
                     qcx: &qcx,
                     name: "AS OF",
@@ -874,7 +877,7 @@ pub fn plan_secret_as(
     let desc = RelationDesc::empty();
     let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
 
-    transform_ast::transform_expr(scx, &mut expr)?;
+    transform_ast::transform(scx, &mut expr)?;
 
     let ecx = &ExprContext {
         qcx: &qcx,
@@ -932,7 +935,7 @@ pub fn plan_params<'a>(
     let mut types = Vec::new();
     let temp_storage = &RowArena::new();
     for (mut expr, ty) in params.into_iter().zip(&desc.param_types) {
-        transform_ast::transform_expr(scx, &mut expr)?;
+        transform_ast::transform(scx, &mut expr)?;
 
         let ecx = &ExprContext {
             qcx: &qcx,
@@ -979,7 +982,7 @@ pub fn plan_index_exprs<'a>(
     };
     let mut out = vec![];
     for mut expr in exprs {
-        transform_ast::transform_expr(scx, &mut expr)?;
+        transform_ast::transform(scx, &mut expr)?;
         let expr = plan_expr_or_col_index(ecx, &expr)?;
         let mut expr = expr.lower_uncorrelated()?;
         expr.reduce(&on_desc.typ().column_types);
@@ -2814,6 +2817,7 @@ fn expand_select_item<'a>(
             expr: Expr::QualifiedWildcard(table_name),
             alias: _,
         } => {
+            *ecx.qcx.scx.ambiguous_columns.borrow_mut() = true;
             let table_name =
                 normalize::unresolved_object_name(UnresolvedObjectName(table_name.clone()))?;
             let out: Vec<_> = ecx
@@ -2836,6 +2840,7 @@ fn expand_select_item<'a>(
             expr: Expr::WildcardAccess(sql_expr),
             alias: _,
         } => {
+            *ecx.qcx.scx.ambiguous_columns.borrow_mut() = true;
             // A bit silly to have to plan the expression here just to get its
             // type, since we throw away the planned expression, but fixing this
             // requires a separate semantic analysis phase. Luckily this is an
@@ -2884,6 +2889,7 @@ fn expand_select_item<'a>(
             Ok(items)
         }
         SelectItem::Wildcard => {
+            *ecx.qcx.scx.ambiguous_columns.borrow_mut() = true;
             let items: Vec<_> = ecx
                 .scope
                 .items
@@ -2969,6 +2975,10 @@ fn plan_join(
             kind,
         )?,
         JoinConstraint::Natural => {
+            // We shouldn't need to set ambiguous_columns on both the right and left qcx since they
+            // have the same scx. However, it doesn't hurt to be safe.
+            *left_qcx.scx.ambiguous_columns.borrow_mut() = true;
+            *right_qcx.scx.ambiguous_columns.borrow_mut() = true;
             let left_column_names = left_scope.column_names();
             let right_column_names: BTreeSet<_> = right_scope.column_names().collect();
             let column_names: Vec<_> = left_column_names

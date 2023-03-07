@@ -8,6 +8,66 @@
 // by the Apache License, Version 2.0.
 
 //! Telemetry collection.
+//!
+//! This report loop collects two types of telemetry data on a regular interval:
+//!
+//!   * Statistics, which represent aggregated activity since the last reporting
+//!     interval. An example of a statistic is "number of SUBSCRIBE queries
+//!     executed in the last reporting interval."
+//!
+//!   * Traits, which represent the properties of the environment at the time of
+//!     reporting. An example of a trait is "number of currently active
+//!     SUBSCRIBE queries."
+//!
+//! The reporting loop makes two Segment API calls each interval:
+//!
+//!   * A `group` API call [0] to report traits. The traits are scoped to the
+//!     environment's cloud provider and region, as in:
+//!
+//!     ```json
+//!     {
+//!         "aws": {
+//!             "us-east-1": {
+//!                 "active_subscribes": 2,
+//!                 ...
+//!             }
+//!         }
+//!     }
+//!     ```
+//!
+//!     Downstream tools often flatten these traits into, e.g.,
+//!     `aws_us_east_1_active_subscribes`.
+//!
+//!  * A `track` API call [1] for the "Environment Rolled Up" event, containing
+//!    both statistics and traits as the event properties, as in:
+//!
+//!    ```json
+//!    {
+//!        "cloud_provider": "aws",
+//!        "cloud_provider_region": "us-east-1",
+//!        "active_subscribes": 1,
+//!        "subscribes": 23,
+//!        ...
+//!    }
+//!    ```
+//!
+//!    This event is only emitted after the *first* reporting interval has
+//!    completed, since at boot all statistics will be zero.
+//!
+//! The reason for including traits in both the `group` and `track` API calls is
+//! because downstream tools want easy access to both of these questions:
+//!
+//!   1. What is the latest state of the environment?
+//!   2. What was the state of this environment in this time window?
+//!
+//! Answering question 2 requires that we periodically report statistics and
+//! traits in a `track` call. Strictly speaking, the `track` event could be used
+//! to answer question 1 too (look for the latest "Environment Rolled Up"
+//! event), but in practice it is often far more convenient to have the latest
+//! state available as a property of the environment.
+//!
+//! [0]: https://segment.com/docs/connections/spec/group/
+//! [1]: https://segment.com/docs/connections/spec/track/
 
 // To test this module, you'll need to run environmentd with
 // the --segment-api-key=<REDACTED> flag. Use the API key from your personal
@@ -44,19 +104,17 @@ pub struct Config {
 
 /// Starts reporting telemetry events to Segment.
 pub fn start_reporting(config: Config) {
-    task::spawn(|| "telemetry_rollup", report_rollup_loop(config.clone()));
-    task::spawn(|| "telemetry_traits", report_traits_loop(config));
+    task::spawn(|| "telemetry", report_loop(config));
 }
 
-async fn report_rollup_loop(
+async fn report_loop(
     Config {
         segment_client,
         adapter_client,
         environment_id,
     }: Config,
 ) {
-    #[derive(Default)]
-    struct Rollup {
+    struct Stats {
         deletes: u64,
         inserts: u64,
         selects: u64,
@@ -64,51 +122,8 @@ async fn report_rollup_loop(
         updates: u64,
     }
 
-    let mut interval = time::interval(REPORT_INTERVAL);
+    let mut last_stats: Option<Stats> = None;
 
-    // The first tick always completes immediately. Ignore it.
-    interval.tick().await;
-
-    let mut last_rollup = Rollup::default();
-    loop {
-        interval.tick().await;
-
-        let query_total = &adapter_client.metrics().query_total;
-        let current_rollup = Rollup {
-            deletes: query_total.with_label_values(&["user", "delete"]).get(),
-            inserts: query_total.with_label_values(&["user", "insert"]).get(),
-            updates: query_total.with_label_values(&["user", "update"]).get(),
-            selects: query_total.with_label_values(&["user", "select"]).get(),
-            subscribes: query_total.with_label_values(&["user", "subscribe"]).get(),
-        };
-
-        segment_client.environment_track(
-            &environment_id,
-            // We use the organization ID as the user ID for events
-            // that are not associated with a particular user.
-            environment_id.organization_id(),
-            "Environment Rolled Up",
-            json!({
-                "event_source": "environmentd",
-                "deletes": current_rollup.deletes - last_rollup.deletes,
-                "inserts": current_rollup.inserts - last_rollup.inserts,
-                "updates": current_rollup.updates - last_rollup.updates,
-                "selects": current_rollup.selects - last_rollup.selects,
-                "subscribes": current_rollup.subscribes - last_rollup.subscribes,
-            }),
-        );
-
-        last_rollup = current_rollup;
-    }
-}
-
-async fn report_traits_loop(
-    Config {
-        segment_client,
-        adapter_client,
-        environment_id,
-    }: Config,
-) {
     let mut interval = time::interval(REPORT_INTERVAL);
     loop {
         interval.tick().await;
@@ -159,21 +174,55 @@ async fn report_traits_loop(
             })
             .await;
 
-        match traits {
-            Ok(traits) => {
-                segment_client.group(
-                    // We use the organization ID as the user ID for events
-                    // that are not associated with a particular user.
-                    environment_id.organization_id(),
-                    environment_id.organization_id(),
-                    json!({
-                        environment_id.cloud_provider().to_string(): {
-                            environment_id.cloud_provider_region(): traits,
-                        }
-                    }),
-                );
+        let traits = match traits {
+            Ok(traits) => traits,
+            Err(e) => {
+                warn!("unable to collect telemetry traits: {e}");
+                continue;
             }
-            Err(e) => warn!("unable to collect telemetry traits: {e}"),
+        };
+
+        segment_client.group(
+            // We use the organization ID as the user ID for events
+            // that are not associated with a particular user.
+            environment_id.organization_id(),
+            environment_id.organization_id(),
+            json!({
+                environment_id.cloud_provider().to_string(): {
+                    environment_id.cloud_provider_region(): traits,
+                }
+            }),
+        );
+
+        let query_total = &adapter_client.metrics().query_total;
+        let current_stats = Stats {
+            deletes: query_total.with_label_values(&["user", "delete"]).get(),
+            inserts: query_total.with_label_values(&["user", "insert"]).get(),
+            updates: query_total.with_label_values(&["user", "update"]).get(),
+            selects: query_total.with_label_values(&["user", "select"]).get(),
+            subscribes: query_total.with_label_values(&["user", "subscribe"]).get(),
+        };
+        if let Some(last_stats) = &last_stats {
+            let mut event = json!({
+                "deletes": current_stats.deletes - last_stats.deletes,
+                "inserts": current_stats.inserts - last_stats.inserts,
+                "updates": current_stats.updates - last_stats.updates,
+                "selects": current_stats.selects - last_stats.selects,
+                "subscribes": current_stats.subscribes - last_stats.subscribes,
+            });
+            event
+                .as_object_mut()
+                .unwrap()
+                .extend(traits.as_object().unwrap().clone());
+            segment_client.environment_track(
+                &environment_id,
+                // We use the organization ID as the user ID for events
+                // that are not associated with a particular user.
+                environment_id.organization_id(),
+                "Environment Rolled Up",
+                event,
+            );
         }
+        last_stats = Some(current_stats);
     }
 }

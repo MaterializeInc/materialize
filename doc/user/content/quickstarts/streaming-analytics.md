@@ -1,11 +1,11 @@
 ---
-title: "Streaming analytics"
-description: "How to build a live business intelligence dashboard using Materialize and Metabase"
+title: "Build a real-time dashboard"
+description: "How to build a real-time Business Intelligence (BI) dashboard using Materialize and Metabase"
 menu:
   main:
     parent: 'quickstarts'
-    weight: 30
-    name: 'Streaming analytics'
+    weight: 20
+    name: 'Build a real-time dashboard'
 draft: true
 aliases:
   - /demos/streaming-analytics
@@ -63,7 +63,7 @@ Materialize provides public Kafka topics and a Confluent Schema Registry for its
 
     CREATE CONNECTION kafka_connection TO KAFKA (
         BROKER 'TBD',
-        SASL MECHANISMS = 'SCRAM-SHA-256',
+        SASL MECHANISMS = 'PLAIN',
         SASL USERNAME = 'TBD',
         SASL PASSWORD = SECRET kafka_password
     );
@@ -72,19 +72,19 @@ Materialize provides public Kafka topics and a Confluent Schema Registry for its
 1. Create the sources, one per Kafka topic:
 
     ```sql
-    CREATE SOURCE purchases
+    CREATE SOURCE IF NOT EXISTS purchases
     FROM KAFKA CONNECTION kafka_connection (TOPIC 'mysql.shop.purchases')
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_basic_http
     ENVELOPE DEBEZIUM
     WITH (SIZE = '3xsmall');
 
-    CREATE SOURCE items
+    CREATE SOURCE IF NOT EXISTS items
     FROM KAFKA CONNECTION kafka_connection (TOPIC 'mysql.shop.items')
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_basic_http
     ENVELOPE DEBEZIUM
     WITH (SIZE = '3xsmall');
 
-    CREATE SOURCE users
+    CREATE SOURCE IF NOT EXISTS users
     FROM KAFKA CONNECTION kafka_connection (TOPIC 'mysql.shop.users')
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_basic_http
     ENVELOPE DEBEZIUM
@@ -115,6 +115,38 @@ Reuse your `psql` session and build the analytics:
     ```
 
     The above model will update as new purchases come in, as well as when existing purchases are marked as deleted (soft deletes). Handling soft deletes is a challenging use case in streaming, and most systems can only provide eventually consistent results. Materialize not only provides strong consistency guarantees when handling the resulting retractions, but also minimizes the amount of state that needs to be maintained for the join.
+
+    1. Create a view that takes the on-time bids and finds the highest bid for each auction:
+
+    ```sql
+    CREATE VIEW highest_bid_per_auction AS
+        SELECT grp.auction_id,
+               bid_id,
+               buyer,
+               seller,
+               item,
+               amount,
+               bid_time,
+               end_time
+        FROM
+        (SELECT DISTINCT auction_id FROM on_time_bids) grp,
+        LATERAL (
+            SELECT * FROM on_time_bids
+            WHERE auction_id = grp.auction_id
+            ORDER BY amount DESC LIMIT 1
+    );
+    ```
+
+    ```
+    CREATE MATERIALIZED VIEW remaining_stock AS
+    SELECT
+      i.id AS item_id,
+      MAX(i.inventory) - SUM(purchases.quantity) AS remaining_stock
+    FROM items i
+    JOIN purchases ON purchases.item_id = i.id
+     AND purchases.created_at > i.inventory_updated_at
+    GROUP BY i.id;
+    ```
 
 ### Subscribe to updates
 

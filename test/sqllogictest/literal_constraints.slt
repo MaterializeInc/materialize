@@ -675,7 +675,7 @@ Explained Query:
     Filter (#0) IS NOT NULL // { arity: 6 }
       Join on=(#0 = #3) type=differential // { arity: 6 }
         implementation
-          %1:t2[#0] » %0:t1[#0]KAe
+          %0:t1[#0]KAe » %1:t2[#0]KAe
         ArrangeBy keys=[[#0]] // { arity: 3 }
           ReadExistingIndex materialize.public.t1 lookup_values=[("l2"); ("l3")]
         ArrangeBy keys=[[#0]] // { arity: 3 }
@@ -710,7 +710,7 @@ Explained Query:
     Filter (#0) IS NOT NULL // { arity: 6 }
       Join on=(#0 = #3) type=differential // { arity: 6 }
         implementation
-          %1:t2[#0] » %0:t1[#0]KAe
+          %0:t1[#0]KAe » %1:t2[#0]KAe
         ArrangeBy keys=[[#0]] // { arity: 3 }
           ReadExistingIndex materialize.public.t1 lookup_value=("l2")
         ArrangeBy keys=[[#0]] // { arity: 3 }
@@ -745,7 +745,7 @@ WHERE
 Explained Query:
   CrossJoin type=differential // { arity: 3 }
     implementation
-      %1:t2[×] » %0:t1[×]Ae
+      %0:t1[×]e » %1:t2[×]e
     ArrangeBy keys=[[]] // { arity: 2 }
       Project (#0, #1) // { arity: 2 }
         ReadExistingIndex materialize.public.t1 lookup_value=(2, "l2")

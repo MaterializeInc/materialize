@@ -560,11 +560,18 @@ async fn execute_request<S: ResultSender>(
         Ok(())
     }
 
+    fn parse(query: &str) -> Result<Vec<Statement<Raw>>, anyhow::Error> {
+        match mz_sql::parse::parse_with_limit(query) {
+            Ok(result) => result.map_err(|e| anyhow!(e)),
+            Err(e) => Err(anyhow!(e)),
+        }
+    }
+
     let mut stmt_groups = vec![];
 
     match request {
         SqlRequest::Simple { query } => {
-            let stmts = mz_sql::parse::parse(&query).map_err(|e| anyhow!(e))?;
+            let stmts = parse(&query)?;
             let mut stmt_group = Vec::with_capacity(stmts.len());
             for stmt in stmts {
                 check_prohibited_stmts(sender, &stmt)?;
@@ -574,7 +581,7 @@ async fn execute_request<S: ResultSender>(
         }
         SqlRequest::Extended { queries } => {
             for ExtendedRequest { query, params } in queries {
-                let mut stmts = mz_sql::parse::parse(&query).map_err(|e| anyhow!(e))?;
+                let mut stmts = parse(&query)?;
                 if stmts.len() != 1 {
                     anyhow::bail!(
                         "each query must contain exactly 1 statement, but \"{}\" contains {}",
@@ -754,6 +761,7 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::Updated(_)
         | ExecuteResponse::AlteredObject(_)
         | ExecuteResponse::AlteredIndexLogicalCompaction
+        | ExecuteResponse::AlteredRole
         | ExecuteResponse::AlteredSystemConfiguration
         | ExecuteResponse::Deallocate { .. }
         | ExecuteResponse::Prepare => SqlResult::ok(client, tag.expect("ok only called on tag-generating results")).into(),

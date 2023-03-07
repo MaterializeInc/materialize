@@ -1,0 +1,107 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+query T
+show search_path
+----
+public
+
+statement ok
+SET search_path = foo
+
+query T
+show search_path
+----
+foo
+
+statement ok
+SET search_path = 'foo'
+
+query T
+show search_path
+----
+foo
+
+statement ok
+SET search_path = 'ba r', foo, 'x, y', "a, b"
+
+query T
+show search_path
+----
+"ba r", foo, "x, y", "a, b"
+
+query T
+SELECT current_schema()
+----
+NULL
+
+query T
+SELECT current_schemas(false)
+----
+{}
+
+query T
+SELECT current_schemas(true)
+----
+{mz_catalog,pg_catalog}
+
+statement error no schema has been selected to create in
+CREATE TABLE t (i INT)
+
+statement ok
+CREATE SCHEMA foo
+----
+
+query T
+SELECT current_schema()
+----
+foo
+
+query T
+SELECT current_schemas(false)
+----
+{foo}
+
+query T
+SELECT current_schemas(true)
+----
+{mz_catalog,pg_catalog,foo}
+
+statement ok
+CREATE TABLE t (i INT)
+
+query T
+SELECT count(*) from t
+----
+0
+
+statement ok
+SET search_path = pg_catalog
+
+query T
+show search_path
+----
+pg_catalog
+
+query T
+SELECT current_schema()
+----
+pg_catalog
+
+query T
+SELECT current_schemas(true)
+----
+{mz_catalog,pg_catalog}
+
+query T
+SELECT current_schemas(false)
+----
+{pg_catalog}

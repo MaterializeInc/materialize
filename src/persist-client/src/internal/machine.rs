@@ -32,12 +32,13 @@ use crate::critical::CriticalReaderId;
 use crate::error::{CodecMismatch, InvalidUsage};
 use crate::internal::apply::Applier;
 use crate::internal::compact::CompactReq;
+use crate::internal::gc::GarbageCollector;
 use crate::internal::maintenance::{RoutineMaintenance, WriterMaintenance};
 use crate::internal::metrics::{CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics};
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
-    CompareAndAppendBreak, CriticalReaderState, HollowBatch, IdempotencyToken, LeasedReaderState,
-    NoOpStateTransition, Since, StateCollections, Upper, WriterState,
+    CompareAndAppendBreak, CriticalReaderState, HollowBatch, HollowRollup, IdempotencyToken,
+    LeasedReaderState, NoOpStateTransition, Since, StateCollections, Upper, WriterState,
 };
 use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
@@ -98,10 +99,10 @@ where
         self.applier.state().seqno_since()
     }
 
-    pub async fn add_rollup_for_current_seqno(&mut self) {
+    pub async fn add_rollup_for_current_seqno(&mut self) -> RoutineMaintenance {
         let rollup = self.applier.write_rollup_blob(&RollupId::new()).await;
-        let applied = self
-            .add_and_remove_rollups((rollup.seqno, &rollup.key), &[])
+        let (applied, maintenance) = self
+            .add_and_remove_rollups((rollup.seqno, &rollup.to_hollow()), &[])
             .await;
         if !applied {
             // Someone else already wrote a rollup at this seqno, so ours didn't
@@ -111,18 +112,19 @@ where
                 .delete_rollup(&rollup.shard_id, &rollup.key)
                 .await;
         }
+        maintenance
     }
 
     pub async fn add_and_remove_rollups(
         &mut self,
-        add_rollup: (SeqNo, &PartialRollupKey),
+        add_rollup: (SeqNo, &HollowRollup),
         remove_rollups: &[(SeqNo, PartialRollupKey)],
-    ) -> bool {
+    ) -> (bool, RoutineMaintenance) {
         // See the big SUBTLE comment in [Self::merge_res] for what's going on
         // here.
         let mut applied_ever_true = false;
         let metrics = Arc::clone(&self.applier.metrics);
-        let (_seqno, _applied, _maintenance) = self
+        let (_seqno, _applied, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.add_and_remove_rollups, |_, _, state| {
                 let ret = state.add_and_remove_rollups(add_rollup, remove_rollups);
                 if let Continue(applied) = ret {
@@ -131,7 +133,7 @@ where
                 ret
             })
             .await;
-        applied_ever_true
+        (applied_ever_true, maintenance)
     }
 
     pub async fn register_leased_reader(
@@ -140,9 +142,9 @@ where
         purpose: &str,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
-    ) -> LeasedReaderState<T> {
+    ) -> (LeasedReaderState<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
-        let (_seqno, reader_state, _maintenance) = self
+        let (_seqno, reader_state, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |seqno, cfg, state| {
                 state.register_leased_reader(
                     &cfg.hostname,
@@ -180,21 +182,21 @@ where
             reader_state.seqno,
             self.applier.state().seqno_since()
         );
-        reader_state
+        (reader_state, maintenance)
     }
 
     pub async fn register_critical_reader<O: Opaque + Codec64>(
         &mut self,
         reader_id: &CriticalReaderId,
         purpose: &str,
-    ) -> CriticalReaderState<T> {
+    ) -> (CriticalReaderState<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
-        let (_seqno, state, _maintenance) = self
+        let (_seqno, state, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, cfg, state| {
                 state.register_critical_reader::<O>(&cfg.hostname, reader_id, purpose)
             })
             .await;
-        state
+        (state, maintenance)
     }
 
     pub async fn register_writer(
@@ -203,9 +205,9 @@ where
         purpose: &str,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
-    ) -> (Upper<T>, WriterState<T>) {
+    ) -> (Upper<T>, WriterState<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
-        let (_seqno, (shard_upper, writer_state), _maintenance) = self
+        let (_seqno, (shard_upper, writer_state), maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, cfg, state| {
                 state.register_writer(
                     &cfg.hostname,
@@ -227,7 +229,7 @@ where
             error!("Writer {writer_id} was registered at timestamp {heartbeat_timestamp_ms} but immediately expired.\
                     This implies {lease_duration:?} passed between the call and its completion, which should be rare.");
         }
-        (shard_upper, writer_state)
+        (shard_upper, writer_state, maintenance)
     }
 
     pub async fn compare_and_append(
@@ -489,7 +491,10 @@ where
         }
     }
 
-    pub async fn merge_res(&mut self, res: &FueledMergeRes<T>) -> ApplyMergeResult {
+    pub async fn merge_res(
+        &mut self,
+        res: &FueledMergeRes<T>,
+    ) -> (ApplyMergeResult, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
 
         // SUBTLE! If Machine::merge_res returns false, the blobs referenced in
@@ -521,7 +526,7 @@ where
         // anyway need a mechanism to clean up leaked blobs because of process
         // crashes.
         let mut merge_result_ever_applied = ApplyMergeResult::NotAppliedNoMatch;
-        let (_seqno, _apply_merge_result, _maintenance) = self
+        let (_seqno, _apply_merge_result, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, _, state| {
                 let ret = state.apply_merge_res(res);
                 if let Continue(result) = ret {
@@ -539,7 +544,7 @@ where
                 ret
             })
             .await;
-        merge_result_ever_applied
+        (merge_result_ever_applied, maintenance)
     }
 
     pub async fn downgrade_since(
@@ -602,46 +607,6 @@ where
         (seqno, existed, maintenance)
     }
 
-    pub async fn start_reader_heartbeat_task(self, reader_id: LeasedReaderId) -> JoinHandle<()> {
-        let mut machine = self;
-        spawn(|| "persist::heartbeat_read", async move {
-            let sleep_duration = machine.applier.cfg.reader_lease_duration / 2;
-            loop {
-                let before_sleep = Instant::now();
-                tokio::time::sleep(sleep_duration).await;
-
-                let elapsed_since_before_sleeping = before_sleep.elapsed();
-                if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
-                    warn!(
-                        "reader ({}) of shard ({}) went {}s between heartbeats",
-                        reader_id,
-                        machine.shard_id(),
-                        elapsed_since_before_sleeping.as_secs_f64()
-                    );
-                }
-
-                let before_heartbeat = Instant::now();
-                let (_seqno, existed, _maintenance) = machine
-                    .heartbeat_leased_reader(&reader_id, (machine.applier.cfg.now)())
-                    .await;
-
-                let elapsed_since_heartbeat = before_heartbeat.elapsed();
-                if elapsed_since_heartbeat > Duration::from_secs(60) {
-                    warn!(
-                        "reader ({}) of shard ({}) heartbeat call took {}s",
-                        reader_id,
-                        machine.shard_id(),
-                        elapsed_since_heartbeat.as_secs_f64(),
-                    );
-                }
-
-                if !existed {
-                    return;
-                }
-            }
-        })
-    }
-
     pub async fn heartbeat_writer(
         &mut self,
         writer_id: &WriterId,
@@ -656,74 +621,40 @@ where
         (seqno, existed, maintenance)
     }
 
-    pub async fn start_writer_heartbeat_task(self, writer_id: WriterId) -> JoinHandle<()> {
-        let mut machine = self;
-        spawn(|| "persist::heartbeat_write", async move {
-            let sleep_duration = machine.applier.cfg.writer_lease_duration / 4;
-            loop {
-                let before_sleep = Instant::now();
-                tokio::time::sleep(sleep_duration).await;
-
-                let elapsed_since_before_sleeping = before_sleep.elapsed();
-                if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
-                    warn!(
-                        "writer ({}) of shard ({}) went {}s between heartbeats",
-                        writer_id,
-                        machine.shard_id(),
-                        elapsed_since_before_sleeping.as_secs_f64()
-                    );
-                }
-
-                let before_heartbeat = Instant::now();
-                let (_seqno, existed, _maintenance) = machine
-                    .heartbeat_writer(&writer_id, (machine.applier.cfg.now)())
-                    .await;
-
-                let elapsed_since_heartbeat = before_heartbeat.elapsed();
-                if elapsed_since_heartbeat > Duration::from_secs(60) {
-                    warn!(
-                        "writer ({}) of shard ({}) heartbeat call took {}s",
-                        writer_id,
-                        machine.shard_id(),
-                        elapsed_since_heartbeat.as_secs_f64(),
-                    );
-                }
-
-                if !existed {
-                    return;
-                }
-            }
-        })
-    }
-
-    pub async fn expire_leased_reader(&mut self, reader_id: &LeasedReaderId) -> SeqNo {
+    pub async fn expire_leased_reader(
+        &mut self,
+        reader_id: &LeasedReaderId,
+    ) -> (SeqNo, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
-        let (seqno, _existed, _maintenance) = self
+        let (seqno, _existed, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_reader, |_, _, state| {
                 state.expire_leased_reader(reader_id)
             })
             .await;
-        seqno
+        (seqno, maintenance)
     }
 
-    pub async fn expire_critical_reader(&mut self, reader_id: &CriticalReaderId) -> SeqNo {
+    pub async fn expire_critical_reader(
+        &mut self,
+        reader_id: &CriticalReaderId,
+    ) -> (SeqNo, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
-        let (seqno, _existed, _maintenance) = self
+        let (seqno, _existed, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_reader, |_, _, state| {
                 state.expire_critical_reader(reader_id)
             })
             .await;
-        seqno
+        (seqno, maintenance)
     }
 
-    pub async fn expire_writer(&mut self, writer_id: &WriterId) -> SeqNo {
+    pub async fn expire_writer(&mut self, writer_id: &WriterId) -> (SeqNo, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
-        let (seqno, _existed, _maintenance) = self
+        let (seqno, _existed, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_writer, |_, _, state| {
                 state.expire_writer(writer_id)
             })
             .await;
-        seqno
+        (seqno, maintenance)
     }
 
     pub async fn maybe_become_tombstone(&mut self) -> Option<RoutineMaintenance> {
@@ -879,6 +810,104 @@ where
                 }
             }
         }
+    }
+}
+
+impl<K, V, T, D> Machine<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
+    pub async fn start_reader_heartbeat_task(
+        self,
+        reader_id: LeasedReaderId,
+        gc: GarbageCollector<K, V, T, D>,
+    ) -> JoinHandle<()> {
+        let mut machine = self;
+        spawn(|| "persist::heartbeat_read", async move {
+            let sleep_duration = machine.applier.cfg.reader_lease_duration / 2;
+            loop {
+                let before_sleep = Instant::now();
+                tokio::time::sleep(sleep_duration).await;
+
+                let elapsed_since_before_sleeping = before_sleep.elapsed();
+                if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
+                    warn!(
+                        "reader ({}) of shard ({}) went {}s between heartbeats",
+                        reader_id,
+                        machine.shard_id(),
+                        elapsed_since_before_sleeping.as_secs_f64()
+                    );
+                }
+
+                let before_heartbeat = Instant::now();
+                let (_seqno, existed, maintenance) = machine
+                    .heartbeat_leased_reader(&reader_id, (machine.applier.cfg.now)())
+                    .await;
+                maintenance.start_performing(&machine, &gc);
+
+                let elapsed_since_heartbeat = before_heartbeat.elapsed();
+                if elapsed_since_heartbeat > Duration::from_secs(60) {
+                    warn!(
+                        "reader ({}) of shard ({}) heartbeat call took {}s",
+                        reader_id,
+                        machine.shard_id(),
+                        elapsed_since_heartbeat.as_secs_f64(),
+                    );
+                }
+
+                if !existed {
+                    return;
+                }
+            }
+        })
+    }
+
+    pub async fn start_writer_heartbeat_task(
+        self,
+        writer_id: WriterId,
+        gc: GarbageCollector<K, V, T, D>,
+    ) -> JoinHandle<()> {
+        let mut machine = self;
+        spawn(|| "persist::heartbeat_write", async move {
+            let sleep_duration = machine.applier.cfg.writer_lease_duration / 4;
+            loop {
+                let before_sleep = Instant::now();
+                tokio::time::sleep(sleep_duration).await;
+
+                let elapsed_since_before_sleeping = before_sleep.elapsed();
+                if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
+                    warn!(
+                        "writer ({}) of shard ({}) went {}s between heartbeats",
+                        writer_id,
+                        machine.shard_id(),
+                        elapsed_since_before_sleeping.as_secs_f64()
+                    );
+                }
+
+                let before_heartbeat = Instant::now();
+                let (_seqno, existed, maintenance) = machine
+                    .heartbeat_writer(&writer_id, (machine.applier.cfg.now)())
+                    .await;
+                maintenance.start_performing(&machine, &gc);
+
+                let elapsed_since_heartbeat = before_heartbeat.elapsed();
+                if elapsed_since_heartbeat > Duration::from_secs(60) {
+                    warn!(
+                        "writer ({}) of shard ({}) heartbeat call took {}s",
+                        writer_id,
+                        machine.shard_id(),
+                        elapsed_since_heartbeat.as_secs_f64(),
+                    );
+                }
+
+                if !existed {
+                    return;
+                }
+            }
+        })
     }
 }
 
@@ -1051,10 +1080,11 @@ pub mod datadriven {
             .state_versions
             .fetch_all_live_states::<u64>(datadriven.shard_id)
             .await
+            .expect("should only be called on an initialized shard")
             .check_ts_codec()
             .expect("shard codecs should not change");
         let mut s = String::new();
-        while let Some(x) = states.next() {
+        while let Some(x) = states.next(|_| {}) {
             if x.seqno < from {
                 continue;
             }
@@ -1360,7 +1390,8 @@ pub mod datadriven {
             shard_id: datadriven.shard_id,
             new_seqno_since,
         };
-        GarbageCollector::gc_and_truncate(&mut datadriven.machine, req).await;
+        let maintenance = GarbageCollector::gc_and_truncate(&mut datadriven.machine, req).await;
+        datadriven.routine.push(maintenance);
 
         Ok(format!("{} ok\n", datadriven.machine.seqno()))
     }
@@ -1461,10 +1492,11 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let reader_id = args.expect("reader_id");
-        let state = datadriven
+        let (state, maintenance) = datadriven
             .machine
             .register_critical_reader::<u64>(&reader_id, "tests")
             .await;
+        datadriven.routine.push(maintenance);
         Ok(format!(
             "{} {:?}\n",
             datadriven.machine.seqno(),
@@ -1477,7 +1509,7 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let reader_id = args.expect("reader_id");
-        let reader_state = datadriven
+        let (reader_state, maintenance) = datadriven
             .machine
             .register_leased_reader(
                 &reader_id,
@@ -1486,6 +1518,7 @@ pub mod datadriven {
                 (datadriven.client.cfg.now)(),
             )
             .await;
+        datadriven.routine.push(maintenance);
         Ok(format!(
             "{} {:?}\n",
             datadriven.machine.seqno(),
@@ -1498,7 +1531,7 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let writer_id = args.expect("writer_id");
-        let (upper, _state) = datadriven
+        let (upper, _state, maintenance) = datadriven
             .machine
             .register_writer(
                 &writer_id,
@@ -1507,6 +1540,7 @@ pub mod datadriven {
                 (datadriven.client.cfg.now)(),
             )
             .await;
+        datadriven.routine.push(maintenance);
         Ok(format!(
             "{} {:?}\n",
             datadriven.machine.seqno(),
@@ -1543,7 +1577,8 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let reader_id = args.expect("reader_id");
-        let _ = datadriven.machine.expire_critical_reader(&reader_id).await;
+        let (_, maintenance) = datadriven.machine.expire_critical_reader(&reader_id).await;
+        datadriven.routine.push(maintenance);
         Ok(format!("{} ok\n", datadriven.machine.seqno()))
     }
 
@@ -1552,7 +1587,8 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let reader_id = args.expect("reader_id");
-        let _ = datadriven.machine.expire_leased_reader(&reader_id).await;
+        let (_, maintenance) = datadriven.machine.expire_leased_reader(&reader_id).await;
+        datadriven.routine.push(maintenance);
         Ok(format!("{} ok\n", datadriven.machine.seqno()))
     }
 
@@ -1561,7 +1597,8 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let writer_id = args.expect("writer_id");
-        let _ = datadriven.machine.expire_writer(&writer_id).await;
+        let (_, maintenance) = datadriven.machine.expire_writer(&writer_id).await;
+        datadriven.routine.push(maintenance);
         Ok(format!("{} ok\n", datadriven.machine.seqno()))
     }
 
@@ -1607,10 +1644,11 @@ pub mod datadriven {
             .get(input)
             .expect("unknown batch")
             .clone();
-        let merge_res = datadriven
+        let (merge_res, maintenance) = datadriven
             .machine
             .merge_res(&FueledMergeRes { output: batch })
             .await;
+        datadriven.routine.push(maintenance);
         Ok(format!(
             "{} {}\n",
             datadriven.machine.seqno(),

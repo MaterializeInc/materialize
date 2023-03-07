@@ -353,7 +353,14 @@ impl RowPacker<'_> {
                 Some(ProtoDatumOther::False) => self.push(Datum::False),
                 Some(ProtoDatumOther::True) => self.push(Datum::True),
                 Some(ProtoDatumOther::JsonNull) => self.push(Datum::JsonNull),
-                Some(ProtoDatumOther::Dummy) => self.push(Datum::Dummy),
+                Some(ProtoDatumOther::Dummy) => {
+                    // We plan to remove the `Dummy` variant soon (#17099). To prepare for that, we
+                    // emit a log to Sentry here, to notify us of any instances that might have
+                    // been made durable.
+                    #[cfg(feature = "tracing_")]
+                    tracing::error!("protobuf decoding found Dummy datum");
+                    self.push(Datum::Dummy);
+                }
                 Some(ProtoDatumOther::NumericPosInf) => self.push(Datum::from(Numeric::infinity())),
                 Some(ProtoDatumOther::NumericNegInf) => {
                     self.push(Datum::from(-Numeric::infinity()))

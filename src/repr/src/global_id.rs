@@ -22,6 +22,11 @@ use mz_proto::{RustType, TryFromProtoError};
 include!(concat!(env!("OUT_DIR"), "/mz_repr.global_id.rs"));
 
 /// The identifier for a global dataflow.
+///
+/// WARNING: Despite the fact that `GlobalId` implements `Ord`, the ordering of
+/// IDs does not express any relationship between dependencies. We retain the
+/// `Ord` implementation exclusively to facilitate placing `GlobalId`s in
+/// maps/sets.
 #[derive(
     Arbitrary,
     Clone,

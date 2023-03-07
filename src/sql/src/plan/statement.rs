@@ -30,10 +30,10 @@ use crate::names::{
     QualifiedObjectName, RawDatabaseSpecifier, ResolvedDataType, ResolvedDatabaseSpecifier,
     ResolvedObjectName, ResolvedSchemaName, SchemaSpecifier,
 };
+use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::{query, with_options};
 use crate::plan::{Params, Plan, PlanContext, PlanKind};
-use crate::{normalize, DEFAULT_SCHEMA};
 
 pub(crate) mod ddl;
 mod dml;
@@ -105,6 +105,7 @@ pub fn describe(
         pcx: Some(pcx),
         catalog,
         param_types: RefCell::new(param_types),
+        ambiguous_columns: RefCell::new(false),
     };
 
     let desc = match stmt {
@@ -112,6 +113,7 @@ pub fn describe(
         Statement::AlterConnection(stmt) => ddl::describe_alter_connection(&scx, stmt)?,
         Statement::AlterIndex(stmt) => ddl::describe_alter_index_options(&scx, stmt)?,
         Statement::AlterObjectRename(stmt) => ddl::describe_alter_object_rename(&scx, stmt)?,
+        Statement::AlterRole(stmt) => ddl::describe_alter_role(&scx, stmt)?,
         Statement::AlterSecret(stmt) => ddl::describe_alter_secret_options(&scx, stmt)?,
         Statement::AlterSink(stmt) => ddl::describe_alter_sink(&scx, stmt)?,
         Statement::AlterSource(stmt) => ddl::describe_alter_source(&scx, stmt)?,
@@ -244,6 +246,7 @@ pub fn plan(
         pcx,
         catalog,
         param_types: RefCell::new(param_types),
+        ambiguous_columns: RefCell::new(false),
     };
 
     let plan = match stmt {
@@ -251,6 +254,7 @@ pub fn plan(
         Statement::AlterConnection(stmt) => ddl::plan_alter_connection(scx, stmt),
         Statement::AlterIndex(stmt) => ddl::plan_alter_index_options(scx, stmt),
         Statement::AlterObjectRename(stmt) => ddl::plan_alter_object_rename(scx, stmt),
+        Statement::AlterRole(stmt) => ddl::plan_alter_role(scx, stmt),
         Statement::AlterSecret(stmt) => ddl::plan_alter_secret(scx, stmt),
         Statement::AlterSink(stmt) => ddl::plan_alter_sink(scx, stmt),
         Statement::AlterSource(stmt) => ddl::plan_alter_source(scx, stmt),
@@ -404,6 +408,9 @@ pub struct StatementContext<'a> {
     /// The types of the parameters in the query. This is filled in as planning
     /// occurs.
     pub param_types: RefCell<BTreeMap<usize, ScalarType>>,
+    /// Whether the statement contains an expression that can make the exact column list
+    /// ambiguous. For example `NATURAL JOIN` or `SELECT *`. This is filled in as planning occurs.
+    pub ambiguous_columns: RefCell<bool>,
 }
 
 impl<'a> StatementContext<'a> {
@@ -415,7 +422,19 @@ impl<'a> StatementContext<'a> {
             pcx,
             catalog,
             param_types: Default::default(),
+            ambiguous_columns: RefCell::new(false),
         }
+    }
+
+    /// Returns the schemas in order of search_path that exist in the catalog.
+    pub fn current_schemas(&self) -> &[(ResolvedDatabaseSpecifier, SchemaSpecifier)] {
+        self.catalog.search_path()
+    }
+
+    /// Returns the first schema from the search_path that exist in the catalog,
+    /// or None if there are none.
+    pub fn current_schema(&self) -> Option<&(ResolvedDatabaseSpecifier, SchemaSpecifier)> {
+        self.current_schemas().into_iter().next()
     }
 
     pub fn pcx(&self) -> Result<&PlanContext, PlanError> {
@@ -423,16 +442,39 @@ impl<'a> StatementContext<'a> {
     }
 
     pub fn allocate_full_name(&self, name: PartialObjectName) -> Result<FullObjectName, PlanError> {
-        let schema = name.schema.unwrap_or_else(|| DEFAULT_SCHEMA.into());
-        let database = match name.database {
-            Some(name) => RawDatabaseSpecifier::Name(name),
-            None if self.catalog.is_system_schema(&schema) => RawDatabaseSpecifier::Ambient,
-            None => match self.catalog.active_database_name() {
-                Some(name) => RawDatabaseSpecifier::Name(name.to_string()),
-                None => {
-                    sql_bail!("no database specified for non-system schema and no active database")
+        let (database, schema): (RawDatabaseSpecifier, String) = match (name.database, name.schema)
+        {
+            (None, None) => {
+                let Some((database, schema)) = self.current_schema() else {
+                    return Err(PlanError::InvalidSchemaName);
+                };
+                let schema = self.get_schema(database, schema);
+                let database = match schema.database() {
+                    ResolvedDatabaseSpecifier::Ambient => RawDatabaseSpecifier::Ambient,
+                    ResolvedDatabaseSpecifier::Id(id) => {
+                        RawDatabaseSpecifier::Name(self.catalog.get_database(id).name().to_string())
+                    }
+                };
+                (database, schema.name().schema.clone())
+            }
+            (None, Some(schema)) => {
+                if self.catalog.is_system_schema(&schema) {
+                    (RawDatabaseSpecifier::Ambient, schema)
+                } else {
+                    match self.catalog.active_database_name() {
+                        Some(name) => (RawDatabaseSpecifier::Name(name.to_string()), schema),
+                        None => {
+                            sql_bail!("no database specified for non-system schema and no active database")
+                        }
+                    }
                 }
-            },
+            }
+            (Some(_database), None) => {
+                // This shouldn't be possible. Refactor the datastructure to
+                // make it not exist.
+                sql_bail!("unreachable: specified the database but no schema")
+            }
+            (Some(database), Some(schema)) => (RawDatabaseSpecifier::Name(database), schema),
         };
         let item = name.item;
         Ok(FullObjectName {
@@ -538,7 +580,10 @@ impl<'a> StatementContext<'a> {
     }
 
     pub fn resolve_active_schema(&self) -> Result<&SchemaSpecifier, PlanError> {
-        Ok(self.catalog.resolve_schema(None, DEFAULT_SCHEMA)?.id())
+        match self.current_schema() {
+            Some((_db, schema)) => Ok(schema),
+            None => Err(PlanError::InvalidSchemaName),
+        }
     }
 
     pub fn resolve_database(

@@ -50,11 +50,12 @@ use mz_storage_client::types::sources::{SourceDesc, Timeline};
 
 use crate::ast::{
     ExplainStage, Expr, FetchDirection, IndexOptionName, NoticeSeverity, ObjectType, Raw,
-    SetVariableValue, Statement, StatementKind, TransactionAccessMode,
+    Statement, StatementKind, TransactionAccessMode,
 };
-use crate::catalog::{CatalogType, IdReference};
+use crate::catalog::{CatalogType, IdReference, RoleAttributes};
 use crate::names::{
-    Aug, DatabaseId, FullObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaId,
+    Aug, DatabaseId, FullObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier, RoleId,
+    SchemaId,
 };
 
 pub(crate) mod error;
@@ -132,6 +133,7 @@ pub enum Plan {
     AlterSystemSet(AlterSystemSetPlan),
     AlterSystemReset(AlterSystemResetPlan),
     AlterSystemResetAll(AlterSystemResetAllPlan),
+    AlterRole(AlterRolePlan),
     Declare(DeclarePlan),
     Fetch(FetchPlan),
     Close(ClosePlan),
@@ -157,6 +159,7 @@ impl Plan {
             StatementKind::AlterObjectRename => {
                 vec![PlanKind::AlterItemRename, PlanKind::AlterNoop]
             }
+            StatementKind::AlterRole => vec![PlanKind::AlterRole],
             StatementKind::AlterSecret => vec![PlanKind::AlterNoop, PlanKind::AlterSecret],
             StatementKind::AlterSink => vec![PlanKind::AlterNoop, PlanKind::AlterSink],
             StatementKind::AlterSource => vec![PlanKind::AlterNoop, PlanKind::AlterSource],
@@ -247,6 +250,7 @@ pub struct CreateSchemaPlan {
 #[derive(Debug)]
 pub struct CreateRolePlan {
     pub name: String,
+    pub attributes: RoleAttributes,
 }
 
 #[derive(Debug)]
@@ -280,7 +284,8 @@ pub struct ComputeReplicaConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ReplicaConfig {
     Unmanaged {
-        storagectl_addr: String,
+        storagectl_addrs: Vec<String>,
+        storage_addrs: Vec<String>,
         computectl_addrs: Vec<String>,
         compute_addrs: Vec<String>,
         workers: usize,
@@ -339,7 +344,6 @@ pub struct CreateConnectionPlan {
 pub struct CreateSecretPlan {
     pub name: QualifiedObjectName,
     pub secret: Secret,
-    pub full_name: FullObjectName,
     pub if_not_exists: bool,
 }
 
@@ -366,6 +370,9 @@ pub struct CreateViewPlan {
     /// The ID of the object that this view is replacing, if any.
     pub replace: Option<GlobalId>,
     pub if_not_exists: bool,
+    /// True if the view contains an expression that can make the exact column list
+    /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
+    pub ambiguous_columns: bool,
 }
 
 #[derive(Debug)]
@@ -375,6 +382,9 @@ pub struct CreateMaterializedViewPlan {
     /// The ID of the object that this view is replacing, if any.
     pub replace: Option<GlobalId>,
     pub if_not_exists: bool,
+    /// True if the materialized view contains an expression that can make the exact column list
+    /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
+    pub ambiguous_columns: bool,
 }
 
 #[derive(Debug)]
@@ -403,7 +413,7 @@ pub struct DropSchemaPlan {
 
 #[derive(Debug)]
 pub struct DropRolesPlan {
-    pub names: Vec<String>,
+    pub ids: Vec<(RoleId, String)>,
 }
 
 #[derive(Debug)]
@@ -430,8 +440,14 @@ pub struct ShowVariablePlan {
 #[derive(Debug)]
 pub struct SetVariablePlan {
     pub name: String,
-    pub value: SetVariableValue,
+    pub value: VariableValue,
     pub local: bool,
+}
+
+#[derive(Debug)]
+pub enum VariableValue {
+    Default,
+    Values(Vec<String>),
 }
 
 #[derive(Debug)]
@@ -485,6 +501,7 @@ pub struct ExplainPlan {
     pub stage: ExplainStage,
     pub format: ExplainFormat,
     pub config: ExplainConfig,
+    pub no_errors: bool,
     pub explainee: mz_repr::explain::Explainee,
 }
 
@@ -568,7 +585,7 @@ pub struct AlterSecretPlan {
 #[derive(Debug)]
 pub struct AlterSystemSetPlan {
     pub name: String,
-    pub value: SetVariableValue,
+    pub value: VariableValue,
 }
 
 #[derive(Debug)]
@@ -578,6 +595,13 @@ pub struct AlterSystemResetPlan {
 
 #[derive(Debug)]
 pub struct AlterSystemResetAllPlan {}
+
+#[derive(Debug)]
+pub struct AlterRolePlan {
+    pub id: RoleId,
+    pub name: String,
+    pub attributes: RoleAttributes,
+}
 
 #[derive(Debug)]
 pub struct RotateKeysPlan {
@@ -655,6 +679,8 @@ pub struct Ingestion {
     pub desc: SourceDesc,
     pub source_imports: BTreeSet<GlobalId>,
     pub subsource_exports: BTreeMap<GlobalId, usize>,
+    // MIGRATION: v0.44 This can be converted to a `GlobalId` in v0.46
+    pub progress_subsource: Option<GlobalId>,
 }
 
 #[derive(Clone, Debug)]

@@ -189,6 +189,8 @@ pub struct Config {
     pub bootstrap_system_parameters: BTreeMap<String, String>,
     /// The interval at which to collect storage usage information.
     pub storage_usage_collection_interval: Duration,
+    /// How long to retain storage usage records for.
+    pub storage_usage_retention_period: Option<Duration>,
     /// An API key for Segment. Enables export of audit events to Segment.
     pub segment_api_key: Option<String>,
     /// IP Addresses which will be used for egress.
@@ -338,11 +340,13 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
 
     // Initialize storage usage client.
     let storage_usage_client = StorageUsageClient::open(
-        config.controller.persist_location.blob_uri.clone(),
-        &config.controller.persist_clients,
-    )
-    .await
-    .context("opening storage usage client")?;
+        config
+            .controller
+            .persist_clients
+            .open(config.controller.persist_location.clone())
+            .await
+            .context("opening storage usage client")?,
+    );
 
     // TODO(teskje): Remove this migration in v0.42, since v0.41+ will only create orchestrator
     // resources in the "cluster" namespace.
@@ -399,6 +403,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         connection_context: config.connection_context,
         storage_usage_client,
         storage_usage_collection_interval: config.storage_usage_collection_interval,
+        storage_usage_retention_period: config.storage_usage_retention_period,
         segment_client: segment_client.clone(),
         egress_ips: config.egress_ips,
         system_parameter_frontend: system_parameter_frontend.clone(),

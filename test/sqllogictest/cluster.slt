@@ -28,7 +28,7 @@ CREATE CLUSTER foo REPLICAS (), REPLICAS()
 
 # Creating cluster w/ remote replica works.
 statement ok
-CREATE CLUSTER foo REPLICAS (r1 (STORAGECTL ADDRESS 's:1234', COMPUTECTL ADDRESSES ['c:1234'], COMPUTE ADDRESSES ['t:1235']))
+CREATE CLUSTER foo REPLICAS (r1 (STORAGECTL ADDRESSES ['s:1234'], STORAGE ADDRESSES ['st:1235'], COMPUTECTL ADDRESSES ['c:1234'], COMPUTE ADDRESSES ['ct:1235']))
 
 statement error cluster 'foo' already exists
 CREATE CLUSTER foo REPLICAS (r1 (SIZE '1'))
@@ -77,13 +77,19 @@ statement error invalid mixture of managed and unmanaged replica options
 CREATE CLUSTER baz REPLICAS (r1 (SIZE '2', COMPUTE ADDRESSES ['localhost:1234']))
 
 statement error COMPUTECTL ADDRESSES and COMPUTE ADDRESSES must have the same length
-CREATE CLUSTER baz REPLICAS (r1 (STORAGECTL ADDRESS 'localhost:1234', COMPUTECTL ADDRESSES ['localhost:1234', 'localhost:4567'], COMPUTE ADDRESSES [], WORKERS 1))
+CREATE CLUSTER baz REPLICAS (r1 (STORAGECTL ADDRESSES ['localhost:1234'], STORAGE ADDRESSES ['localhost:1234'], COMPUTECTL ADDRESSES ['localhost:1234', 'localhost:4567'], COMPUTE ADDRESSES [], WORKERS 1))
+
+statement error STORAGECTL ADDRESSES and STORAGE ADDRESSES must have the same length
+CREATE CLUSTER baz REPLICAS (r1 (STORAGECTL ADDRESSES ['localhost:1234'], STORAGE ADDRESSES ['localhost:1234', 'localhost:4567'], COMPUTECTL ADDRESSES ['localhost:1234'], COMPUTE ADDRESSES ['localhost:1234'], WORKERS 1))
+
+statement error COMPUTECTL ADDRESSES and STORAGECTL ADDRESSES must have the same length
+CREATE CLUSTER baz REPLICAS (r1 (STORAGECTL ADDRESSES ['localhost:1234'], STORAGE ADDRESSES ['localhost:1234'], COMPUTECTL ADDRESSES [], COMPUTE ADDRESSES [], WORKERS 1))
 
 statement error COMPUTECTL ADDRESSES and COMPUTE ADDRESSES must have the same length
-CREATE CLUSTER baz REPLICAS (r1 (STORAGECTL ADDRESS 'localhost:1234', COMPUTECTL ADDRESSES [], COMPUTE ADDRESSES ['localhost:1234', 'localhost:4567'], WORKERS 1))
+CREATE CLUSTER baz REPLICAS (r1 (STORAGECTL ADDRESSES ['localhost:1234'], STORAGE ADDRESSES ['localhost:1234'], COMPUTECTL ADDRESSES [], COMPUTE ADDRESSES ['localhost:1234', 'localhost:4567'], WORKERS 1))
 
 statement error WORKERS must be greater than 0
-CREATE CLUSTER baz REPLICAS (r1 (STORAGECTL ADDRESS 's:1234', COMPUTECTL ADDRESSES ['c:1234'], COMPUTE ADDRESSES ['t:1235'], WORKERS 0))
+CREATE CLUSTER baz REPLICAS (r1 (STORAGECTL ADDRESSES ['s:1234'], STORAGE ADDRESSES ['st:1234'], COMPUTECTL ADDRESSES ['c:1234'], COMPUTE ADDRESSES ['t:1235'], WORKERS 0))
 
 # Test `cluster` session variable.
 
@@ -521,13 +527,13 @@ statement error AVAILABILITY ZONE specified more than once
 CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', AVAILABILITY ZONE 'b'
 
 statement error invalid mixture of managed and unmanaged replica options
-CREATE CLUSTER REPLICA default.replica STORAGECTL ADDRESS 'host', AVAILABILITY ZONE 'a'
+CREATE CLUSTER REPLICA default.replica STORAGECTL ADDRESSES ['host'], AVAILABILITY ZONE 'a'
 
 statement error invalid mixture of managed and unmanaged replica options
-CREATE CLUSTER REPLICA default.replica STORAGECTL ADDRESS 'host', AVAILABILITY ZONE 'a'
+CREATE CLUSTER REPLICA default.replica STORAGECTL ADDRESSES ['host'], AVAILABILITY ZONE 'a'
 
 statement error invalid mixture of managed and unmanaged replica options
-CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', STORAGECTL ADDRESS 'host'
+CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', STORAGECTL ADDRESSES ['host']
 
 # Test that the contents of mz_cluster_replicas look sensible
 

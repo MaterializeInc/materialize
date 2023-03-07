@@ -1025,9 +1025,9 @@ CREATE CLUSTER cluster REPLICAS (), BADOPT
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (STORAGECTL ADDRESSES ['host1']))
 ----
-error: Expected ADDRESS, found ADDRESSES
-CREATE CLUSTER cluster REPLICAS (a (STORAGECTL ADDRESSES ['host1']))
-                                               ^
+CREATE CLUSTER cluster REPLICAS (a (STORAGECTL ADDRESSES = ('host1')))
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: StoragectlAddresses, value: Some(Sequence([Value(String("host1"))])) }] }])) }] })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (COMPUTECTL ADDRESSES ['host1']), b (SIZE '1'))
@@ -1058,11 +1058,11 @@ CREATE CLUSTER cluster REPLICAS (a (SIZE = '1'))
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Size, value: Some(Value(String("1"))) }] }])) }] })
 
 parse-statement
-CREATE CLUSTER cluster REPLICAS (a (STORAGECTL ADDRESS '123', COMPUTECTL ADDRESSES ['host1:2400', 'host2:2400'], COMPUTE ADDRESSES ['host1:2401', 'host2:2401'], WORKERS '1'))
+CREATE CLUSTER cluster REPLICAS (a (STORAGECTL ADDRESSES ['123'], STORAGE ADDRESSES ['124'], COMPUTECTL ADDRESSES ['host1:2400', 'host2:2400'], COMPUTE ADDRESSES ['host1:2401', 'host2:2401'], WORKERS '1'))
 ----
-CREATE CLUSTER cluster REPLICAS (a (STORAGECTL ADDRESS = '123', COMPUTECTL ADDRESSES = ('host1:2400', 'host2:2400'), COMPUTE ADDRESSES = ('host1:2401', 'host2:2401'), WORKERS = '1'))
+CREATE CLUSTER cluster REPLICAS (a (STORAGECTL ADDRESSES = ('123'), STORAGE ADDRESSES = ('124'), COMPUTECTL ADDRESSES = ('host1:2400', 'host2:2400'), COMPUTE ADDRESSES = ('host1:2401', 'host2:2401'), WORKERS = '1'))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: StoragectlAddress, value: Some(Value(String("123"))) }, ReplicaOption { name: ComputectlAddresses, value: Some(Sequence([Value(String("host1:2400")), Value(String("host2:2400"))])) }, ReplicaOption { name: ComputeAddresses, value: Some(Sequence([Value(String("host1:2401")), Value(String("host2:2401"))])) }, ReplicaOption { name: Workers, value: Some(Value(String("1"))) }] }])) }] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: StoragectlAddresses, value: Some(Sequence([Value(String("123"))])) }, ReplicaOption { name: StorageAddresses, value: Some(Sequence([Value(String("124"))])) }, ReplicaOption { name: ComputectlAddresses, value: Some(Sequence([Value(String("host1:2400")), Value(String("host2:2400"))])) }, ReplicaOption { name: ComputeAddresses, value: Some(Sequence([Value(String("host1:2401")), Value(String("host2:2401"))])) }, ReplicaOption { name: Workers, value: Some(Value(String("1"))) }] }])) }] })
 
 parse-statement
 CREATE CLUSTER REPLICA replica
@@ -1135,11 +1135,11 @@ CREATE CLUSTER REPLICA default.replica IDLE ARRANGEMENT MERGE EFFORT = 0
 CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: IdleArrangementMergeEffort, value: Some(Value(Number("0"))) }] } })
 
 parse-statement
-CREATE CLUSTER REPLICA default.replica STORAGECTL ADDRESS ('1', '2'), COMPUTECTL ADDRESSES ('1', '2'), COMPUTE ADDRESSES ('3', '4'), WORKERS 2, INTROSPECTION INTERVAL = NULL
+CREATE CLUSTER REPLICA default.replica STORAGECTL ADDRESSES ('1', '2'), COMPUTECTL ADDRESSES ('1', '2'), COMPUTE ADDRESSES ('3', '4'), WORKERS 2, INTROSPECTION INTERVAL = NULL
 ----
-CREATE CLUSTER REPLICA default.replica STORAGECTL ADDRESS = ('1', '2'), COMPUTECTL ADDRESSES = ('1', '2'), COMPUTE ADDRESSES = ('3', '4'), WORKERS = 2, INTROSPECTION INTERVAL = NULL
+CREATE CLUSTER REPLICA default.replica STORAGECTL ADDRESSES = ('1', '2'), COMPUTECTL ADDRESSES = ('1', '2'), COMPUTE ADDRESSES = ('3', '4'), WORKERS = 2, INTROSPECTION INTERVAL = NULL
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: StoragectlAddress, value: Some(Sequence([Value(String("1")), Value(String("2"))])) }, ReplicaOption { name: ComputectlAddresses, value: Some(Sequence([Value(String("1")), Value(String("2"))])) }, ReplicaOption { name: ComputeAddresses, value: Some(Sequence([Value(String("3")), Value(String("4"))])) }, ReplicaOption { name: Workers, value: Some(Value(Number("2"))) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(Null)) }] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: StoragectlAddresses, value: Some(Sequence([Value(String("1")), Value(String("2"))])) }, ReplicaOption { name: ComputectlAddresses, value: Some(Sequence([Value(String("1")), Value(String("2"))])) }, ReplicaOption { name: ComputeAddresses, value: Some(Sequence([Value(String("3")), Value(String("4"))])) }, ReplicaOption { name: Workers, value: Some(Value(Number("2"))) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(Null)) }] } })
 
 
 parse-statement
@@ -1462,70 +1462,70 @@ ALTER SYSTEM SET wal_level TO logical
 ----
 ALTER SYSTEM SET wal_level = logical
 =>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("wal_level"), value: Ident(Ident("logical")) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("wal_level"), to: Values([Ident(Ident("logical"))]) })
 
 parse-statement
 ALTER SYSTEM SET wal_level = logical
 ----
 ALTER SYSTEM SET wal_level = logical
 =>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("wal_level"), value: Ident(Ident("logical")) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("wal_level"), to: Values([Ident(Ident("logical"))]) })
 
 parse-statement
 ALTER SYSTEM SET log_destination TO 'syslog'
 ----
 ALTER SYSTEM SET log_destination = 'syslog'
 =>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("log_destination"), value: Literal(String("syslog")) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("log_destination"), to: Values([Literal(String("syslog"))]) })
 
 parse-statement
 ALTER SYSTEM SET log_destination = 'syslog'
 ----
 ALTER SYSTEM SET log_destination = 'syslog'
 =>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("log_destination"), value: Literal(String("syslog")) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("log_destination"), to: Values([Literal(String("syslog"))]) })
 
 parse-statement
 ALTER SYSTEM SET shared_buffers TO 42
 ----
 ALTER SYSTEM SET shared_buffers = 42
 =>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("shared_buffers"), value: Literal(Number("42")) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("shared_buffers"), to: Values([Literal(Number("42"))]) })
 
 parse-statement
 ALTER SYSTEM SET shared_buffers = 42
 ----
 ALTER SYSTEM SET shared_buffers = 42
 =>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("shared_buffers"), value: Literal(Number("42")) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("shared_buffers"), to: Values([Literal(Number("42"))]) })
 
 parse-statement
 ALTER SYSTEM SET search_path TO default
 ----
 ALTER SYSTEM SET search_path = DEFAULT
 =>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("search_path"), value: Default })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("search_path"), to: Default })
 
 parse-statement
 ALTER SYSTEM SET search_path = default
 ----
 ALTER SYSTEM SET search_path = DEFAULT
 =>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("search_path"), value: Default })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("search_path"), to: Default })
 
 parse-statement
 ALTER SYSTEM SET log_connections TO 'default'
 ----
 ALTER SYSTEM SET log_connections = 'default'
 =>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("log_connections"), value: Literal(String("default")) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("log_connections"), to: Values([Literal(String("default"))]) })
 
 parse-statement
 ALTER SYSTEM SET log_connections = 'default'
 ----
 ALTER SYSTEM SET log_connections = 'default'
 =>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("log_connections"), value: Literal(String("default")) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("log_connections"), to: Values([Literal(String("default"))]) })
 
 parse-statement
 ALTER SYSTEM SET some_array_key = [667, 668]
@@ -1539,14 +1539,14 @@ ALTER SYSTEM SET quantum_enabled = true
 ----
 ALTER SYSTEM SET quantum_enabled = true
 =>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("quantum_enabled"), value: Literal(Boolean(true)) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("quantum_enabled"), to: Values([Literal(Boolean(true))]) })
 
 parse-statement
 ALTER SYSTEM SET use_optional = NULL
 ----
 ALTER SYSTEM SET use_optional = NULL
 =>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("use_optional"), value: Literal(Null) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("use_optional"), to: Values([Literal(Null)]) })
 
 parse-statement
 ALTER SYSTEM SET key value

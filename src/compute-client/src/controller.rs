@@ -43,6 +43,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
+use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_expr::RowSetFinishing;
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::metrics::MetricsRegistry;
@@ -91,19 +92,6 @@ pub enum ComputeControllerResponse<T> {
     ReplicaMetrics(ReplicaId, Vec<ServiceProcessMetrics>),
     /// A notification that the write frontiers of the replicas have changed.
     ReplicaWriteFrontiers(BTreeMap<ReplicaId, Vec<(GlobalId, T)>>),
-}
-
-/// Specifies the location of a compute replica.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ComputeReplicaLocation {
-    /// The network addresses of the computectl endpoints for each process in
-    /// the replica.
-    pub computectl_addrs: Vec<String>,
-    /// The network addresses of the compute (Timely) endpoints for
-    /// each process in the replica.
-    pub compute_addrs: Vec<String>,
-    /// The workers per process in the replica.
-    pub workers: usize,
 }
 
 /// Replica configuration
@@ -430,7 +418,7 @@ where
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
-        location: ComputeReplicaLocation,
+        location: ClusterReplicaLocation,
         config: ComputeReplicaConfig,
     ) -> Result<(), ReplicaCreationError> {
         let (enable_logging, interval) = match config.logging.interval {

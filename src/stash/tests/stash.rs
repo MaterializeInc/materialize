@@ -78,14 +78,16 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     convert::Infallible,
+    time::Duration,
 };
 
 use futures::Future;
 use postgres_openssl::MakeTlsConnector;
 use timely::progress::Antichain;
+use tokio::sync::oneshot;
 use tokio_postgres::Config;
 
-use mz_ore::{assert_contains, metrics::MetricsRegistry};
+use mz_ore::{assert_contains, metrics::MetricsRegistry, task::spawn};
 
 use mz_stash::{
     Stash, StashCollection, StashError, StashFactory, TableTransaction, Timestamp, TypedCollection,
@@ -146,6 +148,44 @@ async fn test_stash_postgres() {
             _ => panic!("expected error"),
         });
         let _: StashCollection<String, String> = conn2.collection("c").await.unwrap();
+    }
+    // Test failures after commit.
+    {
+        let mut stash = connect(&factory, &connstr, tls.clone(), true).await;
+        let col = stash.collection::<i64, i64>("c1").await.unwrap();
+        let mut batch = col.make_batch(&mut stash).await.unwrap();
+        col.append_to_batch(&mut batch, &1, &2, 1);
+        stash.append(vec![batch]).await.unwrap();
+        assert_eq!(
+            C1.peek_one(&mut stash).await.unwrap(),
+            BTreeMap::from([(1, 2)])
+        );
+        let mut batch = col.make_batch(&mut stash).await.unwrap();
+        col.append_to_batch(&mut batch, &1, &2, -1);
+
+        fail::cfg("stash_commit_pre", "return(commit failpoint)").unwrap();
+        fail::cfg("stash_commit_post", "return(commit failpoint)").unwrap();
+        // Because the commit error will either retry or discover it succeeded,
+        // it never returns an error. Thus, we need to re-enable the failpoint
+        // in another thread. Use both a pre and post commit error to test both
+        // commit success and fail paths. Use a channel to check that we haven't
+        // succeeded unexpectedly.
+        let (tx, mut rx) = oneshot::channel();
+        let handle = spawn(|| "stash_commit_enable", async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            // Assert no success yet.
+            rx.try_recv().unwrap_err();
+            fail::cfg("stash_commit_post", "off").unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            // Assert no success yet.
+            rx.try_recv().unwrap_err();
+            fail::cfg("stash_commit_pre", "off").unwrap();
+            rx.await.unwrap();
+        });
+        stash.append(vec![batch.clone()]).await.unwrap();
+        assert_eq!(C1.peek_one(&mut stash).await.unwrap(), BTreeMap::new());
+        tx.send(()).unwrap();
+        handle.await.unwrap();
     }
     // Test readonly.
     {

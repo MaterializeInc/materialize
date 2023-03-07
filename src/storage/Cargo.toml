@@ -1,7 +1,7 @@
 [package]
 name = "mz-storage"
 description = "Materialize's storage layer."
-version = "0.38.0-dev"
+version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -33,6 +33,7 @@ mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-expr = { path = "../expr" }
+mz-cluster = { path = "../cluster" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-kinesis-util = { path = "../kinesis-util" }

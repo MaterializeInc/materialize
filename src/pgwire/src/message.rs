@@ -18,6 +18,7 @@ use mz_adapter::{AdapterError, AdapterNotice, StartupMessage};
 use mz_expr::EvalError;
 use mz_repr::{ColumnName, NotNullViolation, RelationDesc};
 use mz_sql::ast::NoticeSeverity;
+use mz_sql::plan::PlanError;
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the
@@ -314,6 +315,7 @@ impl ErrorResponse {
             // DATA_EXCEPTION to match what Postgres returns for degenerate
             // range bounds
             AdapterError::AbsurdSubscribeBounds { .. } => SqlState::DATA_EXCEPTION,
+            AdapterError::AmbiguousSystemColumnReference => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::BadItemInStorageCluster { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Catalog(_) => SqlState::INTERNAL_ERROR,
             AdapterError::ChangedPlan => SqlState::FEATURE_NOT_SUPPORTED,
@@ -348,6 +350,7 @@ impl ErrorResponse {
             AdapterError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
             AdapterError::ParseError(_) => SqlState::SYNTAX_ERROR,
+            AdapterError::PlanError(PlanError::InvalidSchemaName) => SqlState::INVALID_SCHEMA_NAME,
             AdapterError::PlanError(_) => SqlState::INTERNAL_ERROR,
             AdapterError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,
             AdapterError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
@@ -373,6 +376,7 @@ impl ErrorResponse {
             AdapterError::UnknownLoginRole(_) => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
             AdapterError::UnknownClusterReplica { .. } => SqlState::UNDEFINED_OBJECT,
             AdapterError::UnmaterializableFunction(_) => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::UnrecognizedConfigurationParam(_) => SqlState::UNDEFINED_OBJECT,
             AdapterError::UnstableDependency { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Unsupported(..) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Unstructured(_) => SqlState::INTERNAL_ERROR,
@@ -386,6 +390,7 @@ impl ErrorResponse {
             AdapterError::Storage(_) | AdapterError::Compute(_) | AdapterError::Orchestrator(_) => {
                 SqlState::INTERNAL_ERROR
             }
+            AdapterError::ConcurrentRoleDrop(_) => SqlState::UNDEFINED_OBJECT,
         };
         ErrorResponse {
             severity,
@@ -418,6 +423,8 @@ impl ErrorResponse {
             AdapterNotice::QueryTrace { .. } => SqlState::WARNING,
             AdapterNotice::UnimplementedIsolationLevel { .. } => SqlState::WARNING,
             AdapterNotice::DroppedSubscribe { .. } => SqlState::WARNING,
+            AdapterNotice::BadStartupSetting { .. } => SqlState::WARNING,
+            AdapterNotice::RbacDisabled => SqlState::WARNING,
         };
         ErrorResponse {
             severity: Severity::for_adapter_notice(&notice),
@@ -574,6 +581,8 @@ impl Severity {
             AdapterNotice::QueryTrace { .. } => Severity::Notice,
             AdapterNotice::UnimplementedIsolationLevel { .. } => Severity::Notice,
             AdapterNotice::DroppedSubscribe { .. } => Severity::Notice,
+            AdapterNotice::BadStartupSetting { .. } => Severity::Notice,
+            AdapterNotice::RbacDisabled => Severity::Notice,
         }
     }
 }

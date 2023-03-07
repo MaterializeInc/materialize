@@ -10,6 +10,7 @@
 //! `EXPLAIN` support for structures defined in this crate.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::explain::{
@@ -32,6 +33,7 @@ pub struct ExplainContext<'a> {
     pub humanizer: &'a dyn ExprHumanizer,
     pub used_indexes: UsedIndexes,
     pub finishing: Option<RowSetFinishing>,
+    pub duration: Duration,
 }
 
 /// A structure produced by the `explain_$format` methods in

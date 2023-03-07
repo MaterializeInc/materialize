@@ -1,7 +1,7 @@
 [package]
 name = "mz-environmentd"
 description = "Manages a single Materialize environment."
-version = "0.43.0-dev"
+version = "0.46.0-dev"
 authors = ["Materialize, Inc."]
 license = "proprietary"
 edition.workspace = true
@@ -99,6 +99,7 @@ jsonwebtoken = "8.2.0"
 mz-pgrepr = { path = "../pgrepr" }
 mz-pgtest = { path = "../pgtest" }
 mz-repr = { path = "../repr" }
+mz-sql-parser = { path = "../sql-parser" }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["with-chrono-0_4"] }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }

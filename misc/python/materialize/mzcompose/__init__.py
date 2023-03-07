@@ -246,6 +246,7 @@ class Composition:
                 stdout=stdout,
                 input=stdin,
                 text=True,
+                bufsize=1,
             )
         except subprocess.CalledProcessError as e:
             if e.stdout:
@@ -904,7 +905,7 @@ def _wait_for_pg(
     args = f"dbname={dbname} host={host} port={port} user={user} password='{obfuscated_password}...'"
     ui.progress(f"waiting for {args} to handle {query!r}", "C")
     error = None
-    for remaining in ui.timeout_loop(timeout_secs, tick=0.1):
+    for remaining in ui.timeout_loop(timeout_secs, tick=0.5):
         try:
             conn = pg8000.connect(
                 database=dbname,

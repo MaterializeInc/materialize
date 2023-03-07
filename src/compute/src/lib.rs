@@ -79,7 +79,6 @@
 //! Materialize's compute layer.
 
 pub(crate) mod arrangement;
-pub mod communication;
 pub mod compute_state;
 pub(crate) mod logging;
 pub(crate) mod metrics;

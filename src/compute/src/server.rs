@@ -11,304 +11,79 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use anyhow::{anyhow, Error};
-use async_trait::async_trait;
+use anyhow::Error;
 use crossbeam_channel::{RecvError, TryRecvError};
-use futures::future;
-use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::source;
 use timely::dataflow::operators::Operator;
-use timely::execute::execute_from;
 use timely::progress::Timestamp;
 use timely::scheduling::{Scheduler, SyncActivator};
 use timely::worker::Worker as TimelyWorker;
-use timely::WorkerConfig;
-use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
-use mz_compute_client::protocol::command::{ComputeCommand, ComputeStartupEpoch, TimelyConfig};
+use mz_cluster::server::TimelyContainerRef;
+use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::ComputeResponse;
 use mz_compute_client::service::ComputeClient;
 use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription};
 use mz_ore::cast::CastFrom;
 use mz_ore::halt;
-use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::cache::PersistClientCache;
-use mz_service::client::{GenericClient, Partitioned};
-use mz_service::local::LocalClient;
-use tracing::{info, warn};
 
-use crate::communication::initialize_networking;
-use crate::compute_state::ActiveComputeState;
-use crate::compute_state::ComputeState;
+use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
+use crate::logging::compute::ComputeEvent;
 use crate::metrics::ComputeMetrics;
 use crate::{TraceManager, TraceMetrics};
 
-/// Configures a dataflow server.
-#[derive(Debug)]
+/// Configures the server with compute-specific metrics.
+#[derive(Debug, Clone)]
 pub struct Config {
-    /// Metrics registry through which dataflow metrics will be reported.
-    pub metrics_registry: MetricsRegistry,
-    /// `persist` client cache.
-    pub persist_clients: Arc<PersistClientCache>,
+    /// Metrics about traces.
+    pub trace_metrics: TraceMetrics,
+    /// Metrics about command histories and dataflows.
+    // TODO(guswynn): cluster-unification: ensure these stats
+    // also work for storage when merging.
+    pub compute_metrics: ComputeMetrics,
 }
-
-/// A client managing access to the local portion of a Timely cluster
-struct ClusterClient<C> {
-    /// The actual client to talk to the cluster
-    inner: Option<C>,
-    /// The running timely instance
-    timely_container: TimelyContainerRef,
-    /// The dataflow trace metrics.
-    trace_metrics: TraceMetrics,
-    /// The compute metrics.
-    compute_metrics: ComputeMetrics,
-    /// Handle to the persist infrastructure.
-    persist_clients: Arc<PersistClientCache>,
-    /// The handle to the Tokio runtime.
-    tokio_handle: tokio::runtime::Handle,
-}
-
-/// Metadata about timely workers in this process.
-pub struct TimelyContainer {
-    /// The current timely config in use
-    config: TimelyConfig,
-    /// Channels over which to send endpoints for wiring up a new Client
-    client_txs: Vec<
-        crossbeam_channel::Sender<(
-            crossbeam_channel::Receiver<ComputeCommand>,
-            mpsc::UnboundedSender<ComputeResponse>,
-            crossbeam_channel::Sender<SyncActivator>,
-        )>,
-    >,
-    /// Thread guards that keep worker threads alive
-    _worker_guards: WorkerGuards<()>,
-}
-
-/// Threadsafe reference to an optional TimelyContainer
-pub type TimelyContainerRef = Arc<tokio::sync::Mutex<Option<TimelyContainer>>>;
 
 /// Initiates a timely dataflow computation, processing compute commands.
 pub fn serve(
-    config: Config,
-) -> Result<(TimelyContainerRef, impl Fn() -> Box<dyn ComputeClient>), Error> {
+    config: mz_cluster::server::ClusterConfig,
+) -> Result<
+    (
+        TimelyContainerRef<ComputeCommand, ComputeResponse, SyncActivator>,
+        impl Fn() -> Box<dyn ComputeClient>,
+    ),
+    Error,
+> {
     // Various metrics related things.
     let trace_metrics = TraceMetrics::register_with(&config.metrics_registry);
     let compute_metrics = ComputeMetrics::register_with(&config.metrics_registry);
 
-    let tokio_executor = tokio::runtime::Handle::current();
-    let timely_container = Arc::new(tokio::sync::Mutex::new(None));
+    let compute_config = Config {
+        trace_metrics,
+        compute_metrics,
+    };
 
+    let (timely_container, client_builder) = mz_cluster::server::serve::<
+        Config,
+        ComputeCommand,
+        ComputeResponse,
+    >(config, compute_config)?;
     let client_builder = {
-        let timely_container = Arc::clone(&timely_container);
         move || {
-            let client = ClusterClient::new(
-                Arc::clone(&timely_container),
-                trace_metrics.clone(),
-                compute_metrics.clone(),
-                Arc::clone(&config.persist_clients),
-                tokio_executor.clone(),
-            );
-            let client: Box<dyn ComputeClient> = Box::new(client);
+            let client: Box<dyn ComputeClient> = client_builder();
             client
         }
     };
 
     Ok((timely_container, client_builder))
-}
-
-impl ClusterClient<PartitionedClient> {
-    fn new(
-        timely_container: TimelyContainerRef,
-        trace_metrics: TraceMetrics,
-        compute_metrics: ComputeMetrics,
-        persist_clients: Arc<PersistClientCache>,
-        tokio_handle: tokio::runtime::Handle,
-    ) -> Self {
-        Self {
-            timely_container,
-            inner: None,
-            trace_metrics,
-            compute_metrics,
-            persist_clients,
-            tokio_handle,
-        }
-    }
-
-    async fn build_timely(
-        config: TimelyConfig,
-        epoch: ComputeStartupEpoch,
-        trace_metrics: TraceMetrics,
-        compute_metrics: ComputeMetrics,
-        persist_clients: Arc<PersistClientCache>,
-        tokio_executor: Handle,
-    ) -> Result<TimelyContainer, Error> {
-        info!("Building timely container with config {config:?}");
-        let (client_txs, client_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
-            .map(|_| crossbeam_channel::unbounded())
-            .unzip();
-        let client_rxs: Mutex<Vec<_>> = Mutex::new(client_rxs.into_iter().map(Some).collect());
-
-        let (builders, other) = initialize_networking(
-            config.workers,
-            config.process,
-            config.addresses.clone(),
-            epoch,
-        )
-        .await?;
-
-        let mut worker_config = WorkerConfig::default();
-        differential_dataflow::configure(
-            &mut worker_config,
-            &differential_dataflow::Config {
-                idle_merge_effort: Some(isize::cast_from(config.idle_arrangement_merge_effort)),
-            },
-        );
-
-        let worker_guards = execute_from(builders, other, worker_config, move |timely_worker| {
-            let timely_worker_index = timely_worker.index();
-            let _tokio_guard = tokio_executor.enter();
-            let client_rx = client_rxs.lock().unwrap()[timely_worker_index % config.workers]
-                .take()
-                .unwrap();
-            let _trace_metrics = trace_metrics.clone();
-            let _compute_metrics = compute_metrics.clone();
-            let persist_clients = Arc::clone(&persist_clients);
-            Worker {
-                timely_worker,
-                client_rx,
-                compute_state: None,
-                trace_metrics: trace_metrics.clone(),
-                compute_metrics: compute_metrics.clone(),
-                persist_clients,
-            }
-            .run()
-        })
-        .map_err(|e| anyhow!("{e}"))?;
-
-        Ok(TimelyContainer {
-            config,
-            client_txs,
-            _worker_guards: worker_guards,
-        })
-    }
-
-    async fn build(
-        &mut self,
-        config: TimelyConfig,
-        epoch: ComputeStartupEpoch,
-    ) -> Result<(), Error> {
-        let workers = config.workers;
-
-        // Check if we can reuse the existing timely instance.
-        // We currently do not support reinstantiating timely, we simply panic if another config is
-        // requested. This code must panic before dropping the worker guards contained in
-        // timely_container. As we don't terminate timely workers, the thread join would hang
-        // forever, possibly creating a fair share of confusion in the orchestrator.
-
-        let trace_metrics = self.trace_metrics.clone();
-        let compute_metrics = self.compute_metrics.clone();
-        let persist_clients = Arc::clone(&self.persist_clients);
-        let handle = self.tokio_handle.clone();
-
-        let mut timely_lock = self.timely_container.lock().await;
-        let timely = match timely_lock.take() {
-            Some(existing) => {
-                if config != existing.config {
-                    halt!(
-                        "new timely configuration does not match existing timely configuration:\n{:?}\nvs\n{:?}",
-                        config,
-                        existing.config,
-                    );
-                }
-                info!("Timely already initialized; re-using.",);
-                existing
-            }
-            None => {
-                let build_timely_result = Self::build_timely(
-                    config,
-                    epoch,
-                    trace_metrics,
-                    compute_metrics,
-                    persist_clients,
-                    handle,
-                )
-                .await;
-                match build_timely_result {
-                    Err(e) => {
-                        warn!("timely initialization failed: {e:#}");
-                        return Err(e);
-                    }
-                    Ok(ok) => ok,
-                }
-            }
-        };
-
-        let (command_txs, command_rxs): (Vec<_>, Vec<_>) =
-            (0..workers).map(|_| crossbeam_channel::unbounded()).unzip();
-        let (response_txs, response_rxs): (Vec<_>, Vec<_>) =
-            (0..workers).map(|_| mpsc::unbounded_channel()).unzip();
-        let activators = timely
-            .client_txs
-            .iter()
-            .zip(command_rxs)
-            .zip(response_txs)
-            .map(|((client_tx, cmd_rx), resp_tx)| {
-                let (activator_tx, activator_rx) = crossbeam_channel::unbounded();
-                client_tx
-                    .send((cmd_rx, resp_tx, activator_tx))
-                    .expect("worker should not drop first");
-
-                activator_rx.recv().unwrap()
-            })
-            .collect();
-        *timely_lock = Some(timely);
-
-        self.inner = Some(LocalClient::new_partitioned(
-            response_rxs,
-            command_txs,
-            activators,
-        ));
-        Ok(())
-    }
-}
-
-impl<C: Debug> Debug for ClusterClient<C> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ClusterClient")
-            .field("trace_metrics", &self.trace_metrics)
-            .field("compute_metrics", &self.compute_metrics)
-            .field("persist_clients", &self.persist_clients)
-            .field("inner", &self.inner)
-            .finish_non_exhaustive()
-    }
-}
-
-#[async_trait]
-impl GenericClient<ComputeCommand, ComputeResponse> for ClusterClient<PartitionedClient> {
-    async fn send(&mut self, cmd: ComputeCommand) -> Result<(), Error> {
-        // Changing this debug statement requires changing the replica-isolation test
-        tracing::debug!("ClusterClient send={:?}", &cmd);
-        match cmd {
-            ComputeCommand::CreateTimely { config, epoch } => self.build(config, epoch).await,
-            _ => self.inner.as_mut().expect("intialized").send(cmd).await,
-        }
-    }
-
-    async fn recv(&mut self) -> Result<Option<ComputeResponse>, Error> {
-        if let Some(client) = self.inner.as_mut() {
-            client.recv().await
-        } else {
-            future::pending().await
-        }
-    }
 }
 
 type CommandReceiver = crossbeam_channel::Receiver<ComputeCommand>;
@@ -351,11 +126,6 @@ impl CommandReceiverQueue {
         self.queue.borrow().is_empty()
     }
 }
-type PartitionedClient = Partitioned<
-    LocalClient<ComputeCommand, ComputeResponse, SyncActivator>,
-    ComputeCommand,
-    ComputeResponse,
->;
 
 /// State maintained for each worker thread.
 ///
@@ -375,6 +145,30 @@ struct Worker<'w, A: Allocate> {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     persist_clients: Arc<PersistClientCache>,
+}
+
+impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Config {
+    type Activatable = SyncActivator;
+    fn build_and_run<A: Allocate>(
+        config: Self,
+        timely_worker: &mut TimelyWorker<A>,
+        client_rx: crossbeam_channel::Receiver<(
+            crossbeam_channel::Receiver<ComputeCommand>,
+            tokio::sync::mpsc::UnboundedSender<ComputeResponse>,
+            ActivatorSender,
+        )>,
+        persist_clients: Arc<PersistClientCache>,
+    ) {
+        Worker {
+            timely_worker,
+            client_rx,
+            trace_metrics: config.trace_metrics,
+            compute_metrics: config.compute_metrics,
+            persist_clients,
+            compute_state: None,
+        }
+        .run()
+    }
 }
 
 impl<'w, A: Allocate> Worker<'w, A> {
@@ -611,6 +405,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     persist_clients: Arc::clone(&self.persist_clients),
                     command_history: ComputeCommandHistory::default(),
                     max_result_size: u32::MAX,
+                    dataflow_max_inflight_bytes: usize::MAX,
                     metrics: self.compute_metrics.clone(),
                 });
             }
@@ -675,9 +470,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
         // and creating new dataflows, in addition to standard peek and compaction commands.
         // The result should be the same as if dropping all dataflows and running `new_commands`.
         let mut todo_commands = Vec::new();
-        // Exported identifiers from dataflows we retain.
-        let mut retain_ids = BTreeSet::default();
-
         // We only have a compute history if we are in an initialized state
         // (i.e. after a `CreateInstance`).
         // If this is not the case, just copy `new_commands` into `todo_commands`.
@@ -731,6 +523,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
             // Compaction commands that can be applied to existing dataflows.
             let mut old_compaction = BTreeMap::default();
+            // Exported identifiers from dataflows we retain.
+            let mut retain_ids = BTreeSet::default();
+            // `as_of` frontiers of collections exported from requested dataflows.
+            let mut new_as_ofs = BTreeMap::default();
 
             // Traverse new commands, sorting out what remediation we can do.
             for command in new_commands.iter() {
@@ -741,7 +537,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
                         // Attempt to find an existing match for each dataflow.
                         for dataflow in dataflows.iter() {
+                            let as_of = dataflow.as_of.as_ref().unwrap();
                             let export_ids = dataflow.export_ids().collect::<BTreeSet<_>>();
+                            new_as_ofs.extend(export_ids.iter().map(|id| (*id, as_of.clone())));
+
                             if let Some(old_dataflow) = old_dataflows.get(&export_ids) {
                                 let compatible = old_dataflow.compatible_with(dataflow);
                                 let uncompacted = !export_ids
@@ -764,12 +563,18 @@ impl<'w, A: Allocate> Worker<'w, A> {
                                     // and compact its outputs to the dataflow's `as_of`.
                                     old_dataflows.remove(&export_ids);
                                     for id in export_ids.iter() {
-                                        old_compaction.insert(*id, dataflow.as_of.clone().unwrap());
+                                        old_compaction.insert(*id, as_of.clone());
                                     }
                                     retain_ids.extend(export_ids);
                                 } else {
                                     new_dataflows.push(dataflow.clone());
                                 }
+
+                                compute_state.metrics.record_dataflow_reconciliation(
+                                    compatible,
+                                    uncompacted,
+                                    subscribe_free,
+                                );
                             } else {
                                 new_dataflows.push(dataflow.clone());
                             }
@@ -827,18 +632,30 @@ impl<'w, A: Allocate> Worker<'w, A> {
             // so that they recommunicate that information as if from scratch.
 
             // Remove all pending peeks.
-            compute_state.pending_peeks.clear();
+            for (_, peek) in std::mem::take(&mut compute_state.pending_peeks) {
+                // Log dropping the peek request.
+                if let Some(logger) = compute_state.compute_logger.as_mut() {
+                    logger.log(ComputeEvent::Peek(peek.as_log_event(), false));
+                }
+            }
             // We compact away removed frontiers, and so only need to reset ids we continue to use.
             // We must remember, though, to compensate what already was sent to logging sources.
-            for (id, frontier) in compute_state.reported_frontiers.iter_mut() {
+            for (&id, reported_frontier) in compute_state.reported_frontiers.iter_mut() {
+                let new_reported_frontier = match new_as_ofs.remove(&id) {
+                    Some(lower) => ReportedFrontier::NotReported { lower },
+                    None => ReportedFrontier::new(),
+                };
+
                 if let Some(logger) = &compute_state.compute_logger {
-                    if let Some(time) = frontier.get(0) {
-                        use crate::logging::compute::ComputeEvent;
-                        logger.log(ComputeEvent::Frontier(*id, *time, -1));
-                        logger.log(ComputeEvent::Frontier(*id, Timestamp::minimum(), 1));
+                    if let Some(time) = reported_frontier.logging_time() {
+                        logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
+                    }
+                    if let Some(time) = new_reported_frontier.logging_time() {
+                        logger.log(ComputeEvent::Frontier { id, time, diff: 1 });
                     }
                 }
-                *frontier = timely::progress::Antichain::from_elem(<_>::minimum());
+
+                *reported_frontier = new_reported_frontier;
             }
             // Sink tokens should be retained for retained dataflows, and dropped for dropped dataflows.
             compute_state

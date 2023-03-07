@@ -15,10 +15,12 @@ use mz_sql::names::Aug;
 use mz_sql::plan::StatementDesc;
 use mz_sql_parser::ast::{Raw, Statement};
 
+use crate::coord::appends::BuiltinTableUpdateSource;
 use crate::coord::Coordinator;
 use crate::session::{Session, TransactionStatus};
+use crate::subscribe::ActiveSubscribe;
 use crate::util::describe;
-use crate::AdapterError;
+use crate::{metrics, AdapterError};
 
 impl Coordinator {
     pub(crate) fn plan_statement(
@@ -157,12 +159,42 @@ impl Coordinator {
         session.clear_transaction()
     }
 
+    /// Handle adding metadata associated with a SUBSCRIBE query.
+    pub(crate) async fn add_active_subscribe(
+        &mut self,
+        id: GlobalId,
+        active_subscribe: ActiveSubscribe,
+    ) {
+        let update = self
+            .catalog
+            .state()
+            .pack_subscribe_update(id, &active_subscribe, 1);
+        self.send_builtin_table_updates(vec![update], BuiltinTableUpdateSource::DDL)
+            .await;
+
+        let session_type = metrics::session_type_label_value(&active_subscribe.user);
+        self.metrics
+            .active_subscribes
+            .with_label_values(&[session_type])
+            .inc();
+
+        self.active_subscribes.insert(id, active_subscribe);
+    }
+
     /// Handle removing metadata associated with a SUBSCRIBE query.
-    pub(crate) fn remove_active_subscribe(&mut self, sink_id: &GlobalId) {
-        if let Some(active_subscribe) = self.active_subscribes.remove(sink_id) {
+    pub(crate) async fn remove_active_subscribe(&mut self, id: GlobalId) {
+        if let Some(active_subscribe) = self.active_subscribes.remove(&id) {
+            let update = self
+                .catalog
+                .state()
+                .pack_subscribe_update(id, &active_subscribe, -1);
+            self.send_builtin_table_updates(vec![update], BuiltinTableUpdateSource::DDL)
+                .await;
+
+            let session_type = metrics::session_type_label_value(&active_subscribe.user);
             self.metrics
                 .active_subscribes
-                .with_label_values(&[active_subscribe.session_type])
+                .with_label_values(&[session_type])
                 .dec();
         }
         // Note: Drop sinks are removed at commit time.

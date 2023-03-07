@@ -1,0 +1,68 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
+CREATE VIEW v AS SELECT * FROM mz_schemas;
+
+statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
+CREATE VIEW v AS SELECT id FROM mz_columns NATURAL JOIN mz_indexes;
+
+statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
+CREATE VIEW v AS SELECT (mz_tables).* FROM mz_tables;
+
+statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
+CREATE VIEW v AS SELECT mz_connections.* FROM mz_connections;
+
+statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
+CREATE VIEW v AS SELECT * FROM (SELECT id, oid FROM mz_sources);
+
+statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
+CREATE MATERIALIZED VIEW mv AS SELECT * FROM mz_schemas;
+
+statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
+CREATE MATERIALIZED VIEW mv AS SELECT id FROM mz_columns NATURAL JOIN mz_indexes;
+
+statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
+CREATE MATERIALIZED VIEW mv AS SELECT (mz_tables).* FROM mz_tables;
+
+statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
+CREATE MATERIALIZED VIEW mv AS SELECT mz_connections.* FROM mz_connections;
+
+statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
+CREATE MATERIALIZED VIEW mv AS SELECT * FROM (SELECT id, oid FROM mz_sources);
+
+statement ok
+CREATE VIEW v1 AS SELECT oid FROM mz_objects;
+
+statement ok
+CREATE VIEW v2 AS SELECT * FROM v1;
+
+# Queries are fine
+
+query IIIT
+SELECT * FROM mz_schemas LIMIT 0;
+----
+
+query TTIBTTIITTT
+SELECT id FROM mz_columns NATURAL JOIN mz_indexes LIMIT 0;
+----
+
+query TIIT
+SELECT (mz_tables).* FROM mz_tables LIMIT 0;
+----
+
+query TIITT
+SELECT mz_connections.* FROM mz_connections LIMIT 0;
+----
+
+query TI
+SELECT * FROM (SELECT id, oid FROM mz_sources) LIMIT 0;
+----

@@ -13,6 +13,7 @@ from textwrap import dedent
 from threading import Thread
 from typing import Tuple
 
+from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
@@ -58,14 +59,19 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-github-15535",
         "test-github-15799",
         "test-github-15930",
+        "test-github-15496",
+        "test-github-17510",
         "test-remote-storage",
         "test-drop-default-cluster",
         "test-upsert",
         "test-resource-limits",
         "test-invalid-compute-reuse",
         "pg-snapshot-resumption",
+        "pg-snapshot-partial-failure",
         "test-system-table-indexes",
         "test-replica-targeted-subscribe-abort",
+        "test-compute-reconciliation-reuse",
+        "test-mz-subscriptions",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -92,7 +98,8 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
     c.sql(
         """CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESS 'clusterd1:2100',
+            STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
             COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
             COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
             WORKERS 2
@@ -106,7 +113,8 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("clusterd4")
     c.sql(
         """CREATE CLUSTER REPLICA cluster1.replica2
-            STORAGECTL ADDRESS 'clusterd3:2100',
+            STORAGECTL ADDRESSES ['clusterd3:2100', 'clusterd4:2100'],
+            STORAGE ADDRESSES ['clusterd3:2103', 'clusterd4:2103'],
             COMPUTECTL ADDRESSES ['clusterd3:2101', 'clusterd4:2101'],
             COMPUTE ADDRESSES ['clusterd3:2102', 'clusterd4:2102'],
             WORKERS 2
@@ -135,7 +143,8 @@ def workflow_test_invalid_compute_reuse(c: Composition) -> None:
     c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
     c.sql(
         """CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESS 'clusterd1:2100',
+            STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
             COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
             COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
             WORKERS 2
@@ -147,7 +156,8 @@ def workflow_test_invalid_compute_reuse(c: Composition) -> None:
     # Note the different WORKERS argument
     c.sql(
         """CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESS 'clusterd1:2100',
+            STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
             COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
             COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
             WORKERS 1
@@ -239,7 +249,8 @@ def workflow_test_github_15531(c: Composition) -> None:
     c.sql(
         """
         CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESS 'clusterd1:2100',
+            STORAGECTL ADDRESSES ['clusterd1:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103'],
             COMPUTECTL ADDRESSES ['clusterd1:2101'],
             COMPUTE ADDRESSES ['clusterd1:2102'],
             WORKERS 2
@@ -321,7 +332,8 @@ def workflow_test_github_15535(c: Composition) -> None:
     c.sql(
         """
         CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESS 'clusterd1:2100',
+            STORAGECTL ADDRESSES ['clusterd1:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103'],
             COMPUTECTL ADDRESSES ['clusterd1:2101'],
             COMPUTE ADDRESSES ['clusterd1:2102'],
             WORKERS 2
@@ -385,13 +397,15 @@ def workflow_test_github_15799(c: Composition) -> None:
         """
         CREATE CLUSTER cluster1 REPLICAS (
             logging_on (
-                STORAGECTL ADDRESS 'clusterd1:2100',
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
                 COMPUTECTL ADDRESSES ['clusterd1:2101'],
                 COMPUTE ADDRESSES ['clusterd1:2102'],
                 WORKERS 2
             ),
             logging_off (
-                STORAGECTL ADDRESS 'clusterd2:2100',
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
                 COMPUTECTL ADDRESSES ['clusterd2:2101'],
                 COMPUTE ADDRESSES ['clusterd2:2102'],
                 WORKERS 2,
@@ -431,7 +445,8 @@ def workflow_test_github_15930(c: Composition) -> None:
             """
             CREATE CLUSTER cluster1 REPLICAS (
                 logging_on (
-                    STORAGECTL ADDRESS 'clusterd1:2100',
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
                     COMPUTECTL ADDRESSES ['clusterd1:2101'],
                     COMPUTE ADDRESSES ['clusterd1:2102'],
                     WORKERS 2
@@ -502,6 +517,189 @@ def workflow_test_github_15930(c: Composition) -> None:
         )
 
 
+def workflow_test_github_15496(c: Composition) -> None:
+    """
+    Test that a reduce collation over a source with an invalid accumulation does not
+    panic, but rather logs errors, when soft assertions are turned off.
+
+    Regression test for https://github.com/MaterializeInc/materialize/issues/15496.
+    """
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Clusterd(
+            name="clusterd_nopanic",
+            environment_extra=[
+                "MZ_SOFT_ASSERTIONS=0",
+            ],
+        ),
+        Testdrive(no_reset=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.up("clusterd_nopanic")
+
+        # set up a test cluster and run a testdrive regression script
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (
+                r1 (
+                    STORAGECTL ADDRESSES ['clusterd_nopanic:2100'],
+                    STORAGE ADDRESSES ['clusterd_nopanic:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd_nopanic:2101'],
+                    COMPUTE ADDRESSES ['clusterd_nopanic:2102'],
+                    WORKERS 2
+                )
+            );
+            """
+        )
+        c.testdrive(
+            dedent(
+                f"""
+            # Set data for test up
+            > SET cluster = cluster1;
+
+            > CREATE TABLE base (data bigint, diff bigint);
+
+            > CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
+
+            > INSERT INTO base VALUES (1, 1);
+
+            > INSERT INTO base VALUES (1, -1), (1, -1);
+
+            # Run a query that would generate a panic before the fix. Note that
+            # we expect the query to succeed for now, but follow-up work might
+            # eventually lead us to favor a SQL-level error for such a query, as
+            # tracked by https://github.com/MaterializeInc/materialize/issues/17178
+            > SELECT SUM(data), MAX(data) FROM data;
+            <null> <null>
+            """
+            )
+        )
+
+        # ensure that an error was put into the logs
+        c1 = c.invoke("logs", "clusterd_nopanic", capture=True)
+        assert "Mismatched aggregates for key in ReduceCollation" in c1.stdout
+
+
+def workflow_test_github_17510(c: Composition) -> None:
+    """
+    Test that sum aggregations over uint2 and uint4 types do not produce a panic, but
+    rather a SQL-level error when faced with invalid accumulations due to too many
+    retractions in a source. Additionally, we verify that in these cases, an adequate
+    error message is written to the logs.
+
+    Regression test for https://github.com/MaterializeInc/materialize/issues/17510.
+    """
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Clusterd(
+            name="clusterd_nopanic",
+            environment_extra=[
+                "MZ_SOFT_ASSERTIONS=0",
+            ],
+        ),
+        Testdrive(no_reset=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.up("clusterd_nopanic")
+
+        # set up a test cluster and run a testdrive regression script
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (
+                r1 (
+                    STORAGECTL ADDRESSES ['clusterd_nopanic:2100'],
+                    STORAGE ADDRESSES ['clusterd_nopanic:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd_nopanic:2101'],
+                    COMPUTE ADDRESSES ['clusterd_nopanic:2102'],
+                    WORKERS 2
+                )
+            );
+            -- Set data for test up
+            SET cluster = cluster1;
+            CREATE TABLE base (data2 uint2, data4 uint4, data8 uint8, diff bigint);
+            CREATE MATERIALIZED VIEW data AS
+              SELECT data2, data4, data8
+              FROM base, repeat_row(diff);
+            CREATE MATERIALIZED VIEW sum_types AS
+              SELECT SUM(data2) AS sum2, SUM(data4) AS sum4, SUM(data8) AS sum8
+              FROM data;
+            INSERT INTO base VALUES (1, 1, 1, 1);
+            INSERT INTO base VALUES (1, 1, 1, -1), (1, 1, 1, -1);
+            CREATE MATERIALIZED VIEW constant_sums AS
+              SELECT SUM(data2) AS sum2, SUM(data4) AS sum4, SUM(data8) AS sum8
+              FROM (
+                  SELECT * FROM (
+                      VALUES (1::uint2, 1::uint4, 1::uint8, 1),
+                          (1::uint2, 1::uint4, 1::uint8, -1),
+                          (1::uint2, 1::uint4, 1::uint8, -1)
+                  ) AS base (data2, data4, data8, diff),
+                  repeat_row(diff)
+              );
+            """
+        )
+        c.testdrive(
+            dedent(
+                f"""
+            > SET cluster = cluster1;
+
+            # Run a queries that would generate panics before the fix.
+            ! SELECT SUM(data2) FROM data;
+            contains:uint8 out of range
+
+            ! SELECT SUM(data4) FROM data;
+            contains:uint8 out of range
+
+            ! SELECT * FROM constant_sums;
+            contains:constant folding encountered reduce on collection with non-positive multiplicities
+
+            # The following statement succeeds with a negative accumulation,
+            # which is the behavior introduced in https://github.com/MaterializeInc/materialize/pull/16852
+            > SELECT SUM(data8) FROM data;
+            -1
+
+            # Test repairs
+            > INSERT INTO base VALUES (1, 1, 1, 1), (1, 1, 1, 1);
+
+            > SELECT SUM(data2) FROM data;
+            1
+
+            > SELECT SUM(data4) FROM data;
+            1
+
+            > SELECT SUM(data8) FROM data;
+            1
+
+            # Ensure that the output types for uint sums are unaffected.
+            > SELECT c.name, c.type
+              FROM mz_materialized_views mv
+                   JOIN mz_columns c USING (id)
+              WHERE mv.name = 'sum_types'
+              ORDER BY c.type, c.name;
+            sum8 numeric
+            sum2 uint8
+            sum4 uint8
+
+            > SELECT c.name, c.type
+              FROM mz_materialized_views mv
+                   JOIN mz_columns c USING (id)
+              WHERE mv.name = 'constant_sums'
+              ORDER BY c.type, c.name;
+            sum8 numeric
+            sum2 uint8
+            sum4 uint8
+            """
+            )
+        )
+
+        # ensure that an error was put into the logs
+        c1 = c.invoke("logs", "clusterd_nopanic", capture=True)
+        assert "Invalid negative unsigned aggregation in ReduceAccumulable" in c1.stdout
+
+
 def workflow_test_upsert(c: Composition) -> None:
     """Test creating upsert sources and continuing to ingest them after a restart."""
     with c.override(
@@ -535,6 +733,7 @@ def workflow_test_remote_storage(c: Composition) -> None:
             "cockroach",
             "materialized",
             "clusterd1",
+            "clusterd2",
             "zookeeper",
             "kafka",
             "schema-registry",
@@ -544,12 +743,19 @@ def workflow_test_remote_storage(c: Composition) -> None:
 
         c.kill("materialized")
         c.up("materialized")
+        c.kill("clusterd1")
+        c.up("clusterd1")
+        c.up("clusterd2")
         c.run("testdrive", "storage/02-after-environmentd-restart.td")
 
+        # just kill one of the clusterd's and make sure we can recover.
+        # `clusterd2` will die on its own.
         c.kill("clusterd1")
         c.run("testdrive", "storage/03-while-clusterd-down.td")
 
+        # Bring back both clusterd's
         c.up("clusterd1")
+        c.up("clusterd2")
         c.run("testdrive", "storage/04-after-clusterd-restart.td")
 
 
@@ -695,13 +901,15 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
         DROP CLUSTER IF EXISTS cluster1 CASCADE;
         CREATE CLUSTER cluster1 REPLICAS (
             replica1 (
-                STORAGECTL ADDRESS 'clusterd1:2100',
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
                 COMPUTECTL ADDRESSES ['clusterd1:2101'],
                 COMPUTE ADDRESSES ['clusterd1:2102'],
                 WORKERS 2
             ),
             replica2 (
-                STORAGECTL ADDRESS 'clusterd2:2100',
+                STORAGECTL ADDRESSES ['clusterd2:2100'],
+                STORAGE ADDRESSES ['clusterd2:2103'],
                 COMPUTECTL ADDRESSES ['clusterd2:2101'],
                 COMPUTE ADDRESSES ['clusterd2:2102'],
                 WORKERS 2
@@ -789,3 +997,174 @@ def workflow_pg_snapshot_partial_failure(c: Composition) -> None:
             c.run("testdrive", "pg-snapshot-partial-failure/04-add-more-data.td")
             c.up("storage")
             c.run("testdrive", "pg-snapshot-partial-failure/05-verify-data.td")
+
+
+def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
+    """
+    Test that compute reconciliation reuses existing dataflows.
+
+    Note that this is currently not working, due to #17594. This test
+    tests the current, undesired behavior and must be adjusted once
+    #17594 is fixed.
+    """
+
+    c.down(destroy_volumes=True)
+
+    c.up("materialized")
+    c.up("clusterd1")
+
+    # Helper function to get reconciliation metrics for clusterd.
+    def fetch_reconciliation_metrics() -> Tuple[int, int]:
+        metrics = c.exec(
+            "clusterd1", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+
+        reused = 0
+        replaced = 0
+        for metric in metrics.splitlines():
+            if metric.startswith("mz_compute_reconciliation_reused_dataflows"):
+                reused += int(metric.split()[1])
+            elif metric.startswith("mz_compute_reconciliation_replaced_dataflows"):
+                replaced += int(metric.split()[1])
+
+        return reused, replaced
+
+    # Set up a cluster and a number of dataflows that can be reconciled.
+    c.sql(
+        """
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (
+            STORAGECTL ADDRESSES ['clusterd1:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103'],
+            COMPUTECTL ADDRESSES ['clusterd1:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102'],
+            WORKERS 1
+        ));
+        SET cluster = cluster1;
+
+        -- index on table
+        CREATE TABLE t1 (a int);
+        CREATE DEFAULT INDEX on t1;
+
+        -- index on view
+        CREATE VIEW v AS SELECT a + 1 FROM t1;
+        CREATE DEFAULT INDEX on v;
+
+        -- materialized view on table
+        CREATE TABLE t2 (a int);
+        CREATE MATERIALIZED VIEW mv1 AS SELECT a + 1 FROM t2;
+
+        -- materialized view on index
+        CREATE MATERIALIZED VIEW mv2 AS SELECT a + 1 FROM t1;
+        """
+    )
+
+    # Give the dataflows some time to make progress and get compacted.
+    # This is done to trigger the bug described in #17594.
+    time.sleep(10)
+
+    # Restart environmentd to trigger a reconciliation.
+    c.kill("materialized")
+    c.up("materialized")
+
+    # Perform a query to ensure reconciliation has finished.
+    c.sql(
+        """
+        SET cluster = cluster1;
+        SELECT * FROM v;
+        """
+    )
+
+    reused, replaced = fetch_reconciliation_metrics()
+
+    # TODO(#17594): Flip these once the bug is fixed.
+    assert reused == 0
+    assert replaced == 4
+
+
+def workflow_test_mz_subscriptions(c: Composition) -> None:
+    """
+    Test that in-progress subscriptions are reflected in
+    mz_subscriptions.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized", "clusterd1")
+
+    c.sql(
+        """
+        CREATE CLUSTER cluster1 REPLICAS (r (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 1
+        ));
+
+        CREATE TABLE t1 (a int);
+        CREATE TABLE t2 (a int);
+        CREATE TABLE t3 (a int);
+        INSERT INTO t1 VALUES (1);
+        INSERT INTO t2 VALUES (1);
+        INSERT INTO t3 VALUES (1);
+        """
+    )
+
+    def start_subscribe(table: str, cluster: str) -> Cursor:
+        """Start a subscribe on the given table and cluster."""
+        cursor = c.sql_cursor()
+        cursor.execute(f"SET cluster = {cluster}")
+        cursor.execute("BEGIN")
+        cursor.execute(f"DECLARE c CURSOR FOR SUBSCRIBE {table}")
+        cursor.execute("FETCH 1 c")
+        return cursor
+
+    def stop_subscribe(cursor: Cursor) -> None:
+        """Stop a susbscribe started with `start_subscribe`."""
+        cursor.execute("ROLLBACK")
+
+    def check_mz_subscriptions(expected: Tuple) -> None:
+        """
+        Check that the expected subscribes exist in mz_subscriptions.
+        We identify subscribes by user, cluster, and target table only.
+        We explicitly don't check the `GlobalId`, as how that is
+        allocated is an implementation detail and might change in the
+        future.
+        """
+        output = c.sql_query(
+            f"""
+            SELECT s.user, c.name, t.name
+            FROM mz_internal.mz_subscriptions s
+              JOIN mz_clusters c ON (c.id = s.cluster_id)
+              JOIN mz_tables t ON (t.id = s.referenced_object_ids[1])
+            ORDER BY s.created_at
+            """
+        )
+        assert output == expected, f"expected: {expected}, got: {output}"
+
+    subscribe1 = start_subscribe("t1", "default")
+    check_mz_subscriptions((["materialize", "default", "t1"],))
+
+    subscribe2 = start_subscribe("t2", "cluster1")
+    check_mz_subscriptions(
+        (
+            ["materialize", "default", "t1"],
+            ["materialize", "cluster1", "t2"],
+        )
+    )
+
+    stop_subscribe(subscribe1)
+    check_mz_subscriptions((["materialize", "cluster1", "t2"],))
+
+    subscribe3 = start_subscribe("t3", "default")
+    check_mz_subscriptions(
+        (
+            ["materialize", "cluster1", "t2"],
+            ["materialize", "default", "t3"],
+        )
+    )
+
+    stop_subscribe(subscribe3)
+    check_mz_subscriptions((["materialize", "cluster1", "t2"],))
+
+    stop_subscribe(subscribe2)
+    check_mz_subscriptions(())

@@ -79,16 +79,6 @@ class Materialized(Service):
 
         command = ["--unsafe-mode"]
 
-        # TODO(benesch): remove this special case when v0.39 ships.
-        # latest being 'v0.38.0' until then
-        if image is not None and any(
-            image.endswith(version)
-            for version in ["v0.36.2", "v0.37.3", "v0.38.0", "latest"]
-        ):
-            persist_blob_url = "file:///mzdata/persist/blob"
-            command.append("--orchestrator=process")
-            command.append("--orchestrator-process-secrets-directory=/mzdata/secrets")
-
         if not environment_id:
             environment_id = DEFAULT_MZ_ENVIRONMENT_ID
         command += [f"--environment-id={environment_id}"]
@@ -150,7 +140,7 @@ class Materialized(Service):
                     "test": ["CMD", "curl", "-f", "localhost:6878/api/readyz"],
                     "interval": "1s",
                     # A fully loaded Materialize can take a long time to start.
-                    "start_period": "300s",
+                    "start_period": "600s",
                 },
             }
         )
@@ -166,7 +156,6 @@ class Clusterd(Service):
         environment_extra: List[str] = [],
         memory: Optional[str] = None,
         options: List[str] = [],
-        storage_workers: Optional[int] = Materialized.Size.DEFAULT_SIZE,
     ) -> None:
         environment = [
             "CLUSTERD_LOG_FILTER",
@@ -175,9 +164,6 @@ class Clusterd(Service):
         ]
 
         command = []
-
-        if storage_workers:
-            command += [f"--storage-workers={storage_workers}"]
 
         command += options
 
@@ -291,7 +277,7 @@ class Redpanda(Service):
     def __init__(
         self,
         name: str = "redpanda",
-        version: str = "v22.3.8",
+        version: str = "v22.3.13",
         auto_create_topics: bool = False,
         image: Optional[str] = None,
         aliases: Optional[List[str]] = None,
@@ -695,6 +681,8 @@ class Testdrive(Service):
         materialize_params: Dict[str, str] = {},
         kafka_url: str = "kafka:9092",
         kafka_default_partitions: Optional[int] = None,
+        kafka_args: Optional[str] = None,
+        schema_registry_url: str = "http://schema-registry:8081",
         no_reset: bool = False,
         default_timeout: str = "120s",
         seed: Optional[int] = None,
@@ -737,7 +725,7 @@ class Testdrive(Service):
             entrypoint = [
                 "testdrive",
                 f"--kafka-addr={kafka_url}",
-                "--schema-registry-url=http://schema-registry:8081",
+                f"--schema-registry-url={schema_registry_url}",
                 f"--materialize-url={materialize_url}",
                 f"--materialize-internal-url={materialize_url_internal}",
             ]

@@ -100,14 +100,9 @@ impl<T: Timestamp + Lattice + Codec64> AsyncStorageWorker<T> {
                             ),
                         );
 
-                        match res {
-                            Ok(_) => {
-                                // All's well!
-                            }
-                            Err(_err) => {
-                                // Receiver must have hung up.
-                                break;
-                            }
+                        if let Err(_err) = res {
+                            // Receiver must have hung up.
+                            break;
                         }
                     }
                 }

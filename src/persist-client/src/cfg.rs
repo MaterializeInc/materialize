@@ -12,7 +12,7 @@
 //! The tunable knobs for persist.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use mz_build_info::BuildInfo;
@@ -126,10 +126,12 @@ impl PersistConfig {
                 compaction_minimum_timeout: Self::DEFAULT_COMPACTION_MINIMUM_TIMEOUT,
                 consensus_connection_pool_ttl: Duration::from_secs(300),
                 consensus_connection_pool_ttl_stagger: Duration::from_secs(6),
+                consensus_connect_timeout: RwLock::new(Self::DEFAULT_CRDB_CONNECT_TIMEOUT),
                 gc_blob_delete_concurrency_limit: AtomicUsize::new(32),
                 state_versions_recent_live_diffs_limit: AtomicUsize::new(usize::cast_from(
                     30 * Self::NEED_ROLLUP_THRESHOLD,
                 )),
+                usage_state_fetch_concurrency_limit: AtomicUsize::new(8),
                 sink_minimum_batch_updates: AtomicUsize::new(
                     Self::DEFAULT_SINK_MINIMUM_BATCH_UPDATES,
                 ),
@@ -177,6 +179,8 @@ impl PersistConfig {
     pub const DEFAULT_BLOB_TARGET_SIZE: usize = 128 * MB;
     /// Default value for [`DynamicConfig::compaction_minimum_timeout`].
     pub const DEFAULT_COMPACTION_MINIMUM_TIMEOUT: Duration = Duration::from_secs(90);
+    /// Default value for [`DynamicConfig::consensus_connect_timeout`].
+    pub const DEFAULT_CRDB_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
     /// Default value for [`PersistConfig::sink_minimum_batch_updates`].
     pub const DEFAULT_SINK_MINIMUM_BATCH_UPDATES: usize = 0;
@@ -211,6 +215,14 @@ impl ConsensusKnobs for PersistConfig {
     fn connection_pool_ttl_stagger(&self) -> Duration {
         self.dynamic.consensus_connection_pool_ttl_stagger()
     }
+
+    fn connect_timeout(&self) -> Duration {
+        *self
+            .dynamic
+            .consensus_connect_timeout
+            .read()
+            .expect("lock poisoned")
+    }
 }
 
 /// Persist configurations that can be dynamically updated.
@@ -242,6 +254,8 @@ pub struct DynamicConfig {
     compaction_memory_bound_bytes: AtomicUsize,
     gc_blob_delete_concurrency_limit: AtomicUsize,
     state_versions_recent_live_diffs_limit: AtomicUsize,
+    usage_state_fetch_concurrency_limit: AtomicUsize,
+    consensus_connect_timeout: RwLock<Duration>,
     sink_minimum_batch_updates: AtomicUsize,
 
     // TODO: Figure out how to make these dynamic.
@@ -328,6 +342,13 @@ impl DynamicConfig {
     pub fn consensus_connection_pool_ttl_stagger(&self) -> Duration {
         self.consensus_connection_pool_ttl_stagger
     }
+    /// The duration to wait for a Consensus Postgres/CRDB connection to be made before retrying.
+    pub fn consensus_connect_timeout(&self) -> Duration {
+        *self
+            .consensus_connect_timeout
+            .read()
+            .expect("lock poisoned")
+    }
 
     /// The maximum number of concurrent blob deletes during garbage collection.
     pub fn gc_blob_delete_concurrency_limit(&self) -> usize {
@@ -346,6 +367,12 @@ impl DynamicConfig {
     /// by GC.
     pub fn state_versions_recent_live_diffs_limit(&self) -> usize {
         self.state_versions_recent_live_diffs_limit
+            .load(Self::LOAD_ORDERING)
+    }
+
+    /// The maximum number of concurrent state fetches during usage computation.
+    pub fn usage_state_fetch_concurrency_limit(&self) -> usize {
+        self.usage_state_fetch_concurrency_limit
             .load(Self::LOAD_ORDERING)
     }
 
@@ -399,6 +426,8 @@ pub struct PersistParameters {
     pub blob_target_size: Option<usize>,
     /// Configures [`DynamicConfig::compaction_minimum_timeout`].
     pub compaction_minimum_timeout: Option<Duration>,
+    /// Configures [`DynamicConfig::consensus_connect_timeout`].
+    pub consensus_connect_timeout: Option<Duration>,
     /// Configures [`PersistConfig::sink_minimum_batch_updates`].
     pub sink_minimum_batch_updates: Option<usize>,
 }
@@ -411,11 +440,13 @@ impl PersistParameters {
         let Self {
             blob_target_size: self_blob_target_size,
             compaction_minimum_timeout: self_compaction_minimum_timeout,
+            consensus_connect_timeout: self_consensus_connect_timeout,
             sink_minimum_batch_updates: self_sink_minimum_batch_updates,
         } = self;
         let Self {
             blob_target_size: other_blob_target_size,
             compaction_minimum_timeout: other_compaction_minimum_timeout,
+            consensus_connect_timeout: other_consensus_connect_timeout,
             sink_minimum_batch_updates: other_sink_minimum_batch_updates,
         } = other;
         if let Some(v) = other_blob_target_size {
@@ -423,6 +454,9 @@ impl PersistParameters {
         }
         if let Some(v) = other_compaction_minimum_timeout {
             *self_compaction_minimum_timeout = Some(v);
+        }
+        if let Some(v) = other_consensus_connect_timeout {
+            *self_consensus_connect_timeout = Some(v);
         }
         if let Some(v) = other_sink_minimum_batch_updates {
             *self_sink_minimum_batch_updates = Some(v);
@@ -438,10 +472,12 @@ impl PersistParameters {
         let Self {
             blob_target_size,
             compaction_minimum_timeout,
+            consensus_connect_timeout,
             sink_minimum_batch_updates,
         } = self;
         blob_target_size.is_none()
             && compaction_minimum_timeout.is_none()
+            && consensus_connect_timeout.is_none()
             && sink_minimum_batch_updates.is_none()
     }
 
@@ -455,6 +491,7 @@ impl PersistParameters {
         let Self {
             blob_target_size,
             compaction_minimum_timeout,
+            consensus_connect_timeout,
             sink_minimum_batch_updates,
         } = self;
         if let Some(blob_target_size) = blob_target_size {
@@ -464,6 +501,14 @@ impl PersistParameters {
         }
         if let Some(_compaction_minimum_timeout) = compaction_minimum_timeout {
             // TODO: Figure out how to represent Durations in DynamicConfig.
+        }
+        if let Some(consensus_connect_timeout) = consensus_connect_timeout {
+            let mut timeout = cfg
+                .dynamic
+                .consensus_connect_timeout
+                .write()
+                .expect("lock poisoned");
+            *timeout = *consensus_connect_timeout;
         }
         if let Some(sink_minimum_batch_updates) = sink_minimum_batch_updates {
             cfg.dynamic
@@ -478,6 +523,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
         ProtoPersistParameters {
             blob_target_size: self.blob_target_size.into_proto(),
             compaction_minimum_timeout: self.compaction_minimum_timeout.into_proto(),
+            consensus_connect_timeout: self.consensus_connect_timeout.into_proto(),
             sink_minimum_batch_updates: self.sink_minimum_batch_updates.into_proto(),
         }
     }
@@ -486,6 +532,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
         Ok(Self {
             blob_target_size: proto.blob_target_size.into_rust()?,
             compaction_minimum_timeout: proto.compaction_minimum_timeout.into_rust()?,
+            consensus_connect_timeout: proto.consensus_connect_timeout.into_rust()?,
             sink_minimum_batch_updates: proto.sink_minimum_batch_updates.into_rust()?,
         })
     }

@@ -150,6 +150,16 @@ macro_rules! bail_unsupported {
     };
 }
 
+macro_rules! bail_never_supported {
+    ($feature:expr, $docs:expr) => {
+        return Err(crate::plan::error::PlanError::NeverSupported {
+            feature: $feature.to_string(),
+            documentation_link: $docs.to_string(),
+        }
+        .into())
+    };
+}
+
 // TODO(benesch): delete these macros once we use structured errors everywhere.
 macro_rules! sql_bail {
     ($($e:expr),* $(,)?) => {

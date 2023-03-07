@@ -35,7 +35,16 @@ SERVICES = [
         name="clusterd_compute_1"
     ),  # Started by some Scenarios, defined here only for the teardown
     Materialized(external_cockroach=True),
-    TestdriveService(default_timeout="300s", no_reset=True, seed=1),
+    TestdriveService(
+        default_timeout="300s",
+        no_reset=True,
+        seed=1,
+        entrypoint_extra=[
+            f"--var=replicas=1",
+            f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}",
+        ],
+    ),
 ]
 
 
@@ -77,6 +86,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         default=ExecutionMode.SEQUENTIAL,
     )
 
+    parser.add_argument(
+        "--seed",
+        metavar="SEED",
+        type=str,
+        help="Seed for shuffling checks in sequential run.",
+    )
+
     args = parser.parse_args()
 
     scenarios = (
@@ -102,7 +118,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         if args.execution_mode in [ExecutionMode.SEQUENTIAL, ExecutionMode.PARALLEL]:
             setup(c)
-            scenario = scenario_class(checks=checks, executor=executor)
+            scenario = scenario_class(checks=checks, executor=executor, seed=args.seed)
             scenario.run()
             teardown(c)
         elif args.execution_mode is ExecutionMode.ONEATATIME:

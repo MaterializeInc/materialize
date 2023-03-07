@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #

@@ -1066,8 +1066,6 @@ where
         internal_cmd_tx,
     );
 
-    let mut vector = Vec::new();
-
     // keep the latest progress updates, if any, in order to update
     // our internal state after the send loop
     let mut progress_update = None;
@@ -1129,13 +1127,12 @@ where
 
         s.update_status(SinkStatus::Running).await;
 
-        while let Some(event) = input.next().await {
+        while let Some(event) = input.next_mut().await {
             match event {
                 Event::Data(_, rows) => {
                     // Queue all pending rows waiting to be sent to kafka
                     assert!(is_active_worker);
-                    rows.swap(&mut vector);
-                    for ((key, value), time, diff) in vector.drain(..) {
+                    for ((key, value), time, diff) in rows.drain(..) {
                         let should_emit = if as_of.strict {
                             as_of.frontier.less_than(&time)
                         } else {

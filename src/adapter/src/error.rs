@@ -21,6 +21,7 @@ use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
 use mz_repr::explain::ExplainError;
 use mz_repr::NotNullViolation;
+use mz_sql::names::RoleId;
 use mz_sql::plan::PlanError;
 use mz_storage_client::controller::StorageError;
 use mz_transform::TransformError;
@@ -36,6 +37,10 @@ pub enum AdapterError {
         as_of: mz_repr::Timestamp,
         up_to: mz_repr::Timestamp,
     },
+    /// Attempted to use a potentially ambiguous column reference expression with a system table.
+    // We don't allow this until https://github.com/MaterializeInc/materialize/issues/16650 is
+    // resolved because it prevents us from adding columns to system tables.
+    AmbiguousSystemColumnReference,
     /// An error occurred in a catalog operation.
     Catalog(catalog::Error),
     /// The cached plan or descriptor changed.
@@ -43,7 +48,7 @@ pub enum AdapterError {
     /// The specified session parameter is constrained to a finite set of values.
     ConstrainedParameter {
         parameter: &'static (dyn Var + Send + Sync),
-        value: String,
+        values: Vec<String>,
         valid_values: Option<Vec<&'static str>>,
     },
     /// The cursor already exists.
@@ -53,6 +58,9 @@ pub enum AdapterError {
     /// An error occurred while planning the statement.
     Explain(ExplainError),
     /// The specified parameter is fixed to a single specific value.
+    ///
+    /// We allow setting the parameter to its fixed value for compatibility
+    /// with PostgreSQL-based tools.
     FixedValueParameter(&'static (dyn Var + Send + Sync)),
     /// The ID allocator exhausted all valid IDs.
     IdExhaustionError,
@@ -73,7 +81,7 @@ pub enum AdapterError {
     /// The value of the specified parameter is incorrect
     InvalidParameterValue {
         parameter: &'static (dyn Var + Send + Sync),
-        value: String,
+        values: Vec<String>,
         reason: String,
     },
     /// No such cluster replica size has been configured.
@@ -177,6 +185,8 @@ pub enum AdapterError {
         cluster_name: String,
         replica_name: String,
     },
+    /// The named setting does not exist.
+    UnrecognizedConfigurationParam(String),
     /// A generic error occurred.
     //
     // TODO(benesch): convert all those errors to structured errors.
@@ -204,12 +214,18 @@ pub enum AdapterError {
     Compute(anyhow::Error),
     /// An error in the orchestrator layer
     Orchestrator(anyhow::Error),
+    /// The active role was dropped while a user was logged in.
+    ConcurrentRoleDrop(RoleId),
 }
 
 impl AdapterError {
     /// Reports additional details about the error, if any are available.
     pub fn detail(&self) -> Option<String> {
         match self {
+            AdapterError::AmbiguousSystemColumnReference => {
+                Some("This is a limitation in Materialize that will be lifted in a future release. \
+                See https://github.com/MaterializeInc/materialize/issues/16650 for details.".to_string())
+            },
             AdapterError::Catalog(c) => c.detail(),
             AdapterError::Eval(e) => e.detail(),
             AdapterError::RelationOutsideTimeDomain { relations, names } => Some(format!(
@@ -253,6 +269,7 @@ impl AdapterError {
                 unstable_dependencies.join("\n    "),
             )),
             AdapterError::PlanError(e) => e.detail(),
+            AdapterError::ConcurrentRoleDrop(_) => Some("Please disconnect and re-connect with a valid role.".into()),
             _ => None,
         }
     }
@@ -260,22 +277,17 @@ impl AdapterError {
     /// Reports a hint for the user about how the error could be fixed.
     pub fn hint(&self) -> Option<String> {
         match self {
+            AdapterError::AmbiguousSystemColumnReference => Some(
+                "Rewrite the view to refer to all columns by name. Expand all wildcards and \
+                convert all NATURAL JOINs to USING joins."
+                    .to_string(),
+            ),
             AdapterError::Catalog(c) => c.hint(),
             AdapterError::ConstrainedParameter {
                 valid_values: Some(valid_values),
                 ..
             } => Some(format!("Available values: {}.", valid_values.join(", "))),
             AdapterError::Eval(e) => e.hint(),
-            AdapterError::UnknownLoginRole(_) => {
-                // TODO(benesch): this will be a bad hint when people are used
-                // to creating roles in Materialize, since they might drop the
-                // default "materialize" role. Remove it in a few months
-                // (say, April 2021) when folks are more used to using roles
-                // with Materialize. (We don't want to do something more clever
-                // and include the actual roles that exist in the message,
-                // because that leaks information to unauthenticated clients.)
-                Some("Try connecting as the \"materialize\" user.".into())
-            }
             AdapterError::InvalidClusterReplicaAz { expected, az: _ } => {
                 Some(if expected.is_empty() {
                     "No availability zones configured; do not specify AVAILABILITY ZONE".into()
@@ -330,18 +342,29 @@ impl fmt::Display for AdapterError {
                     up_to, as_of
                 )
             }
+            AdapterError::AmbiguousSystemColumnReference => {
+                write!(
+                    f,
+                    "cannot use wildcard expansions or NATURAL JOINs in a view that depends on \
+                    system objects"
+                )
+            }
             AdapterError::ModifyLinkedCluster { cluster_name, .. } => {
                 write!(f, "cannot modify linked cluster {}", cluster_name.quoted())
             }
             AdapterError::ChangedPlan => f.write_str("cached plan must not change result type"),
             AdapterError::Catalog(e) => e.fmt(f),
             AdapterError::ConstrainedParameter {
-                parameter, value, ..
+                parameter, values, ..
             } => write!(
                 f,
                 "invalid value for parameter {}: {}",
                 parameter.name().quoted(),
-                value.quoted()
+                values
+                    .iter()
+                    .map(|v| v.quoted().to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
             ),
             AdapterError::DuplicateCursor(name) => {
                 write!(f, "cursor {} already exists", name.quoted())
@@ -374,13 +397,17 @@ impl fmt::Display for AdapterError {
             ),
             AdapterError::InvalidParameterValue {
                 parameter,
-                value,
+                values,
                 reason,
             } => write!(
                 f,
                 "parameter {} cannot have value {}: {}",
                 parameter.name().quoted(),
-                value.quoted(),
+                values
+                    .iter()
+                    .map(|v| v.quoted().to_string())
+                    .collect::<Vec<_>>()
+                    .join(","),
                 reason,
             ),
             AdapterError::InvalidClusterReplicaAz { az, expected: _ } => {
@@ -496,6 +523,11 @@ impl fmt::Display for AdapterError {
                 f,
                 "cluster replica '{cluster_name}.{replica_name}' does not exist"
             ),
+            AdapterError::UnrecognizedConfigurationParam(setting_name) => write!(
+                f,
+                "unrecognized configuration parameter {}",
+                setting_name.quoted()
+            ),
             AdapterError::UnstableDependency { object_type, .. } => {
                 write!(f, "cannot create {object_type} with unstable dependencies")
             }
@@ -508,6 +540,9 @@ impl fmt::Display for AdapterError {
             AdapterError::Storage(e) => e.fmt(f),
             AdapterError::Compute(e) => e.fmt(f),
             AdapterError::Orchestrator(e) => e.fmt(f),
+            AdapterError::ConcurrentRoleDrop(role_id) => {
+                write!(f, "role {role_id} was concurrently dropped")
+            }
         }
     }
 }

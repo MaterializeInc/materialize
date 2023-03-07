@@ -108,9 +108,8 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::AsCollection;
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
-use timely::dataflow::operators::InspectCore;
 use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::Scope;
 use timely::order::Product;
 use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
@@ -120,7 +119,7 @@ use timely::PartialOrder;
 use mz_compute_client::plan::Plan;
 use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
 use mz_expr::Id;
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::source::persist_source;
 use mz_storage_client::source::persist_source::FlowControl;
@@ -129,8 +128,7 @@ use mz_timely_util::probe::{self, ProbeNotify};
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
-use crate::logging::compute::ComputeEvent;
-use crate::logging::compute::Logger;
+use crate::logging::compute::LogImportFrontiers;
 pub use context::CollectionBundle;
 use context::{ArrangementFlavor, Context};
 
@@ -209,9 +207,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     );
                     let flow_control = FlowControl {
                         progress_stream: flow_control_input,
-                        // TODO: Enable flow control with a sensible limit value. This is currently
-                        // blocked by a bug in `persist_source` (#16995).
-                        max_inflight_bytes: usize::MAX,
+                        max_inflight_bytes: compute_state.dataflow_max_inflight_bytes,
                     };
 
                     // Note: For correctness, we require that sources only emit times advanced by
@@ -233,14 +229,13 @@ pub fn build_compute_dataflow<A: Allocate>(
                     // For the moment, assert that it is either trivial or `None`.
                     assert!(mfp.map(|x| x.is_identity()).unwrap_or(true));
 
-                    // If logging is enabled, intercept frontier advancements coming from persist to track materialization lags.
-                    // Note that we do this here instead of in the server.rs worker loop since we want to catch the wall-clock
-                    // time of the frontier advancement for each dataflow as early as possible.
+                    // If logging is enabled, log source frontier advancements. Note that we do
+                    // this here instead of in the server.rs worker loop since we want to catch the
+                    // wall-clock time of the frontier advancement for each dataflow as early as
+                    // possible.
                     if let Some(logger) = compute_state.compute_logger.clone() {
                         let export_ids = dataflow.export_ids().collect();
-                        ok_stream = intercept_source_instantiation_frontiers(
-                            &ok_stream, logger, *source_id, export_ids,
-                        );
+                        ok_stream = ok_stream.log_import_frontiers(logger, *source_id, export_ids);
                     }
 
                     let (oks, errs) = (
@@ -265,92 +260,66 @@ pub fn build_compute_dataflow<A: Allocate>(
             .chain(flow_control_probe)
             .collect();
 
+        // If there exists a recursive expression, we'll need to use a non-region scope,
+        // in order to support additional timestamp coordinates for iteration.
         if recursive {
-            scope.clone().iterative::<usize, _, _>(|region| {
-                let mut context =
-                    crate::render::context::Context::for_dataflow_in(&dataflow, region.clone());
+            scope
+                .clone()
+                .iterative::<PointStamp<usize>, _, _>(|region| {
+                    let mut context =
+                        crate::render::context::Context::for_dataflow_in(&dataflow, region.clone());
 
-                for (id, (oks, errs)) in imported_sources.into_iter() {
-                    let bundle = crate::render::CollectionBundle::from_collections(
-                        oks.enter(region),
-                        errs.enter(region),
-                    );
-                    // Associate collection bundle with the source identifier.
-                    context.insert_id(id, bundle);
-                }
-
-                // Import declared indexes into the rendering context.
-                for (idx_id, idx) in &dataflow.index_imports {
-                    context.import_index(compute_state, &mut tokens, *idx_id, &idx.0);
-                }
-
-                // Build declared objects.
-                let mut any_letrec = false;
-                for object in dataflow.objects_to_build {
-                    if let Plan::LetRec { ids, values, body } = object.plan {
-                        assert!(!any_letrec, "Cannot render multiple instances of LetRec");
-                        any_letrec = true;
-                        // Build declared objects.
-                        // It is important that we only use the `Variable` until the object is bound.
-                        // At that point, all subsequent uses should have access to the object itself.
-                        let mut variables = BTreeMap::new();
-                        for id in ids.iter() {
-                            use differential_dataflow::operators::iterate::Variable;
-
-                            let oks_v = Variable::new(region, Product::new(Default::default(), 1));
-                            let err_v = Variable::new(region, Product::new(Default::default(), 1));
-
-                            context.insert_id(
-                                Id::Local(*id),
-                                CollectionBundle::from_collections(
-                                    oks_v.consolidate(),
-                                    err_v.consolidate(),
-                                ),
-                            );
-                            variables.insert(Id::Local(*id), (oks_v, err_v));
-                        }
-                        for (id, value) in ids.into_iter().zip(values.into_iter()) {
-                            let bundle = context.render_plan(value);
-                            // We need to ensure that the raw collection exists, but do not have enough information
-                            // here to cause that to happen.
-                            let (oks, err) = bundle.collection.clone().unwrap();
-                            context.insert_id(Id::Local(id), bundle);
-                            let (oks_v, err_v) = variables.remove(&Id::Local(id)).unwrap();
-                            oks_v.set(&oks);
-                            err_v.set(&err);
-                        }
-
-                        let bundle = context.render_plan(*body);
-                        context.insert_id(Id::Global(object.id), bundle);
-                    } else {
-                        context.build_object(object);
+                    for (id, (oks, errs)) in imported_sources.into_iter() {
+                        let bundle = crate::render::CollectionBundle::from_collections(
+                            oks.enter(region),
+                            errs.enter(region),
+                        );
+                        // Associate collection bundle with the source identifier.
+                        context.insert_id(id, bundle);
                     }
-                }
 
-                // Export declared indexes.
-                for (idx_id, imports, idx) in indexes {
-                    context.export_index_iterative(
-                        compute_state,
-                        &mut tokens,
-                        imports,
-                        idx_id,
-                        &idx,
-                        output_probes.clone(),
-                    );
-                }
+                    // Import declared indexes into the rendering context.
+                    for (idx_id, idx) in &dataflow.index_imports {
+                        let export_ids = dataflow.export_ids().collect();
+                        context.import_index(
+                            compute_state,
+                            &mut tokens,
+                            export_ids,
+                            *idx_id,
+                            &idx.0,
+                        );
+                    }
 
-                // Export declared sinks.
-                for (sink_id, imports, sink) in sinks {
-                    context.export_sink(
-                        compute_state,
-                        &mut tokens,
-                        imports,
-                        sink_id,
-                        &sink,
-                        output_probes.clone(),
-                    );
-                }
-            });
+                    // Build declared objects.
+                    for object in dataflow.objects_to_build {
+                        let bundle = context.render_recursive_plan(0, object.plan);
+                        context.insert_id(Id::Global(object.id), bundle);
+                    }
+
+                    // Export declared indexes.
+                    for (idx_id, imports, idx) in indexes {
+                        context.export_index_iterative(
+                            compute_state,
+                            &mut tokens,
+                            imports,
+                            idx_id,
+                            &idx,
+                            output_probes.clone(),
+                        );
+                    }
+
+                    // Export declared sinks.
+                    for (sink_id, imports, sink) in sinks {
+                        context.export_sink(
+                            compute_state,
+                            &mut tokens,
+                            imports,
+                            sink_id,
+                            &sink,
+                            output_probes.clone(),
+                        );
+                    }
+                });
         } else {
             scope.clone().region_named(&build_name, |region| {
                 let mut context =
@@ -367,7 +336,8 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Import declared indexes into the rendering context.
                 for (idx_id, idx) in &dataflow.index_imports {
-                    context.import_index(compute_state, &mut tokens, *idx_id, &idx.0);
+                    let export_ids = dataflow.export_ids().collect();
+                    context.import_index(compute_state, &mut tokens, export_ids, *idx_id, &idx.0);
                 }
 
                 // Build declared objects.
@@ -403,47 +373,6 @@ pub fn build_compute_dataflow<A: Allocate>(
     })
 }
 
-// This helper function adds an operator to track source instantiation frontier advancements
-// in a dataflow. The tracking supports instrospection sources populated by compute logging.
-fn intercept_source_instantiation_frontiers<G>(
-    source_instantiation: &Stream<G, (Row, mz_repr::Timestamp, Diff)>,
-    logger: Logger,
-    source_id: GlobalId,
-    dataflow_ids: Vec<GlobalId>,
-) -> Stream<G, (Row, mz_repr::Timestamp, Diff)>
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-{
-    let mut previous_time = None;
-    source_instantiation.inspect_container(move |event| {
-        if let Err(frontier) = event {
-            if let Some(previous) = previous_time {
-                for dataflow_id in dataflow_ids.iter() {
-                    logger.log(ComputeEvent::SourceFrontier(
-                        *dataflow_id,
-                        source_id,
-                        previous,
-                        -1,
-                    ));
-                }
-            }
-            if let Some(time) = frontier.get(0) {
-                for dataflow_id in dataflow_ids.iter() {
-                    logger.log(ComputeEvent::SourceFrontier(
-                        *dataflow_id,
-                        source_id,
-                        *time,
-                        1,
-                    ));
-                }
-                previous_time = Some(*time);
-            } else {
-                previous_time = None;
-            }
-        }
-    })
-}
-
 // This implementation block allows child timestamps to vary from parent timestamps,
 // but requires the parent timestamp to be `repr::Timestamp`.
 impl<'g, G, T> Context<Child<'g, G, T>, Row>
@@ -455,6 +384,7 @@ where
         &mut self,
         compute_state: &mut ComputeState,
         tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
+        export_ids: Vec<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
     ) {
@@ -465,7 +395,7 @@ where
             );
 
             let token = traces.to_drop().clone();
-            let (ok_arranged, ok_button) = traces.oks_mut().import_frontier_core(
+            let (mut ok_arranged, ok_button) = traces.oks_mut().import_frontier_core(
                 &self.scope.parent,
                 &format!("Index({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
@@ -477,8 +407,18 @@ where
                 self.as_of_frontier.clone(),
                 self.until.clone(),
             );
+
+            // If logging is enabled, log import frontier advancements. Note that we do
+            // this here instead of in the server.rs worker loop since we want to catch the
+            // wall-clock time of the frontier advancement for each dataflow as early as
+            // possible.
+            if let Some(logger) = compute_state.compute_logger.clone() {
+                ok_arranged = ok_arranged.log_import_frontiers(logger, idx_id, export_ids);
+            }
+
             let ok_arranged = ok_arranged.enter(&self.scope);
             let err_arranged = err_arranged.enter(&self.scope);
+
             self.update_id(
                 Id::Global(idx.on_id),
                 CollectionBundle::from_expressions(
@@ -649,6 +589,85 @@ where
     }
 }
 
+use differential_dataflow::dynamic::pointstamp::PointStamp;
+
+impl<G> Context<G, Row>
+where
+    G: Scope<Timestamp = Product<mz_repr::Timestamp, PointStamp<usize>>>,
+{
+    /// Renders a plan to a differential dataflow, producing the collection of results.
+    ///
+    /// This method allows for `plan` to contain a `LetRec` variant at its root, and is planned
+    /// in the context of `level` pre-existing iteration coordinates.
+    ///
+    /// This method recursively descends `LetRec` nodes, establishing nested scopes for each
+    /// and establishing the appropriate recursive dependencies among the bound variables.
+    /// Once non-`LetRec` nodes are reached it calls in to `render_plan` which will error if
+    /// furher `LetRec` variants are found.
+    ///
+    /// The method requires that all variables conclude with a physical representation that
+    /// contains a collection (i.e. a non-arrangement), and it will panic otherwise.
+    pub fn render_recursive_plan(&mut self, level: usize, plan: Plan) -> CollectionBundle<G, Row> {
+        if let Plan::LetRec { ids, values, body } = plan {
+            // It is important that we only use the `Variable` until the object is bound.
+            // At that point, all subsequent uses should have access to the object itself.
+            let mut variables = BTreeMap::new();
+            for id in ids.iter() {
+                use differential_dataflow::operators::iterate::Variable;
+
+                use differential_dataflow::dynamic::feedback_summary;
+                let inner = feedback_summary::<usize>(level + 1, 1);
+                let oks_v = Variable::new(
+                    &mut self.scope,
+                    Product::new(Default::default(), inner.clone()),
+                );
+                let err_v = Variable::new(&mut self.scope, Product::new(Default::default(), inner));
+
+                self.insert_id(
+                    Id::Local(*id),
+                    CollectionBundle::from_collections(oks_v.clone(), err_v.clone()),
+                );
+                variables.insert(Id::Local(*id), (oks_v, err_v));
+            }
+            // Now render each of the bindings.
+            for (id, value) in ids.iter().zip(values.into_iter()) {
+                let bundle = self.render_recursive_plan(level + 1, value);
+                // We need to ensure that the raw collection exists, but do not have enough information
+                // here to cause that to happen.
+                let (oks, err) = bundle.collection.clone().unwrap();
+                self.insert_id(Id::Local(*id), bundle);
+                let (oks_v, err_v) = variables.remove(&Id::Local(*id)).unwrap();
+                // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
+                use crate::typedefs::RowKeySpine;
+                oks_v.set(&oks.consolidate_named::<RowKeySpine<_, _, _>>("LetRecConsolidation"));
+                // Set err variable to the distinct elements of `err`.
+                // Distinctness is important, as we otherwise might add the same error each iteration,
+                // say if the limit of `oks` has an error. This would result in non-terminatino rather
+                // than a clean report of the error. The trade-off is that we lose informatino about
+                // multiplicities of errors, but .. this seems to be the better call.
+                use differential_dataflow::operators::Threshold;
+                err_v.set(&err.distinct_core());
+            }
+            // Now extract each of the bindings into the outer scope.
+            for id in ids.into_iter() {
+                let bundle = self.remove_id(Id::Local(id)).unwrap();
+                let (oks, err) = bundle.collection.unwrap();
+                self.insert_id(
+                    Id::Local(id),
+                    CollectionBundle::from_collections(
+                        oks.leave_dynamic(level + 1),
+                        err.leave_dynamic(level + 1),
+                    ),
+                );
+            }
+
+            self.render_recursive_plan(level, *body)
+        } else {
+            self.render_plan(plan)
+        }
+    }
+}
+
 impl<G> Context<G, Row>
 where
     G: Scope,
@@ -749,7 +768,7 @@ where
                 body
             }
             Plan::LetRec { .. } => {
-                unimplemented!("Not yet implemented; sorry!");
+                unreachable!("LetRec should have been extracted and rendered");
             }
             Plan::Mfp {
                 input,

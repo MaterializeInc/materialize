@@ -37,8 +37,11 @@ use mz_ore::cast::ReinterpretCast;
 use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
+use mz_sql::catalog::SessionCatalog;
 
-use crate::catalog::{CatalogItem, CatalogState, DataSourceDesc, MaterializedView, Source, View};
+use crate::catalog::{
+    Catalog, CatalogItem, CatalogState, DataSourceDesc, MaterializedView, Source, View,
+};
 use crate::coord::ddl::CatalogTxn;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::{Coordinator, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS};
@@ -507,7 +510,9 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         // we can retrieve monotonicity information from the parent source.
         match &source.data_source {
             DataSourceDesc::Ingestion(ingestion) => ingestion.desc.monotonic(),
-            DataSourceDesc::Introspection(_) | DataSourceDesc::Source => false,
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Source => false,
         }
     }
 
@@ -700,6 +705,16 @@ fn eval_unmaterializable_func(
             .expect("known to be a valid array");
         Ok(MirScalarExpr::Literal(Ok(row), f.output_type()))
     };
+    let pack_dict = |mut datums: Vec<(String, String)>| {
+        datums.sort();
+        let mut row = Row::default();
+        row.packer().push_dict(
+            datums
+                .iter()
+                .map(|(key, value)| (key.as_str(), Datum::from(value.as_str()))),
+        );
+        Ok(MirScalarExpr::Literal(Ok(row), f.output_type()))
+    };
     let pack = |datum| {
         Ok(MirScalarExpr::literal_ok(
             datum,
@@ -710,40 +725,36 @@ fn eval_unmaterializable_func(
     match f {
         UnmaterializableFunc::CurrentDatabase => pack(Datum::from(session.vars().database())),
         UnmaterializableFunc::CurrentSchemasWithSystem => {
-            let search_path = session.vars().search_path();
-            let mut v = Vec::with_capacity(search_path.len() + 2);
-            let default_schemas = ["mz_catalog", "pg_catalog"];
-            for schema in default_schemas {
-                if !search_path.contains(&schema) {
-                    v.push(Datum::String(schema))
-                }
-            }
-            for schema in search_path {
-                v.push(Datum::String(schema))
-            }
-            pack_1d_array(v)
-        }
-        UnmaterializableFunc::CurrentSchemasWithoutSystem => {
-            use crate::catalog::builtin::{
-                INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA,
-                PG_CATALOG_SCHEMA,
-            };
+            let catalog = Catalog::for_session_state(state, session);
+            let search_path = catalog.effective_search_path(false);
             pack_1d_array(
-                session
-                    .vars()
-                    .search_path()
-                    .iter()
-                    .filter(|s| {
-                        (**s != PG_CATALOG_SCHEMA)
-                            && (**s != INFORMATION_SCHEMA)
-                            && (**s != MZ_CATALOG_SCHEMA)
-                            && (**s != MZ_TEMP_SCHEMA)
-                            && (**s != MZ_INTERNAL_SCHEMA)
+                search_path
+                    .into_iter()
+                    .map(|(db, schema)| {
+                        let schema = state.get_schema(&db, &schema, session.conn_id());
+                        Datum::String(&schema.name.schema)
                     })
-                    .map(|s| Datum::String(s))
                     .collect(),
             )
         }
+        UnmaterializableFunc::CurrentSchemasWithoutSystem => {
+            let catalog = Catalog::for_session_state(state, session);
+            let search_path = catalog.search_path();
+            pack_1d_array(
+                search_path
+                    .into_iter()
+                    .map(|(db, schema)| {
+                        let schema = state.get_schema(db, schema, session.conn_id());
+                        Datum::String(&schema.name.schema)
+                    })
+                    .collect(),
+            )
+        }
+        UnmaterializableFunc::ViewableVariables => pack_dict(
+            Coordinator::viewable_variables(state, session)
+                .map(|var| (var.name().to_lowercase(), var.value()))
+                .collect(),
+        ),
         UnmaterializableFunc::CurrentTimestamp => {
             let t: Datum = session.pcx().wall_time.try_into()?;
             pack(t)

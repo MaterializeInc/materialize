@@ -551,32 +551,3 @@ macro_rules! generate_extracted_config {
 }
 
 pub(crate) use generate_extracted_config;
-
-#[cfg(test)]
-mod tests {
-    use std::error::Error;
-
-    use mz_ore::collections::CollectionExt;
-
-    use super::*;
-    use crate::catalog::DummyCatalog;
-    use crate::names;
-
-    #[test]
-    fn normalized_create() -> Result<(), Box<dyn Error>> {
-        let scx = &mut StatementContext::new(None, &DummyCatalog);
-
-        let parsed = mz_sql_parser::parser::parse_statements("create view foo as select 1 as bar")?
-            .into_element();
-
-        let (stmt, _) = names::resolve(scx.catalog, parsed)?;
-
-        // Ensure that all identifiers are quoted.
-        assert_eq!(
-            r#"CREATE VIEW "dummy"."public"."foo" AS SELECT 1 AS "bar""#,
-            create_statement(scx, stmt)?,
-        );
-
-        Ok(())
-    }
-}

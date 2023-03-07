@@ -12,7 +12,7 @@ mode cockroach
 # mz_view_keys and mz_view_foreign_keys are unstable.
 
 statement error cannot create view with unstable dependencies
-CREATE VIEW v AS SELECT * FROM mz_internal.mz_view_keys
+CREATE VIEW v AS SELECT object_id, column, key_group FROM mz_internal.mz_view_keys
 
 statement error cannot create index with unstable dependencies
 CREATE DEFAULT INDEX ON mz_internal.mz_view_foreign_keys
@@ -20,9 +20,9 @@ CREATE DEFAULT INDEX ON mz_internal.mz_view_foreign_keys
 # Other system tables are stable.
 
 statement ok
-CREATE VIEW v AS SELECT * FROM mz_tables
+CREATE VIEW v AS SELECT id, oid, schema_id, name FROM mz_tables
 
 # SELECTs from unstable objects are allowed.
 
 statement ok
-SELECT * FROM mz_internal.mz_view_keys
+SELECT object_id, column, key_group FROM mz_internal.mz_view_keys

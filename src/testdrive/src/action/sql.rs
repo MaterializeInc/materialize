@@ -15,7 +15,6 @@ use std::time::SystemTime;
 
 use anyhow::{bail, Context};
 use md5::{Digest, Md5};
-use mz_sql::ast::ExplainStage;
 use postgres_array::Array;
 use regex::Regex;
 use tokio_postgres::error::DbError;
@@ -26,7 +25,9 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
 use mz_pgrepr::{Interval, Jsonb, Numeric, UInt2, UInt4, UInt8};
-use mz_sql_parser::ast::Statement;
+use mz_repr::adt::range::Range;
+use mz_sql::ast::ExplainStage;
+use mz_sql_parser::ast::{Raw, Statement};
 
 use crate::action::{ControlFlow, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlExpectedError, SqlOutput};
@@ -44,9 +45,6 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         // TODO(benesch): one day we'll support SQL queries where order matters.
         expected_rows.sort();
     }
-
-    let query = &cmd.query;
-    print_query(query);
 
     let should_retry = match &stmt {
         // Do not retry FETCH statements as subsequent executions are likely
@@ -75,6 +73,9 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         | SetVariable(_) => false,
         _ => true,
     };
+
+    let query = &cmd.query;
+    print_query(query, Some(&stmt));
 
     let state = &state;
     let expected_output = &cmd.expected_output;
@@ -329,7 +330,7 @@ pub async fn run_fail_sql(
     let expected_hint = cmd.expected_hint.map(ErrorMatcher::Contains);
 
     let query = &cmd.query;
-    print_query(query);
+    print_query(query, stmt.as_ref());
 
     let should_retry = match &stmt {
         // Do not retry statements that could not be parsed
@@ -463,8 +464,13 @@ async fn try_run_fail_sql(
     }
 }
 
-pub fn print_query(query: &str) {
-    println!("> {}", query);
+pub fn print_query(query: &str, stmt: Option<&Statement<Raw>>) {
+    use Statement::*;
+    if let Some(CreateSecret(_)) = stmt {
+        println!("> CREATE SECRET [query truncated on purpose so as to not reveal the secret in the log]");
+    } else {
+        println!("> {}", query)
+    }
 }
 
 pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error> {
@@ -618,6 +624,38 @@ pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error>
                 .map(|v| v.to_string()),
             Type::UUID_ARRAY => row
                 .get::<_, Option<Array<ArrayElement<uuid::Uuid>>>>(i)
+                .map(|v| v.to_string()),
+            Type::INT4_RANGE => row.get::<_, Option<Range<i32>>>(i).map(|v| v.to_string()),
+            Type::INT4_RANGE_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<Range<i32>>>>>(i)
+                .map(|v| v.to_string()),
+            Type::INT8_RANGE => row.get::<_, Option<Range<i64>>>(i).map(|v| v.to_string()),
+            Type::INT8_RANGE_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<Range<i64>>>>>(i)
+                .map(|v| v.to_string()),
+            Type::NUM_RANGE => row
+                .get::<_, Option<Range<NumericStandardNotation>>>(i)
+                .map(|v| v.to_string()),
+            Type::NUM_RANGE_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<Range<NumericStandardNotation>>>>>(i)
+                .map(|v| v.to_string()),
+            Type::DATE_RANGE => row
+                .get::<_, Option<Range<chrono::NaiveDate>>>(i)
+                .map(|v| v.to_string()),
+            Type::DATE_RANGE_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<Range<chrono::NaiveDate>>>>>(i)
+                .map(|v| v.to_string()),
+            Type::TS_RANGE => row
+                .get::<_, Option<Range<chrono::NaiveDateTime>>>(i)
+                .map(|v| v.to_string()),
+            Type::TS_RANGE_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<Range<chrono::NaiveDateTime>>>>>(i)
+                .map(|v| v.to_string()),
+            Type::TSTZ_RANGE => row
+                .get::<_, Option<Range<chrono::DateTime<chrono::Utc>>>>(i)
+                .map(|v| v.to_string()),
+            Type::TSTZ_RANGE_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<Range<chrono::DateTime<chrono::Utc>>>>>>(i)
                 .map(|v| v.to_string()),
             _ => match ty.oid() {
                 mz_pgrepr::oid::TYPE_UINT2_OID => {

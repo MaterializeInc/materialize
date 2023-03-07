@@ -32,11 +32,11 @@ use sha1::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
 
 use mz_lowertest::MzReflect;
-use mz_ore::cast;
 use mz_ore::cast::CastFrom;
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::option::OptionExt;
 use mz_ore::result::ResultExt;
+use mz_ore::{cast, soft_assert};
 use mz_pgrepr::Type;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::ArrayDimension;
@@ -83,6 +83,7 @@ pub enum UnmaterializableFunc {
     PgBackendPid,
     PgPostmasterStartTime,
     Version,
+    ViewableVariables,
 }
 
 impl UnmaterializableFunc {
@@ -107,6 +108,11 @@ impl UnmaterializableFunc {
             UnmaterializableFunc::PgBackendPid => ScalarType::Int32.nullable(false),
             UnmaterializableFunc::PgPostmasterStartTime => ScalarType::TimestampTz.nullable(false),
             UnmaterializableFunc::Version => ScalarType::String.nullable(false),
+            UnmaterializableFunc::ViewableVariables => ScalarType::Map {
+                value_type: Box::new(ScalarType::String),
+                custom_id: None,
+            }
+            .nullable(false),
         }
     }
 }
@@ -130,6 +136,7 @@ impl fmt::Display for UnmaterializableFunc {
             UnmaterializableFunc::PgBackendPid => f.write_str("pg_backend_pid"),
             UnmaterializableFunc::PgPostmasterStartTime => f.write_str("pg_postmaster_start_time"),
             UnmaterializableFunc::Version => f.write_str("version"),
+            UnmaterializableFunc::ViewableVariables => f.write_str("viewable_variables"),
         }
     }
 }
@@ -141,6 +148,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
             UnmaterializableFunc::CurrentDatabase => CurrentDatabase(()),
             UnmaterializableFunc::CurrentSchemasWithSystem => CurrentSchemasWithSystem(()),
             UnmaterializableFunc::CurrentSchemasWithoutSystem => CurrentSchemasWithoutSystem(()),
+            UnmaterializableFunc::ViewableVariables => CurrentSetting(()),
             UnmaterializableFunc::CurrentTimestamp => CurrentTimestamp(()),
             UnmaterializableFunc::CurrentUser => CurrentUser(()),
             UnmaterializableFunc::MzEnvironmentId => MzEnvironmentId(()),
@@ -166,6 +174,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
                     Ok(UnmaterializableFunc::CurrentSchemasWithoutSystem)
                 }
                 CurrentTimestamp(()) => Ok(UnmaterializableFunc::CurrentTimestamp),
+                CurrentSetting(()) => Ok(UnmaterializableFunc::ViewableVariables),
                 CurrentUser(()) => Ok(UnmaterializableFunc::CurrentUser),
                 MzEnvironmentId(()) => Ok(UnmaterializableFunc::MzEnvironmentId),
                 MzNow(()) => Ok(UnmaterializableFunc::MzNow),
@@ -192,18 +201,21 @@ pub fn and<'a>(
 ) -> Result<Datum<'a>, EvalError> {
     // If any is false, then return false. Else, if any is null, then return null. Else, return true.
     let mut null = false;
+    let mut err = None;
     for expr in exprs {
-        match expr.eval(datums, temp_storage)? {
-            Datum::False => return Ok(Datum::False), // short-circuit
-            Datum::True => {}
-            Datum::Null => null = true, // No return here, because we might still see a false
+        match expr.eval(datums, temp_storage) {
+            Ok(Datum::False) => return Ok(Datum::False), // short-circuit
+            Ok(Datum::True) => {}
+            // No return in these two cases, because we might still see a false
+            Ok(Datum::Null) => null = true,
+            Err(this_err) => err = std::cmp::max(err.take(), Some(this_err)),
             _ => unreachable!(),
         }
     }
-    if null {
-        Ok(Datum::Null)
-    } else {
-        Ok(Datum::True)
+    match (err, null) {
+        (Some(err), _) => Err(err),
+        (None, true) => Ok(Datum::Null),
+        (None, false) => Ok(Datum::True),
     }
 }
 
@@ -214,18 +226,21 @@ pub fn or<'a>(
 ) -> Result<Datum<'a>, EvalError> {
     // If any is true, then return true. Else, if any is null, then return null. Else, return false.
     let mut null = false;
+    let mut err = None;
     for expr in exprs {
-        match expr.eval(datums, temp_storage)? {
-            Datum::False => {}
-            Datum::True => return Ok(Datum::True), // short-circuit
-            Datum::Null => null = true, // No return here, because we might still see a true
+        match expr.eval(datums, temp_storage) {
+            Ok(Datum::False) => {}
+            Ok(Datum::True) => return Ok(Datum::True), // short-circuit
+            // No return in these two cases, because we might still see a true
+            Ok(Datum::Null) => null = true,
+            Err(this_err) => err = std::cmp::max(err.take(), Some(this_err)),
             _ => unreachable!(),
         }
     }
-    if null {
-        Ok(Datum::Null)
-    } else {
-        Ok(Datum::False)
+    match (err, null) {
+        (Some(err), _) => Err(err),
+        (None, true) => Ok(Datum::Null),
+        (None, false) => Ok(Datum::False),
     }
 }
 
@@ -1211,6 +1226,13 @@ fn power<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     Ok(Datum::from(a.powf(b)))
 }
 
+fn uuid_generate_v5<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let a = a.unwrap_uuid();
+    let b = b.unwrap_str();
+    let res = uuid::Uuid::new_v5(&a, b.as_bytes());
+    Datum::Uuid(res)
+}
+
 fn power_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let mut a = a.unwrap_numeric().0;
     let b = b.unwrap_numeric().0;
@@ -1285,6 +1307,36 @@ range_fn!(before);
 range_fn!(overleft);
 range_fn!(overright);
 range_fn!(adjacent);
+
+fn range_union<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let l = a.unwrap_range();
+    let r = b.unwrap_range();
+    l.union(&r)?.into_result(temp_storage)
+}
+
+fn range_intersection<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let l = a.unwrap_range();
+    let r = b.unwrap_range();
+    l.intersection(&r).into_result(temp_storage)
+}
+
+fn range_difference<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let l = a.unwrap_range();
+    let r = b.unwrap_range();
+    l.difference(&r)?.into_result(temp_storage)
+}
 
 fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a == b)
@@ -1935,6 +1987,10 @@ pub enum BinaryFunc {
     RangeOverleft,
     RangeOverright,
     RangeAdjacent,
+    RangeUnion,
+    RangeIntersection,
+    RangeDifference,
+    UuidGenerateV5,
 }
 
 impl BinaryFunc {
@@ -2239,6 +2295,12 @@ impl BinaryFunc {
                 ScalarType::Numeric { .. } => {
                     eager!(contains_range_elem::<OrderedDecimal<Numeric>>)
                 }
+                ScalarType::Timestamp => {
+                    eager!(contains_range_elem::<CheckedTimestamp<NaiveDateTime>>)
+                }
+                ScalarType::TimestampTz => {
+                    eager!(contains_range_elem::<CheckedTimestamp<DateTime<Utc>>>)
+                }
                 _ => unreachable!(),
             }),
             BinaryFunc::RangeContainsRange { rev: _ } => Ok(eager!(range_contains_range)),
@@ -2248,6 +2310,10 @@ impl BinaryFunc {
             BinaryFunc::RangeOverleft => Ok(eager!(range_overleft)),
             BinaryFunc::RangeOverright => Ok(eager!(range_overright)),
             BinaryFunc::RangeAdjacent => Ok(eager!(range_adjacent)),
+            BinaryFunc::RangeUnion => eager!(range_union, temp_storage),
+            BinaryFunc::RangeIntersection => eager!(range_intersection, temp_storage),
+            BinaryFunc::RangeDifference => eager!(range_difference, temp_storage),
+            BinaryFunc::UuidGenerateV5 => Ok(eager!(uuid_generate_v5)),
         }
     }
 
@@ -2401,6 +2467,8 @@ impl BinaryFunc {
 
             GetByte => ScalarType::Int32.nullable(in_nullable),
 
+            UuidGenerateV5 => ScalarType::Uuid.nullable(true),
+
             RangeContainsElem { .. }
             | RangeContainsRange { .. }
             | RangeOverlaps
@@ -2409,6 +2477,14 @@ impl BinaryFunc {
             | RangeOverleft
             | RangeOverright
             | RangeAdjacent => ScalarType::Bool.nullable(in_nullable),
+
+            RangeUnion | RangeIntersection | RangeDifference => {
+                soft_assert!(
+                    input1_type.scalar_type.without_modifiers()
+                        == input2_type.scalar_type.without_modifiers()
+                );
+                input1_type.scalar_type.without_modifiers().nullable(true)
+            }
         }
     }
 
@@ -2540,6 +2616,9 @@ impl BinaryFunc {
                 | RangeOverleft
                 | RangeOverright
                 | RangeAdjacent
+                | RangeUnion
+                | RangeIntersection
+                | RangeDifference
         )
     }
 
@@ -2676,7 +2755,10 @@ impl BinaryFunc {
             | RangeBefore
             | RangeOverleft
             | RangeOverright
-            | RangeAdjacent => true,
+            | RangeAdjacent
+            | RangeUnion
+            | RangeIntersection
+            | RangeDifference => true,
             ToCharTimestamp
             | ToCharTimestampTz
             | DateBinTimestamp
@@ -2721,6 +2803,7 @@ impl BinaryFunc {
             | ArrayRemove
             | ListRemove
             | LikeEscape
+            | UuidGenerateV5
             | GetByte => false,
         }
     }
@@ -2944,6 +3027,10 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::RangeOverleft => f.write_str("&<"),
             BinaryFunc::RangeOverright => f.write_str("&>"),
             BinaryFunc::RangeAdjacent => f.write_str("-|-"),
+            BinaryFunc::RangeUnion => f.write_str("+"),
+            BinaryFunc::RangeIntersection => f.write_str("*"),
+            BinaryFunc::RangeDifference => f.write_str("-"),
+            BinaryFunc::UuidGenerateV5 => f.write_str("uuid_generate_v5"),
         }
     }
 }
@@ -3154,6 +3241,9 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::RangeOverleft).boxed(),
             Just(BinaryFunc::RangeOverright).boxed(),
             Just(BinaryFunc::RangeAdjacent).boxed(),
+            Just(BinaryFunc::RangeUnion).boxed(),
+            Just(BinaryFunc::RangeIntersection).boxed(),
+            Just(BinaryFunc::RangeDifference).boxed(),
         ])
     }
 }
@@ -3343,6 +3433,10 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::RangeOverleft => RangeOverleft(()),
             BinaryFunc::RangeOverright => RangeOverright(()),
             BinaryFunc::RangeAdjacent => RangeAdjacent(()),
+            BinaryFunc::RangeUnion => RangeUnion(()),
+            BinaryFunc::RangeIntersection => RangeIntersection(()),
+            BinaryFunc::RangeDifference => RangeDifference(()),
+            BinaryFunc::UuidGenerateV5 => UuidGenerateV5(()),
         };
         ProtoBinaryFunc { kind: Some(kind) }
     }
@@ -3538,6 +3632,10 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 RangeOverleft(()) => Ok(BinaryFunc::RangeOverleft),
                 RangeOverright(()) => Ok(BinaryFunc::RangeOverright),
                 RangeAdjacent(()) => Ok(BinaryFunc::RangeAdjacent),
+                RangeUnion(()) => Ok(BinaryFunc::RangeUnion),
+                RangeIntersection(()) => Ok(BinaryFunc::RangeIntersection),
+                RangeDifference(()) => Ok(BinaryFunc::RangeDifference),
+                UuidGenerateV5(()) => Ok(BinaryFunc::UuidGenerateV5),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoBinaryFunc::kind"))
@@ -6644,6 +6742,8 @@ impl fmt::Display for VariadicFunc {
                 ScalarType::Int64 => "int8range",
                 ScalarType::Date => "daterange",
                 ScalarType::Numeric { .. } => "numrange",
+                ScalarType::Timestamp => "tsrange",
+                ScalarType::TimestampTz => "tstzrange",
                 _ => unreachable!(),
             }),
         }

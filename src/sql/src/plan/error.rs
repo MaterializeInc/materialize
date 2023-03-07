@@ -30,7 +30,7 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::UnresolvedObjectName;
 use mz_sql_parser::parser::ParserError;
 
-use crate::catalog::CatalogError;
+use crate::catalog::{CatalogError, CatalogItemType};
 use crate::names::PartialObjectName;
 use crate::names::ResolvedObjectName;
 use crate::plan::plan_utils::JoinSide;
@@ -38,9 +38,15 @@ use crate::plan::scope::ScopeItem;
 
 #[derive(Clone, Debug)]
 pub enum PlanError {
+    /// This feature is not yet supported, but may be supported at some point in the future.
     Unsupported {
         feature: String,
         issue_no: Option<usize>,
+    },
+    /// This feature is not supported, and will likely never be supported.
+    NeverSupported {
+        feature: String,
+        documentation_link: String,
     },
     UnknownColumn {
         table: Option<PartialObjectName>,
@@ -138,6 +144,11 @@ pub enum PlanError {
         name: String,
         supported_azs: BTreeSet<String>,
     },
+    InvalidSchemaName,
+    ItemAlreadyExists {
+        name: String,
+        item_type: CatalogItemType,
+    },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -234,6 +245,10 @@ impl fmt::Display for PlanError {
                 if let Some(issue_no) = issue_no {
                     write!(f, ", see https://github.com/MaterializeInc/materialize/issues/{} for more details", issue_no)?;
                 }
+                Ok(())
+            }
+            Self::NeverSupported { feature, documentation_link: documentation_path } => {
+                write!(f, "{feature} is not supported, for more information consult the documentation at https://materialize.com/docs/{documentation_path}",)?;
                 Ok(())
             }
             Self::UnknownColumn { table, column } => write!(
@@ -373,6 +388,8 @@ impl fmt::Display for PlanError {
                 })
             },
             Self::InvalidPrivatelinkAvailabilityZone { name, ..} => write!(f, "invalid AWS PrivateLink availability zone {}", name.quoted()),
+            Self::InvalidSchemaName => write!(f, "no schema has been selected to create in"),
+            Self::ItemAlreadyExists { name, item_type } => write!(f, "{item_type} {} already exists", name.quoted()),
         }
     }
 }

@@ -21,6 +21,7 @@ use timely::PartialOrder;
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
+use mz_cluster_client::client::ClusterStartupEpoch;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
@@ -28,7 +29,7 @@ use mz_storage_client::controller::{ReadPolicy, StorageController};
 
 use crate::logging::LogVariant;
 use crate::metrics::InstanceMetrics;
-use crate::protocol::command::{ComputeCommand, ComputeParameters, ComputeStartupEpoch, Peek};
+use crate::protocol::command::{ComputeCommand, ComputeParameters, Peek};
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
@@ -246,7 +247,7 @@ where
 
         instance.send(ComputeCommand::CreateTimely {
             config: Default::default(),
-            epoch: ComputeStartupEpoch::new(envd_epoch, 0),
+            epoch: ClusterStartupEpoch::new(envd_epoch, 0),
         });
 
         let dummy_logging_config = Default::default();
@@ -414,7 +415,7 @@ where
             id,
             self.compute.build_info,
             config,
-            ComputeStartupEpoch::new(self.compute.envd_epoch, *replica_epoch),
+            ClusterStartupEpoch::new(self.compute.envd_epoch, *replica_epoch),
             self.compute.metrics.for_replica(id),
         );
 
@@ -830,6 +831,7 @@ where
     /// # Panics
     ///
     /// Panics if any of the `updates` references an absent collection.
+    /// Panics if any of the `updates` regresses an existing write frontier.
     #[tracing::instrument(level = "debug", skip(self))]
     fn update_write_frontiers(
         &mut self,
@@ -854,6 +856,15 @@ where
             let old_upper = collection
                 .replica_write_frontiers
                 .insert(replica_id, new_upper.clone());
+
+            // Safety check against frontier regressions.
+            if let Some(old) = &old_upper {
+                assert!(
+                    PartialOrder::less_equal(old, new_upper),
+                    "Frontier regression: {old:?} -> {new_upper:?}, \
+                     collection={id}, replica={replica_id}",
+                );
+            }
 
             if new_upper.is_empty() {
                 dropped_collection_ids.push(*id);
@@ -1075,14 +1086,34 @@ where
         list: Vec<(GlobalId, Antichain<T>)>,
         replica_id: ReplicaId,
     ) {
-        // We should not receive updates for collections we don't track. It is possible that we
-        // currently do due to a bug where replicas send `FrontierUppers` for collections they drop
-        // during reconciliation.
-        // TODO(teskje): Revisit this after #16247 is resolved.
-        let updates: Vec<_> = list
-            .into_iter()
-            .filter(|(id, _)| self.compute.collections.contains_key(id))
-            .collect();
+        // According to the compute protocol, replicas are not allowed to send `FrontierUppers`
+        // that regress frontiers they have reported previously. We still perform a check here,
+        // rather than risking the controller becoming confused trying to handle regressions.
+        let mut updates = Vec::with_capacity(list.len());
+        for (id, new_frontier) in list {
+            let Ok(coll) = self.compute.collection(id) else {
+                // We should not receive updates for collections we don't track. It is possible
+                // that we currently do due to a bug where replicas send `FrontierUppers` for
+                // collections they drop during reconciliation.
+                // TODO(teskje): Revisit this after #16247 is resolved.
+                continue;
+            };
+
+            if let Some(old_frontier) = coll.replica_write_frontiers.get(&replica_id) {
+                if !PartialOrder::less_equal(old_frontier, &new_frontier) {
+                    tracing::warn!(
+                        ?replica_id,
+                        "Frontier of collection {id} regressed: {:?} -> {:?}",
+                        old_frontier.elements(),
+                        new_frontier.elements(),
+                    );
+                    tracing::error!("Replica reported a regressed collection frontier");
+                    continue;
+                }
+            }
+
+            updates.push((id, new_frontier));
+        }
 
         self.update_write_frontiers(replica_id, &updates);
     }

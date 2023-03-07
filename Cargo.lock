@@ -1713,7 +1713,7 @@ checksum = "0e25ea47919b1560c4e3b7fe0aaab9becf5b84a10325ddf7db0f0ba5e1026499"
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#e9e1157b7ab7d2548df699c9b95b578e0e64772a"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#cc88469a4834faa179725d52e2beb7ab677bdb37"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1790,7 +1790,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#e9e1157b7ab7d2548df699c9b95b578e0e64772a"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#cc88469a4834faa179725d52e2beb7ab677bdb37"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -3315,16 +3315,18 @@ dependencies = [
 
 [[package]]
 name = "mz"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
  "clap",
  "dirs",
  "indicatif",
+ "mz-build-info",
  "mz-ore",
  "once_cell",
  "open",
+ "openssl-probe",
  "postgres-protocol",
  "reqwest",
  "rpassword",
@@ -3527,8 +3529,77 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-cluster"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytesize",
+ "clap",
+ "crossbeam-channel",
+ "dec",
+ "differential-dataflow",
+ "futures",
+ "mz-build-info",
+ "mz-cluster-client",
+ "mz-compute-client",
+ "mz-expr",
+ "mz-ore",
+ "mz-persist-client",
+ "mz-persist-types",
+ "mz-pid-file",
+ "mz-repr",
+ "mz-service",
+ "mz-storage-client",
+ "mz-timely-util",
+ "once_cell",
+ "prometheus",
+ "regex",
+ "scopeguard",
+ "serde",
+ "smallvec",
+ "timely",
+ "tokio",
+ "tracing",
+ "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-cluster-client"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "futures",
+ "http",
+ "itertools",
+ "mz-ore",
+ "mz-proto",
+ "once_cell",
+ "prometheus",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "prost-build",
+ "protobuf-src",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-build",
+ "tracing",
+ "uuid",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-clusterd"
-version = "0.43.0-dev"
+version = "0.46.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3538,6 +3609,7 @@ dependencies = [
  "mz-alloc",
  "mz-build-info",
  "mz-cloud-resources",
+ "mz-cluster",
  "mz-compute",
  "mz-compute-client",
  "mz-http-util",
@@ -3559,7 +3631,7 @@ dependencies = [
 
 [[package]]
 name = "mz-compute"
-version = "0.38.0-dev"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3571,6 +3643,8 @@ dependencies = [
  "dogsdogsdogs",
  "futures",
  "mz-build-info",
+ "mz-cluster",
+ "mz-cluster-client",
  "mz-compute-client",
  "mz-expr",
  "mz-ore",
@@ -3608,6 +3682,7 @@ dependencies = [
  "http",
  "itertools",
  "mz-build-info",
+ "mz-cluster-client",
  "mz-expr",
  "mz-orchestrator",
  "mz-ore",
@@ -3649,6 +3724,7 @@ dependencies = [
  "differential-dataflow",
  "futures",
  "mz-build-info",
+ "mz-cluster-client",
  "mz-compute-client",
  "mz-orchestrator",
  "mz-ore",
@@ -3671,7 +3747,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.43.0-dev"
+version = "0.46.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -3723,6 +3799,7 @@ dependencies = [
  "mz-segment",
  "mz-service",
  "mz-sql",
+ "mz-sql-parser",
  "mz-stash",
  "mz-storage-client",
  "nix",
@@ -3860,11 +3937,16 @@ dependencies = [
  "askama",
  "axum",
  "headers",
+ "http",
+ "hyper",
  "include_dir",
  "mz-ore",
  "prometheus",
  "serde",
  "serde_json",
+ "tokio",
+ "tower",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
  "workspace-hack",
@@ -4198,7 +4280,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.43.0-dev"
+version = "0.46.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4248,6 +4330,7 @@ dependencies = [
  "anyhow",
  "arrow2",
  "bytes",
+ "parquet2",
  "workspace-hack",
 ]
 
@@ -4434,6 +4517,7 @@ dependencies = [
  "num_enum",
  "once_cell",
  "ordered-float",
+ "postgres-protocol",
  "proptest",
  "proptest-derive",
  "prost",
@@ -4448,6 +4532,7 @@ dependencies = [
  "smallvec",
  "thiserror",
  "timely",
+ "tokio-postgres",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -4682,6 +4767,7 @@ dependencies = [
  "anyhow",
  "criterion",
  "differential-dataflow",
+ "fail",
  "futures",
  "mz-ore",
  "mz-postgres-util",
@@ -4721,7 +4807,7 @@ dependencies = [
 
 [[package]]
 name = "mz-storage"
-version = "0.38.0-dev"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -4749,6 +4835,7 @@ dependencies = [
  "mz-build-info",
  "mz-ccsr",
  "mz-cloud-resources",
+ "mz-cluster",
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
@@ -4810,6 +4897,7 @@ dependencies = [
  "mz-build-info",
  "mz-ccsr",
  "mz-cloud-resources",
+ "mz-cluster-client",
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
@@ -6721,6 +6809,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1_smol"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae1a47186c03a32177042e55dbc5fd5aee900b8e0069a8d70fba96a9375cd012"
+
+[[package]]
 name = "sha2"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7224,7 +7318,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#6a736009d0276b181f0a069174390b99c8bd9ae1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#f2ea9600f06eac46d2b43fcdbb3257593d3759ec"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7242,12 +7336,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#6a736009d0276b181f0a069174390b99c8bd9ae1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#f2ea9600f06eac46d2b43fcdbb3257593d3759ec"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#6a736009d0276b181f0a069174390b99c8bd9ae1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#f2ea9600f06eac46d2b43fcdbb3257593d3759ec"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7263,7 +7357,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#6a736009d0276b181f0a069174390b99c8bd9ae1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#f2ea9600f06eac46d2b43fcdbb3257593d3759ec"
 dependencies = [
  "columnation",
  "serde",
@@ -7272,7 +7366,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#6a736009d0276b181f0a069174390b99c8bd9ae1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#f2ea9600f06eac46d2b43fcdbb3257593d3759ec"
 
 [[package]]
 name = "tiny-keccak"
@@ -7842,6 +7936,7 @@ checksum = "422ee0de9031b5b948b97a8fc04e3aa35230001a722ddd27943e0be31564ce4c"
 dependencies = [
  "getrandom",
  "serde",
+ "sha1_smol",
 ]
 
 [[package]]

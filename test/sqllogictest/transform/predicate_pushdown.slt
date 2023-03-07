@@ -149,7 +149,7 @@ Explained Query:
   Project (#0, #1, #0, #1) // { arity: 4 }
     Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
       implementation
-        %1:t2[#0, #1] » %0:t1[#0, #1]KKA
+        %0:t1[#0, #1]KK » %1:t2[#0, #1]KK
       ArrangeBy keys=[[#0, #1]] // { arity: 2 }
         Filter (#0) IS NOT NULL AND (#1) IS NOT NULL // { arity: 2 }
           Get materialize.public.t1 // { arity: 2 }
@@ -172,7 +172,7 @@ select * from t1, t2 where t1.f1 = t2.f1 + 1 or (t1.f1 is null and t2.f1 is null
 Explained Query:
   Join on=(#0 = (#2 + 1)) type=differential // { arity: 4 }
     implementation
-      %1:t2[(#0 + 1)] » %0:t1[#0]KA
+      %0:t1[#0]K » %1:t2[(#0 + 1)]K
     ArrangeBy keys=[[#0]] // { arity: 2 }
       Get materialize.public.t1 // { arity: 2 }
     ArrangeBy keys=[[(#0 + 1)]] // { arity: 2 }
@@ -187,7 +187,7 @@ select * from t1, t2 where t1.f1 = t2.f1 + 1 or (t1.f1 is null and (t2.f1 + 1) i
 Explained Query:
   Join on=(#0 = (#2 + 1)) type=differential // { arity: 4 }
     implementation
-      %1:t2[(#0 + 1)] » %0:t1[#0]KA
+      %0:t1[#0]K » %1:t2[(#0 + 1)]K
     ArrangeBy keys=[[#0]] // { arity: 2 }
       Get materialize.public.t1 // { arity: 2 }
     ArrangeBy keys=[[(#0 + 1)]] // { arity: 2 }
@@ -202,7 +202,7 @@ select * from t1, t2 where t2.f1 = t1.f1 + 1 or (t1.f1 is null and (t2.f1 + 1) i
 Explained Query:
   Join on=(#2 = (#0 + 1)) type=differential // { arity: 4 }
     implementation
-      %1:t2[#0] » %0:t1[(#0 + 1)]KA
+      %0:t1[(#0 + 1)]K » %1:t2[#0]K
     ArrangeBy keys=[[(#0 + 1)]] // { arity: 2 }
       Get materialize.public.t1 // { arity: 2 }
     ArrangeBy keys=[[#0]] // { arity: 2 }
@@ -217,7 +217,7 @@ select * from t1, t2 where t2.f1 = t1.f1 + 1 or (t1.f1 is null and ((t2.f1 + 1) 
 Explained Query:
   Join on=(#2 = (#0 + 1)) type=differential // { arity: 4 }
     implementation
-      %1:t2[#0] » %0:t1[(#0 + 1)]KA
+      %0:t1[(#0 + 1)]K » %1:t2[#0]K
     ArrangeBy keys=[[(#0 + 1)]] // { arity: 2 }
       Get materialize.public.t1 // { arity: 2 }
     ArrangeBy keys=[[#0]] // { arity: 2 }
@@ -236,7 +236,7 @@ Explained Query:
     Filter (((#1 = 3) AND (#3 = 4)) OR ((#1 = 5) AND (#3 = 6))) // { arity: 4 }
       Join on=(#0 = #2) type=differential // { arity: 4 }
         implementation
-          %1:t2[#0] » %0:t1[#0]KAef
+          %0:t1[#0]Kef » %1:t2[#0]Kef
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Filter (#0) IS NOT NULL AND ((#1 = 3) OR (#1 = 5)) // { arity: 2 }
             Get materialize.public.t1 // { arity: 2 }
@@ -260,7 +260,7 @@ Explained Query:
     Filter ((#1 = 5) OR ((#1 = 3) AND (#3 = 4))) // { arity: 4 }
       Join on=(#0 = #2) type=differential // { arity: 4 }
         implementation
-          %1:t2[#0] » %0:t1[#0]KAef
+          %0:t1[#0]Kef » %1:t2[#0]Kef
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Filter (#0) IS NOT NULL AND ((#1 = 3) OR (#1 = 5)) // { arity: 2 }
             Get materialize.public.t1 // { arity: 2 }
@@ -284,7 +284,7 @@ Explained Query:
   Filter ((#1 = 27) OR ((#0 = #2) AND (#1 <= 1995))) // { arity: 4 }
     CrossJoin type=differential // { arity: 4 }
       implementation
-        %1:t2[×] » %0:t1[×]Aeiif
+        %0:t1[×]eiif » %1:t2[×]eiif
       ArrangeBy keys=[[]] // { arity: 2 }
         Filter ((#1 = 27) OR (#1 <= 1995)) // { arity: 2 }
           Get materialize.public.t1 // { arity: 2 }
@@ -316,12 +316,11 @@ Explained Query:
       project=(#0, #1, #0, #2)
     linear_stage[0]
       closure
-        project=(#0, #2, #1)
         filter=((#0) IS NOT NULL AND (#3 OR #4) AND (#5 OR #6) AND ((#3 AND #5) OR (#4 AND #6)))
-        map=((#2 = 3), (#2 = 5), (#1 = 4), (#1 = 6))
-      lookup={ relation=0, key=[#0] }
+        map=((#1 = 3), (#1 = 5), (#2 = 4), (#2 = 6))
+      lookup={ relation=1, key=[#0] }
       stream={ key=[#0], thinning=(#1) }
-    source={ relation=1, key=[#0] }
+    source={ relation=0, key=[#0] }
     Get::PassArrangements materialize.public.t1
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
@@ -374,7 +373,7 @@ Explained Query:
     Filter ((#4 = "materialized-view") OR ((#4 = "view") AND (#1 != "doesntmatter"))) // { arity: 5 }
       Join on=(#0 = #2) type=differential // { arity: 5 }
         implementation
-          %1[#0] » %0:mz_schemas[#0]KAef
+          %1[#0]Kef » %0:mz_schemas[#0]Kef
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Project (#0, #3) // { arity: 2 }
             Get mz_catalog.mz_schemas // { arity: 4 }
@@ -391,6 +390,68 @@ Source mz_catalog.mz_views
   filter=(true)
 Source mz_catalog.mz_materialized_views
   filter=(true)
+
+EOF
+
+# Regression tests for #17515
+# Push predicates through Threshold and TopK
+
+# Test Threshold.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+WITH cte(a) as (SELECT a FROM x EXCEPT ALL SELECT a FROM y)
+SELECT a * 5 FROM cte WHERE a = 5
+----
+Explained Query:
+  Project (#1)
+    Map (25)
+      Threshold
+        Union
+          Project (#0)
+            Filter (#0 = 5)
+              Get materialize.public.x
+          Negate
+            Filter (#0 = 5)
+              Get materialize.public.y
+
+Source materialize.public.x
+  filter=((#0 = 5))
+Source materialize.public.y
+  filter=((#0 = 5))
+
+EOF
+
+# Test TopK.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+SELECT a FROM y as y, LATERAL(SELECT u FROM x WHERE y.a = x.a LIMIT 5) WHERE a IN (41, 42);
+----
+Explained Query:
+  Return
+    Project (#0)
+      Join on=(#0 = #1) type=differential
+        ArrangeBy keys=[[#0]]
+          Get l0
+        ArrangeBy keys=[[#0]]
+          TopK group_by=[#0] limit=5 monotonic=false
+            Project (#0)
+              Join on=(#0 = #1) type=differential
+                ArrangeBy keys=[[#0]]
+                  Distinct group_by=[#0]
+                    Get l0
+                ArrangeBy keys=[[#0]]
+                  Project (#0)
+                    Filter ((#0 = 41) OR (#0 = 42))
+                      Get materialize.public.x
+  With
+    cte l0 =
+      Filter ((#0 = 41) OR (#0 = 42))
+        Get materialize.public.y
+
+Source materialize.public.x
+  filter=(((#0 = 41) OR (#0 = 42)))
+Source materialize.public.y
+  filter=(((#0 = 41) OR (#0 = 42)))
 
 EOF
 

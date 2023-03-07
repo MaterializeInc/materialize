@@ -24,8 +24,9 @@ use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 use tracing::{error, warn};
 
+use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_compute_client::controller::{
-    ComputeInstanceId, ComputeReplicaConfig, ComputeReplicaLocation, ComputeReplicaLogging,
+    ComputeInstanceId, ComputeReplicaConfig, ComputeReplicaLogging,
 };
 use mz_compute_client::logging::LogVariant;
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
@@ -130,9 +131,12 @@ pub enum ClusterRole {
 /// The location of an unmanaged replica.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UnmanagedReplicaLocation {
-    /// The network address of the storagectl endpoints for the first process in
+    /// The network addresses of the storagectl endpoints for each process in
     /// the replica.
-    pub storagectl_addr: String,
+    pub storagectl_addrs: Vec<String>,
+    /// The network addresses of the storage (Timely) endpoints for
+    /// each process in the replica.
+    pub storage_addrs: Vec<String>,
     /// The network addresses of the computectl endpoints for each process in
     /// the replica.
     pub computectl_addrs: Vec<String>,
@@ -221,18 +225,30 @@ where
                 match config.location {
                     // This branch doesn't do any async work, so there is a slight performance
                     // opportunity to serially process it, but it makes the code worse to read.
-                    ReplicaLocation::Unmanaged(u) => {
-                        let storage_addr = u.storagectl_addr;
-                        let compute_location = ComputeReplicaLocation {
-                            computectl_addrs: u.computectl_addrs,
-                            compute_addrs: u.compute_addrs,
-                            workers: u.workers,
+                    ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
+                        storagectl_addrs,
+                        storage_addrs,
+                        computectl_addrs,
+                        compute_addrs,
+                        workers,
+                    }) => {
+                        let compute_location = ClusterReplicaLocation {
+                            ctl_addrs: computectl_addrs,
+                            dataflow_addrs: compute_addrs,
+                            workers,
                         };
+                        let storage_location = ClusterReplicaLocation {
+                            ctl_addrs: storagectl_addrs,
+                            dataflow_addrs: storage_addrs,
+                            // Storage and compute on the same replica have linked sizes.
+                            workers,
+                        };
+
                         Ok::<_, anyhow::Error>((
                             cluster_id,
                             replica_id,
                             config.compute,
-                            storage_addr,
+                            storage_location,
                             compute_location,
                             None,
                         ))
@@ -242,21 +258,21 @@ where
                         let (service, metrics_task_join_handle) = this
                             .provision_replica(cluster_id, replica_id, role, m)
                             .await?;
-                        let storage_addr = service
-                            .addresses("storagectl")
-                            .into_iter()
-                            .next()
-                            .expect("should be at least one process");
-                        let compute_location = ComputeReplicaLocation {
-                            computectl_addrs: service.addresses("computectl"),
-                            compute_addrs: service.addresses("compute"),
+                        let storage_location = ClusterReplicaLocation {
+                            ctl_addrs: service.addresses("storagectl"),
+                            dataflow_addrs: service.addresses("storage"),
+                            workers,
+                        };
+                        let compute_location = ClusterReplicaLocation {
+                            ctl_addrs: service.addresses("computectl"),
+                            dataflow_addrs: service.addresses("compute"),
                             workers,
                         };
                         Ok((
                             cluster_id,
                             replica_id,
                             config.compute,
-                            storage_addr,
+                            storage_location,
                             compute_location,
                             Some(metrics_task_join_handle),
                         ))
@@ -275,7 +291,7 @@ where
             cluster_id,
             replica_id,
             compute_config,
-            storage_addr,
+            storage_location,
             compute_location,
             metrics_task_join_handle,
         ) in replicas
@@ -283,7 +299,7 @@ where
             if let Some(jh) = metrics_task_join_handle {
                 self.metrics_tasks.insert(replica_id, jh);
             }
-            self.storage.connect_replica(cluster_id, storage_addr);
+            self.storage.connect_replica(cluster_id, storage_location);
             self.active_compute().add_replica_to_instance(
                 cluster_id,
                 replica_id,
@@ -401,7 +417,6 @@ where
                     init_container_image: self.init_container_image.clone(),
                     args: &|assigned| {
                         vec![
-                            format!("--storage-workers={}", location.allocation.workers),
                             format!(
                                 "--storage-controller-listen-addr={}",
                                 assigned["storagectl"]
@@ -419,6 +434,13 @@ where
                         ServicePort {
                             name: "storagectl".into(),
                             port_hint: 2100,
+                        },
+                        // To simplify the changes to tests, the port
+                        // chosen here is _after_ the compute ones.
+                        // TODO(petrosagg): fix the numerical ordering here
+                        ServicePort {
+                            name: "storage".into(),
+                            port_hint: 2103,
                         },
                         ServicePort {
                             name: "computectl".into(),

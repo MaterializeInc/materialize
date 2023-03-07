@@ -1,0 +1,24 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+package mz_cluster_client.client;
+
+message ProtoClusterStartupEpoch {
+  int64 envd = 1;
+  uint64 replica = 2;
+}
+
+message ProtoTimelyConfig {
+    uint64 workers = 1;
+    uint64 process = 2;
+    repeated string addresses = 3;
+    uint32 idle_arrangement_merge_effort = 4;
+}

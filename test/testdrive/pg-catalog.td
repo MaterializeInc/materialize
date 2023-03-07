@@ -137,13 +137,21 @@ name                nullable    type
 ------------------------------------------------------------
  oid                false       oid
  rolname            false       text
- rolsuper           false       boolean
+ rolsuper           true        boolean
  rolinherit         false       boolean
  rolcreaterole      false       boolean
  rolcreatedb        false       boolean
- rolcanlogin        false       boolean
+ rolcanlogin        true        boolean
  rolreplication     false       boolean
  rolbypassrls       false       boolean
  rolconnlimit       false       integer
  rolpassword        true        text
  rolvaliduntil      true        "timestamp with time zone"
+
+> SHOW COLUMNS FROM pg_auth_members
+name                nullable    type
+------------------------------------------------------------
+ roleid             false       oid
+ member           false       oid
+ grantor            false       oid
+ admin_option       false       boolean

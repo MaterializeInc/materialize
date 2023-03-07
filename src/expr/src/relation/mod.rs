@@ -28,7 +28,7 @@ use mz_ore::str::Indent;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::text::text_string_at;
-use mz_repr::explain::{DummyHumanizer, ExplainConfig, PlanRenderingContext};
+use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
 
 use crate::visit::{Visit, VisitChildren};
@@ -1194,12 +1194,58 @@ impl MirRelationExpr {
         aggregates: Vec<AggregateExpr>,
         expected_group_size: Option<usize>,
     ) -> Self {
-        MirRelationExpr::Reduce {
-            input: Box::new(self),
-            group_key: group_key.into_iter().map(MirScalarExpr::Column).collect(),
-            aggregates,
-            monotonic: false,
-            expected_group_size,
+        // Check if we have an unsigned aggregation and add an appropriate cast here
+        // when the output is expected to be unsigned. This is done since rendering
+        // needs to accumulate to a signed number to deal with retractions, and we do
+        // not want to panic there (#17510).
+        let mut unsigned_sums = aggregates
+            .iter()
+            .enumerate()
+            .filter(|(_, agg)| {
+                agg.func == AggregateFunc::SumUInt16 || agg.func == AggregateFunc::SumUInt32
+            })
+            .map(|(idx, _)| idx)
+            .peekable();
+        if unsigned_sums.peek().is_some() {
+            let unsigned_sums: Vec<_> = unsigned_sums.collect();
+
+            // First, we build the cast expressions.
+            let key_arity = group_key.len();
+            let casts: Vec<_> = unsigned_sums
+                .iter()
+                .map(|idx| MirScalarExpr::CallUnary {
+                    func: crate::UnaryFunc::CastNumericToUint64(crate::func::CastNumericToUint64),
+                    expr: Box::new(MirScalarExpr::Column(key_arity + idx)),
+                })
+                .collect();
+
+            // Then, we create the reduction, followed by a map.
+            let expr_arity = key_arity + aggregates.len();
+            let reduce = MirRelationExpr::Reduce {
+                input: Box::new(self),
+                group_key: group_key.into_iter().map(MirScalarExpr::Column).collect(),
+                aggregates,
+                monotonic: false,
+                expected_group_size,
+            };
+            let map = reduce.map(casts);
+
+            // Finally, we create a projection keeping only the cast values.
+            let mut outputs = (0..expr_arity).collect::<Vec<_>>();
+            let mut offset = 0;
+            for idx in unsigned_sums {
+                outputs[key_arity + idx] = expr_arity + offset;
+                offset += 1;
+            }
+            map.project(outputs)
+        } else {
+            MirRelationExpr::Reduce {
+                input: Box::new(self),
+                group_key: group_key.into_iter().map(MirScalarExpr::Column).collect(),
+                aggregates,
+                monotonic: false,
+                expected_group_size,
+            }
         }
     }
 
@@ -1349,25 +1395,20 @@ impl MirRelationExpr {
         None
     }
 
-    /// Pretty-print this MirRelationExpr to a string.
+    /// Pretty-print this [MirRelationExpr] to a string.
     pub fn pretty(&self) -> String {
+        let config = ExplainConfig::default();
+        self.explain(&config, None)
+    }
+
+    /// Pretty-print this [MirRelationExpr] to a string using a custom
+    /// [ExplainConfig] and an optionally provided [ExprHumanizer].
+    pub fn explain(&self, config: &ExplainConfig, humanizer: Option<&dyn ExprHumanizer>) -> String {
         text_string_at(self, || PlanRenderingContext {
             indent: Indent::default(),
-            humanizer: &DummyHumanizer,
+            humanizer: humanizer.unwrap_or(&DummyHumanizer),
             annotations: BTreeMap::default(),
-            config: &ExplainConfig {
-                arity: false,
-                join_impls: true,
-                keys: false,
-                linear_chains: false,
-                non_negative: false,
-                no_fast_path: true,
-                raw_plans: true,
-                raw_syntax: true,
-                subtree_size: false,
-                timing: false,
-                types: false,
-            },
+            config,
         })
     }
 
@@ -1426,6 +1467,33 @@ impl MirRelationExpr {
                 value: Box::new(self),
                 body: Box::new(body),
             }
+        }
+    }
+
+    /// Like [MirRelationExpr::let_in], but with a fallible return type.
+    pub fn let_in_fallible<Body, E>(
+        self,
+        id_gen: &mut IdGen,
+        body: Body,
+    ) -> Result<MirRelationExpr, E>
+    where
+        Body: FnOnce(&mut IdGen, MirRelationExpr) -> Result<MirRelationExpr, E>,
+    {
+        if let MirRelationExpr::Get { .. } = self {
+            // already done
+            body(id_gen, self)
+        } else {
+            let id = LocalId::new(id_gen.allocate_id());
+            let get = MirRelationExpr::Get {
+                id: Id::Local(id),
+                typ: self.typ(),
+            };
+            let body = (body)(id_gen, get)?;
+            Ok(MirRelationExpr::Let {
+                id,
+                value: Box::new(self),
+                body: Box::new(body),
+            })
         }
     }
 
@@ -2458,17 +2526,23 @@ impl AggregateExpr {
 pub enum JoinImplementation {
     /// Perform a sequence of binary differential dataflow joins.
     ///
-    /// The first argument indicates 1) the index of the starting collection
-    /// and 2) if it should be arranged, the keys to arrange it by.
+    /// The first argument indicates
+    /// 1) the index of the starting collection,
+    /// 2) if it should be arranged, the keys to arrange it by, and
+    /// 3) the characteristics of the starting collection (for EXPLAINing).
     /// The sequence that follows lists other relation indexes, and the key for
     /// the arrangement we should use when joining it in.
     /// The JoinInputCharacteristics are for EXPLAINing the characteristics that
     /// were used for join ordering.
     ///
-    /// Each collection index should occur exactly once, either in the first
-    /// position or somewhere in the list.
+    /// Each collection index should occur exactly once, either as the starting collection
+    /// or somewhere in the list.
     Differential(
-        (usize, Option<Vec<MirScalarExpr>>),
+        (
+            usize,
+            Option<Vec<MirScalarExpr>>,
+            Option<JoinInputCharacteristics>,
+        ),
         Vec<(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)>,
     ),
     /// Perform independent delta query dataflows for each input.
@@ -2674,26 +2748,29 @@ impl RowSetFinishing {
 
         let limit = self.limit.unwrap_or(usize::MAX);
 
-        // The code below is logically equivalent to:
-        //
-        // let mut total = 0;
-        // for (_, count) in &rows[offset_nth_row..] {
-        //     total += count.get();
-        // }
-        // let return_size = std::cmp::min(total, limit);
-        //
-        // but it breaks early if the limit is reached, instead of scanning the entire code.
-        let return_size = rows[offset_nth_row..]
-            .iter()
-            .try_fold(0, |sum, (_, count)| {
-                let new_sum = sum + count.get();
-                if new_sum > limit {
-                    None
-                } else {
-                    Some(new_sum)
-                }
-            })
-            .unwrap_or(limit);
+        // Count how many rows we'd expand into, returning early from the whole function
+        // if we don't have enough memory to expand the result, or break early from the
+        // iteration once we pass our limit.
+        let mut num_rows = 0;
+        let mut num_bytes: usize = 0;
+        for (row, count) in &rows[offset_nth_row..] {
+            num_rows += count.get();
+            num_bytes = num_bytes.saturating_add(count.get().saturating_mul(row.byte_len()));
+
+            // Check that result fits into max_result_size.
+            if num_bytes > max_result_size {
+                return Err(format!(
+                    "result exceeds max size of {}",
+                    ByteSize::b(u64::cast_from(max_result_size))
+                ));
+            }
+
+            // Stop iterating if we've passed limit.
+            if num_rows > limit {
+                break;
+            }
+        }
+        let return_size = std::cmp::min(num_rows, limit);
 
         let mut ret = Vec::with_capacity(return_size);
         let mut remaining = limit;

@@ -69,6 +69,7 @@ pub enum Statement<T: AstInfo> {
     AlterSystemReset(AlterSystemResetStatement),
     AlterSystemResetAll(AlterSystemResetAllStatement),
     AlterConnection(AlterConnectionStatement),
+    AlterRole(AlterRoleStatement<T>),
     Discard(DiscardStatement),
     DropDatabase(DropDatabaseStatement),
     DropSchema(DropSchemaStatement),
@@ -126,6 +127,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterSystemReset(stmt) => f.write_node(stmt),
             Statement::AlterSystemResetAll(stmt) => f.write_node(stmt),
             Statement::AlterConnection(stmt) => f.write_node(stmt),
+            Statement::AlterRole(stmt) => f.write_node(stmt),
             Statement::Discard(stmt) => f.write_node(stmt),
             Statement::DropDatabase(stmt) => f.write_node(stmt),
             Statement::DropSchema(stmt) => f.write_node(stmt),
@@ -1028,22 +1030,16 @@ impl<T: AstInfo> AstDisplay for IndexOption<T> {
 /// A `CREATE ROLE` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateRoleStatement {
-    /// Whether this was actually a `CREATE USER` statement.
-    pub is_user: bool,
     /// The specified role.
     pub name: Ident,
     /// Any options that were attached, in the order they were presented.
-    pub options: Vec<CreateRoleOption>,
+    pub options: Vec<RoleAttribute>,
 }
 
 impl AstDisplay for CreateRoleStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("CREATE ");
-        if self.is_user {
-            f.write_str("USER ");
-        } else {
-            f.write_str("ROLE ");
-        }
+        f.write_str("ROLE ");
         f.write_node(&self.name);
         for option in &self.options {
             f.write_str(" ");
@@ -1053,30 +1049,51 @@ impl AstDisplay for CreateRoleStatement {
 }
 impl_display!(CreateRoleStatement);
 
-/// Options that can be attached to [`CreateRoleStatement`].
+/// Attributes that can be attached to roles.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CreateRoleOption {
-    /// The `SUPERUSER` option.
-    SuperUser,
-    /// The `NOSUPERUSER` option.
-    NoSuperUser,
-    /// The `LOGIN` option.
+pub enum RoleAttribute {
+    /// The `INHERIT` option.
+    Inherit,
+    /// The `NOINHERIT` option.
+    NoInherit,
+    /// The `CREATECLUSTER` option.
+    CreateCluster,
+    /// The `NOCREATECLUSTER` option.
+    NoCreateCluster,
+    /// The `CREATEDB` option.
+    CreateDB,
+    /// The `NOCREATEDB` option.
+    NoCreateDB,
+    /// The `CREATEROLE` option.
+    CreateRole,
+    /// The `NOCREATEROLE` option.
+    NoCreateRole,
+    // The following are not supported, but included to give helpful error messages.
     Login,
-    /// The `NOLOGIN` option.
     NoLogin,
+    SuperUser,
+    NoSuperUser,
 }
 
-impl AstDisplay for CreateRoleOption {
+impl AstDisplay for RoleAttribute {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            CreateRoleOption::SuperUser => f.write_str("SUPERUSER"),
-            CreateRoleOption::NoSuperUser => f.write_str("NOSUPERUSER"),
-            CreateRoleOption::Login => f.write_str("LOGIN"),
-            CreateRoleOption::NoLogin => f.write_str("NOLOGIN"),
+            RoleAttribute::SuperUser => f.write_str("SUPERUSER"),
+            RoleAttribute::NoSuperUser => f.write_str("NOSUPERUSER"),
+            RoleAttribute::Login => f.write_str("LOGIN"),
+            RoleAttribute::NoLogin => f.write_str("NOLOGIN"),
+            RoleAttribute::Inherit => f.write_str("INHERIT"),
+            RoleAttribute::NoInherit => f.write_str("NOINHERIT"),
+            RoleAttribute::CreateCluster => f.write_str("CREATECLUSTER"),
+            RoleAttribute::NoCreateCluster => f.write_str("NOCREATECLUSTER"),
+            RoleAttribute::CreateDB => f.write_str("CREATEDB"),
+            RoleAttribute::NoCreateDB => f.write_str("NOCREATEDB"),
+            RoleAttribute::CreateRole => f.write_str("CREATEROLE"),
+            RoleAttribute::NoCreateRole => f.write_str("NOCREATEROLE"),
         }
     }
 }
-impl_display!(CreateRoleOption);
+impl_display!(RoleAttribute);
 
 /// A `CREATE SECRET` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1241,8 +1258,10 @@ pub enum ReplicaOptionName {
     Size,
     /// The `AVAILABILITY ZONE [[=] <id>]` option.
     AvailabilityZone,
-    /// The `STORAGECTL ADDRESS` option.
-    StoragectlAddress,
+    /// The `STORAGE ADDRESSES` option.
+    StorageAddresses,
+    /// The `STORAGECTL ADDRESSES` option.
+    StoragectlAddresses,
     /// The `COMPUTECTL ADDRESSES` option.
     ComputectlAddresses,
     /// The `COMPUTE ADDRESSES` option.
@@ -1262,7 +1281,8 @@ impl AstDisplay for ReplicaOptionName {
         match self {
             ReplicaOptionName::Size => f.write_str("SIZE"),
             ReplicaOptionName::AvailabilityZone => f.write_str("AVAILABILITY ZONE"),
-            ReplicaOptionName::StoragectlAddress => f.write_str("STORAGECTL ADDRESS"),
+            ReplicaOptionName::StorageAddresses => f.write_str("STORAGE ADDRESSES"),
+            ReplicaOptionName::StoragectlAddresses => f.write_str("STORAGECTL ADDRESSES"),
             ReplicaOptionName::ComputectlAddresses => f.write_str("COMPUTECTL ADDRESSES"),
             ReplicaOptionName::ComputeAddresses => f.write_str("COMPUTE ADDRESSES"),
             ReplicaOptionName::Workers => f.write_str("WORKERS"),
@@ -1559,6 +1579,28 @@ impl AstDisplay for AlterConnectionStatement {
 
 impl_display!(AlterConnectionStatement);
 
+/// `ALTER ROLE`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterRoleStatement<T: AstInfo> {
+    /// The specified role.
+    pub name: T::RoleName,
+    /// Any options that were attached, in the order they were presented.
+    pub options: Vec<RoleAttribute>,
+}
+
+impl<T: AstInfo> AstDisplay for AlterRoleStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER ");
+        f.write_str("ROLE ");
+        f.write_node(&self.name);
+        for option in &self.options {
+            f.write_str(" ");
+            option.fmt(f)
+        }
+    }
+}
+impl_display_t!(AlterRoleStatement);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiscardStatement {
     pub target: DiscardTarget,
@@ -1751,7 +1793,7 @@ impl_display!(DropClusterReplicasStatement);
 pub struct SetVariableStatement {
     pub local: bool,
     pub variable: Ident,
-    pub value: SetVariableValue,
+    pub to: SetVariableTo,
 }
 
 impl AstDisplay for SetVariableStatement {
@@ -1762,7 +1804,7 @@ impl AstDisplay for SetVariableStatement {
         }
         f.write_node(&self.variable);
         f.write_str(" = ");
-        f.write_node(&self.value);
+        f.write_node(&self.to);
     }
 }
 impl_display!(SetVariableStatement);
@@ -2197,6 +2239,7 @@ pub struct ExplainStatement<T: AstInfo> {
     pub stage: ExplainStage,
     pub config_flags: Vec<Ident>,
     pub format: ExplainFormat,
+    pub no_errors: bool,
     pub explainee: Explainee<T>,
 }
 
@@ -2212,6 +2255,9 @@ impl<T: AstInfo> AstDisplay for ExplainStatement<T> {
         f.write_str(" AS ");
         f.write_node(&self.format);
         f.write_str(" FOR ");
+        if self.no_errors {
+            f.write_str("BROKEN ");
+        }
         f.write_node(&self.explainee);
     }
 }
@@ -2400,12 +2446,26 @@ impl AstDisplay for TransactionIsolationLevel {
 impl_display!(TransactionIsolationLevel);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SetVariableTo {
+    Default,
+    Values(Vec<SetVariableValue>),
+}
+
+impl AstDisplay for SetVariableTo {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        use SetVariableTo::*;
+        match self {
+            Values(values) => f.write_node(&display::comma_separated(values)),
+            Default => f.write_str("DEFAULT"),
+        }
+    }
+}
+impl_display!(SetVariableTo);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SetVariableValue {
     Ident(Ident),
-    Idents(Vec<Ident>),
     Literal(Value),
-    Literals(Vec<Value>),
-    Default,
 }
 
 impl AstDisplay for SetVariableValue {
@@ -2413,14 +2473,24 @@ impl AstDisplay for SetVariableValue {
         use SetVariableValue::*;
         match self {
             Ident(ident) => f.write_node(ident),
-            Idents(idents) => f.write_node(&display::separated(idents, ", ")),
             Literal(literal) => f.write_node(literal),
-            Literals(literals) => f.write_node(&display::separated(literals, ", ")),
-            Default => f.write_str("DEFAULT"),
         }
     }
 }
 impl_display!(SetVariableValue);
+
+impl SetVariableValue {
+    /// Returns the underlying value without quotes.
+    pub fn into_unquoted_value(self) -> String {
+        match self {
+            // `lit.to_string` will quote a `Value::String`, so get the unquoted
+            // version.
+            SetVariableValue::Literal(Value::String(s)) => s,
+            SetVariableValue::Literal(lit) => lit.to_string(),
+            SetVariableValue::Ident(ident) => ident.into_string(),
+        }
+    }
+}
 
 /// SQL assignment `foo = expr` as used in SQLUpdate
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2734,7 +2804,7 @@ impl_display!(NoticeSeverity);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlterSystemSetStatement {
     pub name: Ident,
-    pub value: SetVariableValue,
+    pub to: SetVariableTo,
 }
 
 impl AstDisplay for AlterSystemSetStatement {
@@ -2742,7 +2812,7 @@ impl AstDisplay for AlterSystemSetStatement {
         f.write_str("ALTER SYSTEM SET ");
         f.write_node(&self.name);
         f.write_str(" = ");
-        f.write_node(&self.value);
+        f.write_node(&self.to);
     }
 }
 impl_display!(AlterSystemSetStatement);

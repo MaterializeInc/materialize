@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::{NonZeroI64, NonZeroUsize};
+use std::panic::AssertUnwindSafe;
 use std::time::Duration;
 
 use anyhow::anyhow;
@@ -35,25 +36,28 @@ use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
 };
+use mz_ore::collections::CollectionExt;
+use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task;
 use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
-use mz_sql::catalog::CatalogItem as SqlCatalogItem;
 use mz_sql::catalog::{CatalogCluster, CatalogError, CatalogItemType, CatalogTypeDetails};
+use mz_sql::catalog::{CatalogItem as SqlCatalogItem, SessionCatalog};
 use mz_sql::names::QualifiedObjectName;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
-    AlterOptionParameter, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
-    AlterSystemResetPlan, AlterSystemSetPlan, CopyFormat, CreateClusterPlan,
-    CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DropClusterReplicasPlan,
-    DropClustersPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan,
-    ExplainPlan, FetchPlan, IndexOption, InsertPlan, MaterializedView, MutationKind,
-    OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan,
-    ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
-    SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, View,
+    AlterOptionParameter, AlterRolePlan, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan,
+    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, CopyFormat,
+    CreateClusterPlan, CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
+    CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, DropClusterReplicasPlan, DropClustersPlan, DropDatabasePlan, DropItemsPlan,
+    DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan, IndexOption, InsertPlan,
+    MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen,
+    RaisePlan, ReadThenWritePlan, ResetVariablePlan, RotateKeysPlan, SendDiffsPlan,
+    SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan,
+    VariableValue, View,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
@@ -65,13 +69,15 @@ use crate::catalog::builtin::{
     PG_CATALOG_SCHEMA,
 };
 use crate::catalog::{
-    self, Catalog, CatalogItem, Cluster, Connection, DataSourceDesc, SerializedReplicaLocation,
-    StorageSinkConnectionState, LINKED_CLUSTER_REPLICA_NAME, SYSTEM_USER,
+    self, Catalog, CatalogItem, CatalogState, Cluster, Connection, DataSourceDesc,
+    SerializedReplicaLocation, StorageSinkConnectionState, LINKED_CLUSTER_REPLICA_NAME,
+    SYSTEM_USER,
 };
 use crate::command::{Command, ExecuteResponse, Response};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::dataflows::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
+use crate::coord::peek::FastPathPlan;
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
@@ -80,10 +86,10 @@ use crate::coord::{
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
-use crate::metrics;
 use crate::notice::AdapterNotice;
 use crate::session::vars::{
-    IsolationLevel, CLUSTER_VAR_NAME, DATABASE_VAR_NAME, TRANSACTION_ISOLATION_VAR_NAME,
+    IsolationLevel, OwnedVarInput, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
+    TRANSACTION_ISOLATION_VAR_NAME,
 };
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, Var,
@@ -91,7 +97,7 @@ use crate::session::{
 };
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{send_immediate_rows, ClientTransmitter, ComputeSinkId, ResultExt};
-use crate::{guard_write_critical_section, session, PeekResponseUnary};
+use crate::{guard_write_critical_section, PeekResponseUnary};
 
 use super::timestamp_selection::{TimestampExplanation, TimestampSource};
 use super::ReplicaMetadata;
@@ -121,6 +127,23 @@ impl Coordinator {
         event!(Level::TRACE, plan = format!("{:?}", plan));
         let responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
         tx.set_allowed(responses);
+
+        let role_id = session.role_id();
+        if self
+            .catalog
+            .for_session(&session)
+            .try_get_role(role_id)
+            .is_none()
+        {
+            // PostgreSQL allows users that have their role dropped to perform some actions,
+            // such as `SET ROLE` and certain `SELECT` queries. We haven't implemented
+            // `SET ROLE` and feel it's safer to force to user to re-authenticate if their
+            // role is dropped.
+            return tx.send(
+                Err(AdapterError::ConcurrentRoleDrop(role_id.clone())),
+                session,
+            );
+        };
 
         if session.user().name == MZ_INTROSPECTION_ROLE.name {
             if let Err(e) = self.mz_introspection_user_privilege_hack(&session, &plan, &depends_on)
@@ -158,7 +181,13 @@ impl Coordinator {
                 );
             }
             Plan::CreateRole(plan) => {
-                tx.send(self.sequence_create_role(&session, plan).await, session);
+                let res = self.sequence_create_role(&session, plan).await;
+                if res.is_ok() {
+                    // Notice is intentionally sent here and not in sequence_create_role so that
+                    // no notice is sent during startup.
+                    session.add_notice(AdapterNotice::RbacDisabled);
+                }
+                tx.send(res, session);
             }
             Plan::CreateCluster(plan) => {
                 tx.send(self.sequence_create_cluster(&session, plan).await, session);
@@ -335,6 +364,13 @@ impl Coordinator {
             Plan::AlterIndexResetOptions(plan) => {
                 tx.send(self.sequence_alter_index_reset_options(plan), session);
             }
+            Plan::AlterRole(plan) => {
+                let res = self.sequence_alter_role(&session, plan).await;
+                if res.is_ok() {
+                    session.add_notice(AdapterNotice::RbacDisabled);
+                }
+                tx.send(res, session);
+            }
             Plan::AlterSecret(plan) => {
                 tx.send(self.sequence_alter_secret(&session, plan).await, session);
             }
@@ -471,6 +507,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) async fn sequence_create_source(
         &mut self,
         session: &mut Session,
@@ -509,10 +546,18 @@ impl Coordinator {
                             source_imports: ingestion.source_imports,
                             subsource_exports: ingestion.subsource_exports,
                             cluster_id,
+                            remap_collection_id: ingestion.progress_subsource,
                         })
                     }
                     mz_sql::plan::DataSourceDesc::Progress => {
-                        unreachable!("PROGRESS subsources error in purification");
+                        assert!(
+                            matches!(
+                                plan.cluster_config,
+                                mz_sql::plan::SourceSinkClusterConfig::Undefined
+                            ),
+                            "subsources must not have a host config defined"
+                        );
+                        DataSourceDesc::Progress
                     }
                     mz_sql::plan::DataSourceDesc::Source => {
                         assert!(
@@ -541,6 +586,7 @@ impl Coordinator {
         }
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => {
+                let mut source_ids = Vec::with_capacity(sources.len());
                 for (source_id, source) in sources {
                     let source_status_collection_id =
                         Some(self.catalog.resolve_builtin_storage_collection(
@@ -575,10 +621,14 @@ impl Coordinator {
                                     source_imports,
                                     source_exports,
                                     instance_id: ingestion.cluster_id,
+                                    remap_collection_id: ingestion.remap_collection_id.expect(
+                                        "ingestion-based collection must name remap collection before going to storage",
+                                    ),
                                 }),
                                 source_status_collection_id,
                             )
                         }
+                        DataSourceDesc::Progress => (DataSource::Progress, None),
                         DataSourceDesc::Source => (DataSource::Other, None),
                         DataSourceDesc::Introspection(_) => {
                             unreachable!("cannot create sources with introspection data sources")
@@ -601,12 +651,15 @@ impl Coordinator {
                         .await
                         .unwrap_or_terminate("cannot fail to create collections");
 
-                    self.initialize_storage_read_policies(
-                        vec![source_id],
-                        Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-                    )
-                    .await;
+                    source_ids.push(source_id);
                 }
+
+                self.initialize_storage_read_policies(
+                    source_ids,
+                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
+                )
+                .await;
+
                 Ok(ExecuteResponse::CreatedSource)
             }
             Err(AdapterError::Catalog(catalog::Error {
@@ -623,6 +676,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn sequence_create_connection(
         &mut self,
         session: &mut Session,
@@ -707,6 +761,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn sequence_create_database(
         &mut self,
         session: &mut Session,
@@ -732,6 +787,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn sequence_create_schema(
         &mut self,
         session: &mut Session,
@@ -758,15 +814,17 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) async fn sequence_create_role(
         &mut self,
         session: &Session,
-        plan: CreateRolePlan,
+        CreateRolePlan { name, attributes }: CreateRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateRole {
-            name: plan.name,
+            name,
             oid,
+            attributes,
         };
         self.catalog_transact(Some(session), vec![op])
             .await
@@ -793,6 +851,7 @@ impl Coordinator {
         first_argmin.clone()
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn sequence_create_cluster(
         &mut self,
         session: &Session,
@@ -840,14 +899,16 @@ impl Coordinator {
             // the lowest number of configured replicas for this cluster.
             let (compute, location) = match replica_config {
                 mz_sql::plan::ReplicaConfig::Unmanaged {
-                    storagectl_addr,
+                    storagectl_addrs,
+                    storage_addrs,
                     computectl_addrs,
                     compute_addrs,
                     workers,
                     compute,
                 } => {
                     let location = SerializedReplicaLocation::Unmanaged {
-                        storagectl_addr,
+                        storagectl_addrs,
+                        storage_addrs,
                         computectl_addrs,
                         compute_addrs,
                         workers,
@@ -895,7 +956,7 @@ impl Coordinator {
             let config = ReplicaConfig {
                 location: self.catalog.concretize_replica_location(
                     location,
-                    self.catalog.system_config().allowed_cluster_replica_sizes(),
+                    &self.catalog.system_config().allowed_cluster_replica_sizes(),
                 )?,
                 compute: ComputeReplicaConfig {
                     logging,
@@ -951,6 +1012,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn sequence_create_cluster_replica(
         &mut self,
         session: &Session,
@@ -965,14 +1027,16 @@ impl Coordinator {
         // Choose default AZ if necessary
         let (compute, location) = match config {
             mz_sql::plan::ReplicaConfig::Unmanaged {
-                storagectl_addr,
+                storagectl_addrs,
+                storage_addrs,
                 computectl_addrs,
                 compute_addrs,
                 workers,
                 compute,
             } => {
                 let location = SerializedReplicaLocation::Unmanaged {
-                    storagectl_addr,
+                    storagectl_addrs,
+                    storage_addrs,
                     computectl_addrs,
                     compute_addrs,
                     workers,
@@ -1043,7 +1107,7 @@ impl Coordinator {
         let config = ReplicaConfig {
             location: self.catalog.concretize_replica_location(
                 location,
-                self.catalog.system_config().allowed_cluster_replica_sizes(),
+                &self.catalog.system_config().allowed_cluster_replica_sizes(),
             )?,
             compute: ComputeReplicaConfig {
                 logging,
@@ -1208,6 +1272,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn sequence_create_secret(
         &mut self,
         session: &mut Session,
@@ -1216,7 +1281,6 @@ impl Coordinator {
         let CreateSecretPlan {
             name,
             mut secret,
-            full_name,
             if_not_exists,
         } = plan;
 
@@ -1225,7 +1289,7 @@ impl Coordinator {
         let id = self.catalog.allocate_user_id().await?;
         let oid = self.catalog.allocate_oid()?;
         let secret = catalog::Secret {
-            create_sql: format!("CREATE SECRET {} AS '********'", full_name),
+            create_sql: secret.create_sql,
         };
 
         self.secrets_controller.ensure(id, &payload).await?;
@@ -1261,6 +1325,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self, tx))]
     async fn sequence_create_sink(
         &mut self,
         mut session: Session,
@@ -1395,12 +1460,53 @@ impl Coordinator {
         );
     }
 
+    /// Validates that a view definition does not contain any expressions that may lead to
+    /// ambiguous column references to system tables. For example `NATURAL JOIN` or `SELECT *`.
+    ///
+    /// We prevent these expressions so that we can add columns to system tables without
+    /// changing the definition of the view.
+    ///
+    /// Here is a bit of a hand wavy proof as to why we only need to check the
+    /// immediate view definition for system objects and ambiguous column
+    /// references, and not the entire dependency tree:
+    ///
+    ///   - A view with no object references cannot have any ambiguous column
+    ///   references to a system object, because it has no system objects.
+    ///   - A view with a direct reference to a system object and a * or
+    ///   NATURAL JOIN will be rejected due to ambiguous column references.
+    ///   - A view with system objects but no * or NATURAL JOINs cannot have
+    ///   any ambiguous column references to a system object, because all column
+    ///   references are explicitly named.
+    ///   - A view with * or NATURAL JOINs, that doesn't directly reference a
+    ///   system object cannot have any ambiguous column references to a system
+    ///   object, because there are no system objects in the top level view and
+    ///   all sub-views are guaranteed to have no ambiguous column references to
+    ///   system objects.
+    fn validate_system_column_references(
+        &self,
+        uses_ambiguous_columns: bool,
+        depends_on: &Vec<GlobalId>,
+    ) -> Result<(), AdapterError> {
+        if uses_ambiguous_columns
+            && depends_on
+                .iter()
+                .any(|id| id.is_system() && self.catalog.get_entry(id).is_relation())
+        {
+            Err(AdapterError::AmbiguousSystemColumnReference)
+        } else {
+            Ok(())
+        }
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn sequence_create_view(
         &mut self,
         session: &mut Session,
         plan: CreateViewPlan,
         depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
+        self.validate_system_column_references(plan.ambiguous_columns, &depends_on)?;
+
         let if_not_exists = plan.if_not_exists;
         let ops = self
             .generate_view_ops(
@@ -1467,6 +1573,7 @@ impl Coordinator {
         Ok(ops)
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn sequence_create_materialized_view(
         &mut self,
         session: &mut Session,
@@ -1484,6 +1591,7 @@ impl Coordinator {
                 },
             replace,
             if_not_exists,
+            ambiguous_columns,
         } = plan;
 
         if !self
@@ -1499,6 +1607,8 @@ impl Coordinator {
         }
 
         self.validate_timeline_context(depends_on.clone())?;
+
+        self.validate_system_column_references(ambiguous_columns, &depends_on)?;
 
         // Materialized views are not allowed to depend on log sources, as replicas
         // are not producing the same definite collection for these.
@@ -1602,6 +1712,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn sequence_create_index(
         &mut self,
         session: &mut Session,
@@ -1673,6 +1784,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn sequence_create_type(
         &mut self,
         session: &Session,
@@ -1739,9 +1851,9 @@ impl Coordinator {
         plan: DropRolesPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let ops = plan
-            .names
+            .ids
             .into_iter()
-            .map(|name| catalog::Op::DropRole { name })
+            .map(|(id, name)| catalog::Op::DropRole { id, name })
             .collect();
         self.catalog_transact(Some(session), ops).await?;
         Ok(ExecuteResponse::DroppedRole)
@@ -1861,12 +1973,7 @@ impl Coordinator {
         session: &Session,
     ) -> Result<ExecuteResponse, AdapterError> {
         Ok(send_immediate_rows(
-            session
-                .vars()
-                .iter()
-                .chain(self.catalog.system_config().iter())
-                .filter(|v| !v.experimental() && v.visible(session.user()))
-                .filter(|v| v.safe() || self.catalog.unsafe_mode())
+            Self::viewable_variables(self.catalog.state(), session)
                 .map(|v| {
                     Row::pack_slice(&[
                         Datum::String(v.name()),
@@ -1876,6 +1983,19 @@ impl Coordinator {
                 })
                 .collect(),
         ))
+    }
+
+    /// Returns the viewable session and system variables.
+    pub(crate) fn viewable_variables<'a>(
+        catalog: &'a CatalogState,
+        session: &'a Session,
+    ) -> impl Iterator<Item = &'a dyn Var> {
+        session
+            .vars()
+            .iter()
+            .chain(catalog.system_config().iter())
+            .filter(|v| !v.experimental() && v.visible(session.user()))
+            .filter(|v| v.safe() || catalog.unsafe_mode())
     }
 
     fn sequence_show_variable(
@@ -1901,15 +2021,11 @@ impl Coordinator {
         session: &mut Session,
         plan: SetVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        use mz_sql::ast::{SetVariableValue, Value};
-
         let vars = session.vars_mut();
         let (name, local) = (plan.name, plan.local);
-        let value = match plan.value {
-            SetVariableValue::Default => None,
-            SetVariableValue::Literal(Value::String(s)) => Some(s), // unquoted strings
-            SetVariableValue::Ident(ident) => Some(ident.into_string()), // pass-through unquoted idents
-            value => Some(value.to_string()), // or else use the AstDisplay for SetVariableValue
+        let values = match plan.value {
+            VariableValue::Default => None,
+            VariableValue::Values(values) => Some(values),
         };
 
         let var = vars.get(&name)?;
@@ -1917,31 +2033,29 @@ impl Coordinator {
             self.catalog.require_unsafe_mode(var.name())?;
         }
 
-        match &value {
-            Some(v) => {
-                vars.set(&name, v, local)?;
+        match values {
+            Some(values) => {
+                vars.set(&name, VarInput::SqlSet(&values), local)?;
 
-                // Add notice if database or cluster value does not correspond to a catalog item.
+                // Database or cluster value does not correspond to a catalog item.
                 if name.as_str() == DATABASE_VAR_NAME
                     && matches!(
-                        self.catalog.resolve_database(v),
+                        self.catalog.resolve_database(vars.database()),
                         Err(CatalogError::UnknownDatabase(_))
                     )
                 {
-                    session.add_notice(AdapterNotice::DatabaseDoesNotExist {
-                        name: v.to_string(),
-                    });
+                    let name = vars.database().to_string();
+                    session.add_notice(AdapterNotice::DatabaseDoesNotExist { name });
                 } else if name.as_str() == CLUSTER_VAR_NAME
                     && matches!(
-                        self.catalog.resolve_cluster(v),
+                        self.catalog.resolve_cluster(vars.cluster()),
                         Err(CatalogError::UnknownCluster(_))
                     )
                 {
-                    session.add_notice(AdapterNotice::ClusterDoesNotExist {
-                        name: v.to_string(),
-                    });
+                    let name = vars.cluster().to_string();
+                    session.add_notice(AdapterNotice::ClusterDoesNotExist { name });
                 } else if name.as_str() == TRANSACTION_ISOLATION_VAR_NAME {
-                    let v = v.to_lowercase();
+                    let v = values.into_first().to_lowercase();
                     if v == IsolationLevel::ReadUncommitted.as_str()
                         || v == IsolationLevel::ReadCommitted.as_str()
                         || v == IsolationLevel::RepeatableRead.as_str()
@@ -2640,30 +2754,23 @@ impl Coordinator {
             .iter()
             .next()
             .expect("subscribes have a single sink export");
-        let arity = sink_desc.from_desc.arity();
         let (tx, rx) = mpsc::unbounded_channel();
-        let session_type = metrics::session_type_label_value(session);
-        self.metrics
-            .active_subscribes
-            .with_label_values(&[session_type])
-            .inc();
-        self.active_subscribes.insert(
-            sink_id,
-            ActiveSubscribe {
-                session_type,
-                conn_id: session.conn_id(),
-                channel: tx,
-                emit_progress,
-                arity,
-                cluster_id,
-                depends_on: depends_on.into_iter().collect(),
-            },
-        );
+        let active_subscribe = ActiveSubscribe {
+            user: session.user().clone(),
+            conn_id: session.conn_id(),
+            channel: tx,
+            emit_progress,
+            arity: sink_desc.from_desc.arity(),
+            cluster_id,
+            depends_on: depends_on.into_iter().collect(),
+            start_time: SYSTEM_TIME(),
+        };
+        self.add_active_subscribe(sink_id, active_subscribe).await;
 
         match self.ship_dataflow(dataflow, cluster_id).await {
             Ok(_) => {}
             Err(e) => {
-                self.remove_active_subscribe(&sink_id);
+                self.remove_active_subscribe(sink_id).await;
                 return Err(e);
             }
         };
@@ -2722,8 +2829,30 @@ impl Coordinator {
             stage,
             format,
             config,
+            no_errors,
             explainee,
         } = plan;
+
+        /// Like [`mz_ore::panic::catch_unwind`], with an extra guard that must be true
+        /// in order to wrap the function call in a [`mz_ore::panic::catch_unwind`] call.
+        fn catch_unwind<R, E, F>(guard: bool, stage: &'static str, f: F) -> Result<R, AdapterError>
+        where
+            F: FnOnce() -> Result<R, E>,
+            E: Into<AdapterError>,
+        {
+            if guard {
+                let r: Result<Result<R, E>, _> = mz_ore::panic::catch_unwind(AssertUnwindSafe(f));
+                match r {
+                    Ok(result) => result.map_err(Into::into),
+                    Err(_) => {
+                        let msg = format!("panic at the `{}` optimization stage", stage);
+                        Err(AdapterError::Internal(msg))
+                    }
+                }
+            } else {
+                f().map_err(Into::into)
+            }
+        }
 
         assert_ne!(stage, ExplainStage::Timestamp);
 
@@ -2732,60 +2861,94 @@ impl Coordinator {
             stage => OptimizerTrace::find(stage.path()), // collect a trace entry only the selected stage
         };
 
-        let (used_indexes, fast_path_plan) =
-            optimizer_trace.collect_trace(|| -> Result<_, AdapterError> {
-                let _span = tracing::span!(Level::INFO, "optimize").entered();
+        let pipeline_result = optimizer_trace.collect_trace(|| -> Result<_, AdapterError> {
+            let _span = tracing::span!(Level::INFO, "optimize").entered();
 
-                tracing::span!(Level::INFO, "raw").in_scope(|| {
-                    trace_plan(&raw_plan);
-                });
+            let explainee_id = match explainee {
+                Explainee::Dataflow(id) => id,
+                Explainee::Query => GlobalId::Explain,
+            };
 
-                let explainee_id = match explainee {
-                    Explainee::Dataflow(id) => id,
-                    Explainee::Query => GlobalId::Explain,
-                };
+            // Execute the various stages of the optimization pipeline
+            // -------------------------------------------------------
 
-                // run optimization pipeline
-                let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {})?;
+            // Trace the pipeline input under `optimize/raw`.
+            tracing::span!(Level::INFO, "raw").in_scope(|| {
+                trace_plan(&raw_plan);
+            });
 
-                self.validate_timeline_context(decorrelated_plan.depends_on())?;
-
-                let mut dataflow = tracing::span!(Level::INFO, "local").in_scope(
-                    || -> Result<_, AdapterError> {
-                        let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
-                        let mut dataflow = DataflowDesc::new("explanation".to_string());
-                        self.dataflow_builder(cluster).import_view_into_dataflow(
-                            &explainee_id,
-                            &optimized_plan,
-                            &mut dataflow,
-                        )?;
-                        mz_repr::explain::trace_plan(&dataflow);
-                        Ok(dataflow)
-                    },
-                )?;
-
-                mz_transform::optimize_dataflow(&mut dataflow, &self.index_oracle(cluster))?;
-
-                let used_indexes = dataflow
-                    .index_imports
-                    .keys()
-                    .cloned()
-                    .collect::<Vec<GlobalId>>();
-
-                let fast_path_plan = match explainee {
-                    Explainee::Query => {
-                        peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?
-                    }
-                    _ => None,
-                };
-
-                let dataflow_plan = Plan::<mz_repr::Timestamp>::finalize_dataflow(dataflow)
-                    .expect("Finalized dataflow");
-
-                trace_plan(&dataflow_plan);
-
-                Ok((used_indexes, fast_path_plan))
+            // Execute the `optimize/hir_to_mir` stage.
+            let decorrelated_plan = catch_unwind(no_errors, "hir_to_mir", || {
+                raw_plan.optimize_and_lower(&OptimizerConfig {})
             })?;
+
+            self.validate_timeline_context(decorrelated_plan.depends_on())?;
+
+            // Execute the `optimize/local` stage.
+            let optimized_plan = catch_unwind(no_errors, "local", || {
+                tracing::span!(Level::INFO, "local").in_scope(|| -> Result<_, AdapterError> {
+                    let optimized_plan = self.view_optimizer.optimize(decorrelated_plan);
+                    if let Ok(ref optimized_plan) = optimized_plan {
+                        trace_plan(optimized_plan.as_inner());
+                    }
+                    optimized_plan.map_err(Into::into)
+                })
+            })?;
+
+            let mut dataflow = DataflowDesc::new("explanation".to_string());
+            self.dataflow_builder(cluster).import_view_into_dataflow(
+                &explainee_id,
+                &optimized_plan,
+                &mut dataflow,
+            )?;
+
+            // Execute the `optimize/global` stage.
+            catch_unwind(no_errors, "global", || {
+                mz_transform::optimize_dataflow(&mut dataflow, &self.index_oracle(cluster))
+            })?;
+
+            // Calculate indexes used by the dataflow at this point
+            let used_indexes = dataflow
+                .index_imports
+                .keys()
+                .cloned()
+                .collect::<Vec<GlobalId>>();
+
+            // Determine if fast path plan will be used for this explainee
+            let fast_path_plan = match explainee {
+                Explainee::Query => peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?,
+                _ => None,
+            };
+
+            // Execute the `optimize/mir_to_lir` stage.
+            let dataflow_plan = catch_unwind(no_errors, "mir_to_lir", || {
+                Plan::<mz_repr::Timestamp>::finalize_dataflow(dataflow)
+                    .map_err(AdapterError::Internal)
+            })?;
+
+            // Trace the resulting plan for the top-level `optimize` path.
+            trace_plan(&dataflow_plan);
+
+            // Return objects that need to be passed to the `ExplainContext`
+            // when rendering explanations for the various trace entries.
+            Ok((used_indexes, fast_path_plan))
+        });
+
+        let (used_indexes, fast_path_plan) = match pipeline_result {
+            Ok((used_indexes, fast_path_plan)) => (used_indexes, fast_path_plan),
+            Err(err) => {
+                if no_errors {
+                    tracing::error!("error while handling EXPLAIN statement: {}", err);
+
+                    let used_indexes: Vec<GlobalId> = vec![];
+                    let fast_path_plan: Option<FastPathPlan> = None;
+
+                    (used_indexes, fast_path_plan)
+                } else {
+                    return Err(err);
+                }
+            }
+        };
 
         let trace = optimizer_trace.drain_all(
             format,
@@ -2797,16 +2960,17 @@ impl Coordinator {
         )?;
 
         let rows = match stage {
-            // For the `Trace` stage, return the entire trace as (time, path, plan) triples.
             Trace => {
+                // For the `Trace` (pseudo-)stage, return the entire trace as (time,
+                // path, plan) triples.
                 let rows = trace
                     .into_iter()
                     .map(|entry| {
+                        // The trace would have to take over 584 years to overflow a u64.
+                        let span_duration =
+                            u64::try_from(entry.span_duration.as_nanos()).unwrap_or(u64::MAX);
                         Row::pack_slice(&[
-                            Datum::from(
-                                // The trace would have to take over 584 years to overflow a u64.
-                                u64::try_from(entry.duration.as_nanos()).unwrap_or(u64::MAX),
-                            ),
+                            Datum::from(span_duration),
                             Datum::from(entry.path.as_str()),
                             Datum::from(entry.plan.as_str()),
                         ])
@@ -2814,15 +2978,16 @@ impl Coordinator {
                     .collect();
                 rows
             }
-            // For everything else, return the plan for the stage identified by the corresponding path.
             stage => {
+                // For everything else, return the plan for the stage identified
+                // by the corresponding path.
                 let row = trace
                     .into_iter()
                     .find(|entry| entry.path == stage.path())
                     .map(|entry| Row::pack_slice(&[Datum::from(entry.plan.as_str())]))
                     .ok_or_else(|| {
                         AdapterError::Internal(format!(
-                            "a plan at stage {} does not exist in the collected optimizer trace",
+                            "stage `{}` not present in the collected optimizer trace",
                             stage.path(),
                         ))
                     })?;
@@ -3202,7 +3367,7 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         let catalog = self.catalog.for_session(session);
         let values = mz_sql::plan::plan_copy_from(session.pcx(), &catalog, id, columns, rows)?;
-        let values = self.view_optimizer.optimize(values.lower())?;
+        let values = self.view_optimizer.optimize(values.lower()?)?;
         // Copied rows must always be constants.
         self.sequence_insert_constant(session, id, values.into_inner())
     }
@@ -3355,7 +3520,6 @@ impl Coordinator {
                                                         ))
                                                     }
                                                 };
-                                                desc.constraints_met(*idx, &updated)?;
                                                 updates.push((*idx, updated));
                                             }
                                             for (idx, new_value) in updates {
@@ -3372,6 +3536,13 @@ impl Coordinator {
                                                 diffs.push((row, -1))
                                             }
                                             MutationKind::Insert => diffs.push((row, 1)),
+                                        }
+                                    }
+                                    for (row, diff) in &diffs {
+                                        if *diff > 0 {
+                                            for (idx, datum) in row.iter().enumerate() {
+                                                desc.constraints_met(idx, &datum)?;
+                                            }
                                         }
                                     }
                                     Ok(diffs)
@@ -3571,6 +3742,25 @@ impl Coordinator {
         Ok(())
     }
 
+    async fn sequence_alter_role(
+        &mut self,
+        session: &Session,
+        AlterRolePlan {
+            id,
+            name,
+            attributes,
+        }: AlterRolePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let op = catalog::Op::AlterRole {
+            id,
+            name,
+            attributes,
+        };
+        self.catalog_transact(Some(session), vec![op])
+            .await
+            .map(|_| ExecuteResponse::AlteredRole)
+    }
+
     async fn sequence_alter_secret(
         &mut self,
         session: &Session,
@@ -3617,7 +3807,9 @@ impl Coordinator {
             .expect("known to be source");
         match source.data_source {
             DataSourceDesc::Ingestion(_) => (),
-            DataSourceDesc::Source | DataSourceDesc::Introspection(_) => {
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Source => {
                 coord_bail!("cannot ALTER this type of source");
             }
         }
@@ -3691,39 +3883,15 @@ impl Coordinator {
         session: &Session,
         AlterSystemSetPlan { name, value }: AlterSystemSetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        use mz_sql::ast::{SetVariableValue, Value};
         self.is_user_allowed_to_alter_system(session)?;
-        let var = self.catalog.state().get_system_configuration(&name)?;
-        if !var.safe() {
-            self.catalog.require_unsafe_mode(var.name())?;
-        }
-        let update_compute_config = session::vars::is_compute_config_var(&name);
-        let update_storage_config = session::vars::is_storage_config_var(&name);
-        let update_metrics_retention = name == session::vars::METRICS_RETENTION.name();
         let op = match value {
-            SetVariableValue::Default => catalog::Op::ResetSystemConfiguration { name },
-            SetVariableValue::Literal(Value::String(value)) => {
-                catalog::Op::UpdateSystemConfiguration { name, value }
-            }
-            SetVariableValue::Ident(ident) => catalog::Op::UpdateSystemConfiguration {
+            VariableValue::Values(values) => catalog::Op::UpdateSystemConfiguration {
                 name,
-                value: ident.into_string(),
+                value: OwnedVarInput::SqlSet(values),
             },
-            value => catalog::Op::UpdateSystemConfiguration {
-                name,
-                value: value.to_string(),
-            },
+            VariableValue::Default => catalog::Op::ResetSystemConfiguration { name },
         };
         self.catalog_transact(Some(session), vec![op]).await?;
-        if update_compute_config {
-            self.update_compute_config();
-        }
-        if update_storage_config {
-            self.update_storage_config();
-        }
-        if update_metrics_retention {
-            self.update_metrics_retention();
-        }
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
@@ -3733,24 +3901,8 @@ impl Coordinator {
         AlterSystemResetPlan { name }: AlterSystemResetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session)?;
-        let var = self.catalog.state().get_system_configuration(&name)?;
-        if !var.safe() {
-            self.catalog.require_unsafe_mode(var.name())?;
-        }
-        let update_compute_config = session::vars::is_compute_config_var(&name);
-        let update_storage_config = session::vars::is_storage_config_var(&name);
-        let update_metrics_retention = name == session::vars::METRICS_RETENTION.name();
         let op = catalog::Op::ResetSystemConfiguration { name };
         self.catalog_transact(Some(session), vec![op]).await?;
-        if update_compute_config {
-            self.update_compute_config();
-        }
-        if update_storage_config {
-            self.update_storage_config();
-        }
-        if update_metrics_retention {
-            self.update_metrics_retention();
-        }
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
@@ -3760,11 +3912,8 @@ impl Coordinator {
         _: AlterSystemResetAllPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session)?;
-        let op = catalog::Op::ResetAllSystemConfiguration {};
+        let op = catalog::Op::ResetAllSystemConfiguration;
         self.catalog_transact(Some(session), vec![op]).await?;
-        self.update_compute_config();
-        self.update_storage_config();
-        self.update_metrics_retention();
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
@@ -3777,33 +3926,6 @@ impl Coordinator {
                 SYSTEM_USER.name,
             )))
         }
-    }
-
-    fn update_compute_config(&mut self) {
-        let config_params = self.catalog.compute_config();
-        self.controller.compute.update_configuration(config_params);
-    }
-
-    fn update_storage_config(&mut self) {
-        let config_params = self.catalog.storage_config();
-        self.controller.storage.update_configuration(config_params);
-    }
-
-    fn update_metrics_retention(&mut self) {
-        let duration = self.catalog.system_config().metrics_retention();
-        let policy = ReadPolicy::lag_writes_by(Timestamp::new(
-            u64::try_from(duration.as_millis()).unwrap_or_else(|_e| {
-                tracing::error!("Absurd metrics retention duration: {duration:?}.");
-                u64::MAX
-            }),
-        ));
-        let policies = self
-            .catalog
-            .entries()
-            .filter(|entry| entry.item().is_retained_metrics_relation())
-            .map(|entry| (entry.id(), policy.clone()))
-            .collect::<Vec<_>>();
-        self.update_storage_base_read_policies(policies)
     }
 
     // Returns the name of the portal to execute.
@@ -3894,6 +4016,7 @@ impl Coordinator {
             | Plan::AlterNoop(_)
             | Plan::AlterIndexSetOptions(_)
             | Plan::AlterIndexResetOptions(_)
+            | Plan::AlterRole(_)
             | Plan::AlterSink(_)
             | Plan::AlterSource(_)
             | Plan::AlterItemRename(_)
@@ -3986,7 +4109,7 @@ impl Coordinator {
         };
         let location = self.catalog.concretize_replica_location(
             location,
-            self.catalog.system_config().allowed_cluster_replica_sizes(),
+            &self.catalog.system_config().allowed_cluster_replica_sizes(),
         )?;
         let logging = {
             ReplicaLogging {
@@ -4021,22 +4144,28 @@ impl Coordinator {
         config: &SourceSinkClusterConfig,
     ) -> Result<Vec<catalog::Op>, AdapterError> {
         let mut ops = vec![];
-        if let Some(linked_cluster) = self.catalog.get_linked_cluster(linked_object_id) {
-            for id in linked_cluster.replicas_by_id.keys() {
-                let drop_ops = self
-                    .catalog
-                    .drop_cluster_replica_ops(&[(linked_cluster.id, *id)], &mut BTreeSet::new());
-                ops.extend(drop_ops);
+        match self.catalog.get_linked_cluster(linked_object_id) {
+            None => {
+                coord_bail!("cannot change the size of a source or sink created with IN CLUSTER");
             }
-            let size = match config {
-                SourceSinkClusterConfig::Linked { size } => size.clone(),
-                SourceSinkClusterConfig::Undefined => self.default_linked_cluster_size()?,
-                SourceSinkClusterConfig::Existing { .. } => {
-                    coord_bail!("cannot change the cluster of a source or sink")
+            Some(linked_cluster) => {
+                for id in linked_cluster.replicas_by_id.keys() {
+                    let drop_ops = self.catalog.drop_cluster_replica_ops(
+                        &[(linked_cluster.id, *id)],
+                        &mut BTreeSet::new(),
+                    );
+                    ops.extend(drop_ops);
                 }
-            };
-            self.create_linked_cluster_replica_op(linked_cluster.id, size, &mut ops)
-                .await?;
+                let size = match config {
+                    SourceSinkClusterConfig::Linked { size } => size.clone(),
+                    SourceSinkClusterConfig::Undefined => self.default_linked_cluster_size()?,
+                    SourceSinkClusterConfig::Existing { .. } => {
+                        coord_bail!("cannot change the cluster of a source or sink")
+                    }
+                };
+                self.create_linked_cluster_replica_op(linked_cluster.id, size, &mut ops)
+                    .await?;
+            }
         }
         Ok(ops)
     }

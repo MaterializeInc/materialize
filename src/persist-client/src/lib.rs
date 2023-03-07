@@ -360,7 +360,7 @@ impl PersistClient {
 
         let reader_id = LeasedReaderId::new();
         let heartbeat_ts = (self.cfg.now)();
-        let reader_state = machine
+        let (reader_state, maintenance) = machine
             .register_leased_reader(
                 &reader_id,
                 purpose,
@@ -368,6 +368,7 @@ impl PersistClient {
                 heartbeat_ts,
             )
             .await;
+        maintenance.start_performing(&machine, &gc);
         let reader = ReadHandle::new(
             self.cfg.clone(),
             Arc::clone(&self.metrics),
@@ -500,9 +501,10 @@ impl PersistClient {
         .await?;
         let gc = GarbageCollector::new(machine.clone());
 
-        let state = machine
+        let (state, maintenance) = machine
             .register_critical_reader::<O>(&reader_id, purpose)
             .await;
+        maintenance.start_performing(&machine, &gc);
         let handle = SinceHandle::new(
             machine,
             gc,
@@ -557,10 +559,11 @@ impl PersistClient {
                 Arc::clone(&self.metrics),
                 Arc::clone(&self.cpu_heavy_runtime),
                 writer_id.clone(),
+                gc.clone(),
             )
         });
         let heartbeat_ts = (self.cfg.now)();
-        let (shard_upper, _) = machine
+        let (shard_upper, _, maintenance) = machine
             .register_writer(
                 &writer_id,
                 purpose,
@@ -568,6 +571,7 @@ impl PersistClient {
                 heartbeat_ts,
             )
             .await;
+        maintenance.start_performing(&machine, &gc);
         let writer = WriteHandle::new(
             self.cfg.clone(),
             Arc::clone(&self.metrics),

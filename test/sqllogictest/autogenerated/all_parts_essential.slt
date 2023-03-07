@@ -197,7 +197,7 @@ Explained Query:
     Filter ((#4 = 24) OR ((#3 = 6) AND (#4 <= 4) AND (#4 >= 3))) // { arity: 25 }
       Join on=(#0 = #16) type=differential // { arity: 25 }
         implementation
-          %1:orders[#0] » %0:lineitem[#0]KAeif
+          %0:lineitem[#0]KAeif » %1:orders[#0]KAeif
         ArrangeBy keys=[[#0]] // { arity: 16 }
           Get materialize.public.lineitem // { arity: 16 }
         ArrangeBy keys=[[#0]] // { arity: 9 }
@@ -361,16 +361,14 @@ Explained Query:
   Reduce group_by=[(#2 * #3), #4] aggregates=[max(#1), max(#0)] // { arity: 4 }
     Project (#0..=#3, #17) // { arity: 5 }
       Filter (#19 < #8) AND (#19 <= #3) // { arity: 22 }
-        Join on=(#4 = #9 AND #6 = #14) type=delta // { arity: 22 }
+        Join on=(#4 = #9 AND #6 = #14) type=differential // { arity: 22 }
           implementation
-            %0:lineitem » %1:orders[#4]KA » %2:customer[#0]KA
-            %1:orders » %0:lineitem[#4]KAf » %2:customer[#0]KA
-            %2:customer » %1:orders[#1]KA » %0:lineitem[#4]KAf
+            %1:orders[#1]KA » %2:customer[#0]KA » %0:lineitem[#4]Kf
           ArrangeBy keys=[[#4]] // { arity: 5 }
             Project (#2..=#5, #12) // { arity: 5 }
               Filter (#3 != 1) AND (#3 != 2) AND (#3 != 6) // { arity: 16 }
                 Get materialize.public.lineitem // { arity: 16 }
-          ArrangeBy keys=[[#1], [#4]] // { arity: 9 }
+          ArrangeBy keys=[[#1]] // { arity: 9 }
             Get materialize.public.orders // { arity: 9 }
           ArrangeBy keys=[[#0]] // { arity: 8 }
             Get materialize.public.customer // { arity: 8 }
@@ -414,7 +412,7 @@ Explained Query:
               Project (#0) // { arity: 1 }
                 Join on=(#1 = #2) type=differential // { arity: 3 }
                   implementation
-                    %0:l1[#1] » %1[#0]UKAif
+                    %1[#0]UKA » %0:l1[#1]Kif
                   ArrangeBy keys=[[#1]] // { arity: 2 }
                     Project (#4, #11) // { arity: 2 }
                       Get l1 // { arity: 16 }
@@ -435,7 +433,7 @@ Explained Query:
       Project (#0..=#4) // { arity: 5 }
         Join on=(#2 = #5) type=differential // { arity: 6 }
           implementation
-            %1:orders[#1] » %0:lineitem[#2]KA
+            %0:lineitem[#2]K » %1:orders[#1]K
           ArrangeBy keys=[[#2]] // { arity: 4 }
             Project (#0, #4, #11, #12) // { arity: 4 }
               Get materialize.public.lineitem // { arity: 16 }
@@ -476,25 +474,24 @@ WHERE l_quantity = 17
                     33)
 ----
 Explained Query:
-  Project (#11, #3) // { arity: 2 }
-    Filter (#12 <= #5) AND ((#1 = 7) OR (#1 = 33) OR ((#1 = 17) AND (#13 <= "x") AND (#13 >= "s"))) // { arity: 14 }
-      Join on=(#0 = #2) type=differential // { arity: 14 }
-        implementation
-          %2:customer[×] » %0:lineitem[×]Aef » %1:orders[#0]KAef
-        ArrangeBy keys=[[]] // { arity: 2 }
-          Project (#0, #4) // { arity: 2 }
-            Filter ((#4 = 7) OR (#4 = 17) OR (#4 = 33)) // { arity: 16 }
-              Get materialize.public.lineitem // { arity: 16 }
-        ArrangeBy keys=[[#0]] // { arity: 9 }
-          Get materialize.public.orders // { arity: 9 }
-        ArrangeBy keys=[[]] // { arity: 3 }
-          Project (#0, #5, #7) // { arity: 3 }
-            Get materialize.public.customer // { arity: 8 }
+  Project (#25, #17) // { arity: 2 }
+    Filter (#26 <= #19) AND (#28 OR #29 OR #30) AND (#28 OR #30 OR (#29 AND (#27 <= "x") AND (#27 >= "s"))) // { arity: 31 }
+      Map ((#4 = 7), (#4 = 17), (#4 = 33)) // { arity: 31 }
+        Join on=(#0 = #16) type=differential // { arity: 28 }
+          implementation
+            %0:lineitem[#0]KAef » %1:orders[#0]KAef » %2:customer[×]ef
+          ArrangeBy keys=[[#0]] // { arity: 16 }
+            Get materialize.public.lineitem // { arity: 16 }
+          ArrangeBy keys=[[#0]] // { arity: 9 }
+            Get materialize.public.orders // { arity: 9 }
+          ArrangeBy keys=[[]] // { arity: 3 }
+            Project (#0, #5, #7) // { arity: 3 }
+              Get materialize.public.customer // { arity: 8 }
 
 Used Indexes:
   - materialize.public.pk_customer_custkey
   - materialize.public.pk_orders_orderkey
-  - materialize.public.pk_lineitem_orderkey_linenumber
+  - materialize.public.fk_lineitem_orderkey
 
 EOF
 
@@ -589,7 +586,7 @@ Explained Query:
         Filter (#1 < #6) AND (#16 > #5) AND (#16 >= #0) // { arity: 19 }
           Join on=(#3 = #11) type=differential // { arity: 19 }
             implementation
-              %2:customer[#0] » %1:orders[#1]KA » %0:lineitem[×]Af
+              %1:orders[#1]KA » %2:customer[#0]KA » %0:lineitem[×]f
             ArrangeBy keys=[[]] // { arity: 2 }
               Project (#5, #10) // { arity: 2 }
                 Filter (#3 != 4) // { arity: 16 }
@@ -640,9 +637,9 @@ Explained Query:
       Filter (#0 <= 280) AND (#0 <= 289) AND (#0 >= 62) AND (#0 >= 117) AND (#10 > #20) // { arity: 33 }
         Join on=(#0 = #16 AND #17 = #25) type=delta // { arity: 33 }
           implementation
-            %0:lineitem » %1:orders[#0]KAiiiiiiiif » %2:customer[#0]KA
-            %1:orders » %0:lineitem[#0]KAiiiiiiiif » %2:customer[#0]KA
-            %2:customer » %1:orders[#1]KAiiiiiiiif » %0:lineitem[#0]KAiiiiiiiif
+            %0:lineitem » %1:orders[#0]KAiiiif » %2:customer[#0]KA
+            %1:orders » %0:lineitem[#0]KAiiiif » %2:customer[#0]KA
+            %2:customer » %1:orders[#1]KAiiiif » %0:lineitem[#0]KAiiiif
           ArrangeBy keys=[[#0]] // { arity: 16 }
             Get materialize.public.lineitem // { arity: 16 }
           ArrangeBy keys=[[#0], [#1]] // { arity: 9 }
@@ -692,7 +689,7 @@ Explained Query:
       Filter (#10 <= 1994-03-17) AND (#0 >= 53) AND (#5 < #19) AND (#26 < #19) // { arity: 27 }
         Join on=(#0 = #16) type=differential // { arity: 27 }
           implementation
-            %1:orders[#0] » %0:lineitem[#0]KAiiiiif » %2:customer[×]Aiiiiif
+            %0:lineitem[#0]KAiif » %1:orders[#0]KAiiif » %2:customer[×]iiif
           ArrangeBy keys=[[#0]] // { arity: 16 }
             Get materialize.public.lineitem // { arity: 16 }
           ArrangeBy keys=[[#0]] // { arity: 9 }

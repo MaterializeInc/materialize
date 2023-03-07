@@ -19,8 +19,9 @@ use anyhow::anyhow;
 use arrow2::datatypes::Schema as ArrowSchema;
 use arrow2::io::parquet::read::{infer_schema, read_metadata, FileReader};
 use arrow2::io::parquet::write::{
-    CompressionOptions, FileWriter, RowGroupIterator, Version, WriteOptions,
+    row_group_iter, to_parquet_schema, CompressionOptions, Version, WriteOptions,
 };
+use parquet2::write::{DynIter, FileWriter, WriteOptions as ParquetWriteOptions};
 
 use crate::codec_impls::UnitSchema;
 use crate::columnar::{PartDecoder, PartEncoder, Schema};
@@ -35,18 +36,32 @@ pub fn encode_part<W: Write>(w: &mut W, part: &Part) -> Result<(), anyhow::Error
     let (fields, encodings, chunk) = part.to_arrow();
 
     let schema = ArrowSchema::from(fields);
+    // Construct a FileWriter manually so we can omit the created_by string and
+    // (redundant) arrow schema.
+    let parquet_schema = to_parquet_schema(&schema)?;
     let options = WriteOptions {
         write_statistics: false,
         compression: CompressionOptions::Uncompressed,
         version: Version::V2,
     };
-    let mut writer = FileWriter::try_new(w, schema.clone(), options)?;
+    let created_by = None;
+    let mut writer = FileWriter::new(
+        w,
+        parquet_schema.clone(),
+        ParquetWriteOptions {
+            version: options.version,
+            write_statistics: options.write_statistics,
+        },
+        created_by,
+    );
 
-    let row_groups =
-        RowGroupIterator::try_new(std::iter::once(Ok(chunk)), &schema, options, encodings)?;
-    for row_group in row_groups {
-        writer.write(row_group?)?;
-    }
+    let row_group = DynIter::new(row_group_iter(
+        chunk,
+        encodings,
+        parquet_schema.fields().to_vec(),
+        options,
+    ));
+    writer.write(row_group)?;
     writer.end(Some(metadata))?;
     Ok(())
 }

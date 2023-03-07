@@ -102,7 +102,6 @@ use jsonwebtoken::DecodingKey;
 use once_cell::sync::Lazy;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
-use tower_http::cors::{self, AllowOrigin};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use url::Url;
@@ -226,6 +225,12 @@ pub struct Args {
     internal_http_listen_addr: SocketAddr,
     /// Enable cross-origin resource sharing (CORS) for HTTP requests from the
     /// specified origin.
+    ///
+    /// The default allows all local connections.
+    /// "*" allows all.
+    /// "*.domain.com" allows connections from any matching subdomain.
+    ///
+    /// Wildcards in other positions (e.g., "https://*.foo.com" or "https://foo.*.com") have no effect.
     #[structopt(long, env = "CORS_ALLOWED_ORIGIN")]
     cors_allowed_origin: Vec<HeaderValue>,
     /// How stringently to demand TLS authentication and encryption.
@@ -268,7 +273,7 @@ pub struct Args {
     #[clap(
         long,
         env = "FRONTEGG_TENANT",
-        requires_all = &["frontegg-jwk", "frontegg-api-token-url"],
+        requires_all = &["frontegg-jwk", "frontegg-api-token-url", "frontegg-admin-role"],
         value_name = "UUID",
     )]
     frontegg_tenant: Option<Uuid>,
@@ -279,6 +284,9 @@ pub struct Args {
     /// The full URL (including path) to the Frontegg api-token endpoint.
     #[clap(long, env = "FRONTEGG_API_TOKEN_URL", requires = "frontegg-tenant")]
     frontegg_api_token_url: Option<String>,
+    /// The name of the admin role in Frontegg.
+    #[clap(long, env = "FRONTEGG_ADMIN_ROLE", requires = "frontegg-tenant")]
+    frontegg_admin_role: Option<String>,
     /// A common string prefix that is expected to be present at the beginning
     /// of all Frontegg passwords.
     #[clap(long, env = "FRONTEGG_PASSWORD_PREFIX", requires = "frontegg-tenant")]
@@ -450,6 +458,11 @@ pub struct Args {
         default_value = "3600s"
     )]
     storage_usage_collection_interval_sec: Duration,
+    /// The period for which to retain usage records. Note that the retention
+    /// period is only evaluated at server start time, so rebooting the server
+    /// is required to discard old records.
+    #[clap(long, env = "STORAGE_USAGE_RETENTION_PERIOD", parse(try_from_str = humantime::parse_duration))]
+    storage_usage_retention_period: Option<Duration>,
     /// An API key for Segment. Enables export of audit events to Segment.
     #[clap(long, env = "SEGMENT_API_KEY")]
     segment_api_key: Option<String>,
@@ -602,9 +615,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         args.frontegg_tenant,
         args.frontegg_api_token_url,
         args.frontegg_jwk,
+        args.frontegg_admin_role,
     ) {
-        (None, None, None) => None,
-        (Some(tenant_id), Some(admin_api_token_url), Some(jwk)) => {
+        (None, None, None, None) => None,
+        (Some(tenant_id), Some(admin_api_token_url), Some(jwk), Some(admin_role)) => {
             Some(FronteggAuthentication::new(FronteggConfig {
                 admin_api_token_url,
                 decoding_key: DecodingKey::from_rsa_pem(jwk.as_bytes())?,
@@ -612,31 +626,27 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 now: mz_ore::now::SYSTEM_TIME.clone(),
                 refresh_before_secs: 60,
                 password_prefix: args.frontegg_password_prefix.unwrap_or_default(),
+                admin_role,
             }))
         }
         _ => unreachable!("clap enforced"),
     };
 
     // Configure CORS.
-    let cors_allowed_origin = if args
-        .cors_allowed_origin
-        .iter()
-        .any(|val| val.as_bytes() == b"*")
-    {
-        cors::Any.into()
-    } else if !args.cors_allowed_origin.is_empty() {
-        AllowOrigin::list(args.cors_allowed_origin)
+    let allowed_origins = if !args.cors_allowed_origin.is_empty() {
+        args.cors_allowed_origin
     } else {
         let port = args.http_listen_addr.port();
-        AllowOrigin::list([
+        vec![
             HeaderValue::from_str(&format!("http://localhost:{}", port)).unwrap(),
             HeaderValue::from_str(&format!("http://127.0.0.1:{}", port)).unwrap(),
             HeaderValue::from_str(&format!("http://[::1]:{}", port)).unwrap(),
             HeaderValue::from_str(&format!("https://localhost:{}", port)).unwrap(),
             HeaderValue::from_str(&format!("https://127.0.0.1:{}", port)).unwrap(),
             HeaderValue::from_str(&format!("https://[::1]:{}", port)).unwrap(),
-        ])
+        ]
     };
+    let cors_allowed_origin = mz_http_util::build_cors_allowed_origin(&allowed_origins);
 
     // Configure controller.
     let (orchestrator, secrets_controller, cloud_resource_controller): (
@@ -782,6 +792,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         ),
         tracing_handle,
         storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
+        storage_usage_retention_period: args.storage_usage_retention_period,
         segment_api_key: args.segment_api_key,
         egress_ips: args.announce_egress_ip,
         aws_account_id: args.aws_account_id,

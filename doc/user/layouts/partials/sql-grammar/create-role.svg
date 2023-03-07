@@ -1,59 +1,91 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="503" height="203">
-   <polygon points="9 183 1 179 1 187"/>
-   <polygon points="17 183 9 179 9 187"/>
-   <rect x="31" y="169" width="76" height="32" rx="10"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="431" height="419">
+   <polygon points="9 17 1 13 1 21"/>
+   <polygon points="17 17 9 13 9 21"/>
+   <rect x="31" y="3" width="76" height="32" rx="10"/>
    <rect x="29"
-         y="167"
+         y="1"
          width="76"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="39" y="187">CREATE</text>
-   <rect x="127" y="169" width="56" height="32" rx="10"/>
+   <text class="terminal" x="39" y="21">CREATE</text>
+   <rect x="127" y="3" width="56" height="32" rx="10"/>
    <rect x="125"
-         y="167"
+         y="1"
          width="56"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="135" y="187">ROLE</text>
-   <rect x="203" y="169" width="88" height="32"/>
-   <rect x="201" y="167" width="88" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="211" y="187">role_name</text>
-   <rect x="331" y="135" width="64" height="32" rx="10"/>
+   <text class="terminal" x="135" y="21">ROLE</text>
+   <rect x="203" y="3" width="88" height="32"/>
+   <rect x="201" y="1" width="88" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="211" y="21">role_name</text>
+   <rect x="331" y="35" width="58" height="32" rx="10"/>
    <rect x="329"
-         y="133"
-         width="64"
+         y="33"
+         width="58"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="339" y="153">LOGIN</text>
-   <rect x="331" y="91" width="84" height="32" rx="10"/>
-   <rect x="329"
-         y="89"
-         width="84"
+   <text class="terminal" x="339" y="53">WITH</text>
+   <rect x="221" y="365" width="76" height="32" rx="10"/>
+   <rect x="219"
+         y="363"
+         width="76"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="339" y="109">NOLOGIN</text>
-   <rect x="331" y="47" width="104" height="32" rx="10"/>
-   <rect x="329"
-         y="45"
-         width="104"
+   <text class="terminal" x="229" y="383">INHERIT</text>
+   <rect x="221" y="321" width="114" height="32" rx="10"/>
+   <rect x="219"
+         y="319"
+         width="114"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="339" y="65">SUPERUSER</text>
-   <rect x="331" y="3" width="124" height="32" rx="10"/>
-   <rect x="329"
-         y="1"
-         width="124"
+   <text class="terminal" x="229" y="339">CREATEROLE</text>
+   <rect x="221" y="277" width="134" height="32" rx="10"/>
+   <rect x="219"
+         y="275"
+         width="134"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="339" y="21">NOSUPERUSER</text>
+   <text class="terminal" x="229" y="295">NOCREATEROLE</text>
+   <rect x="221" y="233" width="96" height="32" rx="10"/>
+   <rect x="219"
+         y="231"
+         width="96"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="229" y="251">CREATEDB</text>
+   <rect x="221" y="189" width="118" height="32" rx="10"/>
+   <rect x="219"
+         y="187"
+         width="118"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="229" y="207">NOCREATEDB</text>
+   <rect x="221" y="145" width="142" height="32" rx="10"/>
+   <rect x="219"
+         y="143"
+         width="142"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="229" y="163">CREATECLUSTER</text>
+   <rect x="221" y="101" width="162" height="32" rx="10"/>
+   <rect x="219"
+         y="99"
+         width="162"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="229" y="119">NOCREATECLUSTER</text>
    <path class="line"
-         d="m17 183 h2 m0 0 h10 m76 0 h10 m0 0 h10 m56 0 h10 m0 0 h10 m88 0 h10 m20 0 h10 m0 0 h134 m-164 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -14 q0 -10 10 -10 m144 34 l20 0 m-20 0 q10 0 10 -10 l0 -14 q0 -10 -10 -10 m-144 0 h10 m64 0 h10 m0 0 h60 m-154 10 l0 -44 q0 -10 10 -10 m154 54 l0 -44 q0 -10 -10 -10 m-144 0 h10 m84 0 h10 m0 0 h40 m-154 10 l0 -44 q0 -10 10 -10 m154 54 l0 -44 q0 -10 -10 -10 m-144 0 h10 m104 0 h10 m0 0 h20 m-154 10 l0 -44 q0 -10 10 -10 m154 54 l0 -44 q0 -10 -10 -10 m-144 0 h10 m124 0 h10 m23 166 h-3"/>
-   <polygon points="493 183 501 179 501 187"/>
-   <polygon points="493 183 485 179 485 187"/>
+         d="m17 17 h2 m0 0 h10 m76 0 h10 m0 0 h10 m56 0 h10 m0 0 h10 m88 0 h10 m20 0 h10 m0 0 h68 m-98 0 h20 m78 0 h20 m-118 0 q10 0 10 10 m98 0 q0 -10 10 -10 m-108 10 v12 m98 0 v-12 m-98 12 q0 10 10 10 m78 0 q10 0 10 -10 m-88 10 h10 m58 0 h10 m22 -32 l2 0 m2 0 l2 0 m2 0 l2 0 m-252 396 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h172 m-202 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -14 q0 -10 10 -10 m182 34 l20 0 m-20 0 q10 0 10 -10 l0 -14 q0 -10 -10 -10 m-182 0 h10 m76 0 h10 m0 0 h86 m-192 10 l0 -44 q0 -10 10 -10 m192 54 l0 -44 q0 -10 -10 -10 m-182 0 h10 m114 0 h10 m0 0 h48 m-192 10 l0 -44 q0 -10 10 -10 m192 54 l0 -44 q0 -10 -10 -10 m-182 0 h10 m134 0 h10 m0 0 h28 m-192 10 l0 -44 q0 -10 10 -10 m192 54 l0 -44 q0 -10 -10 -10 m-182 0 h10 m96 0 h10 m0 0 h66 m-192 10 l0 -44 q0 -10 10 -10 m192 54 l0 -44 q0 -10 -10 -10 m-182 0 h10 m118 0 h10 m0 0 h44 m-192 10 l0 -44 q0 -10 10 -10 m192 54 l0 -44 q0 -10 -10 -10 m-182 0 h10 m142 0 h10 m0 0 h20 m-192 10 l0 -44 q0 -10 10 -10 m192 54 l0 -44 q0 -10 -10 -10 m-182 0 h10 m162 0 h10 m23 298 h-3"/>
+   <polygon points="421 413 429 409 429 417"/>
+   <polygon points="421 413 413 409 413 417"/>
 </svg>

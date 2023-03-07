@@ -1033,48 +1033,128 @@ SELECT x * 5 FROM cte WHERE x = 5
                     "Union": {
                       "inputs": [
                         {
-                          "Get": {
-                            "id": {
-                              "Global": {
-                                "User": 1
-                              }
-                            },
-                            "keys": {
-                              "raw": false,
-                              "arranged": [
-                                [
-                                  [
-                                    {
-                                      "Column": 0
+                          "Join": {
+                            "inputs": [
+                              {
+                                "Get": {
+                                  "id": {
+                                    "Global": {
+                                      "User": 1
                                     }
-                                  ],
-                                  {
-                                    "0": 0,
-                                    "1": 1
                                   },
-                                  [
-                                    1
-                                  ]
-                                ]
-                              ]
-                            },
+                                  "keys": {
+                                    "raw": false,
+                                    "arranged": [
+                                      [
+                                        [
+                                          {
+                                            "Column": 0
+                                          }
+                                        ],
+                                        {
+                                          "0": 0,
+                                          "1": 1
+                                        },
+                                        [
+                                          1
+                                        ]
+                                      ]
+                                    ]
+                                  },
+                                  "plan": "PassArrangements"
+                                }
+                              },
+                              {
+                                "ArrangeBy": {
+                                  "input": {
+                                    "Constant": {
+                                      "rows": {
+                                        "Ok": [
+                                          [
+                                            {
+                                              "data": [
+                                                4,
+                                                5,
+                                                0,
+                                                0,
+                                                0
+                                              ]
+                                            },
+                                            0,
+                                            1
+                                          ]
+                                        ]
+                                      }
+                                    }
+                                  },
+                                  "forms": {
+                                    "raw": false,
+                                    "arranged": [
+                                      [
+                                        [
+                                          {
+                                            "Column": 0
+                                          }
+                                        ],
+                                        {
+                                          "0": 0
+                                        },
+                                        []
+                                      ]
+                                    ]
+                                  },
+                                  "input_key": null,
+                                  "input_mfp": {
+                                    "expressions": [],
+                                    "predicates": [],
+                                    "projection": [
+                                      0
+                                    ],
+                                    "input_arity": 1
+                                  }
+                                }
+                              }
+                            ],
                             "plan": {
-                              "Arrangement": [
-                                [
+                              "Linear": {
+                                "source_relation": 1,
+                                "source_key": [
                                   {
                                     "Column": 0
                                   }
                                 ],
-                                null,
-                                {
-                                  "expressions": [],
-                                  "predicates": [],
-                                  "projection": [
-                                    0
-                                  ],
-                                  "input_arity": 2
-                                }
-                              ]
+                                "initial_closure": null,
+                                "stage_plans": [
+                                  {
+                                    "lookup_relation": 0,
+                                    "stream_key": [
+                                      {
+                                        "Column": 0
+                                      }
+                                    ],
+                                    "stream_thinning": [],
+                                    "lookup_key": [
+                                      {
+                                        "Column": 0
+                                      }
+                                    ],
+                                    "closure": {
+                                      "ready_equivalences": [],
+                                      "before": {
+                                        "mfp": {
+                                          "expressions": [],
+                                          "predicates": [],
+                                          "projection": [
+                                            0
+                                          ],
+                                          "input_arity": 2
+                                        }
+                                      }
+                                    }
+                                  }
+                                ],
+                                "final_closure": null
+                              }
                             }
                           }
                         },
@@ -1174,38 +1254,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                 ]
               }
             ],
-            "predicates": [
-              [
-                1,
-                {
-                  "CallBinary": {
-                    "func": "Eq",
-                    "expr1": {
-                      "Column": 0
-                    },
-                    "expr2": {
-                      "Literal": [
-                        {
-                          "Ok": {
-                            "data": [
-                              4,
-                              5,
-                              0,
-                              0,
-                              0
-                            ]
-                          }
-                        },
-                        {
-                          "scalar_type": "Int32",
-                          "nullable": false
-                        }
-                      ]
-                    }
-                  }
-                }
-              ]
-            ],
+            "predicates": [],
             "projection": [
               1
             ],
@@ -1217,15 +1266,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                 "Column": 0
               }
             ],
-            {
-              "data": [
-                4,
-                5,
-                0,
-                0,
-                0
-              ]
-            }
+            null
           ]
         }
       }
@@ -1236,7 +1277,38 @@ SELECT x * 5 FROM cte WHERE x = 5
       "id": "materialize.public.mv",
       "op": {
         "expressions": [],
-        "predicates": [],
+        "predicates": [
+          [
+            2,
+            {
+              "CallBinary": {
+                "func": "Eq",
+                "expr1": {
+                  "Column": 1
+                },
+                "expr2": {
+                  "Literal": [
+                    {
+                      "Ok": {
+                        "data": [
+                          4,
+                          5,
+                          0,
+                          0,
+                          0
+                        ]
+                      }
+                    },
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": false
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        ],
         "projection": [
           1
         ],
@@ -4522,15 +4594,15 @@ WHERE a = c AND d = e AND b + d > 42
                     [
                       [
                         {
-                          "Column": 1
+                          "Column": 0
                         }
                       ],
                       {
-                        "0": 1,
-                        "1": 0
+                        "0": 0,
+                        "1": 1
                       },
                       [
-                        0
+                        1
                       ]
                     ]
                   ]
@@ -4602,7 +4674,7 @@ WHERE a = c AND d = e AND b + d > 42
           ],
           "plan": {
             "Linear": {
-              "source_relation": 2,
+              "source_relation": 0,
               "source_key": [
                 {
                   "Column": 0
@@ -4612,34 +4684,6 @@ WHERE a = c AND d = e AND b + d > 42
               "stage_plans": [
                 {
                   "lookup_relation": 1,
-                  "stream_key": [
-                    {
-                      "Column": 0
-                    }
-                  ],
-                  "stream_thinning": [],
-                  "lookup_key": [
-                    {
-                      "Column": 1
-                    }
-                  ],
-                  "closure": {
-                    "ready_equivalences": [],
-                    "before": {
-                      "mfp": {
-                        "expressions": [],
-                        "predicates": [],
-                        "projection": [
-                          1,
-                          0
-                        ],
-                        "input_arity": 2
-                      }
-                    }
-                  }
-                },
-                {
-                  "lookup_relation": 0,
                   "stream_key": [
                     {
                       "Column": 0
@@ -4662,10 +4706,10 @@ WHERE a = c AND d = e AND b + d > 42
                             "CallBinary": {
                               "func": "AddInt32",
                               "expr1": {
-                                "Column": 2
+                                "Column": 1
                               },
                               "expr2": {
-                                "Column": 1
+                                "Column": 2
                               }
                             }
                           },
@@ -4676,7 +4720,7 @@ WHERE a = c AND d = e AND b + d > 42
                                 "Column": 0
                               },
                               "expr2": {
-                                "Column": 1
+                                "Column": 2
                               }
                             }
                           }
@@ -4714,8 +4758,40 @@ WHERE a = c AND d = e AND b + d > 42
                           ]
                         ],
                         "projection": [
+                          2,
                           3,
                           4
+                        ],
+                        "input_arity": 3
+                      }
+                    }
+                  }
+                },
+                {
+                  "lookup_relation": 2,
+                  "stream_key": [
+                    {
+                      "Column": 0
+                    }
+                  ],
+                  "stream_thinning": [
+                    1,
+                    2
+                  ],
+                  "lookup_key": [
+                    {
+                      "Column": 0
+                    }
+                  ],
+                  "closure": {
+                    "ready_equivalences": [],
+                    "before": {
+                      "mfp": {
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          1,
+                          2
                         ],
                         "input_arity": 3
                       }
@@ -4984,15 +5060,15 @@ WHERE a = c AND d = e AND f = a
                     [
                       [
                         {
-                          "Column": 0
+                          "Column": 1
                         },
                         {
-                          "Column": 1
+                          "Column": 0
                         }
                       ],
                       {
-                        "0": 0,
-                        "1": 1
+                        "0": 1,
+                        "1": 0
                       },
                       []
                     ]
@@ -5106,15 +5182,15 @@ WHERE a = c AND d = e AND f = a
                     [
                       [
                         {
-                          "Column": 1
+                          "Column": 0
                         },
                         {
-                          "Column": 0
+                          "Column": 1
                         }
                       ],
                       {
-                        "0": 1,
-                        "1": 0
+                        "0": 0,
+                        "1": 1
                       },
                       []
                     ]
@@ -5135,7 +5211,7 @@ WHERE a = c AND d = e AND f = a
           ],
           "plan": {
             "Linear": {
-              "source_relation": 2,
+              "source_relation": 1,
               "source_key": [
                 {
                   "Column": 1
@@ -5147,7 +5223,7 @@ WHERE a = c AND d = e AND f = a
               "initial_closure": null,
               "stage_plans": [
                 {
-                  "lookup_relation": 1,
+                  "lookup_relation": 2,
                   "stream_key": [
                     {
                       "Column": 1
@@ -5184,11 +5260,11 @@ WHERE a = c AND d = e AND f = a
                   "lookup_relation": 0,
                   "stream_key": [
                     {
-                      "Column": 1
+                      "Column": 0
                     }
                   ],
                   "stream_thinning": [
-                    0
+                    1
                   ],
                   "lookup_key": [
                     {

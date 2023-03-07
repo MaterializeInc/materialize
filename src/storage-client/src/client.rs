@@ -27,6 +27,7 @@ use timely::progress::frontier::{Antichain, MutableAntichain};
 use timely::PartialOrder;
 use tonic::{Request, Status, Streaming};
 
+use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
@@ -93,6 +94,12 @@ where
 /// Commands related to the ingress and egress of collections.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum StorageCommand<T = mz_repr::Timestamp> {
+    /// Specifies to the storage server(s) the shape of the timely cluster
+    /// we want created, before other commands are sent.
+    CreateTimely {
+        config: TimelyConfig,
+        epoch: ClusterStartupEpoch,
+    },
     /// Indicates that the controller has sent all commands reflecting its
     /// initial state.
     InitializationComplete,
@@ -203,8 +210,13 @@ impl Arbitrary for CreateSinkCommand<mz_repr::Timestamp> {
 impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoStorageCommand {
         use proto_storage_command::Kind::*;
+        use proto_storage_command::*;
         ProtoStorageCommand {
             kind: Some(match self {
+                StorageCommand::CreateTimely { config, epoch } => CreateTimely(ProtoCreateTimely {
+                    config: Some(config.into_proto()),
+                    epoch: Some(epoch.into_proto()),
+                }),
                 StorageCommand::InitializationComplete => InitializationComplete(()),
                 StorageCommand::UpdateConfiguration(params) => {
                     UpdateConfiguration(params.into_proto())
@@ -226,7 +238,14 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
 
     fn from_proto(proto: ProtoStorageCommand) -> Result<Self, TryFromProtoError> {
         use proto_storage_command::Kind::*;
+        use proto_storage_command::*;
         match proto.kind {
+            Some(CreateTimely(ProtoCreateTimely { config, epoch })) => {
+                Ok(StorageCommand::CreateTimely {
+                    config: config.into_rust_if_some("ProtoCreateTimely::config")?,
+                    epoch: epoch.into_rust_if_some("ProtoCreateTimely::epoch")?,
+                })
+            }
             Some(InitializationComplete(())) => Ok(StorageCommand::InitializationComplete),
             Some(UpdateConfiguration(params)) => {
                 Ok(StorageCommand::UpdateConfiguration(params.into_rust()?))
@@ -253,6 +272,7 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         Union::new(vec![
+            // TODO(guswynn): cluster-unification: also test `CreateTimely` here.
             proptest::collection::vec(any::<CreateSourceCommand<mz_repr::Timestamp>>(), 1..4)
                 .prop_map(StorageCommand::CreateSources)
                 .boxed(),
@@ -468,7 +488,7 @@ impl Arbitrary for StorageResponse<mz_repr::Timestamp> {
 #[derive(Debug)]
 pub struct PartitionedStorageState<T> {
     /// Number of partitions the state machine represents.
-    parts: u32,
+    parts: usize,
     /// Upper frontiers for sources and sinks, both unioned across all partitions and from each
     /// individual partition.
     uppers: BTreeMap<GlobalId, (MutableAntichain<T>, Vec<Option<Antichain<T>>>)>,
@@ -483,7 +503,7 @@ where
 
     fn new(parts: usize) -> PartitionedStorageState<T> {
         PartitionedStorageState {
-            parts: parts.try_into().expect("more than 4 billion partitions"),
+            parts,
             uppers: BTreeMap::new(),
         }
     }
@@ -494,16 +514,28 @@ where
     T: timely::progress::Timestamp,
 {
     fn observe_command(&mut self, command: &StorageCommand<T>) {
+        // Note that `observe_command` is quite different in `mz_compute_client`.
+        // Compute (currently) only sends the command to 1 process,
+        // but storage fan's out to all workers, allowing the storage processes
+        // to self-coordinate how commands and internal commands are ordered.
+        //
+        // TODO(guswynn): cluster-unification: consolidate this with compute.
         match command {
+            StorageCommand::CreateTimely { .. } => {
+                // Similarly, we don't reset state here like compute, because,
+                // until we are required to manage multiple replicas, we can handle
+                // keeping track of state across restarts of storage server(s).
+            }
             StorageCommand::CreateSources(ingestions) => {
                 for ingestion in ingestions {
-                    for &export_id in ingestion.description.source_exports.keys() {
+                    for export_id in ingestion.description.subsource_ids() {
                         let mut frontier = MutableAntichain::new();
-                        frontier.update_iter(iter::once((T::minimum(), i64::from(self.parts))));
-                        let part_frontiers = vec![
-                            Some(Antichain::from_elem(T::minimum()));
-                            usize::cast_from(self.parts)
-                        ];
+                        // TODO(guswynn): cluster-unification: fix this dangerous use of `as`, by
+                        // merging the types that compute and storage use.
+                        #[allow(clippy::as_conversions)]
+                        frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
+                        let part_frontiers =
+                            vec![Some(Antichain::from_elem(T::minimum())); self.parts];
                         let previous = self.uppers.insert(export_id, (frontier, part_frontiers));
                         assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", export_id, command);
                     }
@@ -512,11 +544,11 @@ where
             StorageCommand::CreateSinks(exports) => {
                 for export in exports {
                     let mut frontier = MutableAntichain::new();
-                    frontier.update_iter(iter::once((T::minimum(), i64::from(self.parts))));
-                    let part_frontiers = vec![
-                        Some(Antichain::from_elem(T::minimum()));
-                        usize::cast_from(self.parts)
-                    ];
+                    // TODO(guswynn): cluster-unification: fix this dangerous use of `as`, by
+                    // merging the types that compute and storage use.
+                    #[allow(clippy::as_conversions)]
+                    frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
+                    let part_frontiers = vec![Some(Antichain::from_elem(T::minimum())); self.parts];
                     let previous = self.uppers.insert(export.id, (frontier, part_frontiers));
                     assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", export.id, command);
                 }
@@ -537,7 +569,22 @@ where
     fn split_command(&mut self, command: StorageCommand<T>) -> Vec<Option<StorageCommand<T>>> {
         self.observe_command(&command);
 
-        vec![Some(command); usize::cast_from(self.parts)]
+        match command {
+            StorageCommand::CreateTimely { config, epoch } => {
+                let timely_cmds = config.split_command(self.parts);
+
+                let timely_cmds = timely_cmds
+                    .into_iter()
+                    .map(|config| Some(StorageCommand::CreateTimely { config, epoch }))
+                    .collect();
+                timely_cmds
+            }
+            command => {
+                // Fan out to all processes (which will fan out to all workers).
+                // StorageState manages ordering of commands internally.
+                vec![Some(command); self.parts]
+            }
+        }
     }
 
     fn absorb_response(

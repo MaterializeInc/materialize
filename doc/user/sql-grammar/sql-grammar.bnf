@@ -5,6 +5,8 @@ alter_rename ::=
   'ALTER' ('CONNECTION' | 'INDEX' | 'SOURCE' | 'SINK' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'SECRET' ) name 'RENAME TO' new_name
 alter_index ::=
   'ALTER' 'INDEX' name 'SET' 'ENABLED'
+alter_role ::=
+    'ALTER' 'ROLE' role_name 'WITH'? ('INHERIT' | 'CREATEROLE' | 'NOCREATEROLE' | 'CREATEDB' | 'NOCREATEDB' | 'CREATECLUSTER' | 'NOCREATECLUSTER')*
 alter_secret ::=
   'ALTER' 'SECRET' 'IF EXISTS'? name AS value
 alter_sink ::=
@@ -38,13 +40,26 @@ cluster_replica_def ::=
   replica_name '(' replica_option '=' value ( ',' replica_option '=' value )* ')'
 create_cluster_replica ::=
   'CREATE' 'CLUSTER' 'REPLICA' cluster_name '.' replica_name (option '=' value ( ',' option '=' value )*)?
-create_connection ::=
-  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO'
-  ( 'AWS' 'PRIVATELINK' | 'CONFLUENT' 'SCHEMA' 'REGISTRY' | 'KAFKA' | 'POSTGRES' | 'SSH' 'TUNNEL' )
+create_connection_kafka ::=
+  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'KAFKA'
+  '(' field '='? val ( ',' field '='? val )* ')'
+create_connection_csr ::=
+  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'CONFLUENT' 'SCHEMA' 'REGISTRY'
+  '(' field '='? val ( ',' field '='? val )* ')'
+create_connection_postgres ::=
+  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'POSTGRES'
+  '(' field '='? val ( ',' field '='? val )* ')'
+create_connection_aws_privatelink ::=
+  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'AWS' 'PRIVATELINK'
+  '(' field '='? val ( ',' field '='? val )* ')'
+create_connection_ssh_tunnel ::=
+  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'SSH' 'TUNNEL'
   '(' field '='? val ( ',' field '='? val )* ')'
 create_connection_kafka_brokers ::= 'BROKERS' '(' kafka_broker (',' kafka_broker)* ')'
-create_connection_kafka_broker ::=
-  "'host:port'" ('USING' ('AWS' 'PRIVATELINK' aws_connection ( '(' broker_option (',' broker_option)* ')' )? | 'SSH' 'TUNNEL' ssh_connection))?
+create_connection_kafka_broker_aws_privatelink ::=
+  "'host:port'" 'USING' 'AWS' 'PRIVATELINK' aws_connection ( '(' broker_option (',' broker_option)* ')' )?
+create_connection_kafka_broker_ssh_tunnel ::=
+  "'host:port'" 'USING' 'SSH' 'TUNNEL' ssh_connection
 broker_option ::= 'PORT' number | 'AVAILABILITY ZONE' az
 create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
@@ -63,7 +78,7 @@ create_materialized_view ::=
     ('IN CLUSTER' cluster_name)?
     'AS' select_stmt
 create_role ::=
-    'CREATE' 'ROLE' role_name ('LOGIN' | 'NOLOGIN' | 'SUPERUSER' | 'NOSUPERUSER')*
+    'CREATE' 'ROLE' role_name 'WITH'? ('INHERIT' | 'CREATEROLE' | 'NOCREATEROLE' | 'CREATEDB' | 'NOCREATEDB' | 'CREATECLUSTER' | 'NOCREATECLUSTER')*
 create_secret ::=
     'CREATE' 'SECRET' ('IF NOT EXISTS')? name 'AS' value
 create_schema ::=
@@ -106,6 +121,7 @@ create_source_load_generator ::=
 load_generator_option ::=
     'TICK INTERVAL' interval
     | 'SCALE FACTOR' scale_factor
+    | 'MAX CARDINALITY' max_cardinality
 create_source_postgres ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('IN CLUSTER' cluster_name)?
@@ -134,8 +150,6 @@ create_source_s3 ::=
 create_type ::=
     'CREATE' 'TYPE' type_name 'AS' '(' ((field_name field_type) (',' field_name field_type)*) ')' |
     'CREATE' 'TYPE' type_name 'AS' ( 'LIST' | 'MAP' ) '(' ( property '=' val ) ( ( ',' property '=' val ) )* ')'
-create_user ::=
-    'CREATE' 'USER' user_name ('LOGIN' | 'NOLOGIN' | 'SUPERUSER' | 'NOSUPERUSER')*
 create_view ::=
   'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt |
   'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' 'IF NOT EXISTS' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt |

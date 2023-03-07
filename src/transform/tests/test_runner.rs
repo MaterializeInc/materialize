@@ -86,6 +86,7 @@
 mod tests {
     use std::collections::BTreeMap;
     use std::fmt::Write;
+    use std::time::Duration;
 
     use anyhow::{anyhow, Error};
     use mz_expr::explain::ExplainContext;
@@ -209,6 +210,7 @@ mod tests {
                     humanizer: cat,
                     used_indexes: UsedIndexes::new(vec![]),
                     finishing: None,
+                    duration: Duration::default(),
                 };
 
                 Explainable(&mut rel.clone())

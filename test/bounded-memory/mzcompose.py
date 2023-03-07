@@ -368,7 +368,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.sql(
             """
             CREATE CLUSTER clusterd REPLICAS (r1 (
-                STORAGECTL ADDRESS 'clusterd:2100',
+                STORAGECTL ADDRESSES ['clusterd:2100'],
+                STORAGE ADDRESSES ['clusterd:2103'],
                 COMPUTECTL ADDRESSES ['clusterd:2101'],
                 COMPUTE ADDRESSES ['clusterd:2102']
             ))

@@ -103,7 +103,6 @@ where
 
     let persist_clients = Arc::clone(&storage_state.persist_clients);
     let button = persist_op.build(move |_capabilities| async move {
-        let mut buffer = Vec::new();
         let mut stashed_batches = BTreeMap::new();
 
         let mut write = persist_clients
@@ -136,29 +135,25 @@ where
             return;
         }
 
-        // Pause the source to prevent committing the snapshot
-        let mut should_pause = false;
+        // Whether or not we should pause the source
+        // to prevent committing the snapshot.
+        let mut pg_snapshot_pause = false;
         (|| {
             fail::fail_point!("pg_snapshot_pause", |val| {
-                should_pause = val.map_or(false, |index| {
+                pg_snapshot_pause = val.map_or(false, |index| {
                     let index: usize = index.parse().unwrap();
                     index == output_index
                 });
             });
         })();
-        if should_pause {
-            futures::future::pending().await
-        }
 
-        while let Some(event) = input.next().await {
+        while let Some(event) = input.next_mut().await {
             match event {
                 Event::Data(_cap, data) => {
-                    data.swap(&mut buffer);
-
                     // TODO: come up with a better default batch size here
                     // (100 was chosen arbitrarily), and avoid having to make a batch
                     // per-timestamp.
-                    for (row, ts, diff) in buffer.drain(..) {
+                    for (row, ts, diff) in data.drain(..) {
                         if write.upper().less_equal(&ts) {
                             let builder = stashed_batches.entry(ts).or_insert_with(|| {
                                 BatchBuilderAndCounts::new(
@@ -223,6 +218,18 @@ where
                             *current_upper.borrow_mut() = input_upper.clone();
                             // wait for more data or a new input frontier
                             continue;
+                        }
+
+                        // We evaluate this above to avoid checking an environment variable
+                        // in a hot loop. Note that we only pause before we emit
+                        // non-empty batches, because we do want to bump the upper
+                        // with empty ones before we start ingesting the snapshot.
+                        //
+                        // This is a fairly complex failure case we need to check
+                        // see `test/cluster/pg-snapshot-partial-failure` for more
+                        // information.
+                        if pg_snapshot_pause {
+                            futures::future::pending().await
                         }
 
                         // `current_upper` tracks the last known upper

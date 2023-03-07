@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use chrono::DurationRound;
+use mz_persist_client::usage::ShardsUsage;
 use rand::{rngs, Rng, SeedableRng};
 use tracing::{event, warn, Level};
 
@@ -22,7 +23,6 @@ use mz_controller::clusters::ClusterEvent;
 use mz_controller::ControllerResponse;
 use mz_ore::now::EpochMillis;
 use mz_ore::task;
-use mz_persist_client::ShardId;
 use mz_sql::ast::Statement;
 use mz_sql::plan::{Plan, SendDiffsPlan};
 use mz_storage_client::controller::CollectionMetadata;
@@ -129,8 +129,9 @@ impl Coordinator {
                     persist_location: _,
                     relation_desc: _,
                 } = &collection.collection_metadata;
-                [*data_shard, *remap_shard].into_iter().chain(*status_shard)
+                [*remap_shard, *status_shard, Some(*data_shard)].into_iter()
             })
+            .filter_map(|shard| shard)
             .collect();
 
         let collection_metric = self
@@ -142,17 +143,16 @@ impl Coordinator {
         // requires a slow scan of the underlying storage engine.
         task::spawn(|| "storage_usage_fetch", async move {
             let collection_metric_timer = collection_metric.start_timer();
-            let mut shard_sizes = client.shard_sizes().await;
+            let mut shard_sizes = client.shards_usage().await;
 
             // Don't record usage for shards that are no longer live.
             // Technically the storage is in use, but we never free it, and
             // we don't want to bill the customer for it.
             //
             // See: https://github.com/MaterializeInc/materialize/issues/8185
-            shard_sizes.retain(|shard_id, _| match shard_id {
-                None => true,
-                Some(shard_id) => live_shards.contains(shard_id),
-            });
+            shard_sizes
+                .by_shard
+                .retain(|shard_id, _| live_shards.contains(shard_id));
             collection_metric_timer.observe_duration();
 
             // It is not an error for shard sizes to become ready after
@@ -164,7 +164,7 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn storage_usage_update(&mut self, shard_sizes: BTreeMap<Option<ShardId>, u64>) {
+    async fn storage_usage_update(&mut self, shards_usage: ShardsUsage) {
         // Similar to audit events, use the oracle ts so this is guaranteed to
         // increase. This is intentionally the timestamp of when collection
         // finished, not when it started, so that we don't write data with a
@@ -172,10 +172,17 @@ impl Coordinator {
         let collection_timestamp: EpochMillis = self.get_local_write_ts().await.timestamp.into();
 
         let mut ops = vec![];
-        for (shard_id, size_bytes) in shard_sizes {
+        for (shard_id, shard_usage) in shards_usage.by_shard {
             ops.push(catalog::Op::UpdateStorageUsage {
-                shard_id: shard_id.map(|shard_id| shard_id.to_string()),
-                size_bytes,
+                shard_id: Some(shard_id.to_string()),
+                size_bytes: shard_usage.referenced_bytes(),
+                collection_timestamp,
+            });
+        }
+        if shards_usage.unattributable_bytes > 0 {
+            ops.push(catalog::Op::UpdateStorageUsage {
+                shard_id: None,
+                size_bytes: shards_usage.unattributable_bytes,
                 collection_timestamp,
             });
         }
@@ -256,7 +263,7 @@ impl Coordinator {
                 if let Some(active_subscribe) = self.active_subscribes.get_mut(&sink_id) {
                     let remove = active_subscribe.process_response(response);
                     if remove {
-                        self.remove_active_subscribe(&sink_id);
+                        self.remove_active_subscribe(sink_id).await;
                     }
                 }
             }

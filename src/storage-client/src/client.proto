@@ -12,6 +12,7 @@ syntax = "proto3";
 import "proto/src/proto.proto";
 import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
+import "cluster-client/src/client.proto";
 import "storage-client/src/types/parameters.proto";
 import "storage-client/src/types/sources.proto";
 import "storage-client/src/types/sinks.proto";
@@ -62,7 +63,13 @@ message ProtoTrace {
 }
 
 message ProtoStorageCommand {
+    message ProtoCreateTimely {
+        mz_cluster_client.client.ProtoTimelyConfig config = 1;
+        mz_cluster_client.client.ProtoClusterStartupEpoch epoch = 2;
+    }
+
     oneof kind {
+        ProtoCreateTimely create_timely = 6;
         ProtoCreateSources create_sources = 1;
         ProtoAllowCompaction allow_compaction = 2;
         google.protobuf.Empty initialization_complete = 3;
@@ -97,6 +104,7 @@ message ProtoStorageResponse {
     message ProtoDroppedIds {
         repeated mz_repr.global_id.ProtoGlobalId ids = 1;
     }
+
     oneof kind {
         ProtoFrontierUppersKind frontier_uppers = 1;
         ProtoDroppedIds dropped_ids = 2;

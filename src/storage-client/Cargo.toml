@@ -26,6 +26,7 @@ once_cell = "1.16.0"
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
 mz-cloud-resources = { path = "../cloud-resources" }
+mz-cluster-client = { path = "../cluster-client" }
 mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }

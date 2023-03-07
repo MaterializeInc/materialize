@@ -6,22 +6,14 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-# Copyright Materialize, Inc. and contributors. All rights reserved.
-#
-# Use of this software is governed by the Business Source License
-# included in the LICENSE file at the root of this repository.
-#
-# As of the Change Date specified in that file, in accordance with
-# the Business Source License, use of this software will be governed
-# by the Apache License, Version 2.0.
 
 import time
-from typing import TYPE_CHECKING, Any, List, Optional, Type
+from typing import TYPE_CHECKING, Any, Optional
 
 from materialize.checks.executors import Executor
 
 if TYPE_CHECKING:
-    from materialize.checks.checks import Check
+    from materialize.checks.scenarios import Scenario
 
 
 class Action:
@@ -58,8 +50,10 @@ class Sleep(Action):
 
 
 class Initialize(Action):
-    def __init__(self, checks: List[Type["Check"]]) -> None:
-        self.checks = [check_class() for check_class in checks]
+    def __init__(self, scenario: "Scenario") -> None:
+        self.checks = [
+            check_class(scenario.base_version()) for check_class in scenario.checks()
+        ]
 
     def execute(self, e: Executor) -> None:
         for check in self.checks:
@@ -72,12 +66,16 @@ class Initialize(Action):
 
 class Manipulate(Action):
     def __init__(
-        self, checks: List[Type["Check"]], phase: Optional[int] = None
+        self,
+        scenario: "Scenario",
+        phase: Optional[int] = None,
     ) -> None:
         assert phase is not None
         self.phase = phase - 1
 
-        self.checks = [check_class() for check_class in checks]
+        self.checks = [
+            check_class(scenario.base_version()) for check_class in scenario.checks()
+        ]
         assert len(self.checks) >= self.phase
 
     def execute(self, e: Executor) -> None:
@@ -91,8 +89,10 @@ class Manipulate(Action):
 
 
 class Validate(Action):
-    def __init__(self, checks: List[Type["Check"]]) -> None:
-        self.checks = [check_class() for check_class in checks]
+    def __init__(self, scenario: "Scenario") -> None:
+        self.checks = [
+            check_class(scenario.base_version()) for check_class in scenario.checks()
+        ]
 
     def execute(self, e: Executor) -> None:
         for check in self.checks:

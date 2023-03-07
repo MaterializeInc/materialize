@@ -43,6 +43,66 @@ def workflow_github_8021(c: Composition) -> None:
     c.kill("materialized")
 
 
+# Test that `mz_internal.mz_object_dependencies` re-populates.
+def workflow_github_17578(c: Composition) -> None:
+    c.up("testdrive_no_reset", persistent=True)
+    c.up("materialized")
+
+    c.testdrive(
+        service="testdrive_no_reset",
+        input=dedent(
+            """
+            > CREATE SOURCE with_subsources FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
+
+            > SELECT
+              top_level_s.name as source,
+              s.name AS subsource
+              FROM mz_internal.mz_object_dependencies AS d
+              JOIN mz_sources AS s ON s.id = d.referenced_object_id
+              JOIN mz_sources AS top_level_s ON top_level_s.id = d.object_id
+              WHERE top_level_s.name = 'with_subsources';
+            source          subsource
+            -------------------------
+            with_subsources accounts
+            with_subsources auctions
+            with_subsources bids
+            with_subsources organizations
+            with_subsources users
+            with_subsources with_subsources_progress
+            """
+        ),
+    )
+
+    # Restart mz
+    c.kill("materialized")
+    c.up("materialized")
+
+    c.testdrive(
+        service="testdrive_no_reset",
+        input=dedent(
+            """
+            > SELECT
+              top_level_s.name as source,
+              s.name AS subsource
+              FROM mz_internal.mz_object_dependencies AS d
+              JOIN mz_sources AS s ON s.id = d.referenced_object_id
+              JOIN mz_sources AS top_level_s ON top_level_s.id = d.object_id
+              WHERE top_level_s.name = 'with_subsources';
+            source          subsource
+            -------------------------
+            with_subsources accounts
+            with_subsources auctions
+            with_subsources bids
+            with_subsources organizations
+            with_subsources users
+            with_subsources with_subsources_progress
+            """
+        ),
+    )
+
+    c.kill("materialized")
+
+
 def workflow_audit_log(c: Composition) -> None:
     c.up("materialized")
 
@@ -210,8 +270,24 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
         ),
     )
 
+    # Assert that the persisted allowed_cluster_replica_sizes (a setting that
+    # supports multiple values) is correctly restored on restart.
+    c.kill("materialized")
+    c.up("materialized")
+
+    c.testdrive(
+        service="testdrive_no_reset",
+        input=dedent(
+            """
+            > SHOW allowed_cluster_replica_sizes
+            "\\"1\\", \\"2\\""
+            """
+        ),
+    )
+
 
 def workflow_default(c: Composition) -> None:
+    c.workflow("github-17578")
     c.workflow("github-8021")
     c.workflow("audit-log")
     c.workflow("timelines")

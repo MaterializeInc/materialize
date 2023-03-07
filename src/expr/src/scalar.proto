@@ -92,6 +92,7 @@ message ProtoUnmaterializableFunc {
         google.protobuf.Empty pg_postmaster_start_time = 12;
         google.protobuf.Empty version = 13;
         google.protobuf.Empty mz_version_num = 14;
+        google.protobuf.Empty current_setting = 15;
     }
 }
 
@@ -596,6 +597,10 @@ message ProtoBinaryFunc {
         google.protobuf.Empty range_overleft = 177;
         google.protobuf.Empty range_overright = 178;
         google.protobuf.Empty range_adjacent = 179;
+        google.protobuf.Empty range_union = 180;
+        google.protobuf.Empty range_intersection = 181;
+        google.protobuf.Empty range_difference = 182;
+        google.protobuf.Empty uuid_generate_v5 = 183;
     }
 }
 

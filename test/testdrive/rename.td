@@ -64,7 +64,8 @@ mz_view_primary_idx mz_view     <VARIABLE_OUTPUT>   {a,b}
     ';
 
 > CREATE VIEW public_objects AS
-    SELECT mz_objects.* FROM mz_objects
+    SELECT mz_objects.id, mz_objects.oid, mz_objects.schema_id, mz_objects.name, mz_objects.type
+    FROM mz_objects
     JOIN mz_schemas ON mz_objects.schema_id = mz_schemas.id
     WHERE mz_schemas.name = 'public';
 
@@ -73,6 +74,7 @@ name
 -----
 mz_data
 mz_data_primary_idx
+mz_data_progress
 
 # Test that data can be selected from the source before renaming.
 > SELECT * FROM mz_data
@@ -92,6 +94,7 @@ exact:"materialize.public.mz_data" is a source not a index
 name
 -----
 mz_data_primary_idx
+mz_data_progress
 
 > SELECT name FROM public_objects WHERE name LIKE 'renamed_mz_data%';
 name
@@ -188,6 +191,7 @@ renamed_sink
 name               type   size
 ------------------------------
 renamed_mz_data    kafka  ${arg.default-storage-size}
+mz_data_progress   subsource <null>
 
 # Sink was successfully renamed
 > SHOW SINKS

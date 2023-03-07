@@ -12,6 +12,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use std::mem;
 use std::time::Instant;
 
 use differential_dataflow::difference::Semigroup;
@@ -28,12 +29,12 @@ use tokio::sync::{mpsc, oneshot, Semaphore};
 use tracing::{debug, debug_span, warn, Instrument, Span};
 
 use crate::internal::machine::{retry_external, Machine};
+use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::RetryMetrics;
 use crate::internal::paths::{BlobKey, PartialRollupKey, RollupId};
 use crate::ShardId;
 
-#[derive(Debug, Clone)]
-#[cfg_attr(test, derive(PartialEq))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GcReq {
     pub shard_id: ShardId,
     pub new_seqno_since: SeqNo,
@@ -41,7 +42,7 @@ pub struct GcReq {
 
 #[derive(Debug)]
 pub struct GarbageCollector<K, V, T, D> {
-    sender: UnboundedSender<(GcReq, oneshot::Sender<()>)>,
+    sender: UnboundedSender<(GcReq, oneshot::Sender<RoutineMaintenance>)>,
     _phantom: PhantomData<fn() -> (K, V, T, D)>,
 }
 
@@ -111,7 +112,7 @@ where
 {
     pub fn new(mut machine: Machine<K, V, T, D>) -> Self {
         let (gc_req_sender, mut gc_req_recv) =
-            mpsc::unbounded_channel::<(GcReq, oneshot::Sender<()>)>();
+            mpsc::unbounded_channel::<(GcReq, oneshot::Sender<RoutineMaintenance>)>();
 
         // spin off a single task responsible for executing GC requests.
         // work is enqueued into the task through a channel
@@ -148,7 +149,7 @@ where
 
                 let start = Instant::now();
                 machine.applier.metrics.gc.started.inc();
-                Self::gc_and_truncate(&mut machine, consolidated_req)
+                let mut maintenance = Self::gc_and_truncate(&mut machine, consolidated_req)
                     .instrument(gc_span)
                     .await;
                 machine.applier.metrics.gc.finished.inc();
@@ -163,8 +164,9 @@ where
                 // inform all callers who enqueued GC reqs that their work is complete
                 for sender in gc_completed_senders {
                     // we can safely ignore errors here, it's possible the caller
-                    // wasn't interested in waiting and dropped their receiver
-                    let _ = sender.send(());
+                    // wasn't interested in waiting and dropped their receiver.
+                    // maintenance will be somewhat-arbitrarily assigned to the first oneshot.
+                    let _ = sender.send(mem::take(&mut maintenance));
                 }
             }
         });
@@ -178,7 +180,10 @@ where
     /// Enqueues a [GcReq] to be consumed by the GC background task when available.
     ///
     /// Returns a future that indicates when GC has cleaned up to at least [GcReq::new_seqno_since]
-    pub fn gc_and_truncate_background(&self, req: GcReq) -> Option<oneshot::Receiver<()>> {
+    pub fn gc_and_truncate_background(
+        &self,
+        req: GcReq,
+    ) -> Option<oneshot::Receiver<RoutineMaintenance>> {
         let (gc_completed_sender, gc_completed_receiver) = oneshot::channel();
         let new_gc_sender = self.sender.clone();
         let send = new_gc_sender.send((req, gc_completed_sender));
@@ -196,7 +201,10 @@ where
         Some(gc_completed_receiver)
     }
 
-    pub async fn gc_and_truncate(machine: &mut Machine<K, V, T, D>, req: GcReq) {
+    pub async fn gc_and_truncate(
+        machine: &mut Machine<K, V, T, D>,
+        req: GcReq,
+    ) -> RoutineMaintenance {
         // There's also a bulk delete API in s3 if the performance of this
         // becomes an issue. Maybe make Blob::delete take a list of keys?
         //
@@ -253,6 +261,7 @@ where
             .state_versions
             .fetch_all_live_states::<T>(req.shard_id)
             .await
+            .expect("gc should only be called on an initialized shard")
             // TODO: Consider pulling the K, V, D params off of GC. If we do,
             // then we should be able to delete TypedStateVersionsIter (and
             // probably merge UntypedStateVersionsIter into StateVersionsIter).
@@ -284,7 +293,7 @@ where
                 "gc {} early returning, already GC'd past {}",
                 req.shard_id, req.new_seqno_since,
             );
-            return;
+            return RoutineMaintenance::default();
         }
 
         let mut deleteable_batch_blobs = BTreeSet::new();
@@ -328,13 +337,13 @@ where
                     });
                     // We only need to detect deletable rollups in the last iter
                     // through the live_diffs loop because they accumulate in state.
-                    for (seqno, key) in state.collections.rollups.iter() {
+                    for (seqno, rollup) in state.collections.rollups.iter() {
                         // SUBTLE: We only guarantee that a rollup exists for the
                         // first live state. Anything before that is not allowed to
                         // be used and so is free to be deleted and removed from
                         // state.
                         if seqno < &earliest_live_seqno {
-                            deleteable_rollup_blobs.push((*seqno, key.clone()));
+                            deleteable_rollup_blobs.push((*seqno, rollup.key.clone()));
                         } else {
                             // We iterate in order, may as well short circuit the
                             // rollup loop.
@@ -382,20 +391,21 @@ where
         // lease timeouts whenever environmentd restarts).
         let state = states.state();
         assert_eq!(state.seqno, req.new_seqno_since);
-        let rollup_seqno = state.seqno;
-        let rollup_key = PartialRollupKey::new(rollup_seqno, &RollupId::new());
         let rollup = machine.applier.state_versions.encode_rollup_blob(
             &machine.applier.shard_metrics,
             state,
-            rollup_key,
+            PartialRollupKey::new(state.seqno, &RollupId::new()),
         );
         let () = machine
             .applier
             .state_versions
             .write_rollup_blob(&rollup)
             .await;
-        let applied = machine
-            .add_and_remove_rollups((rollup.seqno, &rollup.key), &deleteable_rollup_blobs)
+        let (applied, maintenance) = machine
+            .add_and_remove_rollups(
+                (rollup.seqno, &rollup.to_hollow()),
+                &deleteable_rollup_blobs,
+            )
             .await;
         // We raced with some other GC process to write this rollup out. Ours
         // wasn't registered, so delete it.
@@ -408,7 +418,7 @@ where
         }
         debug!(
             "gc {} wrote rollup at seqno {}. applied={}",
-            req.shard_id, rollup_seqno, applied
+            req.shard_id, rollup.seqno, applied
         );
         report_step_timing(&machine.applier.metrics.gc.steps.write_rollup_seconds);
 
@@ -458,8 +468,12 @@ where
         });
 
         let shard_metrics = machine.applier.metrics.shards.shard(&req.shard_id);
-        shard_metrics.set_gc_seqno_held_parts(seqno_held_parts.len());
+        shard_metrics
+            .gc_seqno_held_parts
+            .set(u64::cast_from(seqno_held_parts.len()));
         shard_metrics.gc_live_diffs.set(live_diffs);
         report_step_timing(&machine.applier.metrics.gc.steps.finish_seconds);
+
+        maintenance
     }
 }

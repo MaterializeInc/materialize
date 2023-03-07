@@ -190,6 +190,7 @@ fn lex_quoted_ident(buf: &mut LexBuf) -> Result<Token, ParserError> {
         match buf.next() {
             Some('"') if buf.consume('"') => s.push('"'),
             Some('"') => break,
+            Some('\0') => bail!(pos, "null character in quoted identifier"),
             Some(c) => s.push(c),
             None => bail!(pos, "unterminated quoted identifier"),
         }

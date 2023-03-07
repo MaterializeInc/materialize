@@ -307,6 +307,7 @@ pass_secret secret
 kafka_conn  connection
 mv          materialized-view
 source_data source
+source_data_progress source
 snk         sink
 
 > SELECT DISTINCT(TYPE) FROM mz_objects
@@ -332,6 +333,7 @@ mv          materialized-view
 pass_secret secret
 snk         sink
 source_data source
+source_data_progress source
 tbl         table
 v1          view
 v2          view
@@ -473,6 +475,7 @@ mz_kafka_sinks
 mz_list_types
 mz_map_types
 mz_materialized_views
+mz_operators
 mz_pseudo_types
 mz_roles
 mz_schemas
@@ -536,6 +539,7 @@ mz_cluster_replica_sizes
 mz_cluster_replica_statuses
 mz_postgres_sources
 mz_storage_usage_by_shard
+mz_subscriptions
 mz_view_foreign_keys
 mz_view_keys
 mz_object_dependencies
@@ -546,6 +550,7 @@ name
 mz_arrangement_sharing
 mz_arrangement_sizes
 mz_dataflows
+mz_dataflow_channel_operators
 mz_dataflow_operator_dataflows
 mz_dataflow_operator_reachability
 mz_cluster_replica_utilization
@@ -580,7 +585,7 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-39
+41
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

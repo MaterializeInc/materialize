@@ -469,6 +469,9 @@ impl OffsetCommitter<Partitioned<PartitionId, MzOffset>> for KafkaOffsetCommiter
         &self,
         frontier: Antichain<Partitioned<PartitionId, MzOffset>>,
     ) -> Result<(), anyhow::Error> {
+        // Log frontier before we potentially fail to commit them.
+        self.logger.commit_offsets(frontier.clone()).await?;
+
         use rdkafka::consumer::CommitMode;
         use rdkafka::topic_partition_list::Offset;
 
@@ -487,22 +490,28 @@ impl OffsetCommitter<Partitioned<PartitionId, MzOffset>> for KafkaOffsetCommiter
             }
         }
 
-        let mut tpl = TopicPartitionList::new();
-        for (pid, offset) in offsets.clone() {
-            let offset_to_commit =
-                Offset::Offset(offset.offset.try_into().expect("offset to be vald i64"));
-            tpl.add_partition_offset(&self.topic_name, pid, offset_to_commit)
-                .expect("offset known to be valid");
+        tracing::trace!(
+            ?offsets,
+            "timely-{} source({}) attempting to commit kafka offsets",
+            self.worker_id,
+            self.source_id,
+        );
+
+        if !offsets.is_empty() {
+            let mut tpl = TopicPartitionList::new();
+            for (pid, offset) in offsets {
+                let offset_to_commit =
+                    Offset::Offset(offset.offset.try_into().expect("offset to be vald i64"));
+                tpl.add_partition_offset(&self.topic_name, pid, offset_to_commit)
+                    .expect("offset known to be valid");
+            }
+            let consumer = Arc::clone(&self.consumer);
+            mz_ore::task::spawn_blocking(
+                || format!("source({}) kafka offset commit", self.source_id),
+                move || consumer.commit(&tpl, CommitMode::Sync),
+            )
+            .await??;
         }
-
-        let consumer = Arc::clone(&self.consumer);
-        mz_ore::task::spawn_blocking(
-            || format!("source({}) kafka offset commit", self.source_id),
-            move || consumer.commit(&tpl, CommitMode::Sync),
-        )
-        .await??;
-
-        self.logger.commit_offsets(frontier).await?;
         Ok(())
     }
 }

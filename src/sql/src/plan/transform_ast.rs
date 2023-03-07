@@ -16,7 +16,7 @@
 use uuid::Uuid;
 
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
-use mz_sql_parser::ast::visit_mut::{self, VisitMut};
+use mz_sql_parser::ast::visit_mut::{self, VisitMut, VisitMutNode};
 use mz_sql_parser::ast::{
     Expr, Function, FunctionArgs, Ident, Op, OrderByExpr, Query, Select, SelectItem, TableAlias,
     TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName, Value,
@@ -26,31 +26,16 @@ use crate::names::{Aug, PartialObjectName, ResolvedDataType};
 use crate::normalize;
 use crate::plan::{PlanError, StatementContext};
 
-pub fn transform_query<'a>(
-    scx: &StatementContext,
-    query: &'a mut Query<Aug>,
-) -> Result<(), PlanError> {
-    run_transforms(scx, |t, query| t.visit_query_mut(query), query)
-}
-
-pub fn transform_expr(scx: &StatementContext, expr: &mut Expr<Aug>) -> Result<(), PlanError> {
-    run_transforms(scx, |t, expr| t.visit_expr_mut(expr), expr)
-}
-
-pub(crate) fn run_transforms<F, A>(
-    scx: &StatementContext,
-    mut f: F,
-    ast: &mut A,
-) -> Result<(), PlanError>
+pub(crate) fn transform<N>(scx: &StatementContext, node: &mut N) -> Result<(), PlanError>
 where
-    F: for<'ast> FnMut(&mut dyn VisitMut<'ast, Aug>, &'ast mut A),
+    N: for<'a> VisitMutNode<'a, Aug>,
 {
     let mut func_rewriter = FuncRewriter::new(scx);
-    f(&mut func_rewriter, ast);
+    node.visit_mut(&mut func_rewriter);
     func_rewriter.status?;
 
     let mut desugarer = Desugarer::new();
-    f(&mut desugarer, ast);
+    node.visit_mut(&mut desugarer);
     desugarer.status
 }
 

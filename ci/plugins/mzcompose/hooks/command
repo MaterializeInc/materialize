@@ -25,7 +25,7 @@ if read_list BUILDKITE_PLUGIN_MZCOMPOSE_ARGS; then
     done
 fi
 
-echo "system uptime: $(cut -f1 -d' ' /proc/uptime)"
+date +"%Y-%m-%d %H:%M:%S" > step_start_timestamp
 
 # Sometimes build cancellations prevent us from properly cleaning up the last
 # Docker Compose run, which can leave old containers or volumes around that will
@@ -34,6 +34,9 @@ ci_collapsed_heading ":docker: Purging containers and volumes from previous buil
 mzcompose --mz-quiet kill
 mzcompose --mz-quiet rm --force -v
 mzcompose --mz-quiet down --volumes
+
+ci_collapsed_heading ":docker: Purging all existing docker containers and volumes, regardless of origin"
+docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
 
 ci_collapsed_heading ":docker: Rebuilding non-mzbuild containers"
 mzcompose --mz-quiet build
@@ -48,4 +51,4 @@ fi
 
 ci_uncollapsed_heading ":docker: Running \`mzcompose run ${run_args[*]}\`"
 
-mzcompose run "${run_args[@]}"
+mzcompose run "${run_args[@]}" |& tee run.log

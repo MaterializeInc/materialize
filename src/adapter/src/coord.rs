@@ -99,8 +99,7 @@ use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{stack, task};
-use mz_persist_client::usage::StorageUsageClient;
-use mz_persist_client::ShardId;
+use mz_persist_client::usage::{ShardsUsage, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_secrets::SecretsController;
@@ -202,7 +201,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     },
     LinearizeReads(Vec<PendingReadTxn>),
     StorageUsageFetch,
-    StorageUsageUpdate(BTreeMap<Option<ShardId>, u64>),
+    StorageUsageUpdate(ShardsUsage),
     RealTimeRecencyTimestamp {
         conn_id: ConnectionId,
         transient_revision: u64,
@@ -308,6 +307,7 @@ pub struct Config {
     pub connection_context: ConnectionContext,
     pub storage_usage_client: StorageUsageClient,
     pub storage_usage_collection_interval: Duration,
+    pub storage_usage_retention_period: Option<Duration>,
     pub segment_client: Option<mz_segment::Client>,
     pub egress_ips: Vec<Ipv4Addr>,
     pub system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
@@ -555,7 +555,7 @@ impl Coordinator {
                 },
             )?;
             for (replica_id, replica) in instance.replicas_by_id.clone() {
-                let introspection_collections = replica
+                let introspection_collections: Vec<_> = replica
                     .config
                     .compute
                     .logging
@@ -563,6 +563,11 @@ impl Coordinator {
                     .iter()
                     .map(|(variant, id)| (*id, variant.desc().into()))
                     .collect();
+
+                self.controller
+                    .storage
+                    .migrate_collections(introspection_collections.clone())
+                    .await?;
 
                 // Create collections does not recreate existing collections, so it is safe to
                 // always call it.
@@ -609,31 +614,117 @@ impl Coordinator {
             .storage
             .drop_sinks_unvalidated(builtin_migration_metadata.previous_sink_ids);
 
-        let mut entries: Vec<_> = self.catalog.entries().cloned().collect();
-        // Topologically sort entries:
-        // - If one item uses the other, preserve that causal dependency
-        // - Else, treat each item as if its ID were max(greatest dependency,
-        //   self); this lets the item "bubble up" to the position of its
-        //   greatest dependency, where it can be properly checked using the
-        //   prior condition
-        entries.sort_by(|a, b| {
-            use std::cmp::Ordering;
-            if a.used_by().contains(&b.id()) {
-                Ordering::Less
-            } else if b.used_by().contains(&a.id()) {
-                Ordering::Greater
-            } else {
-                let a_cmp = match a.uses().iter().max() {
-                    Some(id) => std::cmp::max(*id, a.id()),
-                    None => a.id(),
-                };
-                let b_cmp = match b.uses().iter().max() {
-                    Some(id) => std::cmp::max(*id, b.id()),
-                    None => b.id(),
-                };
-                a_cmp.cmp(&b_cmp)
+        // Load catalog entries based on topological dependency sorting. We do
+        // this to reinforce that `GlobalId`'s `Ord` implementation does not
+        // express the entries' dependency graph.
+        let mut entries_awaiting_dependencies: BTreeMap<
+            GlobalId,
+            Vec<(catalog::CatalogEntry, Vec<GlobalId>)>,
+        > = BTreeMap::new();
+
+        let mut loaded_items = BTreeSet::new();
+
+        // Subsources must be created immediately before their primary source
+        // without any intermediary collections between them. This version of MZ
+        // needs this because it sets tighter bounds on collections' sinces.
+        // Without this, dependent collections can place read holds on the
+        // subsource, which can result in panics if we adjust the subsource's
+        // since.
+        //
+        // This can likely be removed in the next version of Materialize
+        // (v0.46).
+        let mut entries_awaiting_dependent: BTreeMap<GlobalId, Vec<catalog::CatalogEntry>> =
+            BTreeMap::new();
+        let mut awaited_dependent_seen = BTreeSet::new();
+
+        let mut unsorted_entries: VecDeque<_> = self
+            .catalog
+            .entries()
+            .cloned()
+            .map(|entry| {
+                let remaining_deps = entry.uses().to_vec();
+                (entry, remaining_deps)
+            })
+            .collect();
+        let mut entries = Vec::with_capacity(unsorted_entries.len());
+
+        while let Some((entry, mut remaining_deps)) = unsorted_entries.pop_front() {
+            let awaiting_this_dep = entries_awaiting_dependent.get(&entry.id());
+            remaining_deps.retain(|dep| {
+                // Consider dependency filled if item is loaded or if this
+                // dependency is waiting on this entry.
+                !loaded_items.contains(dep)
+                    && awaiting_this_dep
+                        .map(|awaiting| awaiting.iter().all(|e| e.id() != *dep))
+                        .unwrap_or(true)
+            });
+
+            // While you cannot assume anything about the ordering of
+            // dependencies based on their GlobalId, it is not secret knowledge
+            // that the most likely final dependency is that with the greatest
+            // ID.
+            match remaining_deps.last() {
+                Some(dep) => {
+                    entries_awaiting_dependencies
+                        .entry(*dep)
+                        .or_default()
+                        .push((entry, remaining_deps));
+                }
+                None => {
+                    let id = entry.id();
+
+                    if let Some(waiting_on_this_dep) = entries_awaiting_dependencies.remove(&id) {
+                        unsorted_entries.extend(waiting_on_this_dep);
+                    }
+
+                    if let Some(waiting_on_this_dependent) = entries_awaiting_dependent.remove(&id)
+                    {
+                        mz_ore::soft_assert! {{
+                            let mut subsources =  entry.subsources();
+                            subsources.sort();
+                            let mut w: Vec<_> = waiting_on_this_dependent.iter().map(|e| e.id()).collect();
+                            w.sort();
+
+                            subsources == w
+                        }, "expect that items are exactly source's subsources"}
+
+                        // Re-enqueue objects and continue.
+                        for entry in
+                            std::iter::once(entry).chain(waiting_on_this_dependent.into_iter())
+                        {
+                            awaited_dependent_seen.insert(entry.id());
+                            unsorted_entries.push_front((entry, vec![]));
+                        }
+                        continue;
+                    }
+
+                    // Subsources wait on their primary source before being
+                    // added.
+                    if entry.is_subsource() && !awaited_dependent_seen.contains(&id) {
+                        let min = entry
+                            .used_by()
+                            .into_iter()
+                            .min()
+                            .expect("subsource always used");
+
+                        entries_awaiting_dependent
+                            .entry(*min)
+                            .or_default()
+                            .push(entry);
+                        continue;
+                    }
+
+                    awaited_dependent_seen.remove(&id);
+                    loaded_items.insert(id);
+                    entries.push(entry);
+                }
             }
-        });
+        }
+
+        assert!(
+            entries_awaiting_dependent.is_empty() && entries_awaiting_dependencies.is_empty(),
+            "items not cleared from queue {entries_awaiting_dependent:?}, {entries_awaiting_dependencies:?}"
+        );
 
         let logs: BTreeSet<_> = BUILTINS::logs()
             .map(|log| self.catalog.resolve_builtin_log(log))
@@ -682,10 +773,14 @@ impl Coordinator {
                             source_imports,
                             source_exports,
                             instance_id: ingestion.cluster_id,
+                            remap_collection_id: ingestion.remap_collection_id.expect(
+                                "ingestion-based collection must name remap collection before going to storage",
+                            ),
                         }),
                         source_status_collection_id,
                     )
                 }
+                DataSourceDesc::Progress => (DataSource::Progress, None),
                 DataSourceDesc::Source => (DataSource::Other, None),
                 DataSourceDesc::Introspection(introspection) => {
                     (DataSource::Introspection(*introspection), None)
@@ -698,6 +793,30 @@ impl Coordinator {
                 status_collection_id,
             }
         }
+
+        self.controller
+            .storage
+            .migrate_collections(
+                entries
+                    .iter()
+                    .filter_map(|entry| match entry.item() {
+                        CatalogItem::Source(source) => Some((
+                            entry.id(),
+                            source_desc(entry.id(), source_status_collection_id, source),
+                        )),
+                        CatalogItem::Table(table) => {
+                            let collection_desc = table.desc.clone().into();
+                            Some((entry.id(), collection_desc))
+                        }
+                        CatalogItem::MaterializedView(mview) => {
+                            let collection_desc = mview.desc.clone().into();
+                            Some((entry.id(), collection_desc))
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+            )
+            .await?;
 
         // Do a first pass looking for collections to create so we can call
         // create_collections only once with a large batch. This batches only
@@ -1211,6 +1330,7 @@ pub async fn serve(
         connection_context,
         storage_usage_client,
         storage_usage_collection_interval,
+        storage_usage_retention_period,
         segment_client,
         egress_ips,
         aws_account_id,
@@ -1275,6 +1395,7 @@ pub async fn serve(
             aws_principal_context,
             aws_privatelink_availability_zones,
             system_parameter_frontend,
+            storage_usage_retention_period,
         })
         .await?;
     let session_id = catalog.config().session_id;

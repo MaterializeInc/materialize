@@ -19,7 +19,7 @@ Return
   Project (#0..=#2, #0, #4, #5)
     Join on=(#0 = #3) type=differential
       implementation
-        %1:l0[#0] » %0:l0[#0]KA
+        %0:l0[#0]K » %1:l0[#0]K
       Get l0
       Get l0
 With
@@ -64,7 +64,7 @@ opt
 Return
   CrossJoin type=differential
     implementation
-      %1:l0[×] » %0:l0[×]Aef
+      %0:l0[×]ef » %1:l0[×]ef
     Get l0
     Get l0
 With
@@ -101,7 +101,7 @@ Project (#5, #1, #0, #0, #3, #4)
     Map (-(#1))
       Join on=(#0 = #2) type=differential
         implementation
-          %1:x[#0] » %0[#0]UKAf
+          %0[#0]UKAf » %1:x[#0]Kf
         ArrangeBy keys=[[#0]]
           Reduce group_by=[#0] aggregates=[sum(#1)]
             Project (#0, #1)
@@ -123,7 +123,7 @@ opt
 Project (#1, #2, #0, #2, #4)
   Join on=(#2 = #3) type=differential
     implementation
-      %0:x[#2] » %1[#0]UKAf
+      %1[#0]UKA » %0:x[#2]Kf
     ArrangeBy keys=[[#2]]
       Project (#0, #1, #3)
         Filter (#1 < #0)
@@ -147,19 +147,19 @@ opt
     [[#2 #3] [#1 #6]]
 )
 ----
-Project (#1, #7, #0, #0, #3, #4, #7, #6)
-  Filter (#1 < #7)
-    Map (-(#1))
-      Join on=(#0 = #2 AND #5 = -(#1)) type=differential
-        implementation
-          %1:x[#0] » %0[#0]UKAf » %2[#0]UKAf
-        ArrangeBy keys=[[#0]]
+Project (#1, #2, #0, #0, #4, #5, #2, #7)
+  Join on=(#0 = #3 AND #2 = #6) type=differential
+    implementation
+      %2[#0]UKA » %0[#2]Kf » %1:x[#0]Kf
+    ArrangeBy keys=[[#2]]
+      Filter (#1 < #2)
+        Map (-(#1))
           Reduce group_by=[#0] aggregates=[sum(#1)]
             Project (#0, #1)
               Get x
-        ArrangeBy keys=[[#0]]
+    ArrangeBy keys=[[#0]]
+      Get x
+    ArrangeBy keys=[[#0]]
+      Reduce group_by=[#0] aggregates=[max(#1)]
+        Project (#1, #2)
           Get x
-        ArrangeBy keys=[[#0]]
-          Reduce group_by=[#0] aggregates=[max(#1)]
-            Project (#1, #2)
-              Get x

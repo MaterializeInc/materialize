@@ -12,6 +12,7 @@ system catalog](https://www.postgresql.org/docs/current/catalogs.html):
 
   * [`pg_am`](https://www.postgresql.org/docs/current/catalog-pg-am.html)
   * [`pg_attribute`](https://www.postgresql.org/docs/current/catalog-pg-attribute.html)
+  * [`pg_auth_members`](https://www.postgresql.org/docs/current/catalog-pg-auth-members.html)
   * [`pg_class`](https://www.postgresql.org/docs/current/catalog-pg-class.html)
   * [`pg_collation`](https://www.postgresql.org/docs/current/catalog-pg-collation.html)
   * [`pg_constraint`](https://www.postgresql.org/docs/current/catalog-pg-constraint.html)

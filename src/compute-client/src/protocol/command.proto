@@ -17,17 +17,13 @@ import "persist-client/src/cfg.proto";
 import "proto/src/proto.proto";
 import "repr/src/global_id.proto";
 import "repr/src/row.proto";
+import "cluster-client/src/client.proto";
 import "storage-client/src/client.proto";
 import "storage-client/src/types/parameters.proto";
 
 import "google/protobuf/empty.proto";
 
 package mz_compute_client.protocol.command;
-
-message ProtoComputeStartupEpoch {
-  int64 envd = 1;
-  uint64 replica = 2;
-}
 
 message ProtoComputeCommand {
     message ProtoCreateDataflows {
@@ -39,8 +35,8 @@ message ProtoComputeCommand {
     }
 
     message ProtoCreateTimely {
-        ProtoTimelyConfig config = 1;
-        ProtoComputeStartupEpoch epoch = 2;
+        mz_cluster_client.client.ProtoTimelyConfig config = 1;
+        mz_cluster_client.client.ProtoClusterStartupEpoch epoch = 2;
     }
 
     oneof kind {
@@ -53,13 +49,6 @@ message ProtoComputeCommand {
         google.protobuf.Empty initialization_complete = 7;
         ProtoComputeParameters update_configuration = 8;
     }
-}
-
-message ProtoTimelyConfig {
-    uint64 workers = 1;
-    uint64 process = 2;
-    repeated string addresses = 3;
-    uint32 idle_arrangement_merge_effort = 4;
 }
 
 message ProtoPeek {
@@ -75,4 +64,5 @@ message ProtoPeek {
 message ProtoComputeParameters {
     optional uint32 max_result_size = 1;
     mz_persist_client.cfg.ProtoPersistParameters persist = 2;
+    optional uint64 dataflow_max_inflight_bytes = 3;
 }

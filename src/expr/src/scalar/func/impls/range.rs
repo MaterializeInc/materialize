@@ -97,7 +97,7 @@ impl LazyUnaryFunc for RangeLower {
             .scalar_type
             .unwrap_range_element_type()
             .clone()
-            .nullable(input_type.nullable)
+            .nullable(true)
     }
 
     fn propagates_nulls(&self) -> bool {
@@ -150,7 +150,7 @@ impl LazyUnaryFunc for RangeUpper {
             .scalar_type
             .unwrap_range_element_type()
             .clone()
-            .nullable(input_type.nullable)
+            .nullable(true)
     }
 
     fn propagates_nulls(&self) -> bool {

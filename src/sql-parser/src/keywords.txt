@@ -25,7 +25,6 @@
 
 Access
 Acks
-Address
 Addresses
 All
 Alter
@@ -48,11 +47,13 @@ Bigint
 Boolean
 Both
 Bpchar
+Broken
 Broker
 Brokers
 Bucket
 By
 Bytes
+Cardinality
 Cascade
 Case
 Cast
@@ -83,6 +84,9 @@ Copy
 Count
 Counter
 Create
+Createcluster
+Createdb
+Createrole
 Cross
 Csv
 Current
@@ -166,6 +170,7 @@ Include
 Index
 Indexes
 Info
+Inherit
 Inline
 Inner
 Insert
@@ -220,6 +225,10 @@ Names
 Natural
 Next
 No
+Nocreatecluster
+Nocreatedb
+Nocreaterole
+Noinherit
 Nologin
 None
 Nosuperuser
@@ -323,6 +332,7 @@ Ssl
 Start
 Stdin
 Stdout
+Storage
 Storagectl
 Strategy
 String

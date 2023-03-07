@@ -12,6 +12,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -19,7 +20,6 @@ use anyhow::bail;
 use chrono::{DateTime, Utc};
 use futures::Future;
 use itertools::Itertools;
-use mz_controller::clusters::ClusterRole;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -35,6 +35,7 @@ use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::{LogVariant, LogView, DEFAULT_LOG_VARIANTS, DEFAULT_LOG_VIEWS};
 use mz_compute_client::protocol::command::ComputeParameters;
+use mz_controller::clusters::ClusterRole;
 use mz_controller::clusters::{
     ClusterEvent, ClusterId, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaAllocation,
     ReplicaConfig, ReplicaId, ReplicaLocation, ReplicaLogging, UnmanagedReplicaLocation,
@@ -53,9 +54,10 @@ use mz_sql::ast::Expr;
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError as SqlCatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogItemType,
-    CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId, IdReference, NameReference,
-    SessionCatalog, TypeReference,
+    CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId, IdReference,
+    NameReference, RoleAttributes, SessionCatalog, TypeReference,
 };
+use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
     Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
     QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier, RoleId, SchemaId,
@@ -79,8 +81,9 @@ use mz_storage_client::types::sources::{SourceConnection, SourceDesc, SourceEnve
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{
-    Builtin, BuiltinLog, BuiltinTable, BuiltinType, Fingerprint, BUILTINS, BUILTIN_PREFIXES,
-    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
+    Builtin, BuiltinLog, BuiltinRole, BuiltinTable, BuiltinType, Fingerprint, BUILTINS,
+    BUILTIN_PREFIXES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_SYSTEM_ROLE,
+    MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
@@ -89,7 +92,7 @@ use crate::catalog::storage::{BootstrapArgs, Transaction};
 use crate::client::ConnectionId;
 use crate::config::{SynchronizedParameters, SystemParameterFrontend};
 use crate::coord::DEFAULT_LOGICAL_COMPACTION_WINDOW;
-use crate::session::vars::{SystemVars, Var, CONFIG_HAS_SYNCED_ONCE};
+use crate::session::vars::{OwnedVarInput, SystemVars, Var, VarInput, CONFIG_HAS_SYNCED_ONCE};
 use crate::session::{PreparedStatement, Session, User, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
 use crate::{AdapterError, DUMMY_AVAILABILITY_ZONE};
@@ -185,7 +188,8 @@ pub struct CatalogState {
     clusters_by_id: BTreeMap<ClusterId, Cluster>,
     clusters_by_name: BTreeMap<String, ClusterId>,
     clusters_by_linked_object_id: BTreeMap<GlobalId, ClusterId>,
-    roles: BTreeMap<String, Role>,
+    roles_by_name: BTreeMap<String, RoleId>,
+    roles_by_id: BTreeMap<RoleId, Role>,
     config: mz_sql::catalog::CatalogConfig,
     oid_counter: u32,
     cluster_replica_sizes: ClusterReplicaSizeMap,
@@ -436,6 +440,10 @@ impl CatalogState {
         }
     }
 
+    fn get_role(&self, id: &RoleId) -> &Role {
+        &self.roles_by_id[id]
+    }
+
     /// Create and insert the per replica log sources and log views.
     #[tracing::instrument(level = "info", skip_all)]
     fn insert_replica_introspection_items(&mut self, logging: &ReplicaLogging, replica_id: u64) {
@@ -523,7 +531,7 @@ impl CatalogState {
                 .ok()
                 .map(|db| db.id()),
             search_path: Vec::new(),
-            user: SYSTEM_USER.clone(),
+            role_id: self.resolve_builtin_role(&MZ_SYSTEM_ROLE),
             prepared_statements: None,
         };
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
@@ -876,7 +884,7 @@ impl CatalogState {
     fn insert_system_configuration(
         &mut self,
         name: &str,
-        value: &str,
+        value: VarInput,
     ) -> Result<bool, AdapterError> {
         self.system_configuration.set(name, value)
     }
@@ -1038,6 +1046,13 @@ impl CatalogState {
         schema.items[builtin.name()].clone()
     }
 
+    /// Optimized lookup for a builtin role
+    ///
+    /// Panics if the builtin role doesn't exist in the catalog
+    pub fn resolve_builtin_role(&self, builtin: &'static BuiltinRole) -> RoleId {
+        self.roles_by_name[builtin.name]
+    }
+
     pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {
         &self.config
     }
@@ -1193,6 +1208,14 @@ impl CatalogState {
         &self.system_configuration
     }
 
+    pub fn require_unsafe_mode(&self, feature_name: &'static str) -> Result<(), AdapterError> {
+        if !self.config.unsafe_mode {
+            Err(AdapterError::Unsupported(feature_name))
+        } else {
+            Ok(())
+        }
+    }
+
     /// Serializes the catalog's in-memory state.
     ///
     /// There are no guarantees about the format of the serialized state, except
@@ -1278,7 +1301,7 @@ pub struct ConnCatalog<'a> {
     cluster: String,
     database: Option<DatabaseId>,
     search_path: Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
-    user: User,
+    role_id: RoleId,
     prepared_statements: Option<Cow<'a, BTreeMap<String, PreparedStatement>>>,
 }
 
@@ -1298,12 +1321,17 @@ impl ConnCatalog<'_> {
             cluster: self.cluster,
             database: self.database,
             search_path: self.search_path,
-            user: self.user,
+            role_id: self.role_id,
             prepared_statements: self.prepared_statements.map(|s| Cow::Owned(s.into_owned())),
         }
     }
 
-    fn effective_search_path(
+    /// Returns the schemas:
+    /// - mz_catalog
+    /// - pg_catalog
+    /// - temp (if requested)
+    /// - all schemas from the session's search_path var that exist
+    pub fn effective_search_path(
         &self,
         include_temp_schema: bool,
     ) -> Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)> {
@@ -1370,6 +1398,7 @@ pub struct Role {
     pub id: RoleId,
     #[serde(skip)]
     pub oid: u32,
+    pub attributes: RoleAttributes,
 }
 
 impl Role {
@@ -1485,6 +1514,8 @@ pub enum DataSourceDesc {
     Source,
     /// Receives introspection data from an internal system
     Introspection(IntrospectionType),
+    /// Receives data from the source's reclocking/remapping operations.
+    Progress,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1505,7 +1536,9 @@ impl Source {
     pub fn is_external(&self) -> bool {
         match self.data_source {
             DataSourceDesc::Ingestion(_) => true,
-            DataSourceDesc::Source | DataSourceDesc::Introspection(_) => false,
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Source => false,
         }
     }
 
@@ -1513,7 +1546,7 @@ impl Source {
     pub fn source_type(&self) -> &str {
         match &self.data_source {
             DataSourceDesc::Ingestion(ingestion) => ingestion.desc.connection.name(),
-            DataSourceDesc::Source => "subsource",
+            DataSourceDesc::Progress | DataSourceDesc::Source => "subsource",
             DataSourceDesc::Introspection(_) => "source",
         }
     }
@@ -1551,8 +1584,9 @@ impl Source {
                     Some("materialize")
                 }
             },
-            DataSourceDesc::Source => None,
-            DataSourceDesc::Introspection(_) => None,
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Source => None,
         }
     }
 
@@ -1560,7 +1594,9 @@ impl Source {
     pub fn connection_id(&self) -> Option<GlobalId> {
         match &self.data_source {
             DataSourceDesc::Ingestion(ingestion) => ingestion.desc.connection.connection_id(),
-            DataSourceDesc::Source | DataSourceDesc::Introspection(_) => None,
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Source => None,
         }
     }
 }
@@ -1585,6 +1621,9 @@ pub struct Ingestion {
     /// This map does *not* include the export of the source associated with the ingestion itself
     pub subsource_exports: BTreeMap<GlobalId, usize>,
     pub cluster_id: ClusterId,
+    /// The ID of this collection's remap/progress collection.
+    // MIGRATION: v0.44 This can be converted to a `GlobalId` in v0.46
+    pub remap_collection_id: Option<GlobalId>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1748,7 +1787,9 @@ impl CatalogItem {
         match &self {
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion(ingestion) => Ok(Some(&ingestion.desc)),
-                DataSourceDesc::Source | DataSourceDesc::Introspection(_) => Ok(None),
+                DataSourceDesc::Introspection(_)
+                | DataSourceDesc::Progress
+                | DataSourceDesc::Source => Ok(None),
             },
             _ => Err(SqlCatalogError::UnexpectedType {
                 name: entry.name().item.to_string(),
@@ -1895,8 +1936,9 @@ impl CatalogItem {
             CatalogItem::Index(index) => Some(index.cluster_id),
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion(ingestion) => Some(ingestion.cluster_id),
-                DataSourceDesc::Source => None,
-                DataSourceDesc::Introspection(_) => None,
+                DataSourceDesc::Introspection(_)
+                | DataSourceDesc::Progress
+                | DataSourceDesc::Source => None,
             },
             CatalogItem::Sink(sink) => Some(sink.cluster_id),
             CatalogItem::Table(_)
@@ -2012,9 +2054,52 @@ impl CatalogEntry {
         matches!(self.item(), CatalogItem::Table(_))
     }
 
-    /// Reports whether this catalog entry is a source.
+    /// Reports whether this catalog entry is a source. Note that this includes
+    /// subsources.
     pub fn is_source(&self) -> bool {
         matches!(self.item(), CatalogItem::Source(_))
+    }
+
+    /// Reports whether this catalog entry is a subsource.
+    pub fn is_subsource(&self) -> bool {
+        match &self.item() {
+            CatalogItem::Source(source) => matches!(
+                &source.data_source,
+                DataSourceDesc::Progress | DataSourceDesc::Source
+            ),
+            _ => false,
+        }
+    }
+
+    /// Returns the `GlobalId` of all of this entry's subsources.
+    pub fn subsources(&self) -> Vec<GlobalId> {
+        match &self.item() {
+            CatalogItem::Source(source) => match &source.data_source {
+                DataSourceDesc::Ingestion(ingestion) => ingestion
+                    .subsource_exports
+                    .keys()
+                    .copied()
+                    .chain(std::iter::once(
+                        ingestion
+                            .remap_collection_id
+                            .expect("remap collection must named by this point"),
+                    ))
+                    .collect(),
+                DataSourceDesc::Introspection(_)
+                | DataSourceDesc::Progress
+                | DataSourceDesc::Source => vec![],
+            },
+            CatalogItem::Table(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => vec![],
+        }
     }
 
     /// Reports whether this catalog entry is a sink.
@@ -2035,6 +2120,23 @@ impl CatalogEntry {
     /// Reports whether this catalog entry is a introspection source.
     pub fn is_introspection_source(&self) -> bool {
         matches!(self.item(), CatalogItem::Log(_))
+    }
+
+    /// Reports whether this catalog entry can be treated as a relation, it can produce rows.
+    pub fn is_relation(&self) -> bool {
+        match self.item {
+            CatalogItem::Table(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::MaterializedView(_) => true,
+            CatalogItem::Sink(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => false,
+        }
     }
 
     /// Collects the identifiers of the dataflows that this dataflow depends
@@ -2197,7 +2299,8 @@ impl Catalog {
                 clusters_by_id: BTreeMap::new(),
                 clusters_by_name: BTreeMap::new(),
                 clusters_by_linked_object_id: BTreeMap::new(),
-                roles: BTreeMap::new(),
+                roles_by_name: BTreeMap::new(),
+                roles_by_id: BTreeMap::new(),
                 config: mz_sql::catalog::CatalogConfig {
                     start_time: to_datetime((config.now)()),
                     start_instant: Instant::now(),
@@ -2283,14 +2386,18 @@ impl Catalog {
         }
 
         let roles = catalog.storage().await.load_roles().await?;
-        for (id, name) in roles {
+        for (id, role) in roles {
             let oid = catalog.allocate_oid()?;
-            catalog.state.roles.insert(
-                name.clone(),
+            catalog.state.roles_by_name.insert(role.name.clone(), id);
+            catalog.state.roles_by_id.insert(
+                id,
                 Role {
-                    name: name.clone(),
+                    name: role.name,
                     id,
                     oid,
+                    attributes: role
+                        .attributes
+                        .expect("serialized role was not properly migrated"),
                 },
             );
         }
@@ -2301,6 +2408,14 @@ impl Catalog {
                 config.system_parameter_frontend,
             )
             .await?;
+
+        // Now that LD is loaded, set the intended stash timeout.
+        // TODO: Move this into the stash constructor.
+        catalog
+            .storage()
+            .await
+            .set_connect_timeout(catalog.system_config().crdb_connect_timeout())
+            .await;
 
         catalog.load_builtin_types().await?;
 
@@ -2333,8 +2448,6 @@ impl Catalog {
         let (builtin_indexes, builtin_non_indexes): (Vec<_>, Vec<_>) = all_builtins
             .into_iter()
             .partition(|(builtin, _)| matches!(builtin, Builtin::Index(_)));
-
-        let mut mz_object_dependencies_updates = vec![];
 
         {
             let span = tracing::span!(tracing::Level::DEBUG, "builtin_non_indexes");
@@ -2402,7 +2515,6 @@ impl Catalog {
                             )
                         });
                         let oid = catalog.allocate_oid()?;
-                        mz_object_dependencies_updates.push((id, item.uses().to_owned()));
                         catalog.state.insert_item(id, oid, name, item);
                     }
 
@@ -2550,7 +2662,6 @@ impl Catalog {
                             )
                         });
                     let oid = catalog.allocate_oid()?;
-                    mz_object_dependencies_updates.push((id, item.uses().to_owned()));
                     catalog.state.insert_item(id, oid, name, item);
                 }
                 Builtin::Log(_)
@@ -2657,14 +2768,8 @@ impl Catalog {
                 }
             }
         }
-        for (_name, role) in &catalog.state.roles {
-            builtin_table_updates.push(catalog.state.pack_role_update(role, 1));
-        }
-        for (depender, dependees) in mz_object_dependencies_updates {
-            dependees.into_iter().for_each(|dependee| {
-                builtin_table_updates
-                    .push(catalog.state.pack_depends_update(depender, dependee, 1));
-            })
+        for (_id, role) in &catalog.state.roles_by_id {
+            builtin_table_updates.push(catalog.state.pack_role_update(role.id, 1));
         }
         for (id, cluster) in &catalog.state.clusters_by_id {
             builtin_table_updates.push(catalog.state.pack_cluster_update(&cluster.name, 1));
@@ -2693,15 +2798,35 @@ impl Catalog {
                 }
             }
         }
+        // Operators aren't stored in the catalog, but we would like them in
+        // introspection views.
+        for (op, func) in OP_IMPLS.iter() {
+            match func {
+                mz_sql::func::Func::Scalar(impls) => {
+                    for imp in impls {
+                        builtin_table_updates.push(catalog.state.pack_op_update(
+                            op,
+                            imp.details(),
+                            1,
+                        ));
+                    }
+                }
+                _ => unreachable!("all operators must be scalar functions"),
+            }
+        }
         let audit_logs = catalog.storage().await.load_audit_log().await?;
         for event in audit_logs {
             builtin_table_updates.push(catalog.state.pack_audit_log_update(&event)?);
         }
 
-        // To avoid reading over storage_usage() multiple times, do both the
-        // table updates and most-recent-timestamp calculations on a single
-        // iterator.
-        let storage_usage_events = catalog.storage().await.storage_usage().await?;
+        // To avoid reading over storage_usage events multiple times, do both
+        // the table updates and delete calculations in a single read over the
+        // data.
+        let storage_usage_events = catalog
+            .storage()
+            .await
+            .fetch_and_prune_storage_usage(config.storage_usage_retention_period)
+            .await?;
         for event in storage_usage_events {
             builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
         }
@@ -2749,7 +2874,10 @@ impl Catalog {
             (system_config, boot_ts)
         };
         for (name, value) in &bootstrap_system_parameters {
-            match self.state.insert_system_configuration(name, value) {
+            match self
+                .state
+                .insert_system_configuration(name, VarInput::Flat(value))
+            {
                 Ok(_) => (),
                 Err(AdapterError::UnknownParameter(name)) => {
                     warn!(%name, "cannot load unknown system parameter from stash");
@@ -2758,7 +2886,10 @@ impl Catalog {
             };
         }
         for (name, value) in system_config {
-            match self.state.insert_system_configuration(&name, &value) {
+            match self
+                .state
+                .insert_system_configuration(&name, VarInput::Flat(&value))
+            {
                 Ok(_) => (),
                 Err(AdapterError::UnknownParameter(name)) => {
                     warn!(%name, "cannot load unknown system parameter from stash");
@@ -2819,13 +2950,19 @@ impl Catalog {
                         let name = param.name;
                         let value = param.value;
                         tracing::debug!(name, value, "sync parameter");
-                        Op::UpdateSystemConfiguration { name, value }
+                        Op::UpdateSystemConfiguration {
+                            name,
+                            value: OwnedVarInput::Flat(value),
+                        }
                     })
                     .chain(std::iter::once({
                         let name = CONFIG_HAS_SYNCED_ONCE.name().to_string();
                         let value = true.to_string();
                         tracing::debug!(name, value, "sync parameter");
-                        Op::UpdateSystemConfiguration { name, value }
+                        Op::UpdateSystemConfiguration {
+                            name,
+                            value: OwnedVarInput::Flat(value),
+                        }
                     }))
                     .collect::<Vec<_>>();
                 self.transact(boot_ts, None, ops, |_| Ok(()))
@@ -3256,7 +3393,8 @@ impl Catalog {
         c: &Catalog,
     ) -> Result<Catalog, Error> {
         let mut c = c.clone();
-        let mut awaiting_dependencies: BTreeMap<GlobalId, Vec<_>> = BTreeMap::new();
+        let mut awaiting_id_dependencies: BTreeMap<GlobalId, Vec<_>> = BTreeMap::new();
+        let mut awaiting_name_dependencies: BTreeMap<String, Vec<_>> = BTreeMap::new();
         let mut items: VecDeque<_> = tx.loaded_items().into_iter().collect();
         while let Some((id, name, def)) = items.pop_front() {
             let d_c = def.clone();
@@ -3278,10 +3416,30 @@ impl Catalog {
                 }
                 // If we were missing a dependency, wait for it to be added.
                 Err(AdapterError::PlanError(plan::PlanError::InvalidId(missing_dep))) => {
-                    awaiting_dependencies
+                    awaiting_id_dependencies
                         .entry(missing_dep)
                         .or_default()
                         .push((id, name, def));
+                    continue;
+                }
+                // If we were missing a dependency, wait for it to be added.
+                Err(AdapterError::PlanError(plan::PlanError::Catalog(
+                    SqlCatalogError::UnknownItem(missing_dep),
+                ))) => {
+                    match GlobalId::from_str(&missing_dep) {
+                        Ok(id) => {
+                            awaiting_id_dependencies
+                                .entry(id)
+                                .or_default()
+                                .push((id, name, def));
+                        }
+                        Err(_) => {
+                            awaiting_name_dependencies
+                                .entry(missing_dep)
+                                .or_default()
+                                .push((id, name, def));
+                        }
+                    }
                     continue;
                 }
                 Err(e) => {
@@ -3291,17 +3449,45 @@ impl Catalog {
                 }
             };
             let oid = c.allocate_oid()?;
-            c.state.insert_item(id, oid, name, item);
-            if let Some(dependent_items) = awaiting_dependencies.remove(&id) {
+
+            // Enqueue any items waiting on this dependency.
+            if let Some(dependent_items) = awaiting_id_dependencies.remove(&id) {
                 items.extend(dependent_items);
             }
+            let full_name = c.resolve_full_name(&name, None);
+            if let Some(dependent_items) = awaiting_name_dependencies.remove(&full_name.to_string())
+            {
+                items.extend(dependent_items);
+            }
+
+            c.state.insert_item(id, oid, name, item);
         }
 
-        assert!(
-            awaiting_dependencies.is_empty(),
-            "the following dependencies were never filled {:?}",
-            awaiting_dependencies
-        );
+        // Error on any unsatisfied dependencies.
+        if let Some((missing_dep, mut dependents)) = awaiting_id_dependencies.into_iter().next() {
+            let (id, name, _def) = dependents.remove(0);
+            return Err(Error::new(ErrorKind::Corruption {
+                detail: format!(
+                    "failed to deserialize item {} ({}): {}",
+                    id,
+                    name,
+                    AdapterError::PlanError(plan::PlanError::InvalidId(missing_dep))
+                ),
+            }));
+        }
+
+        if let Some((missing_dep, mut dependents)) = awaiting_name_dependencies.into_iter().next() {
+            let (id, name, _def) = dependents.remove(0);
+            return Err(Error::new(ErrorKind::Corruption {
+                detail: format!(
+                    "failed to deserialize item {} ({}): {}",
+                    id,
+                    name,
+                    AdapterError::SqlCatalog(SqlCatalogError::UnknownItem(missing_dep))
+                ),
+            }));
+        }
+
         c.transient_revision = 1;
         Ok(c)
     }
@@ -3381,14 +3567,19 @@ impl Catalog {
             aws_principal_context: None,
             aws_privatelink_availability_zones: None,
             system_parameter_frontend: None,
+            // when debugging, no reaping
+            storage_usage_retention_period: None,
         })
         .await?;
         Ok(catalog)
     }
 
     pub fn for_session<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a> {
-        let database = self
-            .state
+        Self::for_session_state(&self.state, session)
+    }
+
+    pub fn for_session_state<'a>(state: &'a CatalogState, session: &'a Session) -> ConnCatalog<'a> {
+        let database = state
             .database_by_name
             .get(session.vars().database())
             .map(|id| id.clone());
@@ -3396,22 +3587,24 @@ impl Catalog {
             .vars()
             .search_path()
             .iter()
-            .map(|schema| self.resolve_schema(database.as_ref(), None, schema, session.conn_id()))
+            .map(|schema| {
+                state.resolve_schema(database.as_ref(), None, schema.as_str(), session.conn_id())
+            })
             .filter_map(|schema| schema.ok())
             .map(|schema| (schema.name().database.clone(), schema.id().clone()))
             .collect();
         ConnCatalog {
-            state: Cow::Borrowed(&self.state),
+            state: Cow::Borrowed(state),
             conn_id: session.conn_id(),
             cluster: session.vars().cluster().into(),
             database,
             search_path,
-            user: session.user().clone(),
+            role_id: session.role_id().clone(),
             prepared_statements: Some(Cow::Borrowed(session.prepared_statements())),
         }
     }
 
-    pub fn for_sessionless_user(&self, user: User) -> ConnCatalog {
+    pub fn for_sessionless_user(&self, role_id: RoleId) -> ConnCatalog {
         ConnCatalog {
             state: Cow::Borrowed(&self.state),
             conn_id: SYSTEM_CONN_ID,
@@ -3421,7 +3614,7 @@ impl Catalog {
                 .ok()
                 .map(|db| db.id()),
             search_path: Vec::new(),
-            user,
+            role_id,
             prepared_statements: None,
         }
     }
@@ -3429,7 +3622,8 @@ impl Catalog {
     // Leaving the system's search path empty allows us to catch issues
     // where catalog object names have not been normalized correctly.
     pub fn for_system_session(&self) -> ConnCatalog {
-        self.for_sessionless_user(SYSTEM_USER.clone())
+        let role_id = self.resolve_builin_role(&MZ_SYSTEM_ROLE);
+        self.for_sessionless_user(role_id)
     }
 
     async fn storage<'a>(&'a self) -> MutexGuard<'a, storage::Connection> {
@@ -3594,6 +3788,11 @@ impl Catalog {
     /// Resolves a `BuiltinSource`.
     pub fn resolve_builtin_storage_collection(&self, builtin: &'static BuiltinSource) -> GlobalId {
         self.state.resolve_builtin_source(builtin)
+    }
+
+    /// Resolves a `BuiltinRole`.
+    pub fn resolve_builin_role(&self, builtin: &'static BuiltinRole) -> RoleId {
+        self.state.resolve_builtin_role(builtin)
     }
 
     /// Resolves `name` to a function [`CatalogEntry`].
@@ -3980,12 +4179,14 @@ impl Catalog {
     ) -> Result<ReplicaLocation, AdapterError> {
         let location = match location {
             SerializedReplicaLocation::Unmanaged {
-                storagectl_addr,
+                storagectl_addrs,
+                storage_addrs,
                 computectl_addrs,
                 compute_addrs,
                 workers,
             } => ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
-                storagectl_addr,
+                storagectl_addrs,
+                storage_addrs,
                 computectl_addrs,
                 compute_addrs,
                 workers,
@@ -4097,8 +4298,14 @@ impl Catalog {
 
         let result = f(&state)?;
 
-        // The user closure was successful, apply the updates.
-        tx.commit().await?;
+        // The user closure was successful, apply the updates. Terminate the
+        // process if this fails, because we have to restart envd due to
+        // indeterminate stash state, which we only reconcile during catalog
+        // init.
+        tx.commit()
+            .await
+            .unwrap_or_terminate("catalog storage transaction commit must succeed");
+
         // Dropping here keeps the mutable borrow on self, preventing us accidentally
         // mutating anything until after f is executed.
         drop(storage);
@@ -4112,6 +4319,7 @@ impl Catalog {
         })
     }
 
+    #[tracing::instrument(name = "catalog::transact_inner", level = "debug", skip_all)]
     fn transact_inner(
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&Session>,
@@ -4139,6 +4347,7 @@ impl Catalog {
                 id: RoleId,
                 oid: u32,
                 name: String,
+                attributes: RoleAttributes,
             },
             CreateCluster {
                 id: ClusterId,
@@ -4166,7 +4375,7 @@ impl Catalog {
                 schema_id: SchemaId,
             },
             DropRole {
-                name: String,
+                id: RoleId,
             },
             DropCluster {
                 id: ClusterId,
@@ -4184,14 +4393,11 @@ impl Catalog {
             UpdateClusterReplicaStatus {
                 event: ClusterEvent,
             },
-            UpdateSystemConfiguration {
+            UpdateRole {
+                id: RoleId,
                 name: String,
-                value: String,
+                attributes: RoleAttributes,
             },
-            ResetSystemConfiguration {
-                name: String,
-            },
-            ResetAllSystemConfiguration,
             UpdateRotatedKeys {
                 id: GlobalId,
                 new_item: CatalogItem,
@@ -4215,6 +4421,48 @@ impl Catalog {
 
         for op in ops {
             match op {
+                Op::AlterRole {
+                    id,
+                    name,
+                    attributes,
+                } => {
+                    if is_reserved_name(&name) {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReservedRoleName(name),
+                        )));
+                    }
+                    let serialized_role = SerializedRole {
+                        name: name.clone(),
+                        attributes: Some(attributes.clone()),
+                    };
+                    tx.update_role(id, serialized_role)?;
+
+                    // NB: this will be re-incremented by the action below.
+                    builtin_table_updates.push(state.pack_role_update(id, -1));
+
+                    state.add_to_audit_log(
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        builtin_table_updates,
+                        audit_events,
+                        EventType::Alter,
+                        ObjectType::Role,
+                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                            id: id.to_string(),
+                            name: name.clone(),
+                        }),
+                    )?;
+                    catalog_action(
+                        state,
+                        builtin_table_updates,
+                        Action::UpdateRole {
+                            id,
+                            name,
+                            attributes,
+                        },
+                    )?;
+                }
                 Op::AlterSink { id, cluster_config } => {
                     use mz_sql::ast::Value;
                     use mz_sql_parser::ast::CreateSinkOptionName::*;
@@ -4519,13 +4767,21 @@ impl Catalog {
                         },
                     )?;
                 }
-                Op::CreateRole { name, oid } => {
+                Op::CreateRole {
+                    name,
+                    oid,
+                    attributes,
+                } => {
                     if is_reserved_name(&name) {
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReservedRoleName(name),
                         )));
                     }
-                    let role_id = tx.insert_user_role(&name)?;
+                    let serialized_role = SerializedRole {
+                        name: name.clone(),
+                        attributes: Some(attributes.clone()),
+                    };
+                    let id = tx.insert_user_role(serialized_role)?;
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -4535,7 +4791,7 @@ impl Catalog {
                         EventType::Create,
                         ObjectType::Role,
                         EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
-                            id: role_id.to_string(),
+                            id: id.to_string(),
                             name: name.clone(),
                         }),
                     )?;
@@ -4543,9 +4799,10 @@ impl Catalog {
                         state,
                         builtin_table_updates,
                         Action::CreateRole {
-                            id: role_id,
+                            id,
                             oid,
                             name,
+                            attributes,
                         },
                     )?;
                 }
@@ -4703,11 +4960,6 @@ impl Catalog {
                         let schema_id = name.qualifiers.schema_spec.clone().into();
                         let serialized_item = Self::serialize_item(&item);
                         tx.insert_item(id, schema_id, &name.item, serialized_item)?;
-
-                        // Fill the `mz_object_dependencies` table.
-                        for dependee in item.uses() {
-                            builtin_table_updates.push(state.pack_depends_update(id, *dependee, 1))
-                        }
                     }
 
                     if Self::should_audit_log_item(&item) {
@@ -4814,15 +5066,15 @@ impl Catalog {
                         },
                     )?;
                 }
-                Op::DropRole { name } => {
+                Op::DropRole { id, name } => {
                     if is_reserved_name(&name) {
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReservedRoleName(name),
                         )));
                     }
                     tx.remove_role(&name)?;
-                    let role = &state.roles[&name];
-                    builtin_table_updates.push(state.pack_role_update(role, -1));
+                    let role = &state.roles_by_id[&id];
+                    builtin_table_updates.push(state.pack_role_update(role.id, -1));
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -4836,7 +5088,7 @@ impl Catalog {
                             name: name.clone(),
                         }),
                     )?;
-                    catalog_action(state, builtin_table_updates, Action::DropRole { name })?;
+                    catalog_action(state, builtin_table_updates, Action::DropRole { id })?;
                 }
                 Op::DropCluster { id } => {
                     let cluster = state.get_cluster(id);
@@ -4942,11 +5194,6 @@ impl Catalog {
                     let entry = state.get_entry(&id);
                     if !entry.item().is_temporary() {
                         tx.remove_item(id)?;
-
-                        // Clean up the `mz_object_dependencies` table.
-                        for dependee in entry.item().uses() {
-                            builtin_table_updates.push(state.pack_depends_update(id, *dependee, -1))
-                        }
                     }
 
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
@@ -5128,28 +5375,24 @@ impl Catalog {
                     )?;
                 }
                 Op::UpdateSystemConfiguration { name, value } => {
-                    tx.upsert_system_config(&name, &value)?;
-                    catalog_action(
-                        state,
-                        builtin_table_updates,
-                        Action::UpdateSystemConfiguration { name, value },
-                    )?;
+                    state.insert_system_configuration(&name, value.borrow())?;
+                    let var = state.get_system_configuration(&name)?;
+                    if !var.safe() {
+                        state.require_unsafe_mode(var.name())?;
+                    }
+                    tx.upsert_system_config(&name, var.value())?;
                 }
                 Op::ResetSystemConfiguration { name } => {
+                    state.remove_system_configuration(&name)?;
+                    let var = state.get_system_configuration(&name)?;
+                    if !var.safe() {
+                        state.require_unsafe_mode(var.name())?;
+                    }
                     tx.remove_system_config(&name);
-                    catalog_action(
-                        state,
-                        builtin_table_updates,
-                        Action::ResetSystemConfiguration { name },
-                    )?;
                 }
-                Op::ResetAllSystemConfiguration {} => {
+                Op::ResetAllSystemConfiguration => {
+                    state.clear_system_configuration();
                     tx.clear_system_configs();
-                    catalog_action(
-                        state,
-                        builtin_table_updates,
-                        Action::ResetAllSystemConfiguration,
-                    )?;
                 }
                 Op::UpdateRotatedKeys {
                     id,
@@ -5246,18 +5489,25 @@ impl Catalog {
                     ));
                 }
 
-                Action::CreateRole { id, oid, name } => {
+                Action::CreateRole {
+                    id,
+                    oid,
+                    name,
+                    attributes,
+                } => {
                     info!("create role {}", name);
-                    state.roles.insert(
-                        name.clone(),
+                    state.roles_by_name.insert(name.clone(), id);
+                    state.roles_by_id.insert(
+                        id,
                         Role {
-                            name: name.clone(),
+                            name,
                             id,
                             oid,
+                            attributes,
                         },
                     );
-                    let role = &state.roles[&name];
-                    builtin_table_updates.push(state.pack_role_update(role, 1));
+                    let role = &state.roles_by_id[&id];
+                    builtin_table_updates.push(state.pack_role_update(role.id, 1));
                 }
 
                 Action::CreateCluster {
@@ -5349,9 +5599,10 @@ impl Catalog {
                     db.schemas_by_id.remove(&schema_id);
                 }
 
-                Action::DropRole { name } => {
-                    if state.roles.remove(&name).is_some() {
-                        info!("drop role {}", name);
+                Action::DropRole { id } => {
+                    if let Some(role) = state.roles_by_id.remove(&id) {
+                        state.roles_by_name.remove(role.name());
+                        info!("drop role {}", role.name());
                     }
                 }
 
@@ -5459,14 +5710,24 @@ impl Catalog {
                         1,
                     ));
                 }
-                Action::UpdateSystemConfiguration { name, value } => {
-                    state.insert_system_configuration(&name, &value)?;
-                }
-                Action::ResetSystemConfiguration { name } => {
-                    state.remove_system_configuration(&name)?;
-                }
-                Action::ResetAllSystemConfiguration {} => {
-                    state.clear_system_configuration();
+
+                Action::UpdateRole {
+                    id,
+                    name,
+                    attributes,
+                } => {
+                    let old_role = state.roles_by_id.remove(&id).expect("catalog out of sync");
+                    info!("update role {name} ({id})");
+                    state.roles_by_id.insert(
+                        id,
+                        Role {
+                            id,
+                            oid: old_role.oid,
+                            name,
+                            attributes,
+                        },
+                    );
+                    builtin_table_updates.push(state.pack_role_update(id, 1));
                 }
 
                 Action::UpdateRotatedKeys { id, new_item } => {
@@ -5589,11 +5850,10 @@ impl Catalog {
                                     self.state.clusters_by_linked_object_id[&id]
                                 }
                             },
+                            remap_collection_id: ingestion.progress_subsource,
                         })
                     }
-                    mz_sql::plan::DataSourceDesc::Progress => {
-                        unreachable!("progress subsources error in purification")
-                    }
+                    mz_sql::plan::DataSourceDesc::Progress => DataSourceDesc::Progress,
                     mz_sql::plan::DataSourceDesc::Source => DataSourceDesc::Source,
                 },
                 desc: source.desc,
@@ -5760,7 +6020,10 @@ impl Catalog {
     }
 
     pub fn user_roles(&self) -> impl Iterator<Item = &Role> {
-        self.state.roles.values().filter(|role| role.is_user())
+        self.state
+            .roles_by_id
+            .values()
+            .filter(|role| role.is_user())
     }
 
     /// Allocate ids for legacy, active logs. Called once per cluster creation.
@@ -5845,11 +6108,7 @@ impl Catalog {
     }
 
     pub fn require_unsafe_mode(&self, feature_name: &'static str) -> Result<(), AdapterError> {
-        if !self.unsafe_mode() {
-            Err(AdapterError::Unsupported(feature_name))
-        } else {
-            Ok(())
-        }
+        self.state.require_unsafe_mode(feature_name)
     }
 
     /// Return the current compute configuration, derived from the system configuration.
@@ -5857,6 +6116,7 @@ impl Catalog {
         let config = self.system_config();
         ComputeParameters {
             max_result_size: Some(config.max_result_size()),
+            dataflow_max_inflight_bytes: Some(config.dataflow_max_inflight_bytes()),
             persist: self.persist_config(),
         }
     }
@@ -5873,6 +6133,7 @@ impl Catalog {
         PersistParameters {
             blob_target_size: Some(config.persist_blob_target_size()),
             compaction_minimum_timeout: Some(config.persist_compaction_minimum_timeout()),
+            consensus_connect_timeout: Some(config.crdb_connect_timeout()),
             sink_minimum_batch_updates: Some(config.persist_sink_minimum_batch_updates()),
         }
     }
@@ -5894,6 +6155,11 @@ pub enum Op {
         id: GlobalId,
         cluster_config: plan::SourceSinkClusterConfig,
     },
+    AlterRole {
+        id: RoleId,
+        name: String,
+        attributes: RoleAttributes,
+    },
     CreateDatabase {
         name: String,
         oid: u32,
@@ -5907,6 +6173,7 @@ pub enum Op {
     CreateRole {
         name: String,
         oid: u32,
+        attributes: RoleAttributes,
     },
     CreateCluster {
         id: ClusterId,
@@ -5934,6 +6201,7 @@ pub enum Op {
         schema_id: SchemaId,
     },
     DropRole {
+        id: RoleId,
         name: String,
     },
     DropCluster {
@@ -5968,12 +6236,12 @@ pub enum Op {
     },
     UpdateSystemConfiguration {
         name: String,
-        value: String,
+        value: OwnedVarInput,
     },
     ResetSystemConfiguration {
         name: String,
     },
-    ResetAllSystemConfiguration {},
+    ResetAllSystemConfiguration,
     UpdateRotatedKeys {
         id: GlobalId,
         previous_public_key_pair: (String, String),
@@ -6042,7 +6310,8 @@ impl From<ReplicaConfig> for SerializedReplicaConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SerializedReplicaLocation {
     Unmanaged {
-        storagectl_addr: String,
+        storagectl_addrs: Vec<String>,
+        storage_addrs: Vec<String>,
         computectl_addrs: Vec<String>,
         compute_addrs: Vec<String>,
         workers: usize,
@@ -6060,12 +6329,14 @@ impl From<ReplicaLocation> for SerializedReplicaLocation {
     fn from(loc: ReplicaLocation) -> Self {
         match loc {
             ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
-                storagectl_addr,
+                storagectl_addrs,
+                storage_addrs,
                 computectl_addrs,
                 compute_addrs,
                 workers,
             }) => Self::Unmanaged {
-                storagectl_addr,
+                storagectl_addrs,
+                storage_addrs,
                 computectl_addrs,
                 compute_addrs,
                 workers,
@@ -6084,6 +6355,33 @@ impl From<ReplicaLocation> for SerializedReplicaLocation {
     }
 }
 
+/// A [`Role`] that is serialized as JSON and persisted to the catalog
+/// stash. This is a separate type to allow us to evolve the on-disk format
+/// independently from the SQL layer.
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+pub struct SerializedRole {
+    pub name: String,
+    // TODO(jkosh44): Remove Option in v0.46.0
+    pub attributes: Option<RoleAttributes>,
+}
+
+impl From<Role> for SerializedRole {
+    fn from(role: Role) -> Self {
+        SerializedRole {
+            name: role.name,
+            attributes: Some(role.attributes),
+        }
+    }
+}
+
+impl From<&BuiltinRole> for SerializedRole {
+    fn from(role: &BuiltinRole) -> Self {
+        SerializedRole {
+            name: role.name.to_string(),
+            attributes: Some(role.attributes.clone()),
+        }
+    }
+}
 impl ConnCatalog<'_> {
     fn resolve_item_name(
         &self,
@@ -6223,8 +6521,8 @@ impl ExprHumanizer for ConnCatalog<'_> {
 }
 
 impl SessionCatalog for ConnCatalog<'_> {
-    fn active_user(&self) -> &str {
-        &self.user.name
+    fn active_role_id(&self) -> &RoleId {
+        &self.role_id
     }
 
     fn get_prepared_statement_desc(&self, name: &str) -> Option<&StatementDesc> {
@@ -6240,6 +6538,10 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn active_cluster(&self) -> &str {
         &self.cluster
+    }
+
+    fn search_path(&self) -> &[(ResolvedDatabaseSpecifier, SchemaSpecifier)] {
+        &self.search_path
     }
 
     fn resolve_database(
@@ -6296,10 +6598,18 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self,
         role_name: &str,
     ) -> Result<&dyn mz_sql::catalog::CatalogRole, SqlCatalogError> {
-        match self.state.roles.get(role_name) {
-            Some(role) => Ok(role),
+        match self.state.roles_by_name.get(role_name) {
+            Some(id) => Ok(&self.state.roles_by_id[id]),
             None => Err(SqlCatalogError::UnknownRole(role_name.into())),
         }
+    }
+
+    fn try_get_role(&self, id: &RoleId) -> Option<&dyn CatalogRole> {
+        Some(self.state.roles_by_id.get(id)?)
+    }
+
+    fn get_role(&self, id: &RoleId) -> &dyn mz_sql::catalog::CatalogRole {
+        &self.state.roles_by_id[id]
     }
 
     fn resolve_cluster(
@@ -6412,6 +6722,22 @@ impl mz_sql::catalog::CatalogRole for Role {
     fn id(&self) -> RoleId {
         self.id
     }
+
+    fn is_inherit(&self) -> bool {
+        self.attributes.inherit
+    }
+
+    fn create_role(&self) -> bool {
+        self.attributes.create_role
+    }
+
+    fn create_db(&self) -> bool {
+        self.attributes.create_db
+    }
+
+    fn create_cluster(&self) -> bool {
+        self.attributes.create_cluster
+    }
 }
 
 impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
@@ -6520,24 +6846,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
     }
 
     fn subsources(&self) -> Vec<GlobalId> {
-        match &self.item {
-            CatalogItem::Source(source) => match &source.data_source {
-                DataSourceDesc::Ingestion(ingestion) => {
-                    ingestion.subsource_exports.keys().copied().collect()
-                }
-                DataSourceDesc::Source | DataSourceDesc::Introspection(_) => vec![],
-            },
-            CatalogItem::Table(_)
-            | CatalogItem::Log(_)
-            | CatalogItem::View(_)
-            | CatalogItem::MaterializedView(_)
-            | CatalogItem::Sink(_)
-            | CatalogItem::Index(_)
-            | CatalogItem::Type(_)
-            | CatalogItem::Func(_)
-            | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => vec![],
-        }
+        self.subsources()
     }
 }
 
@@ -6545,23 +6854,28 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 mod tests {
     use itertools::Itertools;
     use std::collections::{BTreeMap, BTreeSet};
+    use std::iter;
 
     use mz_controller::clusters::ClusterId;
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
-    use mz_ore::now::NOW_ZERO;
+    use mz_ore::collections::CollectionExt;
+    use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
     use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
     use mz_sql::catalog::CatalogDatabase;
+    use mz_sql::names;
     use mz_sql::names::{
-        ObjectQualifiers, PartialObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier,
-        SchemaSpecifier,
+        DatabaseId, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
+        ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
     };
+    use mz_sql::plan::StatementContext;
     use mz_sql::DEFAULT_SCHEMA;
     use mz_sql_parser::ast::Expr;
-    use mz_stash::Stash;
+    use mz_stash::DebugStashFactory;
 
     use crate::catalog::{
         Catalog, CatalogItem, Index, MaterializedView, Op, Table, SYSTEM_CONN_ID,
     };
+    use crate::session::vars::VarInput;
     use crate::session::{Session, DEFAULT_DATABASE_NAME};
 
     /// System sessions have an empty `search_path` so it's necessary to
@@ -6644,7 +6958,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_catalog_revision() {
-        Stash::with_debug_stash(move |stash| async move {
+        let debug_stash_factory = DebugStashFactory::new().await;
+        {
+            let stash = debug_stash_factory.open_debug().await;
             let mut catalog = Catalog::open_debug_stash(stash, NOW_ZERO.clone())
                 .await
                 .expect("unable to open debug catalog");
@@ -6663,21 +6979,15 @@ mod tests {
                 .await
                 .expect("failed to transact");
             assert_eq!(catalog.transient_revision(), 2);
-            drop(catalog);
-
-            // TODO: Test that re-opening the same stash resets the
-            // transient_revision to 1. The current debug stash implementation
-            // doesn't allow for stash reuse.
-
-            /*
+        }
+        {
+            let stash = debug_stash_factory.open_debug().await;
             let catalog = Catalog::open_debug_stash(stash, NOW_ZERO.clone())
                 .await
-                .unwrap();
+                .expect("unable to open debug catalog");
+            // Re-opening the same stash resets the transient_revision to 1.
             assert_eq!(catalog.transient_revision(), 1);
-            */
-        })
-        .await
-        .expect("unable to open debug stash");
+        }
     }
 
     #[tokio::test]
@@ -6729,7 +7039,7 @@ mod tests {
             let mut session = Session::dummy();
             session
                 .vars_mut()
-                .set("search_path", "pg_catalog", false)
+                .set("search_path", VarInput::Flat("pg_catalog"), false)
                 .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
             assert_ne!(
@@ -6756,7 +7066,7 @@ mod tests {
             let mut session = Session::dummy();
             session
                 .vars_mut()
-                .set("search_path", "mz_catalog", false)
+                .set("search_path", VarInput::Flat("mz_catalog"), false)
                 .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
             assert_ne!(
@@ -6783,7 +7093,7 @@ mod tests {
             let mut session = Session::dummy();
             session
                 .vars_mut()
-                .set("search_path", "mz_temp", false)
+                .set("search_path", VarInput::Flat("mz_temp"), false)
                 .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
             assert_ne!(
@@ -7458,6 +7768,92 @@ mod tests {
                 );
             })
             .await
+        }
+    }
+
+    #[tokio::test]
+    async fn test_normalized_create() {
+        Catalog::with_debug(NOW_ZERO.clone(), |catalog| {
+            let catalog = catalog.for_system_session();
+            let scx = &mut StatementContext::new(None, &catalog);
+
+            let parsed = mz_sql_parser::parser::parse_statements(
+                "create view public.foo as select 1 as bar",
+            )
+            .expect("")
+            .into_element();
+
+            let (stmt, _) = names::resolve(scx.catalog, parsed).expect("");
+
+            // Ensure that all identifiers are quoted.
+            assert_eq!(
+                r#"CREATE VIEW "materialize"."public"."foo" AS SELECT 1 AS "bar""#,
+                mz_sql::normalize::create_statement(scx, stmt).expect(""),
+            );
+
+            async {}
+        })
+        .await;
+    }
+
+    // Test that if a large catalog item is somehow committed, then we can still load the catalog.
+    #[tokio::test]
+    async fn test_large_catalog_item() {
+        let view_def = "CREATE VIEW \"materialize\".\"public\".\"v\" AS SELECT 1 FROM (SELECT 1";
+        let column = ", 1";
+        let view_def_size = view_def.bytes().count();
+        let column_size = column.bytes().count();
+        let column_count =
+            (mz_sql_parser::parser::MAX_STATEMENT_BATCH_SIZE - view_def_size) / column_size + 1;
+        let columns = iter::repeat(column).take(column_count).join("");
+        let create_sql = format!("{view_def}{columns})");
+        let create_sql_check = create_sql.clone();
+        assert!(mz_sql_parser::parser::parse_statements(&create_sql).is_ok());
+        assert!(mz_sql_parser::parser::parse_statements_with_limit(&create_sql).is_err());
+
+        let debug_stash_factory = DebugStashFactory::new().await;
+        let id = GlobalId::User(1);
+        {
+            let stash = debug_stash_factory.open_debug().await;
+            let mut catalog = Catalog::open_debug_stash(stash, SYSTEM_TIME.clone())
+                .await
+                .expect("unable to open debug catalog");
+            let item = catalog
+                .state()
+                .parse_view_item(create_sql)
+                .expect("unable to parse view");
+            catalog
+                .transact(
+                    SYSTEM_TIME().into(),
+                    None,
+                    vec![Op::CreateItem {
+                        item,
+                        name: QualifiedObjectName {
+                            qualifiers: ObjectQualifiers {
+                                database_spec: ResolvedDatabaseSpecifier::Id(DatabaseId::new(1)),
+                                schema_spec: SchemaSpecifier::Id(SchemaId::new(3)),
+                            },
+                            item: "v".to_string(),
+                        },
+                        oid: 1,
+                        id,
+                    }],
+                    |_catalog| Ok(()),
+                )
+                .await
+                .expect("failed to transact");
+        }
+        {
+            let stash = debug_stash_factory.open_debug().await;
+            let catalog = Catalog::open_debug_stash(stash, SYSTEM_TIME.clone())
+                .await
+                .expect("unable to open debug catalog");
+            let view = catalog.get_entry(&id);
+            assert_eq!("v", view.name.item);
+            match &view.item {
+                CatalogItem::View(view) => assert_eq!(create_sql_check, view.create_sql),
+                item => panic!("expected view, got {}", item.typ()),
+            }
         }
     }
 }

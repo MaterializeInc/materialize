@@ -10,6 +10,7 @@
 //! Tracing utilities for explainable plans.
 
 use std::fmt::{Debug, Display};
+use std::time::Duration;
 
 use mz_compute_client::{plan::Plan, types::dataflows::DataflowDescription};
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
@@ -89,25 +90,27 @@ impl OptimizerTrace {
     ) -> Result<Vec<TraceEntry<String>>, ExplainError> {
         let mut results = vec![];
 
-        let context = ExplainContext {
+        let mut context = ExplainContext {
             config: &config,
             humanizer: &catalog,
             used_indexes: UsedIndexes::new(vec![]),
             finishing: row_set_finishing.clone(),
+            duration: Duration::default(),
         };
 
         // Drain trace entries of types produced by local optimizer stages.
         results.extend(itertools::chain!(
-            self.drain_explainable_entries::<HirRelationExpr>(&format, &context, &None)?,
-            self.drain_explainable_entries::<MirRelationExpr>(&format, &context, &None)?,
+            self.drain_explainable_entries::<HirRelationExpr>(&format, &mut context, &None)?,
+            self.drain_explainable_entries::<MirRelationExpr>(&format, &mut context, &None)?,
         ));
 
         // Drain trace entries of types produced by global optimizer stages.
-        let context = ExplainContext {
+        let mut context = ExplainContext {
             config: &config,
             humanizer: &catalog,
             used_indexes: UsedIndexes::new(used_indexes),
             finishing: row_set_finishing,
+            duration: Duration::default(),
         };
         let fast_path_plan = match fast_path_plan {
             Some(mut plan) if !context.config.no_fast_path => {
@@ -118,12 +121,12 @@ impl OptimizerTrace {
         results.extend(itertools::chain!(
             self.drain_explainable_entries::<DataflowDescription<OptimizedMirRelationExpr>>(
                 &format,
-                &context,
+                &mut context,
                 &fast_path_plan
             )?,
             self.drain_explainable_entries::<DataflowDescription<Plan>>(
                 &format,
-                &context,
+                &mut context,
                 &fast_path_plan
             )?,
         ));
@@ -149,7 +152,7 @@ impl OptimizerTrace {
     fn drain_explainable_entries<T>(
         &self,
         format: &ExplainFormat,
-        context: &ExplainContext,
+        context: &mut ExplainContext,
         fast_path_plan: &Option<String>,
     ) -> Result<Vec<TraceEntry<String>>, ExplainError>
     where
@@ -160,19 +163,25 @@ impl OptimizerTrace {
             trace
                 .drain_as_vec()
                 .into_iter()
-                .map(|mut entry| match fast_path_plan {
-                    Some(fast_path_plan) if !context.config.no_fast_path => Ok(TraceEntry {
-                        instant: entry.instant,
-                        duration: entry.duration,
-                        path: entry.path,
-                        plan: fast_path_plan.clone(),
-                    }),
-                    _ => Ok(TraceEntry {
-                        instant: entry.instant,
-                        duration: entry.duration,
-                        path: entry.path,
-                        plan: Explainable::new(&mut entry.plan).explain(format, context)?,
-                    }),
+                .map(|mut entry| {
+                    // update the context with the current time
+                    context.duration = entry.full_duration;
+                    match fast_path_plan {
+                        Some(fast_path_plan) if !context.config.no_fast_path => Ok(TraceEntry {
+                            instant: entry.instant,
+                            span_duration: entry.span_duration,
+                            full_duration: entry.full_duration,
+                            path: entry.path,
+                            plan: fast_path_plan.clone(),
+                        }),
+                        _ => Ok(TraceEntry {
+                            instant: entry.instant,
+                            span_duration: entry.span_duration,
+                            full_duration: entry.full_duration,
+                            path: entry.path,
+                            plan: Explainable::new(&mut entry.plan).explain(format, context)?,
+                        }),
+                    }
                 })
                 .collect()
         } else {
@@ -192,7 +201,8 @@ impl OptimizerTrace {
                 .into_iter()
                 .map(|entry| TraceEntry {
                     instant: entry.instant,
-                    duration: entry.duration,
+                    span_duration: entry.span_duration,
+                    full_duration: entry.full_duration,
                     path: entry.path,
                     plan: entry.plan.to_string(),
                 })

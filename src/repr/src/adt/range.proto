@@ -18,5 +18,7 @@ message ProtoInvalidRangeError {
         google.protobuf.Empty misordered_range_bounds = 1;
         string canonicalization_overflow = 2;
         google.protobuf.Empty invalid_range_bound_flags = 3;
+        google.protobuf.Empty discontiguous_union = 4;
+        google.protobuf.Empty discontiguous_difference = 5;
     }
 }

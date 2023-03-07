@@ -119,7 +119,6 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `replica_id`     | [`uint8`] | The ID of a cluster replica.                               |
 | `process_id`     | [`uint8`] | An identifier of a compute process within a replica.       |
 | `cpu_percent`    | [`uint8`] | Approximate CPU usage, in percent of the total allocation. |
-| `cpu_percent_normalized`    | [`uint8`] | Approximate CPU usage, in percent of the total number of timely workers. Can exceed 100, as threads other than timely workers may be scheduled. |
 | `memory_percent` | [`uint8`] | Approximate RAM usage, in percent of the total allocation. |
 
 ### `mz_dataflows`
@@ -159,6 +158,19 @@ Field           | Type       | Meaning
 `to_index`      | [`bigint`] | The scope-local index of the target operator. Corresponds to an address in [`mz_dataflow_addresses.address`](#mz_dataflow_addresses).
 `to_port`       | [`bigint`] | The target operator's input port.
 
+### `mz_dataflow_channel_operators`
+
+The `mz_dataflow_channel_operators` view associates
+[channels](#mz_dataflow_channels) with the operators that are their endpoints.
+
+| Field              | Type       | Meaning                                          |
+|--------------------|------------|--------------------------------------------------|
+| `id`               | [`bigint`] | The ID of the channel.                           |
+| `worker_id`        | [`bigint`] | The ID of the worker thread hosting the channel. |
+| `from_operator_id` | [`bigint`] | The ID of the source of the channel.             |
+| `to_operator_id`   | [`bigint`] | The ID of the target of the channel.             |
+
+
 ### `mz_dataflow_operators`
 
 The `mz_dataflow_operators` source describes the dataflow operators in the
@@ -185,11 +197,11 @@ Field           | Type       | Meaning
 
 ### `mz_compute_exports`
 
-The `mz_compute_exports` source describes the dataflows created by indexes and materialized views in the system.
+The `mz_compute_exports` source describes the dataflows created by indexes, materialized views, and subscriptions in the system.
 
 Field       | Type       | Meaning
 ------------|------------|--------
-`export_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes) or [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views).
+`export_id` | [`text`]   | The ID of the index, materialized view, or subscription that created the dataflow. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions`](#mz_subscriptions).
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the corresponding [dataflow].
 
 ### `mz_compute_frontiers`
@@ -204,7 +216,7 @@ For per-worker frontier information, see
 
 Field        | Type       | Meaning
 -------------|------------|--------
-`export_id ` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
+`export_id ` | [`text`]   | The ID of the index, materialized view, or subscription that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
 `time`       | [`mz_timestamp`] | The next timestamp at which the output may change.
 
 ### `mz_cluster_replica_frontiers`
@@ -219,7 +231,7 @@ At this time, we do not make any guarantees about the freshness of these numbers
 Field        | Type       | Meaning
 -------------|------------|--------
 `replica_id` | [`bigint`] | The ID of a cluster replica.
-`export_id ` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
+`export_id ` | [`text`]   | The ID of the index, materialized view, or subscription that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
 `time`       | [`mz_timestamp`] | The next timestamp at which the output may change.
 
 ### `mz_compute_import_frontiers`
@@ -234,8 +246,8 @@ For per-worker frontier information, see
 
 Field       | Type       | Meaning
 ------------|------------|--------
-`export_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
-`import_id` | [`text`]   | The ID of the input source object for the dataflow. Corresponds to either [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables) or [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views).
+`export_id` | [`text`]   | The ID of the index, materialized view, or subscription that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
+`import_id` | [`text`]   | The ID of the input source object for the dataflow. Corresponds to either [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables) or [`mz_compute_exports.export_id`](#mz_compute_exports).
 `time`      | [`mz_timestamp`] | The next timestamp at which the source instantiation may change.
 
 ### `mz_message_counts`
@@ -262,6 +274,19 @@ Field      | Type       | Meaning
 `worker_id`| [`bigint`] | The ID of the worker thread servicing the peek.
 `index_id` | [`text`]   | The ID of the index the peek is targeting.
 `time`     | [`mz_timestamp`] | The timestamp the peek has requested.
+
+### `mz_subscriptions`
+
+The `mz_subscriptions` table describes all active [`SUBSCRIBE`](/sql/subscribe)
+operations in the system.
+
+Field                   | Type                         | Meaning
+------------------------|------------------------------|--------
+`id`                    | [`text`]                     | The ID of the subscription.
+`user`                  | [`text`]                     | The user who started the subscription.
+`cluster_id`            | [`text`]                     | The ID of the cluster on which the subscription is running. Corresponds to [`mz_clusters.id`](../mz_catalog/#mz_clusters).
+`created_at`            | [`timestamp with time zone`] | The time at which the subscription was created.
+`referenced_object_ids` | [`text list`]                | The IDs of objects referenced by the subscription. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects)
 
 ### `mz_object_dependencies`
 
@@ -404,7 +429,7 @@ advancements of the corresponding [dataflow] frontiers.
 
 Field       | Type       | Meaning
 ------------|------------|--------
-`export_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
+`export_id` | [`text`]   | The ID of the index, materialized view, or subscription that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
 `import_id` | [`text`]   | The ID of the input source object for the dataflow. Corresponds to either [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables) or [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views).
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
 `delay_ns`  | [`bigint`] | The upper bound of the bucket in nanoseconds.
@@ -420,8 +445,8 @@ corresponding [dataflow] frontiers.
 
 Field       | Type          | Meaning
 ------------|---------------|--------
-`export_id` | [`text`]      | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
-`import_id` | [`text`]      | The ID of the input source object for the dataflow. Corresponds to either [`mz_sources.id`](../mz_catalog#mz_sources) or [`mz_tables.id`](../mz_catalog#mz_tables) or [`mz_materialized_views.id`](../mz_catalog#mz_materialized_views).
+`export_id` | [`text`]      | The ID of the index, materialized view, or subscription that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
+`import_id` | [`text`]      | The ID of the input source object for the dataflow. Corresponds to either [`mz_sources.id`](../mz_catalog#mz_sources) or [`mz_tables.id`](../mz_catalog#mz_tables) or [`mz_compute_exports.export_id`](#mz_compute_exports).
 `worker_id` | [`bigint`]    | The ID of the worker thread hosting the dataflow.
 `delay`     | [`interval`]  | The upper bound of the bucket as an interval.
 `count`     | [`bigint`]    | The (noncumulative) count of delay measurements in this bucket.
@@ -450,7 +475,7 @@ For frontier information aggregated across all workers, see
 
 Field       | Type       | Meaning
 ------------|------------|--------
-`export_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
+`export_id` | [`text`]   | The ID of the index, materialized view, or subscription that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
 `time`      | [`mz_timestamp`] | The next timestamp at which the dataflow may change.
 
@@ -466,8 +491,8 @@ For frontier information aggregated across all workers, see
 
 Field       | Type       | Meaning
 ------------|------------|--------
-`export_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
-`source_id` | [`text`]   | The ID of the input source object for the dataflow. Corresponds to either [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables) or [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views).
+`export_id` | [`text`]   | The ID of the index, materialized view, or subscription that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
+`source_id` | [`text`]   | The ID of the input source object for the dataflow. Corresponds to either [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables) or [`mz_compute_exports.export_id`](#mz_compute_exports).
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
 `time`      | [`mz_timestamp`] | The next timestamp at which the dataflow may change.
 
@@ -575,6 +600,7 @@ Field         | Type                          | Meaning
 [`mz_timestamp`]: /sql/types/mz_timestamp
 [`numeric`]: /sql/types/numeric
 [`text`]: /sql/types/text
+[`text list`]: /sql/types/list
 [`uuid`]: /sql/types/uuid
 [`uint8`]: /sql/types/uint8
 [`timestamp with time zone`]: /sql/types/timestamp

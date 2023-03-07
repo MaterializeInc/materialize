@@ -152,6 +152,8 @@ case "$cmd" in
             --env LAUNCHDARKLY_API_TOKEN
             --env LAUNCHDARKLY_SDK_KEY
             --env NIGHTLY_CANARY_APP_PASSWORD
+            --env NIGHTLY_CANARY_CONFLUENT_CLOUD_API_KEY
+            --env NIGHTLY_CANARY_CONFLUENT_CLOUD_API_SECRET
             --env PYPI_TOKEN
         )
         for env in $(printenv | grep '^BUILDKITE' | sed 's/=.*//'); do
