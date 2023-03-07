@@ -66,10 +66,8 @@ enum UnauthorizedErrorKind {
     Superuser,
     /// The action requires a specific attribute.
     Attribute(Attribute),
-    // TODO(jkosh44) replace with structured errors once RBAC is done.
-    Unstructured {
-        reason: String,
-    },
+    /// The action requires one or more privileges.
+    Privilege { reason: String },
 }
 
 impl fmt::Display for UnauthorizedError {
@@ -93,7 +91,7 @@ impl UnauthorizedError {
         }
     }
 
-    pub fn unstructured(action: String, reason: String) -> UnauthorizedError {
+    pub fn privilege(action: String, reason: String) -> UnauthorizedError {
         UnauthorizedError {
             action,
             kind: UnauthorizedErrorKind::Unstructured { reason },

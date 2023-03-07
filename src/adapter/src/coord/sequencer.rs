@@ -3923,7 +3923,7 @@ impl Coordinator {
             ))
         } else {
             Err(AdapterError::Unauthorized(
-                rbac::UnauthorizedError::unstructured(
+                rbac::UnauthorizedError::privilege(
                     "alter system".into(),
                     format!("You must be the '{}' role", SYSTEM_USER.name),
                 ),
@@ -4031,7 +4031,7 @@ impl Coordinator {
             | Plan::Raise(_)
             | Plan::RotateKeys(_) => {
                 return Err(AdapterError::Unauthorized(
-                    rbac::UnauthorizedError::unstructured(
+                    rbac::UnauthorizedError::privilege(
                         plan.name().to_string(),
                         format!("You must not be the '{}' role", MZ_INTROSPECTION_ROLE.name),
                     ),
@@ -4051,7 +4051,7 @@ impl Coordinator {
                 && schema != INFORMATION_SCHEMA
             {
                 return Err(AdapterError::Unauthorized(
-                    rbac::UnauthorizedError::unstructured(
+                    rbac::UnauthorizedError::privilege(
                         format!("interact with object {full_name}"),
                         format!("You must not be the '{}' role", MZ_INTROSPECTION_ROLE.name),
                     ),
