@@ -380,7 +380,7 @@ async fn main() -> Result<()> {
                     .await
                     .with_context(|| "Retrieving cloud providers.")?;
                 let cloud_providers_regions =
-                    list_regions(&cloud_providers, &client, &valid_profile)
+                    list_regions(&cloud_providers.data, &client, &valid_profile)
                         .await
                         .with_context(|| "Listing regions.")?;
                 cloud_providers_regions
