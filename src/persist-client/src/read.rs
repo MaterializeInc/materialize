@@ -183,8 +183,8 @@ where
     }
 
     /// Returns a [`SubscriptionLeaseReturner`] tied to this [`Subscribe`].
-    pub(crate) fn clone_lease_returner(&self) -> SubscriptionLeaseReturner {
-        self.listen.handle.clone_lease_returner()
+    pub(crate) fn lease_returner(&self) -> &SubscriptionLeaseReturner {
+        self.listen.handle.lease_returner()
     }
 }
 
@@ -440,7 +440,6 @@ where
 
 #[derive(Clone, Debug)]
 pub(crate) struct SubscriptionLeaseReturner {
-    // A non-async mutex protecting plain-old-data that is written by `SubscriptionLeaseReturner`s, and read as part of normal `Subscription` operation.
     leased_seqnos: Arc<Mutex<BTreeMap<SeqNo, usize>>>,
     reader_id: LeasedReaderId,
     metrics: Arc<Metrics>,
@@ -517,7 +516,6 @@ where
     since: Antichain<T>,
     pub(crate) last_heartbeat: EpochMillis,
     explicitly_expired: bool,
-    leased_seqnos: Arc<Mutex<BTreeMap<SeqNo, usize>>>,
     lease_returner: SubscriptionLeaseReturner,
 
     pub(crate) heartbeat_task: Option<JoinHandle<()>>,
@@ -540,15 +538,9 @@ where
         since: Antichain<T>,
         last_heartbeat: EpochMillis,
     ) -> Self {
-        let leased_seqnos = Arc::new(Mutex::new(BTreeMap::new()));
-        let lease_returner = SubscriptionLeaseReturner {
-            leased_seqnos: Arc::clone(&leased_seqnos),
-            reader_id: reader_id.clone(),
-            metrics: Arc::clone(&metrics),
-        };
         ReadHandle {
             cfg,
-            metrics,
+            metrics: Arc::clone(&metrics),
             machine: machine.clone(),
             gc: gc.clone(),
             blob,
@@ -556,8 +548,11 @@ where
             since,
             last_heartbeat,
             explicitly_expired: false,
-            leased_seqnos,
-            lease_returner,
+            lease_returner: SubscriptionLeaseReturner {
+                leased_seqnos: Arc::new(Mutex::new(BTreeMap::new())),
+                reader_id: reader_id.clone(),
+                metrics,
+            },
             heartbeat_task: Some(machine.start_reader_heartbeat_task(reader_id, gc).await),
         }
     }
@@ -583,6 +578,7 @@ where
     pub async fn downgrade_since(&mut self, new_since: &Antichain<T>) {
         // Guaranteed to be the smallest/oldest outstanding lease on a `SeqNo`.
         let outstanding_seqno = self
+            .lease_returner
             .leased_seqnos
             .lock()
             .expect("lock poisoned")
@@ -609,7 +605,7 @@ where
                     self.reader_id,
                     outstanding_seqno,
                     _seqno,
-                    self.leased_seqnos,
+                    self.lease_returner.leased_seqnos,
                     // The Debug impl of backtrace is less aesthetic, but will put the trace
                     // on a single line and play more nicely with our Honeycomb quota
                     Backtrace::capture(),
@@ -750,6 +746,7 @@ where
         let seqno = self.machine.seqno();
 
         *self
+            .lease_returner
             .leased_seqnos
             .lock()
             .expect("lock poisoned")
@@ -762,8 +759,8 @@ where
     /// Returns a [`SubscriptionLeaseReturner`] tied to this [`ReadHandle`],
     /// allowing a caller to return leases without needing to mutably borrowing
     /// this `ReadHandle` directly.
-    pub(crate) fn clone_lease_returner(&self) -> SubscriptionLeaseReturner {
-        self.lease_returner.clone()
+    pub(crate) fn lease_returner(&self) -> &SubscriptionLeaseReturner {
+        &self.lease_returner
     }
 
     /// Processes that a part issued from `self` has been consumed, and `self`
@@ -1186,6 +1183,7 @@ mod tests {
             let expect_downgrade = subscribe
                 .listen
                 .handle
+                .lease_returner
                 .leased_seqnos
                 .lock()
                 .expect("lock poisoned")

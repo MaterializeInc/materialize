@@ -280,7 +280,7 @@ where
 
         let mut batch_parts = vec![];
 
-        let mut lease_returner = subscription.clone_lease_returner();
+        let mut lease_returner = subscription.lease_returner().clone();
         let subscription_stream = async_stream::stream! {
             // Eagerly yield the initial as_of. This makes sure that the output
             // frontier of the `persist_source` closely tracks the `upper` frontier
