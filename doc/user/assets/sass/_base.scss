@@ -85,7 +85,8 @@ body.dark {
     --link: #9e7cf7;
 
     --code-block: var(--card-light);
-    --code-simple: #d4d4d4;
+    --code-simple: #c2c2c2;
+    --code-simple-bg: #292929;
     --code-red: #fc6e6c;
     --code-pink: #f97fe6;
     --code-blue: #4b73f8;
@@ -115,6 +116,7 @@ body.light {
 
     --code-block: var(--code-block-light);
     --code-simple: #505050;
+    --code-simple-bg: var(--code-block-light);
     --code-red: #c41a16;
     --code-pink: #a90d91;
     --code-blue: #1c01ce;

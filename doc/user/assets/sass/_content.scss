@@ -81,7 +81,7 @@ p+p {
     code {
         font-size: inherit;
         color: var(--code-simple);
-        background: var(--card-light);
+        background: var(--code-simple-bg);
         border: none;
     }
 
@@ -393,7 +393,7 @@ p+p {
         border-radius: 2px;
         padding: 0.1rem 0.25rem 0rem;
         color: var(--code-simple);
-        background: var(--card-light);
+        background: var(--code-simple-bg);
     }
 
     // Merge a highlighted code block followed by a non-highlighted code block,
