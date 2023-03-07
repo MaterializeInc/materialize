@@ -215,6 +215,15 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
 
     /// Returns `true` iff the given `feature` is supported at the moment.
     fn get_feature(&self, feature: CatalogFeature) -> bool;
+
+    /// Set the given `feature` to `value`. Returns `true` iff the value was
+    /// changed.
+    ///
+    /// Clients should use this this method carefully, as changes to the backing
+    /// state here are not guarateed to be persisted. The motivating use case
+    /// for this method was ensuring that features are temporary turned on so
+    /// catalog rehydration does not break due to unsupported SQL syntax.
+    fn set_feature(&mut self, feature: CatalogFeature, value: bool) -> bool;
 }
 
 /// Defines features that the [SessionCatalog] may optionally support.

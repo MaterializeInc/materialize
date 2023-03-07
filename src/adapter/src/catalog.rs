@@ -522,7 +522,7 @@ impl CatalogState {
     /// context.
     #[tracing::instrument(level = "info", skip_all)]
     pub fn parse_view_item(&self, create_sql: String) -> Result<CatalogItem, anyhow::Error> {
-        let session_catalog = ConnCatalog {
+        let mut session_catalog = ConnCatalog {
             state: Cow::Borrowed(self),
             conn_id: SYSTEM_CONN_ID,
             cluster: "default".into(),
@@ -534,6 +534,8 @@ impl CatalogState {
             role_id: self.resolve_builtin_role(&MZ_SYSTEM_ROLE),
             prepared_statements: None,
         };
+        enable_features_required_for_catalog_open(&mut session_catalog);
+
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
         let (stmt, depends_on) = mz_sql::names::resolve(&session_catalog, stmt)?;
         let depends_on = depends_on.into_iter().collect();
@@ -5815,7 +5817,9 @@ impl Catalog {
         create_sql: String,
         pcx: Option<&PlanContext>,
     ) -> Result<CatalogItem, AdapterError> {
-        let session_catalog = self.for_system_session();
+        let mut session_catalog = self.for_system_session();
+        enable_features_required_for_catalog_open(&mut session_catalog);
+
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
         let (stmt, depends_on) = mz_sql::names::resolve(&session_catalog, stmt)?;
         let depends_on = depends_on.into_iter().collect();
@@ -6142,6 +6146,16 @@ pub fn is_reserved_name(name: &str) -> bool {
     BUILTIN_PREFIXES
         .iter()
         .any(|prefix| name.starts_with(prefix))
+}
+
+/// Enable catalog features that might be required during planning in
+/// [Catalog::open]. Existing catalog items might have been created while a
+/// specific feature flag turned on, so we need to ensure that this is also the
+/// case during catalog rehydration in order to avoid panics.
+fn enable_features_required_for_catalog_open(session_catalog: &mut ConnCatalog) {
+    if !session_catalog.get_feature(CatalogFeature::EnableWithMutuallyRecursive) {
+        session_catalog.set_feature(CatalogFeature::EnableWithMutuallyRecursive, true);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -6685,6 +6699,14 @@ impl SessionCatalog for ConnCatalog<'_> {
         let config = &self.state.system_configuration;
         match name {
             EnableWithMutuallyRecursive => config.enable_with_mutually_recursive(),
+        }
+    }
+
+    fn set_feature(&mut self, name: CatalogFeature, value: bool) -> bool {
+        use CatalogFeature::*;
+        let config = &mut self.state.to_mut().system_configuration;
+        match name {
+            EnableWithMutuallyRecursive => config.set_enable_with_mutually_recursive(value),
         }
     }
 }

@@ -1583,6 +1583,13 @@ impl SystemVars {
     pub fn enable_with_mutually_recursive(&self) -> bool {
         *self.enable_with_mutually_recursive.value()
     }
+
+    /// Sets the `enable_with_mutually_recursive` configuration parameter.
+    pub fn set_enable_with_mutually_recursive(&mut self, value: bool) -> bool {
+        self.enable_with_mutually_recursive
+            .set(VarInput::Flat(value.format().as_str()))
+            .expect("valid parameter value")
+    }
 }
 
 /// A `Var` represents a configuration parameter of an arbitrary type.
