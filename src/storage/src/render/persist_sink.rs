@@ -103,6 +103,13 @@ where
 
     let persist_clients = Arc::clone(&storage_state.persist_clients);
     let button = persist_op.build(move |_capabilities| async move {
+        // This may SEEM unnecessary, but metrics contains extra
+        // `DeleteOnDrop`-wrapped fields that will NOT be moved into this
+        // closure otherwise, dropping and destroying
+        // those metrics. This is because rust now only moves the
+        // explicitly-referenced fields into closures.
+        let metrics = metrics;
+
         let mut stashed_batches = BTreeMap::new();
 
         let mut write = persist_clients
