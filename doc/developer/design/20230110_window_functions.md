@@ -101,9 +101,7 @@ As noted above, some window function queries on some input data are impossible t
 
 ## Limitations
 
-We don't handle such OVER clauses where the ORDER BY inside the OVER is on a String or other complex type. See a discussion on supported types below in the "Types" section.
-
-In cases that we handle by Prefix Sum, peer groups (i.e., groups of rows that agree on both the PARTITION BY and the ORDER BY keys) should be small, see the "Duplicate Indexes" section.
+We don't handle such OVER clauses where the ORDER BY inside the OVER is on a String or other such type that can't be mapped to a fixed-length integer. See a discussion on supported types below in the "Types" section.
 
 # Details
 
@@ -180,8 +178,6 @@ The implementation is data-parallel not just across keys, but inside each key as
 We’ll use the word **index** in this document to mean the values of the ORDER BY column of the OVER clause, i.e., they are simply the values that determine the ordering. (Note that it’s sparse indexing, i.e., not every number occurs from 1 to n, but there are usually (big) gaps.)
 
 As mentioned above, DD's prefix sum needs the index type to be `usize`. It is actually a fundamental limitation of the algorithm that it only works with integer indexes, and therefore we will have to map other types to integers. We discuss this in the "ORDER BY types" section.
-
-In DD's prefix sum implementation, duplicate indexes are currently forbidden. We will discuss this in the "Duplicate indexes" section.
 
 #### Implementation details of DD's prefix sum
 
@@ -290,7 +286,7 @@ TODO: switch the order of I. and II.
         - We start with `(index, offset)` pairs for all the possible current elements in parallel, where the pair means that we need to move `index` down by `offset` (down when looking for the lower end of the interval, or up when looking for the upper end), i.e., we need to lower `index` while lowering `offset` to 0.
         - Then, at every step of an `iterate`, we can use a range from `counts` on each  `(index, offset)` pair: `index` is lowered by the size of the range, and `offset` is lowered by the aggregated count of the range.
             - We want to use the biggest such range in `counts` that doesn't make `offset` negative. We can do this by an inner `iterate`.
-- ROWS: similar to GROUPS, but use indexes that include the deduplication component. (see below at “Duplicate indexes”)
+- ROWS: similar to GROUPS, but use indexes that include the hash. (see at [Peer groups](#Peer-groups))
 
 There is also `frame_exclusion`, which sometimes necessitates special handling for the group that contains the current row. In such cases, we will put together the result value of the window function from 3 parts: 1. prefix sum (generalized to arbitrary intervals) for groups that are earlier than the current row’s group, 2. prefix sum for groups that are later than the current row’s group, 3. current row’s group (without prefix sum).
 
@@ -325,11 +321,9 @@ Alternatively, we could make these a bit faster (except for NTH_VALUE) if we jus
 
 ----------------------
 
-### Duplicate indexes (peer groups)
+### Peer groups
 
-TODO: change title to "peer groups" first
-
-There might be rows which agree on both the PARTITION BY key and the ORDER BY key (the index). These groups of rows are called _peer groups_.
+There might be rows which agree on both the PARTITION BY key and the ORDER BY key (the index of the prefix sum). These groups of rows are called _peer groups_.
 
 Framed window functions in GROUPS or RANGE frame mode as well as the RANK, DENSE_RANK, PERCENT_RANK, and CUME_DIST functions compute the same output for all the rows inside a peer group.
 This is easy to handle, since we can simply deduplicate the indexes and compute one result for each index (and then join with the original data on the index). Note that the sums of each peer group (i.e., the input to `aggregate`) need to be precomputed by a standard grouped aggregation. (FIRST_VALUE and LAST_VALUE are handled specially as explained above.)
@@ -338,11 +332,12 @@ However, for framed window functions in ROWS frame mode as well as for LAG/LEAD 
 
 One idea to solve this problem is to have a `reduce` number the elements inside each peer group with 0, 1, 2, ... before prefix sum, and adding just this numbering column as an additional component to the prefix sum indexes. But the problem with this is that this would handle only small peer groups, since it's not incremental inside peer groups, i.e., it recomputes the numbering for an entire pee group when any group element changes. Even though, it might be ok in many cases to assume that peer groups are small (this should hold much more commonly than the assumption of the current window function implementation, which is that _window partitions_ are small), this would still hurt the generality of the whole prefix sum approach.
 
-TODO: add Moritz's hashing idea here:
-We can fix a deterministic order of rows _inside_ a peer group by hashing the rows, and making the hash part of the prefix sum index. The hashes will have an arbitrary, but deterministic order. The order being arbitrary doesn't matter, because the user didn't request any specific ordering on fields that don't appear in the ORDER BY clause.
-Hash collisions will be resolved by an extra Reduce beforehand grouping by collision groups, adding a few more bits (e.g., 6) to differentiate records within a collision group.
+A better way to solve the problem is to fix a deterministic order of rows inside a peer group by _hashing the rows_, and making the hash part of the prefix sum index. The hashes will have an arbitrary, but deterministic order. The order being arbitrary doesn't matter, because the user didn't request any specific ordering on fields that don't appear in the ORDER BY clause.
 
-(Note that there is one common situation where peer groups are large: if there is no ORDER BY in the OVER clause. However, this particular case is not a big problem, since we are planning to handle these cases by transforming away the window function to a grouped aggregation + a join, instead of using prefix sum.)
+Hash collisions will be resolved by an extra Reduce beforehand, which groups by hash value, and adds a few more bits (e.g., 8) to differentiate records within a collision group. If the collision resolution bits are not enough, i.e., there is a hash value that occurs more times than is representable by the collision resolution bits, then we error out.
+Therefore, we'll have to determine the exact number of bits of the hash function's output as well as the number of collision resolution bits in a way that the chances of the collision resolution bits not being enough will be astronomically small for any realistically sized peer groups. My intuition is that 32 bits of hash + 8 bits of collision resolution are enough for peer groups of hundreds of millions, but [I'll make an exact calculation](https://oeis.org/A225871).
+
+(Note that there is one common situation where peer groups are large: if there is no ORDER BY in the OVER clause. However, this particular case is not relevant here, since we are planning to handle this case by transforming away the window function to a grouped aggregation + a join, instead of using prefix sum.)
 
 ### ORDER BY types
 
