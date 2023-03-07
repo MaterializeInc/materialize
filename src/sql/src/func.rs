@@ -2162,6 +2162,13 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                      WHERE t.oid = $1)"
             ) => Bool, 2080;
         },
+        "pg_function_is_visible" => Scalar {
+            params!(Oid) => sql_impl_func(
+                "(SELECT s.name = ANY(pg_catalog.current_schemas(true))
+                     FROM mz_catalog.mz_functions f JOIN mz_catalog.mz_schemas s ON f.schema_id = s.id
+                     WHERE f.oid = $1)"
+            ) => Bool, 2081;
+        },
         "pg_typeof" => Scalar {
             params!(Any) => Operation::new(|ecx, exprs, params, _order_by| {
                 // pg_typeof reports the type *before* coercion.

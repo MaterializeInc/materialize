@@ -277,7 +277,7 @@ other_record_c
 > CREATE TABLE jsonb_array_list_t (a jsonb_array_list_c);
 > INSERT INTO jsonb_array_list_t VALUES (LIST[ARRAY['{"1":2}'::jsonb]]);
 
-# Test pg_table_is_visible.
+# Test pg_type_is_visible.
 
 > SELECT PG_TYPE_IS_VISIBLE('bool'::REGTYPE::OID);
 pg_type_is_visible
