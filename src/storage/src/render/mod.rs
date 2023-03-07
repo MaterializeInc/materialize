@@ -233,6 +233,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
     resume_upper: Antichain<mz_repr::Timestamp>,
     source_resume_upper: Vec<Row>,
 ) {
+    let worker_id = timely_worker.index();
     let worker_logging = timely_worker.log_register().get("timely");
     let debug_name = id.to_string();
     let name = format!("Source dataflow: {debug_name}");
@@ -264,11 +265,33 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 
                 let metrics = SourcePersistSinkMetrics::new(
                     &storage_state.source_metrics,
-                    &export.storage_metadata.data_shard,
+                    target,
                     id,
+                    worker_id,
+                    &export.storage_metadata.data_shard,
                     export.output_index,
                 );
 
+                // This `DeleteOnDropGauge` will be moved into
+                // `persist_sink`. Only the active-worker-labeled
+                // metric will exist long-term.
+                metrics.enable_multi_worker_storage_persist_sink.set(
+                    if storage_state
+                        .dataflow_parameters
+                        .enable_multi_worker_storage_persist_sink
+                    {
+                        1
+                    } else {
+                        0
+                    },
+                );
+
+                // NOTE: this will be made conditional on `enable_multi_worker_storage_persist_sink`
+                // in <https://github.com/MaterializeInc/materialize/pull/17589>.
+                tracing::info!(
+                    "timely-{worker_id} rendering {} with single-worker persist_sink",
+                    target
+                );
                 let token = crate::render::persist_sink::render(
                     into_time_scope,
                     target,

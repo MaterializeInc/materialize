@@ -19,6 +19,18 @@ use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_client::types::sources::IngestionDescription;
 
+/// Storage instance configuration parameters that can affect
+/// dataflow rendering, and as such must be applied to
+/// `StorageWorker`s in a consistent order with source and sink
+/// creation.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DataflowParameters {
+    /// Whether or not to use the new multi-worker storage `persist_sink`
+    /// implementation in storage ingestions. Is applied only
+    /// when a cluster or dataflow is restarted.
+    pub enable_multi_worker_storage_persist_sink: bool,
+}
+
 /// Internal commands that can be sent by individual operators/workers that will
 /// be broadcast to all workers. The worker main loop will receive those and act
 /// on them.
@@ -49,6 +61,9 @@ pub enum InternalStorageCommand {
     ),
     /// Drop all state and operators for a dataflow.
     DropDataflow(GlobalId),
+
+    /// Update the configuration for rendering dataflows.
+    UpdateConfiguration(DataflowParameters),
 }
 
 /// Allows broadcasting [`internal commands`](InternalStorageCommand) to all

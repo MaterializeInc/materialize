@@ -100,7 +100,9 @@ use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_client::types::sources::{IngestionDescription, SourceData};
 
 use crate::decode::metrics::DecodeMetrics;
-use crate::internal_control::{self, InternalCommandSender, InternalStorageCommand};
+use crate::internal_control::{
+    self, DataflowParameters, InternalCommandSender, InternalStorageCommand,
+};
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::statistics::{SinkStatisticsMetrics, SourceStatisticsMetrics, StorageStatistics};
@@ -209,6 +211,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             sink_statistics: BTreeMap::new(),
             internal_cmd_tx: command_sequencer,
             async_worker,
+            dataflow_parameters: Default::default(),
         };
 
         // TODO(aljoscha): We might want `async_worker` and `internal_cmd_tx` to
@@ -287,6 +290,9 @@ pub struct StorageState {
     /// Async worker companion, used for running code that requires async, which
     /// the timely main loop cannot do.
     pub async_worker: Rc<RefCell<AsyncStorageWorker<mz_repr::Timestamp>>>,
+
+    /// Dynamically configurable parameters that control how dataflows are rendered.
+    pub dataflow_parameters: DataflowParameters,
 }
 
 /// This maintains an additional read hold on the source data for a sink, alongside
@@ -773,6 +779,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 // control flow from external command to this internal command.
                 self.storage_state.dropped_ids.extend(ids);
             }
+            InternalStorageCommand::UpdateConfiguration(params) => {
+                self.storage_state.dataflow_parameters = params;
+            }
         }
     }
 
@@ -1008,6 +1017,18 @@ impl StorageState {
             StorageCommand::UpdateConfiguration(params) => {
                 tracing::info!("Applying configuration update: {params:?}");
                 params.persist.apply(self.persist_clients.cfg());
+
+                // This needs to be broadcast by one worker and go through
+                // the internal command fabric, to ensure consistent
+                // ordering of dataflow rendering across all workers.
+                if worker_index == 0 {
+                    internal_cmd_tx.broadcast(InternalStorageCommand::UpdateConfiguration(
+                        DataflowParameters {
+                            enable_multi_worker_storage_persist_sink: params
+                                .enable_multi_worker_storage_persist_sink,
+                        },
+                    ))
+                }
             }
             StorageCommand::CreateSources(ingestions) => {
                 for ingestion in ingestions {
