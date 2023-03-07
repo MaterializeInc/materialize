@@ -82,7 +82,8 @@ pub struct PostgresColumnDesc {
     pub name: String,
     /// The column's monotonic position in its table, i.e. "this was the _i_th
     /// column created" irrespective of the current number of columns.
-    // TODO(migration): remove this Option in v0.48
+    // TODO(migration): remove option in version v.50 (released in v0.48 + 1
+    // additional release)
     pub col_num: Option<u16>,
     /// The OID of the column's type.
     pub type_oid: u32,

@@ -3307,6 +3307,7 @@ dependencies = [
  "enum-kinds",
  "fail",
  "futures",
+ "hex",
  "itertools",
  "launchdarkly-server-sdk",
  "maplit",
