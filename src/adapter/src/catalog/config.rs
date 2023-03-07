@@ -67,6 +67,13 @@ pub struct Config<'a> {
     pub system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
     /// How long to retain storage usage records
     pub storage_usage_retention_period: Option<Duration>,
+    /// Needed only for migrating PG source column metadata. If `None`, will
+    /// skip any migrations that require it, which will likely cause tests to
+    /// fail.
+    ///
+    /// TODO(migration): delete in version v.50 (released in v0.48 + 1
+    /// additional release)
+    pub connection_context: Option<mz_storage_client::types::connections::ConnectionContext>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
