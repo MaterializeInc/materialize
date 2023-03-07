@@ -21,7 +21,7 @@ $ set-regex match=s\d+ replacement=SID
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_scheduling_elapsed);
 1
 
-> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_compute_operator_durations);
+> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_compute_operator_durations_histogram);
 1
 
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_arrangement_sizes);
@@ -36,7 +36,7 @@ $ set-regex match=s\d+ replacement=SID
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_compute_import_frontiers);
 1
 
-> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_worker_compute_delays);
+> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_worker_compute_delays_histogram);
 1
 
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_worker_compute_dependencies);
@@ -45,7 +45,7 @@ $ set-regex match=s\d+ replacement=SID
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_active_peeks);
 1
 
-> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_peek_durations);
+> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_peek_durations_histogram);
 1
 
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_message_counts);
@@ -57,8 +57,18 @@ contains:cannot drop schema mz_internal because it is required by the database s
 ! DROP VIEW mz_internal.mz_compute_frontiers
 contains:cannot drop item mz_internal.mz_compute_frontiers because it is required by the database system
 
-! DROP SOURCE mz_internal.mz_worker_compute_delays
-contains:cannot drop item mz_internal.mz_worker_compute_delays because it is required by the database system
+! DROP SOURCE mz_internal.mz_worker_compute_delays_histogram_internal
+contains:cannot drop item mz_internal.mz_worker_compute_delays_histogram_internal because it is required by the database system
+
+> SELECT mz_columns.id, mz_columns.name, position, type
+  FROM mz_views JOIN mz_columns USING (id)
+  WHERE mz_views.name = 'mz_peek_durations_histogram'
+  ORDER BY position
+id      name        position    type
+--------------------------------------
+SID   worker_id   1           uint8
+SID   duration_ns 2           uint8
+SID   count       3           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)
@@ -72,7 +82,7 @@ SID   elapsed_ns  3           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)
-  WHERE mz_views.name = 'mz_compute_operator_durations'
+  WHERE mz_views.name = 'mz_compute_operator_durations_histogram'
   ORDER BY position
 id      name        position    type
 --------------------------------------
@@ -83,7 +93,7 @@ SID   count       4           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)
-  WHERE mz_views.name = 'mz_scheduling_parks'
+  WHERE mz_views.name = 'mz_scheduling_parks_histogram'
   ORDER BY position
 id      name        position    type
 --------------------------------------
@@ -138,9 +148,9 @@ SID   operator_id 1           uint8
 SID   worker_id   2           uint8
 SID   count       3           bigint
 
-> SELECT mz_columns.id, mz_columns.name, position, mz_columns.type
-  FROM mz_sources JOIN mz_columns USING (id)
-  WHERE mz_sources.name = 'mz_worker_compute_delays'
+> SELECT mz_columns.id, mz_columns.name, position, type
+  FROM mz_views JOIN mz_columns USING (id)
+  WHERE mz_views.name = 'mz_worker_compute_delays_histogram'
   ORDER BY position
 id      name        position    type
 --------------------------------------
@@ -149,7 +159,6 @@ SID   import_id   2           text
 SID   worker_id   3           uint8
 SID   delay_ns    4           uint8
 SID   count       5           bigint
-SID   sum	  6	      uint8
 
 > SELECT mz_columns.id, mz_columns.name, position, mz_columns.type
   FROM mz_sources JOIN mz_columns USING (id)

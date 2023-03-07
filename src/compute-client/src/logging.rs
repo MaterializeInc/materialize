@@ -332,7 +332,7 @@ pub static DEFAULT_LOG_VARIANTS: Lazy<Vec<LogVariant>> = Lazy::new(|| {
 pub enum LogView {
     MzArrangementSharing,
     MzArrangementSizes,
-    MzComputeOperatorDurations,
+    MzComputeOperatorDurationsHistogram,
     MzDataflowNames,
     MzDataflowOperatorDataflows,
     MzDataflowOperatorParents,
@@ -343,8 +343,10 @@ pub enum LogView {
     MzRecordsPerDataflowOperator,
     MzRecordsPerDataflow,
     MzRecordsPerDataflowGlobal,
+    MzPeekDurationsHistogram,
     MzSchedulingElapsed,
-    MzSchedulingParks,
+    MzSchedulingParksHistogram,
+    MzWorkerComputeDelaysHistogram,
 }
 
 pub static DEFAULT_LOG_VIEWS: Lazy<Vec<LogView>> = Lazy::new(|| {
@@ -362,9 +364,11 @@ pub static DEFAULT_LOG_VIEWS: Lazy<Vec<LogView>> = Lazy::new(|| {
         LogView::MzRecordsPerDataflowOperator,
         LogView::MzRecordsPerDataflow,
         LogView::MzRecordsPerDataflowGlobal,
+        LogView::MzPeekDurationsHistogram,
         LogView::MzSchedulingElapsed,
-        LogView::MzComputeOperatorDurations,
-        LogView::MzSchedulingParks,
+        LogView::MzComputeOperatorDurationsHistogram,
+        LogView::MzSchedulingParksHistogram,
+        LogView::MzWorkerComputeDelaysHistogram,
     ]
 });
 
@@ -589,6 +593,16 @@ impl LogView {
                 "mz_records_per_dataflow_global_{}",
             ),
 
+            LogView::MzPeekDurationsHistogram => (
+                "SELECT
+                    worker_id, duration_ns, pg_catalog.count(*) AS count
+                FROM
+                    mz_internal.mz_peek_durations_histogram_internal_{}
+                GROUP BY
+                    worker_id, duration_ns",
+                "mz_peek_durations_histogram_{}",
+            ),
+
             LogView::MzSchedulingElapsed => (
                 "SELECT
                     id, worker_id, pg_catalog.count(*) AS elapsed_ns
@@ -599,24 +613,34 @@ impl LogView {
                 "mz_scheduling_elapsed_{}",
             ),
 
-            LogView::MzComputeOperatorDurations => (
+            LogView::MzComputeOperatorDurationsHistogram => (
                 "SELECT
                     id, worker_id, duration_ns, pg_catalog.count(*) AS count
                 FROM
-                    mz_internal.mz_compute_operator_durations_internal_{}
+                    mz_internal.mz_compute_operator_durations_histogram_internal_{}
                 GROUP BY
                     id, worker_id, duration_ns",
-                "mz_compute_operator_durations_{}",
+                "mz_compute_operator_durations_histogram_{}",
             ),
 
-            LogView::MzSchedulingParks => (
+            LogView::MzSchedulingParksHistogram => (
                 "SELECT
                     worker_id, slept_for, requested, pg_catalog.count(*) AS count
                 FROM
-                    mz_internal.mz_scheduling_parks_internal_{}
+                    mz_internal.mz_scheduling_parks_histogram_internal_{}
                 GROUP BY
                     worker_id, slept_for, requested",
-                "mz_scheduling_parks_{}",
+                "mz_scheduling_parks_histogram_{}",
+            ),
+
+            LogView::MzWorkerComputeDelaysHistogram => (
+                "SELECT
+                    export_id, import_id, worker_id, delay_ns, pg_catalog.count(*) AS count
+                FROM
+                    mz_internal.mz_worker_compute_delays_histogram_internal_{}
+                GROUP BY
+                    export_id, import_id, worker_id, delay_ns",
+                "mz_worker_compute_delays_histogram_{}",
             ),
         }
     }
@@ -738,10 +762,7 @@ impl LogVariant {
                 .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("import_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("delay_ns", ScalarType::UInt64.nullable(false))
-                .with_column("count", ScalarType::Int64.nullable(false))
-                .with_column("sum", ScalarType::UInt64.nullable(true))
-                .with_key(vec![0, 1, 2, 3]),
+                .with_column("delay_ns", ScalarType::UInt64.nullable(false)),
 
             LogVariant::Compute(ComputeLog::PeekCurrent) => RelationDesc::empty()
                 .with_column("id", ScalarType::Uuid.nullable(false))
@@ -752,10 +773,7 @@ impl LogVariant {
 
             LogVariant::Compute(ComputeLog::PeekDuration) => RelationDesc::empty()
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("duration_ns", ScalarType::UInt64.nullable(false))
-                .with_column("count", ScalarType::UInt64.nullable(false))
-                .with_column("sum", ScalarType::UInt64.nullable(true))
-                .with_key(vec![0, 1]),
+                .with_column("duration_ns", ScalarType::UInt64.nullable(false)),
         }
     }
 
