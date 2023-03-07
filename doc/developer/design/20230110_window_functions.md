@@ -417,22 +417,17 @@ Pros:
 - Efficiency, due to several reasons:
   - Computation times and memory requirements here don't involve the bit length of the input indexes (_b_). Instead, the logarithm of the partition sizes (_p_) is involved. Having _log p_ instead of _log b_ can often be a factor of several times.
   - The above _log p_ is hidden inside sequential code (inside the logic of a DD operator instead of calling DD operators), while in the case of prefix sum, there are _log b_ DD operators chained together. This means that in the case of prefix sum, the _log b_ is _multiplied_ by an extra logarithmic factor that comes from manipulating arrangements as part of each DD operation.
-- Simplicity. (no need for: a mapping of various types to integers, handling peer groups separately, [complicated optimizations to make the performance acceptable](#Performance-and-optimizations))
-- Able to handle peer groups of non-trivial sizes. (A peer group is a group of records which agree on both the PARTITION BY key and the ORDER BY key.) As discussed in the "Duplicate indexes" section, the prefix sum approach can handle only very small peer groups, because ordering within a peer group has to involve the entire input records, but prefix sum's indexes have to be small, i.e., they can only involve the ORDER BY key. A custom tree datastructure would have no trouble ordering by the entire records instead of just the ORDER BY keys.
+- No need for certain complications: a mapping of various types to integers, handling peer groups by hashing, [complicated optimizations](#Performance-and-optimizations).
 - Would work with arbitrary types in the ORDER BY (e.g., string).
 
 Cons:
 - Partition sizes would not be scalable beyond a single machine, since each partition is stored in a single instance of the data structure. (Contrast this with prefix sum implemented by DD's data-parallel operations.)
 - This approach wouldn't compose nicely with WITH MUTUALLY RECURSIVE. DD's prefix sum would be incremental not just with respect to changing input data, but also with respect to changes from one iteration of a recursive query to the next. This is because DD's operations and data structures (arrangements) are written in a way to incrementalize across Timely's complex timestamps (where the timestamps involve source timestamps as well as iteration numbers). Our custom data structure would incrementalize only across source timestamps, by simply updating it in-place when a source timestamp closes. But between each iteration, it would need to be fully rebuilt.
+- Not supporting partially ordered timestamps might be problematic not just for WMR. There are some other plans to use complex timestamps, e.g., for higher throughput read-write transactions. Further uses for partially ordered timestamps might be discovered later.
+- Writing a custom DD operator is very hard.
+- A more philosophical argument is that if we implement the more general approach first (prefix sum), then we can gather data on how people really want to use window functions (whether they want huge partitions that don't fit on 1 machine, whether they want to use it in WMR), and then possibly implement various optimizations (maybe even custom datastructures) for popular cases at some future time with less guesswork.
 
-*An interesting option would be to allow the user to switch between prefix sum and a custom datastructure rendering*. The custom datastructure rendering is fine if 1) partitions won't be larger than, say, 10,000,000 elements, and 2) WITH MUTUALLY RECURSIVE is not present in the query. Maybe both huge partitions and window functions _inside_ WITH MUTUALLY RECURSIVE are rare enough that the default could be the custom datastructure rendering. The switching could be realized by a new keyword after the PARTITION BY clause.
-
-We will probably choose prefix sum for now.
-TODO: add arguments from the Monday office hours here:
-- Moritz had the hashing idea for solving one of the big problems that the prefix sum approach had (ordering within the peer groups).
-- Frank told me that not supporting partially ordered timestamps might be problematic not just for WMR, but there are some other plans to use complex timestamps, e.g., for higher throughput read-write transactions.
-- They told me that writing a custom DD operator is very hard.
-- And a more philosophical argument is that if we implement the more general approach first (prefix sum), then we can gather data on how people really want to use it (whether they want huge partitions that don't fit on 1 machine, whether they want to use it in WMR), and then possibly implement various optimizations (maybe even custom datastructures) for popular cases at some future time.
+An interesting option would be to allow the user to switch between prefix sum and a custom datastructure rendering. This could be realized by a new keyword after the PARTITION BY clause, e.g., SINGLEMACHINE.
 
 ### Implement Prefix Sum in MIR (involving `LetRec`) instead of a large chunk of custom rendering code
 
@@ -481,10 +476,16 @@ In HIR, the window functions are currently in the scalar expressions (option 2. 
 
 ### MIR
 
-The current plan is to *not* have an explicit representation of window functions in MIR for now, but here we still discuss how such a representation could look like.
+The current plan is to *not* have an explicit representation of window functions in MIR for now. Here, we first discuss some reasons for this. Then, we discuss how such a representation could look like, as it is still on the table for a future evolution of window function handling, when
+- the currently ongoing optimizer refactoring is completed;
+- all window functions are ported to the prefix sum rendering;
+- we have data indicating that the pattern recognition is indeed too brittle.
 
 We decided not to have an explicit representation because it would mean that we would have to immediately teach all existing transforms how to handle window functions, which would be a lot of code to write. Current transforms at least don't do incorrect things with window functions. (However, some transforms might currently not be able to do their thing on the complicated pattern that the HIR lowering creates for window functions, for example [projection pushdown doesn't work for window functions](https://github.com/MaterializeInc/materialize/issues/17522).)
-I'm hoping that MIR transforms won't create too many variations of the pattern. The pattern involves FlatMap, which not many transforms actually manipulate much. Also, the data is in a very weird form during the pattern (the whole row hidden inside a (nested) record), so some transforms cannot handle that, e.g. ProjectionPushdown.
+
+I'm hoping that MIR transforms won't create too many variations of the window function pattern that HIR lowering creates. The pattern involves FlatMap, which not many transforms actually manipulate much. Also, the data is in a very weird form during the pattern (the whole row hidden inside a (nested) record), so some transforms cannot handle that, e.g. ProjectionPushdown.
+
+Having an explicit MIR representation instead of the current pattern would also mean that we would have to put in extra work to allow falling back to the old window function rendering code in such cases that are not yet covered by the prefix sum rendering. More specifically, we would need to port the code that creates the pattern from the HIR lowering to an MIR transformation (or to MIR lowering). This code would create the old pattern from the explicit MIR representation instead of from the HIR representation. Note that this problem will disappear later when we will have completed the porting of all window functions to the prefix sum rendering, because then all need for the old pattern would disappear with an explicit MIR representation.
 
 The 3 representation options in MIR are:
 
