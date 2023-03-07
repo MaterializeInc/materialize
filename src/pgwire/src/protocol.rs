@@ -1402,9 +1402,11 @@ where
             | ExecuteResponse::DroppedTable
             | ExecuteResponse::DroppedType
             | ExecuteResponse::DroppedView
+            | ExecuteResponse::GrantedRole
             | ExecuteResponse::Inserted(..)
             | ExecuteResponse::Prepare
             | ExecuteResponse::Raised
+            | ExecuteResponse::RevokedRole
             | ExecuteResponse::StartedTransaction { .. }
             | ExecuteResponse::TransactionCommitted
             | ExecuteResponse::TransactionRolledBack

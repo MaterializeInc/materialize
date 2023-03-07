@@ -43,7 +43,9 @@ use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
 use mz_sql::catalog::CatalogItem as SqlCatalogItem;
-use mz_sql::catalog::{CatalogCluster, CatalogError, CatalogItemType, CatalogTypeDetails};
+use mz_sql::catalog::{
+    CatalogCluster, CatalogError, CatalogItemType, CatalogRole, CatalogTypeDetails,
+};
 use mz_sql::names::QualifiedObjectName;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
@@ -53,11 +55,11 @@ use mz_sql::plan::{
     CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
     CreateViewPlan, DropClusterReplicasPlan, DropClustersPlan, DropDatabasePlan, DropItemsPlan,
-    DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan, IndexOption, InsertPlan,
-    MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen,
-    RaisePlan, ReadThenWritePlan, ResetVariablePlan, RotateKeysPlan, SendDiffsPlan,
-    SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan,
-    VariableValue, View,
+    DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan, GrantRolePlan, IndexOption,
+    InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan, PlanKind,
+    QueryWhen, RaisePlan, ReadThenWritePlan, ResetVariablePlan, RevokeRolePlan, RotateKeysPlan,
+    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom,
+    SubscribePlan, VariableValue, View,
 };
 use mz_sql::session::user::SYSTEM_USER;
 use mz_sql::session::vars::{
@@ -489,6 +491,12 @@ impl Coordinator {
             }
             Plan::RotateKeys(RotateKeysPlan { id }) => {
                 tx.send(self.sequence_rotate_keys(&session, id).await, session);
+            }
+            Plan::GrantRole(plan) => {
+                tx.send(self.sequence_grant_role(&mut session, plan).await, session);
+            }
+            Plan::RevokeRole(plan) => {
+                tx.send(self.sequence_revoke_role(&mut session, plan).await, session);
             }
         }
     }
@@ -1836,11 +1844,24 @@ impl Coordinator {
         session: &Session,
         plan: DropRolesPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let ops = plan
-            .ids
-            .into_iter()
-            .map(|(id, name)| catalog::Op::DropRole { id, name })
-            .collect();
+        let dropped_ids: BTreeSet<_> = plan.ids.iter().map(|(id, _)| id).collect();
+        let mut ops = Vec::new();
+
+        // If any role is a member of a dropped role, then we must revoke that membership.
+        for role in self.catalog.user_roles() {
+            for dropped_role_id in dropped_ids.intersection(&role.membership.map.keys().collect()) {
+                ops.push(catalog::Op::RevokeRole {
+                    role_id: **dropped_role_id,
+                    member_id: role.id(),
+                })
+            }
+        }
+
+        ops.extend(
+            plan.ids
+                .into_iter()
+                .map(|(id, name)| catalog::Op::DropRole { id, name }),
+        );
         self.catalog_transact(Some(session), ops).await?;
         Ok(ExecuteResponse::DroppedRole)
     }
@@ -3950,6 +3971,58 @@ impl Coordinator {
         session.create_new_portal(sql, desc, plan.params, Vec::new(), revision)
     }
 
+    async fn sequence_grant_role(
+        &mut self,
+        session: &mut Session,
+        GrantRolePlan {
+            role_id,
+            member_id,
+            grantor_id,
+        }: GrantRolePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let member_membership = self.catalog.get_role(&member_id).membership();
+        if member_membership.contains(&role_id) {
+            let role_name = self.catalog.get_role(&role_id).name().to_string();
+            let member_name = self.catalog.get_role(&member_id).name().to_string();
+            session.add_notice(AdapterNotice::RoleMembershipAlreadyExists {
+                role_name,
+                member_name,
+            });
+            return Ok(ExecuteResponse::GrantedRole);
+        }
+
+        let op = catalog::Op::GrantRole {
+            role_id,
+            member_id,
+            grantor_id,
+        };
+        self.catalog_transact(Some(session), vec![op])
+            .await
+            .map(|_| ExecuteResponse::GrantedRole)
+    }
+
+    async fn sequence_revoke_role(
+        &mut self,
+        session: &mut Session,
+        RevokeRolePlan { role_id, member_id }: RevokeRolePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let member_membership = self.catalog.get_role(&member_id).membership();
+        if !member_membership.contains(&role_id) {
+            let role_name = self.catalog.get_role(&role_id).name().to_string();
+            let member_name = self.catalog.get_role(&member_id).name().to_string();
+            session.add_notice(AdapterNotice::RoleMembershipDoesNotExists {
+                role_name,
+                member_name,
+            });
+            return Ok(ExecuteResponse::RevokedRole);
+        }
+
+        let op = catalog::Op::RevokeRole { role_id, member_id };
+        self.catalog_transact(Some(session), vec![op])
+            .await
+            .map(|_| ExecuteResponse::RevokedRole)
+    }
+
     pub(crate) fn allocate_transient_id(&mut self) -> Result<GlobalId, AdapterError> {
         let id = self.transient_id_counter;
         if id == u64::MAX {
@@ -4031,7 +4104,9 @@ impl Coordinator {
             | Plan::AlterSystemResetAll(_)
             | Plan::ReadThenWrite(_)
             | Plan::Raise(_)
-            | Plan::RotateKeys(_) => {
+            | Plan::RotateKeys(_)
+            | Plan::GrantRole(_)
+            | Plan::RevokeRole(_) => {
                 return Err(AdapterError::Unauthorized(
                     rbac::UnauthorizedError::privilege(plan.name().to_string(), None),
                 ))

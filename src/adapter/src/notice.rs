@@ -79,6 +79,14 @@ pub enum AdapterNotice {
         reason: String,
     },
     RbacDisabled,
+    RoleMembershipAlreadyExists {
+        role_name: String,
+        member_name: String,
+    },
+    RoleMembershipDoesNotExists {
+        role_name: String,
+        member_name: String,
+    },
 }
 
 impl AdapterNotice {
@@ -186,6 +194,20 @@ impl fmt::Display for AdapterNotice {
                     "RBAC is disabled so no role attributes will be considered when executing statements"
                 )
             }
+            AdapterNotice::RoleMembershipAlreadyExists {
+                role_name,
+                member_name,
+            } => write!(
+                f,
+                "role \"{member_name}\" is already a member of role \"{role_name}\""
+            ),
+            AdapterNotice::RoleMembershipDoesNotExists {
+                role_name,
+                member_name,
+            } => write!(
+                f,
+                "role \"{member_name}\" is not a member of role \"{role_name}\""
+            ),
         }
     }
 }

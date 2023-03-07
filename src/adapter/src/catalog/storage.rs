@@ -38,7 +38,7 @@ use crate::catalog::builtin::{
     BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES, BUILTIN_ROLES,
 };
 use crate::catalog::error::{Error, ErrorKind};
-use crate::catalog::{is_reserved_name, SerializedRole, SystemObjectMapping};
+use crate::catalog::{is_reserved_name, RoleMembership, SerializedRole, SystemObjectMapping};
 use crate::catalog::{SerializedReplicaConfig, DEFAULT_CLUSTER_REPLICA_NAME};
 use crate::coord::timeline;
 
@@ -380,6 +380,21 @@ async fn migrate(
                         attributes = attributes.with_all();
                     }
                     role_value.role.attributes = Some(attributes);
+                }
+                Some(role_value)
+            })?;
+            Ok(())
+        },
+        // Role memberships were added to role definitions.
+        //
+        // Introduced in v0.46.0
+        //
+        // TODO(jkosh44) Can be cleared (patched to be empty) in v0.47.0
+        |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
+            txn.roles.update(|_role_key, role_value| {
+                let mut role_value = role_value.clone();
+                if role_value.role.membership.is_none() {
+                    role_value.role.membership = Some(RoleMembership::new());
                 }
                 Some(role_value)
             })?;

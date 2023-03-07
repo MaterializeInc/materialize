@@ -233,6 +233,8 @@ format_spec ::=
   'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' ) | n 'COLUMNS') ('DELIMITED BY' char)? |
   'TEXT' |
   'BYTES'
+grant_role ::=
+  'GRANT' role_name 'TO' 'GROUP'? member_name
 key_strat ::=
   'KEY STRATEGY' strat
 val_strat ::=
@@ -312,6 +314,8 @@ prepare ::=
   'PREPARE' name 'AS' statement
 reset_session_variable ::=
   'RESET' variable_name
+revoke_role ::=
+  'REVOKE' role_name 'FROM' 'GROUP'? member_name
 rollback ::=
   'ROLLBACK'
 select_stmt ::=

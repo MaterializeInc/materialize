@@ -148,6 +148,7 @@ From
 Full
 Fullname
 Generator
+Grant
 Greatest
 Group
 Groups
@@ -292,6 +293,7 @@ Reset
 Restrict
 Retention
 Returning
+Revoke
 Right
 Role
 Roles

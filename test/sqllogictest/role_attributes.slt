@@ -380,3 +380,101 @@ simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;
 ----
 COMPLETE 0
+
+# Test that the attribute check apply through role membership
+
+# Parent
+
+statement ok
+ALTER ROLE joe NOCREATEROLE NOCREATEDB NOCREATECLUSTER
+
+statement ok
+CREATE ROLE joe_parent CREATEROLE CREATEDB CREATECLUSTER
+
+statement ok
+GRANT joe_parent TO joe
+
+simple conn=joe,user=joe
+CREATE ROLE bar;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER ROLE foo CREATECLUSTER;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+DROP ROLE foo;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE DATABASE foo;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE CLUSTER foo REPLICAS (r1 (size '1'));
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE bar;
+
+statement ok
+CREATE ROLE foo;
+
+statement ok
+DROP DATABASE foo;
+
+statement ok
+DROP CLUSTER foo;
+
+# Grandparent
+
+statement ok
+ALTER ROLE joe_parent NOCREATEROLE NOCREATEDB NOCREATECLUSTER
+
+statement ok
+CREATE ROLE joe_grandparent CREATEROLE CREATEDB CREATECLUSTER
+
+statement ok
+GRANT joe_grandparent TO joe_parent
+
+simple conn=joe,user=joe
+CREATE ROLE bar;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER ROLE foo CREATECLUSTER;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+DROP ROLE foo;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE DATABASE foo;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE CLUSTER foo REPLICAS (r1 (size '1'));
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE bar;
+
+statement ok
+CREATE ROLE foo;
+
+statement ok
+DROP DATABASE foo;
+
+statement ok
+DROP CLUSTER foo;

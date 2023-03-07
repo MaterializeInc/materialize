@@ -156,12 +156,8 @@ pub fn check_plan(
         return Ok(());
     }
 
-    if session.is_superuser() {
-        return Ok(());
-    }
-
     let role_id = session.role_id();
-    let Some(role) = catalog.try_get_role(role_id) else {
+    if catalog.try_get_role(role_id).is_none() {
         // PostgreSQL allows users that have their role dropped to perform some actions,
         // such as `SET ROLE` and certain `SELECT` queries. We haven't implemented
         // `SET ROLE` and feel it's safer to force to user to re-authenticate if their
@@ -169,8 +165,21 @@ pub fn check_plan(
         return Err(AdapterError::ConcurrentRoleDrop(role_id.clone()));
     };
 
+    if session.is_superuser() {
+        return Ok(());
+    }
+
+    let all_roles: Vec<_> = catalog
+        .collect_role_membership(role_id)
+        .into_iter()
+        .map(|id| catalog.get_role(&id))
+        .collect();
+
     if let Some(required_attribute) = generate_plan_attribute(plan) {
-        if !required_attribute.check_role(role) {
+        if !all_roles
+            .into_iter()
+            .any(|role| required_attribute.check_role(role))
+        {
             return Err(AdapterError::Unauthorized(UnauthorizedError::attribute(
                 plan.name().to_string(),
                 required_attribute,
@@ -185,10 +194,12 @@ pub fn check_plan(
 fn generate_plan_attribute(plan: &Plan) -> Option<Attribute> {
     match plan {
         Plan::CreateDatabase(_) => Some(Attribute::CreateDB),
-        Plan::CreateRole(_) | Plan::AlterRole(_) | Plan::DropRoles(_) => {
-            Some(Attribute::CreateRole)
-        }
         Plan::CreateCluster(_) => Some(Attribute::CreateCluster),
+        Plan::CreateRole(_)
+        | Plan::AlterRole(_)
+        | Plan::DropRoles(_)
+        | Plan::GrantRole(_)
+        | Plan::RevokeRole(_) => Some(Attribute::CreateRole),
         Plan::CreateSource(_)
         | Plan::CreateTable(_)
         | Plan::CreateMaterializedView(_)

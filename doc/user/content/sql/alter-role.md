@@ -66,3 +66,5 @@ rj  true  false
 - [CREATE ROLE](../create-role)
 - [DROP ROLE](../drop-role)
 - [DROP USER](../drop-user)
+- [GRANT ROLE](../grant-role)
+- [REVOKE ROLE](../revoke-role)
