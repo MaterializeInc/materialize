@@ -77,7 +77,7 @@ We would like to have efficient window function support.
 Some window functions are impossible to efficiently support in streaming, because sometimes small input changes cause big result changes. (E.g., if a new first element of a partition appears, then ROW_NUMBERs will change for the whole window partition.) So a realistic goal would be to support at least those cases where a small input change leads to a small output change.
 
 - LAG/LEAD (i.e., previous/next element of the window partition) (these don't have any frames)
-    - We aim for only offset 1 in the first version (i.e., the previous or the next element), which is the default. Bigger offsets not seen in user queries yet (i.e., when requesting to go back or forward by several rows).
+    - We aim for only offset 1 in the first version (i.e., the previous or the next element), which is the default. Bigger offsets have not been seen in user queries yet (i.e., when requesting to go back or forward by several rows).
     - IGNORE NULLS should be supported. (already seen in a user query)
 - Window aggregations
     - Small frames (e.g., summing the previous 5 elements): We should support these efficiently, because a small frame means that small input changes lead to small output changes.
@@ -86,7 +86,7 @@ Some window functions are impossible to efficiently support in streaming, becaus
         - SUMming an expression that is 0 for many rows.
         - Window aggregations with an UNBOUNDED PRECEDING frame are fine if changes happen mostly at the end of partitions
             - e.g., OVER an `ORDER BY time` if new elements are arriving typically with fresh timestamps. Such OVER clauses are popular in our [use case list](https://www.notion.so/Window-Functions-Use-Cases-6ad1846a7da942dc8fa28997d9c220dd).
-    - For frames encompassing the entire window partition (i.e., an UNBOUNDED frame and/or no ORDER BY), window aggregations can be simply translated to a standard grouped aggregation + a self-join. In case of these frames, small output changes often lead to big output changes, but similar exceptions exist as listed for "Large frames" above.
+    - For frames encompassing the entire window partition (i.e., an UNBOUNDED frame and/or no ORDER BY), window aggregations can be simply translated to a standard grouped aggregation + a self-join. In case of these frames, small input changes often lead to big output changes, but similar exceptions exist as listed for "Large frames" above.
 - FIRST_VALUE / LAST_VALUE / (NTH_VALUE) with various frames.
   - For the case of general frames, these are similar to window aggregations.
   - For frames encompassing the entire window partition (an UNBOUNDED frame and/or no ORDER BY), FIRST_VALUE / LAST_VALUE are actually requesting the top or the bottom row of the partition. We should compile this to TopK, with k=1.
@@ -261,6 +261,7 @@ In most situations other than TopK, these functions cannot be implemented effici
 
 #### 2. Window aggregations
 
+These operate on frames (a certain subset of a window partition).
 For example: Compute a moving average for each user's transaction costs on windows of 6 adjacent transactions:
 ```sql
 SELECT user_id, tx_id, AVG(cost) OVER
@@ -268,8 +269,6 @@ SELECT user_id, tx_id, AVG(cost) OVER
    ROWS BETWEEN 5 PRECEDING AND CURRENT ROW)
 FROM transactions;
 ```
-
-These operate on so-called **frames**, i.e., a certain subset of a window partition. Frames are specified in relation to the current row. For example, "sum up column `x` for the preceding 5 rows from the current row". For all the frame options, see https://www.postgresql.org/docs/current/sql-expressions.html#SYNTAX-WINDOW-FUNCTIONS
 
 There is a special case where the frame includes the entire window partition: An aggregation where the frame is both UNBOUNDED PRECEDING and UNBOUNDED FOLLOWING at the same time (or having no ORDER BY achieves a similar effect) should be transformed to a grouped aggregation + self join.
 
@@ -330,6 +329,10 @@ Alternatively, we could make these a bit faster (except for NTH_VALUE) if we jus
 
 There might be rows which agree on both the PARTITION BY key and the ORDER BY key (the index). These groups of rows are called _peer groups_. Framed window functions in GROUPS or RANGE frame mode compute the same output for all the rows inside a peer group. This is easy to handle, since we can simply deduplicate the indexes, and compute one result for each index (and then join with the original data on the index).
 
+TODO: add Moritz's hashing idea here:
+We can fix a deterministic order of rows _inside_ a peer group by hashing the rows, and making the hash part of the prefix sum index. The hashes will have an arbitrary, but deterministic order. The order being arbitrary doesn't matter, because the user didn't request any specific ordering on fields that don't appear in the ORDER BY clause.
+Hash collisions will be resolved by an extra Reduce beforehand grouping by collision groups, adding a few more bits (e.g., 6) to differentiate records within a collision group.
+
 However, in ROWS frame mode as well as for all non-framed window functions (e.g., LAG/LEAD) we need to treat each element of a peer group separately. To make the output deterministic, we need to sort the rows inside a peer group by the entire row (as we do in all other sorting situations in Materialize). A straightforward way to achieve this would be to make all the components of the row part of the index of the prefix sum, but this is unfortunately impossible: First, [we will support only certain types in a prefix sum index](#ORDER-BY-types) (e.g., we don't support string), and second, recall that the bit length of the index is critical for the performance of prefix sum, so adding several more columns to it would be catastrophic for performance.
 
 We could partially solve this problem by having a `reduce` number the elements inside each peer group with 0, 1, 2, ... before prefix sum, and adding just this numbering column as an additional component to the prefix sum indexes. But this has some sad issues:
@@ -357,6 +360,8 @@ For the performance of `aggregate`, the size distribution of the *D_len* sets is
 So the question now is how quickly do the *D_len* sets get small as `aggregate` proceeds through its steps. Interestingly, the size distribution of the `D_len` sets depends on where are the variations in the bit vectors of the indexes in the input. For example, if all indexes start with 10 zero bits, then the last 10 *D_len* sets each will have only one element, and thus the last 10 steps of `aggregate` will contribute only a per-partition overhead. However, if all indexes _end_ with 10 zero bits, then each of the _first_ 10 *D_len* sets will have a similar size as the input data.
 
 TODO: discuss how the numbering affects trailing zero bits
+
+TODO: mention somewhere that we won't put entire rows inside the prefix sum, but only the index + the value of the expression appearing in the window function.
 
 Optimizations: TODO:
 
@@ -422,6 +427,13 @@ Cons:
 
 *An interesting option would be to allow the user to switch between prefix sum and a custom datastructure rendering*. The custom datastructure rendering is fine if 1) partitions won't be larger than, say, 10,000,000 elements, and 2) WITH MUTUALLY RECURSIVE is not present in the query. Maybe both huge partitions and window functions _inside_ WITH MUTUALLY RECURSIVE are rare enough that the default could be the custom datastructure rendering. The switching could be realized by a new keyword after the PARTITION BY clause.
 
+We will probably choose prefix sum for now.
+TODO: add arguments from the Monday office hours here:
+- Moritz had the hashing idea for solving one of the big problems that the prefix sum approach had (ordering within the peer groups).
+- Frank told me that not supporting partially ordered timestamps might be problematic not just for WMR, but there are some other plans to use complex timestamps, e.g., for higher throughput read-write transactions.
+- They told me that writing a custom DD operator is very hard.
+- And a more philosophical argument is that if we implement the more general approach first (prefix sum), then we can gather data on how people really want to use it (whether they want huge partitions that don't fit on 1 machine, whether they want to use it in WMR), and then possibly implement various optimizations (maybe even custom datastructures) for popular cases at some future time.
+
 ### Implement Prefix Sum in MIR (involving `LetRec`) instead of a large chunk of custom rendering code
 
 The main plan for implementing Prefix Sum is to implement it directly on DD (and represent it as one node in LIR). An alternative would be to implement Prefix Sum on MIR: Prefix Sum's internal joins, reduces, iterations, etc. would be constructed not by directly calling DD functions in the rendering, but by MIR joins, MIR reduces, MIR LetRec, etc. In this case, the window function handling code would mainly operate in the HIR-to-MIR lowering: it would translate HIR's WindowExpr to MirRelationExpr.
@@ -469,7 +481,10 @@ In HIR, the window functions are currently in the scalar expressions (option 2. 
 
 ### MIR
 
-The current plan is to *not* have an explicit representation of window functions in MIR for now, but here we still discuss how such a representation could look like. We decided not to have an explicit representation because it would mean that we would have to immediately teach all existing transforms how to handle window functions, which would be a lot of code to write. Current transforms at least don't do incorrect things with window functions. (However, some transforms might currently not be able to do their thing on the complicated pattern that the HIR lowering creates for window functions, for example [projection pushdown doesn't work for window functions](https://github.com/MaterializeInc/materialize/issues/17522).)
+The current plan is to *not* have an explicit representation of window functions in MIR for now, but here we still discuss how such a representation could look like.
+
+We decided not to have an explicit representation because it would mean that we would have to immediately teach all existing transforms how to handle window functions, which would be a lot of code to write. Current transforms at least don't do incorrect things with window functions. (However, some transforms might currently not be able to do their thing on the complicated pattern that the HIR lowering creates for window functions, for example [projection pushdown doesn't work for window functions](https://github.com/MaterializeInc/materialize/issues/17522).)
+I'm hoping that MIR transforms won't create too many variations of the pattern. The pattern involves FlatMap, which not many transforms actually manipulate much. Also, the data is in a very weird form during the pattern (the whole row hidden inside a (nested) record), so some transforms cannot handle that, e.g. ProjectionPushdown.
 
 The 3 representation options in MIR are:
 
