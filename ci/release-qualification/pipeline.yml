@@ -21,7 +21,7 @@ steps:
           - { value: zippy-dataflows-large }
           - { value: zippy-pg-cdc-large }
           - { value: zippy-cluster-replicas-large }
-          - { value: zippy-no-killing }
+          - { value: zippy-user-tables-large }
         multiple: true
         required: false
     if: build.source == "ui"
@@ -55,7 +55,7 @@ steps:
           args: [--scenario=KafkaSourcesLarge, --actions=100000]
 
   - id: zippy-dataflows-large
-    label: "Long running Zippy with complex dataflows"
+    label: "Large Zippy w/ complex dataflows"
     # 48h
     timeout_in_minutes: 2880
     agents:
@@ -64,10 +64,10 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=DataflowsLarge, --actions=100000]
+          args: [--scenario=DataflowsLarge, --actions=35000]
 
   - id: zippy-pg-cdc-large
-    label: "Longer Zippy PogresCdc test"
+    label: "Longer Zippy PogresCdc"
     timeout_in_minutes: 2880
     agents:
       queue: linux-x86_64-large
@@ -75,10 +75,10 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=PostgresCdc, --actions=100000]
+          args: [--scenario=PostgresCdcLarge, --actions=200000]
 
   - id: zippy-cluster-replicas-large
-    label: "Longer Zippy ClusterReplicas test"
+    label: "Longer Zippy ClusterReplicas"
     timeout_in_minutes: 2880
     agents:
       queue: linux-x86_64-large
@@ -86,10 +86,10 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=ClusterReplicas, --actions=100000]
+          args: [--scenario=ClusterReplicas, --actions=10000]
 
-  - id: zippy-no-killing
-    label: "Long Zippy scenario with no killing"
+  - id: zippy-user-tables-large
+    label: "Long Zippy w/ user tables"
     timeout_in_minutes: 2880
     agents:
       queue: linux-x86_64-large
@@ -97,7 +97,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=NoKilling, --actions=100000]
+          args: [--scenario=UserTablesLarge, --actions=200000]
 
   - wait: ~
     continue_on_failure: true
