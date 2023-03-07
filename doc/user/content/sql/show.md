@@ -45,7 +45,7 @@ transaction_isolation                       | `STRICT SERIALIZABLE`     | The cu
 timezone                                    | `UTC`                     | The time zone for displaying and interpreting time stamps. <br/> This session variable **has no effect** and its sole purpose is to maintain compatibility with Postgres.
 
 
-#### Interval variables
+#### Internal variables
 
 The following variables are available but cannot be modified, hence the 'SET' command will not recognize them. These variables store information about internal constraints, like the maximum amount of creable tables or sinks.
 
