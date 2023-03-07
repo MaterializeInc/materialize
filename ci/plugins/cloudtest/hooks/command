@@ -13,7 +13,12 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-run_args=("--junitxml=junit_cloudtest_$BUILDKITE_JOB_ID.xml")
+run_args=(
+    "--junitxml=junit_cloudtest_$BUILDKITE_JOB_ID.xml"
+    "--splits=${BUILDKITE_PARALLEL_JOB_COUNT:-1}"
+    "--group=$((${BUILDKITE_PARALLEL_JOB:-0}+1))"
+)
+
 if read_list BUILDKITE_PLUGIN_CLOUDTEST_ARGS; then
     for arg in "${result[@]}"; do
         run_args+=("$arg")
@@ -21,6 +26,9 @@ if read_list BUILDKITE_PLUGIN_CLOUDTEST_ARGS; then
 fi
 
 date +"%Y-%m-%d %H:%M:%S" > step_start_timestamp
+
+ci_collapsed_heading ":docker: Purging all existing docker containers and volumes, regardless of origin"
+docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
 
 ci_collapsed_heading "kind: Make sure kind is running..."
 bin/ci-builder run stable test/cloudtest/setup
