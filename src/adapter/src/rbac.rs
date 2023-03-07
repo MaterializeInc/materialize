@@ -67,7 +67,7 @@ enum UnauthorizedErrorKind {
     /// The action requires a specific attribute.
     Attribute(Attribute),
     /// The action requires one or more privileges.
-    Privilege { reason: String },
+    Privilege { reason: Option<String> },
 }
 
 impl fmt::Display for UnauthorizedError {
@@ -91,10 +91,10 @@ impl UnauthorizedError {
         }
     }
 
-    pub fn privilege(action: String, reason: String) -> UnauthorizedError {
+    pub fn privilege(action: String, reason: Option<String>) -> UnauthorizedError {
         UnauthorizedError {
             action,
-            kind: UnauthorizedErrorKind::Unstructured { reason },
+            kind: UnauthorizedErrorKind::Privilege { reason },
         }
     }
 
@@ -109,7 +109,7 @@ impl UnauthorizedError {
                 self.action
             )),
             UnauthorizedErrorKind::Unstructured { reason } => {
-                Some(format!("{} to {}", reason, self.action))
+                reason.map(|reason| format!("{} to {}", reason, self.action))
             }
         }
     }

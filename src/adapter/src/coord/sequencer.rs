@@ -4031,10 +4031,7 @@ impl Coordinator {
             | Plan::Raise(_)
             | Plan::RotateKeys(_) => {
                 return Err(AdapterError::Unauthorized(
-                    rbac::UnauthorizedError::privilege(
-                        plan.name().to_string(),
-                        format!("You must not be the '{}' role", MZ_INTROSPECTION_ROLE.name),
-                    ),
+                    rbac::UnauthorizedError::privilege(plan.name().to_string(), None),
                 ))
             }
         }
@@ -4053,7 +4050,7 @@ impl Coordinator {
                 return Err(AdapterError::Unauthorized(
                     rbac::UnauthorizedError::privilege(
                         format!("interact with object {full_name}"),
-                        format!("You must not be the '{}' role", MZ_INTROSPECTION_ROLE.name),
+                        None,
                     ),
                 ));
             }
