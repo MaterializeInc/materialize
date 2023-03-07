@@ -55,6 +55,7 @@ class Materialized(Service):
         propagate_crashes: bool = True,
         external_cockroach: bool = False,
         external_minio: bool = False,
+        unsafe_mode: bool = True,
     ) -> None:
         depends_on: Dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
@@ -77,7 +78,10 @@ class Materialized(Service):
             *environment_extra,
         ]
 
-        command = ["--unsafe-mode"]
+        command = []
+
+        if unsafe_mode:
+            command += ["--unsafe-mode"]
 
         if not environment_id:
             environment_id = DEFAULT_MZ_ENVIRONMENT_ID
