@@ -37,12 +37,16 @@ pub fn pack_status_row(
     let collection_id = Datum::String(&collection_id);
     let status = Datum::String(status_name);
     let error = error.into();
-    let hint: Datum = hint.into();
-    let mut row = Row::pack_slice(&[timestamp, collection_id, status, error]);
-    row.packer().push_dict_with(|row| {
-        row.push(Datum::String("hint"));
-        row.push(hint);
-    });
+    let mut row = Row::default();
+    let mut packer = row.packer();
+    packer.extend(&[timestamp, collection_id, status, error]);
+    match hint {
+        Some(hint) => packer.push_dict_with(|row_packer| {
+            row_packer.push(Datum::String("hint"));
+            row_packer.push::<Datum>(hint.into());
+        }),
+        None => packer.push(Datum::Null),
+    };
     row
 }
 
@@ -63,3 +67,64 @@ pub static MZ_SOURCE_STATUS_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         .with_column("error", ScalarType::String.nullable(true))
         .with_column("details", ScalarType::Jsonb.nullable(true))
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_row() {
+        let error_message = "error message";
+        let hint = "hint message";
+        let id = GlobalId::User(1);
+        let status = "dropped";
+        let row = pack_status_row(id, status, Some(error_message), 1000, Some(hint));
+
+        assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
+        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status));
+        assert_eq!(row.iter().nth(3).unwrap(), Datum::String(error_message));
+        assert_eq!(
+            row.iter()
+                .nth(4)
+                .unwrap()
+                .unwrap_map()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![("hint", Datum::String(hint))]
+        );
+    }
+
+    #[test]
+    fn test_row_without_hint() {
+        let error_message = "error message";
+        let id = GlobalId::User(1);
+        let status = "dropped";
+        let row = pack_status_row(id, status, Some(error_message), 1000, None);
+
+        assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
+        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status));
+        assert_eq!(row.iter().nth(3).unwrap(), Datum::String(error_message));
+        assert_eq!(row.iter().nth(4).unwrap(), Datum::Null);
+    }
+
+    #[test]
+    fn test_row_without_error() {
+        let id = GlobalId::User(1);
+        let status = "dropped";
+        let hint = "hint message";
+        let row = pack_status_row(id, status, None, 1000, Some(hint));
+
+        assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
+        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status));
+        assert_eq!(row.iter().nth(3).unwrap(), Datum::Null);
+        assert_eq!(
+            row.iter()
+                .nth(4)
+                .unwrap()
+                .unwrap_map()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![("hint", Datum::String(hint))]
+        );
+    }
+}
