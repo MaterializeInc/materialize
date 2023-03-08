@@ -22,6 +22,7 @@ use differential_dataflow::Hashable;
 use futures::stream::LocalBoxStream;
 use prometheus::core::{AtomicI64, AtomicU64};
 use serde::{Deserialize, Serialize};
+use std::rc::Rc;
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract};
 use timely::dataflow::operators::Capability;
 use timely::progress::{Antichain, Timestamp};
@@ -181,6 +182,39 @@ impl<Key, Value, Time: Timestamp, Diff> SourceMessageType<Key, Value, Time, Diff
     }
 }
 
+#[derive(Clone)]
+pub struct ByteStream {
+    /// The underlying asynchronous stream
+    pub stream: Rc<LocalBoxStream<'static, Vec<u8>>>,
+    /// The expected size of this stream in bytes. This is only an estimation and no assumption
+    /// should be based on the accuracy of this value.
+    pub size_hint: Option<usize>,
+}
+
+impl ByteStream {
+    pub fn new<S>(stream: S, size_hint: Option<usize>) -> Self
+    where
+        S: futures::Stream<Item = Vec<u8>> + 'static,
+    {
+        Self {
+            stream: Rc::new(Box::pin(stream)),
+            size_hint,
+        }
+    }
+    pub fn from_vec(data: Vec<u8>) -> Self {
+        Self {
+            size_hint: Some(data.len()),
+            stream: Rc::new(Box::pin(futures::stream::iter([data]))),
+        }
+    }
+}
+
+impl MaybeLength for ByteStream {
+    fn len(&self) -> Option<usize> {
+        self.size_hint
+    }
+}
+
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
 #[derive(Debug, Clone)]
@@ -203,11 +237,7 @@ pub struct SourceMessage<Key, Value> {
 
 /// A record produced by a source
 #[derive(Clone, Serialize, Debug, Deserialize)]
-pub struct SourceOutput<K, V, D>
-where
-    K: Data,
-    V: Data,
-{
+pub struct SourceOutput<K, V, D> {
     /// The record's key (or some empty/default value for sources without the concept of key)
     pub key: K,
     /// The record's value

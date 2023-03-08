@@ -30,23 +30,21 @@ use mz_storage_client::types::sources::{encoding::*, *};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 
 use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
-use crate::source::types::{DecodeResult, SourceOutput};
+use crate::source::types::{ByteStream, DecodeResult, SourceOutput};
 use crate::source::{self, DelimitedValueSourceConnection, RawSourceCreationConfig};
 
 /// A type-level enum that holds one of two types of sources depending on their message type
 ///
 /// This enum puts no restrictions to the generic parameters of the variants since it only serves
 /// as a type-level enum.
-enum SourceType<Delimited, ByteStream, RowSource> {
+enum SourceType<G: Scope> {
     /// A delimited source
-    Delimited(Delimited),
+    Delimited(Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>, ()>>),
     /// A bytestream source
-    ByteStream(ByteStream),
-    /// A source that produces Row's natively,
-    /// and skips any `render_decode` stream
-    /// adapters, and can produce
-    /// retractions
-    Row(RowSource),
+    ByteStream(Stream<G, SourceOutput<(), ByteStream, ()>>),
+    /// A source that produces Row's natively, and skips any `render_decode` stream adapters, and
+    /// can produce retractions
+    Row(Stream<G, SourceOutput<(), Row, Diff>>),
 }
 
 /// _Renders_ complete _differential_ [`Collection`]s
@@ -230,22 +228,13 @@ where
     (outputs, Rc::new(needed_tokens))
 }
 
-type ConcreteSourceType<G> = SourceType<
-    // Delimited sources
-    Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>, ()>>,
-    // ByteStream sources
-    Stream<G, SourceOutput<(), Option<Vec<u8>>, ()>>,
-    // Row sources
-    Stream<G, SourceOutput<(), Row, Diff>>,
->;
-
 /// Completes the rendering of a particular source stream by applying decoding and envelope
 /// processing as necessary
 fn render_source_stream<G>(
     scope: &mut G,
     dataflow_debug_name: &String,
     id: GlobalId,
-    ok_source: ConcreteSourceType<G>,
+    ok_source: SourceType<G>,
     description: IngestionDescription<CollectionMetadata>,
     resume_upper: Antichain<G::Timestamp>,
     mut error_collections: Vec<Collection<G, DataflowError, Diff>>,
