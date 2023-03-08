@@ -81,6 +81,7 @@ where
                 let sink_render = get_sink_render_for::<_>(&sink.connection);
 
                 let sink_token = sink_render.render_continuous_sink(
+                    inner,
                     compute_state,
                     sink,
                     sink_id,
@@ -114,6 +115,7 @@ where
 {
     fn render_continuous_sink(
         &self,
+        scope: &mut G,
         compute_state: &mut crate::compute_state::ComputeState,
         sink: &ComputeSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,

@@ -97,6 +97,9 @@ name = "arrayvec"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8da52d66c7071e2e3fa2a1e5c6d088fec47b593032b254f5e980de8ea54454d6"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "arrow-format"
@@ -4283,6 +4286,7 @@ name = "mz-persist-client"
 version = "0.46.0-dev"
 dependencies = [
  "anyhow",
+ "arrayvec",
  "async-stream",
  "async-trait",
  "axum",
