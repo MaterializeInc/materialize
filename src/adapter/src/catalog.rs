@@ -52,7 +52,7 @@ use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogError as SqlCatalogError, CatalogFeature,
+    CatalogCluster, CatalogDatabase, CatalogError as SqlCatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogItemType,
     CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId, IdReference,
     NameReference, RoleAttributes, SessionCatalog, TypeReference,
@@ -6154,8 +6154,8 @@ pub fn is_reserved_name(name: &str) -> bool {
 /// specific feature flag turned on, so we need to ensure that this is also the
 /// case during catalog rehydration in order to avoid panics.
 fn enable_features_required_for_catalog_open(session_catalog: &mut ConnCatalog) {
-    if !session_catalog.get_feature(CatalogFeature::EnableWithMutuallyRecursive) {
-        session_catalog.set_feature(CatalogFeature::EnableWithMutuallyRecursive, true);
+    if !session_catalog.system_vars().enable_with_mutually_recursive() {
+        session_catalog.mut_system_vars().set_enable_with_mutually_recursive(true);
     }
 }
 
@@ -6695,24 +6695,12 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.aws_privatelink_availability_zones.clone()
     }
 
-    fn get_feature(&self, name: CatalogFeature) -> bool {
-        use CatalogFeature::*;
-        let config = &self.state.system_configuration;
-        match name {
-            EnableWithMutuallyRecursive => config.enable_with_mutually_recursive(),
-        }
-    }
-
-    fn set_feature(&mut self, name: CatalogFeature, value: bool) -> bool {
-        use CatalogFeature::*;
-        let config = &mut self.state.to_mut().system_configuration;
-        match name {
-            EnableWithMutuallyRecursive => config.set_enable_with_mutually_recursive(value),
-        }
-    }
-
     fn system_vars(&self) -> &SystemVars {
         &self.state.system_configuration
+    }
+
+    fn mut_system_vars(&mut self) -> &mut SystemVars {
+        &mut self.state.to_mut().system_configuration
     }
 }
 

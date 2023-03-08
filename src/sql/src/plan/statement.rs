@@ -716,8 +716,7 @@ impl<'a> StatementContext<'a> {
     }
 
     pub fn require_with_mutually_recursive(&self) -> Result<(), PlanError> {
-        use crate::catalog::CatalogFeature::EnableWithMutuallyRecursive;
-        if !self.unsafe_mode() && !self.catalog.get_feature(EnableWithMutuallyRecursive) {
+        if !self.unsafe_mode() && !self.catalog.system_vars().enable_with_mutually_recursive() {
             sql_bail!("`WITH MUTUALLY RECURSIVE` syntax is not enabled")
         }
         Ok(())

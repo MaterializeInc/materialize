@@ -214,28 +214,17 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Returns the set of supported AWS PrivateLink availability zone ids.
     fn aws_privatelink_availability_zones(&self) -> Option<BTreeSet<String>>;
 
-    /// Returns `true` iff the given `feature` is supported at the moment.
-    fn get_feature(&self, feature: CatalogFeature) -> bool;
+    /// Returns system vars
+    fn system_vars(&self) -> &SystemVars;
 
-    /// Set the given `feature` to `value`. Returns `true` iff the value was
-    /// changed.
-    ///
+    /// Returns mutable system vars
+    /// 
     /// Clients should use this this method carefully, as changes to the backing
     /// state here are not guarateed to be persisted. The motivating use case
     /// for this method was ensuring that features are temporary turned on so
     /// catalog rehydration does not break due to unsupported SQL syntax.
-    fn set_feature(&mut self, feature: CatalogFeature, value: bool) -> bool;
+    fn mut_system_vars(&mut self) -> &mut SystemVars;
 
-    /// Returns system vars
-    fn system_vars(&self) -> &SystemVars;
-
-}
-
-/// Defines features that the [SessionCatalog] may optionally support.
-#[derive(Debug)]
-pub enum CatalogFeature {
-    /// True iff `WITH MUTUALLY RECURSIVE` syntax is enabled.
-    EnableWithMutuallyRecursive,
 }
 
 /// Configuration associated with a catalog.
