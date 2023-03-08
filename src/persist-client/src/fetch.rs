@@ -416,6 +416,13 @@ pub struct FetchedPart<K, V, T, D> {
     _phantom: PhantomData<fn() -> (K, V, D)>,
 }
 
+impl<K, V, T, D> FetchedPart<K, V, T, D> {
+    /// Retrieve the underlying description of the source.
+    pub fn desc(&self) -> &Description<T> {
+        &self.part.registered_desc
+    }
+}
+
 impl<K, V, T: Clone, D> Clone for FetchedPart<K, V, T, D> {
     fn clone(&self) -> Self {
         Self {
