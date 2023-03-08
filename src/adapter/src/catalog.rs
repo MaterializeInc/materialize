@@ -6154,8 +6154,13 @@ pub fn is_reserved_name(name: &str) -> bool {
 /// specific feature flag turned on, so we need to ensure that this is also the
 /// case during catalog rehydration in order to avoid panics.
 fn enable_features_required_for_catalog_open(session_catalog: &mut ConnCatalog) {
-    if !session_catalog.system_vars().enable_with_mutually_recursive() {
-        session_catalog.mut_system_vars().set_enable_with_mutually_recursive(true);
+    if !session_catalog
+        .system_vars()
+        .enable_with_mutually_recursive()
+    {
+        session_catalog
+            .mut_system_vars()
+            .set_enable_with_mutually_recursive(true);
     }
 }
 

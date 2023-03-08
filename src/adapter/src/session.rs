@@ -40,8 +40,8 @@ use crate::error::AdapterError;
 use crate::AdapterNotice;
 
 pub use mz_sql::vars::{
-    SessionVars, EndTransactionAction, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION,
-    SERVER_PATCH_VERSION,
+    EndTransactionAction, SessionVars, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
+    SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
 };
 
 const DUMMY_CONNECTION_ID: ConnectionId = 0;

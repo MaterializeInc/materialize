@@ -17,11 +17,11 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use uncased::UncasedStr;
 
+use crate::ast::Ident;
+use crate::DEFAULT_SCHEMA;
 use mz_build_info::BuildInfo;
 use mz_ore::cast;
 use mz_persist_client::cfg::PersistConfig;
-use crate::ast::Ident;
-use crate::DEFAULT_SCHEMA;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 
 /// The action to take during end_transaction.
@@ -56,7 +56,6 @@ pub enum VarError {
         values: Vec<String>,
         valid_values: Option<Vec<&'static str>>,
     },
-
 }
 
 // We pretend to be Postgres v9.5.0, which is also what CockroachDB pretends to
@@ -818,14 +817,13 @@ impl SessionVars {
                     continue;
                 }
                 let mut splits = cfg.splitn(2, '=');
-                let failpoint =
-                    splits
-                        .next()
-                        .ok_or_else(|| VarError::InvalidParameterValue {
-                            parameter: &FAILPOINTS,
-                            values: input.to_vec(),
-                            reason: "missing failpoint name".into(),
-                        })?;
+                let failpoint = splits
+                    .next()
+                    .ok_or_else(|| VarError::InvalidParameterValue {
+                        parameter: &FAILPOINTS,
+                        values: input.to_vec(),
+                        reason: "missing failpoint name".into(),
+                    })?;
                 let action = splits
                     .next()
                     .ok_or_else(|| VarError::InvalidParameterValue {
@@ -858,12 +856,8 @@ impl SessionVars {
         } else if name == STANDARD_CONFORMING_STRINGS.name {
             match bool::parse(input) {
                 Ok(value) if value == *STANDARD_CONFORMING_STRINGS.value => Ok(()),
-                Ok(_) => Err(VarError::FixedValueParameter(
-                    &STANDARD_CONFORMING_STRINGS,
-                )),
-                Err(()) => Err(VarError::InvalidParameterType(
-                    &STANDARD_CONFORMING_STRINGS,
-                )),
+                Ok(_) => Err(VarError::FixedValueParameter(&STANDARD_CONFORMING_STRINGS)),
+                Err(()) => Err(VarError::InvalidParameterType(&STANDARD_CONFORMING_STRINGS)),
             }
         } else if name == STATEMENT_TIMEOUT.name {
             self.statement_timeout.set(input, local)

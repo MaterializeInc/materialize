@@ -654,11 +654,29 @@ impl From<mz_sql::vars::VarError> for AdapterError {
     fn from(e: mz_sql::vars::VarError) -> Self {
         match e {
             mz_sql::vars::VarError::UnknownParameter(p) => AdapterError::UnknownParameter(p),
-            mz_sql::vars::VarError::InvalidParameterType(p) => AdapterError::InvalidParameterType(p),
-            mz_sql::vars::VarError::InvalidParameterValue { parameter, values, reason } => AdapterError::InvalidParameterValue{parameter, values, reason},
+            mz_sql::vars::VarError::InvalidParameterType(p) => {
+                AdapterError::InvalidParameterType(p)
+            }
+            mz_sql::vars::VarError::InvalidParameterValue {
+                parameter,
+                values,
+                reason,
+            } => AdapterError::InvalidParameterValue {
+                parameter,
+                values,
+                reason,
+            },
             mz_sql::vars::VarError::FixedValueParameter(p) => AdapterError::FixedValueParameter(p),
             mz_sql::vars::VarError::ReadOnlyParameter(p) => AdapterError::ReadOnlyParameter(p),
-            mz_sql::vars::VarError::ConstrainedParameter { parameter, values, valid_values } => AdapterError::ConstrainedParameter{parameter, values, valid_values},
+            mz_sql::vars::VarError::ConstrainedParameter {
+                parameter,
+                values,
+                valid_values,
+            } => AdapterError::ConstrainedParameter {
+                parameter,
+                values,
+                valid_values,
+            },
         }
     }
 }
