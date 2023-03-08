@@ -421,6 +421,15 @@ pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+/// Feature flag indicating whether `WITH MUTUALLY RECURSIVE` queries are enabled.
+static ENABLE_WITH_MUTUALLY_RECURSIVE: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_with_mutually_recursive"),
+    value: &false,
+    description: "Feature flag indicating whether `WITH MUTUALLY RECURSIVE` queries are enabled (Materialize).",
+    internal: true,
+    safe: true,
+};
+
 /// Feature flag indicating whether real time recency is enabled.
 static REAL_TIME_RECENCY: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("real_time_recency"),
@@ -1130,7 +1139,7 @@ pub struct SystemVars {
     allowed_cluster_replica_sizes: SystemVar<Vec<Ident>>,
 
     // features
-    // (empty)
+    enable_with_mutually_recursive: SystemVar<bool>,
 
     // persist configuration
     persist_blob_target_size: SystemVar<usize>,
@@ -1175,6 +1184,7 @@ impl Default for SystemVars {
             persist_sink_minimum_batch_updates: SystemVar::new(&PERSIST_SINK_MINIMUM_BATCH_UPDATES),
             metrics_retention: SystemVar::new(&METRICS_RETENTION),
             mock_audit_event_timestamp: SystemVar::new(&MOCK_AUDIT_EVENT_TIMESTAMP),
+            enable_with_mutually_recursive: SystemVar::new(&ENABLE_WITH_MUTUALLY_RECURSIVE),
         }
     }
 }
@@ -1206,6 +1216,7 @@ impl SystemVars {
             &self.persist_sink_minimum_batch_updates,
             &self.metrics_retention,
             &self.mock_audit_event_timestamp,
+            &self.enable_with_mutually_recursive,
         ];
         vars.into_iter()
     }
@@ -1278,6 +1289,8 @@ impl SystemVars {
             Ok(&self.metrics_retention)
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
             Ok(&self.mock_audit_event_timestamp)
+        } else if name == ENABLE_WITH_MUTUALLY_RECURSIVE.name {
+            Ok(&self.enable_with_mutually_recursive)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -1337,6 +1350,8 @@ impl SystemVars {
             self.metrics_retention.is_default(input)
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
             self.mock_audit_event_timestamp.is_default(input)
+        } else if name == ENABLE_WITH_MUTUALLY_RECURSIVE.name {
+            self.enable_with_mutually_recursive.is_default(input)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -1405,6 +1420,8 @@ impl SystemVars {
             self.metrics_retention.set(input)
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
             self.mock_audit_event_timestamp.set(input)
+        } else if name == ENABLE_WITH_MUTUALLY_RECURSIVE.name {
+            self.enable_with_mutually_recursive.set(input)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -1468,6 +1485,8 @@ impl SystemVars {
             Ok(self.metrics_retention.reset())
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
             Ok(self.mock_audit_event_timestamp.reset())
+        } else if name == ENABLE_WITH_MUTUALLY_RECURSIVE.name {
+            Ok(self.enable_with_mutually_recursive.reset())
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -1585,6 +1604,18 @@ impl SystemVars {
     /// Returns the `mock_audit_event_timestamp` configuration parameter.
     pub fn mock_audit_event_timestamp(&self) -> Option<mz_repr::Timestamp> {
         *self.mock_audit_event_timestamp.value()
+    }
+
+    /// Returns the `enable_with_mutually_recursive` configuration parameter.
+    pub fn enable_with_mutually_recursive(&self) -> bool {
+        *self.enable_with_mutually_recursive.value()
+    }
+
+    /// Sets the `enable_with_mutually_recursive` configuration parameter.
+    pub fn set_enable_with_mutually_recursive(&mut self, value: bool) -> bool {
+        self.enable_with_mutually_recursive
+            .set(VarInput::Flat(value.format().as_str()))
+            .expect("valid parameter value")
     }
 }
 

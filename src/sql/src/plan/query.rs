@@ -1175,7 +1175,7 @@ pub fn plan_ctes(
             }
         }
         CteBlock::MutuallyRecursive(ctes) => {
-            qcx.scx.require_unsafe_mode("WITH MUTUALLY_RECURSIVE")?;
+            qcx.scx.require_with_mutually_recursive()?;
 
             // Insert column types into `qcx.ctes` first for recursive bindings.
             for cte in ctes.iter() {

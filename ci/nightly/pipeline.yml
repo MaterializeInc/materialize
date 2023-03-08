@@ -59,6 +59,7 @@ steps:
           - { value: persist-maelstrom-single-node }
           - { value: persist-maelstrom-multi-node }
           - { value: unused-deps }
+          - { value: sql-feature-flags }
           - { value: launchdarkly }
           - { value: bounded-memory }
           - { value: cloud-canary }
@@ -572,6 +573,16 @@ steps:
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
+
+  - id: sql-feature-flags
+    label: "SQL-level feature flags"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sql-feature-flags
 
   - id: launchdarkly
     label: "LaunchDarkly"
