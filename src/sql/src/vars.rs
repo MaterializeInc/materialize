@@ -25,9 +25,9 @@ use mz_persist_client::cfg::PersistConfig;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 
 /// The action to take during end_transaction.
-/// 
+///
 /// This enum lives here because of convenience: it's more of an adapter
-/// concept but [`SessionVars::end_transaction`] takes it. 
+/// concept but [`SessionVars::end_transaction`] takes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EndTransactionAction {
     /// Commit the transaction.
