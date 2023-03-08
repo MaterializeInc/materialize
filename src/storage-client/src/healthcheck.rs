@@ -40,7 +40,7 @@ pub fn pack_status_row(
 
     let mut row = Row::default();
     let mut packer = row.packer();
-    packer.extend(&[timestamp, collection_id, status, error]);
+    packer.extend([timestamp, collection_id, status, error]);
 
     match hint {
         Some(hint) => {
