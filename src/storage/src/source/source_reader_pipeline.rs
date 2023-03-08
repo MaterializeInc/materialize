@@ -574,6 +574,7 @@ fn health_operator<G: Scope>(
                                 &persist_client,
                                 status_shard,
                                 &*MZ_SOURCE_STATUS_HISTORY_DESC,
+                                None,
                             )
                             .await;
                         }

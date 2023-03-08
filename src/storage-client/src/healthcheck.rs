@@ -17,6 +17,7 @@ pub fn pack_status_row(
     status_name: &str,
     error: Option<&str>,
     ts: u64,
+    hint: Option<&str>,
 ) -> Row {
     let timestamp = NaiveDateTime::from_timestamp_opt(
         (ts / 1000)
@@ -36,8 +37,13 @@ pub fn pack_status_row(
     let collection_id = Datum::String(&collection_id);
     let status = Datum::String(status_name);
     let error = error.into();
-    let metadata = Datum::Null;
-    Row::pack_slice(&[timestamp, collection_id, status, error, metadata])
+    let hint: Datum = hint.into();
+    let mut row = Row::pack_slice(&[timestamp, collection_id, status, error]);
+    row.packer().push_dict_with(|row| {
+        row.push(Datum::String("hint"));
+        row.push(hint);
+    });
+    row
 }
 
 pub static MZ_SINK_STATUS_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {

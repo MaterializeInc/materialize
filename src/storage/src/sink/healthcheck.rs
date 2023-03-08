@@ -83,6 +83,7 @@ impl Healthchecker {
                 &self.persist_client,
                 self.status_shard,
                 &*MZ_SINK_STATUS_HISTORY_DESC,
+                None,
             )
             .await;
 
