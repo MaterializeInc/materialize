@@ -6159,7 +6159,7 @@ fn enable_features_required_for_catalog_open(session_catalog: &mut ConnCatalog) 
         .enable_with_mutually_recursive()
     {
         session_catalog
-            .mut_system_vars()
+            .system_vars_mut()
             .set_enable_with_mutually_recursive(true);
     }
 }
@@ -6704,7 +6704,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self.state.system_configuration
     }
 
-    fn mut_system_vars(&mut self) -> &mut SystemVars {
+    fn system_vars_mut(&mut self) -> &mut SystemVars {
         &mut self.state.to_mut().system_configuration
     }
 }

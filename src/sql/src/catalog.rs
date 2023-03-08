@@ -223,7 +223,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// state here are not guarateed to be persisted. The motivating use case
     /// for this method was ensuring that features are temporary turned on so
     /// catalog rehydration does not break due to unsupported SQL syntax.
-    fn mut_system_vars(&mut self) -> &mut SystemVars;
+    fn system_vars_mut(&mut self) -> &mut SystemVars;
 }
 
 /// Configuration associated with a catalog.
