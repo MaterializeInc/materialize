@@ -798,6 +798,13 @@ where
     // description.
 
     let shutdown_button = append_op.build(move |_| async move {
+        // This may SEEM unnecessary, but metrics contains extra
+        // `DeleteOnDrop`-wrapped fields that will NOT be moved into this
+        // closure otherwise, dropping and destroying
+        // those metrics. This is because rust now only moves the
+        // explicitly-referenced fields into closures.
+        let metrics = metrics;
+
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
         // determines batch descriptions for all writers.
