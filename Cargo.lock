@@ -4286,7 +4286,6 @@ name = "mz-persist-client"
 version = "0.46.0-dev"
 dependencies = [
  "anyhow",
- "arrayvec",
  "async-stream",
  "async-trait",
  "axum",
@@ -4887,6 +4886,7 @@ name = "mz-storage-client"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "arrayvec",
  "async-stream",
  "async-trait",
  "aws-config",
