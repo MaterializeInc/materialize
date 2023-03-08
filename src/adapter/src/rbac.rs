@@ -11,7 +11,7 @@ use crate::catalog::Catalog;
 use crate::command::Command;
 use crate::session::Session;
 use crate::AdapterError;
-use mz_sql::catalog::{CatalogRole, SessionCatalog};
+use mz_sql::catalog::{CatalogFeature, CatalogRole, SessionCatalog};
 use mz_sql::plan::Plan;
 use std::error::Error;
 use std::fmt;
@@ -152,7 +152,7 @@ pub fn check_plan(
     session: &Session,
     plan: &Plan,
 ) -> Result<(), AdapterError> {
-    if !catalog.rbac_checks_enabled() {
+    if !catalog.get_feature(CatalogFeature::EnableRbacChecks) {
         return Ok(());
     }
 

@@ -224,10 +224,6 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// for this method was ensuring that features are temporary turned on so
     /// catalog rehydration does not break due to unsupported SQL syntax.
     fn set_feature(&mut self, feature: CatalogFeature, value: bool) -> bool;
-
-    /// Reports whether rbac_checks are enabled.
-    /// TODO(jkosh44) remove for `get_feature`.
-    fn rbac_checks_enabled(&self) -> bool;
 }
 
 /// Defines features that the [SessionCatalog] may optionally support.
@@ -235,6 +231,8 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
 pub enum CatalogFeature {
     /// True iff `WITH MUTUALLY RECURSIVE` syntax is enabled.
     EnableWithMutuallyRecursive,
+    /// True iff RBAC checks are enabled.
+    EnableRbacChecks,
 }
 
 /// Configuration associated with a catalog.

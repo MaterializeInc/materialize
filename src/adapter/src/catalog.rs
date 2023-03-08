@@ -6700,6 +6700,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         let config = &self.state.system_configuration;
         match name {
             EnableWithMutuallyRecursive => config.enable_with_mutually_recursive(),
+            EnableRbacChecks => config.enable_rbac_checks(),
         }
     }
 
@@ -6708,11 +6709,8 @@ impl SessionCatalog for ConnCatalog<'_> {
         let config = &mut self.state.to_mut().system_configuration;
         match name {
             EnableWithMutuallyRecursive => config.set_enable_with_mutually_recursive(value),
+            EnableRbacChecks => false,
         }
-    }
-
-    fn rbac_checks_enabled(&self) -> bool {
-        self.state.system_config().enable_rbac_checks()
     }
 }
 

@@ -1205,7 +1205,7 @@ impl SystemVars {
     /// Returns an iterator over the configuration parameters and their current
     /// values on disk.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        let vars: [&dyn Var; 23] = [
+        let vars: [&dyn Var; 24] = [
             &self.config_has_synced_once,
             &self.max_aws_privatelink_connections,
             &self.max_tables,
