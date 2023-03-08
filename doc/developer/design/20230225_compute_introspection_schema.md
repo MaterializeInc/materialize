@@ -124,12 +124,20 @@ Confusingly, not all times are reported as intervals; for example,
 `mz_scheduling_parks` has `slept_for` and `requested` columns, whose
 type is `bigint` and whose unit is undocumented (in fact, it is nanoseconds).
 
+The trade-off between intervals and nanoseconds timestamps is that the
+former is more ergonomic but also has only microsecond precision.
+
 #### Inconsistent presence of `sum` column in histograms
 
 Some histograms include a per-bucket sum, which allows consumers to
 compute average or total values precisely. Confusingly, not all
 histograms report such a column (e.g. `mz_worker_compute_delays` does
 not, whereas `mz_worker_raw_compute_delays` does).
+
+We introduced the `sum` column initially to support Prometheus
+histograms, which expects to know about cumulative sums and cannot be
+convinced otherwise. However, it is possible to provide approximate
+sums, based on multiplying the bucket values with the bucket counts.
 
 #### Lack of clarity around per-replica vs. global relations
 
@@ -161,14 +169,23 @@ clear what the distinction is.
 * The expectations about per-worker relations should be clearly
   documented (e.g., we should clearly say whether the values for each
   worker are expected to be the same during normal operation).
+* `raw` variants should be removed, and all introspection relations
+  should present durations as nanoseconds timestamps. This allows us to
+  provide the full precision, while also allowing users to cast the
+  durations to intervals if they find those more convenient.
 * All relations that report a simple count or sum should be views based on
-  an `_internal` variant that maintains the count or sum in the
-  Differential diff field. We may consider renaming this, since it
-  conflicts confusingly with the overall name `mz_internal`.
-* `raw` variants should be removed, and the underlying dataflows
-  should be in terms of intervals.
-* All histogram views or sources should have a per-bucket `sum`
-  column.
+  a `*_raw` variant that maintains the count or sum in the Differential
+  diff field. These relations previously had an `_internal` suffix, but
+  `_raw` is less likely to be confused with the `mz_internal` schema,
+  and better reflects that fact that these relations contain unaggregated
+  data.
+* All columns containing nanoseconds timestamps should have names
+  suffixed with `_ns`.
+* The `sum` column should be removed from all histogram sources.
+  Maintaining that field has some cost, in the form of additional state
+  we must keep, a roughly doubled amount of updates, and code complexity.
+  On the other hand, it is not clear how much value the `sum` field
+  provides given that we can approximate it.
 * All histogram views or sources should be suffixed with `_histogram`,
   to make their role more obvious. 
 * All per-replica sources and views should have their names prepended
