@@ -956,11 +956,24 @@ where
                     let total_buffered: usize = untimestamped_batches.iter().map(|(_, b)| b.len()).sum();
                     let reclock_source_upper = timestamper.source_upper();
 
+                    // Peel as many consequtive reclockable items as possible. It is not benefitial
+                    // to go further even if theoretically there may be more messages ready to be
+                    // reclocked further along because in the common case the message order is
+                    // correleated with time and therefore in the common case we would be wasting
+                    // work trying to compare all the buffered messages with the frontier.
+                    let mut reclockable_count = untimestamped_batches
+                        .iter()
+                        .flat_map(|(_, batch)| batch)
+                        .take_while(|(_, ts, _)| !reclock_source_upper.less_equal(ts))
+                        .count();
+
                     let msgs = untimestamped_batches
                         .iter_mut()
-                        .flat_map(|(_, batch)| batch.drain_filter_swapping(|(_, ts, _)| {
-                            !reclock_source_upper.less_equal(ts)
-                        }))
+                        .flat_map(|(_, batch)| {
+                            let drain_count = std::cmp::min(batch.len(), reclockable_count);
+                            reclockable_count = reclockable_count.saturating_sub(drain_count);
+                            batch.drain(0..drain_count)
+                        })
                         .map(|(data, time, diff)| ((data, time.clone(), diff), time));
 
                     // Accumulate updates to bytes_read for Prometheus metrics collection
