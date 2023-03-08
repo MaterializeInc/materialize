@@ -1250,7 +1250,7 @@ impl SystemVars {
 
     /// Returns an iterator over the configuration parameters and their current
     /// values on disk. Compared to [`SystemVars::iter`], this should omit vars
-    /// that shouldn't be synced by [`crate::config::SystemParameterFrontend`].
+    /// that shouldn't be synced by SystemParameterFrontend.
     pub fn iter_synced(&self) -> impl Iterator<Item = &dyn Var> {
         self.iter()
             .filter(|v| v.name() != CONFIG_HAS_SYNCED_ONCE.name)
@@ -1668,7 +1668,7 @@ pub trait Var: fmt::Debug {
     /// Indicates wither the [`Var`] is visible given is_system_user.
     ///
     /// Variables marked as `internal` are only visible for the
-    /// [`mz_adapter::catalog::SYSTEM_USER`] user.
+    /// system user.
     fn visible(&self, is_system_user: bool) -> bool;
 
     /// Indicates wither the [`Var`] is only visible in unsafe mode.
