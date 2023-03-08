@@ -39,6 +39,7 @@ use tonic::metadata::MetadataMap;
 use tonic::transport::Endpoint;
 use tracing::{Event, Level, Subscriber};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::fmt::format::{format, Writer};
 use tracing_subscriber::fmt::{self, FmtContext, FormatEvent, FormatFields};
@@ -315,16 +316,51 @@ where
             .with_exporter(exporter)
             .install_batch(opentelemetry::runtime::Tokio)
             .unwrap();
+
+        // By default we turn off tracing from the following crates, because they
+        // have long-lived Spans, which OpenTelemetry does not handle well.
+        //
+        // Note: folks should feel free to add more crates here if we find more
+        // with long lived Spans.
+        let default_targets = [("h2", LevelFilter::OFF), ("hyper", LevelFilter::OFF)];
+
         let (filter, filter_handle) = reload::Layer::new(if otel_config.start_enabled {
-            otel_config.filter
+            let new_targets = Targets::default()
+                .with_targets(default_targets)
+                .with_targets(&otel_config.filter);
+
+            if let Some(default_level) = otel_config.filter.default_level() {
+                new_targets.with_default(default_level)
+            } else {
+                new_targets
+            }
         } else {
             // The default `Targets` has everything disabled.
             Targets::default()
         });
         let layer = tracing_opentelemetry::layer()
+            // OpenTelemetry does not handle long-lived Spans well, and they end up continuously
+            // eating memory until OOM. So we set a max number of events that are allowed to be
+            // logged to a Span, once this max is passed, old events will get dropped
+            //
+            // TODO(parker-timmerman|guswynn): make this configurable with LaunchDarkly
+            .max_events_per_span(2048)
             .with_tracer(tracer)
             .with_filter(filter);
-        let reloader = Arc::new(move |targets| Ok(filter_handle.reload(targets)?));
+        let reloader = Arc::new(move |targets: Targets| {
+            // Re-apply our default targets on reload.
+            let new_targets = Targets::default()
+                .with_targets(default_targets)
+                .with_targets(&targets);
+
+            let new_targets = if let Some(default_level) = targets.default_level() {
+                new_targets.with_default(default_level)
+            } else {
+                new_targets
+            };
+
+            Ok(filter_handle.reload(new_targets)?)
+        });
         (Some(layer), reloader)
     } else {
         let reloader = Arc::new(move |_| bail!("OpenTelemetry is disabled"));
@@ -542,5 +578,25 @@ impl From<OpenTelemetryContext> for BTreeMap<String, String> {
 impl From<BTreeMap<String, String>> for OpenTelemetryContext {
     fn from(map: BTreeMap<String, String>) -> Self {
         Self { inner: map }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tracing::Level;
+    use tracing_subscriber::filter::{LevelFilter, Targets};
+
+    #[test]
+    fn overriding_targets() {
+        let user_defined = Targets::new().with_target("my_crate", Level::INFO);
+
+        let default = Targets::new().with_target("my_crate", LevelFilter::OFF);
+        assert!(!default.would_enable("my_crate", &Level::INFO));
+
+        // The user_defined filters should override the default
+        let filters = Targets::new()
+            .with_targets(default)
+            .with_targets(user_defined);
+        assert!(filters.would_enable("my_crate", &Level::INFO));
     }
 }
