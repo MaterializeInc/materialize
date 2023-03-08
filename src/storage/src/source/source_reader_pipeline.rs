@@ -44,7 +44,6 @@ use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::capture::capture::Capture;
 use timely::dataflow::operators::capture::Event;
-use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::operators::{Broadcast, CapabilitySet, Partition};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::frontier::MutableAntichain;
@@ -68,7 +67,9 @@ use mz_storage_client::types::errors::SourceError;
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
 use mz_storage_client::types::sources::{MzOffset, SourceConnection, SourceTimestamp, SourceToken};
 use mz_timely_util::antichain::AntichainExt;
-use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::builder_async::{
+    AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
+};
 use mz_timely_util::capture::UnboundedTokioCapture;
 use mz_timely_util::operator::StreamExt as _;
 
@@ -366,10 +367,10 @@ where
         tokio::pin!(source_stream);
         tokio::pin!(resume_uppers);
 
-        health_output.activate().session(&health_cap).give((worker_id, HealthStatusUpdate {
+        health_output.give(&health_cap, (worker_id, HealthStatusUpdate {
             update: HealthStatus::Starting,
             should_halt: false,
-        }));
+        })).await;
         let mut prev_status = HealthStatusUpdate {
             update: HealthStatus::Starting,
             should_halt: false,
@@ -412,7 +413,6 @@ where
                     // We want to efficiently batch up messages that are ready. To do that we will
                     // activate the output handle here and then drain the currently available
                     // messages until we either run out of messages or run out of time.
-                    let mut output = output.activate();
                     while timer.elapsed() < YIELD_INTERVAL {
                         match source_stream.next().now_or_never() {
                             Some(Some(SourceMessageType::Message(message, cap, diff))) => {
@@ -430,10 +430,7 @@ where
 
                                 if prev_status != new_status_update {
                                     prev_status = new_status_update.clone();
-                                    health_output
-                                        .activate()
-                                        .session(&health_cap)
-                                        .give((worker_id, new_status_update));
+                                    health_output.give(&health_cap, (worker_id, new_status_update)).await;
                                 }
 
                                 if let Ok(message) = &message {
@@ -448,7 +445,7 @@ where
                                     // If cap is not beyond emit_cap we can't re-use emit_cap so
                                     // flush the current batch
                                     Some(emit_cap) => if !PartialOrder::less_equal(emit_cap, &cap) {
-                                        output.session(&emit_cap).give_container(&mut batch);
+                                        output.give_container(&*emit_cap, &mut batch).await;
                                         batch.clear();
                                         *emit_cap = cap;
                                     },
@@ -458,12 +455,12 @@ where
                             }
                             Some(Some(SourceMessageType::SourceStatus(new_status))) => {
                                 prev_status = new_status.clone();
-                                health_output.activate().session(&health_cap).give((worker_id, new_status));
+                                health_output.give(&health_cap, (worker_id, new_status)).await;
                             }
                             Some(None) => {
                                 trace!("timely-{worker_id} source({id}): source ended, dropping capabilities");
                                 if let Some(emit_cap) = emit_cap.take() {
-                                    output.session(&emit_cap).give_container(&mut batch);
+                                    output.give_container(&emit_cap, &mut batch).await;
                                     batch.clear();
                                 }
                                 return;
@@ -472,14 +469,10 @@ where
                         }
                     }
                     if let Some(emit_cap) = emit_cap.take() {
-                        output.session(&emit_cap).give_container(&mut batch);
+                        output.give_container(&emit_cap, &mut batch).await;
                         batch.clear();
                     }
                     assert!(batch.is_empty());
-                    // Now we drop the activated output handle to force timely to emit any pending
-                    // batch. It's crucial that this happens before our attempt to yield otherwise
-                    // the buffer would get stuck in this operator.
-                    drop(output);
                     if timer.elapsed() > YIELD_INTERVAL {
                         tokio::task::yield_now().await;
                     }
@@ -751,15 +744,10 @@ where
             &initial_batch.updates
         );
 
-        // Out of an abundance of caution, do not hold the output handle
-        // across an await, and drop it before we downgrade the capability.
-        {
-            let mut remap_output = remap_output.activate();
-            let cap = cap_set.delayed(cap_set.first().unwrap());
-            let mut session = remap_output.session(&cap);
-            session.give_vec(&mut initial_batch.updates);
-            cap_set.downgrade(initial_batch.upper);
-        }
+        let cap = cap_set.delayed(cap_set.first().unwrap());
+        remap_output.give_container(&cap, &mut initial_batch.updates).await;
+        drop(cap);
+        cap_set.downgrade(initial_batch.upper);
 
         let mut ticker = tokio::time::interval(timestamp_interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -780,14 +768,8 @@ where
                         remap_trace_batch.upper.pretty()
                     );
 
-                    // Out of an abundance of caution, do not hold the output handle
-                    // across an await, and drop it before we downgrade the capability.
-                    {
-                        let mut remap_output = remap_output.activate();
-                        let cap = cap_set.delayed(cap_set.first().unwrap());
-                        let mut session = remap_output.session(&cap);
-                        session.give_vec(&mut remap_trace_batch.updates);
-                    }
+                    let cap = cap_set.delayed(cap_set.first().unwrap());
+                    remap_output.give_container(&cap, &mut remap_trace_batch.updates).await;
 
                     // If the last remap trace closed the input, we no longer
                     // need to (or can) advance the timestamper.
@@ -799,14 +781,8 @@ where
 
                     let mut remap_trace_batch = timestamper.advance().await;
 
-                    // Out of an abundance of caution, do not hold the output handle
-                    // across an await, and drop it before we downgrade the capability.
-                    {
-                        let mut remap_output = remap_output.activate();
-                        let cap = cap_set.delayed(cap_set.first().unwrap());
-                        let mut session = remap_output.session(&cap);
-                        session.give_vec(&mut remap_trace_batch.updates);
-                    }
+                    let cap = cap_set.delayed(cap_set.first().unwrap());
+                    remap_output.give_container(&cap, &mut remap_trace_batch.updates).await;
 
                     cap_set.downgrade(remap_trace_batch.upper);
                 }
@@ -981,7 +957,6 @@ where
                     // Accumulate updates to offsets for Prometheus and system table metrics collection
                     let mut metric_updates = BTreeMap::new();
 
-                    let mut output = reclocked_output.activate();
                     let mut total_processed = 0;
                     for ((message, from_ts, diff), into_ts) in timestamper.reclock(msgs) {
                         let into_ts = into_ts.expect("reclock for update not beyond upper failed");
@@ -991,11 +966,11 @@ where
                             diff,
                             &mut bytes_read,
                             &cap_set,
-                            &mut output,
+                            &mut reclocked_output,
                             &mut metric_updates,
                             into_ts,
                             id,
-                        );
+                        ).await;
                         total_processed += 1;
                     }
                     // The loop above might have completely emptied batches. We can now remove them
@@ -1140,15 +1115,15 @@ where
 ///
 /// TODO: This function is a bit of a mess rn but hopefully this function makes
 /// the existing mess more obvious and points towards ways to improve it.
-fn handle_message<K, V, T, D>(
+async fn handle_message<K, V, T, D>(
     message: Result<SourceMessage<K, V>, SourceReaderError>,
     time: T,
     diff: D,
     bytes_read: &mut usize,
     cap_set: &CapabilitySet<mz_repr::Timestamp>,
-    output_handle: &mut OutputHandle<
+    output_handle: &mut AsyncOutputHandle<
         mz_repr::Timestamp,
-        (usize, Result<SourceOutput<K, V, D>, SourceError>),
+        Vec<(usize, Result<SourceOutput<K, V, D>, SourceError>)>,
         Tee<mz_repr::Timestamp, (usize, Result<SourceOutput<K, V, D>, SourceError>)>,
     >,
     metric_updates: &mut BTreeMap<PartitionId, (MzOffset, mz_repr::Timestamp, Diff)>,
@@ -1199,7 +1174,7 @@ fn handle_message<K, V, T, D>(
     };
 
     let ts_cap = cap_set.delayed(&ts);
-    output_handle.session(&ts_cap).give(output);
+    output_handle.give(&ts_cap, output).await;
     match metric_updates.entry(partition) {
         Entry::Occupied(mut entry) => {
             entry.insert((offset, ts, entry.get().2 + 1));

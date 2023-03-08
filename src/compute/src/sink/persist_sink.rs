@@ -460,9 +460,7 @@ where
                     batch_description
                 );
 
-                let mut output = output.activate();
-                let mut session = output.session(&cap);
-                session.give(batch_description);
+                output.give(&cap, batch_description).await;
 
                 // WIP: We downgrade our capability so that downstream
                 // operators (writer and appender) can know when all the
@@ -823,9 +821,7 @@ where
                             }
                         };
 
-                        let mut output = output.activate();
-                        let mut session = output.session(&cap);
-                        session.give(batch_or_data);
+                        output.give(&cap, batch_or_data).await;
                     }
                 }
             } else {

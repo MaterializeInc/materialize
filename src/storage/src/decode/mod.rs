@@ -582,9 +582,8 @@ where
                                 headers.as_deref(),
                             );
 
-                            let mut output = output.activate();
                             if value_bytes_remaining.is_empty() {
-                                output.session(&cap).give(DecodeResult {
+                                let result = DecodeResult {
                                     key: None,
                                     value: Some(value.map(|r| (r, 1)).map_err(|inner| {
                                         DecodeError {
@@ -596,11 +595,12 @@ where
                                     upstream_time_millis,
                                     partition: partition.clone(),
                                     metadata,
-                                });
+                                };
+                                output.give(&cap, result).await;
                                 value_buf = vec![];
                                 break;
                             } else {
-                                output.session(&cap).give(DecodeResult {
+                                let result = DecodeResult {
                                     key: None,
                                     value: Some(value.map(|r| (r, 1)).map_err(|inner| {
                                         DecodeError {
@@ -612,7 +612,8 @@ where
                                     upstream_time_millis,
                                     partition: partition.clone(),
                                     metadata,
-                                });
+                                };
+                                output.give(&cap, result).await;
                             }
                             if is_err {
                                 // If decoding has gone off the rails, we can no longer be sure that the delimiters are correct, so it
@@ -650,8 +651,7 @@ where
                                 headers.as_deref(),
                             );
 
-                            let mut output = output.activate();
-                            output.session(&cap).give(DecodeResult {
+                            let result = DecodeResult {
                                 key: None,
                                 value: Some(value.map(|r| (r, 1)).map_err(|inner| DecodeError {
                                     kind: inner,
@@ -661,7 +661,8 @@ where
                                 upstream_time_millis,
                                 partition: partition.clone(),
                                 metadata,
-                            });
+                            };
+                            output.give(&cap, result).await;
                         }
                     }
                 }
