@@ -52,9 +52,7 @@ class Td(MeasurementSource):
         assert not (executor is None and self._executor is None)
         assert not (executor is not None and self._executor is not None)
 
-        td_output = getattr((executor if executor else self._executor), "Td")(
-            self._td_str
-        )
+        td_output = getattr((executor or self._executor), "Td")(self._td_str)
 
         lines = td_output.splitlines()
         lines = [l for l in lines if l]
@@ -100,7 +98,7 @@ class Lambda(MeasurementSource):
         self,
         executor: Optional[Executor] = None,
     ) -> Timestamp:
-        e = executor if executor else self._executor
+        e = executor or self._executor
         assert e is not None
         e.Lambda(self._lambda)
         return time.time()
