@@ -10,32 +10,39 @@
 //! A source that reads from an a persist shard.
 
 use std::any::Any;
+
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
-use mz_persist_client::operators::shard_source::shard_source;
-use mz_persist_types::codec_impls::UnitSchema;
+use differential_dataflow::AsCollection;
 use timely::communication::Push;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::Bundle;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{Capability, OkErr};
+use timely::dataflow::operators::{Capability, Enter, OkErr};
 use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
+use timely::progress::timestamp::Refines;
+use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use timely::scheduling::Activator;
 
 use mz_expr::MfpPlan;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::fetch::FetchedPart;
+use mz_persist_client::operators::shard_source::shard_source;
+pub use mz_persist_client::operators::shard_source::FlowControl;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, Timestamp};
+use mz_timely_util::buffer::ConsolidateBuffer;
+use mz_timely_util::order::Hybrid;
 
 use crate::controller::CollectionMetadata;
+use crate::source::util::{Prefixed, Sort, WithPrefix};
 use crate::types::errors::DataflowError;
 use crate::types::sources::SourceData;
 
-pub use mz_persist_client::operators::shard_source::FlowControl;
-use mz_timely_util::buffer::ConsolidateBuffer;
+type HybridT = Hybrid<Timestamp, Sort>;
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -60,7 +67,7 @@ use mz_timely_util::buffer::ConsolidateBuffer;
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
 pub fn persist_source<G, YFn>(
-    scope: &G,
+    scope: &mut G,
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
     metadata: CollectionMetadata,
@@ -104,7 +111,7 @@ where
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
 #[allow(clippy::needless_borrow)]
 pub fn persist_source_core<G, YFn>(
-    scope: &G,
+    scope: &mut G,
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
     metadata: CollectionMetadata,
@@ -131,22 +138,32 @@ where
         as_of,
         until.clone(),
         flow_control,
-        Arc::new(metadata.relation_desc),
+        Arc::new(Prefixed(Arc::new(metadata.relation_desc))),
         Arc::new(UnitSchema),
     );
-    let rows = decode_and_mfp(&fetched, &name, until, map_filter_project, yield_fn);
+    let rows = scope.scoped::<Timestamp, _, _>("with_hybrid_timestamp", |scope| {
+        let rows = decode_and_mfp(
+            &fetched.enter(scope),
+            &name,
+            until,
+            map_filter_project,
+            yield_fn,
+        );
+        rows.as_collection().leave().inner
+    });
     (rows, token)
 }
 
 pub fn decode_and_mfp<G, YFn>(
-    fetched: &Stream<G, FetchedPart<SourceData, (), Timestamp, Diff>>,
+    fetched: &Stream<G, FetchedPart<WithPrefix<SourceData>, (), Timestamp, Diff>>,
     name: &str,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
     yield_fn: YFn,
-) -> Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>
+) -> Stream<G, (Result<Row, DataflowError>, G::Timestamp, Diff)>
 where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
+    G: Scope,
+    HybridT: Refines<G::Timestamp>,
     YFn: Fn(Instant, usize) -> bool + 'static,
 {
     let scope = fetched.scope();
@@ -171,7 +188,9 @@ where
         let activations = scope.activations();
         let activator = Activator::new(&operator_info.address[..], activations);
         // Maintain a list of work to do
-        let mut pending_work = std::collections::VecDeque::new();
+        let mut pending_work = WorkQueue {
+            queue: Default::default(),
+        };
         let mut buffer = Default::default();
 
         move |_frontier| {
@@ -179,7 +198,7 @@ where
                 data.swap(&mut buffer);
                 let capability = time.retain();
                 for fetched_part in buffer.drain(..) {
-                    pending_work.push_back(PendingWork {
+                    pending_work.queue.push_back(PendingWork {
                         capability: capability.clone(),
                         fetched_part,
                     })
@@ -190,22 +209,17 @@ where
             let start_time = Instant::now();
             let mut output = updates_output.activate();
             let mut handle = ConsolidateBuffer::new(&mut output, 0);
-            while !pending_work.is_empty() && !yield_fn(start_time, work) {
-                let done = pending_work.front_mut().unwrap().do_work(
-                    &mut work,
-                    start_time,
-                    &yield_fn,
-                    &until,
-                    map_filter_project.as_ref(),
-                    &mut datum_vec,
-                    &mut row_builder,
-                    &mut handle,
-                );
-                if done {
-                    pending_work.pop_front();
-                }
-            }
-            if !pending_work.is_empty() {
+            pending_work.do_work(
+                &mut work,
+                start_time,
+                &yield_fn,
+                &until,
+                map_filter_project.as_ref(),
+                &mut datum_vec,
+                &mut row_builder,
+                &mut handle,
+            );
+            if !pending_work.queue.is_empty() {
                 activator.activate();
             }
         }
@@ -214,15 +228,15 @@ where
     updates_stream
 }
 
-/// Pending work to read from fetched parts
-struct PendingWork {
-    /// The time at which the work should happen.
-    capability: Capability<Timestamp>,
-    /// Pending fetched part.
-    fetched_part: FetchedPart<SourceData, (), Timestamp, Diff>,
+struct WorkQueue<T: TimelyTimestamp> {
+    queue: VecDeque<PendingWork<T>>,
 }
 
-impl PendingWork {
+impl<T> WorkQueue<T>
+where
+    T: TimelyTimestamp,
+    HybridT: Refines<T>,
+{
     /// Perform work, reading from the fetched part, decoding, and sending outputs, while checking
     /// `yield_fn` whether more fuel is available.
     fn do_work<P, YFn>(
@@ -234,64 +248,86 @@ impl PendingWork {
         map_filter_project: Option<&MfpPlan>,
         datum_vec: &mut DatumVec,
         row_builder: &mut Row,
-        output: &mut ConsolidateBuffer<Timestamp, Result<Row, DataflowError>, Diff, P>,
+        output: &mut ConsolidateBuffer<T, Result<Row, DataflowError>, Diff, P>,
     ) -> bool
     where
-        P: Push<Bundle<Timestamp, (Result<Row, DataflowError>, Timestamp, Diff)>>,
+        P: Push<Bundle<T, (Result<Row, DataflowError>, T, Diff)>>,
         YFn: Fn(Instant, usize) -> bool,
     {
-        while let Some(((key, val), time, diff)) = self.fetched_part.next() {
-            if until.less_equal(&time) {
-                continue;
-            }
-            match (key, val) {
-                (Ok(SourceData(Ok(row))), Ok(())) => {
-                    if let Some(mfp) = map_filter_project {
-                        let arena = mz_repr::RowArena::new();
-                        let mut datums_local = datum_vec.borrow_with(&row);
-                        for result in mfp.evaluate(
-                            &mut datums_local,
-                            &arena,
-                            time,
-                            diff,
-                            |time| !until.less_equal(time),
-                            row_builder,
-                        ) {
-                            match result {
-                                Ok((row, time, diff)) => {
-                                    // Additional `until` filtering due to temporal filters.
-                                    if !until.less_equal(&time) {
-                                        output.give_at(&self.capability, (Ok(row), time, diff));
-                                        *work += 1;
+        while let Some(front) = self.queue.front_mut() {
+            while let Some(((key, val), time, diff)) = front.fetched_part.next() {
+                if until.less_equal(&time) {
+                    continue;
+                }
+                match (key, val) {
+                    (Ok(WithPrefix(SourceData(Ok(row)), _)), Ok(())) => {
+                        if let Some(mfp) = map_filter_project {
+                            let arena = mz_repr::RowArena::new();
+                            let mut datums_local = datum_vec.borrow_with(&row);
+                            for result in mfp.evaluate(
+                                &mut datums_local,
+                                &arena,
+                                time,
+                                diff,
+                                |time| !until.less_equal(time),
+                                row_builder,
+                            ) {
+                                match result {
+                                    Ok((row, time, diff)) => {
+                                        // Additional `until` filtering due to temporal filters.
+                                        if !until.less_equal(&time) {
+                                            let time = Hybrid(time, Sort::minimum()).to_outer();
+                                            output
+                                                .give_at(&front.capability, (Ok(row), time, diff));
+                                            *work += 1;
+                                        }
                                     }
-                                }
-                                Err((err, time, diff)) => {
-                                    // Additional `until` filtering due to temporal filters.
-                                    if !until.less_equal(&time) {
-                                        output.give_at(&self.capability, (Err(err), time, diff));
-                                        *work += 1;
+                                    Err((err, time, diff)) => {
+                                        // Additional `until` filtering due to temporal filters.
+                                        if !until.less_equal(&time) {
+                                            let time = Hybrid(time, Sort::minimum()).to_outer();
+
+                                            output
+                                                .give_at(&front.capability, (Err(err), time, diff));
+                                            *work += 1;
+                                        }
                                     }
                                 }
                             }
+                        } else {
+                            let time = Hybrid(time, Sort::minimum()).to_outer();
+
+                            output.give_at(&front.capability, (Ok(row), time, diff));
+                            *work += 1;
                         }
-                    } else {
-                        output.give_at(&self.capability, (Ok(row), time, diff));
+                    }
+                    (Ok(WithPrefix(SourceData(Err(err)), _)), Ok(())) => {
+                        let time = Hybrid(time, Sort::minimum()).to_outer();
+
+                        output.give_at(&front.capability, (Err(err), time, diff));
                         *work += 1;
                     }
+                    // TODO(petrosagg): error handling
+                    (Err(_), Ok(_)) | (Ok(_), Err(_)) | (Err(_), Err(_)) => {
+                        panic!("decoding failed")
+                    }
                 }
-                (Ok(SourceData(Err(err))), Ok(())) => {
-                    output.give_at(&self.capability, (Err(err), time, diff));
-                    *work += 1;
-                }
-                // TODO(petrosagg): error handling
-                (Err(_), Ok(_)) | (Ok(_), Err(_)) | (Err(_), Err(_)) => {
-                    panic!("decoding failed")
+                if yield_fn(start_time, *work) {
+                    return false;
                 }
             }
-            if yield_fn(start_time, *work) {
-                return false;
-            }
+
+            self.queue.pop_front();
         }
+
         true
     }
+}
+
+/// Pending work to read from fetched parts
+struct PendingWork<T: TimelyTimestamp> {
+    /// The time at which the work should happen.
+    capability: Capability<T>,
+    /// Pending fetched part.
+    fetched_part: FetchedPart<WithPrefix<SourceData>, (), Timestamp, Diff>,
 }

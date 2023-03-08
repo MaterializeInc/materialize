@@ -139,10 +139,10 @@ where
 /// A key along with its serialized representation. Used to both deserialize the data and keep
 /// around the raw bytes for comparison.
 #[derive(Debug)]
-struct WithPrefix<K>(K, ArrayVec<u8, 16>);
+pub struct WithPrefix<K>(pub K, pub ArrayVec<u8, 16>);
 
 #[derive(Debug)]
-struct Prefixed<S>(S);
+pub struct Prefixed<S>(pub S);
 
 impl<K: Codec> Codec for WithPrefix<K> {
     type Schema = Prefixed<Arc<K::Schema>>;
