@@ -41,7 +41,7 @@ class LambdaAction(Action):
         self,
         executor: Optional[Executor] = None,
     ) -> None:
-        e = executor if executor else self._executor
+        e = executor or self._executor
         assert e is not None
         e.Lambda(self._lambda)
         return None
@@ -57,7 +57,7 @@ class Kgen(Action):
         self,
         executor: Optional[Executor] = None,
     ) -> None:
-        getattr((executor if executor else self._executor), "Kgen")(
+        getattr((executor or self._executor), "Kgen")(
             topic=self._topic, args=self._args
         )
 
@@ -73,7 +73,7 @@ class TdAction(Action):
         self,
         executor: Optional[Executor] = None,
     ) -> None:
-        getattr((executor if executor else self._executor), "Td")(self._td_str)
+        getattr((executor or self._executor), "Td")(self._td_str)
 
 
 class DummyAction(Action):

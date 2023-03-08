@@ -750,6 +750,8 @@
     description: Reports whether the relation with the specified OID is visible in the search path.
   - signature: 'pg_type_is_visible(relation: oid) -> boolean'
     description: Reports whether the type with the specified OID is visible in the search path.
+  - signature: 'pg_function_is_visible(relation: oid) -> boolean'
+    description: Reports whether the function with the specified OID is visible in the search path.
   - signature: 'pg_typeof(expr: any) -> text'
     description: Returns the type of its input argument as a string.
   - signature: 'pg_encoding_to_char(encoding_id: integer) -> text'

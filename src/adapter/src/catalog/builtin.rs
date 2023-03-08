@@ -2298,9 +2298,24 @@ pub const PG_OPERATOR: BuiltinView = BuiltinView {
     sql: "CREATE VIEW pg_catalog.pg_operator AS SELECT
     mz_operators.oid,
     mz_operators.name AS oprname,
-    ret_type.oid AS oprresult
+    ret_type.oid AS oprresult,
+    left_type.oid as oprleft,
+    right_type.oid as oprright
 FROM mz_catalog.mz_operators
-JOIN mz_catalog.mz_types AS ret_type ON mz_operators.return_type_id = ret_type.id",
+JOIN mz_catalog.mz_types AS ret_type ON mz_operators.return_type_id = ret_type.id
+JOIN mz_catalog.mz_types AS left_type ON mz_operators.argument_type_ids[1] = left_type.id
+JOIN mz_catalog.mz_types AS right_type ON mz_operators.argument_type_ids[2] = right_type.id
+WHERE array_length(mz_operators.argument_type_ids, 1) = 2
+UNION SELECT
+    mz_operators.oid,
+    mz_operators.name AS oprname,
+    ret_type.oid AS oprresult,
+    0 as oprleft,
+    right_type.oid as oprright
+FROM mz_catalog.mz_operators
+JOIN mz_catalog.mz_types AS ret_type ON mz_operators.return_type_id = ret_type.id
+JOIN mz_catalog.mz_types AS right_type ON mz_operators.argument_type_ids[1] = right_type.id
+WHERE array_length(mz_operators.argument_type_ids, 1) = 1",
 };
 
 pub const PG_RANGE: BuiltinView = BuiltinView {

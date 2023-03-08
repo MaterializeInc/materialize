@@ -17,4 +17,5 @@ message ProtoPersistParameters {
     optional uint64 blob_target_size = 1;
     mz_proto.ProtoDuration compaction_minimum_timeout = 2;
     mz_proto.ProtoDuration consensus_connect_timeout = 3;
+    optional uint64 sink_minimum_batch_updates = 4;
 }

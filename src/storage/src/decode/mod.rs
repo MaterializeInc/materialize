@@ -23,6 +23,7 @@ use chrono::NaiveDateTime;
 use differential_dataflow::capture::YieldingIter;
 use differential_dataflow::Hashable;
 use differential_dataflow::{AsCollection, Collection};
+use futures::StreamExt as AsyncStreamExt;
 use regex::Regex;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Operator;
@@ -42,12 +43,14 @@ use mz_storage_client::types::sources::encoding::{
     AvroEncoding, DataEncoding, DataEncodingInner, RegexEncoding,
 };
 use mz_storage_client::types::sources::{IncludedColumnSource, MzOffset};
+use mz_timely_util::builder_async::Event as AsyncEvent;
+use mz_timely_util::operator::StreamExt;
 
 use self::avro::AvroDecoderState;
 use self::csv::CsvDecoderState;
 use self::metrics::DecodeMetrics;
 use self::protobuf::ProtobufDecoderState;
-use crate::source::types::{DecodeResult, SourceOutput};
+use crate::source::types::{ByteStream, DecodeResult, SourceOutput};
 
 mod avro;
 mod csv;
@@ -474,7 +477,7 @@ where
 /// If the decoder does find a message, we verify (by asserting) that it consumed some bytes, to avoid
 /// the possibility of infinite loops.
 pub fn render_decode<G>(
-    stream: &Stream<G, SourceOutput<(), Option<Vec<u8>>, ()>>,
+    stream: &Stream<G, SourceOutput<(), ByteStream, ()>>,
     value_encoding: DataEncoding,
     debug_name: &str,
     metadata_items: Vec<IncludedColumnSource>,
@@ -496,161 +499,173 @@ where
 
     let mut value_buf = vec![];
 
-    // The `position` value from `SourceOutput` is meaningless here -- it's just the index of a chunk.
+    // The `position` value from `SourceOutput` is meaningless -- it's just a counter of the number
+    // of files emitted so far.
     // We therefore ignore it, and keep track ourselves of how many records we've seen (for filling in `mz_line_no`, etc).
     // Historically, non-delimited sources have their offset start at 1
     let mut n_seen = 1..;
-    let results = stream.unary_frontier(Pipeline, &op_name, move |_, _| {
-        let metadata_items = metadata_items;
-        move |input, output| {
+    let results = stream.unary_async(
+        Pipeline,
+        op_name,
+        move |_, _, mut input, mut output| async move {
+            let metadata_items = metadata_items;
             let mut n_errors = 0;
             let mut n_successes = 0;
-            input.for_each(|cap, data| {
+            while let Some(event) = input.next_mut().await {
+                let (cap, data) = match event {
+                    AsyncEvent::Data(cap, data) => (cap, data),
+                    AsyncEvent::Progress(_) => continue,
+                };
+
                 // Currently Kafka is the only kind of source that can have metadata, and it is
                 // always delimited, so we will never have metadata in `render_decode`
-                let mut session = output.session(&cap);
-                for SourceOutput {
-                    key: _,
-                    value,
-                    position: _,
-                    upstream_time_millis,
-                    partition,
-                    headers,
-                    diff: (),
-                } in data.iter()
-                {
-                    let value = match value {
-                        Some(data) => data,
-                        None => {
-                            let data = &mut &value_buf[..];
-                            let mut result = value_decoder.eof(data);
-                            if result.is_ok() && !data.is_empty() {
-                                result = Err(DecodeErrorKind::Text(format!(
-                                    "Saw unexpected EOF with bytes remaining in buffer: {:?}",
-                                    data
-                                )));
-                            }
-                            value_buf.clear();
+                for item in data.drain(..) {
+                    let SourceOutput {
+                        key: _,
+                        value,
+                        position: _,
+                        upstream_time_millis,
+                        partition,
+                        headers,
+                        diff: (),
+                    } = item;
 
-                            match result.transpose() {
-                                None => continue,
-                                Some(value) => {
-                                    if value.is_err() {
-                                        n_errors += 1;
-                                    } else if matches!(&value, Ok(_)) {
-                                        n_successes += 1;
-                                    }
-                                    // `RangeFrom` `Iterator`'s never end
-                                    let position = n_seen.next().unwrap();
-                                    let metadata = to_metadata_row(
-                                        &metadata_items,
-                                        partition.clone(),
-                                        position.into(),
-                                        *upstream_time_millis,
-                                        headers.as_deref(),
-                                    );
-
-                                    session.give(DecodeResult {
-                                        key: None,
-                                        value: Some(value.map(|r| (r, 1)).map_err(|inner| {
-                                            DecodeError {
-                                                kind: inner,
-                                                raw: None,
-                                            }
-                                        })),
-                                        position: position.into(),
-                                        upstream_time_millis: *upstream_time_millis,
-                                        partition: partition.clone(),
-                                        metadata,
-                                    });
-                                }
-                            }
-                            continue;
-                        }
+                    let Ok(mut stream) = Rc::try_unwrap(value.stream) else {
+                        panic!("byte stream cloned unexpectedly");
                     };
-
-                    // Check whether we have a partial message from last time.
-                    // If so, we need to prepend it to the bytes we got from _this_ message.
-                    let value = if value_buf.is_empty() {
-                        value
-                    } else {
-                        value_buf.extend_from_slice(&*value);
-                        &value_buf
-                    };
-
-                    let value_bytes_remaining = &mut value.as_slice();
-                    // The intent is that the below loop runs as long as there are more bytes to decode.
-                    //
-                    // We'd like to be able to write `while !value_cursor.empty()`
-                    // here, but that runs into borrow checker issues, so we use `loop`
-                    // and break manually.
-                    loop {
-                        let old_value_cursor = *value_bytes_remaining;
-                        let value = match value_decoder.next(value_bytes_remaining) {
-                            Err(e) => Err(e),
-                            Ok(None) => {
-                                let leftover = value_bytes_remaining.to_vec();
-                                value_buf = leftover;
-                                break;
-                            }
-                            Ok(Some(value)) => Ok(value),
+                    while let Some(chunk) = stream.next().await {
+                        // Check whether we have a partial message from last time.
+                        // If so, we need to prepend it to the bytes we got from _this_ message.
+                        let value = if value_buf.is_empty() {
+                            &chunk
+                        } else {
+                            value_buf.extend_from_slice(&*chunk);
+                            &value_buf
                         };
 
-                        // If the decoders decoded a message, they need to have made progress consuming the bytes.
-                        // Otherwise, we risk going into an infinite loop.
-                        assert!(old_value_cursor != *value_bytes_remaining || value.is_err());
+                        let value_bytes_remaining = &mut value.as_slice();
 
-                        let is_err = value.is_err();
-                        if is_err {
-                            n_errors += 1;
-                        } else if matches!(&value, Ok(_)) {
-                            n_successes += 1;
+                        // The intent is that the below loop runs as long as there are more bytes to decode.
+                        //
+                        // We'd like to be able to write `while !value_cursor.empty()`
+                        // here, but that runs into borrow checker issues, so we use `loop`
+                        // and break manually.
+                        loop {
+                            let old_value_cursor = *value_bytes_remaining;
+                            let value = match value_decoder.next(value_bytes_remaining) {
+                                Err(e) => Err(e),
+                                Ok(None) => {
+                                    let leftover = value_bytes_remaining.to_vec();
+                                    value_buf = leftover;
+                                    break;
+                                }
+                                Ok(Some(value)) => Ok(value),
+                            };
+
+                            // If the decoders decoded a message, they need to have made progress consuming the bytes.
+                            // Otherwise, we risk going into an infinite loop.
+                            assert!(old_value_cursor != *value_bytes_remaining || value.is_err());
+
+                            let is_err = value.is_err();
+                            if is_err {
+                                n_errors += 1;
+                            } else if matches!(&value, Ok(_)) {
+                                n_successes += 1;
+                            }
+                            // `RangeFrom` `Iterator`'s never end
+                            let position = n_seen.next().unwrap();
+                            let metadata = to_metadata_row(
+                                &metadata_items,
+                                partition.clone(),
+                                position.into(),
+                                upstream_time_millis,
+                                headers.as_deref(),
+                            );
+
+                            let mut output = output.activate();
+                            if value_bytes_remaining.is_empty() {
+                                output.session(&cap).give(DecodeResult {
+                                    key: None,
+                                    value: Some(value.map(|r| (r, 1)).map_err(|inner| {
+                                        DecodeError {
+                                            kind: inner,
+                                            raw: None,
+                                        }
+                                    })),
+                                    position: position.into(),
+                                    upstream_time_millis,
+                                    partition: partition.clone(),
+                                    metadata,
+                                });
+                                value_buf = vec![];
+                                break;
+                            } else {
+                                output.session(&cap).give(DecodeResult {
+                                    key: None,
+                                    value: Some(value.map(|r| (r, 1)).map_err(|inner| {
+                                        DecodeError {
+                                            kind: inner,
+                                            raw: None,
+                                        }
+                                    })),
+                                    position: position.into(),
+                                    upstream_time_millis,
+                                    partition: partition.clone(),
+                                    metadata,
+                                });
+                            }
+                            if is_err {
+                                // If decoding has gone off the rails, we can no longer be sure that the delimiters are correct, so it
+                                // makes no sense to keep going.
+                                break;
+                            }
                         }
-                        // `RangeFrom` `Iterator`'s never end
-                        let position = n_seen.next().unwrap();
-                        let metadata = to_metadata_row(
-                            &metadata_items,
-                            partition.clone(),
-                            position.into(),
-                            *upstream_time_millis,
-                            headers.as_deref(),
-                        );
+                    }
 
-                        if value_bytes_remaining.is_empty() {
-                            session.give(DecodeResult {
+                    let data = &mut &value_buf[..];
+                    let mut result = value_decoder.eof(data);
+                    if result.is_ok() && !data.is_empty() {
+                        result = Err(DecodeErrorKind::Text(format!(
+                            "Saw unexpected EOF with bytes remaining in buffer: {:?}",
+                            data
+                        )));
+                    }
+                    value_buf.clear();
+
+                    match result.transpose() {
+                        None => continue,
+                        Some(value) => {
+                            if value.is_err() {
+                                n_errors += 1;
+                            } else if matches!(&value, Ok(_)) {
+                                n_successes += 1;
+                            }
+                            // `RangeFrom` `Iterator`'s never end
+                            let position = n_seen.next().unwrap();
+                            let metadata = to_metadata_row(
+                                &metadata_items,
+                                partition.clone(),
+                                position.into(),
+                                upstream_time_millis,
+                                headers.as_deref(),
+                            );
+
+                            let mut output = output.activate();
+                            output.session(&cap).give(DecodeResult {
                                 key: None,
                                 value: Some(value.map(|r| (r, 1)).map_err(|inner| DecodeError {
                                     kind: inner,
                                     raw: None,
                                 })),
                                 position: position.into(),
-                                upstream_time_millis: *upstream_time_millis,
+                                upstream_time_millis,
                                 partition: partition.clone(),
                                 metadata,
                             });
-                            value_buf = vec![];
-                            break;
-                        } else {
-                            session.give(DecodeResult {
-                                key: None,
-                                value: Some(value.map(|r| (r, 1)).map_err(|inner| DecodeError {
-                                    kind: inner,
-                                    raw: None,
-                                })),
-                                position: position.into(),
-                                upstream_time_millis: *upstream_time_millis,
-                                partition: partition.clone(),
-                                metadata,
-                            });
-                        }
-                        if is_err {
-                            // If decoding has gone off the rails, we can no longer be sure that the delimiters are correct, so it
-                            // makes no sense to keep going.
-                            break;
                         }
                     }
                 }
-            });
+            }
             // Matching historical practice, we only log metrics on the value decoder.
             if n_errors > 0 {
                 value_decoder.log_errors(n_errors);
@@ -658,8 +673,8 @@ where
             if n_successes > 0 {
                 value_decoder.log_successes(n_errors);
             }
-        }
-    });
+        },
+    );
     (results, None)
 }
 

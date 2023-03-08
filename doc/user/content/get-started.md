@@ -9,6 +9,7 @@ menu:
 aliases:
   - /katacoda/
   - /quickstarts/
+  - /install/
 ---
 
 [//]: # "TODO(morsapaes) Once we're GA, add details about signing up and logging

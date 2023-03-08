@@ -956,29 +956,11 @@ where
                     let total_buffered: usize = untimestamped_batches.iter().map(|(_, b)| b.len()).sum();
                     let reclock_source_upper = timestamper.source_upper();
 
-                    // This is another subtle point. Normally we would be free to emit the
-                    // untimestamped messages in any order so long as the frontiers are respected.
-                    // Unfortunately, downstream decoding operators rely on the messages being
-                    // presented at the exact order produced even if the messages happen at the
-                    // same timestamp. This should be fixed, but until this happens we need to
-                    // preserve the order here.
-                    //
-                    // We will treat the vector of untimestamped batches as a flat list of messages
-                    // and we will compute the size of the reclockable prefix. The messages in this
-                    // prefix can be reclocked immediately and emitted in the original order.
-                    let mut reclockable_count = untimestamped_batches
-                        .iter()
-                        .flat_map(|(_, batch)| batch)
-                        .take_while(|(_, ts, _)| !reclock_source_upper.less_equal(ts))
-                        .count();
-
                     let msgs = untimestamped_batches
                         .iter_mut()
-                        .flat_map(|(_, batch)| {
-                            let drain_count = std::cmp::min(batch.len(), reclockable_count);
-                            reclockable_count = reclockable_count.saturating_sub(drain_count);
-                            batch.drain(0..drain_count)
-                        })
+                        .flat_map(|(_, batch)| batch.drain_filter_swapping(|(_, ts, _)| {
+                            !reclock_source_upper.less_equal(ts)
+                        }))
                         .map(|(data, time, diff)| ((data, time.clone(), diff), time));
 
                     // Accumulate updates to bytes_read for Prometheus metrics collection

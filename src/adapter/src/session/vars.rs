@@ -400,12 +400,32 @@ const DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<usize> = ServerVar {
     safe: true,
 };
 
+/// Controls [`mz_persist_client::cfg::PersistConfig::sink_minimum_batch_updates`].
+const PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("persist_sink_minimum_batch_updates"),
+    value: &PersistConfig::DEFAULT_SINK_MINIMUM_BATCH_UPDATES,
+    description: "In the compute persist sink, workers with less than the minimum number of updates \
+                  will flush their records to single downstream worker to be batched up there... in \
+                  the hopes of grouping our updates into fewer, larger batches.",
+    internal: true,
+    safe: true,
+};
+
 /// Boolean flag indicating that the remote configuration was synchronized at
 /// least once with the persistent [SessionVars].
 pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("config_has_synced_once"),
     value: &false,
     description: "Boolean flag indicating that the remote configuration was synchronized at least once (Materialize).",
+    internal: true,
+    safe: true,
+};
+
+/// Feature flag indicating whether `WITH MUTUALLY RECURSIVE` queries are enabled.
+static ENABLE_WITH_MUTUALLY_RECURSIVE: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_with_mutually_recursive"),
+    value: &false,
+    description: "Feature flag indicating whether `WITH MUTUALLY RECURSIVE` queries are enabled (Materialize).",
     internal: true,
     safe: true,
 };
@@ -1129,11 +1149,13 @@ pub struct SystemVars {
     allowed_cluster_replica_sizes: SystemVar<Vec<Ident>>,
 
     // features
+    enable_with_mutually_recursive: SystemVar<bool>,
     enable_rbac_checks: SystemVar<bool>,
 
     // persist configuration
     persist_blob_target_size: SystemVar<usize>,
     persist_compaction_minimum_timeout: SystemVar<Duration>,
+    persist_sink_minimum_batch_updates: SystemVar<usize>,
 
     // crdb configuration
     crdb_connect_timeout: SystemVar<Duration>,
@@ -1170,8 +1192,10 @@ impl Default for SystemVars {
             persist_compaction_minimum_timeout: SystemVar::new(&PERSIST_COMPACTION_MINIMUM_TIMEOUT),
             crdb_connect_timeout: SystemVar::new(&CRDB_CONNECT_TIMEOUT),
             dataflow_max_inflight_bytes: SystemVar::new(&DATAFLOW_MAX_INFLIGHT_BYTES),
+            persist_sink_minimum_batch_updates: SystemVar::new(&PERSIST_SINK_MINIMUM_BATCH_UPDATES),
             metrics_retention: SystemVar::new(&METRICS_RETENTION),
             mock_audit_event_timestamp: SystemVar::new(&MOCK_AUDIT_EVENT_TIMESTAMP),
+            enable_with_mutually_recursive: SystemVar::new(&ENABLE_WITH_MUTUALLY_RECURSIVE),
             enable_rbac_checks: SystemVar::new(&ENABLE_RBAC_CHECKS),
         }
     }
@@ -1181,7 +1205,7 @@ impl SystemVars {
     /// Returns an iterator over the configuration parameters and their current
     /// values on disk.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        let vars: [&dyn Var; 22] = [
+        let vars: [&dyn Var; 23] = [
             &self.config_has_synced_once,
             &self.max_aws_privatelink_connections,
             &self.max_tables,
@@ -1201,8 +1225,10 @@ impl SystemVars {
             &self.persist_compaction_minimum_timeout,
             &self.crdb_connect_timeout,
             &self.dataflow_max_inflight_bytes,
+            &self.persist_sink_minimum_batch_updates,
             &self.metrics_retention,
             &self.mock_audit_event_timestamp,
+            &self.enable_with_mutually_recursive,
             &self.enable_rbac_checks,
         ];
         vars.into_iter()
@@ -1270,10 +1296,14 @@ impl SystemVars {
             Ok(&self.crdb_connect_timeout)
         } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
             Ok(&self.dataflow_max_inflight_bytes)
+        } else if name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name {
+            Ok(&self.persist_sink_minimum_batch_updates)
         } else if name == METRICS_RETENTION.name {
             Ok(&self.metrics_retention)
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
             Ok(&self.mock_audit_event_timestamp)
+        } else if name == ENABLE_WITH_MUTUALLY_RECURSIVE.name {
+            Ok(&self.enable_with_mutually_recursive)
         } else if name == ENABLE_RBAC_CHECKS.name {
             Ok(&self.enable_rbac_checks)
         } else {
@@ -1329,10 +1359,14 @@ impl SystemVars {
             self.crdb_connect_timeout.is_default(input)
         } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
             self.dataflow_max_inflight_bytes.is_default(input)
+        } else if name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name {
+            self.persist_sink_minimum_batch_updates.is_default(input)
         } else if name == METRICS_RETENTION.name {
             self.metrics_retention.is_default(input)
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
             self.mock_audit_event_timestamp.is_default(input)
+        } else if name == ENABLE_WITH_MUTUALLY_RECURSIVE.name {
+            self.enable_with_mutually_recursive.is_default(input)
         } else if name == ENABLE_RBAC_CHECKS.name {
             self.enable_rbac_checks.is_default(input)
         } else {
@@ -1397,10 +1431,14 @@ impl SystemVars {
             self.crdb_connect_timeout.set(input)
         } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
             self.dataflow_max_inflight_bytes.set(input)
+        } else if name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name {
+            self.persist_sink_minimum_batch_updates.set(input)
         } else if name == METRICS_RETENTION.name {
             self.metrics_retention.set(input)
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
             self.mock_audit_event_timestamp.set(input)
+        } else if name == ENABLE_WITH_MUTUALLY_RECURSIVE.name {
+            self.enable_with_mutually_recursive.set(input)
         } else if name == ENABLE_RBAC_CHECKS.name {
             self.enable_rbac_checks.set(input)
         } else {
@@ -1460,10 +1498,14 @@ impl SystemVars {
             Ok(self.crdb_connect_timeout.reset())
         } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
             Ok(self.dataflow_max_inflight_bytes.reset())
+        } else if name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name {
+            Ok(self.persist_sink_minimum_batch_updates.reset())
         } else if name == METRICS_RETENTION.name {
             Ok(self.metrics_retention.reset())
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
             Ok(self.mock_audit_event_timestamp.reset())
+        } else if name == ENABLE_WITH_MUTUALLY_RECURSIVE.name {
+            Ok(self.enable_with_mutually_recursive.reset())
         } else if name == ENABLE_RBAC_CHECKS.name {
             Ok(self.enable_rbac_checks.reset())
         } else {
@@ -1570,6 +1612,11 @@ impl SystemVars {
         *self.dataflow_max_inflight_bytes.value()
     }
 
+    /// Returns the `persist_sink_minimum_batch_updates` configuration parameter.
+    pub fn persist_sink_minimum_batch_updates(&self) -> usize {
+        *self.persist_sink_minimum_batch_updates.value()
+    }
+
     /// Returns the `metrics_retention` configuration parameter.
     pub fn metrics_retention(&self) -> Duration {
         *self.metrics_retention.value()
@@ -1578,6 +1625,18 @@ impl SystemVars {
     /// Returns the `mock_audit_event_timestamp` configuration parameter.
     pub fn mock_audit_event_timestamp(&self) -> Option<mz_repr::Timestamp> {
         *self.mock_audit_event_timestamp.value()
+    }
+
+    /// Returns the `enable_with_mutually_recursive` configuration parameter.
+    pub fn enable_with_mutually_recursive(&self) -> bool {
+        *self.enable_with_mutually_recursive.value()
+    }
+
+    /// Sets the `enable_with_mutually_recursive` configuration parameter.
+    pub fn set_enable_with_mutually_recursive(&mut self, value: bool) -> bool {
+        self.enable_with_mutually_recursive
+            .set(VarInput::Flat(value.format().as_str()))
+            .expect("valid parameter value")
     }
 
     /// Returns the `enable_rbac_checks` configuration parameter.
@@ -2455,4 +2514,5 @@ fn is_persist_config_var(name: &str) -> bool {
     name == PERSIST_BLOB_TARGET_SIZE.name()
         || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
         || name == CRDB_CONNECT_TIMEOUT.name()
+        || name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
 }

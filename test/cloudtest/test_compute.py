@@ -43,6 +43,7 @@ def test_cluster_sizing(mz: MaterializeApplication) -> None:
     "failpoint",
     ["", "after_catalog_drop_replica=panic", "after_sequencer_drop_replica=panic"],
 )
+@pytest.mark.skip(reason="Failpoints mess up the Mz intance #18000")
 def test_cluster_shutdown(mz: MaterializeApplication, failpoint: str) -> None:
     """Test that dropping a cluster or replica causes the associated clusterds to shut down."""
 

@@ -104,6 +104,7 @@ def test_source_resizing(mz: MaterializeApplication) -> None:
 
 
 @pytest.mark.parametrize("failpoint", [False, True])
+@pytest.mark.skip(reason="Failpoints mess up the Mz intance #18000")
 def test_source_shutdown(mz: MaterializeApplication, failpoint: bool) -> None:
     print("Starting test_source_shutdown")
     if failpoint:
