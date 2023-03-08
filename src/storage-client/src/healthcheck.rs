@@ -37,14 +37,16 @@ pub fn pack_status_row(
     let collection_id = Datum::String(&collection_id);
     let status = Datum::String(status_name);
     let error = error.into();
+
     let mut row = Row::default();
     let mut packer = row.packer();
     packer.extend(&[timestamp, collection_id, status, error]);
+
     match hint {
-        Some(hint) => packer.push_dict_with(|row_packer| {
-            row_packer.push(Datum::String("hint"));
-            row_packer.push::<Datum>(hint.into());
-        }),
+        Some(hint) => {
+            let metadata = vec![("hint", Datum::String(hint))];
+            packer.push_dict(metadata);
+        }
         None => packer.push(Datum::Null),
     };
     row
