@@ -729,6 +729,34 @@ where
     let debug_name = debug_name.to_string();
     let arranged_input =
         input.arrange_named::<RowSpine<_, Vec<Row>, _, _>>("Arranged MinsMaxesHierarchical input");
+
+    #[inline]
+    fn inner<C: Fn(Vec<Row>) -> R, R>(
+        aggrs: &[AggregateFunc],
+        source: &[(&Vec<Row>, Diff)],
+        target: &mut Vec<(R, Diff)>,
+        logic: C,
+    ) {
+        let mut output = Vec::with_capacity(aggrs.len());
+        for (aggr_index, func) in aggrs.iter().enumerate() {
+            let iter = source
+                .iter()
+                .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
+            output.push(Row::pack_slice(&[func.eval(iter, &RowArena::new())]));
+        }
+        // We only want to arrange the parts of the input that are not part of the output.
+        // More specifically, we want to arrange it so that `input.concat(&output.negate())`
+        // gives us the intended value of this aggregate function. Also we assume that regardless
+        // of the multiplicity of the final result in the input, we only want to have one copy
+        // in the output.
+        target.push((logic(output), -1));
+        target.extend(
+            source
+                .iter()
+                .map(|(values, cnt)| (logic((*values).clone()), *cnt)),
+        );
+    }
+
     let (negated_output, stage_errs) = if validating {
         let (negated_output, errs) = arranged_input
         .reduce_abelian::<_,RowSpine<_,Result<_,_>,_,_>>("Reduced Fallibly MinsMaxesHierarchical", {
@@ -751,16 +779,7 @@ where
                     target.push((Err(format!("Invalid data in source, saw negative accumulation for \
                         key {key:?} in hierarchical mins-maxes aggregate")), 1));
                 } else {
-                    let mut output = Vec::with_capacity(aggrs.len());
-                    for (aggr_index, func) in aggrs.iter().enumerate() {
-                        let iter = source.iter().map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
-                        output.push(Row::pack_slice(&[func.eval(iter, &RowArena::new())]));
-                    }
-                    // We do exactly the same here as in levels of the hierarchical reduction
-                    // in which we do not output `Result` (see below), except that correct data
-                    // output needs to be surrounded by `Ok` and multiplicities reported normally.
-                    target.push((Ok(output), -1));
-                    target.extend(source.iter().map(|(values, cnt)| (Ok((*values).clone()), *cnt)));
+                    inner(&aggrs, source, target, Ok);
                 }
             }
         })
@@ -777,21 +796,7 @@ where
         let negated_output = arranged_input
             .reduce_abelian::<_, RowSpine<_, _, _, _>>("Reduced MinsMaxesHierarchical", {
                 move |_key, source, target| {
-                    let mut output = Vec::with_capacity(aggrs.len());
-                    for (aggr_index, func) in aggrs.iter().enumerate() {
-                        let iter = source
-                            .iter()
-                            .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
-                        output.push(Row::pack_slice(&[func.eval(iter, &RowArena::new())]));
-                    }
-                    // We only want to arrange the parts of the input that are not part of the output.
-                    // More specifically, we want to arrange it so that `input.concat(&output.negate())`
-                    // gives us the intended value of this aggregate function. Also we assume that regardless
-                    // of the multiplicity of the final result in the input, we only want to have one copy
-                    // in the output.
-
-                    target.push((output, -1));
-                    target.extend(source.iter().map(|(values, cnt)| ((*values).clone(), *cnt)));
+                    inner(&aggrs, source, target, std::convert::identity);
                 }
             })
             .as_collection(|k, v| (k.clone(), v.clone()));
