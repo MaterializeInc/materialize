@@ -82,6 +82,14 @@ mod tests {
         let status = "dropped";
         let row = pack_status_row(id, status, Some(error_message), 1000, Some(hint));
 
+        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
         assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
         assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status));
         assert_eq!(row.iter().nth(3).unwrap(), Datum::String(error_message));
@@ -103,6 +111,14 @@ mod tests {
         let status = "dropped";
         let row = pack_status_row(id, status, Some(error_message), 1000, None);
 
+        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
         assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
         assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status));
         assert_eq!(row.iter().nth(3).unwrap(), Datum::String(error_message));
@@ -115,6 +131,14 @@ mod tests {
         let status = "dropped";
         let hint = "hint message";
         let row = pack_status_row(id, status, None, 1000, Some(hint));
+
+        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
 
         assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
         assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status));
