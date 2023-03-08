@@ -43,6 +43,8 @@ pub struct ActiveSubscribe {
     pub depends_on: BTreeSet<GlobalId>,
     /// The time when the subscribe was started.
     pub start_time: EpochMillis,
+    /// Are we already in the process of dropping the resources related to this subscribe.
+    pub dropping: bool,
 }
 
 impl ActiveSubscribe {

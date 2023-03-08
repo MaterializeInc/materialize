@@ -445,11 +445,26 @@ impl Coordinator {
     pub(crate) fn drop_compute_sinks(&mut self, sinks: impl IntoIterator<Item = ComputeSinkId>) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for sink in sinks {
-            if self.drop_compute_read_policy(&sink.global_id) {
+            // Filter out sinks that have already been dropped.
+            //
+            // Note: Ideally we'd use .filter(...) on the iterator, but that would
+            // require simultaneously getting an immutable and mutable borrow of self
+            let need_to_drop = self
+                .active_subscribes
+                .get(&sink.global_id)
+                .map(|meta| !meta.dropping)
+                .unwrap_or(false);
+
+            if need_to_drop && self.drop_compute_read_policy(&sink.global_id) {
                 by_cluster
                     .entry(sink.cluster_id)
                     .or_default()
                     .push(sink.global_id);
+
+                // Mark the sink as dropped so we don't try to drop it again.
+                if let Some(sink) = self.active_subscribes.get_mut(&sink.global_id) {
+                    sink.dropping = true;
+                }
             } else {
                 tracing::error!("Instructed to drop a compute sink that isn't one");
             }
