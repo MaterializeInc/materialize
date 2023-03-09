@@ -311,7 +311,7 @@ impl CatalogState {
         // It's okay to create a temporary object with unstable
         // dependencies, since we will never need to reboot a catalog
         // that contains it.
-        if unstable_dependencies.is_empty() || !item.is_temporary() {
+        if unstable_dependencies.is_empty() || item.is_temporary() {
             Ok(())
         } else {
             let object_type = item.typ().to_string();
