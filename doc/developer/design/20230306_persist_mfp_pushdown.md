@@ -94,9 +94,9 @@ we currently do.
 
 ### Projection
 
-Once a part is fetched, there is additional opportunity to push down our MFP's projection by only decoding
-the columns necessary for the dataflow. This is particularly valuable for datasets with wide rows that 
-typically see narrower reads.
+While out of scope for the initial work, we can additionally push down our MFP's projection by only
+decoding the columns necessary for the dataflow. This is particularly valuable for datasets with wide
+rows that typically see narrower reads.
 
 ## Filtering & Locality
 
@@ -112,7 +112,9 @@ typically smallest, parts will contain the most recent updates, allowing one to 
 parts and their data effectively. This filtering is particularly relevant for append-only use cases where
 we may have accumulated considerable numbers of older, larger parts that are no longer relevant to the filter.
 * Filtering on a prefix of the `(key, value)` columns. This is due to how parts within Persist are sorted 
-by `(key, value, ts)` in column/lexicographic ordering.
+by `(key, value, ts)` in column/lexicographic ordering. In practice, the default column order is unlikely to
+be immediately useful for most collections, and column ordering would likely need to be user-specifiable
+to take full advantage of this property.
 
 ## Migration / Backwards-Compatibility
 
@@ -155,7 +157,7 @@ This is the technical part of the design.
 Pushing down an MFP will require Persist to offer a new interface so that Compute can filter 
 at the part level, rather than row level.
 
-Below is a proposal for accessing the statistics within a part:
+Below is a (strawman!) proposal for accessing the statistics within a part:
 
 ```rust
 /// Provides access to statistics stored for each Persist part (S3 data blob).
@@ -337,7 +339,8 @@ feature set it helps enable.
 -->
 
 * The specific interface Persist can give to Compute to apply MFPs to part stats
-* What format part statistics are stored in (Parquet with the same schema as the data? Proto? Something custom?)
+* What format part statistics are stored in (Parquet with the same schema as the data? Proto? Something custom?), as well
+where they are stored (Consensus vs Blob)
 
 # Future work
 [future-work]: #future-work
