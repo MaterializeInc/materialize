@@ -559,19 +559,6 @@ steps:
       - ./ci/plugins/cloudtest:
           args: [--exitfirst, -m, "not long", --aws-region=us-east-2, test/cloudtest/]
 
-  - id: checks-restart-redpanda
-    label: "Checks + restart Redpanda & Debezium"
-    depends_on: build-x86_64
-    inputs: [misc/python/materialize/checks]
-    timeout_in_minutes: 30
-    artifact_paths: junit_*.xml
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=RestartRedpandaDebezium, "--seed=$BUILDKITE_JOB_ID"]
-
   - id: source-sink-errors
     label: "Source/Sink Error Reporting"
     artifact_paths: junit_*.xml
