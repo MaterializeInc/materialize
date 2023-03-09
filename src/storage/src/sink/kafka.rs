@@ -237,7 +237,10 @@ impl ClientContext for SinkProducerContext {
         MzClientContext.log(level, fac, log_message)
     }
     fn error(&self, error: KafkaError, reason: &str) {
-        let status = SinkStatus::Stalled(error.to_string());
+        let status = SinkStatus::Stalled {
+            error: error.to_string(),
+            hint: None,
+        };
         let _ = self.status_tx.try_send(status);
         MzClientContext.error(error, reason)
     }
@@ -414,7 +417,10 @@ impl ClientContext for SinkConsumerContext {
         MzClientContext.log(level, fac, log_message)
     }
     fn error(&self, error: KafkaError, reason: &str) {
-        let status = SinkStatus::Stalled(error.to_string());
+        let status = SinkStatus::Stalled {
+            error: error.to_string(),
+            hint: None,
+        };
         let _ = self.status_tx.try_send(status);
         MzClientContext.error(error, reason)
     }
@@ -914,8 +920,11 @@ impl KafkaSinkState {
         match result {
             Ok(t) => t,
             Err(msg) => {
-                self.update_status(SinkStatus::Stalled(msg.to_string()))
-                    .await;
+                self.update_status(SinkStatus::Stalled {
+                    error: msg.to_string(),
+                    hint: None,
+                })
+                .await;
                 self.internal_cmd_tx.borrow_mut().broadcast(
                     InternalStorageCommand::SuspendAndRestart {
                         id: self.sink_id.clone(),
