@@ -42,7 +42,7 @@ _role_name_         | A name for the role.
 Unlike PostgreSQL, Materialize derives the `LOGIN` and `SUPERUSER`
 attributes for a role during authentication, every time that role tries
 to connect. Therefore, you cannot specify either
-attribute when creating a new role. Additionally, we do not support
+attribute when creating a new role. Additionally, we do not support the
 `CREATE USER` command, because it implies a `LOGIN` attribute for the role.
 
 Unlike PostgreSQL, Materialize does not currently support `NOINHERIT`.
