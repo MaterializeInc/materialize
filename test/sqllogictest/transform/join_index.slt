@@ -142,7 +142,7 @@ where foo.a = bar.a
 ----
 Explained Query:
   Project (#0, #5) // { arity: 2 }
-    Filter (#0) IS NOT NULL // { arity: 6 }
+    Filter (#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL // { arity: 6 }
       Join on=(#0 = #2 AND #3 = #4) type=differential // { arity: 6 }
         implementation
           %0:foo[#0]KA » %1:bar[#0]KA » %2:baz[#0]UK
@@ -190,7 +190,7 @@ where foo.a = bar.a
 ----
 Explained Query:
   Project (#0, #5) // { arity: 2 }
-    Filter (#0) IS NOT NULL AND (#3) IS NOT NULL // { arity: 6 }
+    Filter (#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL // { arity: 6 }
       Join on=(#0 = #2 AND #3 = #4) type=differential // { arity: 6 }
         implementation
           %0:foo[#0]KA » %1:bar[#0]KA » %2:baz[#0]KA
@@ -276,7 +276,7 @@ where foo.a = bar.a
 ----
 Explained Query:
   Project (#3, #1, #5) // { arity: 3 }
-    Filter (#0) IS NOT NULL AND (#4) IS NOT NULL // { arity: 6 }
+    Filter (#0) IS NOT NULL AND (#2) IS NOT NULL AND (#4) IS NOT NULL // { arity: 6 }
       Join on=(#0 = #2 AND #4 = (#0 + 4)) type=differential // { arity: 6 }
         implementation
           %2:baz[#0]KA » %0:bar[(#0 + 4)]KA » %1:foo[#0]KA
@@ -382,17 +382,18 @@ where foo.a = bar.a
 ----
 Explained Query:
   Project (#1, #3, #5) // { arity: 3 }
-    Join on=(#0 = #2 AND #4 = (#0 + 4)) type=differential // { arity: 6 }
-      implementation
-        %0:foo[#0]KA » %1:bar[#0]K » %2:baz[#0]K
-      ArrangeBy keys=[[#0]] // { arity: 2 }
-        Get materialize.public.foo // { arity: 2 }
-      ArrangeBy keys=[[#0]] // { arity: 2 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
-          Get materialize.public.bar // { arity: 2 }
-      ArrangeBy keys=[[#0]] // { arity: 2 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
-          Get materialize.public.baz // { arity: 2 }
+    Filter (#0) IS NOT NULL // { arity: 6 }
+      Join on=(#0 = #2 AND #4 = (#0 + 4)) type=differential // { arity: 6 }
+        implementation
+          %0:foo[#0]KA » %1:bar[#0]K » %2:baz[#0]K
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Get materialize.public.foo // { arity: 2 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Filter (#0) IS NOT NULL // { arity: 2 }
+            Get materialize.public.bar // { arity: 2 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Filter (#0) IS NOT NULL // { arity: 2 }
+            Get materialize.public.baz // { arity: 2 }
 
 Source materialize.public.baz
   filter=((#0) IS NOT NULL)

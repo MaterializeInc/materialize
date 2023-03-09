@@ -672,7 +672,7 @@ WHERE
 ----
 Explained Query:
   Project (#0, #1, #5) // { arity: 3 }
-    Filter (#0) IS NOT NULL // { arity: 6 }
+    Filter (#0) IS NOT NULL AND (#3) IS NOT NULL // { arity: 6 }
       Join on=(#0 = #3) type=differential // { arity: 6 }
         implementation
           %0:t1[#0]KAe » %1:t2[#0]KAe
@@ -707,7 +707,7 @@ WHERE
 ----
 Explained Query:
   Project (#0, #1, #5) // { arity: 3 }
-    Filter (#0) IS NOT NULL // { arity: 6 }
+    Filter (#0) IS NOT NULL AND (#3) IS NOT NULL // { arity: 6 }
       Join on=(#0 = #3) type=differential // { arity: 6 }
         implementation
           %0:t1[#0]KAe » %1:t2[#0]KAe

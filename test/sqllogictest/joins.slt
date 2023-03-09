@@ -1023,7 +1023,7 @@ Explained Query:
     Map (4) // { arity: 2 }
       CrossJoin type=differential // { arity: 1 }
         implementation
-          %0[×]A » %1[×]A
+          %0[×] » %1[×]
         ArrangeBy keys=[[]] // { arity: 0 }
           Union // { arity: 0 }
             Get l0 // { arity: 0 }

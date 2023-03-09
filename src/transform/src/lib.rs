@@ -487,12 +487,17 @@ impl Optimizer {
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![
-                    Box::new(crate::join_implementation::JoinImplementation::default()),
                     Box::new(crate::column_knowledge::ColumnKnowledge::default()),
                     Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
                     Box::new(crate::demand::Demand::default()),
                     Box::new(crate::literal_lifting::LiteralLifting::default()),
                 ],
+            }),
+            Box::new(crate::Fixpoint {
+                limit: 100,
+                transforms: vec![Box::new(
+                    crate::join_implementation::JoinImplementation::default(),
+                )],
             }),
             Box::new(crate::canonicalize_mfp::CanonicalizeMfp),
             // Identifies common relation subexpressions.
