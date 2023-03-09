@@ -86,7 +86,6 @@ impl Coordinator {
         let mut log_sources_to_drop = vec![];
         let mut tables_to_drop = vec![];
         let mut storage_sinks_to_drop = vec![];
-        let mut subscribe_sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
         let mut materialized_views_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(mz_postgres_util::Config, String)> = vec![];
@@ -217,25 +216,33 @@ impl Coordinator {
             .chain(indexes_to_drop.iter().map(|(_, id)| id))
             .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
             .collect();
+
         // Clean up any active subscribes that rely on dropped relations.
-        for (sink_id, active_subscribe) in &self.active_subscribes {
-            if let Some(id) = active_subscribe
-                .depends_on
-                .iter()
-                .find(|id| relations_to_drop.contains(id))
-            {
+        let subscribe_sinks_to_drop: Vec<_> = self
+            .active_subscribes
+            .iter()
+            .filter(|(_id, sub)| !sub.dropping)
+            .filter_map(|(sink_id, sub)| {
+                sub.depends_on
+                    .iter()
+                    .find(|id| relations_to_drop.contains(id))
+                    .map(|dependent_id| (dependent_id, sink_id, sub))
+            })
+            .map(|(dependent_id, sink_id, active_subscribe)| {
                 let conn_id = active_subscribe.conn_id;
-                let entry = self.catalog.get_entry(id);
+                let entry = self.catalog.get_entry(dependent_id);
                 let name = self.catalog.resolve_full_name(entry.name(), Some(conn_id));
-                subscribe_sinks_to_drop.push((
+
+                (
                     (conn_id, name.to_string()),
                     ComputeSinkId {
                         cluster_id: active_subscribe.cluster_id,
                         global_id: *sink_id,
                     },
-                ));
-            }
-        }
+                )
+            })
+            .collect();
+
         // Clean up any pending peeks that rely on dropped relations.
         for (uuid, pending_peek) in &self.pending_peeks {
             if let Some(id) = pending_peek
@@ -454,8 +461,11 @@ impl Coordinator {
                 .get(&sink.global_id)
                 .map(|meta| !meta.dropping)
                 .unwrap_or(false);
+            if !need_to_drop {
+                continue;
+            }
 
-            if need_to_drop && self.drop_compute_read_policy(&sink.global_id) {
+            if self.drop_compute_read_policy(&sink.global_id) {
                 by_cluster
                     .entry(sink.cluster_id)
                     .or_default()

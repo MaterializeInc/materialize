@@ -24,6 +24,7 @@ use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
 
 /// A description of an active subscribe from coord's perspective
+#[derive(Debug)]
 pub struct ActiveSubscribe {
     /// The user of the session that created the subscribe.
     pub user: User,
