@@ -279,17 +279,20 @@ Field          | Type                                     | Meaning
 And can be queried using:
 
 ```sql
-SELECT partition, "offset"
-FROM (
+SELECT
+  partition, "offset"
+FROM
+  (
+    SELECT
       -- Take the upper of the range, which is null for non-partition rows
       -- Cast partition to u64, which is more ergonomic
-      SELECT
-        upper(partition)::uint8 AS partition,
-        "offset"
-      FROM <src_name>_progress
-)
--- Remove all non-partition rows
-WHERE partition IS NOT NULL;
+      upper(partition)::uint8 AS partition, "offset"
+    FROM
+      data_progress
+  )
+WHERE
+  -- Remove all non-partition rows
+  partition IS NOT NULL;
 ```
 
 As long as any offset continues increasing, Materialize is consuming data from
