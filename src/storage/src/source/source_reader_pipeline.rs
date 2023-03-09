@@ -257,11 +257,10 @@ impl HealthStatus {
     fn hint(&self) -> Option<&str> {
         match self {
             HealthStatus::Starting | HealthStatus::Running => None,
-            HealthStatus::StalledWithError {
-                error: _,
-                hint: Some(h), // TODO: how to convert from &Option<String> to Option<&str> without this
-            } => Some(h),
-            _ => None,
+            HealthStatus::StalledWithError { error: _, hint } => match hint {
+                Some(hint) => Some(hint),
+                None => None,
+            },
         }
     }
 }
