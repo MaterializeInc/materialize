@@ -93,7 +93,7 @@ impl SourceReader for TestScriptSourceReader {
     type Key = Option<Vec<u8>>;
     type Value = Option<Vec<u8>>;
     type Time = MzOffset;
-    type Diff = ();
+    type Diff = u32;
 
     async fn next(
         &mut self,
@@ -119,7 +119,7 @@ impl SourceReader for TestScriptSourceReader {
                     let next_ts = ts + 1;
                     self.data_capability.downgrade(&next_ts);
                     self.upper_capability.downgrade(&next_ts);
-                    return Some(SourceMessageType::Message(msg, cap, ()));
+                    return Some(SourceMessageType::Message(msg, cap, 1));
                 }
             }
         } else {

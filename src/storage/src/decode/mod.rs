@@ -63,7 +63,7 @@ mod protobuf;
 /// also builds a differential dataflow collection that respects the
 /// data and progress messages in the underlying CDCv2 stream.
 pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
-    stream: &Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>, ()>>,
+    stream: &Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>, u32>>,
     schema: &str,
     registry: Option<CsrClient>,
     confluent_wire_format: bool,
@@ -74,7 +74,7 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
     let activator: Rc<RefCell<Option<SyncActivator>>> = Rc::new(RefCell::new(None));
     let mut vector = Vec::new();
     stream.sink(
-        SourceOutput::<Option<Vec<u8>>, Option<Vec<u8>>, ()>::position_value_contract(),
+        SourceOutput::<Option<Vec<u8>>, Option<Vec<u8>>, u32>::position_value_contract(),
         "CDCv2-Decode",
         {
             let channel = Rc::clone(&channel);
@@ -355,7 +355,7 @@ fn try_decode_delimited(
 /// (which is not always possible otherwise, since often gibberish strings can be interpreted as Avro,
 ///  so the only signal is how many bytes you managed to decode).
 pub fn render_decode_delimited<G>(
-    stream: &Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>, ()>>,
+    stream: &Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>, u32>>,
     key_encoding: Option<DataEncoding>,
     value_encoding: DataEncoding,
     debug_name: &str,
@@ -392,7 +392,7 @@ where
         connection_context,
     );
 
-    let dist = |x: &SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>, ()>| x.value.hashed();
+    let dist = |x: &SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>, u32>| x.value.hashed();
 
     let results = stream.unary_frontier(Exchange::new(dist), &op_name, move |_, _| {
         move |input, output| {
@@ -400,16 +400,17 @@ where
             let mut n_successes = 0;
             input.for_each(|cap, data| {
                 let mut session = output.session(&cap);
-                for SourceOutput {
-                    key,
-                    value,
-                    position,
-                    upstream_time_millis,
-                    partition,
-                    headers,
-                    diff: (),
-                } in data.iter()
-                {
+                for output in data.iter() {
+                    let SourceOutput {
+                        key,
+                        value,
+                        position,
+                        upstream_time_millis,
+                        partition,
+                        headers,
+                        diff,
+                    } = output;
+
                     let key = key_decoder.as_mut().and_then(|decoder| {
                         try_decode_delimited(decoder, key.as_ref()).map(|result| {
                             result.map_err(|inner| DecodeError {
@@ -477,7 +478,7 @@ where
 /// If the decoder does find a message, we verify (by asserting) that it consumed some bytes, to avoid
 /// the possibility of infinite loops.
 pub fn render_decode<G>(
-    stream: &Stream<G, SourceOutput<(), ByteStream, ()>>,
+    stream: &Stream<G, SourceOutput<(), ByteStream, u32>>,
     value_encoding: DataEncoding,
     debug_name: &str,
     metadata_items: Vec<IncludedColumnSource>,
@@ -527,7 +528,7 @@ where
                         upstream_time_millis,
                         partition,
                         headers,
-                        diff: (),
+                        diff,
                     } = item;
 
                     let Ok(mut stream) = Rc::try_unwrap(value.stream) else {

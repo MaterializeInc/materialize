@@ -353,7 +353,7 @@ impl SourceReader for KafkaSourceReader {
     type Key = Option<Vec<u8>>;
     type Value = Option<Vec<u8>>;
     type Time = Partitioned<PartitionId, MzOffset>;
-    type Diff = ();
+    type Diff = u32;
 
     /// This function polls from the next consumer for which a message is available. This function
     /// polls the set round-robin: when a consumer is polled, it is placed at the back of the
@@ -734,7 +734,8 @@ impl KafkaSourceReader {
         &mut self,
         message: Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, SourceReaderError>,
         (partition, offset): (PartitionId, MzOffset),
-    ) -> NextMessage<Option<Vec<u8>>, Option<Vec<u8>>, Partitioned<PartitionId, MzOffset>, ()> {
+    ) -> NextMessage<Option<Vec<u8>>, Option<Vec<u8>>, Partitioned<PartitionId, MzOffset>, u32>
+    {
         // Offsets are guaranteed to be 1) monotonically increasing *unless* there is
         // a network issue or a new partition added, at which point the consumer may
         // start processing the topic from the beginning, or we may see duplicate offsets
@@ -791,7 +792,7 @@ impl KafkaSourceReader {
             let next_ts = Partitioned::with_partition(partition, offset + 1);
             part_data_cap.downgrade(&next_ts);
             part_upper_cap.downgrade(&next_ts);
-            NextMessage::Ready(SourceMessageType::Message(message, cap, ()))
+            NextMessage::Ready(SourceMessageType::Message(message, cap, 1))
         }
     }
 }

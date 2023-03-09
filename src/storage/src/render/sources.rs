@@ -39,9 +39,9 @@ use crate::source::{self, DelimitedValueSourceConnection, RawSourceCreationConfi
 /// as a type-level enum.
 enum SourceType<G: Scope> {
     /// A delimited source
-    Delimited(Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>, ()>>),
+    Delimited(Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>, u32>>),
     /// A bytestream source
-    ByteStream(Stream<G, SourceOutput<(), ByteStream, ()>>),
+    ByteStream(Stream<G, SourceOutput<(), ByteStream, u32>>),
     /// A source that produces Row's natively, and skips any `render_decode` stream adapters, and
     /// can produce retractions
     Row(Stream<G, SourceOutput<(), Row, Diff>>),
