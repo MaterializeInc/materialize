@@ -217,10 +217,7 @@ where
             first_rows.push((row, diff));
         }
     }
-    let rest_of_row_count = rows
-        .into_iter()
-        .map(|(_, diff)| diff.abs())
-        .sum::<crate::Diff>();
+    let rest_of_row_count = rows.map(|(_, diff)| diff.abs()).sum::<crate::Diff>();
     if rest_of_row_count != 0 {
         writeln!(
             f,
