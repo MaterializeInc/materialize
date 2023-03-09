@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use serde::{Deserialize, Serialize};
-use timely::dataflow::operators::{Exchange, Map, OkErr, ToStream};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::{self, Exchange, OkErr};
+use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use tokio::runtime::Handle as TokioHandle;
 
@@ -27,7 +27,7 @@ use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::source::persist_source;
 use mz_storage_client::types::errors::{DataflowError, DecodeError, EnvelopeError};
 use mz_storage_client::types::sources::{encoding::*, *};
-use mz_timely_util::operator::{CollectionExt, StreamExt};
+use mz_timely_util::operator::CollectionExt;
 
 use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
 use crate::source::types::{ByteStream, DecodeResult, SourceOutput};
@@ -39,12 +39,12 @@ use crate::source::{self, DelimitedValueSourceConnection, RawSourceCreationConfi
 /// as a type-level enum.
 enum SourceType<G: Scope> {
     /// A delimited source
-    Delimited(Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>, u32>>),
+    Delimited(Collection<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, u32>),
     /// A bytestream source
-    ByteStream(Stream<G, SourceOutput<(), ByteStream, u32>>),
+    ByteStream(Collection<G, SourceOutput<(), ByteStream>, u32>),
     /// A source that produces Row's natively, and skips any `render_decode` stream adapters, and
     /// can produce retractions
-    Row(Stream<G, SourceOutput<(), Row, Diff>>),
+    Row(Collection<G, SourceOutput<(), Row>, Diff>),
 }
 
 /// _Renders_ complete _differential_ [`Collection`]s
@@ -209,10 +209,7 @@ where
         // All sources should push their various error streams into this vector,
         // whose contents will be concatenated and inserted along the collection.
         // All subsources include the non-definite errors of the ingestion
-        let error_collections = vec![err_source
-            .map(DataflowError::from)
-            .pass_through("source-errors", 1)
-            .as_collection()];
+        let error_collections = vec![err_source.map(DataflowError::from)];
 
         let (ok, err, extra_tokens) = render_source_stream(
             scope,
@@ -322,7 +319,7 @@ where
                 SourceType::Row(source) => (
                     source.map(|r| DecodeResult {
                         key: None,
-                        value: Some(Ok((r.value, r.diff))),
+                        value: Some(Ok(r.value)),
                         position: r.position,
                         upstream_time_millis: r.upstream_time_millis,
                         partition: r.partition,
@@ -338,7 +335,7 @@ where
             // render envelopes
             match &envelope {
                 SourceEnvelope::Debezium(dbz_envelope) => {
-                    let (stream, errors) = match &dbz_envelope.dedup.tx_metadata {
+                    let (debezium_ok, errors) = match &dbz_envelope.dedup.tx_metadata {
                         Some(tx_metadata) => {
                             let tx_storage_metadata = description
                                 .source_imports
@@ -372,7 +369,7 @@ where
                         }
                         None => super::debezium::render(dbz_envelope, &results),
                     };
-                    (stream.as_collection(), Some(errors.as_collection()))
+                    (debezium_ok, Some(errors))
                 }
                 SourceEnvelope::Upsert(upsert_envelope) => {
                     // TODO: use the key envelope to figure out when to add keys.
@@ -399,52 +396,47 @@ where
                         }
                         Some(&t) => Some(t.saturating_sub(1)),
                     };
-                    let (previous_stream, previous_token) =
-                        if let Some(previous_as_of) = previous_as_of {
-                            let (stream, tok) = persist_source::persist_source_core(
-                                scope,
-                                id,
-                                persist_clients,
-                                // TODO(petrosagg): upsert needs to read its output and here we
-                                // assume that all upsert ingestion will output their data to the
-                                // same collection as the one carrying the ingestion. This is the
-                                // case at the time of writing but we need a more robust
-                                // implementation. Consider having the upsert operator hold private
-                                // state (a copy), or encoding the fact that this operator's state
-                                // and the output collection state is the same in an explicit way
-                                description.ingestion_metadata,
-                                Some(Antichain::from_elem(previous_as_of)),
-                                Antichain::new(),
-                                None,
-                                None,
-                                // Copy the logic in DeltaJoin/Get/Join to start.
-                                |_timer, count| count > 1_000_000,
-                            );
-                            (stream, Some(tok))
-                        } else {
-                            (std::iter::empty().to_stream(scope), None)
-                        };
+                    let (previous, previous_token) = if let Some(previous_as_of) = previous_as_of {
+                        let (stream, tok) = persist_source::persist_source_core(
+                            scope,
+                            id,
+                            persist_clients,
+                            // TODO(petrosagg): upsert needs to read its output and here we
+                            // assume that all upsert ingestion will output their data to the
+                            // same collection as the one carrying the ingestion. This is the
+                            // case at the time of writing but we need a more robust
+                            // implementation. Consider having the upsert operator hold private
+                            // state (a copy), or encoding the fact that this operator's state
+                            // and the output collection state is the same in an explicit way
+                            description.ingestion_metadata,
+                            Some(Antichain::from_elem(previous_as_of)),
+                            Antichain::new(),
+                            None,
+                            None,
+                            // Copy the logic in DeltaJoin/Get/Join to start.
+                            |_timer, count| count > 1_000_000,
+                        );
+                        (stream.as_collection(), Some(tok))
+                    } else {
+                        (
+                            Collection::new(operators::generic::operator::empty(scope)),
+                            None,
+                        )
+                    };
                     let (upsert_ok, upsert_err) = super::upsert::upsert(
                         &transformed_results,
                         resume_upper,
                         upsert_envelope.clone(),
-                        previous_stream,
+                        previous,
                         previous_token,
                     );
 
-                    (upsert_ok.as_collection(), Some(upsert_err.as_collection()))
+                    (upsert_ok, Some(upsert_err))
                 }
                 SourceEnvelope::None(none_envelope) => {
                     let results = append_metadata_to_value(results);
 
                     let flattened_stream = flatten_results_prepend_keys(none_envelope, results);
-
-                    let flattened_stream = flattened_stream.pass_through("decode", 1).map(
-                        |(val, time, diff)| match val {
-                            Ok((val, diff)) => (Ok(val), time, diff),
-                            Err(e) => (Err(e), time, diff),
-                        },
-                    );
 
                     // TODO: Maybe we should finally move this to some central
                     // place and re-use. There seem to be enough instances of this
@@ -461,7 +453,7 @@ where
                         }
                     }
 
-                    let (stream, errors) = flattened_stream.ok_err(split_ok_err);
+                    let (stream, errors) = flattened_stream.inner.ok_err(split_ok_err);
 
                     let errors = errors.as_collection();
                     (stream.as_collection(), Some(errors))
@@ -495,23 +487,19 @@ where
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize)]
 struct KV {
     key: Option<Result<Row, DecodeError>>,
-    val: Option<Result<(Row, Diff), DecodeError>>,
+    val: Option<Result<Row, DecodeError>>,
 }
 
-fn append_metadata_to_value<G>(
-    results: timely::dataflow::Stream<G, DecodeResult>,
-) -> timely::dataflow::Stream<G, KV>
-where
-    G: Scope<Timestamp = Timestamp>,
-{
+fn append_metadata_to_value<G: Scope>(
+    results: Collection<G, DecodeResult, Diff>,
+) -> Collection<G, KV, Diff> {
     results.map(move |res| {
         let val = res.value.map(|val_result| {
-            val_result.map(|(mut val, diff)| {
+            val_result.map(|mut val| {
                 if !res.metadata.is_empty() {
                     RowPacker::for_existing_row(&mut val).extend(res.metadata.into_iter());
                 }
-
-                (val, diff)
+                val
             })
         });
 
@@ -521,13 +509,10 @@ where
 
 /// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
 // TODO(guswynn): figure out how to merge this duplicated logic with `flatten_results_prepend_keys`
-fn transform_keys_from_key_envelope<G>(
+fn transform_keys_from_key_envelope<G: Scope>(
     upsert_envelope: &UpsertEnvelope,
-    results: timely::dataflow::Stream<G, DecodeResult>,
-) -> timely::dataflow::Stream<G, DecodeResult>
-where
-    G: Scope<Timestamp = Timestamp>,
-{
+    results: Collection<G, DecodeResult, Diff>,
+) -> Collection<G, DecodeResult, Diff> {
     match upsert_envelope {
         UpsertEnvelope {
             style: UpsertStyle::Default(KeyEnvelope::Flattened) | UpsertStyle::Debezium { .. },
@@ -565,8 +550,8 @@ where
 /// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
 fn flatten_results_prepend_keys<G>(
     none_envelope: &NoneEnvelope,
-    results: timely::dataflow::Stream<G, KV>,
-) -> timely::dataflow::Stream<G, Result<(Row, Diff), DataflowError>>
+    results: Collection<G, KV, Diff>,
+) -> Collection<G, Result<Row, DataflowError>, Diff>
 where
     G: Scope,
 {
@@ -584,17 +569,17 @@ where
         KeyEnvelope::Flattened => results
             .flat_map(raise_key_value_errors)
             .map(move |maybe_kv| {
-                maybe_kv.map(|(key, value, diff)| {
+                maybe_kv.map(|(key, value)| {
                     let mut key = key.unwrap_or_else(|| null_key_columns.clone());
                     RowPacker::for_existing_row(&mut key).extend_by_row(&value);
-                    (key, diff)
+                    key
                 })
             }),
         KeyEnvelope::Named(_) => {
             results
                 .flat_map(raise_key_value_errors)
                 .map(move |maybe_kv| {
-                    maybe_kv.map(|(key, value, diff)| {
+                    maybe_kv.map(|(key, value)| {
                         let mut key = key.unwrap_or_else(|| null_key_columns.clone());
                         // Named semantics rename a key that is a single column, and encode a
                         // multi-column field as a struct with that name
@@ -608,7 +593,7 @@ where
                             packer.extend_by_row(&value);
                             new_row
                         };
-                        (row, diff)
+                        row
                     })
                 })
         }
@@ -618,10 +603,10 @@ where
 /// Handle possibly missing key or value portions of messages
 fn raise_key_value_errors(
     KV { key, val }: KV,
-) -> Option<Result<(Option<Row>, Row, Diff), DataflowError>> {
+) -> Option<Result<(Option<Row>, Row), DataflowError>> {
     match (key, val) {
-        (Some(Ok(key)), Some(Ok((value, diff)))) => Some(Ok((Some(key), value, diff))),
-        (None, Some(Ok((value, diff)))) => Some(Ok((None, value, diff))),
+        (Some(Ok(key)), Some(Ok(value))) => Some(Ok((Some(key), value))),
+        (None, Some(Ok(value))) => Some(Ok((None, value))),
         // always prioritize the value error if either or both have an error
         (_, Some(Err(e))) => Some(Err(e.into())),
         (Some(Err(e)), _) => Some(Err(e.into())),

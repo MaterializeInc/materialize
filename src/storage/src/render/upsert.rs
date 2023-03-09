@@ -55,15 +55,12 @@ struct UpsertSourceData {
 /// with two components instead of one, and the second component
 /// can be null or empty.
 pub(crate) fn upsert<G>(
-    stream: &Stream<G, DecodeResult>,
+    input: &Collection<G, DecodeResult, Diff>,
     as_of_frontier: Antichain<Timestamp>,
     upsert_envelope: UpsertEnvelope,
-    previous: Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
+    previous: Collection<G, Result<Row, DataflowError>, Diff>,
     previous_token: Option<Rc<dyn Any>>,
-) -> (
-    Stream<G, (Row, Timestamp, Diff)>,
-    Stream<G, (DataflowError, Timestamp, Diff)>,
-)
+) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -125,7 +122,7 @@ where
     // Break `previous` into:
     // On the one hand, "Ok" and "Err(UpsertError)", which we know how to deal with, and,
     // On the other hand, "Err(everything eles)", which we don't.
-    let (previous, mut errs) = previous.ok_err(|(d, t, r)| match d {
+    let (previous, mut errs) = previous.inner.ok_err(|(d, t, r)| match d {
         Ok(row) => Ok((Ok(row), t, r)),
         Err(DataflowError::EnvelopeError(err)) => match *err {
             EnvelopeError::Upsert(e) => Ok((Err(e), t, r)),
@@ -135,7 +132,7 @@ where
     });
 
     let upsert_output = upsert_core(
-        stream,
+        input,
         predicates,
         position_or,
         as_of_frontier,
@@ -172,7 +169,7 @@ where
         errs = errs.concat(&errs2);
     }
 
-    (oks, errs)
+    (oks.as_collection(), errs.as_collection())
 }
 
 /// Evaluates predicates and dummy column information.
@@ -276,7 +273,7 @@ fn extract_kv<G: Scope>(
 
 /// Internal core upsert logic.
 fn upsert_core<G>(
-    stream: &Stream<G, DecodeResult>,
+    input: &Collection<G, DecodeResult, Diff>,
     predicates: Vec<MirScalarExpr>,
     position_or: Vec<Option<usize>>,
     as_of_frontier: Antichain<Timestamp>,
@@ -308,9 +305,9 @@ where
     //
     // Also: this problem was only showing up when trying to use upsert-style
     // sources with multiple clusterd workers.
-    let result_stream = stream.binary_frontier(
+    let result_stream = input.inner.binary_frontier(
         &previous_ok.inner,
-        Exchange::new(move |DecodeResult { key, .. }| {
+        Exchange::new(move |(DecodeResult { key, .. }, _, _)| {
             // N.B. We make the expected type explicit here to make sure it
             // cannot change by accident.
             let key: &Option<Result<Row, DecodeError>> = key;
@@ -475,7 +472,7 @@ where
 /// This function fills `pending_values` with new data
 /// from the timely operator input.
 fn process_new_data(
-    new_data: &mut Vec<DecodeResult>,
+    new_data: &mut Vec<(DecodeResult, Timestamp, Diff)>,
     pending_values: &mut BTreeMap<
         Timestamp,
         (
@@ -486,16 +483,21 @@ fn process_new_data(
     cap: &InputCapability<Timestamp>,
     as_of_frontier: &Antichain<Timestamp>,
 ) {
-    for DecodeResult {
-        key,
-        value: new_value,
-        position: new_position,
-        upstream_time_millis: _,
-        partition: _,
-        metadata,
-    } in new_data.drain(..)
-    {
-        let mut time = cap.time().clone();
+    for (result, mut time, diff) in new_data.drain(..) {
+        // TODO(petrosagg): any positive diff should be accepted
+        assert_eq!(
+            diff, 1,
+            "Upsert should only be used with append-only sources"
+        );
+        let DecodeResult {
+            key,
+            value: new_value,
+            position: new_position,
+            upstream_time_millis: _,
+            partition: _,
+            metadata,
+        } = result;
+
         time.advance_by(as_of_frontier.borrow());
         if key.is_none() {
             error!(?new_value, "Encountered empty key for value");
@@ -509,16 +511,7 @@ fn process_new_data(
             .entry(key);
 
         let new_entry = UpsertSourceData {
-            value: new_value.map(|res| {
-                res.map(|(v, diff)| match diff {
-                    1 => v,
-                    _ => unreachable!(
-                        "Upsert should only be used with sources \
-                                        with no explicit diff"
-                    ),
-                })
-                .map_err(Into::into)
-            }),
+            value: new_value.map(|res| res.map_err(Into::into)),
             position: new_position,
             // upsert sources don't have a column for this, so setting it to
             // `None` is fine.
