@@ -16,15 +16,10 @@ When you [connect to a Materialize instance](/integrations/psql), you must speci
 the name of a valid role in the system.
 
 {{< warning >}}
-Roles in Materialize are currently limited in functionality. In the future they
-will be used for role-based access control. See GitHub issue {{% gh 677 %}}
-for details.
-{{< /warning >}}
-
-{{< warning >}}
-RBAC is under development: currently no role attributes or privileges will be
-considered when executing statements, although these attributes are saved and
-will be considered in a later release.
+Role-Based Access Control is under development {{% gh 11579 %}}. Currently, no
+role attributes or privileges are considered when executing `CREATE ROLE`
+statements, but these attributes are saved and will be considered in a future
+release.
 {{< /warning >}}
 
 ## Syntax
@@ -44,13 +39,13 @@ _role_name_         | A name for the role.
 
 ## Details
 
-Unlike PostgreSQL, materialize derives the `LOGIN` and `SUPERUSER`
+Unlike PostgreSQL, Materialize derives the `LOGIN` and `SUPERUSER`
 attributes for a role during authentication, every time that role tries
-to connect to Materialize. Therefore, you cannot specify either
+to connect. Therefore, you cannot specify either
 attribute when creating a new role. Additionally, we do not support
-`CREATE USER` because it implies a `LOGIN` attribute for the role.
+`CREATE USER` command, because it implies a `LOGIN` attribute for the role.
 
-Unlike PostgreSQL, materialize does not currently support `NOINHERIT`.
+Unlike PostgreSQL, Materialize does not currently support `NOINHERIT`.
 
 You may not specify redundant or conflicting sets of options. For example,
 Materialize will reject the statement `CREATE ROLE ... CREATEDB NOCREATEDB` because
@@ -59,14 +54,15 @@ the `CREATEDB` and `NOCREATEDB` options conflict.
 ## Examples
 
 ```sql
-CREATE ROLE rj;
+CREATE ROLE db_reader;
 ```
 ```sql
 SELECT name FROM mz_roles;
 ```
 ```nofmt
-materialize
-rj
+ db_reader
+ mz_system
+ mz_introspection
 ```
 
 ## Related pages

@@ -508,12 +508,9 @@
 
 - type: UUID
   functions:
-  - signature: mz_environment_id() -> text
-    description: A string containing a `uuid` uniquely identifying this Materialize environment.
-    unmaterializable: true
 
   - signature: 'uuid_generate_v5(namespace: uuid, name: text) -> uuid'
-    description: 'Generates a [version 5 UUID](https://www.rfc-editor.org/rfc/rfc4122#page-7) (using SHA-1) in the given namespace using
+    description: 'Generates a [version 5 UUID](https://www.rfc-editor.org/rfc/rfc4122#page-7) (SHA-1) in the given namespace using
       the specified input name.'
 
 - type: JSON
@@ -673,6 +670,9 @@
 - type: System information
   description: Functions that return information about the system
   functions:
+  - signature: 'mz_environment_id() -> text'
+    description: Returns a string containing a `uuid` uniquely identifying the Materialize environment.
+    unmaterializable: true
   - signature: 'mz_uptime() -> interval'
     description: Returns the length of time that the materialized process has been running.
     unmaterializable: true
