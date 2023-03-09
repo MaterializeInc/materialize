@@ -81,7 +81,7 @@ where
     D: Semigroup + Codec64 + Send + Sync,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
-    G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder + Default,
+    G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
 {
     // WARNING! If emulating any of this code, you should read the doc string on
     // [`LeasedBatchPart`] and [`Subscribe`] or will likely run into intentional
