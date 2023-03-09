@@ -257,10 +257,7 @@ impl HealthStatus {
     fn hint(&self) -> Option<&str> {
         match self {
             HealthStatus::Starting | HealthStatus::Running => None,
-            HealthStatus::StalledWithError { error: _, hint } => match hint {
-                Some(hint) => Some(hint),
-                None => None,
-            },
+            HealthStatus::StalledWithError { error: _, hint } => hint.as_deref(),
         }
     }
 }
