@@ -59,7 +59,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
-use mz_repr::{Diff, GlobalId, RelationDesc};
+use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_client::client::SourceStatisticsUpdate;
 use mz_storage_client::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use mz_storage_client::healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC;
@@ -112,6 +112,11 @@ pub struct RawSourceCreationConfig {
     pub storage_metadata: CollectionMetadata,
     /// The upper frontier this source should resume ingestion at
     pub resume_upper: Antichain<mz_repr::Timestamp>,
+    /// The upper frontier this source should resume ingestion at in the source time domain. Since
+    /// every source has a different timestamp type we carry the timestamps of this frontier in an
+    /// encoded `Vec<Row>` form which will get decoded once we reach the connection specialized
+    /// functions.
+    pub source_resume_upper: Vec<Row>,
     /// A handle to the persist client cache
     pub persist_clients: Arc<PersistClientCache>,
     /// Place to share statistics updates with storage state.
@@ -191,14 +196,12 @@ where
 
     let (token, health_token) = {
         let config = config.clone();
-        let reclock_follower = reclock_follower.share();
         root_scope.scoped("SourceTimeDomain", move |scope| {
             let (source, source_upper, health_stream, token) = source_reader_operator(
                 scope,
                 config.clone(),
                 source_connection,
                 connection_context,
-                reclock_follower,
                 reclocked_resume_stream,
             );
 
@@ -263,7 +266,6 @@ fn source_reader_operator<G, C, R>(
     config: RawSourceCreationConfig,
     source_connection: C,
     connection_context: ConnectionContext,
-    reclock_follower: ReclockFollower<R::Time, mz_repr::Timestamp>,
     resume_uppers: impl futures::Stream<Item = Antichain<R::Time>> + 'static,
 ) -> (
     Collection<G, Result<SourceMessage<R::Key, R::Value>, SourceReaderError>, R::Diff>,
@@ -285,7 +287,8 @@ where
         timestamp_interval,
         encoding,
         storage_metadata: _,
-        resume_upper,
+        resume_upper: _,
+        source_resume_upper,
         base_metrics,
         now: _,
         persist_clients: _,
@@ -312,22 +315,9 @@ where
 
         let mut source_metrics = SourceReaderMetrics::new(&base_metrics, id);
 
-        // TODO(petrosagg): this shouldn't be done by render or even this operator, but it's
-        // tricky lifting this to dataflow construction time due to async-ness. Find a solution
-        let source_upper = loop {
-            match reclock_follower.source_upper_at_frontier(resume_upper.borrow()) {
-                Ok(frontier) => break frontier,
-                Err(ReclockError::BeyondUpper(_) | ReclockError::Uninitialized) => {
-                    tokio::time::sleep(Duration::from_millis(100)).await
-                }
-                Err(err) => panic!("unexpected reclock error {err:?}"),
-            }
-        };
-        // Drop the reclock follower to release the read hold of the trace
-        drop(reclock_follower);
+        let source_upper = Antichain::from_iter(source_resume_upper.iter().map(R::Time::decode_row));
         info!(
-            "timely-{worker_id} source({id}) initial resume upper: into_upper={} source_upper={}",
-            resume_upper.pretty(),
+            "timely-{worker_id} source({id}) initial resume upper: source_upper={}",
             source_upper.pretty()
         );
 
@@ -695,6 +685,7 @@ where
         encoding: _,
         storage_metadata,
         resume_upper,
+        source_resume_upper: _,
         base_metrics: _,
         now,
         persist_clients,
@@ -856,6 +847,7 @@ where
         encoding: _,
         storage_metadata: _,
         resume_upper,
+        source_resume_upper: _,
         base_metrics,
         now: _,
         persist_clients: _,
