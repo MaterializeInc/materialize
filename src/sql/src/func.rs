@@ -2756,7 +2756,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     },
                     column_names: vec!["key".into(), "value".into()],
                 })
-            }) => ReturnType::set_of(RecordAny.into()), 3208;
+            }) => ReturnType::set_of(RecordAny), 3208;
         },
         "jsonb_each_text" => Table {
             params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
@@ -2767,7 +2767,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     },
                     column_names: vec!["key".into(), "value".into()],
                 })
-            }) => ReturnType::set_of(RecordAny.into()), 3932;
+            }) => ReturnType::set_of(RecordAny), 3932;
         },
         "jsonb_object_keys" => Table {
             params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
