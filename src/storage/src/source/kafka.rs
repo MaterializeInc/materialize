@@ -290,7 +290,10 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
                             }
                             Err(e) => {
                                 *status_report.lock().unwrap() =
-                                    Some(HealthStatus::StalledWithError(e.to_string()));
+                                    Some(HealthStatus::StalledWithError {
+                                        error: e.to_string(),
+                                        hint: None,
+                                    });
                                 thread::park_timeout(metadata_refresh_frequency);
                             }
                         }
@@ -405,7 +408,10 @@ impl SourceReader for KafkaSourceReader {
                         self.source_name, self.topic_name, e
                     );
                     next_message = NextMessage::Ready(SourceMessageType::status(
-                        HealthStatus::StalledWithError(message),
+                        HealthStatus::StalledWithError {
+                            error: message,
+                            hint: None,
+                        },
                     ))
                 }
                 Ok(message) => {
@@ -436,7 +442,7 @@ impl SourceReader for KafkaSourceReader {
                 }
                 Err(error) => {
                     next_message = NextMessage::Ready(SourceMessageType::status(
-                        HealthStatus::StalledWithError(error),
+                        HealthStatus::StalledWithError { error, hint: None },
                     ))
                 }
                 Ok(None) => {
