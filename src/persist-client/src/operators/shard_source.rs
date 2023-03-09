@@ -149,7 +149,7 @@ pub(crate) fn shard_source_descs<K, V, D, G>(
     as_of: Option<Antichain<G::Timestamp>>,
     until: Antichain<G::Timestamp>,
     flow_control: Option<FlowControl<G>>,
-    feedback_stream: Stream<G, SerdeLeasedBatchPart>,
+    completed_fetches_stream: Stream<G, SerdeLeasedBatchPart>,
     chosen_worker: usize,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
@@ -194,7 +194,7 @@ where
         vec![Antichain::new()],
     );
     let mut completed_fetches = builder.new_input_connection(
-        &feedback_stream,
+        &completed_fetches_stream,
         // We must ensure all completed fetches are fed into
         // the worker responsible for managing part leases
         Exchange::new(move |_| u64::cast_from(chosen_worker)),
@@ -279,8 +279,8 @@ where
         });
 
         let mut batch_parts = vec![];
-
         let mut lease_returner = subscription.lease_returner().clone();
+        let (_keep_subscribe_alive_tx, keep_subscribe_alive_rx) = tokio::sync::oneshot::channel::<()>();
         let subscription_stream = async_stream::stream! {
             // Eagerly yield the initial as_of. This makes sure that the output
             // frontier of the `persist_source` closely tracks the `upper` frontier
@@ -311,17 +311,28 @@ where
                     yield event;
                 }
             }
+
+            // intentionally keep this stream from dropping until the operator
+            // is dropped. this ensures our Subscribe handle stays alive for as
+            // long as is needed to finish fetching all of its parts.
+            let _ = keep_subscribe_alive_rx.await;
         };
         tokio::pin!(subscription_stream);
 
         'emitting_parts:
         loop {
+            // Notes on this select!:
+            //
+            // We have two mutually exclusive preconditions based on our flow
+            // control state to determine whether we emit new batch parts, vs
+            // applying flow control and waiting for downstream operators to
+            // complete their work.
+            //
+            // We use a `biased` select, not for correctness, but to minimize
+            // the work we need to do (e.g. check if the dataflow has been
+            // dropped before reading more data from CRDB).
             tokio::select! {
-                // Order here is not required for correctness, but minimizes
-                // the work we need to do (e.g. check if the dataflow has been
-                // dropped before reading more data from CRDB)
                 biased;
-
                 // If the token has been dropped, we begin a graceful shutdown
                 // by downgrading to the empty frontier and proceeding to the
                 // next state, where we await our feedback edge's progression.
