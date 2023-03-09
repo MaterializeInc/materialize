@@ -319,7 +319,7 @@ impl CatalogState {
                 object_type,
                 unstable_dependencies,
             })
-        }}
+        }
     }
 
     pub fn resolve_full_name(
