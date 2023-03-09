@@ -199,10 +199,11 @@ Field           | Type       | Meaning
 
 The `mz_compute_exports` source describes the dataflows created by indexes, materialized views, and subscriptions in the system.
 
-Field       | Type       | Meaning
-------------|------------|--------
-`export_id` | [`text`]   | The ID of the index, materialized view, or subscription that created the dataflow. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions`](#mz_subscriptions).
-`worker_id` | [`bigint`] | The ID of the worker thread hosting the corresponding [dataflow].
+Field         | Type       | Meaning
+--------------|------------|--------
+`export_id`   | [`text`]   | The ID of the index, materialized view, or subscription that created the dataflow. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions`](#mz_subscriptions).
+`worker_id`   | [`bigint`] | The ID of the worker thread hosting the corresponding [dataflow].
+`dataflow_id` | [`bigint`] | The ID of the [dataflow]. Corresponds to [`mz_dataflows.local_id`](#mz_dataflows).
 
 ### `mz_compute_frontiers`
 
