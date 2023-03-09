@@ -806,7 +806,11 @@ fn validate_tables(
                         "Error validating table in publication. Expected: {:?} Actual: {:?}",
                         &info.desc, pub_schema
                     );
-                    bail!("Schema for table {} differs, recreate Materialize source to use new schema", info.desc.name)
+                    bail!(
+                        "source table {} with oid {} has been altered",
+                        info.desc.name,
+                        info.desc.oid
+                    )
                 }
             }
             None => {
@@ -815,9 +819,9 @@ fn validate_tables(
                     info.desc.name, id
                 );
                 bail!(
-                    "Publication missing expected table {} with oid {}",
+                    "source table {} with oid {} has been dropped",
                     info.desc.name,
-                    id
+                    info.desc.oid
                 )
             }
         }
