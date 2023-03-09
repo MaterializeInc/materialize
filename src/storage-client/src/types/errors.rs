@@ -203,6 +203,32 @@ impl Display for UpsertValueError {
     }
 }
 
+/// A source contained a record with a NULL key, which we don't support.
+///
+/// NOTE: This does not contain additional (supposedly helpful) information, such as a partition ID
+/// or offset. We start out with keeping this error as generic as possible and, for example, a
+/// partition ID is a Kafka concept.
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct UpsertNullKeyError {}
+
+impl RustType<ProtoUpsertNullKeyError> for UpsertNullKeyError {
+    fn into_proto(&self) -> ProtoUpsertNullKeyError {
+        ProtoUpsertNullKeyError {
+            // partition_id: Some(PartitionId::None),
+        }
+    }
+
+    fn from_proto(_proto: ProtoUpsertNullKeyError) -> Result<Self, TryFromProtoError> {
+        Ok(Self {})
+    }
+}
+
+impl Display for UpsertNullKeyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "record with NULL key in UPSERT source")
+    }
+}
+
 /// An error that can be retracted by a future message using upsert logic.
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum UpsertError {
@@ -217,6 +243,7 @@ pub enum UpsertError {
     KeyDecode(DecodeError),
     /// Wrapper around an error related to the value.
     Value(UpsertValueError),
+    NullKey(UpsertNullKeyError),
 }
 
 impl RustType<ProtoUpsertError> for UpsertError {
@@ -226,6 +253,7 @@ impl RustType<ProtoUpsertError> for UpsertError {
             kind: Some(match self {
                 UpsertError::KeyDecode(err) => Kind::KeyDecode(err.into_proto()),
                 UpsertError::Value(err) => Kind::Value(Box::new(err.into_proto())),
+                UpsertError::NullKey(err) => Kind::NullKey(err.into_proto()),
             }),
         }
     }
@@ -241,6 +269,10 @@ impl RustType<ProtoUpsertError> for UpsertError {
                 let rust = RustType::from_proto(*proto)?;
                 Ok(Self::Value(rust))
             }
+            Some(Kind::NullKey(proto)) => {
+                let rust = RustType::from_proto(proto)?;
+                Ok(Self::NullKey(rust))
+            }
             None => Err(TryFromProtoError::missing_field("ProtoUpsertError::kind")),
         }
     }
@@ -251,6 +283,7 @@ impl Display for UpsertError {
         match self {
             UpsertError::KeyDecode(err) => write!(f, "Key decode: {err}"),
             UpsertError::Value(err) => write!(f, "Value error: {err}"),
+            UpsertError::NullKey(err) => write!(f, "Null key: {err}"),
         }
     }
 }
