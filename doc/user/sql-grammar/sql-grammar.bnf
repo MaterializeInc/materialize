@@ -103,6 +103,7 @@ create_source_kafka ::=
     ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP' | 'HEADERS' ) ('AS' name)? )*
   )?
   ('ENVELOPE' ('NONE' | 'DEBEZIUM' | 'UPSERT'))?
+  ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_source_kinesis ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
@@ -111,12 +112,14 @@ create_source_kinesis ::=
   'FROM' 'KINESIS ARN' arn with_options?
   'FORMAT' format_spec
   ('ENVELOPE NONE')?
+  ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
 create_source_load_generator ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('IN CLUSTER' cluster_name)?
   'FROM LOAD GENERATOR' ('AUCTION' | 'COUNTER' | 'TPCH')
   ('(' (load_generator_option) ( ( ',' load_generator_option ) )* ')')?
   ('FOR ALL TABLES' | 'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')')
+  ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 load_generator_option ::=
     'TICK INTERVAL' interval
@@ -128,6 +131,7 @@ create_source_postgres ::=
   'FROM' 'POSTGRES' 'CONNECTION' connection_name
   '(' 'PUBLICATION' publication_name ( ( ',' 'TEXT COLUMNS' ('(' (column_name) ( ( ',' column_name ) )* ')')? )? ) ')'
   ('FOR ALL TABLES' | 'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')')
+  ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_source_s3 ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
@@ -147,6 +151,7 @@ create_source_s3 ::=
   with_options?
   'FORMAT' format_spec
   ('ENVELOPE NONE')?
+  ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
 create_type ::=
     'CREATE' 'TYPE' type_name 'AS' '(' ((field_name field_type) (',' field_name field_type)*) ')' |
     'CREATE' 'TYPE' type_name 'AS' ( 'LIST' | 'MAP' ) '(' ( property '=' val ) ( ( ',' property '=' val ) )* ')'

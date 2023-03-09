@@ -17,16 +17,49 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use uncased::UncasedStr;
 
+use crate::ast::Ident;
+use crate::DEFAULT_SCHEMA;
 use mz_build_info::BuildInfo;
 use mz_ore::cast;
 use mz_persist_client::cfg::PersistConfig;
-use mz_sql::ast::Ident;
-use mz_sql::DEFAULT_SCHEMA;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 
-use crate::catalog::SYSTEM_USER;
-use crate::error::AdapterError;
-use crate::session::{EndTransactionAction, User};
+/// The action to take during end_transaction.
+///
+/// This enum lives here because of convenience: it's more of an adapter
+/// concept but [`SessionVars::end_transaction`] takes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndTransactionAction {
+    /// Commit the transaction.
+    Commit,
+    /// Rollback the transaction.
+    Rollback,
+}
+
+/// Errors that can occur when working with [`Var`]s
+#[derive(Debug, thiserror::Error)]
+pub enum VarError {
+    #[error("unknown parameter: {0}")]
+    UnknownParameter(String),
+    #[error("value for parameter {0:?} has wrong type")]
+    InvalidParameterType(&'static (dyn Var + Send + Sync)),
+    #[error("value for parameter {parameter:?}: {values:?} is wrong because of {reason}")]
+    InvalidParameterValue {
+        parameter: &'static (dyn Var + Send + Sync),
+        values: Vec<String>,
+        reason: String,
+    },
+    #[error("specified parameter {0:?} is fixed to a specific value")]
+    FixedValueParameter(&'static (dyn Var + Send + Sync)),
+    #[error("specified parameter {0:?} is read only")]
+    ReadOnlyParameter(&'static (dyn Var + Send + Sync)),
+    #[error("value for parameter {parameter:?}: {values:?} is constrainted to {valid_values:?}")]
+    ConstrainedParameter {
+        parameter: &'static (dyn Var + Send + Sync),
+        values: Vec<String>,
+        valid_values: Option<Vec<&'static str>>,
+    },
+}
 
 // We pretend to be Postgres v9.5.0, which is also what CockroachDB pretends to
 // be. Too new and some clients will emit a "server too new" warning. Too old
@@ -684,7 +717,7 @@ impl SessionVars {
     /// named accessor to access the variable with its true Rust type. For
     /// example, `self.get("sql_safe_updates").value()` returns the string
     /// `"true"` or `"false"`, while `self.sql_safe_updates()` returns a bool.
-    pub fn get(&self, name: &str) -> Result<&dyn Var, AdapterError> {
+    pub fn get(&self, name: &str) -> Result<&dyn Var, VarError> {
         if name == APPLICATION_NAME.name {
             Ok(&self.application_name)
         } else if name == CLIENT_ENCODING.name {
@@ -736,7 +769,7 @@ impl SessionVars {
         } else if name == IS_SUPERUSER.name {
             Ok(&self.is_superuser)
         } else {
-            Err(AdapterError::UnknownParameter(name.into()))
+            Err(VarError::UnknownParameter(name.into()))
         }
     }
 
@@ -752,19 +785,19 @@ impl SessionVars {
     /// insensitively. If `value` is not valid, as determined by the underlying
     /// configuration parameter, or if the named configuration parameter does
     /// not exist, an error is returned.
-    pub fn set(&mut self, name: &str, input: VarInput, local: bool) -> Result<(), AdapterError> {
+    pub fn set(&mut self, name: &str, input: VarInput, local: bool) -> Result<(), VarError> {
         if name == APPLICATION_NAME.name {
             self.application_name.set(input, local)
         } else if name == CLIENT_ENCODING.name {
             match extract_single_value(input) {
                 Ok(value) if UncasedStr::new(value) == CLIENT_ENCODING.value => Ok(()),
-                _ => Err(AdapterError::FixedValueParameter(&CLIENT_ENCODING)),
+                _ => Err(VarError::FixedValueParameter(&CLIENT_ENCODING)),
             }
         } else if name == CLIENT_MIN_MESSAGES.name {
             if let Ok(_) = ClientSeverity::parse(input) {
                 self.client_min_messages.set(input, local)
             } else {
-                return Err(AdapterError::ConstrainedParameter {
+                return Err(VarError::ConstrainedParameter {
                     parameter: &CLIENT_MIN_MESSAGES,
                     values: input.to_vec(),
                     valid_values: Some(ClientSeverity::valid_values()),
@@ -778,12 +811,12 @@ impl SessionVars {
             self.database.set(input, local)
         } else if name == DATE_STYLE.name {
             let Ok(values) = Vec::<String>::parse(input) else {
-                return Err(AdapterError::FixedValueParameter(&*DATE_STYLE));
+                return Err(VarError::FixedValueParameter(&*DATE_STYLE));
             };
             for value in values {
                 let value = UncasedStr::new(value.trim());
                 if value != "ISO" && value != "MDY" {
-                    return Err(AdapterError::FixedValueParameter(&*DATE_STYLE));
+                    return Err(VarError::FixedValueParameter(&*DATE_STYLE));
                 }
             }
             Ok(())
@@ -797,22 +830,21 @@ impl SessionVars {
                     continue;
                 }
                 let mut splits = cfg.splitn(2, '=');
-                let failpoint =
-                    splits
-                        .next()
-                        .ok_or_else(|| AdapterError::InvalidParameterValue {
-                            parameter: &FAILPOINTS,
-                            values: input.to_vec(),
-                            reason: "missing failpoint name".into(),
-                        })?;
+                let failpoint = splits
+                    .next()
+                    .ok_or_else(|| VarError::InvalidParameterValue {
+                        parameter: &FAILPOINTS,
+                        values: input.to_vec(),
+                        reason: "missing failpoint name".into(),
+                    })?;
                 let action = splits
                     .next()
-                    .ok_or_else(|| AdapterError::InvalidParameterValue {
+                    .ok_or_else(|| VarError::InvalidParameterValue {
                         parameter: &FAILPOINTS,
                         values: input.to_vec(),
                         reason: "missing failpoint action".into(),
                     })?;
-                fail::cfg(failpoint, action).map_err(|e| AdapterError::InvalidParameterValue {
+                fail::cfg(failpoint, action).map_err(|e| VarError::InvalidParameterValue {
                     parameter: &FAILPOINTS,
                     values: input.to_vec(),
                     reason: e,
@@ -820,29 +852,25 @@ impl SessionVars {
             }
             Ok(())
         } else if name == INTEGER_DATETIMES.name {
-            Err(AdapterError::ReadOnlyParameter(&INTEGER_DATETIMES))
+            Err(VarError::ReadOnlyParameter(&INTEGER_DATETIMES))
         } else if name == INTERVAL_STYLE.name {
             match extract_single_value(input) {
                 Ok(value) if UncasedStr::new(value) == INTERVAL_STYLE.value => Ok(()),
-                _ => Err(AdapterError::FixedValueParameter(&INTERVAL_STYLE)),
+                _ => Err(VarError::FixedValueParameter(&INTERVAL_STYLE)),
             }
         } else if name == SEARCH_PATH.name {
             self.search_path.set(input, local)
         } else if name == SERVER_VERSION.name {
-            Err(AdapterError::ReadOnlyParameter(&SERVER_VERSION))
+            Err(VarError::ReadOnlyParameter(&SERVER_VERSION))
         } else if name == SERVER_VERSION_NUM.name {
-            Err(AdapterError::ReadOnlyParameter(&SERVER_VERSION_NUM))
+            Err(VarError::ReadOnlyParameter(&SERVER_VERSION_NUM))
         } else if name == SQL_SAFE_UPDATES.name {
             self.sql_safe_updates.set(input, local)
         } else if name == STANDARD_CONFORMING_STRINGS.name {
             match bool::parse(input) {
                 Ok(value) if value == *STANDARD_CONFORMING_STRINGS.value => Ok(()),
-                Ok(_) => Err(AdapterError::FixedValueParameter(
-                    &STANDARD_CONFORMING_STRINGS,
-                )),
-                Err(()) => Err(AdapterError::InvalidParameterType(
-                    &STANDARD_CONFORMING_STRINGS,
-                )),
+                Ok(_) => Err(VarError::FixedValueParameter(&STANDARD_CONFORMING_STRINGS)),
+                Err(()) => Err(VarError::InvalidParameterType(&STANDARD_CONFORMING_STRINGS)),
             }
         } else if name == STATEMENT_TIMEOUT.name {
             self.statement_timeout.set(input, local)
@@ -852,7 +880,7 @@ impl SessionVars {
             if let Ok(_) = TimeZone::parse(input) {
                 self.timezone.set(input, local)
             } else {
-                Err(AdapterError::ConstrainedParameter {
+                Err(VarError::ConstrainedParameter {
                     parameter: &TIMEZONE,
                     values: input.to_vec(),
                     valid_values: None,
@@ -862,7 +890,7 @@ impl SessionVars {
             if let Ok(_) = IsolationLevel::parse(input) {
                 self.transaction_isolation.set(input, local)
             } else {
-                return Err(AdapterError::ConstrainedParameter {
+                return Err(VarError::ConstrainedParameter {
                     parameter: &TRANSACTION_ISOLATION,
                     values: input.to_vec(),
                     valid_values: Some(IsolationLevel::valid_values()),
@@ -875,9 +903,9 @@ impl SessionVars {
         } else if name == EMIT_TRACE_ID_NOTICE.name {
             self.emit_trace_id_notice.set(input, local)
         } else if name == IS_SUPERUSER.name {
-            Err(AdapterError::FixedValueParameter(&IS_SUPERUSER))
+            Err(VarError::FixedValueParameter(&IS_SUPERUSER))
         } else {
-            Err(AdapterError::UnknownParameter(name.into()))
+            Err(VarError::UnknownParameter(name.into()))
         }
     }
 
@@ -891,7 +919,7 @@ impl SessionVars {
     /// Like with [`SessionVars::get`], configuration parameters are matched case
     /// insensitively. If the named configuration parameter does not exist, an
     /// error is returned.
-    pub fn reset(&mut self, name: &str, local: bool) -> Result<(), AdapterError> {
+    pub fn reset(&mut self, name: &str, local: bool) -> Result<(), VarError> {
         if name == APPLICATION_NAME.name {
             self.application_name.reset(local);
         } else if name == CLIENT_MIN_MESSAGES.name {
@@ -934,7 +962,7 @@ impl SessionVars {
         {
             // fixed value
         } else {
-            return Err(AdapterError::UnknownParameter(name.into()));
+            return Err(VarError::UnknownParameter(name.into()));
         }
         Ok(())
     }
@@ -1115,11 +1143,11 @@ impl SessionVars {
         *self.is_superuser.value()
     }
 
-    pub(crate) fn set_cluster(&mut self, cluster: String) {
+    pub fn set_cluster(&mut self, cluster: String) {
         self.cluster.session_value = Some(cluster);
     }
 
-    pub(crate) fn set_superuser(&mut self, is_superuser: bool) {
+    pub fn set_superuser(&mut self, is_superuser: bool) {
         self.is_superuser.session_value = Some(is_superuser);
     }
 }
@@ -1238,7 +1266,7 @@ impl SystemVars {
 
     /// Returns an iterator over the configuration parameters and their current
     /// values on disk. Compared to [`SystemVars::iter`], this should omit vars
-    /// that shouldn't be synced by [`crate::config::SystemParameterFrontend`].
+    /// that shouldn't be synced by SystemParameterFrontend.
     pub fn iter_synced(&self) -> impl Iterator<Item = &dyn Var> {
         self.iter()
             .filter(|v| v.name() != CONFIG_HAS_SYNCED_ONCE.name)
@@ -1259,7 +1287,7 @@ impl SystemVars {
     ///
     /// The call will return an error:
     /// 1. If `name` does not refer to a valid [`SystemVars`] field.
-    pub fn get(&self, name: &str) -> Result<&dyn Var, AdapterError> {
+    pub fn get(&self, name: &str) -> Result<&dyn Var, VarError> {
         if name == CONFIG_HAS_SYNCED_ONCE.name {
             Ok(&self.config_has_synced_once)
         } else if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
@@ -1309,7 +1337,7 @@ impl SystemVars {
         } else if name == ENABLE_RBAC_CHECKS.name {
             Ok(&self.enable_rbac_checks)
         } else {
-            Err(AdapterError::UnknownParameter(name.into()))
+            Err(VarError::UnknownParameter(name.into()))
         }
     }
 
@@ -1322,7 +1350,7 @@ impl SystemVars {
     /// 1. If `name` does not refer to a valid [`SystemVars`] field.
     /// 2. If `values` does not represent a valid [`SystemVars`] value for
     ///    `name`.
-    pub fn is_default(&self, name: &str, input: VarInput) -> Result<bool, AdapterError> {
+    pub fn is_default(&self, name: &str, input: VarInput) -> Result<bool, VarError> {
         if name == CONFIG_HAS_SYNCED_ONCE.name {
             self.config_has_synced_once.is_default(input)
         } else if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
@@ -1372,7 +1400,7 @@ impl SystemVars {
         } else if name == ENABLE_RBAC_CHECKS.name {
             self.enable_rbac_checks.is_default(input)
         } else {
-            Err(AdapterError::UnknownParameter(name.into()))
+            Err(VarError::UnknownParameter(name.into()))
         }
     }
 
@@ -1394,7 +1422,7 @@ impl SystemVars {
     /// 1. If `name` does not refer to a valid [`SystemVars`] field.
     /// 2. If `value` does not represent a valid [`SystemVars`] value for
     ///    `name`.
-    pub fn set(&mut self, name: &str, input: VarInput) -> Result<bool, AdapterError> {
+    pub fn set(&mut self, name: &str, input: VarInput) -> Result<bool, VarError> {
         if name == CONFIG_HAS_SYNCED_ONCE.name {
             self.config_has_synced_once.set(input)
         } else if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
@@ -1444,7 +1472,7 @@ impl SystemVars {
         } else if name == ENABLE_RBAC_CHECKS.name {
             self.enable_rbac_checks.set(input)
         } else {
-            Err(AdapterError::UnknownParameter(name.into()))
+            Err(VarError::UnknownParameter(name.into()))
         }
     }
 
@@ -1461,7 +1489,7 @@ impl SystemVars {
     ///
     /// The call will return an error:
     /// 1. If `name` does not refer to a valid [`SystemVars`] field.
-    pub fn reset(&mut self, name: &str) -> Result<bool, AdapterError> {
+    pub fn reset(&mut self, name: &str) -> Result<bool, VarError> {
         if name == CONFIG_HAS_SYNCED_ONCE.name {
             Ok(self.config_has_synced_once.reset())
         } else if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
@@ -1511,7 +1539,7 @@ impl SystemVars {
         } else if name == ENABLE_RBAC_CHECKS.name {
             Ok(self.enable_rbac_checks.reset())
         } else {
-            Err(AdapterError::UnknownParameter(name.into()))
+            Err(VarError::UnknownParameter(name.into()))
         }
     }
 
@@ -1666,11 +1694,11 @@ pub trait Var: fmt::Debug {
     /// Returns the name of the type of this variable.
     fn type_name(&self) -> &'static str;
 
-    /// Indicates wither the [`Var`] is visible for the given [`User`].
+    /// Indicates wither the [`Var`] is visible given is_system_user.
     ///
     /// Variables marked as `internal` are only visible for the
-    /// [`crate::catalog::SYSTEM_USER`] user.
-    fn visible(&self, user: &User) -> bool;
+    /// system user.
+    fn visible(&self, is_system_user: bool) -> bool;
 
     /// Indicates wither the [`Var`] is only visible in unsafe mode.
     ///
@@ -1719,8 +1747,8 @@ where
         V::TYPE_NAME
     }
 
-    fn visible(&self, user: &User) -> bool {
-        !self.internal || user == &*SYSTEM_USER
+    fn visible(&self, is_system_user: bool) -> bool {
+        !self.internal || is_system_user
     }
 
     fn safe(&self) -> bool {
@@ -1752,7 +1780,7 @@ where
         }
     }
 
-    fn set(&mut self, input: VarInput) -> Result<bool, AdapterError> {
+    fn set(&mut self, input: VarInput) -> Result<bool, VarError> {
         match V::parse(input) {
             Ok(v) => {
                 if self.persisted_value.as_ref() != Some(&v) {
@@ -1762,7 +1790,7 @@ where
                     Ok(false)
                 }
             }
-            Err(()) => Err(AdapterError::InvalidParameterType(self.parent)),
+            Err(()) => Err(VarError::InvalidParameterType(self.parent)),
         }
     }
 
@@ -1782,10 +1810,10 @@ where
             .unwrap_or(self.parent.value)
     }
 
-    fn is_default(&self, input: VarInput) -> Result<bool, AdapterError> {
+    fn is_default(&self, input: VarInput) -> Result<bool, VarError> {
         match V::parse(input) {
             Ok(v) => Ok(self.parent.value == v.borrow()),
-            Err(()) => Err(AdapterError::InvalidParameterType(self.parent)),
+            Err(()) => Err(VarError::InvalidParameterType(self.parent)),
         }
     }
 }
@@ -1811,8 +1839,8 @@ where
         V::TYPE_NAME
     }
 
-    fn visible(&self, user: &User) -> bool {
-        self.parent.visible(user)
+    fn visible(&self, is_system_user: bool) -> bool {
+        self.parent.visible(is_system_user)
     }
 
     fn safe(&self) -> bool {
@@ -1848,7 +1876,7 @@ where
         }
     }
 
-    fn set(&mut self, input: VarInput, local: bool) -> Result<(), AdapterError> {
+    fn set(&mut self, input: VarInput, local: bool) -> Result<(), VarError> {
         match V::parse(input) {
             Ok(v) => {
                 if local {
@@ -1859,7 +1887,7 @@ where
                 }
                 Ok(())
             }
-            Err(()) => Err(AdapterError::InvalidParameterType(self.parent)),
+            Err(()) => Err(VarError::InvalidParameterType(self.parent)),
         }
     }
 
@@ -1914,8 +1942,8 @@ where
         V::TYPE_NAME
     }
 
-    fn visible(&self, user: &User) -> bool {
-        self.parent.visible(user)
+    fn visible(&self, is_system_user: bool) -> bool {
+        self.parent.visible(is_system_user)
     }
 
     fn safe(&self) -> bool {
@@ -1940,7 +1968,7 @@ impl Var for BuildInfo {
         str::TYPE_NAME
     }
 
-    fn visible(&self, _: &User) -> bool {
+    fn visible(&self, _: bool) -> bool {
         true
     }
 
@@ -2500,14 +2528,14 @@ impl From<TransactionIsolationLevel> for IsolationLevel {
 }
 
 /// Returns whether the named variable is a compute configuration parameter.
-pub(crate) fn is_compute_config_var(name: &str) -> bool {
+pub fn is_compute_config_var(name: &str) -> bool {
     name == MAX_RESULT_SIZE.name()
         || name == DATAFLOW_MAX_INFLIGHT_BYTES.name()
         || is_persist_config_var(name)
 }
 
 /// Returns whether the named variable is a storage configuration parameter.
-pub(crate) fn is_storage_config_var(name: &str) -> bool {
+pub fn is_storage_config_var(name: &str) -> bool {
     is_persist_config_var(name)
 }
 

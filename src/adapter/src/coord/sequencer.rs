@@ -59,6 +59,10 @@ use mz_sql::plan::{
     SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan,
     VariableValue, View,
 };
+use mz_sql::vars::{
+    IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
+    TRANSACTION_ISOLATION_VAR_NAME,
+};
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
@@ -87,13 +91,8 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
-use crate::session::vars::{
-    IsolationLevel, OwnedVarInput, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
-    ENABLE_RBAC_CHECKS, TRANSACTION_ISOLATION_VAR_NAME,
-};
 use crate::session::{
-    EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, Var,
-    WriteOp,
+    EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
 };
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{send_immediate_rows, ClientTransmitter, ComputeSinkId, ResultExt};
@@ -1981,7 +1980,7 @@ impl Coordinator {
             .vars()
             .iter()
             .chain(catalog.system_config().iter())
-            .filter(|v| !v.experimental() && v.visible(session.user()))
+            .filter(|v| !v.experimental() && v.visible(session.user().is_system_user()))
             .filter(|v| v.safe() || catalog.unsafe_mode())
     }
 
@@ -1995,7 +1994,9 @@ impl Coordinator {
             .get(&plan.name)
             .or_else(|_| self.catalog.system_config().get(&plan.name))?;
 
-        if variable.visible(session.user()) && (variable.safe() || self.catalog.unsafe_mode()) {
+        if variable.visible(session.user().is_system_user())
+            && (variable.safe() || self.catalog.unsafe_mode())
+        {
             let row = Row::pack_slice(&[Datum::String(&variable.value())]);
             Ok(send_immediate_rows(vec![row]))
         } else {
@@ -3910,7 +3911,7 @@ impl Coordinator {
         session: &Session,
         var_name: Option<&str>,
     ) -> Result<(), AdapterError> {
-        if session.user() == &*SYSTEM_USER
+        if session.user().is_system_user()
             || (var_name == Some(ENABLE_RBAC_CHECKS.name()) && session.is_superuser())
         {
             Ok(())

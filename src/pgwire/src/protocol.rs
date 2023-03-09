@@ -27,7 +27,7 @@ use mz_adapter::catalog::INTERNAL_USER_NAMES;
 use mz_adapter::session::User;
 use mz_adapter::session::{
     EndTransactionAction, ExternalUserMetadata, InProgressRows, Portal, PortalState,
-    RowBatchStream, TransactionStatus, VarInput,
+    RowBatchStream, TransactionStatus,
 };
 use mz_adapter::{AdapterNotice, ExecuteResponse, PeekResponseUnary, RowsFuture};
 use mz_frontegg_auth::{Claims, FronteggAuthentication};
@@ -40,6 +40,7 @@ use mz_repr::{Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
+use mz_sql::vars::VarInput;
 
 use crate::codec::FramedConn;
 use crate::message::{

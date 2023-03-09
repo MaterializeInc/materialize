@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::session::vars::{SystemVars, VarInput};
+use mz_sql::vars::{SystemVars, VarInput};
 
 /// A struct that defines the system parameters that should be synchronized
 pub struct SynchronizedParameters {

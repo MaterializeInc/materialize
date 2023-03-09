@@ -26,6 +26,7 @@ use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::ResolvedDatabaseSpecifier;
+use mz_sql::vars::{self, SystemVars, Var};
 use mz_storage_client::controller::{CreateExportToken, ExportDescription, ReadPolicy};
 use mz_storage_client::types::sinks::{SinkAsOf, StorageSinkConnection};
 use mz_storage_client::types::sources::{GenericSourceConnection, Timeline};
@@ -37,8 +38,7 @@ use crate::catalog::{
 use crate::client::ConnectionId;
 use crate::coord::appends::BuiltinTableUpdateSource;
 use crate::coord::Coordinator;
-use crate::session::vars::SystemVars;
-use crate::session::{self, Session, Var};
+use crate::session::Session;
 use crate::telemetry::SegmentClientExt;
 use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterError, AdapterNotice};
@@ -201,9 +201,9 @@ impl Coordinator {
                 }
                 catalog::Op::ResetSystemConfiguration { name }
                 | catalog::Op::UpdateSystemConfiguration { name, .. } => {
-                    update_compute_config |= session::vars::is_compute_config_var(name);
-                    update_storage_config |= session::vars::is_storage_config_var(name);
-                    update_metrics_retention |= name == session::vars::METRICS_RETENTION.name();
+                    update_compute_config |= vars::is_compute_config_var(name);
+                    update_storage_config |= vars::is_storage_config_var(name);
+                    update_metrics_retention |= name == vars::METRICS_RETENTION.name();
                 }
                 _ => (),
             }

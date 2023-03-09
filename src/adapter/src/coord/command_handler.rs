@@ -25,6 +25,7 @@ use mz_repr::ScalarType;
 use mz_sql::ast::{InsertSource, Query, Raw, SetExpr, Statement};
 use mz_sql::catalog::{RoleAttributes, SessionCatalog};
 use mz_sql::plan::{CreateRolePlan, Params};
+use mz_sql::vars::OwnedVarInput;
 
 use crate::client::ConnectionId;
 use crate::command::{
@@ -35,7 +36,6 @@ use crate::coord::peek::PendingPeek;
 use crate::coord::{ConnMeta, Coordinator, CreateSourceStatementReady, Message, PendingTxn};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
-use crate::session::vars::OwnedVarInput;
 use crate::session::{PreparedStatement, Session, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
 use crate::{catalog, metrics, rbac};

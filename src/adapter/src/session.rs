@@ -28,6 +28,7 @@ use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType, TimestampManipulation};
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
 use mz_sql::names::RoleId;
 use mz_sql::plan::{Params, PlanContext, StatementDesc};
+use mz_sql::vars::{IsolationLevel, VarInput};
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_client::types::sources::Timeline;
 
@@ -36,15 +37,12 @@ use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
-use crate::session::vars::IsolationLevel;
 use crate::AdapterNotice;
 
-pub use self::vars::{
-    ClientSeverity, SessionVars, Var, VarInput, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
+pub use mz_sql::vars::{
+    EndTransactionAction, SessionVars, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
     SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
 };
-
-pub(crate) mod vars;
 
 const DUMMY_CONNECTION_ID: ConnectionId = 0;
 
@@ -94,6 +92,11 @@ impl User {
     /// Returns whether this user is a superuser.
     pub fn is_superuser(&self) -> bool {
         self.is_external_admin() || self.name == SYSTEM_USER.name
+    }
+
+    /// Returns whether this is user is a system user
+    pub fn is_system_user(&self) -> bool {
+        self == &*SYSTEM_USER
     }
 }
 
@@ -1047,13 +1050,4 @@ pub struct WriteOp {
     pub id: GlobalId,
     /// The data rows.
     pub rows: Vec<(Row, Diff)>,
-}
-
-/// The action to take during end_transaction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EndTransactionAction {
-    /// Commit the transaction.
-    Commit,
-    /// Rollback the transaction.
-    Rollback,
 }
