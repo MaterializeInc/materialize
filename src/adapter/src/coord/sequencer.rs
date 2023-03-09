@@ -61,7 +61,7 @@ use mz_sql::plan::{
 };
 use mz_sql::vars::{
     IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
-    TRANSACTION_ISOLATION_VAR_NAME,
+    ENABLE_RBAC_CHECKS, TRANSACTION_ISOLATION_VAR_NAME,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
