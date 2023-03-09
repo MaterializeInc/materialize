@@ -52,7 +52,7 @@ use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogError as SqlCatalogError, CatalogFeature,
+    CatalogCluster, CatalogDatabase, CatalogError as SqlCatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogItemType,
     CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId, IdReference,
     NameReference, RoleAttributes, SessionCatalog, TypeReference,
@@ -68,6 +68,7 @@ use mz_sql::plan::{
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
     Plan, PlanContext, SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
 };
+use mz_sql::vars::{OwnedVarInput, SystemVars, Var, VarInput, CONFIG_HAS_SYNCED_ONCE};
 use mz_sql::{plan, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{CreateSinkOption, CreateSourceOption, Statement, WithOptionValue};
 use mz_ssh_util::keys::SshKeyPairSet;
@@ -92,7 +93,6 @@ use crate::catalog::storage::{BootstrapArgs, Transaction};
 use crate::client::ConnectionId;
 use crate::config::{SynchronizedParameters, SystemParameterFrontend};
 use crate::coord::DEFAULT_LOGICAL_COMPACTION_WINDOW;
-use crate::session::vars::{OwnedVarInput, SystemVars, Var, VarInput, CONFIG_HAS_SYNCED_ONCE};
 use crate::session::{PreparedStatement, Session, User, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
 use crate::{AdapterError, DUMMY_AVAILABILITY_ZONE};
@@ -876,7 +876,7 @@ impl CatalogState {
 
     /// Get system configuration `name`.
     pub fn get_system_configuration(&self, name: &str) -> Result<&dyn Var, AdapterError> {
-        self.system_configuration.get(name)
+        Ok(self.system_configuration.get(name)?)
     }
 
     /// Insert system configuration `name` with `value`.
@@ -888,7 +888,7 @@ impl CatalogState {
         name: &str,
         value: VarInput,
     ) -> Result<bool, AdapterError> {
-        self.system_configuration.set(name, value)
+        Ok(self.system_configuration.set(name, value)?)
     }
 
     /// Reset system configuration `name`.
@@ -896,7 +896,7 @@ impl CatalogState {
     /// Return a `bool` value indicating whether the configuration was modified
     /// by the call.
     fn remove_system_configuration(&mut self, name: &str) -> Result<bool, AdapterError> {
-        self.system_configuration.reset(name)
+        Ok(self.system_configuration.reset(name)?)
     }
 
     /// Remove all system configurations.
@@ -6154,8 +6154,13 @@ pub fn is_reserved_name(name: &str) -> bool {
 /// specific feature flag turned on, so we need to ensure that this is also the
 /// case during catalog rehydration in order to avoid panics.
 fn enable_features_required_for_catalog_open(session_catalog: &mut ConnCatalog) {
-    if !session_catalog.get_feature(CatalogFeature::EnableWithMutuallyRecursive) {
-        session_catalog.set_feature(CatalogFeature::EnableWithMutuallyRecursive, true);
+    if !session_catalog
+        .system_vars()
+        .enable_with_mutually_recursive()
+    {
+        session_catalog
+            .system_vars_mut()
+            .set_enable_with_mutually_recursive(true);
     }
 }
 
@@ -6695,20 +6700,12 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.aws_privatelink_availability_zones.clone()
     }
 
-    fn get_feature(&self, name: CatalogFeature) -> bool {
-        use CatalogFeature::*;
-        let config = &self.state.system_configuration;
-        match name {
-            EnableWithMutuallyRecursive => config.enable_with_mutually_recursive(),
-        }
+    fn system_vars(&self) -> &SystemVars {
+        &self.state.system_configuration
     }
 
-    fn set_feature(&mut self, name: CatalogFeature, value: bool) -> bool {
-        use CatalogFeature::*;
-        let config = &mut self.state.to_mut().system_configuration;
-        match name {
-            EnableWithMutuallyRecursive => config.set_enable_with_mutually_recursive(value),
-        }
+    fn system_vars_mut(&mut self) -> &mut SystemVars {
+        &mut self.state.to_mut().system_configuration
     }
 }
 
@@ -6898,6 +6895,7 @@ mod tests {
         ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
     };
     use mz_sql::plan::StatementContext;
+    use mz_sql::vars::VarInput;
     use mz_sql::DEFAULT_SCHEMA;
     use mz_sql_parser::ast::Expr;
     use mz_stash::DebugStashFactory;
@@ -6905,7 +6903,6 @@ mod tests {
     use crate::catalog::{
         Catalog, CatalogItem, Index, MaterializedView, Op, Table, SYSTEM_CONN_ID,
     };
-    use crate::session::vars::VarInput;
     use crate::session::{Session, DEFAULT_DATABASE_NAME};
 
     /// System sessions have an empty `search_path` so it's necessary to

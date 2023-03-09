@@ -23,11 +23,11 @@ use mz_repr::explain::ExplainError;
 use mz_repr::NotNullViolation;
 use mz_sql::names::RoleId;
 use mz_sql::plan::PlanError;
+use mz_sql::vars::Var;
 use mz_storage_client::controller::StorageError;
 use mz_transform::TransformError;
 
 use crate::catalog;
-use crate::session::Var;
 
 /// Errors that can occur in the coordinator.
 #[derive(Debug)]
@@ -647,6 +647,37 @@ impl From<TimestampError> for AdapterError {
 impl From<mz_sql_parser::parser::ParserError> for AdapterError {
     fn from(e: mz_sql_parser::parser::ParserError) -> Self {
         AdapterError::ParseError(e)
+    }
+}
+
+impl From<mz_sql::vars::VarError> for AdapterError {
+    fn from(e: mz_sql::vars::VarError) -> Self {
+        match e {
+            mz_sql::vars::VarError::UnknownParameter(p) => AdapterError::UnknownParameter(p),
+            mz_sql::vars::VarError::InvalidParameterType(p) => {
+                AdapterError::InvalidParameterType(p)
+            }
+            mz_sql::vars::VarError::InvalidParameterValue {
+                parameter,
+                values,
+                reason,
+            } => AdapterError::InvalidParameterValue {
+                parameter,
+                values,
+                reason,
+            },
+            mz_sql::vars::VarError::FixedValueParameter(p) => AdapterError::FixedValueParameter(p),
+            mz_sql::vars::VarError::ReadOnlyParameter(p) => AdapterError::ReadOnlyParameter(p),
+            mz_sql::vars::VarError::ConstrainedParameter {
+                parameter,
+                values,
+                valid_values,
+            } => AdapterError::ConstrainedParameter {
+                parameter,
+                values,
+                valid_values,
+            },
+        }
     }
 }
 

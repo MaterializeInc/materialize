@@ -12,7 +12,9 @@ aws-arn = "0.3.1"
 aws-sdk-sts = { version = "0.23.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 bitflags = "1.3.2"
 chrono = { version = "0.4.23", default-features = false, features = ["std"] }
+const_format = "0.2.30"
 enum-kinds = "0.5.1"
+fail = { version = "0.5.1", features = ["failpoints"] }
 globset = "0.4.9"
 hex = "0.4.3"
 http = "0.2.8"
@@ -27,6 +29,7 @@ mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-ore = { path = "../ore", features = ["chrono", "async"] }
+mz-persist-client = { path = "../persist-client" }
 mz-pgcopy = { path = "../pgcopy" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-postgres-util = { path = "../postgres-util" }
