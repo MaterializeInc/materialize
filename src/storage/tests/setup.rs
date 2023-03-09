@@ -347,6 +347,9 @@ where
                 //
                 // TODO(guswynn): consider using `AllowCompaction` here,
                 // if it works.
+                //
+                // TODO: Do not use `drop_dataflow`
+                #[allow(clippy::disallowed_methods)]
                 worker
                     .timely_worker
                     .drop_dataflow(worker.timely_worker.installed_dataflows()[0]);
