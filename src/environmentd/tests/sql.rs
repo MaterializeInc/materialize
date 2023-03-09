@@ -2430,3 +2430,71 @@ fn test_query_on_dropped_source() {
         )
     });
 }
+
+#[test]
+fn test_dont_drop_sinks_twice() {
+    let config = util::Config::default().workers(4);
+    let server = util::start_server(config).unwrap();
+
+    let (notice_tx, mut notice_rx) = futures::channel::mpsc::unbounded();
+
+    let (create_tx, create_rx) = futures::channel::oneshot::channel();
+    let (drop_tx, drop_rx) = futures::channel::oneshot::channel();
+
+    let mut client_a = server
+        .pg_config()
+        .notice_callback(move |notice| {
+            notice_tx.unbounded_send(notice).unwrap();
+        })
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    let handle_a = std::thread::spawn(move || {
+        client_a.batch_execute("CREATE TABLE t1 (a INT)").unwrap();
+        client_a.batch_execute("CREATE TABLE t2 (a INT)").unwrap();
+
+        create_tx.send(()).unwrap();
+
+        let _out = client_a
+            .copy_out("COPY (SUBSCRIBE (SELECT * FROM t1,t2)) TO STDOUT")
+            .unwrap();
+
+        // Keep the subscribe alive until we drop the underlying tables.
+        futures::executor::block_on(drop_rx).unwrap();
+
+        // Drop our client so the notice channel closes.
+        drop(_out);
+        drop(client_a);
+    });
+
+    // Drop the tables that the subscribe depend on in a second session.
+    let mut client_b = server.connect(postgres::NoTls).unwrap();
+
+    // Wait until the other thread finishes creating the tables.
+    futures::executor::block_on(create_rx).unwrap();
+
+    client_b
+        .batch_execute("INSERT INTO t1 SELECT generate_series(0, 10000)")
+        .unwrap();
+    client_b
+        .batch_execute("INSERT INTO t1 SELECT generate_series(0, 10000)")
+        .unwrap();
+    client_b.batch_execute("DROP TABLE t1").unwrap();
+    client_b.batch_execute("DROP TABLE t2").unwrap();
+
+    // Signal to the other thread that we've dropped the tables and thus it can end.
+    drop_tx.send(()).unwrap();
+    handle_a.join().unwrap();
+
+    // Assert we only got one message.
+    let mut msgs = vec![];
+    while let Ok(Some(msg)) = notice_rx.try_next() {
+        msgs.push(msg);
+    }
+    assert!(matches!(notice_rx.try_next(), Ok(None)));
+    assert_eq!(msgs.len(), 1);
+
+    // Assert the message it the one we expect
+    let msg = msgs.pop().unwrap();
+    assert!(msg.message().starts_with("subscribe has been terminated"));
+}
