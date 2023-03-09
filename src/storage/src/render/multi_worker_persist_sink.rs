@@ -339,6 +339,11 @@ where
                 match event {
                     Event::Data(_cap, _data) => {
                         // Just read away data.
+                        // TODO(guswynn): this, and the same code in the compute version of this
+                        // code, is inefficient, and can be improved.
+                        // See
+                        // <https://github.com/MaterializeInc/materialize/pull/17589#discussion_r1106016139>
+                        // for more info.
                         continue;
                     }
                     Event::Progress(frontier) => {
