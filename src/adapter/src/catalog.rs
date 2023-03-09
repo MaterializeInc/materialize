@@ -308,7 +308,10 @@ impl CatalogState {
             .map(|id| self.get_entry(id).name().item.clone())
             .collect();
 
-        if unstable_dependencies.is_empty() {
+        // It's okay to create a temporary object with unstable
+        // dependencies, since we will never need to reboot a catalog
+        // that contains it.
+        if unstable_dependencies.is_empty() || !item.is_temporary() {
             Ok(())
         } else {
             let object_type = item.typ().to_string();
@@ -316,7 +319,7 @@ impl CatalogState {
                 object_type,
                 unstable_dependencies,
             })
-        }
+        }}
     }
 
     pub fn resolve_full_name(
