@@ -194,3 +194,21 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 mv1             t1
 mv1             t2
 mv1_primary_idx mv1
+
+# Test that mz_compute_exports contains correct dataflow IDs.
+
+> CREATE MATERIALIZED VIEW my_unique_mv_name AS SELECT * FROM t1;
+
+> SELECT count(*)
+  FROM
+    mz_materialized_views mv,
+    mz_internal.mz_compute_exports exp,
+    mz_internal.mz_dataflows df
+  WHERE
+    mv.name = 'my_unique_mv_name' AND
+    mv.id = exp.export_id AND
+    exp.worker_id = 0 AND
+    exp.dataflow_id = df.local_id AND
+    df.worker_id = 0 AND
+    df.name LIKE '%my_unique_mv_name%';
+1

@@ -192,6 +192,8 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 .map(|(idx_id, (idx, _))| (*idx_id, idx.on_id));
             let exported_ids = index_ids.chain(sink_ids);
 
+            let dataflow_index = self.timely_worker.next_dataflow_index();
+
             // Initialize frontiers for each object, and optionally log their construction.
             for (object_id, collection_id) in exported_ids {
                 let reported_frontier = ReportedFrontier::NotReported {
@@ -209,16 +211,19 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
                 // Log dataflow construction, frontier construction, and any dependencies.
                 if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-                    logger.log(ComputeEvent::Dataflow(object_id, true));
+                    logger.log(ComputeEvent::Export {
+                        id: object_id,
+                        dataflow_index,
+                    });
                     logger.log(ComputeEvent::Frontier {
                         id: object_id,
                         time: timely::progress::Timestamp::minimum(),
                         diff: 1,
                     });
                     for import_id in dataflow.depends_on_imports(collection_id) {
-                        logger.log(ComputeEvent::DataflowDependency {
-                            dataflow: object_id,
-                            source: import_id,
+                        logger.log(ComputeEvent::ExportDependency {
+                            export_id: object_id,
+                            import_id,
                         })
                     }
                 }
@@ -250,7 +255,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                     .remove(&id)
                     .expect("Dropped compute collection with no frontier");
                 if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-                    logger.log(ComputeEvent::Dataflow(id, false));
+                    logger.log(ComputeEvent::ExportDropped { id });
                     if let Some(time) = prev_frontier.logging_time() {
                         logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
                     }
