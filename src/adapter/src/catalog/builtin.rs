@@ -2940,14 +2940,6 @@ IN CLUSTER mz_introspection
 ON mz_catalog.mz_columns (id)",
 };
 
-pub const MZ_SHOW_CLUSTERS_IND: BuiltinIndex = BuiltinIndex {
-    name: "mz_show_clusters_ind",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_show_clusters_ind
-IN CLUSTER mz_introspection
-ON mz_catalog.mz_clusters (name)",
-};
-
 pub const MZ_SHOW_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_cluster_replicas_ind",
     schema: MZ_INTERNAL_SCHEMA,
@@ -2962,6 +2954,47 @@ pub const MZ_SHOW_SECRETS_IND: BuiltinIndex = BuiltinIndex {
     sql: "CREATE INDEX mz_show_secrets_ind
 IN CLUSTER mz_introspection
 ON mz_catalog.mz_secrets (schema_id)",
+};
+
+pub const MZ_CLUSTERS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_clusters_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_clusters_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_clusters (id, name)",
+};
+
+pub const MZ_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_replicas_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_cluster_replicas_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_cluster_replicas (id, cluster_id, name, size, availability_zone)",
+};
+
+pub const MZ_CLUSTER_REPLICA_UTILIZATION_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_replica_utilization_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql:
+        "CREATE INDEX mz_cluster_replica_utilization_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_cluster_replica_utilization (replica_id, process_id, cpu_percent, memory_percent)",
+};
+
+pub const MZ_SOURCE_STATUSES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_source_statuses_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_source_statuses_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_source_statuses (id, name, type, last_status_change_at, status, error, details)",
+};
+
+pub const MZ_SOURCE_STATUS_HISTORY_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_source_status_history_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_source_status_history_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_source_status_history (occurred_at, source_id, status, error, details)",
 };
 
 pub static MZ_SYSTEM_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
@@ -3229,9 +3262,13 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_SHOW_ALL_OBJECTS_IND),
         Builtin::Index(&MZ_SHOW_INDEXES_IND),
         Builtin::Index(&MZ_SHOW_COLUMNS_IND),
-        Builtin::Index(&MZ_SHOW_CLUSTERS_IND),
         Builtin::Index(&MZ_SHOW_CLUSTER_REPLICAS_IND),
         Builtin::Index(&MZ_SHOW_SECRETS_IND),
+        Builtin::Index(&MZ_CLUSTERS_IND),
+        Builtin::Index(&MZ_CLUSTER_REPLICAS_IND),
+        Builtin::Index(&MZ_CLUSTER_REPLICA_UTILIZATION_IND),
+        Builtin::Index(&MZ_SOURCE_STATUSES_IND),
+        Builtin::Index(&MZ_SOURCE_STATUS_HISTORY_IND),
     ]);
 
     builtins
