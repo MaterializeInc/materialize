@@ -298,6 +298,11 @@ where
     let shutdown_button = mint_op.build(move |mut capabilities| async move {
         let mut cap_set = CapabilitySet::from_elem(capabilities.pop().expect("missing capability"));
 
+        if !active_worker {
+            // The non-active workers report that they are done snapshotting.
+            return;
+        }
+
         // Initialize this operators's `upper` to the `upper` of the persist shard we are writing
         // to. Data from the source not beyond this time will be dropped, as it has already
         // been persisted.
@@ -323,15 +328,7 @@ where
                 .await
                 .expect("could not open persist shard");
 
-            if active_worker {
-                // VERY IMPORTANT: Only the active write worker produces
-                // batch descriptions. All other worker simply drop their capability
-                // and stop working.
-                write.upper().clone()
-            } else {
-                // The non-active workers report that they are done snapshotting.
-                return;
-            }
+            write.upper().clone()
         };
 
         // The current input frontiers.
@@ -824,6 +821,12 @@ where
             Vec<(Batch<_, _, _, _>, BatchMetrics)>,
         >::new();
 
+        if !active_worker {
+            // The non-active workers report that they are done snapshotting.
+            source_statistics.initialize_snapshot_committed(&Antichain::<Timestamp>::new());
+            return;
+        }
+
         // TODO(aljoscha): We need to figure out what to do with error results from these calls.
         let persist_client = persist_clients
             .open(persist_location)
@@ -844,17 +847,11 @@ where
         // to. Data from the source not beyond this time will be dropped, as it has already
         // been persisted.
         // In the future, sources will avoid passing through data not beyond this upper
-        if active_worker {
-            // VERY IMPORTANT: Only the active write worker must change the
-            // shared upper. All other workers have already cleared this
-            // upper above.
-            current_upper.borrow_mut().clone_from(write.upper());
-            source_statistics.initialize_snapshot_committed(write.upper());
-        } else {
-            // The non-active workers report that they are done snapshotting.
-            source_statistics.initialize_snapshot_committed(&Antichain::<Timestamp>::new());
-            return;
-        }
+        // VERY IMPORTANT: Only the active write worker must change the
+        // shared upper. All other workers have already cleared this
+        // upper above.
+        current_upper.borrow_mut().clone_from(write.upper());
+        source_statistics.initialize_snapshot_committed(write.upper());
 
         // The current input frontiers.
         let mut batch_description_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
