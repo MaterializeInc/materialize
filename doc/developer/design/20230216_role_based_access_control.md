@@ -159,8 +159,6 @@ privileges of that role via `SET ROLE`. We will add the following SQL commands:
     - `GROUP` is ignored.
     - Default is `RESTRICT`.
 
-We will add the following options to `CREATE ROLE`:`IN ROLE`,`IN GROUP`,`ROLE`,`USER`.
-
 We will modify `DROP ROLE <role_name>` so that when `<role_name>` is dropped, all other roles have their membership
 revoked.
 
@@ -191,6 +189,7 @@ NOTE: Since we won't support `SET ROLE` yet, these functions will all behave ide
 - `GRANT` privileges.
 - `REVOKE` privileges.
 - `PUBLIC` alias for `<role>` in `GRANT` and `REVOKE`.
+- The following options to `CREATE ROLE`:`IN ROLE`,`IN GROUP`,`ROLE`,`USER`.
 
 #### Out of Scope for Project
 
@@ -374,9 +373,10 @@ We will update `DROP <object>` so that it revokes all privileges on `<object>`.
     - `TABLESPACE`
 - Adding the necessary pg views to support all role based `psql` meta-commands.
 
-### Phase 5 - Utility Commands (Optional)
+### Phase 5 - Utility Commands/Syntactic Sugar (Optional)
 
-This is an optional phase to add some utility commands present in PostgreSQL. We will add the following SQL commands:
+This is an optional phase to add some utility commands and syntactic sugar present in PostgreSQL. We will add the
+following SQL commands and options to existing commands:
 
 - `REASSIGN OWNED BY <old_role> TO <new_role>`
     - Transfers ownership of all objects owned by `<old_role>` to `<new_role>`.
@@ -393,6 +393,7 @@ This is an optional phase to add some utility commands present in PostgreSQL. We
       and have it affect all databases, including the databases themselves.
     - Revokes all privileges granted to `<name>`.
     - Default is `RESTRICT`.
+- The following options to `CREATE ROLE`:`IN ROLE`,`IN GROUP`,`ROLE`,`USER`.
 
 #### Out of Scope for Project
 
