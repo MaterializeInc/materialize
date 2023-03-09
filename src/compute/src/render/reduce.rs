@@ -156,11 +156,13 @@ where
         G::Timestamp: Lattice + Refines<T>,
         T: Timestamp + Lattice,
     {
-        let err = err_input.arrange_named("Arrange bundle err");
         match self {
             ArrangementOrCollection::Arrangement(arrangement) => CollectionBundle::from_columns(
                 0..key_arity,
-                ArrangementFlavor::Local(arrangement, err),
+                ArrangementFlavor::Local(
+                    arrangement,
+                    err_input.arrange_named("Arrange bundle err"),
+                ),
             ),
             ArrangementOrCollection::Collection(oks) => {
                 CollectionBundle::from_collections(oks, err_input)
