@@ -135,7 +135,7 @@ The following metadata is available for each source as a progress subsource:
 
 Field          | Type                                     | Meaning
 ---------------|------------------------------------------|--------
-`lsn`          | [`uint8`](/sql/types/uint/#uint8-info)   | The last Log Sequence Nubmer (LSN) consumed from the upstream PostgreSQL replication stream.
+`lsn`          | [`uint8`](/sql/types/uint/#uint8-info)   | The last Log Sequence Number (LSN) consumed from the upstream PostgreSQL replication stream.
 
 And can be queried using:
 

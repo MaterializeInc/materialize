@@ -30,7 +30,7 @@ This page describes how to connect Materialize to Kinesis Data Streams to read d
 Field | Use
 ------|-----
 _src_name_  | The name for the source.
-**EXPOSE PROGRESS AS** _progress_subsource_name_ | Name this source's progress collection `progress_subsource_name`; if this is not specified, Materialize names the progress collection `<src_name>_progress`. For details about the progress collection, see [Progress collection](#progress-collection).
+**EXPOSE PROGRESS AS** _progress_subsource_name_ | The name of the progress subsource for the source. If this is not specified, the subsource will be named `<src_name>_progress`. For more information, see [Monitoring source progress](#monitoring-source-progress).
 
 #### `format_spec`
 
@@ -88,7 +88,7 @@ FROM <src_name>_progress;
 ```
 
 As long as any offset continues increasing, Materialize is consuming data from
-the upstream Kafka broker. For more details on monitoring source ingestion
+the upstream Kinesis broker. For more details on monitoring source ingestion
 progress and debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
 
 ## Authentication
