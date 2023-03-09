@@ -104,7 +104,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
+use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::arrange::Arrange;
+use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::AsCollection;
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
@@ -129,6 +132,7 @@ use mz_timely_util::probe::{self, ProbeNotify};
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::logging::compute::LogImportFrontiers;
+use crate::typedefs::ErrSpine;
 pub use context::CollectionBundle;
 use context::{ArrangementFlavor, Context};
 
@@ -552,7 +556,6 @@ where
 
         match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
-                use differential_dataflow::operators::arrange::Arrange;
                 let oks = oks
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .leave()
@@ -588,8 +591,6 @@ where
         };
     }
 }
-
-use differential_dataflow::dynamic::pointstamp::PointStamp;
 
 impl<G> Context<G, Row>
 where
@@ -642,11 +643,17 @@ where
                 oks_v.set(&oks.consolidate_named::<RowKeySpine<_, _, _>>("LetRecConsolidation"));
                 // Set err variable to the distinct elements of `err`.
                 // Distinctness is important, as we otherwise might add the same error each iteration,
-                // say if the limit of `oks` has an error. This would result in non-terminatino rather
-                // than a clean report of the error. The trade-off is that we lose informatino about
+                // say if the limit of `oks` has an error. This would result in non-terminating rather
+                // than a clean report of the error. The trade-off is that we lose information about
                 // multiplicities of errors, but .. this seems to be the better call.
-                use differential_dataflow::operators::Threshold;
-                err_v.set(&err.distinct_core());
+                err_v.set(
+                    &err.arrange_named::<ErrSpine<DataflowError, _, _>>("Arrange recursive err")
+                        .reduce_abelian::<_, ErrSpine<_, _, _>>(
+                            "Distinct recursive err",
+                            move |k, s, t| t.push(((), 1)),
+                        )
+                        .as_collection(|k, _| k.clone()),
+                );
             }
             // Now extract each of the bindings into the outer scope.
             for id in ids.into_iter() {
