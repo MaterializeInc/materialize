@@ -15,7 +15,8 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
+use differential_dataflow::operators::arrange::Arrange;
+use differential_dataflow::trace::implementations::ord::ColValSpine;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use timely::dataflow::Scope;
 use tracing::warn;
@@ -174,7 +175,9 @@ where
     //   (As part of doing so, it asserts that there are not multiple conflicting values at the same timestamp)
     let collection = match sink.envelope {
         Some(SinkEnvelope::Debezium) => {
-            let combined = combine_at_timestamp(keyed.arrange_by_key().stream);
+            let combined = combine_at_timestamp(
+                keyed.arrange_named::<ColValSpine<_, _, _, _>>("Arrange Debezium"),
+            );
 
             // if there is no user-specified key, remove the synthetic
             // distribution key again
@@ -202,7 +205,9 @@ where
             collection
         }
         Some(SinkEnvelope::Upsert) => {
-            let combined = combine_at_timestamp(keyed.arrange_by_key().stream);
+            let combined = combine_at_timestamp(
+                keyed.arrange_named::<ColValSpine<_, _, _, _>>("Arrange Upsert"),
+            );
 
             let from_id = sink.from;
             let collection = combined.flat_map(move |(mut k, v)| {

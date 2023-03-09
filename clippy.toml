@@ -17,7 +17,17 @@ disallowed-methods = [
 
     { path = "aws_sdk_s3::Client::new", reason = "use the `mz_aws_s3_util::new_client` function instead" },
 
+    # Prevent access to Differential APIs that want to use the default trace.
     { path = "differential_dataflow::Collection::consolidate", reason = "use the `differential_dataflow::Collection::consolidate_named` function instead" },
+    { path = "differential_dataflow::operators::arrange::arrangement::Arrange::arrange", reason = "use the `arrange_named` function instead" },
+    { path = "differential_dataflow::operators::arrange::arrangement::ArrangeByKey::arrange_by_key", reason = "use the `Arrange::arrange_named` function instead" },
+    { path = "differential_dataflow::operators::arrange::arrangement::ArrangeByKey::arrange_by_key_named", reason = "use the `Arrange::arrange_named` function instead" },
+    { path = "differential_dataflow::operators::arrange::arrangement::ArrangeBySelf::arrange_by_self", reason = "use the `Arrange::arrange_named` function instead" },
+    { path = "differential_dataflow::operators::arrange::arrangement::ArrangeBySelf::arrange_by_self_named", reason = "use the `Arrange::arrange_named` function instead" },
+    { path = "differential_dataflow::operators::reduce::Count::count_core", reason = "use the `differential_dataflow::operators::reduce::ReduceCore::reduce_abelian` function instead" },
+    { path = "differential_dataflow::operators::reduce::Reduce::reduce_named", reason = "use the `differential_dataflow::operators::reduce::ReduceCore::reduce_abelian` function instead" },
+
+    # Prevent access to Timely APIs with untested semantics.
     { path = "timely::worker::Worker::drop_dataflow", reason = "Might break logging dataflows, check with #team-compute." },
 ]
 

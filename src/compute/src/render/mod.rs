@@ -556,12 +556,12 @@ where
                 let oks = oks
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .leave()
-                    .arrange();
+                    .arrange_named("Arrange export iterative");
                 oks.stream.probe_notify_with(probes);
                 let errs = errs
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .leave()
-                    .arrange();
+                    .arrange_named("Arrange export iterative err");
                 compute_state.traces.set(
                     idx_id,
                     TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),

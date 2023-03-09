@@ -12,7 +12,7 @@
 //! Consult [ThresholdPlan] documentation for details.
 
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::operators::arrange::{Arrange, Arranged, TraceAgent};
 use differential_dataflow::operators::reduce::ReduceCore;
 use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
@@ -71,8 +71,9 @@ where
         }
         ArrangementFlavor::Trace(_, oks, errs) => {
             let oks = threshold_arrangement(&oks, "Threshold trace", |count| *count > 0);
-            use differential_dataflow::operators::arrange::ArrangeBySelf;
-            let errs = errs.as_collection(|k, _| k.clone()).arrange_by_self();
+            let errs = errs
+                .as_collection(|k, _| k.clone())
+                .arrange_named("Arrange threshold basic err");
             CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
         }
     }

@@ -210,14 +210,12 @@ where
             G: Scope,
             G::Timestamp: Lattice,
         {
-            use differential_dataflow::operators::Reduce;
-
             let input = collection.map(move |((key, hash), row)| ((key, hash % modulus), row));
             // We only want to arrange parts of the input that are not part of the actual output
             // such that `input.concat(&negated_output.negate())` yields the correct TopK
             let negated_output = input
                 .arrange_named::<RowSpine<(Row, u64), _, _, _>>("Arranged TopK input")
-                .reduce_named("Reduced TopK input", {
+                .reduce_abelian::<_, RowSpine<_, _, _, _>>("Reduced TopK input", {
                     move |_key, source, target: &mut Vec<(Row, Diff)>| {
                         // Determine if we must actually shrink the result set.
                         // TODO(benesch): avoid dangerous `as` conversion.
@@ -286,7 +284,8 @@ where
                             }
                         }
                     }
-                });
+                })
+                .as_collection(|k, v| (k.clone(), v.clone()));
 
             negated_output
                 .negate()
