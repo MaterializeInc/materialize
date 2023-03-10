@@ -212,7 +212,11 @@ class Composition:
         self.file.flush()
 
     def invoke(
-        self, *args: str, capture: bool = False, stdin: Optional[str] = None
+        self,
+        *args: str,
+        capture: bool = False,
+        stdin: Optional[str] = None,
+        check: bool = True,
     ) -> subprocess.CompletedProcess:
         """Invoke `docker compose` on the rendered composition.
 
@@ -242,7 +246,7 @@ class Composition:
                     *args,
                 ],
                 close_fds=False,
-                check=True,
+                check=check,
                 stdout=stdout,
                 input=stdin,
                 text=True,
@@ -452,6 +456,7 @@ class Composition:
         capture: bool = False,
         stdin: Optional[str] = None,
         entrypoint: Optional[str] = None,
+        check: bool = True,
     ) -> subprocess.CompletedProcess:
         """Run a one-off command in a service.
 
@@ -483,6 +488,7 @@ class Composition:
             *args,
             capture=capture,
             stdin=stdin,
+            check=check,
         )
 
     def exec(
@@ -824,6 +830,9 @@ class ServiceConfig(TypedDict, total=False):
     healthcheck: ServiceHealthcheck
     """Configuration for a check to determine whether the containers for this
     service are healthy."""
+
+    restart: str
+    """Restart policy."""
 
 
 class Service:
