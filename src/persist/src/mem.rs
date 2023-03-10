@@ -19,7 +19,7 @@ use mz_ore::cast::CastFrom;
 
 use crate::error::Error;
 use crate::location::{
-    Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData,
+    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, SeqNo, VersionedData,
 };
 
 /// An in-memory representation of a set of [Log]s and [Blob]s that can be reused
@@ -192,7 +192,7 @@ impl Consensus for MemConsensus {
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
-    ) -> Result<Result<(), Vec<VersionedData>>, ExternalError> {
+    ) -> Result<CaSResult, ExternalError> {
         if let Some(expected) = expected {
             if new.seqno <= expected {
                 return Err(ExternalError::from(
@@ -217,13 +217,12 @@ impl Consensus for MemConsensus {
         let seqno = data.as_ref().map(|data| data.seqno);
 
         if seqno != expected {
-            let from = expected.map_or_else(SeqNo::minimum, |x| x.next());
-            return Ok(Err(Self::scan_store(&store, key, from, usize::MAX)?));
+            return Ok(CaSResult::ExpectationMismatch);
         }
 
         store.entry(key.to_string()).or_default().push(new);
 
-        Ok(Ok(()))
+        Ok(CaSResult::Committed)
     }
 
     async fn scan(

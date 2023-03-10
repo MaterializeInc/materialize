@@ -21,7 +21,8 @@ use rand::{Rng, SeedableRng};
 use tracing::trace;
 
 use crate::location::{
-    Atomicity, Blob, BlobMetadata, Consensus, Determinate, ExternalError, SeqNo, VersionedData,
+    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, Determinate, ExternalError, SeqNo,
+    VersionedData,
 };
 
 #[derive(Debug)]
@@ -193,7 +194,7 @@ impl Consensus for UnreliableConsensus {
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
-    ) -> Result<Result<(), Vec<VersionedData>>, ExternalError> {
+    ) -> Result<CaSResult, ExternalError> {
         self.handle
             .run_op("compare_and_set", || {
                 self.consensus.compare_and_set(key, expected, new)

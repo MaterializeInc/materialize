@@ -21,7 +21,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::{
-    Atomicity, Blob, Consensus, Indeterminate, SeqNo, VersionedData, SCAN_ALL,
+    Atomicity, Blob, CaSResult, Consensus, Indeterminate, SeqNo, VersionedData, SCAN_ALL,
 };
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
@@ -173,13 +173,11 @@ impl StateVersions {
         })
         .await;
         match cas_res {
-            Ok(()) => Ok(initial_state),
-            Err(live_diffs) => {
-                // We lost a CaS race and someone else initialized the shard,
-                // use the value included in the CaS expectation error.
-
+            CaSResult::Committed => Ok(initial_state),
+            CaSResult::ExpectationMismatch => {
+                let recent_live_diffs = self.fetch_recent_live_diffs::<T>(&shard_id).await;
                 let state = self
-                    .fetch_current_state(&shard_id, live_diffs)
+                    .fetch_current_state(&shard_id, recent_live_diffs.0)
                     .await
                     .check_codecs(&shard_id);
 
@@ -221,7 +219,7 @@ impl StateVersions {
         expected: Option<SeqNo>,
         new_state: &TypedState<K, V, T, D>,
         diff: &StateDiff<T>,
-    ) -> Result<Result<(), Vec<VersionedData>>, Indeterminate>
+    ) -> Result<CaSResult, Indeterminate>
     where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -264,7 +262,7 @@ impl StateVersions {
         })?;
 
         match cas_res {
-            Ok(()) => {
+            CaSResult::Committed => {
                 trace!(
                     "apply_unbatched_cmd {} succeeded {}\n  new_state={:?}",
                     cmd_name,
@@ -296,17 +294,16 @@ impl StateVersions {
                 shard_metrics
                     .encoded_diff_size
                     .inc_by(u64::cast_from(payload_len));
-                Ok(Ok(()))
+                Ok(CaSResult::Committed)
             }
-            Err(live_diffs) => {
+            CaSResult::ExpectationMismatch => {
                 debug!(
-                    "apply_unbatched_cmd {} {} lost the CaS race, retrying: {:?} vs {:?}",
+                    "apply_unbatched_cmd {} {} lost the CaS race, retrying: {:?}",
                     new_state.shard_id(),
                     cmd_name,
                     expected,
-                    live_diffs.last().map(|x| x.seqno)
                 );
-                Ok(Err(live_diffs))
+                Ok(CaSResult::ExpectationMismatch)
             }
         }
     }
@@ -407,9 +404,11 @@ impl StateVersions {
             .first()
             .map_or(true, |x| x.seqno == seqno_before.next());
         if diffs_apply {
+            self.metrics.state.update_state_fast_path.inc();
             state.apply_encoded_diffs(&self.cfg, &self.metrics, &diffs_to_current);
             Ok(())
         } else {
+            self.metrics.state.update_state_slow_path.inc();
             let recent_live_diffs = self.fetch_recent_live_diffs::<T>(&state.shard_id).await;
             *state = self
                 .fetch_current_state(&state.shard_id, recent_live_diffs.0)

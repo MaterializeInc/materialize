@@ -21,7 +21,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{
-    Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData,
+    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, SeqNo, VersionedData,
 };
 use prometheus::proto::{MetricFamily, MetricType};
 use tracing::{info, warn};
@@ -313,9 +313,9 @@ impl Consensus for ReadOnly<Arc<dyn Consensus + Sync + Send>> {
         key: &str,
         _expected: Option<SeqNo>,
         _new: VersionedData,
-    ) -> Result<Result<(), Vec<VersionedData>>, ExternalError> {
+    ) -> Result<CaSResult, ExternalError> {
         warn!("ignoring cas({key}) in read-only mode");
-        Ok(Ok(()))
+        Ok(CaSResult::Committed)
     }
 
     async fn scan(
