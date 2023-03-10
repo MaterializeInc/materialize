@@ -27,15 +27,18 @@ use mz_ore::vec::VecExt;
 use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
-use timely::dataflow::{Scope, ScopeParent, Stream};
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::{Capability, CapabilitySet};
+use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::sync::mpsc;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::trace;
 
 use crate::cache::PersistClientCache;
+use crate::cfg::PersistConfig;
 use crate::fetch::{FetchedPart, SerdeLeasedBatchPart};
 use crate::read::ListenEvent;
 use crate::{PersistLocation, ShardId};
@@ -546,25 +549,196 @@ where
                 .await
         };
 
-        while let Some(event) = descs_input.next_mut().await {
-            if let Event::Data(cap, data) = event {
-                // `LeasedBatchPart`es cannot be dropped at this point w/o
-                // panicking, so swap them to an owned version.
-                for (_idx, part) in data.drain(..) {
-                    let (leased_part, fetched) = fetcher
-                        .fetch_leased_part(fetcher.leased_part_from_exchangeable(part))
-                        .await;
-                    let fetched = fetched.expect("shard_id should match across all workers");
+        // We use two channels to buffer up and pipeline reads to Blob, to ensure we can adhere
+        // to a strict memory bound while taking advantage of concurrent network calls.
+        //
+        // The first channel, `queue` is used to store all parts we know to fetch but have not yet
+        // submitted network requests for. Each time we read in a Batch desc, we atomically add all
+        // of its parts to this queue. We soft limit the size of this queue to MAX_QUEUE_SIZE.
+        //
+        // The second channel, `pipelined_fetches` contains the parts we actively have network
+        // calls out for. This channel's size is limited in terms of inflight bytes (sum of part
+        // size of all fetched parts), set to MAX_INFLIGHT_BYTES. The receiver is wrapped in a
+        // ReceiverStream that concurrently fetches up to MAX_FETCH_CONCURRENCY parts at once.
+        const MAX_QUEUE_SIZE: usize = 25;
+        const MAX_INFLIGHT_BYTES: usize = 3 * PersistConfig::DEFAULT_BLOB_TARGET_SIZE;
+        const MAX_FETCH_CONCURRENCY: usize = 5;
+        let (queue_tx, mut queue_rx) = mpsc::unbounded_channel::<((Capability<T>, Capability<T>), SerdeLeasedBatchPart)>();
+        let (pipelined_fetches_tx, pipelined_fetches_rx) = mpsc::unbounded_channel::<((Capability<T>, Capability<T>), SerdeLeasedBatchPart)>();
+        let pipelined_fetches_stream = UnboundedReceiverStream::new(pipelined_fetches_rx);
+
+        let mut fetched_parts = pipelined_fetches_stream.map(|(capabilities, part)| async {
+            let fetcher = fetcher.clone();
+            // we want our part fetches to occur in separate tasks to avoid any risk of them
+            // not being polled if the timely thread were to yield for a long period of time
+            let part_name = part.name();
+            let fetched = mz_ore::task::spawn(|| part_name, async move {
+                fetcher.fetch_leased_part(fetcher.leased_part_from_exchangeable(part)).await
+            }).await.expect("task to complete");
+            (capabilities, fetched)
+        }).buffered(MAX_FETCH_CONCURRENCY);
+
+        let mut queued_parts = 0;
+        let mut pipelined_bytes = 0;
+        'enqueued_and_fetch_parts:
+        loop {
+            // For as long as we have memory available and queued up parts, drain the queued
+            // parts into our fetch pipeline. We may overshoot our MAX_INFLIGHT_BYTES by the
+            // size of 1 part.
+            while pipelined_bytes < MAX_INFLIGHT_BYTES {
+                if let Ok((capabilities, part)) = queue_rx.try_recv() {
+                    let part_size = part.encoded_size_bytes;
+                    if let Ok(_) = pipelined_fetches_tx.send((capabilities, part)) {
+                        pipelined_bytes += part_size;
+                        queued_parts -= 1
+                    }
+                } else {
+                    break;
+                }
+            }
+
+            tokio::select! {
+                // We use a biased select to emit any fetched parts before looking for new
+                // input, and use a precondition to ensure we drain the pipeline if we've hit
+                // our max queue size.
+                biased;
+
+                // First, check to see if we've finished fetching any parts from blob storage.
+                // If we have filled our queue up to capacity, we will wait indefinitely on
+                // this stream.
+                //
+                // StreamExt::next is cancel safe.
+                Some(((fetched_cap, token_cap), (token, fetched))) = fetched_parts.next() => {
+                    pipelined_bytes -= token.encoded_size_bytes;
+                    let fetched: FetchedPart<K, V, T, D> = fetched.expect("shard_id should match across all workers");
                     {
                         // Do very fine-grained output activation/session
                         // creation to ensure that we don't hold activated
                         // outputs or sessions across await points, which
                         // would prevent messages from being flushed from
                         // the shared timely output buffer.
-                        fetched_output.give(&cap, fetched).await;
-                        completed_fetches_output
-                            .give(&cap, leased_part.into_exchangeable_part())
-                            .await;
+                        fetched_output.give(&fetched_cap, fetched).await;
+                        tokens_output.give(&token_cap, token.into_exchangeable_part()).await;
+                    }
+                }
+                // If we have space in our queue, find the next parts to add to our queue.
+                //
+                // AsyncInputHandle::next_mut is cancel safe.
+                event = descs_input.next_mut(), if queued_parts < MAX_QUEUE_SIZE => {
+                    match event {
+                        Some(Event::Data(cap, data)) => {
+                            // we need to retain a capability for each output. the `delayed_for_output`
+                            // is a bit of a workaround to create two owned capabilities, as `retain`
+                            // and `retain_for_output` consume the input capability.
+                            let fetched_cap = cap.delayed_for_output(cap.time(), 0);
+                            let token_cap = cap.retain_for_output(1);
+                            for (_idx, part) in data.drain(..) {
+                                if let Ok(_) = queue_tx.send(((fetched_cap.clone(), token_cap.clone()), part)) {
+                                    queued_parts += 1
+                                }
+                            }
+                        }
+                        Some(Event::Progress(_)) => {}
+                        None => {
+                            drop(queue_tx);
+                            break 'enqueued_and_fetch_parts;
+                        }
+                    }
+                }
+                else => {
+                    break 'enqueued_and_fetch_parts;
+                }
+            };
+        }
+
+        // drain any remaining queued up parts while continuing to adhere to our memory limit
+        'drain_queue:
+        loop {
+            while pipelined_bytes < MAX_INFLIGHT_BYTES {
+                if let Ok((capabilities, part)) = queue_rx.try_recv() {
+                    let part_size = part.encoded_size_bytes;
+                    if let Ok(_) = pipelined_fetches_tx.send((capabilities, part)) {
+                        pipelined_bytes += part_size;
+                        queued_parts -= 1
+                    }
+                } else {
+                    drop(pipelined_fetches_tx);
+                    break 'drain_queue;
+                }
+            }
+
+            match fetched_parts.next().await {
+                Some(((fetched_cap, token_cap), (token, fetched))) => {
+                    pipelined_bytes -= token.encoded_size_bytes;
+                    let fetched: FetchedPart<K, V, T, D> = fetched.expect("shard_id should match across all workers");
+                    {
+                        fetched_output.give(&fetched_cap, fetched).await;
+                        tokens_output.give(&token_cap, token.into_exchangeable_part()).await;
+                    }
+                }
+                None => return
+            }
+        }
+
+        // drain any remaining pipelined parts
+        // ... yes, this section was repeated 3 times. it can probably be cleaned up
+        while let Some(((fetched_cap, token_cap), (token, fetched))) = fetched_parts.next().await {
+            pipelined_bytes -= token.encoded_size_bytes;
+            let fetched: FetchedPart<K, V, T, D> = fetched.expect("shard_id should match across all workers");
+            {
+                fetched_output.give(&fetched_cap, fetched).await;
+                tokens_output.give(&token_cap, token.into_exchangeable_part()).await;
+            }
+        }
+    });
+
+    (fetched_stream, tokens_stream)
+}
+
+pub(crate) fn shard_source_tokens<T, G>(
+    tokens: &Stream<G, SerdeLeasedBatchPart>,
+    name: &str,
+    consumed_part_tx: mpsc::UnboundedSender<SerdeLeasedBatchPart>,
+    chosen_worker: usize,
+) where
+    T: Timestamp + Lattice + Codec64,
+    G: Scope<Timestamp = T>,
+{
+    let worker_index = tokens.scope().index();
+
+    // This operator is meant to only run on the chosen worker. All workers will
+    // exchange their fetched ("consumed") parts back to the leasor.
+    let mut builder =
+        OperatorBuilder::new(format!("shard_source_tokens({})", name), tokens.scope());
+
+    // Exchange all "consumed" parts back to the chosen worker/leasor.
+    let mut tokens_input = builder.new_input(
+        tokens,
+        Exchange::new(move |_| u64::cast_from(chosen_worker)),
+    );
+
+    let name = name.to_owned();
+    builder.build(|_initial_capabilities| {
+        let mut buffer = Vec::new();
+
+        move |_frontiers| {
+            // The chosen worker is the leasor because it issues batches.
+            if worker_index != chosen_worker {
+                trace!("We are not the batch leasor for {:?}, exiting...", name);
+                return;
+            }
+
+            while let Some((_cap, data)) = tokens_input.next() {
+                data.swap(&mut buffer);
+
+                for part in buffer.drain(..) {
+                    if let Err(mpsc::error::SendError(_part)) = consumed_part_tx.send(part) {
+                        // Subscribe loop dropped, which drops its ReadHandle,
+                        // which in turn drops all leases, so doing anything
+                        // else here is both moot and impossible.
+                        //
+                        // The parts we tried to send will just continue being
+                        // `SerdeLeasedBatchPart`'es.
                     }
                 }
             }

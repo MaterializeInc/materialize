@@ -4331,6 +4331,7 @@ dependencies = [
  "tempfile",
  "timely",
  "tokio",
+ "tokio-stream",
  "tracing",
  "uuid",
  "workspace-hack",
