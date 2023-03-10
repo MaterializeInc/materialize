@@ -65,7 +65,6 @@ where
 {
     let mut err_collection = err_input;
     // Convenience wrapper to render the right kind of hierarchical plan.
-    let mut err_collection = err_input;
     let mut build_hierarchical =
         |collection: Collection<G, (Row, Row), Diff>, expr: HierarchicalPlan| match expr {
             HierarchicalPlan::Monotonic(expr) => build_monotonic(debug_name, collection, expr),
@@ -104,17 +103,17 @@ where
             // First, we need to render our constituent aggregations.
             let mut to_collate = vec![];
 
-            if let Some(accumulable) = expr.accumulable {
-                let (arranged_output, errs) =
-                    build_accumulable(debug_name, collection.clone(), accumulable);
-                err_collection = err_collection.concat(&errs);
-                to_collate.push((ReductionType::Accumulable, arranged_output));
-            }
             if let Some(hierarchical) = expr.hierarchical {
                 to_collate.push((
                     ReductionType::Hierarchical,
                     build_hierarchical(collection.clone(), hierarchical),
                 ));
+            }
+            if let Some(accumulable) = expr.accumulable {
+                let (arranged_output, errs) =
+                    build_accumulable(debug_name, collection.clone(), accumulable);
+                err_collection = err_collection.concat(&errs);
+                to_collate.push((ReductionType::Accumulable, arranged_output));
             }
             if let Some(basic) = expr.basic {
                 to_collate.push((ReductionType::Basic, build_basic(collection.clone(), basic)));
@@ -791,7 +790,6 @@ where
         })
         .as_collection(|k,v| (k.clone(), v.clone()))
         .map_fallible("Checked Invalid Accumulations", |(key, result)| {
-            use mz_expr::EvalError;
             match result {
                 Err(message) => Err(EvalError::Internal(message).into()),
                 Ok(values) => Ok((key, values)),
