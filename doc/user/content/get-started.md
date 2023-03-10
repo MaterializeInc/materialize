@@ -298,6 +298,12 @@ That's it! You just created your first transformations on streaming data using c
 DROP SCHEMA qck CASCADE;
 
 DROP CLUSTER quickstart;
+
+-- Reset the session variables to their original values,
+-- so you can keep exploring
+RESET search_path;
+
+RESET cluster;
 ```
 
 For a more comprehensive overview of the basic concepts behind Materialize, take a break and read through ["What is Materialize?"](/overview/what-is-materialize).
