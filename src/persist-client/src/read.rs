@@ -15,6 +15,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::Stream;
@@ -855,9 +856,31 @@ where
             .await
             .expect("cannot serve requested as_of")
     }
+}
 
-    /// Generates a [Self::snapshot], and fetches all of the batches
-    /// it contains.
+impl<K, V, T, D> ReadHandle<K, V, T, D>
+where
+    K: Debug + Codec + Ord,
+    V: Debug + Codec + Ord,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
+    /// Generates a [Self::snapshot], and fetches all of the batches it
+    /// contains.
+    ///
+    /// The output is consolidated. Furthermore, to keep memory usage down when
+    /// reading a snapshot that consolidates well, this consolidates as it goes.
+    ///
+    /// Potential future improvements (if necessary):
+    /// - Accept something like a `F: Fn(K,V) -> (K,V)` argument, which looks
+    ///   like an MFP you might be pushing down. Reason being that if you are
+    ///   projecting or transforming in a way that allows further consolidation,
+    ///   amazing.
+    /// - The parts are already sorted by `(K, V, T)`, which means we could do a
+    ///   streaming consolidate within a part by walking through each `(K, V)`
+    ///   pair. (This would be pushed up into FetchedPart.)
+    /// - Reuse any code we write to streaming-merge consolidate in
+    ///   persist_source here.
     pub async fn snapshot_and_fetch(
         &mut self,
         as_of: Antichain<T>,
@@ -865,6 +888,8 @@ where
         let snap = self.snapshot(as_of).await?;
 
         let mut contents = Vec::new();
+        let mut last_consolidate_len = 0;
+        let mut is_consolidated = true;
         for part in snap {
             let (part, fetched_part) = fetch_leased_part(
                 part,
@@ -876,6 +901,28 @@ where
             .await;
             self.process_returned_leased_part(part);
             contents.extend(fetched_part);
+            // NB: If FetchedPart learns to streaming consolidate its output,
+            // this can stay true for the first part (and more generally as long
+            // as contents was empty before we added it to contents).
+            is_consolidated = false;
+
+            // If the size of contents has doubled since the last consolidated
+            // size, try consolidating it again.
+            //
+            // Note that parts are internally consolidated, but we advance the
+            // timestamp to the as_of, so even the first part might benefit from
+            // consolidation.
+            if contents.len() >= last_consolidate_len * 2 {
+                consolidate_updates(&mut contents);
+                last_consolidate_len = contents.len();
+                is_consolidated = true
+            }
+        }
+
+        // Note that if there is only one part, it's consolidated in the loop
+        // above, and we don't consolidate it again here.
+        if !is_consolidated {
+            consolidate_updates(&mut contents);
         }
         Ok(contents)
     }
