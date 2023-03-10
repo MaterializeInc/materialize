@@ -2964,6 +2964,14 @@ IN CLUSTER mz_introspection
 ON mz_catalog.mz_secrets (schema_id)",
 };
 
+pub const MZ_CLUSTER_REPLICA_UTILIZATION_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_replica_utilization_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_cluster_replica_utilization_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_cluster_replica_utilization (replica_id)"
+};
+
 pub static MZ_SYSTEM_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*SYSTEM_USER.name,
     attributes: RoleAttributes::new().with_all(),
@@ -3232,6 +3240,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_SHOW_CLUSTERS_IND),
         Builtin::Index(&MZ_SHOW_CLUSTER_REPLICAS_IND),
         Builtin::Index(&MZ_SHOW_SECRETS_IND),
+        Builtin::Index(&MZ_CLUSTER_REPLICA_UTILIZATION_IND),
     ]);
 
     builtins
