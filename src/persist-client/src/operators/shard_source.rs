@@ -309,8 +309,6 @@ where
                     }
                     Some(Ok(ListenEvent::Progress(progress))) => {
                         let session_cap = cap_set.delayed(&current_ts);
-                        let mut descs_output = descs_output.activate();
-                        let mut descs_session = descs_output.session(&session_cap);
 
                         // NB: in order to play nice with downstream operators whose invariants
                         // depend on seeing the full contents of an individual batch, we must
@@ -328,7 +326,7 @@ where
                                 // doing instead here, but this has seemed to work
                                 // okay so far. Continue to revisit as necessary.
                                 let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
-                                descs_session.give((worker_idx, part_desc.into_exchangeable_part()));
+                                descs_output.give(&session_cap, (worker_idx, part_desc.into_exchangeable_part())).await;
                             }
                             bytes_emitted
                         };
@@ -480,12 +478,10 @@ where
                         // outputs or sessions across await points, which
                         // would prevent messages from being flushed from
                         // the shared timely output buffer.
-                        let mut fetched_output = fetched_output.activate();
-                        let mut tokens_output = tokens_output.activate();
-                        fetched_output.session(&cap).give(fetched);
+                        fetched_output.give(&cap, fetched).await;
                         tokens_output
-                            .session(&cap)
-                            .give(token.into_exchangeable_part());
+                            .give(&cap, token.into_exchangeable_part())
+                            .await;
                     }
                 }
             }
