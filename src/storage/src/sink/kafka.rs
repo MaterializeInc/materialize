@@ -25,7 +25,7 @@ use maplit::btreemap;
 use prometheus::core::AtomicU64;
 use rdkafka::client::ClientContext;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
-use rdkafka::error::{KafkaError, KafkaResult, RDKafkaErrorCode};
+use rdkafka::error::{KafkaError, KafkaResult, RDKafkaError, RDKafkaErrorCode};
 use rdkafka::message::{Header, Message, OwnedHeaders, OwnedMessage, ToBytes};
 use rdkafka::producer::Producer;
 use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedProducer};
@@ -920,9 +920,25 @@ impl KafkaSinkState {
         match result {
             Ok(t) => t,
             Err(error) => {
+                let hint: Option<String> =
+                    error
+                        .downcast_ref::<RDKafkaError>()
+                        .and_then(|kafka_error| {
+                            if kafka_error.is_retriable()
+                                && kafka_error.code() == RDKafkaErrorCode::OperationTimedOut
+                            {
+                                Some("If you're running a single Kafka broker, ensure that the following configs are set to 1 on the broker:\n
+                                    - transaction.state.log.replication.factor\n
+                                    - transaction.state.log.min.isr\n
+                                    - offsets.topic.replication.factor".to_string())
+                            } else {
+                                None
+                            }
+                        });
+
                 self.update_status(SinkStatus::Stalled {
                     error: error.to_string(),
-                    hint: None,
+                    hint,
                 })
                 .await;
                 self.internal_cmd_tx.borrow_mut().broadcast(
