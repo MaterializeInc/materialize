@@ -22,11 +22,11 @@ pub(crate) fn print_region_enabled(cloud_provider_and_region: &CloudProviderAndR
     match region {
         Some(_) => println!(
             "{:}/{:}  enabled",
-            cloud_provider.provider, cloud_provider.region
+            cloud_provider.cloud_provider, cloud_provider.name
         ),
         None => println!(
             "{:}/{:}  disabled",
-            cloud_provider.provider, cloud_provider.region
+            cloud_provider.cloud_provider, cloud_provider.name
         ),
     };
 }

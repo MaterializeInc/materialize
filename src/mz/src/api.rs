@@ -91,10 +91,17 @@ impl Environment {
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct CloudProviderResponse {
+    pub data: Vec<CloudProvider>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct CloudProvider {
-    pub region: String,
-    pub region_controller_url: String,
-    pub provider: String,
+    pub id: String,
+    pub name: String,
+    pub api_url: String,
+    pub cloud_provider: String,
 }
 
 pub struct CloudProviderAndRegion {
@@ -128,13 +135,7 @@ pub async fn enable_region_environment(
     };
 
     client
-        .post(
-            format!(
-                "{:}/api/environmentassignment",
-                cloud_provider.region_controller_url
-            )
-            .as_str(),
-        )
+        .post(format!("{:}/api/environmentassignment", cloud_provider.api_url).as_str())
         .authenticate(&valid_profile.frontegg_auth)
         .json(&body)
         .send()
@@ -150,13 +151,7 @@ pub async fn disable_region_environment(
     valid_profile: &ValidProfile<'_>,
 ) -> Result<(), reqwest::Error> {
     client
-        .delete(
-            format!(
-                "{:}/api/environmentassignment",
-                cloud_provider.region_controller_url
-            )
-            .as_str(),
-        )
+        .delete(format!("{:}/api/environmentassignment", cloud_provider.api_url).as_str())
         .authenticate(&valid_profile.frontegg_auth)
         .send()
         .await?
@@ -170,7 +165,7 @@ pub async fn get_cloud_provider_region_details(
     cloud_provider_region: &CloudProvider,
     valid_profile: &ValidProfile<'_>,
 ) -> Result<Vec<Region>, anyhow::Error> {
-    let mut region_api_url = cloud_provider_region.region_controller_url.clone();
+    let mut region_api_url = cloud_provider_region.api_url.clone();
     region_api_url.push_str("/api/environmentassignment");
 
     let response = client
@@ -245,13 +240,13 @@ pub async fn list_regions(
 pub async fn list_cloud_providers(
     client: &Client,
     valid_profile: &ValidProfile<'_>,
-) -> Result<Vec<CloudProvider>, Error> {
+) -> Result<CloudProviderResponse, Error> {
     client
         .get(valid_profile.profile.endpoint().cloud_regions_url())
         .authenticate(&valid_profile.frontegg_auth)
         .send()
         .await?
-        .json::<Vec<CloudProvider>>()
+        .json::<CloudProviderResponse>()
         .await
 }
 
@@ -266,8 +261,9 @@ pub async fn get_provider_by_region_name(
 
     // Create a vec with only one region
     let cloud_provider: CloudProvider = cloud_providers
+        .data
         .into_iter()
-        .find(|provider| provider.region == cloud_provider_region.region_name())
+        .find(|provider| provider.name == cloud_provider_region.region_name())
         .with_context(|| "Retriving cloud provider from list.")?;
 
     Ok(cloud_provider)
