@@ -11,7 +11,9 @@
 
 use std::any::Any;
 
-use std::collections::VecDeque;
+use std::cmp::{Ordering, Reverse};
+
+use std::collections::{BTreeMap, BinaryHeap};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -189,6 +191,8 @@ where
         let activator = Activator::new(&operator_info.address[..], activations);
         // Maintain a list of work to do
         let mut pending_work = WorkQueue {
+            next_id: 0,
+            work: Default::default(),
             queue: Default::default(),
         };
         let mut buffer = Default::default();
@@ -198,7 +202,7 @@ where
                 data.swap(&mut buffer);
                 let capability = time.retain();
                 for fetched_part in buffer.drain(..) {
-                    pending_work.queue.push_back(PendingWork {
+                    pending_work.push(PendingWork {
                         capability: capability.clone(),
                         fetched_part,
                     })
@@ -209,7 +213,7 @@ where
             let start_time = Instant::now();
             let mut output = updates_output.activate();
             let mut handle = ConsolidateBuffer::new(&mut output, 0);
-            pending_work.do_work(
+            let done = pending_work.do_work(
                 &mut work,
                 start_time,
                 &yield_fn,
@@ -219,7 +223,10 @@ where
                 &mut row_builder,
                 &mut handle,
             );
-            if !pending_work.queue.is_empty() {
+            if done {
+                assert!(pending_work.work.is_empty());
+                assert!(pending_work.queue.is_empty());
+            } else {
                 activator.activate();
             }
         }
@@ -229,7 +236,9 @@ where
 }
 
 struct WorkQueue<T: TimelyTimestamp> {
-    queue: VecDeque<PendingWork<T>>,
+    next_id: usize,
+    work: BTreeMap<usize, PendingWork<T>>,
+    queue: BinaryHeap<Reverse<(HybridT, usize)>>,
 }
 
 impl<T> WorkQueue<T>
@@ -237,6 +246,17 @@ where
     T: TimelyTimestamp,
     HybridT: Refines<T>,
 {
+    fn push(&mut self, work: PendingWork<T>) {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.queue.push(Reverse((
+            HybridT::to_inner(work.capability.time().clone()),
+            id,
+        )));
+        let removed = self.work.insert(id, work);
+        assert!(removed.is_none());
+    }
+
     /// Perform work, reading from the fetched part, decoding, and sending outputs, while checking
     /// `yield_fn` whether more fuel is available.
     fn do_work<P, YFn>(
@@ -254,13 +274,34 @@ where
         P: Push<Bundle<T, (Result<Row, DataflowError>, T, Diff)>>,
         YFn: Fn(Instant, usize) -> bool,
     {
-        while let Some(front) = self.queue.front_mut() {
+        'work_loop: while let Some(Reverse((mut time_sort, id))) = self.queue.pop() {
+            let front = self.work.get_mut(&id).expect("retrieving known id");
+            let is_probably_ordered =
+                front.fetched_part.desc().since() != &Antichain::from_elem(Timestamp::minimum());
             while let Some(((key, val), time, diff)) = front.fetched_part.next() {
                 if until.less_equal(&time) {
                     continue;
                 }
-                match (key, val) {
-                    (Ok(WithPrefix(SourceData(Ok(row)), _)), Ok(())) => {
+                // TODO(petrosagg): error handling
+                let WithPrefix(key, sort) = key.expect("decoded key");
+                let () = val.expect("decoded val");
+
+                let sort = Sort::Data(sort);
+                if is_probably_ordered {
+                    match time_sort.1.cmp(&sort) {
+                        Ordering::Less => {
+                            time_sort.1 = sort;
+                            front.capability.downgrade(&time_sort.clone().to_outer())
+                        }
+                        Ordering::Equal => {}
+                        Ordering::Greater => {
+                            panic!("unexpectedly out-of-order timestamps");
+                        }
+                    }
+                }
+
+                match key {
+                    SourceData(Ok(row)) => {
                         if let Some(mfp) = map_filter_project {
                             let arena = mz_repr::RowArena::new();
                             let mut datums_local = datum_vec.borrow_with(&row);
@@ -301,23 +342,29 @@ where
                             *work += 1;
                         }
                     }
-                    (Ok(WithPrefix(SourceData(Err(err)), _)), Ok(())) => {
+                    SourceData(Err(err)) => {
                         let time = Hybrid(time, Sort::minimum()).to_outer();
 
                         output.give_at(&front.capability, (Err(err), time, diff));
                         *work += 1;
                     }
-                    // TODO(petrosagg): error handling
-                    (Err(_), Ok(_)) | (Ok(_), Err(_)) | (Err(_), Err(_)) => {
-                        panic!("decoding failed")
+                }
+
+                if let Some(Reverse((next_best, _))) = self.queue.peek() {
+                    if time_sort > *next_best {
+                        self.queue.push(Reverse((time_sort, id)));
+                        continue 'work_loop;
                     }
                 }
+
                 if yield_fn(start_time, *work) {
+                    self.queue.push(Reverse((time_sort, id)));
                     return false;
                 }
             }
 
-            self.queue.pop_front();
+            let removed = self.work.remove(&id);
+            assert!(removed.is_some(), "removing completed work");
         }
 
         true
