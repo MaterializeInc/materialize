@@ -431,9 +431,10 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                                 let massaged: Vec<_> = update
                                     .updates
                                     .iter()
-                                    .map(|u| {
-                                        let ts = u.2.as_any().downcast_ref::<Timestamp>().copied();
-                                        (*u.0, *u.1, true, ts, *u.3)
+                                    .map(|(node, port, time, diff)| {
+                                        let ts = time.as_any().downcast_ref::<Timestamp>().copied();
+                                        let is_source = true;
+                                        (*node, *port, is_source, ts, *diff)
                                     })
                                     .collect();
 
@@ -447,9 +448,10 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                                 let massaged: Vec<_> = update
                                     .updates
                                     .iter()
-                                    .map(|u| {
-                                        let ts = u.2.as_any().downcast_ref::<Timestamp>().copied();
-                                        (*u.0, *u.1, true, ts, *u.3)
+                                    .map(|(node, port, time, diff)| {
+                                        let ts = time.as_any().downcast_ref::<Timestamp>().copied();
+                                        let is_source = false;
+                                        (*node, *port, is_source, ts, *diff)
                                     })
                                     .collect();
 
