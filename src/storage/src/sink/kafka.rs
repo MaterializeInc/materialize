@@ -573,10 +573,10 @@ impl KafkaSinkState {
                         continue;
                     } else {
                         // We've received an error that is not transient
-                        self.halt_on_err(Err(format!(
+                        self.halt_on_err(Err(anyhow!(format!(
                             "fatal error while producing message in {}: {e}",
                             self.name
-                        )))
+                        ))))
                         .await
                     }
                 }
@@ -916,19 +916,19 @@ impl KafkaSinkState {
     }
 
     /// Report a SinkStatus::Stalled and then halt with the same message.
-    pub async fn halt_on_err<T>(&self, result: Result<T, impl ToString + Debug>) -> T {
+    pub async fn halt_on_err<T>(&self, result: Result<T, anyhow::Error>) -> T {
         match result {
             Ok(t) => t,
-            Err(msg) => {
+            Err(error) => {
                 self.update_status(SinkStatus::Stalled {
-                    error: msg.to_string(),
+                    error: error.to_string(),
                     hint: None,
                 })
                 .await;
                 self.internal_cmd_tx.borrow_mut().broadcast(
                     InternalStorageCommand::SuspendAndRestart {
                         id: self.sink_id.clone(),
-                        reason: msg.to_string(),
+                        reason: error.to_string(),
                     },
                 );
 
