@@ -2969,7 +2969,7 @@ pub const MZ_CLUSTER_REPLICA_UTILIZATION_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_cluster_replica_utilization_ind
 IN CLUSTER mz_introspection
-ON mz_internal.mz_cluster_replica_utilization (replica_id)"
+ON mz_internal.mz_cluster_replica_utilization (replica_id)",
 };
 
 pub static MZ_SYSTEM_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
