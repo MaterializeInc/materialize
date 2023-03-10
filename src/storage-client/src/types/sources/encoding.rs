@@ -255,11 +255,9 @@ impl DataEncoding {
                     desc.with_column(name, ty)
                 }),
             DataEncodingInner::Csv(CsvEncoding { columns, .. }) => match columns {
-                ColumnSpec::Count(n) => {
-                    (1..=*n).into_iter().fold(RelationDesc::empty(), |desc, i| {
-                        desc.with_column(format!("column{}", i), ScalarType::String.nullable(false))
-                    })
-                }
+                ColumnSpec::Count(n) => (1..=*n).fold(RelationDesc::empty(), |desc, i| {
+                    desc.with_column(format!("column{}", i), ScalarType::String.nullable(false))
+                }),
                 ColumnSpec::Header { names } => names
                     .iter()
                     .map(|s| &**s)
