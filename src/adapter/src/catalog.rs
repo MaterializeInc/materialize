@@ -4424,6 +4424,33 @@ impl Catalog {
             }
         }
 
+        // NOTE(benesch): to support altering legacy sized sources and sinks
+        // (those with linked clusters), we need to generate retractions for
+        // `mz_sources` and `mz_sinks` in a separate pass over the operations.
+        // The reason is that the alteration is split over several operations:
+        // dropping the linked cluster, recreating it, and then altering the
+        // source or sink. By the time we get to altering the source or sink,
+        // we've already recreated the linked cluster at the new size, and can
+        // no longer determine the old size of the cluster.
+        //
+        // This is a bit tangled, and this code is ugly and only works for
+        // transactions that don't alter the same source or sink more than once,
+        // but it doesn't seem worth refactoring since all this code will be
+        // removed once cluster unification is complete.
+        let mut old_source_sink_sizes = BTreeMap::new();
+        for op in &ops {
+            if let Op::AlterSource { id, .. } | Op::AlterSink { id, .. } = op {
+                builtin_table_updates.extend(state.pack_item_update(*id, -1));
+                let existing = old_source_sink_sizes.insert(
+                    *id,
+                    state.get_storage_object_size(*id).map(|s| s.to_string()),
+                );
+                if existing.is_some() {
+                    coord_bail!("internal error: attempted to alter same source/sink twice in same transaction (id {id})");
+                }
+            }
+        }
+
         for op in ops {
             match op {
                 Op::AlterRole {
@@ -4522,7 +4549,6 @@ impl Catalog {
                         });
                     }
 
-                    let old_size = state.get_storage_object_size(id).map(|s| s.to_string());
                     let new_size = match &cluster_config {
                         PlanStorageClusterConfig::Linked { size } => Some(size.clone()),
                         _ => None,
@@ -4536,9 +4562,6 @@ impl Catalog {
 
                     let ser = Self::serialize_item(&sink);
                     tx.update_item(id, &name.item, &ser)?;
-
-                    // NB: this will be re-incremented by the action below.
-                    builtin_table_updates.extend(state.pack_item_update(id, -1));
 
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -4554,7 +4577,7 @@ impl Catalog {
                                 &name,
                                 session.map(|session| session.conn_id()),
                             )),
-                            old_size,
+                            old_size: old_source_sink_sizes[&id].clone(),
                             new_size,
                         }),
                     )?;
@@ -4626,7 +4649,6 @@ impl Catalog {
                         });
                     }
 
-                    let old_size = state.get_storage_object_size(id).map(|s| s.to_string());
                     let new_size = match &cluster_config {
                         PlanStorageClusterConfig::Linked { size } => Some(size.clone()),
                         _ => None,
@@ -4640,9 +4662,6 @@ impl Catalog {
 
                     let ser = Self::serialize_item(&source);
                     tx.update_item(id, &name.item, &ser)?;
-
-                    // NB: this will be re-incremented by the action below.
-                    builtin_table_updates.extend(state.pack_item_update(id, -1));
 
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -4658,7 +4677,7 @@ impl Catalog {
                                 &name,
                                 session.map(|session| session.conn_id()),
                             )),
-                            old_size,
+                            old_size: old_source_sink_sizes[&id].clone(),
                             new_size,
                         }),
                     )?;
