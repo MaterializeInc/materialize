@@ -21,6 +21,9 @@ use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::count::CountTotal;
 use differential_dataflow::trace::TraceReader;
 use timely::communication::Allocate;
+use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::pushers::buffer::Session;
+use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Filter, InspectCore};
@@ -32,7 +35,7 @@ use uuid::Uuid;
 
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
-use mz_repr::{Datum, DatumVec, GlobalId, Row, Timestamp};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;
 
@@ -41,7 +44,7 @@ use crate::logging::persist::persist_sink;
 use crate::logging::{ComputeLog, LogVariant};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
-/// Type alias for logging of compute events.
+/// Type alias for a logger of compute events.
 pub type Logger = timely::logging_core::Logger<ComputeEvent, WorkerIdentifier>;
 
 /// A logged compute event.
@@ -84,9 +87,7 @@ pub enum ComputeEvent {
 }
 
 /// A logged peek event.
-#[derive(
-    Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct Peek {
     /// The identifier of the view the peek targets.
     id: GlobalId,
@@ -107,24 +108,23 @@ impl Peek {
 ///
 /// Params
 /// * `worker`: The Timely worker hosting the log analysis dataflow.
-/// * `config`: Logging configuration
-/// * `compute`: The source to read compute log events from.
+/// * `config`: Logging configuration.
+/// * `event_source`: The source to read compute log events from.
 /// * `activator`: A handle to acknowledge activations.
 ///
-/// Returns a map from log variant to a tuple of a trace handle and a permutation to reconstruct
-/// the original rows.
+/// Returns a map from log variant to a tuple of a trace handle and a dataflow drop token.
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &mz_compute_client::logging::LoggingConfig,
     compute_state: &mut ComputeState,
-    compute: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, ComputeEvent)>>,
+    event_source: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, ComputeEvent)>>,
     activator: RcActivator,
 ) -> BTreeMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
-    let interval_ms = std::cmp::max(1, config.interval.as_millis());
+    let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
 
-    let traces = worker.dataflow_named("Dataflow: compute logging", move |scope| {
+    worker.dataflow_named("Dataflow: compute logging", move |scope| {
         let (mut compute_logs, token) =
-            Some(compute).mz_replay(scope, "compute logs", config.interval, activator.clone());
+            Some(event_source).mz_replay(scope, "compute logs", config.interval, activator.clone());
 
         // If logging is disabled, we still need to install the indexes, but we can leave them
         // empty. We do so by immediately filtering all logs events.
@@ -133,351 +133,110 @@ pub fn construct<A: Allocate>(
             compute_logs = compute_logs.filter(|_| false);
         }
 
+        // Build a demux operator that splits the replayed event stream up into the separate
+        // logging streams.
         let mut demux = OperatorBuilder::new("Compute Logging Demux".to_string(), scope.clone());
-        use timely::dataflow::channels::pact::Pipeline;
         let mut input = demux.new_input(&compute_logs, Pipeline);
         let (mut export_out, export) = demux.new_output();
         let (mut dependency_out, dependency) = demux.new_output();
         let (mut frontier_out, frontier) = demux.new_output();
-        let (mut source_frontier_out, source_frontier) = demux.new_output();
+        let (mut import_frontier_out, import_frontier) = demux.new_output();
         let (mut frontier_delay_out, frontier_delay) = demux.new_output();
         let (mut peek_out, peek) = demux.new_output();
         let (mut peek_duration_out, peek_duration) = demux.new_output();
 
+        let mut demux_state = DemuxState::default();
         let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
-            let mut export_dataflows = BTreeMap::new();
-            let mut peek_stash = BTreeMap::new();
-
-            /// State for tracking export frontier lag.
-            #[derive(Default)]
-            struct ImportDelayData {
-                /// A list of input timestamps that have appeared on the input
-                /// frontier, but that the output frontier has not yet advanced beyond,
-                /// and the time at which we were informed of their availability
-                time_deque: VecDeque<(mz_repr::Timestamp, u128)>,
-                /// A histogram of emitted delays (bucket size to (bucket_sum, bucket_count))
-                delay_map: BTreeMap<u128, (i128, i32)>,
-            }
-            let mut export_imports =
-                BTreeMap::<(GlobalId, usize), BTreeMap<GlobalId, ImportDelayData>>::new();
-
             move |_frontiers| {
                 let mut export = export_out.activate();
                 let mut dependency = dependency_out.activate();
                 let mut frontier = frontier_out.activate();
-                let mut source_frontier = source_frontier_out.activate();
+                let mut import_frontier = import_frontier_out.activate();
                 let mut frontier_delay = frontier_delay_out.activate();
                 let mut peek = peek_out.activate();
                 let mut peek_duration = peek_duration_out.activate();
 
-                input.for_each(|time, data| {
+                input.for_each(|cap, data| {
                     data.swap(&mut demux_buffer);
 
-                    let mut export_session = export.session(&time);
-                    let mut dependency_session = dependency.session(&time);
-                    let mut frontier_session = frontier.session(&time);
-                    let mut source_frontier_session = source_frontier.session(&time);
-                    let mut frontier_delay_session = frontier_delay.session(&time);
-                    let mut peek_session = peek.session(&time);
-                    let mut peek_duration_session = peek_duration.session(&time);
+                    let mut output_sessions = DemuxOutput {
+                        export: export.session(&cap),
+                        dependency: dependency.session(&cap),
+                        frontier: frontier.session(&cap),
+                        import_frontier: import_frontier.session(&cap),
+                        frontier_delay: frontier_delay.session(&cap),
+                        peek: peek.session(&cap),
+                        peek_duration: peek_duration.session(&cap),
+                    };
 
-                    for (time, worker, datum) in demux_buffer.drain(..) {
-                        let time_ms = (((time.as_millis() / interval_ms) + 1) * interval_ms)
-                            .try_into()
-                            .expect("must fit");
-
-                        match datum {
-                            ComputeEvent::Export { id, dataflow_index } => {
-                                export_session.give(((id, worker, dataflow_index), time_ms, 1));
-
-                                let key = (id, worker);
-                                export_dataflows.insert(key, dataflow_index);
-                                export_imports.insert(key, BTreeMap::new());
-                            }
-                            ComputeEvent::ExportDropped { id } => {
-                                let key = (id, worker);
-                                if let Some(dataflow_index) = export_dataflows.remove(&key) {
-                                    export_session.give((
-                                        (id, worker, dataflow_index),
-                                        time_ms,
-                                        -1,
-                                    ));
-                                } else {
-                                    error!(
-                                        export = ?id, worker = ?worker,
-                                        "missing export_dataflows entry at time of export drop"
-                                    );
-                                }
-
-                                // Remove dependency and frontier delay logging for this export.
-                                if let Some(imports) = export_imports.remove(&key) {
-                                    for (import_id, delay) in imports {
-                                        dependency_session.give((
-                                            (id, import_id, worker),
-                                            time_ms,
-                                            -1,
-                                        ));
-
-                                        for (delay_pow, (delay_sum, delay_count)) in delay.delay_map
-                                        {
-                                            frontier_delay_session.give((
-                                                (
-                                                    id,
-                                                    import_id,
-                                                    worker,
-                                                    delay_pow,
-                                                    delay_sum,
-                                                    delay_count,
-                                                ),
-                                                time_ms,
-                                                -1,
-                                            ));
-                                        }
-                                    }
-                                } else {
-                                    error!(
-                                        export = ?id, worker = ?worker,
-                                        "missing export_imports entry at time of export drop"
-                                    );
-                                }
-                            }
-                            ComputeEvent::ExportDependency {
-                                export_id,
-                                import_id,
-                            } => {
-                                dependency_session.give((
-                                    (export_id, import_id, worker),
-                                    time_ms,
-                                    1,
-                                ));
-
-                                let key = (export_id, worker);
-                                if let Some(imports) = export_imports.get_mut(&key) {
-                                    imports.insert(import_id, Default::default());
-                                } else {
-                                    error!(
-                                        export = ?export_id, import = ?import_id, worker = ?worker,
-                                        "tried to create import for export that doesn't exist"
-                                    );
-                                }
-                            }
-                            ComputeEvent::Frontier {
-                                id,
-                                time: logical,
-                                diff,
-                            } => {
-                                // report dataflow frontier advancement
-                                frontier_session.give((
-                                    Row::pack_slice(&[
-                                        Datum::String(&id.to_string()),
-                                        Datum::UInt64(u64::cast_from(worker)),
-                                        Datum::MzTimestamp(logical),
-                                    ]),
-                                    time_ms,
-                                    i64::from(diff),
-                                ));
-                                if diff > 0 {
-                                    // Check if we have imports associated to this export
-                                    // and report frontier advancement delays.
-                                    let key = (id, worker);
-                                    if let Some(import_map) = export_imports.get_mut(&key) {
-                                        for (
-                                            import_id,
-                                            ImportDelayData {
-                                                time_deque,
-                                                delay_map,
-                                            },
-                                        ) in import_map
-                                        {
-                                            while let Some(current_front) = time_deque.pop_front() {
-                                                let import_logical = current_front.0;
-                                                if logical >= import_logical {
-                                                    let elapsed_ns =
-                                                        time.as_nanos() - current_front.1;
-                                                    let elapsed_pow =
-                                                        elapsed_ns.next_power_of_two();
-                                                    let elapsed_ns: i128 = elapsed_ns
-                                                        .try_into()
-                                                        .expect("elapsed_ns too big");
-                                                    let (new_delay_sum, new_delay_count) =
-                                                        match delay_map.entry(elapsed_pow) {
-                                                            Entry::Vacant(v) => v.insert((0, 0)),
-                                                            Entry::Occupied(o) => {
-                                                                let (
-                                                                    old_delay_sum,
-                                                                    old_delay_count,
-                                                                ) = o.get().clone();
-                                                                frontier_delay_session.give((
-                                                                    (
-                                                                        id,
-                                                                        *import_id,
-                                                                        worker,
-                                                                        elapsed_pow,
-                                                                        old_delay_sum,
-                                                                        old_delay_count,
-                                                                    ),
-                                                                    time_ms,
-                                                                    -1,
-                                                                ));
-                                                                o.into_mut()
-                                                            }
-                                                        };
-                                                    *new_delay_sum += elapsed_ns;
-                                                    *new_delay_count += 1;
-                                                    frontier_delay_session.give((
-                                                        (
-                                                            id,
-                                                            *import_id,
-                                                            worker,
-                                                            elapsed_pow,
-                                                            *new_delay_sum,
-                                                            *new_delay_count,
-                                                        ),
-                                                        time_ms,
-                                                        1,
-                                                    ));
-                                                } else {
-                                                    time_deque.push_front(current_front);
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            ComputeEvent::ImportFrontier {
-                                import_id,
-                                export_id,
-                                time: logical,
-                                diff,
-                            } => {
-                                // report import frontier advancement
-                                source_frontier_session.give((
-                                    Row::pack_slice(&[
-                                        Datum::String(&export_id.to_string()),
-                                        Datum::String(&import_id.to_string()),
-                                        Datum::UInt64(u64::cast_from(worker)),
-                                        Datum::MzTimestamp(logical),
-                                    ]),
-                                    time_ms,
-                                    i64::from(diff),
-                                ));
-                                if diff > 0 {
-                                    // Note that it is possible that we receive frontier updates
-                                    // for exports no longer present in `export_imports`. This
-                                    // behavior arises because `ImportFrontier` events are
-                                    // generated by a dataflow `inspect_container` operator, which
-                                    // may outlive the corresponding trace or sink recording in the
-                                    // current `ComputeState` until Timely eventually drops it.
-                                    let key = (export_id, worker);
-                                    if let Some(import_map) = export_imports.get_mut(&key) {
-                                        if let Some(time_entry) = import_map.get_mut(&import_id) {
-                                            time_entry.time_deque.push_back((logical, time.as_nanos()));
-                                        } else {
-                                            error!(
-                                                export = ?export_id, import = ?import_id, worker = ?worker,
-                                                "tried to create update frontier for import that doesn't exist"
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                            ComputeEvent::Peek(peek, is_install) => {
-                                let key = (worker, peek.uuid);
-                                if is_install {
-                                    peek_session.give(((peek, worker), time_ms, 1));
-                                    if peek_stash.contains_key(&key) {
-                                        error!(
-                                            "peek already registered: \
-                                             worker={}, uuid: {}",
-                                            worker, key.1,
-                                        );
-                                    }
-                                    peek_stash.insert(key, time.as_nanos());
-                                } else {
-                                    peek_session.give(((peek, worker), time_ms, -1));
-                                    if let Some(start) = peek_stash.remove(&key) {
-                                        let elapsed_ns = time.as_nanos() - start;
-                                        let elapsed_pow = elapsed_ns.next_power_of_two();
-                                        let elapsed_ns: i128 =
-                                            elapsed_ns.try_into().expect("elapsed_ns too big");
-                                        peek_duration_session.give((
-                                            (key.0, elapsed_pow),
-                                            time_ms,
-                                            (elapsed_ns, 1u64),
-                                        ));
-                                    } else {
-                                        error!(
-                                            "peek not yet registered: \
-                                             worker={}, uuid: {}",
-                                            worker, key.1,
-                                        );
-                                    }
-                                }
-                            }
+                    for (time, worker, event) in demux_buffer.drain(..) {
+                        DemuxHandler {
+                            state: &mut demux_state,
+                            output: &mut output_sessions,
+                            logging_interval_ms,
+                            time,
+                            worker,
                         }
+                        .handle(event);
                     }
                 });
             }
         });
 
-        let dataflow_current = export.as_collection().map({
-            move |(name, worker, dataflow_id)| {
-                Row::pack_slice(&[
-                    Datum::String(&name.to_string()),
-                    Datum::UInt64(u64::cast_from(worker)),
-                    Datum::UInt64(u64::cast_from(dataflow_id)),
-                ])
-            }
+
+        // Encode the contents of each logging stream into its expected `Row` format.
+        let dataflow_current = export.as_collection().map(move |datum| {
+            Row::pack_slice(&[
+                Datum::String(&datum.id.to_string()),
+                Datum::UInt64(u64::cast_from(datum.worker)),
+                Datum::UInt64(u64::cast_from(datum.dataflow_id)),
+            ])
         });
-
-        let dependency_current = dependency.as_collection().map({
-            move |(dataflow, source, worker)| {
-                Row::pack_slice(&[
-                    Datum::String(&dataflow.to_string()),
-                    Datum::String(&source.to_string()),
-                    Datum::UInt64(u64::cast_from(worker)),
-                ])
-            }
+        let dataflow_dependency = dependency.as_collection().map(move |datum| {
+            Row::pack_slice(&[
+                Datum::String(&datum.export_id.to_string()),
+                Datum::String(&datum.import_id.to_string()),
+                Datum::UInt64(u64::cast_from(datum.worker)),
+            ])
         });
-
-        let frontier_current = frontier.as_collection();
-
-        let source_frontier_current = source_frontier.as_collection();
-
-        let frontier_delay = frontier_delay.as_collection().map({
-            move |(dataflow, source_id, worker, delay_pow, delay_sum, delay_count)| {
-                Row::pack_slice(&[
-                    Datum::String(&dataflow.to_string()),
-                    Datum::String(&source_id.to_string()),
-                    Datum::UInt64(u64::cast_from(worker)),
-                    Datum::UInt64(delay_pow.try_into().expect("pow too big")),
-                    Datum::Int64(delay_count.into()),
-                    // [btv] This is nullable so that we can fill
-                    // in `NULL` if it overflows. That would be a
-                    // bit far-fetched, but not impossible to
-                    // imagine. See discussion
-                    // [here](https://github.com/MaterializeInc/materialize/pull/17302#discussion_r1086373740)
-                    // for more details, and think about this
-                    // again if we ever decide to stabilize it.
-                    u64::try_from(delay_sum).ok().into(),
-                ])
-            }
+        let frontier_current = frontier.as_collection().map(move |datum| {
+            Row::pack_slice(&[
+                Datum::String(&datum.export_id.to_string()),
+                Datum::UInt64(u64::cast_from(datum.worker)),
+                Datum::MzTimestamp(datum.frontier),
+            ])
         });
-
-        let peek_current = peek.as_collection().map({
-            move |(peek, worker)| {
-                Row::pack_slice(&[
-                    Datum::Uuid(peek.uuid),
-                    Datum::UInt64(u64::cast_from(worker)),
-                    Datum::String(&peek.id.to_string()),
-                    Datum::MzTimestamp(peek.time),
-                ])
-            }
+        let import_frontier_current = import_frontier.as_collection().map(move |datum| {
+            Row::pack_slice(&[
+                Datum::String(&datum.export_id.to_string()),
+                Datum::String(&datum.import_id.to_string()),
+                Datum::UInt64(u64::cast_from(datum.worker)),
+                Datum::MzTimestamp(datum.frontier),
+            ])
         });
-
-        // Duration statistics derive from the non-rounded event times.
+        let frontier_delay = frontier_delay.as_collection().map(move |datum| {
+            Row::pack_slice(&[
+                Datum::String(&datum.export_id.to_string()),
+                Datum::String(&datum.import_id.to_string()),
+                Datum::UInt64(u64::cast_from(datum.worker)),
+                Datum::UInt64(datum.delay_pow.try_into().expect("pow too big")),
+                Datum::Int64(datum.count.into()),
+                // [btv] This is nullable so that we can fill in `NULL` if it overflows. That would
+                // be a bit far-fetched, but not impossible to imagine. See discussion
+                // [here](https://github.com/MaterializeInc/materialize/pull/17302#discussion_r1086373740)
+                // for more details, and think about this again if we ever decide to stabilize it.
+                u64::try_from(datum.sum).ok().into(),
+            ])
+        });
+        let peek_current = peek.as_collection().map(move |datum| {
+            Row::pack_slice(&[
+                Datum::Uuid(datum.peek.uuid),
+                Datum::UInt64(u64::cast_from(datum.worker)),
+                Datum::String(&datum.peek.id.to_string()),
+                Datum::MzTimestamp(datum.peek.time),
+            ])
+        });
         let peek_duration = peek_duration
             .as_collection()
             .arrange_named::<RowSpine<_, _, _, _>>("Arranged timely peek_duration")
@@ -487,25 +246,23 @@ pub fn construct<A: Allocate>(
                     Datum::UInt64(u64::cast_from(worker)),
                     Datum::UInt64(bucket.try_into().expect("pow too big")),
                     Datum::UInt64(count),
-                    // [btv] This is nullable so that we can fill
-                    // in `NULL` if it overflows. That would be a
-                    // bit far-fetched, but not impossible to
-                    // imagine. See discussion
+                    // [btv] This is nullable so that we can fill in `NULL` if it overflows. That
+                    // would be a bit far-fetched, but not impossible to imagine. See discussion
                     // [here](https://github.com/MaterializeInc/materialize/pull/17302#discussion_r1086373740)
-                    // for more details, and think about this
-                    // again if we ever decide to stabilize it.
+                    // for more details, and think about this again if we ever decide to stabilize
+                    // it.
                     u64::try_from(sum).ok().into(),
                 ])
             });
 
-        let logs = vec![
+        let logs = [
             (
                 LogVariant::Compute(ComputeLog::DataflowCurrent),
                 dataflow_current,
             ),
             (
                 LogVariant::Compute(ComputeLog::DataflowDependency),
-                dependency_current,
+                dataflow_dependency,
             ),
             (
                 LogVariant::Compute(ComputeLog::FrontierCurrent),
@@ -513,7 +270,7 @@ pub fn construct<A: Allocate>(
             ),
             (
                 LogVariant::Compute(ComputeLog::ImportFrontierCurrent),
-                source_frontier_current,
+                import_frontier_current,
             ),
             (
                 LogVariant::Compute(ComputeLog::FrontierDelay),
@@ -523,7 +280,8 @@ pub fn construct<A: Allocate>(
             (LogVariant::Compute(ComputeLog::PeekDuration), peek_duration),
         ];
 
-        let mut result = BTreeMap::new();
+        // Build the output arrangements.
+        let mut traces = BTreeMap::new();
         for (variant, collection) in logs {
             if config.index_logs.contains_key(&variant) {
                 let key = variant.index_by();
@@ -549,7 +307,7 @@ pub fn construct<A: Allocate>(
                     })
                     .arrange_named::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
                     .trace;
-                result.insert(variant.clone(), (trace, Rc::clone(&token)));
+                traces.insert(variant.clone(), (trace, Rc::clone(&token)));
             }
 
             if let Some((id, meta)) = config.sink_logs.get(&variant) {
@@ -557,10 +315,366 @@ pub fn construct<A: Allocate>(
                 persist_sink(*id, meta, compute_state, collection);
             }
         }
-        result
-    });
 
-    traces
+        traces
+    })
+}
+
+/// State maintained by the demux operator.
+#[derive(Default)]
+struct DemuxState {
+    // Maps dataflow exports to dataflow IDs.
+    export_dataflows: BTreeMap<(GlobalId, usize), usize>,
+    // Maps dataflow exports to their imports and frontier delay tracking state.
+    export_imports: BTreeMap<(GlobalId, usize), BTreeMap<GlobalId, FrontierDelayState>>,
+    // Maps pending peeks to their installation time (in ns).
+    peek_stash: BTreeMap<(usize, Uuid), u128>,
+}
+
+/// State for tracking import-export frontier lag.
+#[derive(Default)]
+struct FrontierDelayState {
+    /// A list of input timestamps that have appeared on the input
+    /// frontier, but that the output frontier has not yet advanced beyond,
+    /// and the time at which we were informed of their availability.
+    time_deque: VecDeque<(mz_repr::Timestamp, u128)>,
+    /// A histogram of emitted delays (bucket size to (bucket_sum, bucket_count)).
+    delay_map: BTreeMap<u128, (i128, i32)>,
+}
+
+type Update<D, R> = (D, Timestamp, R);
+type Pusher<D, R> = Counter<Timestamp, Update<D, R>, Tee<Timestamp, Update<D, R>>>;
+type OutputSession<'a, D, R = Diff> = Session<'a, Timestamp, Vec<Update<D, R>>, Pusher<D, R>>;
+
+/// Bundled output sessions used by the demux operator.
+struct DemuxOutput<'a> {
+    export: OutputSession<'a, ExportDatum>,
+    dependency: OutputSession<'a, DependencyDatum>,
+    frontier: OutputSession<'a, FrontierDatum>,
+    import_frontier: OutputSession<'a, ImportFrontierDatum>,
+    frontier_delay: OutputSession<'a, FrontierDelayDatum>,
+    peek: OutputSession<'a, PeekDatum>,
+    peek_duration: OutputSession<'a, (usize, u128), (i128, u64)>,
+}
+
+#[derive(Clone)]
+struct ExportDatum {
+    id: GlobalId,
+    worker: usize,
+    dataflow_id: usize,
+}
+
+#[derive(Clone)]
+struct DependencyDatum {
+    export_id: GlobalId,
+    import_id: GlobalId,
+    worker: usize,
+}
+
+#[derive(Clone)]
+struct FrontierDatum {
+    export_id: GlobalId,
+    worker: usize,
+    frontier: Timestamp,
+}
+
+#[derive(Clone)]
+struct ImportFrontierDatum {
+    export_id: GlobalId,
+    import_id: GlobalId,
+    worker: usize,
+    frontier: Timestamp,
+}
+
+#[derive(Clone)]
+struct FrontierDelayDatum {
+    export_id: GlobalId,
+    import_id: GlobalId,
+    worker: usize,
+    delay_pow: u128,
+    count: i32,
+    sum: i128,
+}
+
+#[derive(Clone)]
+struct PeekDatum {
+    peek: Peek,
+    worker: usize,
+}
+
+/// Event handler of the demux operator.
+struct DemuxHandler<'a, 'b> {
+    /// State kept by the demux operator.
+    state: &'a mut DemuxState,
+    /// Demux output sessions.
+    output: &'a mut DemuxOutput<'b>,
+    /// The logging interval specifying the time granularity for the updates.
+    logging_interval_ms: u128,
+    /// The current event time.
+    time: Duration,
+    worker: usize,
+}
+
+impl DemuxHandler<'_, '_> {
+    /// Return the timestamp associated with the current event, based on the event time and the
+    /// logging interval.
+    fn ts(&self) -> Timestamp {
+        let time_ms = self.time.as_millis();
+        let interval = self.logging_interval_ms;
+        let rounded = (time_ms / interval + 1) * interval;
+        rounded.try_into().expect("must fit")
+    }
+
+    /// Handle the given compute event.
+    fn handle(&mut self, event: ComputeEvent) {
+        match event {
+            ComputeEvent::Export { id, dataflow_index } => self.handle_export(id, dataflow_index),
+            ComputeEvent::ExportDropped { id } => self.handle_export_dropped(id),
+            ComputeEvent::ExportDependency {
+                export_id,
+                import_id,
+            } => self.handle_export_dependency(export_id, import_id),
+            ComputeEvent::Peek(peek, true) => self.handle_peek_install(peek),
+            ComputeEvent::Peek(peek, false) => self.handle_peek_retire(peek),
+            ComputeEvent::Frontier { id, time, diff } => self.handle_frontier(id, time, diff),
+            ComputeEvent::ImportFrontier {
+                import_id,
+                export_id,
+                time,
+                diff,
+            } => self.handle_import_frontier(import_id, export_id, time, diff),
+        }
+    }
+
+    fn handle_export(&mut self, id: GlobalId, dataflow_id: usize) {
+        let ts = self.ts();
+        let datum = ExportDatum {
+            id,
+            worker: self.worker,
+            dataflow_id,
+        };
+        self.output.export.give((datum, ts, 1));
+
+        let key = (id, self.worker);
+        self.state.export_dataflows.insert(key, dataflow_id);
+        self.state.export_imports.insert(key, BTreeMap::new());
+    }
+
+    fn handle_export_dropped(&mut self, id: GlobalId) {
+        let ts = self.ts();
+        let key = (id, self.worker);
+        if let Some(dataflow_id) = self.state.export_dataflows.remove(&key) {
+            let datum = ExportDatum {
+                id,
+                worker: self.worker,
+                dataflow_id,
+            };
+            self.output.export.give((datum, ts, -1));
+        } else {
+            error!(
+                export = ?id, worker = ?self.worker,
+                "missing export_dataflows entry at time of export drop"
+            );
+        }
+
+        // Remove dependency and frontier delay logging for this export.
+        if let Some(imports) = self.state.export_imports.remove(&key) {
+            for (import_id, delay_state) in imports {
+                let datum = DependencyDatum {
+                    export_id: id,
+                    import_id,
+                    worker: self.worker,
+                };
+                self.output.dependency.give((datum, ts, -1));
+
+                for (delay_pow, (sum, count)) in delay_state.delay_map {
+                    let datum = FrontierDelayDatum {
+                        export_id: id,
+                        import_id,
+                        worker: self.worker,
+                        delay_pow,
+                        count,
+                        sum,
+                    };
+                    self.output.frontier_delay.give((datum, ts, -1));
+                }
+            }
+        } else {
+            error!(
+                export = ?id, worker = ?self.worker,
+                "missing export_imports entry at time of export drop"
+            );
+        }
+    }
+
+    fn handle_export_dependency(&mut self, export_id: GlobalId, import_id: GlobalId) {
+        let ts = self.ts();
+        let datum = DependencyDatum {
+            export_id,
+            import_id,
+            worker: self.worker,
+        };
+        self.output.dependency.give((datum, ts, 1));
+
+        let key = (export_id, self.worker);
+        if let Some(imports) = self.state.export_imports.get_mut(&key) {
+            imports.insert(import_id, Default::default());
+        } else {
+            error!(
+                export = ?export_id, import = ?import_id, worker = ?self.worker,
+                "tried to create import for export that doesn't exist"
+            );
+        }
+    }
+
+    fn handle_peek_install(&mut self, peek: Peek) {
+        let uuid = peek.uuid;
+        let ts = self.ts();
+        let datum = PeekDatum {
+            peek,
+            worker: self.worker,
+        };
+        self.output.peek.give((datum, ts, 1));
+
+        let key = (self.worker, uuid);
+        let existing = self.state.peek_stash.insert(key, self.time.as_nanos());
+        if existing.is_some() {
+            error!(
+                uuid = ?uuid, worker = ?self.worker,
+                "peek already registered",
+            );
+        }
+    }
+
+    fn handle_peek_retire(&mut self, peek: Peek) {
+        let uuid = peek.uuid;
+        let ts = self.ts();
+        let datum = PeekDatum {
+            peek,
+            worker: self.worker,
+        };
+        self.output.peek.give((datum, ts, -1));
+
+        let key = (self.worker, uuid);
+        if let Some(start) = self.state.peek_stash.remove(&key) {
+            let elapsed_ns = self.time.as_nanos() - start;
+            let elapsed_pow = elapsed_ns.next_power_of_two();
+            let elapsed_ns: i128 = elapsed_ns.try_into().expect("elapsed_ns too big");
+            let data = (self.worker, elapsed_pow);
+            let diff = (elapsed_ns, 1);
+            self.output.peek_duration.give((data, ts, diff));
+        } else {
+            error!(
+                uuid = ?uuid, worker = ?self.worker,
+                "peek not yet registered",
+            );
+        }
+    }
+
+    fn handle_frontier(&mut self, export_id: GlobalId, frontier: Timestamp, diff: i8) {
+        let ts = self.ts();
+        let datum = FrontierDatum {
+            export_id,
+            worker: self.worker,
+            frontier,
+        };
+        self.output.frontier.give((datum, ts, diff.into()));
+
+        // Everything below only applies to frontier insertions.
+        if diff <= 0 {
+            return;
+        }
+
+        // Check if we have imports associated to this export and report frontier advancement
+        // delays.
+        let key = (export_id, self.worker);
+        if let Some(import_map) = self.state.export_imports.get_mut(&key) {
+            for (&import_id, delay_state) in import_map {
+                let FrontierDelayState {
+                    time_deque,
+                    delay_map,
+                } = delay_state;
+                while let Some(current_front) = time_deque.pop_front() {
+                    let (import_frontier, update_time) = current_front;
+                    if frontier >= import_frontier {
+                        let elapsed_ns = self.time.as_nanos() - update_time;
+                        let elapsed_pow = elapsed_ns.next_power_of_two();
+                        let elapsed_ns: i128 = elapsed_ns.try_into().expect("elapsed_ns too big");
+                        let (delay_sum, delay_count) = match delay_map.entry(elapsed_pow) {
+                            Entry::Vacant(v) => v.insert((0, 0)),
+                            Entry::Occupied(o) => {
+                                let (sum, count) = o.get().clone();
+                                let datum = FrontierDelayDatum {
+                                    export_id,
+                                    import_id,
+                                    worker: self.worker,
+                                    delay_pow: elapsed_pow,
+                                    count,
+                                    sum,
+                                };
+                                self.output.frontier_delay.give((datum, ts, -1));
+                                o.into_mut()
+                            }
+                        };
+                        *delay_sum += elapsed_ns;
+                        *delay_count += 1;
+                        let datum = FrontierDelayDatum {
+                            export_id,
+                            import_id,
+                            worker: self.worker,
+                            delay_pow: elapsed_pow,
+                            count: *delay_count,
+                            sum: *delay_sum,
+                        };
+                        self.output.frontier_delay.give((datum, ts, 1));
+                    } else {
+                        time_deque.push_front(current_front);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    fn handle_import_frontier(
+        &mut self,
+        import_id: GlobalId,
+        export_id: GlobalId,
+        frontier: Timestamp,
+        diff: i8,
+    ) {
+        let ts = self.ts();
+        let datum = ImportFrontierDatum {
+            export_id,
+            import_id,
+            worker: self.worker,
+            frontier,
+        };
+        self.output.import_frontier.give((datum, ts, diff.into()));
+
+        // Everything below only applies to frontier insertions.
+        if diff <= 0 {
+            return;
+        }
+
+        // Note that it is possible that we receive frontier updates for exports no longer present
+        // in `export_imports`. This behavior arises because `ImportFrontier` events are generated
+        // by a dataflow `inspect_container` operator, which may outlive the corresponding trace or
+        // sink recording in the current `ComputeState` until Timely eventually drops it.
+        let key = (export_id, self.worker);
+        if let Some(import_map) = self.state.export_imports.get_mut(&key) {
+            if let Some(delay_state) = import_map.get_mut(&import_id) {
+                delay_state
+                    .time_deque
+                    .push_back((frontier, self.time.as_nanos()));
+            } else {
+                error!(
+                    export = ?export_id, import = ?import_id, worker = ?self.worker,
+                    "tried to create update frontier for import that doesn't exist"
+                );
+            }
+        }
+    }
 }
 
 pub(crate) trait LogImportFrontiers {
