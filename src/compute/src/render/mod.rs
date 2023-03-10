@@ -650,7 +650,7 @@ where
                     &err.arrange_named::<ErrSpine<DataflowError, _, _>>("Arrange recursive err")
                         .reduce_abelian::<_, ErrSpine<_, _, _>>(
                             "Distinct recursive err",
-                            move |k, s, t| t.push(((), 1)),
+                            move |_k, _s, t| t.push(((), 1)),
                         )
                         .as_collection(|k, _| k.clone()),
                 );
