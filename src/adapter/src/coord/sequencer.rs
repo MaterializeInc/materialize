@@ -3783,11 +3783,11 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         let cluster_config = alter_storage_cluster_config(size);
         if let Some(cluster_config) = cluster_config {
-            let mut ops = vec![catalog::Op::AlterSink {
+            let mut ops = self.alter_linked_cluster_ops(id, &cluster_config).await?;
+            ops.push(catalog::Op::AlterSink {
                 id,
                 cluster_config: cluster_config.clone(),
-            }];
-            ops.extend(self.alter_linked_cluster_ops(id, &cluster_config).await?);
+            });
             self.catalog_transact(Some(session), ops).await?;
 
             self.maybe_alter_linked_cluster(id).await;
@@ -3816,11 +3816,11 @@ impl Coordinator {
         }
         let cluster_config = alter_storage_cluster_config(size);
         if let Some(cluster_config) = cluster_config {
-            let mut ops = vec![catalog::Op::AlterSource {
+            let mut ops = self.alter_linked_cluster_ops(id, &cluster_config).await?;
+            ops.push(catalog::Op::AlterSource {
                 id,
                 cluster_config: cluster_config.clone(),
-            }];
-            ops.extend(self.alter_linked_cluster_ops(id, &cluster_config).await?);
+            });
             self.catalog_transact(Some(session), ops).await?;
 
             self.maybe_alter_linked_cluster(id).await;
