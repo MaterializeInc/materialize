@@ -279,6 +279,9 @@ mz_active_peeks_s2_primary_idx                              mz_active_peeks     
 mz_arrangement_batches_internal_s2_primary_idx              mz_arrangement_batches_internal             mz_introspection    {operator_id,worker_id}
 mz_arrangement_records_internal_s2_primary_idx              mz_arrangement_records_internal             mz_introspection    {operator_id,worker_id}
 mz_arrangement_sharing_internal_s2_primary_idx              mz_arrangement_sharing_internal             mz_introspection    {operator_id,worker_id}
+mz_cluster_replica_utilization_ind                          mz_cluster_replica_utilization              mz_introspection    {replica_id}
+mz_cluster_replicas_ind                                     mz_cluster_replicas                         mz_introspection    {id}
+mz_clusters_ind                                             mz_clusters                                 mz_introspection    {id}
 mz_compute_exports_s2_primary_idx                           mz_compute_exports                          mz_introspection    {export_id,worker_id}
 mz_dataflow_addresses_s2_primary_idx                        mz_dataflow_addresses                       mz_introspection    {id,worker_id}
 mz_dataflow_channels_s2_primary_idx                         mz_dataflow_channels                        mz_introspection    {id,worker_id}
@@ -306,6 +309,8 @@ mz_show_sources_ind                                         mz_sources          
 mz_show_tables_ind                                          mz_tables                                   mz_introspection    {schema_id}
 mz_show_types_ind                                           mz_types                                    mz_introspection    {schema_id}
 mz_show_views_ind                                           mz_views                                    mz_introspection    {schema_id}
+mz_source_status_history_ind                                mz_source_status_history                    mz_introspection    {source_id}
+mz_source_statuses_ind                                      mz_source_statuses                          mz_introspection    {id}
 mz_worker_compute_dependencies_s2_primary_idx               mz_worker_compute_dependencies              mz_introspection    {export_id,import_id,worker_id}
 mz_worker_compute_frontiers_s2_primary_idx                  mz_worker_compute_frontiers                 mz_introspection    {export_id,worker_id,time}
 mz_worker_compute_import_frontiers_s2_primary_idx           mz_worker_compute_import_frontiers          mz_introspection    {export_id,import_id,worker_id,time}
