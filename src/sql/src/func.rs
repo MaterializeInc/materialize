@@ -2663,7 +2663,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     },
                     column_names: vec!["generate_series".into()],
                 })
-            }) => Int32, 1066;
+            }) => ReturnType::set_of(Int32.into()), 1066;
             params!(Int32, Int32) => Operation::binary(move |_ecx, start, stop| {
                 Ok(TableFuncPlan {
                     expr: HirRelationExpr::CallTable {
@@ -2672,7 +2672,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     },
                     column_names: vec!["generate_series".into()],
                 })
-            }) => Int32, 1067;
+            }) => ReturnType::set_of(Int32.into()), 1067;
             params!(Int64, Int64, Int64) => Operation::variadic(move |_ecx, exprs| {
                 Ok(TableFuncPlan {
                     expr: HirRelationExpr::CallTable {
@@ -2681,7 +2681,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     },
                     column_names: vec!["generate_series".into()],
                 })
-            }) => Int64, 1068;
+            }) => ReturnType::set_of(Int64.into()), 1068;
             params!(Int64, Int64) => Operation::binary(move |_ecx, start, stop| {
                 let row = Row::pack([Datum::Int64(1)]);
                 let column_type = ColumnType { scalar_type: ScalarType::Int64, nullable: false };
@@ -2692,7 +2692,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     },
                     column_names: vec!["generate_series".into()],
                 })
-            }) => Int64, 1069;
+            }) => ReturnType::set_of(Int64.into()), 1069;
             params!(Timestamp, Timestamp, Interval) => Operation::variadic(move |_ecx, exprs| {
                 Ok(TableFuncPlan {
                     expr: HirRelationExpr::CallTable {
@@ -2701,7 +2701,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     },
                     column_names: vec!["generate_series".into()],
                 })
-            }) => Timestamp, 938;
+            }) => ReturnType::set_of(Timestamp.into()), 938;
             params!(TimestampTz, TimestampTz, Interval) => Operation::variadic(move |_ecx, exprs| {
                 Ok(TableFuncPlan {
                     expr: HirRelationExpr::CallTable {
@@ -2710,7 +2710,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     },
                     column_names: vec!["generate_series".into()],
                 })
-            }) => TimestampTz, 939;
+            }) => ReturnType::set_of(TimestampTz.into()), 939;
         },
 
         "generate_subscripts" => Table {
@@ -2734,7 +2734,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     },
                     column_names: vec!["value".into()],
                 })
-            }) => Jsonb, 3219;
+            }) => ReturnType::set_of(Jsonb.into()), 3219;
         },
         "jsonb_array_elements_text" => Table {
             params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
@@ -2745,7 +2745,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     },
                     column_names: vec!["value".into()],
                 })
-            }) => String, 3465;
+            }) => ReturnType::set_of(String.into()), 3465;
         },
         "jsonb_each" => Table {
             params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
@@ -2756,7 +2756,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     },
                     column_names: vec!["key".into(), "value".into()],
                 })
-            }) => RecordAny, 3208;
+            }) => ReturnType::set_of(RecordAny), 3208;
         },
         "jsonb_each_text" => Table {
             params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
@@ -2767,7 +2767,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     },
                     column_names: vec!["key".into(), "value".into()],
                 })
-            }) => RecordAny, 3932;
+            }) => ReturnType::set_of(RecordAny), 3932;
         },
         "jsonb_object_keys" => Table {
             params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
@@ -2778,7 +2778,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     },
                     column_names: vec!["jsonb_object_keys".into()],
                 })
-            }) => String, 3931;
+            }) => ReturnType::set_of(String.into()), 3931;
         },
         // Note that these implementations' input to `generate_series` is
         // contrived to match Flink's expected values. There are other,
