@@ -27,7 +27,7 @@ use futures::StreamExt as AsyncStreamExt;
 use regex::Regex;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Operator;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::Scope;
 use timely::scheduling::SyncActivator;
 use tokio::runtime::Handle as TokioHandle;
 use tracing::error;
@@ -63,7 +63,7 @@ mod protobuf;
 /// also builds a differential dataflow collection that respects the
 /// data and progress messages in the underlying CDCv2 stream.
 pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
-    stream: &Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>, ()>>,
+    input: &Collection<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, u32>,
     schema: &str,
     registry: Option<CsrClient>,
     confluent_wire_format: bool,
@@ -73,8 +73,8 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
     let channel = Rc::new(RefCell::new(VecDeque::new()));
     let activator: Rc<RefCell<Option<SyncActivator>>> = Rc::new(RefCell::new(None));
     let mut vector = Vec::new();
-    stream.sink(
-        SourceOutput::<Option<Vec<u8>>, Option<Vec<u8>>, ()>::position_value_contract(),
+    input.inner.sink(
+        Exchange::new(|(x, _, _): &(SourceOutput<_, _>, _, _)| x.position.hashed()),
         "CDCv2-Decode",
         {
             let channel = Rc::clone(&channel);
@@ -83,7 +83,7 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
             move |input| {
                 input.for_each(|_time, data| {
                     data.swap(&mut vector);
-                    for data in vector.drain(..) {
+                    for (data, _time, _diff) in vector.drain(..) {
                         let value = match &data.value {
                             Some(value) => value,
                             None => continue,
@@ -124,11 +124,10 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
         }
     }
     // this operator returns a thread-safe drop-token
-    let (token, stream) =
-        differential_dataflow::capture::source::build(stream.scope(), move |ac| {
-            *activator.borrow_mut() = Some(ac);
-            YieldingIter::new_from(VdIterator(channel), Duration::from_millis(10))
-        });
+    let (token, stream) = differential_dataflow::capture::source::build(input.scope(), move |ac| {
+        *activator.borrow_mut() = Some(ac);
+        YieldingIter::new_from(VdIterator(channel), Duration::from_millis(10))
+    });
     (stream.as_collection(), token)
 }
 
@@ -355,14 +354,17 @@ fn try_decode_delimited(
 /// (which is not always possible otherwise, since often gibberish strings can be interpreted as Avro,
 ///  so the only signal is how many bytes you managed to decode).
 pub fn render_decode_delimited<G>(
-    stream: &Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>, ()>>,
+    input: &Collection<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, u32>,
     key_encoding: Option<DataEncoding>,
     value_encoding: DataEncoding,
     debug_name: &str,
     metadata_items: Vec<IncludedColumnSource>,
     metrics: DecodeMetrics,
     connection_context: &ConnectionContext,
-) -> (Stream<G, DecodeResult>, Option<Box<dyn Any + Send + Sync>>)
+) -> (
+    Collection<G, DecodeResult, Diff>,
+    Option<Box<dyn Any + Send + Sync>>,
+)
 where
     G: Scope,
 {
@@ -392,73 +394,78 @@ where
         connection_context,
     );
 
-    let dist = |x: &SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>, ()>| x.value.hashed();
+    let dist =
+        |(x, _, _): &(SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, _, _)| x.value.hashed();
 
-    let results = stream.unary_frontier(Exchange::new(dist), &op_name, move |_, _| {
-        move |input, output| {
-            let mut n_errors = 0;
-            let mut n_successes = 0;
-            input.for_each(|cap, data| {
-                let mut session = output.session(&cap);
-                for SourceOutput {
-                    key,
-                    value,
-                    position,
-                    upstream_time_millis,
-                    partition,
-                    headers,
-                    diff: (),
-                } in data.iter()
-                {
-                    let key = key_decoder.as_mut().and_then(|decoder| {
-                        try_decode_delimited(decoder, key.as_ref()).map(|result| {
-                            result.map_err(|inner| DecodeError {
-                                kind: inner,
-                                raw: key.clone(),
-                            })
-                        })
-                    });
+    let results = input
+        .inner
+        .unary_frontier(Exchange::new(dist), &op_name, move |_, _| {
+            move |input, output| {
+                let mut n_errors = 0;
+                let mut n_successes = 0;
+                input.for_each(|cap, data| {
+                    let mut session = output.session(&cap);
+                    for (output, ts, diff) in data.iter() {
+                        let SourceOutput {
+                            key,
+                            value,
+                            position,
+                            upstream_time_millis,
+                            partition,
+                            headers,
+                        } = output;
 
-                    let value =
-                        try_decode_delimited(&mut value_decoder, value.as_ref()).map(|result| {
-                            result.map_err(|inner| DecodeError {
-                                kind: inner,
-                                raw: value.clone(),
+                        let key = key_decoder.as_mut().and_then(|decoder| {
+                            try_decode_delimited(decoder, key.as_ref()).map(|result| {
+                                result.map_err(|inner| DecodeError {
+                                    kind: inner,
+                                    raw: key.clone(),
+                                })
                             })
                         });
 
-                    if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
-                        n_errors += 1;
-                    } else if matches!(&value, Some(Ok(_))) {
-                        n_successes += 1;
-                    }
+                        let value = try_decode_delimited(&mut value_decoder, value.as_ref()).map(
+                            |result| {
+                                result.map_err(|inner| DecodeError {
+                                    kind: inner,
+                                    raw: value.clone(),
+                                })
+                            },
+                        );
 
-                    session.give(DecodeResult {
-                        key,
-                        value: value.map(|s| s.map(|r| (r, 1))),
-                        position: *position,
-                        upstream_time_millis: *upstream_time_millis,
-                        partition: partition.clone(),
-                        metadata: to_metadata_row(
-                            &metadata_items,
-                            partition.clone(),
-                            *position,
-                            *upstream_time_millis,
-                            headers.as_deref(),
-                        ),
-                    });
+                        if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
+                            n_errors += 1;
+                        } else if matches!(&value, Some(Ok(_))) {
+                            n_successes += 1;
+                        }
+
+                        let result = DecodeResult {
+                            key,
+                            value,
+                            position: *position,
+                            upstream_time_millis: *upstream_time_millis,
+                            partition: partition.clone(),
+                            metadata: to_metadata_row(
+                                &metadata_items,
+                                partition.clone(),
+                                *position,
+                                *upstream_time_millis,
+                                headers.as_deref(),
+                            ),
+                        };
+                        session.give((result, ts.clone(), Diff::from(*diff)));
+                    }
+                });
+                // Matching historical practice, we only log metrics on the value decoder.
+                if n_errors > 0 {
+                    value_decoder.log_errors(n_errors);
                 }
-            });
-            // Matching historical practice, we only log metrics on the value decoder.
-            if n_errors > 0 {
-                value_decoder.log_errors(n_errors);
+                if n_successes > 0 {
+                    value_decoder.log_successes(n_successes);
+                }
             }
-            if n_successes > 0 {
-                value_decoder.log_successes(n_successes);
-            }
-        }
-    });
-    (results, None)
+        });
+    (results.as_collection(), None)
 }
 
 /// Decode arbitrary chunks of bytes into rows.
@@ -477,13 +484,16 @@ where
 /// If the decoder does find a message, we verify (by asserting) that it consumed some bytes, to avoid
 /// the possibility of infinite loops.
 pub fn render_decode<G>(
-    stream: &Stream<G, SourceOutput<(), ByteStream, ()>>,
+    input: &Collection<G, SourceOutput<(), ByteStream>, u32>,
     value_encoding: DataEncoding,
     debug_name: &str,
     metadata_items: Vec<IncludedColumnSource>,
     metrics: DecodeMetrics,
     connection_context: &ConnectionContext,
-) -> (Stream<G, DecodeResult>, Option<Box<dyn Any + Send + Sync>>)
+) -> (
+    Collection<G, DecodeResult, Diff>,
+    Option<Box<dyn Any + Send + Sync>>,
+)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -504,7 +514,7 @@ where
     // We therefore ignore it, and keep track ourselves of how many records we've seen (for filling in `mz_line_no`, etc).
     // Historically, non-delimited sources have their offset start at 1
     let mut n_seen = 1..;
-    let results = stream.unary_async(
+    let results = input.inner.unary_async(
         Pipeline,
         op_name,
         move |_, _, mut input, mut output| async move {
@@ -519,7 +529,7 @@ where
 
                 // Currently Kafka is the only kind of source that can have metadata, and it is
                 // always delimited, so we will never have metadata in `render_decode`
-                for item in data.drain(..) {
+                for (item, ts, diff) in data.drain(..) {
                     let SourceOutput {
                         key: _,
                         value,
@@ -527,8 +537,8 @@ where
                         upstream_time_millis,
                         partition,
                         headers,
-                        diff: (),
                     } = item;
+                    let diff = Diff::from(diff);
 
                     let Ok(mut stream) = Rc::try_unwrap(value.stream) else {
                         panic!("byte stream cloned unexpectedly");
@@ -585,35 +595,31 @@ where
                             if value_bytes_remaining.is_empty() {
                                 let result = DecodeResult {
                                     key: None,
-                                    value: Some(value.map(|r| (r, 1)).map_err(|inner| {
-                                        DecodeError {
-                                            kind: inner,
-                                            raw: None,
-                                        }
+                                    value: Some(value.map_err(|inner| DecodeError {
+                                        kind: inner,
+                                        raw: None,
                                     })),
                                     position: position.into(),
                                     upstream_time_millis,
                                     partition: partition.clone(),
                                     metadata,
                                 };
-                                output.give(&cap, result).await;
+                                output.give(&cap, (result, ts, diff)).await;
                                 value_buf = vec![];
                                 break;
                             } else {
                                 let result = DecodeResult {
                                     key: None,
-                                    value: Some(value.map(|r| (r, 1)).map_err(|inner| {
-                                        DecodeError {
-                                            kind: inner,
-                                            raw: None,
-                                        }
+                                    value: Some(value.map_err(|inner| DecodeError {
+                                        kind: inner,
+                                        raw: None,
                                     })),
                                     position: position.into(),
                                     upstream_time_millis,
                                     partition: partition.clone(),
                                     metadata,
                                 };
-                                output.give(&cap, result).await;
+                                output.give(&cap, (result, ts, diff)).await;
                             }
                             if is_err {
                                 // If decoding has gone off the rails, we can no longer be sure that the delimiters are correct, so it
@@ -653,7 +659,7 @@ where
 
                             let result = DecodeResult {
                                 key: None,
-                                value: Some(value.map(|r| (r, 1)).map_err(|inner| DecodeError {
+                                value: Some(value.map_err(|inner| DecodeError {
                                     kind: inner,
                                     raw: None,
                                 })),
@@ -662,7 +668,7 @@ where
                                 partition: partition.clone(),
                                 metadata,
                             };
-                            output.give(&cap, result).await;
+                            output.give(&cap, (result, ts, diff)).await;
                         }
                     }
                 }
@@ -676,7 +682,7 @@ where
             }
         },
     );
-    (results, None)
+    (results.as_collection(), None)
 }
 
 fn to_metadata_row(

@@ -35,6 +35,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
+use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::{FutureExt, StreamExt};
@@ -147,16 +148,13 @@ pub fn create_raw_source<RootG, G, C, R>(
 ) -> (
     (
         Vec<
-            Stream<
+            Collection<
                 G,
-                SourceOutput<
-                    <C::Reader as SourceReader>::Key,
-                    <C::Reader as SourceReader>::Value,
-                    <C::Reader as SourceReader>::Diff,
-                >,
+                SourceOutput<<C::Reader as SourceReader>::Key, <C::Reader as SourceReader>::Value>,
+                <C::Reader as SourceReader>::Diff,
             >,
         >,
-        Stream<G, SourceError>,
+        Collection<G, SourceError, Diff>,
     ),
     Option<Rc<dyn Any>>,
 )
@@ -164,6 +162,7 @@ where
     RootG: Scope<Timestamp = ()> + Clone,
     G: Scope<Timestamp = mz_repr::Timestamp> + Clone,
     C: SourceConnection + SourceConnectionBuilder + Clone + 'static,
+    <C::Reader as SourceReader>::Diff: Into<Diff>,
     R: ResumptionFrontierCalculator<mz_repr::Timestamp> + 'static,
 {
     let worker_id = config.worker_id;
@@ -663,7 +662,7 @@ fn remap_operator<G, FromTime>(
     config: RawSourceCreationConfig,
     mut source_upper_rx: UnboundedReceiver<Event<FromTime, ()>>,
     remap_relation_desc: RelationDesc,
-) -> (Stream<G, (FromTime, mz_repr::Timestamp, Diff)>, Rc<dyn Any>)
+) -> (Collection<G, FromTime, Diff>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     FromTime: SourceTimestamp,
@@ -785,7 +784,10 @@ where
         }
     });
 
-    (remap_stream, Rc::new(button.press_on_drop()))
+    (
+        remap_stream.as_collection(),
+        Rc::new(button.press_on_drop()),
+    )
 }
 
 /// Receives un-timestamped batches from the source reader and updates to the
@@ -798,11 +800,11 @@ fn reclock_operator<G, K, V, FromTime, D>(
     mut source_rx: UnboundedReceiver<
         Event<FromTime, (Result<SourceMessage<K, V>, SourceReaderError>, FromTime, D)>,
     >,
-    remap_trace_updates: Stream<G, (FromTime, mz_repr::Timestamp, Diff)>,
+    remap_trace_updates: Collection<G, FromTime, Diff>,
 ) -> (
     (
-        Vec<Stream<G, SourceOutput<K, V, D>>>,
-        Stream<G, SourceError>,
+        Vec<Collection<G, SourceOutput<K, V>, D>>,
+        Collection<G, SourceError, Diff>,
     ),
     Option<SourceToken>,
 )
@@ -811,7 +813,7 @@ where
     K: timely::Data + MaybeLength,
     V: timely::Data + MaybeLength,
     FromTime: SourceTimestamp,
-    D: timely::Data,
+    D: Semigroup + Into<Diff>,
 {
     let RawSourceCreationConfig {
         name,
@@ -844,7 +846,7 @@ where
     let (mut reclocked_output, reclocked_stream) = reclock_op.new_output();
 
     // Need to broadcast the remap changes to all workers.
-    let remap_trace_updates = remap_trace_updates.broadcast();
+    let remap_trace_updates = remap_trace_updates.inner.broadcast();
     let mut remap_input = reclock_op.new_input(&remap_trace_updates, Pipeline);
 
     reclock_op.build(move |capabilities| async move {
@@ -1030,16 +1032,21 @@ where
 
     // TODO(petrosagg): output the two streams directly
     let (ok_muxed_stream, err_stream) =
-        reclocked_stream.map_fallible("reclock-demux-ok-err", |(output, r)| match r {
-            Ok(ok) => Ok((output, ok)),
-            Err(err) => Err(err),
+        reclocked_stream.map_fallible("reclock-demux-ok-err", |((output, r), ts, diff)| match r {
+            Ok(ok) => Ok(((output, ok), ts, diff)),
+            Err(err) => Err((err, ts, diff.into())),
         });
 
-    let ok_streams = ok_muxed_stream.partition(u64::cast_from(num_outputs), |(output, data)| {
-        (u64::cast_from(output), data)
-    });
+    let ok_streams = ok_muxed_stream
+        .partition(
+            u64::cast_from(num_outputs),
+            |((output, data), time, diff)| (u64::cast_from(output), (data, time, diff)),
+        )
+        .into_iter()
+        .map(|stream| stream.as_collection())
+        .collect();
 
-    ((ok_streams, err_stream), None)
+    ((ok_streams, err_stream.as_collection()), None)
 }
 
 /// Reclocks an `IntoTime` frontier stream into a `FromTime` frontier stream. This is used for the
@@ -1115,8 +1122,19 @@ async fn handle_message<K, V, T, D>(
     cap_set: &CapabilitySet<mz_repr::Timestamp>,
     output_handle: &mut AsyncOutputHandle<
         mz_repr::Timestamp,
-        Vec<(usize, Result<SourceOutput<K, V, D>, SourceError>)>,
-        Tee<mz_repr::Timestamp, (usize, Result<SourceOutput<K, V, D>, SourceError>)>,
+        Vec<(
+            (usize, Result<SourceOutput<K, V>, SourceError>),
+            mz_repr::Timestamp,
+            D,
+        )>,
+        Tee<
+            mz_repr::Timestamp,
+            (
+                (usize, Result<SourceOutput<K, V>, SourceError>),
+                mz_repr::Timestamp,
+                D,
+            ),
+        >,
     >,
     metric_updates: &mut BTreeMap<PartitionId, (MzOffset, mz_repr::Timestamp, Diff)>,
     ts: mz_repr::Timestamp,
@@ -1125,7 +1143,7 @@ async fn handle_message<K, V, T, D>(
     K: timely::Data + MaybeLength,
     V: timely::Data + MaybeLength,
     T: SourceTimestamp,
-    D: timely::Data,
+    D: Semigroup,
 {
     let (partition, offset) = time
         .try_into_compat_ts()
@@ -1150,7 +1168,6 @@ async fn handle_message<K, V, T, D>(
                     message.upstream_time_millis,
                     partition.clone(),
                     message.headers,
-                    diff,
                 )),
             )
         }
@@ -1166,7 +1183,7 @@ async fn handle_message<K, V, T, D>(
     };
 
     let ts_cap = cap_set.delayed(&ts);
-    output_handle.give(&ts_cap, output).await;
+    output_handle.give(&ts_cap, (output, ts, diff)).await;
     match metric_updates.entry(partition) {
         Entry::Occupied(mut entry) => {
             entry.insert((offset, ts, entry.get().2 + 1));

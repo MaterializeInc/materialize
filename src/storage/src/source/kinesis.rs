@@ -191,7 +191,7 @@ impl SourceReader for KinesisSourceReader {
     type Key = ();
     type Value = Option<Vec<u8>>;
     type Time = MzOffset;
-    type Diff = ();
+    type Diff = u32;
 
     fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Time, Self::Diff> {
         if !self.active_read_worker {
@@ -214,7 +214,7 @@ impl SourceReader for KinesisSourceReader {
                 let cap = self.data_capability.delayed(&ts);
                 self.upper_capability.downgrade(&(ts + 1));
                 let msg = Err(SourceReaderError::other_definite(e));
-                return NextMessage::Ready(SourceMessageType::Message(msg, cap, ()));
+                return NextMessage::Ready(SourceMessageType::Message(msg, cap, 1));
             }
             self.last_checked_shards = std::time::Instant::now();
         }
@@ -224,80 +224,78 @@ impl SourceReader for KinesisSourceReader {
             let next_ts = ts + 1;
             self.data_capability.downgrade(&next_ts);
             self.upper_capability.downgrade(&next_ts);
-            NextMessage::Ready(SourceMessageType::Message(Ok(message), cap, ()))
+            NextMessage::Ready(SourceMessageType::Message(Ok(message), cap, 1))
         } else {
             // Rotate through all of a stream's shards, start with a new shard on each activation.
             if let Some((shard_id, mut shard_iterator)) = self.shard_queue.pop_front() {
                 if let Some(iterator) = &shard_iterator {
-                    let get_records_output = match self
-                        .tokio_handle
-                        .block_on(self.get_records(iterator))
-                    {
-                        Ok(output) => {
-                            shard_iterator = output.next_shard_iterator.clone();
-                            if let Some(millis) = output.millis_behind_latest {
-                                self.shard_set
-                                    .get(&shard_id)
-                                    .unwrap()
-                                    .millis_behind_latest
-                                    .set(millis);
+                    let get_records_output =
+                        match self.tokio_handle.block_on(self.get_records(iterator)) {
+                            Ok(output) => {
+                                shard_iterator = output.next_shard_iterator.clone();
+                                if let Some(millis) = output.millis_behind_latest {
+                                    self.shard_set
+                                        .get(&shard_id)
+                                        .unwrap()
+                                        .millis_behind_latest
+                                        .set(millis);
+                                }
+                                output
                             }
-                            output
-                        }
-                        Err(e @ SdkError::DispatchFailure(_)) => {
-                            // todo@jldlaughlin: Parse this to determine fatal/retriable?
-                            error!("{}", e);
-                            self.shard_queue.push_back((shard_id, shard_iterator));
-                            // Do not send error message as this would cause source to terminate
-                            return NextMessage::TransientDelay;
-                        }
-                        Err(SdkError::ServiceError(err))
-                            if err.err().is_expired_iterator_exception() =>
-                        {
-                            // todo@jldlaughlin: Will need track source offsets to grab a new iterator.
-                            error!("{}", err.err());
-                            // XXX(petrosagg): We are fabricating a timestamp here. Is the
-                            // error truly definite?
-                            let ts = MzOffset::from(self.processed_message_count);
-                            let cap = self.data_capability.delayed(&ts);
-                            self.upper_capability.downgrade(&(ts + 1));
-                            let msg = Err(SourceReaderError {
-                                inner: SourceErrorDetails::Other(err.err().to_string()),
-                            });
-                            return NextMessage::Ready(SourceMessageType::Message(msg, cap, ()));
-                        }
-                        Err(SdkError::ServiceError(err))
-                            if err.err().is_provisioned_throughput_exceeded_exception() =>
-                        {
-                            self.shard_queue.push_back((shard_id, shard_iterator));
-                            // Do not send error message as this would cause source to terminate
-                            return NextMessage::Pending;
-                        }
-                        Err(e) => {
-                            // Fatal service errors:
-                            //  - InvalidArgument
-                            //  - KMSAccessDenied, KMSDisabled, KMSInvalidState, KMSNotFound,
-                            //    KMSOptInRequired, KMSThrottling
-                            //  - ResourceNotFound
-                            //
-                            // Other fatal Rusoto errors:
-                            // - Credentials
-                            // - Validation
-                            // - ParseError
-                            // - Unknown (raw HTTP provided)
-                            // - Blocking
-                            error!("{}", e);
-                            // XXX(petrosagg): We are fabricating a timestamp here. Is the
-                            // error truly definite?
-                            let ts = MzOffset::from(self.processed_message_count);
-                            let cap = self.data_capability.delayed(&ts);
-                            self.upper_capability.downgrade(&(ts + 1));
-                            let msg = Err(SourceReaderError {
-                                inner: SourceErrorDetails::Other(e.to_string()),
-                            });
-                            return NextMessage::Ready(SourceMessageType::Message(msg, cap, ()));
-                        }
-                    };
+                            Err(e @ SdkError::DispatchFailure(_)) => {
+                                // todo@jldlaughlin: Parse this to determine fatal/retriable?
+                                error!("{}", e);
+                                self.shard_queue.push_back((shard_id, shard_iterator));
+                                // Do not send error message as this would cause source to terminate
+                                return NextMessage::TransientDelay;
+                            }
+                            Err(SdkError::ServiceError(err))
+                                if err.err().is_expired_iterator_exception() =>
+                            {
+                                // todo@jldlaughlin: Will need track source offsets to grab a new iterator.
+                                error!("{}", err.err());
+                                // XXX(petrosagg): We are fabricating a timestamp here. Is the
+                                // error truly definite?
+                                let ts = MzOffset::from(self.processed_message_count);
+                                let cap = self.data_capability.delayed(&ts);
+                                self.upper_capability.downgrade(&(ts + 1));
+                                let msg = Err(SourceReaderError {
+                                    inner: SourceErrorDetails::Other(err.err().to_string()),
+                                });
+                                return NextMessage::Ready(SourceMessageType::Message(msg, cap, 1));
+                            }
+                            Err(SdkError::ServiceError(err))
+                                if err.err().is_provisioned_throughput_exceeded_exception() =>
+                            {
+                                self.shard_queue.push_back((shard_id, shard_iterator));
+                                // Do not send error message as this would cause source to terminate
+                                return NextMessage::Pending;
+                            }
+                            Err(e) => {
+                                // Fatal service errors:
+                                //  - InvalidArgument
+                                //  - KMSAccessDenied, KMSDisabled, KMSInvalidState, KMSNotFound,
+                                //    KMSOptInRequired, KMSThrottling
+                                //  - ResourceNotFound
+                                //
+                                // Other fatal Rusoto errors:
+                                // - Credentials
+                                // - Validation
+                                // - ParseError
+                                // - Unknown (raw HTTP provided)
+                                // - Blocking
+                                error!("{}", e);
+                                // XXX(petrosagg): We are fabricating a timestamp here. Is the
+                                // error truly definite?
+                                let ts = MzOffset::from(self.processed_message_count);
+                                let cap = self.data_capability.delayed(&ts);
+                                self.upper_capability.downgrade(&(ts + 1));
+                                let msg = Err(SourceReaderError {
+                                    inner: SourceErrorDetails::Other(e.to_string()),
+                                });
+                                return NextMessage::Ready(SourceMessageType::Message(msg, cap, 1));
+                            }
+                        };
 
                     for record in get_records_output.records.unwrap_or_default() {
                         let data = record
@@ -326,7 +324,7 @@ impl SourceReader for KinesisSourceReader {
                     let next_ts = ts + 1;
                     self.data_capability.downgrade(&next_ts);
                     self.upper_capability.downgrade(&next_ts);
-                    NextMessage::Ready(SourceMessageType::Message(Ok(msg), cap, ()))
+                    NextMessage::Ready(SourceMessageType::Message(Ok(msg), cap, 1))
                 }
                 None => NextMessage::Pending,
             }

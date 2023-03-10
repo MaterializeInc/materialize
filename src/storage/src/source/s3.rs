@@ -898,7 +898,7 @@ impl SourceReader for S3SourceReader {
     type Key = ();
     type Value = ByteStream;
     type Time = MzOffset;
-    type Diff = ();
+    type Diff = u32;
 
     fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Time, Self::Diff> {
         if !self.active_read_worker {
@@ -920,7 +920,7 @@ impl SourceReader for S3SourceReader {
                 let next_ts = ts + 1;
                 self.data_capability.downgrade(&next_ts);
                 self.upper_capability.downgrade(&next_ts);
-                NextMessage::Ready(SourceMessageType::Message(Ok(msg), cap, ()))
+                NextMessage::Ready(SourceMessageType::Message(Ok(msg), cap, 1))
             }
             Some(Some(Err(e))) => match e {
                 S3Error::GetObjectError { .. } => {
@@ -939,7 +939,7 @@ impl SourceReader for S3SourceReader {
                     let next_ts = not_definite_ts + 1;
                     self.data_capability.downgrade(&next_ts);
                     self.upper_capability.downgrade(&next_ts);
-                    NextMessage::Ready(SourceMessageType::Message(Err(err), cap, ()))
+                    NextMessage::Ready(SourceMessageType::Message(Err(err), cap, 1))
                 }
             },
             None => NextMessage::Pending,
