@@ -471,9 +471,18 @@ impl Optimizer {
             // - there should be no RelationCSE between this LiteralConstraints and
             //   JoinImplementation, because that could move an IndexedFilter behind a Get.
             // - The last RelationCSE before JoinImplementation should be with inline_mfp = true.
-            // - Currently, JoinImplementation has to be in the same fixpoint loop with
-            //   LiteralLifting, because the latter sometimes creates `Unimplemented` joins
-            //   (despite LiteralLifting already having been run in the logical optimizer).
+            // - Currently, JoinImplementation can't be before LiteralLifting because the latter
+            //   sometimes creates `Unimplemented` joins (despite LiteralLifting already having been
+            //   run in the logical optimizer).
+            // - Not running ColumnKnowledge in the same fixpoint loop with JoinImplementation
+            //   is slightly hurting our plans. However, I'd say we should fix these problems by
+            //   making ColumnKnowledge (and/or JoinImplementation) smarter (#18051), rather than
+            //   having them in the same fixpoint loop. If they would be in the same fixpoint loop,
+            //   then we either run the risk of ColumnKnowledge invalidating a join plan (#17993),
+            //   or we would have to run JoinImplementation an unbounded number of times, which is
+            //   also not good #16076.
+            //   (The same is true for FoldConstants, Demand, and LiteralLifting to a lesser
+            //   extent.)
             //
             // Also note that FoldConstants and LiteralLifting are not confluent. They can
             // oscillate between e.g.:
@@ -483,7 +492,6 @@ impl Optimizer {
             //         Map (4)
             //           Constant
             //             - ()
-            Box::new(crate::literal_constraints::LiteralConstraints),
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![
@@ -493,6 +501,7 @@ impl Optimizer {
                     Box::new(crate::literal_lifting::LiteralLifting::default()),
                 ],
             }),
+            Box::new(crate::literal_constraints::LiteralConstraints),
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![Box::new(

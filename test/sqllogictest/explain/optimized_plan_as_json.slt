@@ -3766,7 +3766,7 @@ FROM
                               "CallBinary": {
                                 "func": "NotEq",
                                 "expr1": {
-                                  "Column": 2
+                                  "Column": 0
                                 },
                                 "expr2": {
                                   "Column": 3
@@ -3801,7 +3801,7 @@ FROM
                                           "column_types": [
                                             {
                                               "scalar_type": "Int32",
-                                              "nullable": true
+                                              "nullable": false
                                             },
                                             {
                                               "scalar_type": "Int32",
@@ -3847,7 +3847,7 @@ FROM
                                                                 "column_types": [
                                                                   {
                                                                     "scalar_type": "Int32",
-                                                                    "nullable": true
+                                                                    "nullable": false
                                                                   },
                                                                   {
                                                                     "scalar_type": "Int32",
@@ -4047,7 +4047,7 @@ FROM
                                     "CallBinary": {
                                       "func": "NotEq",
                                       "expr1": {
-                                        "Column": 3
+                                        "Column": 0
                                       },
                                       "expr2": {
                                         "Column": 4
@@ -4081,7 +4081,7 @@ FROM
                                               "IsNull": null
                                             },
                                             "expr": {
-                                              "Column": 3
+                                              "Column": 0
                                             }
                                           }
                                         }
@@ -4914,23 +4914,6 @@ WHERE a = c and d = e and b = f
                           "IsNull": null
                         },
                         "expr": {
-                          "Column": 2
-                        }
-                      }
-                    }
-                  }
-                },
-                {
-                  "CallUnary": {
-                    "func": {
-                      "Not": null
-                    },
-                    "expr": {
-                      "CallUnary": {
-                        "func": {
-                          "IsNull": null
-                        },
-                        "expr": {
                           "Column": 3
                         }
                       }
@@ -5269,41 +5252,7 @@ WHERE b = c and d = e
                           "IsNull": null
                         },
                         "expr": {
-                          "Column": 2
-                        }
-                      }
-                    }
-                  }
-                },
-                {
-                  "CallUnary": {
-                    "func": {
-                      "Not": null
-                    },
-                    "expr": {
-                      "CallUnary": {
-                        "func": {
-                          "IsNull": null
-                        },
-                        "expr": {
                           "Column": 3
-                        }
-                      }
-                    }
-                  }
-                },
-                {
-                  "CallUnary": {
-                    "func": {
-                      "Not": null
-                    },
-                    "expr": {
-                      "CallUnary": {
-                        "func": {
-                          "IsNull": null
-                        },
-                        "expr": {
-                          "Column": 4
                         }
                       }
                     }

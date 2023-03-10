@@ -762,13 +762,9 @@ Explained Query:
       final_closure
         project=(#0, #1, #0, #2, #0, #3)
       delta_stage[1]
-        closure
-          filter=((#0) IS NOT NULL)
         lookup={ relation=2, key=[#0] }
         stream={ key=[#0], thinning=(#1, #2) }
       delta_stage[0]
-        closure
-          filter=((#0) IS NOT NULL)
         lookup={ relation=1, key=[#0] }
         stream={ key=[#0], thinning=(#1) }
       initial_closure
@@ -780,7 +776,6 @@ Explained Query:
       delta_stage[1]
         closure
           project=(#1..=#4)
-          filter=((#0) IS NOT NULL)
         lookup={ relation=2, key=[#0] }
         stream={ key=[#2], thinning=(#0, #1, #3) }
       delta_stage[0]
@@ -789,8 +784,6 @@ Explained Query:
           filter=((#0) IS NOT NULL)
         lookup={ relation=0, key=[#0] }
         stream={ key=[#0], thinning=(#1) }
-      initial_closure
-        filter=((#0) IS NOT NULL)
       source={ relation=1, key=[#0] }
     plan_path[2]
       final_closure
@@ -798,7 +791,6 @@ Explained Query:
       delta_stage[1]
         closure
           project=(#1, #2, #4, #3)
-          filter=((#0) IS NOT NULL)
         lookup={ relation=1, key=[#0] }
         stream={ key=[#2], thinning=(#0, #1, #3) }
       delta_stage[0]
@@ -807,8 +799,6 @@ Explained Query:
           filter=((#0) IS NOT NULL)
         lookup={ relation=0, key=[#0] }
         stream={ key=[#0], thinning=(#1) }
-      initial_closure
-        filter=((#0) IS NOT NULL)
       source={ relation=2, key=[#0] }
     Get::PassArrangements materialize.public.t
       raw=false

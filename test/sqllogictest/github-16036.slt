@@ -39,7 +39,6 @@ Explained Query:
     linear_stage[1]
       closure
         project=(#1..=#3)
-        filter=((#0) IS NOT NULL)
       lookup={ relation=2, key=[#1] }
       stream={ key=[#1], thinning=(#0, #2) }
     linear_stage[0]
