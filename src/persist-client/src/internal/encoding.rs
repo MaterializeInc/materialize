@@ -219,62 +219,22 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
         } = self;
 
         let mut field_diffs = ProtoStateFieldDiffs::default();
-        field_diffs_into_proto(
-            ProtoStateField::Hostname,
-            hostname,
-            &mut field_diffs,
-            |()| Vec::new(),
-            |v| v.into_proto().encode_to_vec(),
-        );
-        field_diffs_into_proto(
-            ProtoStateField::LastGcReq,
-            last_gc_req,
-            &mut field_diffs,
-            |()| Vec::new(),
-            |v| v.into_proto().encode_to_vec(),
-        );
-        field_diffs_into_proto(
-            ProtoStateField::Rollups,
-            rollups,
-            &mut field_diffs,
-            |k| k.into_proto().encode_to_vec(),
-            |v| v.into_proto().encode_to_vec(),
-        );
+        field_diffs_into_proto(ProtoStateField::Hostname, hostname, &mut field_diffs);
+        field_diffs_into_proto(ProtoStateField::LastGcReq, last_gc_req, &mut field_diffs);
+        field_diffs_into_proto(ProtoStateField::Rollups, rollups, &mut field_diffs);
         field_diffs_into_proto(
             ProtoStateField::LeasedReaders,
             leased_readers,
             &mut field_diffs,
-            |k| k.into_proto().encode_to_vec(),
-            |v| v.into_proto().encode_to_vec(),
         );
         field_diffs_into_proto(
             ProtoStateField::CriticalReaders,
             critical_readers,
             &mut field_diffs,
-            |k| k.into_proto().encode_to_vec(),
-            |v| v.into_proto().encode_to_vec(),
         );
-        field_diffs_into_proto(
-            ProtoStateField::Writers,
-            writers,
-            &mut field_diffs,
-            |k| k.into_proto().encode_to_vec(),
-            |v| v.into_proto().encode_to_vec(),
-        );
-        field_diffs_into_proto(
-            ProtoStateField::Since,
-            since,
-            &mut field_diffs,
-            |()| Vec::new(),
-            |v| v.into_proto().encode_to_vec(),
-        );
-        field_diffs_into_proto(
-            ProtoStateField::Spine,
-            spine,
-            &mut field_diffs,
-            |k| k.into_proto().encode_to_vec(),
-            |()| Vec::new(),
-        );
+        field_diffs_into_proto(ProtoStateField::Writers, writers, &mut field_diffs);
+        field_diffs_into_proto(ProtoStateField::Since, since, &mut field_diffs);
+        field_diffs_into_proto(ProtoStateField::Spine, spine, &mut field_diffs);
         debug_assert_eq!(field_diffs.validate(), Ok(()));
         ProtoStateDiff {
             applier_version: applier_version.to_string(),
@@ -395,52 +355,52 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
     }
 }
 
-fn field_diffs_into_proto<K, V, KFn, VFn>(
+fn field_diffs_into_proto<K, KP, V, VP>(
     field: ProtoStateField,
     diffs: &[StateFieldDiff<K, V>],
     proto: &mut ProtoStateFieldDiffs,
-    k_fn: KFn,
-    v_fn: VFn,
 ) where
-    KFn: Fn(&K) -> Vec<u8>,
-    VFn: Fn(&V) -> Vec<u8>,
+    KP: prost::Message,
+    K: RustType<KP>,
+    VP: prost::Message,
+    V: RustType<VP>,
 {
     for diff in diffs.iter() {
-        field_diff_into_proto(field, diff, proto, &k_fn, &v_fn);
+        field_diff_into_proto(field, diff, proto);
     }
 }
 
-fn field_diff_into_proto<K, V, KFn, VFn>(
+fn field_diff_into_proto<K, KP, V, VP>(
     field: ProtoStateField,
     diff: &StateFieldDiff<K, V>,
     proto: &mut ProtoStateFieldDiffs,
-    k_fn: KFn,
-    v_fn: VFn,
 ) where
-    KFn: Fn(&K) -> Vec<u8>,
-    VFn: Fn(&V) -> Vec<u8>,
+    KP: prost::Message,
+    K: RustType<KP>,
+    VP: prost::Message,
+    V: RustType<VP>,
 {
     proto.fields.push(i32::from(field));
-    proto.push_data(k_fn(&diff.key));
+    proto.encode_proto(&diff.key.into_proto());
     match &diff.val {
         StateFieldValDiff::Insert(to) => {
             proto
                 .diff_types
                 .push(i32::from(ProtoStateFieldDiffType::Insert));
-            proto.push_data(v_fn(to));
+            proto.encode_proto(&to.into_proto());
         }
         StateFieldValDiff::Update(from, to) => {
             proto
                 .diff_types
                 .push(i32::from(ProtoStateFieldDiffType::Update));
-            proto.push_data(v_fn(from));
-            proto.push_data(v_fn(to));
+            proto.encode_proto(&from.into_proto());
+            proto.encode_proto(&to.into_proto());
         }
         StateFieldValDiff::Delete(from) => {
             proto
                 .diff_types
                 .push(i32::from(ProtoStateFieldDiffType::Delete));
-            proto.push_data(v_fn(from));
+            proto.encode_proto(&from.into_proto());
         }
     };
 }

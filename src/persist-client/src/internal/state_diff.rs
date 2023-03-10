@@ -865,6 +865,13 @@ fn apply_compaction_lenient<'a, T: Timestamp + Lattice>(
 }
 
 impl ProtoStateFieldDiffs {
+    pub fn encode_proto<M: prost::Message>(&mut self, msg: &M) {
+        let encoded_length = msg.encoded_len();
+        self.data_lens.push(u64::cast_from(encoded_length));
+        self.data_bytes.reserve(encoded_length);
+        msg.encode(&mut self.data_bytes).expect("reserved enough space");
+    }
+
     pub fn push_data(&mut self, mut data: Vec<u8>) {
         self.data_lens.push(u64::cast_from(data.len()));
         self.data_bytes.append(&mut data);
