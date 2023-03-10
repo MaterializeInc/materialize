@@ -176,11 +176,11 @@ query T multiline
 EXPLAIN SHOW CLUSTERS
 ----
 Explained Query (fast path):
-  Project (#1)
-    ReadExistingIndex mz_internal.mz_clusters_ind
+  Project (#0)
+    ReadExistingIndex mz_internal.mz_show_clusters_ind
 
 Used Indexes:
-  - mz_internal.mz_clusters_ind
+  - mz_internal.mz_show_clusters_ind
 
 EOF
 
@@ -224,16 +224,14 @@ ORDER BY r.id;
 ----
 Explained Query:
   Finish order_by=[#0 asc nulls_last] output=[#0..=#5]
-    Project (#0..=#3, #5, #7)
-      Join on=(#0 = #6 AND #2 = #4) type=differential
-        ArrangeBy keys=[[#2]]
-          Project (#0..=#3)
-            Get mz_catalog.mz_cluster_replicas
+    Project (#0..=#3, #6, #10)
+      Join on=(#0 = #7 AND #2 = #5) type=differential
+        ArrangeBy keys=[[#0]]
+          Get mz_catalog.mz_cluster_replicas
         ArrangeBy keys=[[#0]]
           Get mz_catalog.mz_clusters
         ArrangeBy keys=[[#0]]
-          Project (#0, #3)
-            Get mz_internal.mz_cluster_replica_utilization
+          Get mz_internal.mz_cluster_replica_utilization
 
 Used Indexes:
   - mz_internal.mz_clusters_ind
@@ -266,13 +264,12 @@ Explained Query:
       Get l2
   With
     cte l2 =
-      Project (#0..=#4, #6, #7)
-        Join on=(#0 = #5) type=differential
-          Get l1
-          ArrangeBy keys=[[#0]]
-            Project (#0, #4, #5)
-              Filter "u%" ~~(#0)
-                Get mz_internal.mz_source_statuses
+      Project (#0..=#4, #9, #10)
+        Filter "u%" ~~(#0)
+          Join on=(#0 = #5) type=differential
+            Get l1
+            ArrangeBy keys=[[#0]]
+              Get mz_internal.mz_source_statuses
     cte l1 =
       ArrangeBy keys=[[#0]]
         Get l0
@@ -302,9 +299,9 @@ Explained Query:
     Project (#1, #0, #2)
       Reduce group_by=[#1] aggregates=[max((extract_epoch_tstz(#0) * 1000)), count(*)]
         Project (#0, #3)
-          Filter (#1 = "u6") AND (#5 <= 100) AND (#5 >= 0) AND (#3) IS NOT NULL
+          Filter (#6 <= 100) AND (#6 >= 0) AND (#3) IS NOT NULL
             Map (timestamp_tz_to_mz_timestamp(#0))
-              Get mz_internal.mz_source_status_history
+              ReadExistingIndex mz_internal.mz_source_status_history lookup_value=("u6")
 
 Used Indexes:
   - mz_internal.mz_source_status_history_ind
