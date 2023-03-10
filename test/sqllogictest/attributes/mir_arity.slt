@@ -70,12 +70,13 @@ materialize.public.test1:
   With
     cte l1 =
       Project (#0..=#3) // { arity: 4 }
-        Join on=(#0 = #4) type=differential // { arity: 5 }
-          ArrangeBy keys=[[#0]] // { arity: 3 }
-            Filter (#0) IS NOT NULL // { arity: 3 }
-              Get l0 // { arity: 3 }
-          ArrangeBy keys=[[#1]] // { arity: 2 }
-            Get materialize.public.u // { arity: 2 }
+        Filter (#0) IS NOT NULL // { arity: 5 }
+          Join on=(#0 = #4) type=differential // { arity: 5 }
+            ArrangeBy keys=[[#0]] // { arity: 3 }
+              Filter (#0) IS NOT NULL // { arity: 3 }
+                Get l0 // { arity: 3 }
+            ArrangeBy keys=[[#1]] // { arity: 2 }
+              Get materialize.public.u // { arity: 2 }
     cte l0 =
       FlatMap generate_series(#0, #1, 1) // { arity: 3 }
         Get materialize.public.t // { arity: 2 }

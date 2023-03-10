@@ -249,7 +249,7 @@ Explained Query:
           ArrangeBy keys=[[#0, #1]] // { arity: 2 }
             Reduce group_by=[#0] aggregates=[min(#1)] // { arity: 2 }
               Project (#0, #4) // { arity: 2 }
-                Filter (#18 = "EUROPE") AND (#6) IS NOT NULL AND (#13) IS NOT NULL AND (#17) IS NOT NULL // { arity: 20 }
+                Filter (#18 = "EUROPE") AND (#2) IS NOT NULL AND (#9) IS NOT NULL AND (#15) IS NOT NULL // { arity: 20 }
                   Join on=(#0 = #1 AND #2 = #6 AND #9 = #13 AND #15 = #17) type=delta // { arity: 20 }
                     implementation
                       %0 » %1:l1[#0]KA » %2:l0[#0]KA » %3:l2[#0]KA » %4:l3[#0]KAef
@@ -268,7 +268,7 @@ Explained Query:
     With
       cte l4 =
         Project (#0, #2, #10, #11, #13..=#15, #19, #22) // { arity: 9 }
-          Filter (#5 = 15) AND (#26 = "EUROPE") AND (#0) IS NOT NULL AND (#9) IS NOT NULL AND (#21) IS NOT NULL AND (#25) IS NOT NULL AND "%BRASS" ~~(varchar_to_text(#4)) // { arity: 28 }
+          Filter (#5 = 15) AND (#26 = "EUROPE") AND (#0) IS NOT NULL AND (#9) IS NOT NULL AND (#12) IS NOT NULL AND (#23) IS NOT NULL AND "%BRASS" ~~(varchar_to_text(#4)) // { arity: 28 }
             Join on=(#0 = #16 AND #9 = #17 AND #12 = #21 AND #23 = #25) type=delta // { arity: 28 }
               implementation
                 %0:part » %2:l1[#0]KA » %1:l0[#0]KA » %3:l2[#0]KA » %4:l3[#0]KAef
@@ -445,7 +445,7 @@ Explained Query:
   Finish order_by=[#1 desc nulls_first] output=[#0, #1]
     Reduce group_by=[#2] aggregates=[sum((#0 * (1 - #1)))] // { arity: 2 }
       Project (#22, #23, #36) // { arity: 3 }
-        Filter (#40 = "ASIA") AND (#12 < 1995-01-01) AND (#12 >= 1994-01-01) AND (#0) IS NOT NULL AND (#8) IS NOT NULL AND (#35) IS NOT NULL AND (#39) IS NOT NULL // { arity: 42 }
+        Filter (#40 = "ASIA") AND (#12 < 1995-01-01) AND (#12 >= 1994-01-01) AND (#0) IS NOT NULL AND (#3) IS NOT NULL AND (#8) IS NOT NULL AND (#37) IS NOT NULL // { arity: 42 }
           Join on=(#0 = #9 AND eq(#3, #34, #35) AND #8 = #17 AND #19 = #33 AND #37 = #39) type=differential // { arity: 42 }
             implementation
               %5:region[#0]KAef » %4:nation[#2]KAef » %0:customer[#3]KAef » %1:orders[#1]KAeiif » %2:lineitem[#0]KAeiif » %3:supplier[#0, #1]KKeiif
@@ -558,7 +558,7 @@ Explained Query:
     Return // { arity: 4 }
       Reduce group_by=[#3, #4, extract_year_d(#2)] aggregates=[sum((#0 * (1 - #1)))] // { arity: 4 }
         Project (#12, #13, #17, #41, #45) // { arity: 5 }
-          Filter (#17 <= 1996-12-31) AND (#17 >= 1995-01-01) AND (#0) IS NOT NULL AND (#23) IS NOT NULL AND (#32) IS NOT NULL AND (#40) IS NOT NULL AND (#44) IS NOT NULL AND (#48 OR #49) AND (#50 OR #51) AND ((#48 AND #51) OR (#49 AND #50)) // { arity: 52 }
+          Filter (#17 <= 1996-12-31) AND (#17 >= 1995-01-01) AND (#0) IS NOT NULL AND (#3) IS NOT NULL AND (#7) IS NOT NULL AND (#24) IS NOT NULL AND (#35) IS NOT NULL AND (#48 OR #49) AND (#50 OR #51) AND ((#48 AND #51) OR (#49 AND #50)) // { arity: 52 }
             Map ((#41 = "FRANCE"), (#41 = "GERMANY"), (#45 = "FRANCE"), (#45 = "GERMANY")) // { arity: 52 }
               Join on=(#0 = #9 AND #3 = #40 AND #7 = #23 AND #24 = #32 AND #35 = #44) type=delta // { arity: 48 }
                 implementation
@@ -643,7 +643,7 @@ Explained Query:
       Map ((#1 / #2)) // { arity: 4 }
         Reduce group_by=[extract_year_d(#2)] aggregates=[sum(case when (#3 = "BRAZIL") then (#0 * (1 - #1)) else 0 end), sum((#0 * (1 - #1)))] // { arity: 3 }
           Project (#21, #22, #36, #54) // { arity: 4 }
-            Filter (#58 = "AMERICA") AND (#36 <= 1996-12-31) AND (#36 >= 1995-01-01) AND (#0) IS NOT NULL AND (#9) IS NOT NULL AND (#32) IS NOT NULL AND (#41) IS NOT NULL AND (#49) IS NOT NULL AND (#53) IS NOT NULL AND (#57) IS NOT NULL AND ("ECONOMY ANODIZED STEEL" = varchar_to_text(#4)) // { arity: 60 }
+            Filter (#58 = "AMERICA") AND (#36 <= 1996-12-31) AND (#36 >= 1995-01-01) AND (#0) IS NOT NULL AND (#9) IS NOT NULL AND (#12) IS NOT NULL AND (#16) IS NOT NULL AND (#33) IS NOT NULL AND (#44) IS NOT NULL AND (#51) IS NOT NULL AND ("ECONOMY ANODIZED STEEL" = varchar_to_text(#4)) // { arity: 60 }
               Join on=(#0 = #17 AND #9 = #18 AND #12 = #53 AND #16 = #32 AND #33 = #41 AND #44 = #49 AND #51 = #57) type=delta // { arity: 60 }
                 implementation
                   %0:part » %2:lineitem[#1]KA » %3:orders[#0]KAiif » %1:supplier[#0]KA » %4:customer[#0]KA » %5:nation[#0]KA » %7:region[#0]KAef » %6:nation[#0]KA
@@ -728,7 +728,7 @@ Explained Query:
   Finish order_by=[#0 asc nulls_last, #1 desc nulls_first] output=[#0..=#2]
     Reduce group_by=[#5, extract_year_d(#4)] aggregates=[sum(((#1 * (1 - #2)) - (#3 * #0)))] // { arity: 3 }
       Project (#20..=#22, #35, #41, #47) // { arity: 6 }
-        Filter (#0) IS NOT NULL AND (#9) IS NOT NULL AND (#37) IS NOT NULL AND (#46) IS NOT NULL AND "%green%" ~~(varchar_to_text(#1)) // { arity: 50 }
+        Filter (#0) IS NOT NULL AND (#9) IS NOT NULL AND (#12) IS NOT NULL AND (#16) IS NOT NULL AND "%green%" ~~(varchar_to_text(#1)) // { arity: 50 }
           Join on=(eq(#0, #17, #32) AND eq(#9, #18, #33) AND #12 = #46 AND #16 = #37) type=delta // { arity: 50 }
             implementation
               %0:part » %2:lineitem[#1]KA » %3:partsupp[#0, #1]KKA » %1:supplier[#0]KA » %4:orders[#0]KA » %5:nation[#0]KA
@@ -805,7 +805,7 @@ Explained Query:
     Project (#0, #1, #7, #2, #4, #5, #3, #6) // { arity: 8 }
       Reduce group_by=[#0, #1, #4, #3, #8, #2, #5] aggregates=[sum((#6 * (1 - #7)))] // { arity: 8 }
         Project (#0..=#2, #4, #5, #7, #22, #23, #34) // { arity: 9 }
-          Filter (#25 = "R") AND (#12 < 1994-01-01) AND (#12 >= 1993-10-01) AND (#0) IS NOT NULL AND (#8) IS NOT NULL AND (#33) IS NOT NULL AND (date_to_timestamp(#12) < 1994-01-01 00:00:00) // { arity: 37 }
+          Filter (#25 = "R") AND (#12 < 1994-01-01) AND (#12 >= 1993-10-01) AND (#0) IS NOT NULL AND (#3) IS NOT NULL AND (#8) IS NOT NULL AND (date_to_timestamp(#12) < 1994-01-01 00:00:00) // { arity: 37 }
             Join on=(#0 = #9 AND #3 = #33 AND #8 = #17) type=delta // { arity: 37 }
               implementation
                 %0:customer » %1:orders[#1]KAiiif » %2:lineitem[#0]KAef » %3:nation[#0]KA
@@ -880,7 +880,7 @@ Explained Query:
     With
       cte l0 =
         Project (#0, #2, #3) // { arity: 3 }
-          Filter (#13 = "GERMANY") AND (#5) IS NOT NULL AND (#12) IS NOT NULL // { arity: 16 }
+          Filter (#13 = "GERMANY") AND (#1) IS NOT NULL AND (#8) IS NOT NULL // { arity: 16 }
             Join on=(#1 = #5 AND #8 = #12) type=delta // { arity: 16 }
               implementation
                 %0:partsupp » %1:supplier[#0]KA » %2:nation[#0]KAef
@@ -1052,7 +1052,7 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[sum(case when "PROMO%" ~~(varchar_to_text(#2)) then (#0 * (1 - #1)) else 0 end), sum((#0 * (1 - #1)))] // { arity: 2 }
         Project (#5, #6, #20) // { arity: 3 }
-          Filter (#10 >= 1995-09-01) AND (#16) IS NOT NULL AND (date_to_timestamp(#10) < 1995-10-01 00:00:00) // { arity: 25 }
+          Filter (#10 >= 1995-09-01) AND (#1) IS NOT NULL AND (date_to_timestamp(#10) < 1995-10-01 00:00:00) // { arity: 25 }
             Join on=(#1 = #16) type=differential // { arity: 25 }
               implementation
                 %0:lineitem[#1]KAiif » %1:part[#0]KAiif
@@ -1202,7 +1202,7 @@ Explained Query:
             Get l0 // { arity: 4 }
       cte l0 =
         Project (#1, #8..=#10) // { arity: 4 }
-          Filter (#8 != "Brand#45") AND (#5) IS NOT NULL AND NOT("MEDIUM POLISHED%" ~~(varchar_to_text(#9))) AND ((#10 = 3) OR (#10 = 9) OR (#10 = 14) OR (#10 = 19) OR (#10 = 23) OR (#10 = 36) OR (#10 = 45) OR (#10 = 49)) // { arity: 14 }
+          Filter (#8 != "Brand#45") AND (#0) IS NOT NULL AND NOT("MEDIUM POLISHED%" ~~(varchar_to_text(#9))) AND ((#10 = 3) OR (#10 = 9) OR (#10 = 14) OR (#10 = 19) OR (#10 = 23) OR (#10 = 36) OR (#10 = 45) OR (#10 = 49)) // { arity: 14 }
             Join on=(#0 = #5) type=differential // { arity: 14 }
               implementation
                 %1:part[#0]KAef » %0:partsupp[#0]KAef
@@ -1275,7 +1275,7 @@ Explained Query:
                       Get l0 // { arity: 16 }
     cte l1 =
       Project (#1, #4, #5) // { arity: 3 }
-        Filter (#19 = "Brand#23") AND (#22 = "MED BOX") AND (#16) IS NOT NULL // { arity: 25 }
+        Filter (#19 = "Brand#23") AND (#22 = "MED BOX") AND (#1) IS NOT NULL // { arity: 25 }
           Join on=(#1 = #16) type=differential // { arity: 25 }
             implementation
               %1:part[#0]KAef » %0:l0[#1]KAef
@@ -1430,7 +1430,7 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[sum((#0 * (1 - #1)))] // { arity: 1 }
         Project (#5, #6) // { arity: 2 }
-          Filter (#13 = "DELIVER IN PERSON") AND (#21 >= 1) AND (#16) IS NOT NULL AND ((#14 = "AIR") OR (#14 = "AIR REG")) AND ((#25 AND #26) OR (#27 AND #28) OR (#29 AND #30)) AND ((#31 AND #32 AND #33) OR (#34 AND #35 AND #36) OR (#37 AND #38 AND #39)) AND ((#25 AND #26 AND #34 AND #35 AND #36) OR (#27 AND #28 AND #37 AND #38 AND #39) OR (#29 AND #30 AND #31 AND #32 AND #33)) // { arity: 40 }
+          Filter (#13 = "DELIVER IN PERSON") AND (#21 >= 1) AND (#1) IS NOT NULL AND ((#14 = "AIR") OR (#14 = "AIR REG")) AND ((#25 AND #26) OR (#27 AND #28) OR (#29 AND #30)) AND ((#31 AND #32 AND #33) OR (#34 AND #35 AND #36) OR (#37 AND #38 AND #39)) AND ((#25 AND #26 AND #34 AND #35 AND #36) OR (#27 AND #28 AND #37 AND #38 AND #39) OR (#29 AND #30 AND #31 AND #32 AND #33)) // { arity: 40 }
             Map ((#4 <= 20), (#4 >= 10), (#4 <= 30), (#4 >= 20), (#4 <= 11), (#4 >= 1), (#19 = "Brand#12"), (#21 <= 5), ((#22 = "SM BOX") OR (#22 = "SM PKG") OR (#22 = "SM CASE") OR (#22 = "SM PACK")), (#19 = "Brand#23"), (#21 <= 10), ((#22 = "MED BAG") OR (#22 = "MED BOX") OR (#22 = "MED PKG") OR (#22 = "MED PACK")), (#19 = "Brand#34"), (#21 <= 15), ((#22 = "LG BOX") OR (#22 = "LG PKG") OR (#22 = "LG CASE") OR (#22 = "LG PACK"))) // { arity: 40 }
               Join on=(#1 = #16) type=differential // { arity: 25 }
                 implementation
@@ -1541,7 +1541,7 @@ Explained Query:
                     Get materialize.public.part // { arity: 9 }
       cte l0 =
         Project (#0..=#2) // { arity: 3 }
-          Filter (#8 = "CANADA") AND (#7) IS NOT NULL // { arity: 11 }
+          Filter (#8 = "CANADA") AND (#3) IS NOT NULL // { arity: 11 }
             Join on=(#3 = #7) type=differential // { arity: 11 }
               implementation
                 %1:nation[#0]KAef » %0:supplier[#3]KAef
@@ -1654,7 +1654,7 @@ Explained Query:
           Get materialize.public.lineitem // { arity: 16 }
       cte l0 =
         Project (#0, #1, #7) // { arity: 3 }
-          Filter (#25 = "F") AND (#33 = "SAUDI ARABIA") AND (#0) IS NOT NULL AND (#23) IS NOT NULL AND (#32) IS NOT NULL AND (#19 > #18) // { arity: 36 }
+          Filter (#25 = "F") AND (#33 = "SAUDI ARABIA") AND (#0) IS NOT NULL AND (#3) IS NOT NULL AND (#7) IS NOT NULL AND (#19 > #18) // { arity: 36 }
             Join on=(#0 = #9 AND #3 = #32 AND #7 = #23) type=delta // { arity: 36 }
               implementation
                 %0:supplier » %3:nation[#0]KAef » %1:lineitem[#2]KAf » %2:orders[#0]KAef

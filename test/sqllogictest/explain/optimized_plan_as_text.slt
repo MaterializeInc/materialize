@@ -439,7 +439,7 @@ FROM
 Explained Query:
   Return
     Project (#0..=#2, #4)
-      Filter ((#3 != #4) OR ((#4) IS NOT NULL AND (#3) IS NULL))
+      Filter ((#0 != #4) OR ((#4) IS NOT NULL AND (#0) IS NULL))
         Join on=(#0 = #3) type=differential
           ArrangeBy keys=[[#0]]
             Get l2
@@ -454,7 +454,7 @@ Explained Query:
   With
     cte l2 =
       Project (#0, #1, #3)
-        Filter (#2 != #3)
+        Filter (#0 != #3)
           Join on=(#0 = #2) type=differential
             ArrangeBy keys=[[#0]]
               Get materialize.public.t
@@ -550,7 +550,7 @@ WHERE a = c and d = e and b = f
 ----
 Explained Query:
   Project (#0, #1, #0, #3, #3, #1)
-    Filter (#0) IS NOT NULL AND (#1) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL
+    Filter (#0) IS NOT NULL AND (#1) IS NOT NULL AND (#3) IS NOT NULL
       Join on=(#0 = #2 AND #1 = #5 AND #3 = #4) type=differential
         ArrangeBy keys=[[#0]]
           Get materialize.public.t
@@ -576,7 +576,7 @@ WHERE a = c and d = e and b = f
 ----
 Explained Query:
   Project (#0, #1, #0, #3, #3, #1)
-    Filter (#0) IS NOT NULL AND (#1) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL
+    Filter (#0) IS NOT NULL AND (#1) IS NOT NULL AND (#3) IS NOT NULL
       Join on=(#0 = #2 AND #1 = #5 AND #3 = #4) type=differential
         implementation
           %0:t[#0]KA » %1:u[#0]KA » %2:v[#0, #1]KK
@@ -609,7 +609,7 @@ WHERE b = c and d = e
 ----
 Explained Query:
   Project (#0, #1, #1, #3, #3, #5)
-    Filter (#1) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL
+    Filter (#1) IS NOT NULL AND (#3) IS NOT NULL
       Join on=(#1 = #2 AND #3 = #4) type=delta
         ArrangeBy keys=[[#1]]
           Get materialize.public.t
@@ -635,7 +635,7 @@ WHERE b = c and d = e
 ----
 Explained Query:
   Project (#0, #1, #1, #3, #3, #5)
-    Filter (#1) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL
+    Filter (#1) IS NOT NULL AND (#3) IS NOT NULL
       Join on=(#1 = #2 AND #3 = #4) type=delta
         implementation
           %0:t » %1:u[#0]KA » %2:v[#0]KA

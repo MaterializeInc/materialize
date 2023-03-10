@@ -9,6 +9,8 @@
 
 //! Canonicalizes MFPs, e.g., performs CSE on the scalar expressions, eliminates identity MFPs.
 //!
+//! Also calls `canonicalize_predicates` through `fusion::filter`.
+//!
 //! This transform takes a sequence of Maps, Filters, and Projects and
 //! canonicalizes it to a sequence like this:
 //! | Map

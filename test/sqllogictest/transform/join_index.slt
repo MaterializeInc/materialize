@@ -142,7 +142,7 @@ where foo.a = bar.a
 ----
 Explained Query:
   Project (#0, #5) // { arity: 2 }
-    Filter (#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL // { arity: 6 }
+    Filter (#0) IS NOT NULL AND (#3) IS NOT NULL // { arity: 6 }
       Join on=(#0 = #2 AND #3 = #4) type=differential // { arity: 6 }
         implementation
           %0:foo[#0]KA » %1:bar[#0]KA » %2:baz[#0]UK
@@ -190,7 +190,7 @@ where foo.a = bar.a
 ----
 Explained Query:
   Project (#0, #5) // { arity: 2 }
-    Filter (#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL // { arity: 6 }
+    Filter (#0) IS NOT NULL AND (#3) IS NOT NULL // { arity: 6 }
       Join on=(#0 = #2 AND #3 = #4) type=differential // { arity: 6 }
         implementation
           %0:foo[#0]KA » %1:bar[#0]KA » %2:baz[#0]KA
@@ -233,7 +233,7 @@ where nullif(foo.a, 0) = -bar.a
 ----
 Explained Query:
   Project (#1, #3) // { arity: 2 }
-    Filter (#2) IS NOT NULL AND (case when (#0 = 0) then null else #0 end) IS NOT NULL // { arity: 4 }
+    Filter (#2) IS NOT NULL // { arity: 4 }
       Join on=(-(#2) = case when (#0 = 0) then null else #0 end) type=differential // { arity: 4 }
         implementation
           %0:foo[case when (#0 = 0) then null else #0 end]KA » %1:bar[-(#0)]KA
@@ -276,7 +276,7 @@ where foo.a = bar.a
 ----
 Explained Query:
   Project (#3, #1, #5) // { arity: 3 }
-    Filter (#0) IS NOT NULL AND (#2) IS NOT NULL AND (#4) IS NOT NULL // { arity: 6 }
+    Filter (#0) IS NOT NULL AND (#4) IS NOT NULL // { arity: 6 }
       Join on=(#0 = #2 AND #4 = (#0 + 4)) type=differential // { arity: 6 }
         implementation
           %2:baz[#0]KA » %0:bar[(#0 + 4)]KA » %1:foo[#0]KA

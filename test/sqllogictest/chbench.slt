@@ -302,7 +302,7 @@ Explained Query:
   Finish order_by=[#2 asc nulls_last, #1 asc nulls_last, #3 asc nulls_last] output=[#0..=#7]
     Return // { arity: 8 }
       Project (#2, #3, #12, #0, #1, #4, #6, #7) // { arity: 8 }
-        Filter (#16) IS NOT NULL // { arity: 17 }
+        Filter (#9) IS NOT NULL // { arity: 17 }
           Join on=(eq(#0, #8, #15) AND #2 = #10 AND #5 = #11 AND #9 = #16 AND #13 = #14) type=differential // { arity: 17 }
             implementation
               %5[#0]UKA » %0:item[#0]UKlf » %2:stock[#0, #1]KKlf » %1:supplier[#0]UKlf » %3:nation[#0]UKlf » %4:l0[#0]UKlf
@@ -377,7 +377,7 @@ Explained Query:
     Project (#0..=#2, #4, #3) // { arity: 5 }
       Reduce group_by=[#2, #1, #0, #3] aggregates=[sum(#4)] // { arity: 5 }
         Project (#1..=#3, #10, #22) // { arity: 5 }
-          Filter (#9) IS NOT NULL AND (date_to_timestamp(#10) > 2007-01-02 00:00:00) // { arity: 24 }
+          Filter (#0) IS NOT NULL AND (date_to_timestamp(#10) > 2007-01-02 00:00:00) // { arity: 24 }
             Join on=(#0 = #9 AND eq(#1, #4, #7, #15) AND eq(#2, #5, #8, #16) AND eq(#3, #6, #14)) type=differential // { arity: 24 }
               implementation
                 %0:customer[#2, #1, #0]UKKKlf » %2:order[#2, #1, #3]KKKAlif » %1:neworder[#0..=#2]UKKKlif » %3:orderline[#2, #1, #0]KKKAlif
@@ -664,7 +664,7 @@ Explained Query:
       Map ((#1 / case when (#2 = 0) then 1 else #2 end)) // { arity: 4 }
         Reduce group_by=[extract_year_d(#1)] aggregates=[sum(case when (#2 = "GERMANY") then #0 else 0 end), sum(#0)] // { arity: 3 }
           Project (#14, #20, #28) // { arity: 3 }
-            Filter (#10 < 1000) AND (#11) IS NOT NULL // { arity: 30 }
+            Filter (#0 < 1000) AND (#4) IS NOT NULL // { arity: 30 }
               Join on=(eq(#0, #3, #10) AND #1 = #5 AND #2 = #27 AND #4 = #11 AND #6 = #16 AND eq(#7, #17, #22) AND eq(#8, #18, #23) AND #19 = #21 AND #24 = #25 AND #26 = #29) type=differential // { arity: 30 }
                 implementation
                   %4:order[#3, #1, #2]KKKiif » %5:customer[#0..=#2]UKKKiif » %6:nation[#0]UKiif » %8:region[#0]UKeiif » %3:orderline[#2, #1, #0]KKKAeiiif » %2:stock[#0, #1]UKKeiiiif » %0:item[#0]UKeliiiiif » %1:supplier[#0]UKeliiiiif » %7:nation[#0]UKeliiiiif
@@ -739,7 +739,7 @@ Explained Query:
   Finish order_by=[#0 asc nulls_last, #1 desc nulls_first] output=[#0..=#2]
     Reduce group_by=[#2, extract_year_d(#1)] aggregates=[sum(#0)] // { arity: 3 }
       Project (#14, #19, #21) // { arity: 3 }
-        Filter (#10) IS NOT NULL AND (#11) IS NOT NULL // { arity: 22 }
+        Filter (#0) IS NOT NULL AND (#2) IS NOT NULL // { arity: 22 }
           Join on=(eq(#0, #1, #10) AND #2 = #11 AND #3 = #4 AND #5 = #20 AND #6 = #16 AND #7 = #17 AND #8 = #18) type=differential // { arity: 22 }
             implementation
               %4:order[#2, #1, #0]UKKK » %3:orderline[#2, #1, #0]KKKA » %1:stock[#0, #1]UKK » %0:item[#0]UKlf » %2:supplier[#0]UKlf » %5:nation[#0]UKlf
@@ -952,7 +952,7 @@ Explained Query:
     With
       cte l0 =
         Project (#0..=#22) // { arity: 23 }
-          Filter (#27 > 8) AND (#25) IS NOT NULL // { arity: 30 }
+          Filter (#27 > 8) AND (#0) IS NOT NULL // { arity: 30 }
             Join on=(#0 = #25 AND #1 = #23 AND #2 = #24) type=differential // { arity: 30 }
               implementation
                 %0:customer[#2, #1, #0]UKKK » %1:order[#2, #1, #3]KKKAif
@@ -1189,7 +1189,7 @@ Explained Query:
               ArrangeBy keys=[[#0]] // { arity: 3 }
                 Reduce group_by=[#0] aggregates=[sum(#1), count(#1)] // { arity: 3 }
                   Project (#0, #8) // { arity: 2 }
-                    Filter (#5) IS NOT NULL // { arity: 11 }
+                    Filter (#0) IS NOT NULL // { arity: 11 }
                       Join on=(#0 = #5) type=differential // { arity: 11 }
                         implementation
                           %0:item[#0]UKlf » %1:l0[#4]KAlf
@@ -1231,7 +1231,7 @@ Explained Query:
       Filter (#7 > 200) // { arity: 8 }
         Reduce group_by=[#4, #2, #1, #0, #3, #5, #6] aggregates=[sum(#7)] // { arity: 8 }
           Project (#0..=#4, #8, #10, #20) // { arity: 8 }
-            Filter (#7) IS NOT NULL // { arity: 22 }
+            Filter (#0) IS NOT NULL // { arity: 22 }
               Join on=(#0 = #7 AND eq(#1, #5, #13) AND eq(#2, #6, #14) AND #4 = #12) type=differential // { arity: 22 }
                 implementation
                   %0:customer[#2, #1, #0]UKKK » %1:order[#2, #1, #3]KKKA » %2:orderline[#2, #1, #0]KKKA
@@ -1349,7 +1349,7 @@ Explained Query:
                 Filter (integer_to_bigint((2 * #3)) > #4) AND (#0 = ((#1 * #2) % 10000)) // { arity: 5 }
                   Reduce group_by=[#0..=#3] aggregates=[sum(#4)] // { arity: 5 }
                     Project (#0..=#3, #26) // { arity: 5 }
-                      Filter (#23) IS NOT NULL AND (date_to_timestamp(#25) > 2010-05-23 12:00:00) // { arity: 30 }
+                      Filter (#1) IS NOT NULL AND (date_to_timestamp(#25) > 2010-05-23 12:00:00) // { arity: 30 }
                         Join on=(eq(#1, #23, #29)) type=differential // { arity: 30 }
                           implementation
                             %3:item[#0]UKlf » %2:orderline[#4]KAlif » %1:stock[#0]KAlif » %0:l0[×]lif
