@@ -499,7 +499,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             .timely_worker
             .dataflow_named("Dataflow: logging", |scope| {
                 Collection::<_, DataflowError, Diff>::empty(scope)
-                    .arrange()
+                    .arrange_named("Arrange logging err")
                     .trace
             });
 
