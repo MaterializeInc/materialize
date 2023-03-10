@@ -2983,8 +2983,7 @@ ON mz_catalog.mz_cluster_replicas (id)",
 pub const MZ_CLUSTER_REPLICA_UTILIZATION_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replica_utilization_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql:
-        "CREATE INDEX mz_cluster_replica_utilization_ind
+    sql: "CREATE INDEX mz_cluster_replica_utilization_ind
 IN CLUSTER mz_introspection
 ON mz_internal.mz_cluster_replica_utilization (replica_id)",
 };
