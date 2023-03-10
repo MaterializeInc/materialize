@@ -625,30 +625,6 @@ where
         Ok(leased_parts)
     }
 
-    /// Generates a [Self::snapshot], and fetches all of the batches
-    /// it contains.
-    pub async fn snapshot_and_fetch(
-        &mut self,
-        as_of: Antichain<T>,
-    ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
-        let snap = self.snapshot(as_of).await?;
-
-        let mut contents = Vec::new();
-        for part in snap {
-            let (part, fetched_part) = fetch_leased_part(
-                part,
-                self.blob.as_ref(),
-                Arc::clone(&self.metrics),
-                &self.metrics.read.snapshot,
-                Some(&self.reader_id),
-            )
-            .await;
-            self.process_returned_leased_part(part);
-            contents.extend(fetched_part);
-        }
-        Ok(contents)
-    }
-
     /// Returns a snapshot of all of a shard's data using `as_of`, followed by
     /// listening to any future updates.
     ///
@@ -878,6 +854,30 @@ where
         self.listen(Antichain::from_elem(as_of))
             .await
             .expect("cannot serve requested as_of")
+    }
+
+    /// Generates a [Self::snapshot], and fetches all of the batches
+    /// it contains.
+    pub async fn snapshot_and_fetch(
+        &mut self,
+        as_of: Antichain<T>,
+    ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
+        let snap = self.snapshot(as_of).await?;
+
+        let mut contents = Vec::new();
+        for part in snap {
+            let (part, fetched_part) = fetch_leased_part(
+                part,
+                self.blob.as_ref(),
+                Arc::clone(&self.metrics),
+                &self.metrics.read.snapshot,
+                Some(&self.reader_id),
+            )
+            .await;
+            self.process_returned_leased_part(part);
+            contents.extend(fetched_part);
+        }
+        Ok(contents)
     }
 }
 
