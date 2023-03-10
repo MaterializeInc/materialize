@@ -38,6 +38,7 @@ use uuid::Uuid;
 use mz_expr::{MirScalarExpr, PartitionId};
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::read::ReadHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::codec_impls::{TodoSchema, UnitSchema};
 use mz_persist_types::columnar::Schema;
@@ -117,7 +118,10 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
 {
     // A `WriteHandle` per used shard. Once we have source envelopes that keep additional shards we
     // have to specialize this some more.
-    type State = Vec<WriteHandle<SourceData, (), T, Diff>>;
+    type State = Vec<(
+        WriteHandle<SourceData, (), T, Diff>,
+        ReadHandle<SourceData, (), T, Diff>,
+    )>;
 
     async fn initialize_state(&self, client_cache: &PersistClientCache) -> Self::State {
         let mut handles = vec![];
@@ -131,11 +135,11 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
                 status_shard: _,
                 relation_desc,
             } = &export.storage_metadata;
-            let handle = client_cache
+            let handle_pair = client_cache
                 .open(persist_location.clone())
                 .await
                 .expect("error creating persist client")
-                .open_writer::<SourceData, (), T, Diff>(
+                .open::<SourceData, (), T, Diff>(
                     *data_shard,
                     &format!("resumption data {}", id),
                     Arc::new(relation_desc.clone()),
@@ -143,7 +147,7 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
                 )
                 .await
                 .unwrap();
-            handles.push(handle);
+            handles.push(handle_pair);
         }
 
         let remap_relation_desc = self.desc.connection.timestamp_desc();
@@ -157,12 +161,12 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
             relation_desc: _,
         } = &self.ingestion_metadata
         {
-            let remap_handle = client_cache
+            let remap_handle_pair = client_cache
                 .open(persist_location.clone())
                 .await
                 .expect("error creating persist client")
                 // TODO: Any way to plumb the GlobalId to this?
-                .open_writer::<SourceData, (), T, Diff>(
+                .open::<SourceData, (), T, Diff>(
                     *remap_shard,
                     "resumption remap",
                     Arc::new(remap_relation_desc),
@@ -170,7 +174,7 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
                 )
                 .await
                 .unwrap();
-            handles.push(remap_handle);
+            handles.push(remap_handle_pair);
         }
 
         handles
@@ -181,9 +185,19 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
         let mut resume_upper = Antichain::new();
 
         // ..the upper frontier of each shard
-        for handle in handles {
-            handle.fetch_recent_upper().await;
-            for t in handle.upper().elements() {
+        for (write, read) in handles {
+            write.fetch_recent_upper().await;
+            let upper = write.upper();
+            // Goofy call just to ensure we heartbeat this read handle.
+            let since = read.since().clone();
+            read.maybe_downgrade_since(&since).await;
+
+            // Determine the max of the write and read handles; this is
+            // necessary because we seal the read handle when dropping a source
+            // but not the write handle, so the read handle can be the "greater"
+            // of the two.
+            let join = upper.join(&since);
+            for t in join.elements() {
                 resume_upper.insert(t.clone());
             }
         }

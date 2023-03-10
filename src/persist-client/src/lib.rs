@@ -321,7 +321,7 @@ impl PersistClient {
         ))
     }
 
-    /// [Self::open], but returning only a [/eadHandle].
+    /// [Self::open], but returning only a [ReadHandle].
     ///
     /// Use this to save latency and a bit of persist traffic if you're just
     /// going to immediately drop or expire the [WriteHandle].
