@@ -154,10 +154,6 @@ allow-git = [
     # dependency on arrayvec v0.5.2 via a dependency on vte v0.10.1.
     "https://github.com/alacritty/vte",
 
-    # Waiting for a new release that bumps to itoa v1.0.
-    # See: https://github.com/BurntSushi/rust-csv/issues/271
-    "https://github.com/BurntSushi/rust-csv.git",
-
     # Waiting for https://github.com/chronotope/chrono/pull/906
     # to be released in the v0.4.x series.
     "https://github.com/chronotope/chrono.git",
