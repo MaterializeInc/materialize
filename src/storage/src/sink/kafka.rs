@@ -927,10 +927,14 @@ impl KafkaSinkState {
                             if kafka_error.is_retriable()
                                 && kafka_error.code() == RDKafkaErrorCode::OperationTimedOut
                             {
-                                Some("If you're running a single Kafka broker, ensure that the following configs are set to 1 on the broker:\n
-                                    - transaction.state.log.replication.factor\n
-                                    - transaction.state.log.min.isr\n
-                                    - offsets.topic.replication.factor".to_string())
+                                Some(
+                                    "If you're running a single Kafka broker, ensure \
+                                    that the following configs are set to 1 on the broker:\n\
+                                    - transaction.state.log.replication.factor\n\
+                                    - transaction.state.log.min.isr\n\
+                                    - offsets.topic.replication.factor"
+                                        .to_string(),
+                                )
                             } else {
                                 None
                             }
