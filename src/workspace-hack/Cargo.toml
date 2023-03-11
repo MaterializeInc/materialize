@@ -214,6 +214,7 @@ byteorder = { version = "1.4.3", default-features = false, features = ["i128"] }
 getrandom = { version = "0.2.7", default-features = false, features = ["std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.16.0", features = ["unstable"] }
+rustix = { version = "0.36.7", features = ["param", "process", "thread"] }
 tikv-jemalloc-sys = { version = "0.5.2", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
@@ -221,6 +222,7 @@ byteorder = { version = "1.4.3", default-features = false, features = ["i128"] }
 getrandom = { version = "0.2.7", default-features = false, features = ["std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.16.0", features = ["unstable"] }
+rustix = { version = "0.36.7", features = ["param", "process", "thread"] }
 tikv-jemalloc-sys = { version = "0.5.2", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 
 [target.x86_64-apple-darwin.dependencies]
