@@ -27,6 +27,7 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::fmt::Display;
 use std::future::Future;
 use std::pin::Pin;
@@ -269,7 +270,7 @@ fn source_reader_operator<G, C, R>(
     resume_uppers: impl futures::Stream<Item = Antichain<R::Time>> + 'static,
 ) -> (
     Collection<G, Result<SourceMessage<R::Key, R::Value>, SourceReaderError>, R::Diff>,
-    Stream<G, ()>,
+    Stream<G, Infallible>,
     Stream<G, (WorkerId, HealthStatusUpdate)>,
     Rc<dyn Any>,
 )
@@ -660,7 +661,7 @@ impl futures::Stream for RemapClock {
 fn remap_operator<G, FromTime>(
     scope: &G,
     config: RawSourceCreationConfig,
-    mut source_upper_rx: UnboundedReceiver<Event<FromTime, ()>>,
+    mut source_upper_rx: UnboundedReceiver<Event<FromTime, Infallible>>,
     remap_relation_desc: RelationDesc,
 ) -> (Collection<G, FromTime, Diff>, Rc<dyn Any>)
 where
@@ -776,7 +777,13 @@ where
 
                     cap_set.downgrade(remap_trace_batch.upper);
                 }
-                Some(Event::Progress(progress)) = source_upper_rx.recv() => {
+                Some(event) = source_upper_rx.recv() => {
+                    let head = std::iter::once(event);
+                    let tail = std::iter::from_fn(|| source_upper_rx.try_recv().ok());
+                    let progress = head.chain(tail).flat_map(|event| match event {
+                        Event::Progress(progress) => progress,
+                        Event::Messages(_, _) => unreachable!(),
+                    });
                     source_upper.update_iter(progress);
                     trace!("timely-{worker_id} remap({id}) received source upper: {}", source_upper.pretty());
                 }
