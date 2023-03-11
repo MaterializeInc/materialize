@@ -27,7 +27,7 @@ SERVICES = [
             # sets the transaction.state.log.min.isr config
             "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=3",
             # sets the transaction.state.log.replication.factor config
-            "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=3"
+            "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=3",
         ],
     ),
     SchemaRegistry(),
