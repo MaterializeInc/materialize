@@ -23,7 +23,7 @@ use timely::communication::Push;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::Bundle;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{Capability, Enter, OkErr};
+use timely::dataflow::operators::{Capability, Enter, Inspect, OkErr};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
@@ -143,16 +143,37 @@ where
         Arc::new(Prefixed(Arc::new(metadata.relation_desc))),
         Arc::new(UnitSchema),
     );
-    let rows = scope.scoped::<Timestamp, _, _>("with_hybrid_timestamp", |scope| {
-        let rows = decode_and_mfp(
-            &fetched.enter(scope),
-            &name,
-            until,
-            map_filter_project,
-            yield_fn,
-        );
-        rows.as_collection().leave().inner
-    });
+
+    // TODO: this becomes a parameter!
+    let consolidate = false;
+
+    let rows = if consolidate {
+        scope.scoped::<HybridT, _, _>("with_hybrid_timestamp", |scope| {
+            let rows = decode_and_mfp(
+                &fetched.enter(scope),
+                &name,
+                until,
+                map_filter_project,
+                yield_fn,
+            );
+            rows.as_collection()
+                .consolidate()
+                // .inner
+                // .inspect_core(|r| {
+                //     if let Err(f) = r {
+                //         if f.iter().any(|t| t.1 != Sort::minimum()) {
+                //             panic!("Great news! {f:?}")
+                //         }
+                //     }
+                // })
+                // .as_collection()
+                .leave()
+                .inner
+        })
+    } else {
+        decode_and_mfp(&fetched, &name, until, map_filter_project, yield_fn)
+    };
+
     (rows, token)
 }
 
