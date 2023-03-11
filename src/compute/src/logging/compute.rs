@@ -21,7 +21,7 @@ use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::count::CountTotal;
 use differential_dataflow::trace::TraceReader;
 use timely::communication::Allocate;
-use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::operators::capture::EventLink;
@@ -123,6 +123,8 @@ pub fn construct<A: Allocate>(
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
 
     worker.dataflow_named("Dataflow: compute logging", move |scope| {
+        let worker = scope.index();
+
         let (mut compute_logs, token) =
             Some(event_source).mz_replay(scope, "compute logs", config.interval, activator.clone());
 
@@ -170,13 +172,17 @@ pub fn construct<A: Allocate>(
                         peek_duration: peek_duration.session(&cap),
                     };
 
-                    for (time, worker, event) in demux_buffer.drain(..) {
+                    for (time, logger_id, event) in demux_buffer.drain(..) {
+                        // We expect the logging infrastructure to not shuffle events between
+                        // workers and this code relies on the assumption that each worker handles
+                        // its own events.
+                        assert_eq!(logger_id, worker);
+
                         DemuxHandler {
                             state: &mut demux_state,
                             output: &mut output_sessions,
                             logging_interval_ms,
                             time,
-                            worker,
                         }
                         .handle(event);
                     }
@@ -184,12 +190,11 @@ pub fn construct<A: Allocate>(
             }
         });
 
-
         // Encode the contents of each logging stream into its expected `Row` format.
         let dataflow_current = export.as_collection().map(move |datum| {
             Row::pack_slice(&[
                 Datum::String(&datum.id.to_string()),
-                Datum::UInt64(u64::cast_from(datum.worker)),
+                Datum::UInt64(u64::cast_from(worker)),
                 Datum::UInt64(u64::cast_from(datum.dataflow_id)),
             ])
         });
@@ -197,13 +202,13 @@ pub fn construct<A: Allocate>(
             Row::pack_slice(&[
                 Datum::String(&datum.export_id.to_string()),
                 Datum::String(&datum.import_id.to_string()),
-                Datum::UInt64(u64::cast_from(datum.worker)),
+                Datum::UInt64(u64::cast_from(worker)),
             ])
         });
         let frontier_current = frontier.as_collection().map(move |datum| {
             Row::pack_slice(&[
                 Datum::String(&datum.export_id.to_string()),
-                Datum::UInt64(u64::cast_from(datum.worker)),
+                Datum::UInt64(u64::cast_from(worker)),
                 Datum::MzTimestamp(datum.frontier),
             ])
         });
@@ -211,7 +216,7 @@ pub fn construct<A: Allocate>(
             Row::pack_slice(&[
                 Datum::String(&datum.export_id.to_string()),
                 Datum::String(&datum.import_id.to_string()),
-                Datum::UInt64(u64::cast_from(datum.worker)),
+                Datum::UInt64(u64::cast_from(worker)),
                 Datum::MzTimestamp(datum.frontier),
             ])
         });
@@ -219,7 +224,7 @@ pub fn construct<A: Allocate>(
             Row::pack_slice(&[
                 Datum::String(&datum.export_id.to_string()),
                 Datum::String(&datum.import_id.to_string()),
-                Datum::UInt64(u64::cast_from(datum.worker)),
+                Datum::UInt64(u64::cast_from(worker)),
                 Datum::UInt64(datum.delay_pow.try_into().expect("pow too big")),
                 Datum::Int64(datum.count.into()),
                 // [btv] This is nullable so that we can fill in `NULL` if it overflows. That would
@@ -231,17 +236,20 @@ pub fn construct<A: Allocate>(
         });
         let peek_current = peek.as_collection().map(move |datum| {
             Row::pack_slice(&[
-                Datum::Uuid(datum.peek.uuid),
-                Datum::UInt64(u64::cast_from(datum.worker)),
-                Datum::String(&datum.peek.id.to_string()),
-                Datum::MzTimestamp(datum.peek.time),
+                Datum::Uuid(datum.uuid),
+                Datum::UInt64(u64::cast_from(worker)),
+                Datum::String(&datum.id.to_string()),
+                Datum::MzTimestamp(datum.time),
             ])
         });
         let peek_duration = peek_duration
             .as_collection()
-            .arrange_named::<RowSpine<_, _, _, _>>("Arranged timely peek_duration")
+            .arrange_core::<_, RowSpine<_, _, _, _>>(
+                Exchange::new(move |_| u64::cast_from(worker)),
+                "Arranged timely peek_duration",
+            )
             .count_total_core()
-            .map(|((worker, bucket), (sum, count))| {
+            .map(move |(bucket, (sum, count))| {
                 Row::pack_slice(&[
                     Datum::UInt64(u64::cast_from(worker)),
                     Datum::UInt64(bucket.try_into().expect("pow too big")),
@@ -324,11 +332,11 @@ pub fn construct<A: Allocate>(
 #[derive(Default)]
 struct DemuxState {
     // Maps dataflow exports to dataflow IDs.
-    export_dataflows: BTreeMap<(GlobalId, usize), usize>,
+    export_dataflows: BTreeMap<GlobalId, usize>,
     // Maps dataflow exports to their imports and frontier delay tracking state.
-    export_imports: BTreeMap<(GlobalId, usize), BTreeMap<GlobalId, FrontierDelayState>>,
+    export_imports: BTreeMap<GlobalId, BTreeMap<GlobalId, FrontierDelayState>>,
     // Maps pending peeks to their installation time (in ns).
-    peek_stash: BTreeMap<(usize, Uuid), u128>,
+    peek_stash: BTreeMap<Uuid, u128>,
 }
 
 /// State for tracking import-export frontier lag.
@@ -353,14 +361,13 @@ struct DemuxOutput<'a> {
     frontier: OutputSession<'a, FrontierDatum>,
     import_frontier: OutputSession<'a, ImportFrontierDatum>,
     frontier_delay: OutputSession<'a, FrontierDelayDatum>,
-    peek: OutputSession<'a, PeekDatum>,
-    peek_duration: OutputSession<'a, (usize, u128), (i128, u64)>,
+    peek: OutputSession<'a, Peek>,
+    peek_duration: OutputSession<'a, u128, (i128, u64)>,
 }
 
 #[derive(Clone)]
 struct ExportDatum {
     id: GlobalId,
-    worker: usize,
     dataflow_id: usize,
 }
 
@@ -368,13 +375,11 @@ struct ExportDatum {
 struct DependencyDatum {
     export_id: GlobalId,
     import_id: GlobalId,
-    worker: usize,
 }
 
 #[derive(Clone)]
 struct FrontierDatum {
     export_id: GlobalId,
-    worker: usize,
     frontier: Timestamp,
 }
 
@@ -382,7 +387,6 @@ struct FrontierDatum {
 struct ImportFrontierDatum {
     export_id: GlobalId,
     import_id: GlobalId,
-    worker: usize,
     frontier: Timestamp,
 }
 
@@ -390,16 +394,9 @@ struct ImportFrontierDatum {
 struct FrontierDelayDatum {
     export_id: GlobalId,
     import_id: GlobalId,
-    worker: usize,
     delay_pow: u128,
     count: i32,
     sum: i128,
-}
-
-#[derive(Clone)]
-struct PeekDatum {
-    peek: Peek,
-    worker: usize,
 }
 
 /// Event handler of the demux operator.
@@ -412,7 +409,6 @@ struct DemuxHandler<'a, 'b> {
     logging_interval_ms: u128,
     /// The current event time.
     time: Duration,
-    worker: usize,
 }
 
 impl DemuxHandler<'_, '_> {
@@ -448,42 +444,31 @@ impl DemuxHandler<'_, '_> {
 
     fn handle_export(&mut self, id: GlobalId, dataflow_id: usize) {
         let ts = self.ts();
-        let datum = ExportDatum {
-            id,
-            worker: self.worker,
-            dataflow_id,
-        };
+        let datum = ExportDatum { id, dataflow_id };
         self.output.export.give((datum, ts, 1));
 
-        let key = (id, self.worker);
-        self.state.export_dataflows.insert(key, dataflow_id);
-        self.state.export_imports.insert(key, BTreeMap::new());
+        self.state.export_dataflows.insert(id, dataflow_id);
+        self.state.export_imports.insert(id, BTreeMap::new());
     }
 
     fn handle_export_dropped(&mut self, id: GlobalId) {
         let ts = self.ts();
-        let key = (id, self.worker);
-        if let Some(dataflow_id) = self.state.export_dataflows.remove(&key) {
-            let datum = ExportDatum {
-                id,
-                worker: self.worker,
-                dataflow_id,
-            };
+        if let Some(dataflow_id) = self.state.export_dataflows.remove(&id) {
+            let datum = ExportDatum { id, dataflow_id };
             self.output.export.give((datum, ts, -1));
         } else {
             error!(
-                export = ?id, worker = ?self.worker,
+                export = ?id,
                 "missing export_dataflows entry at time of export drop"
             );
         }
 
         // Remove dependency and frontier delay logging for this export.
-        if let Some(imports) = self.state.export_imports.remove(&key) {
+        if let Some(imports) = self.state.export_imports.remove(&id) {
             for (import_id, delay_state) in imports {
                 let datum = DependencyDatum {
                     export_id: id,
                     import_id,
-                    worker: self.worker,
                 };
                 self.output.dependency.give((datum, ts, -1));
 
@@ -491,7 +476,6 @@ impl DemuxHandler<'_, '_> {
                     let datum = FrontierDelayDatum {
                         export_id: id,
                         import_id,
-                        worker: self.worker,
                         delay_pow,
                         count,
                         sum,
@@ -501,7 +485,7 @@ impl DemuxHandler<'_, '_> {
             }
         } else {
             error!(
-                export = ?id, worker = ?self.worker,
+                export = ?id,
                 "missing export_imports entry at time of export drop"
             );
         }
@@ -512,16 +496,14 @@ impl DemuxHandler<'_, '_> {
         let datum = DependencyDatum {
             export_id,
             import_id,
-            worker: self.worker,
         };
         self.output.dependency.give((datum, ts, 1));
 
-        let key = (export_id, self.worker);
-        if let Some(imports) = self.state.export_imports.get_mut(&key) {
+        if let Some(imports) = self.state.export_imports.get_mut(&export_id) {
             imports.insert(import_id, Default::default());
         } else {
             error!(
-                export = ?export_id, import = ?import_id, worker = ?self.worker,
+                export = ?export_id, import = ?import_id,
                 "tried to create import for export that doesn't exist"
             );
         }
@@ -530,17 +512,12 @@ impl DemuxHandler<'_, '_> {
     fn handle_peek_install(&mut self, peek: Peek) {
         let uuid = peek.uuid;
         let ts = self.ts();
-        let datum = PeekDatum {
-            peek,
-            worker: self.worker,
-        };
-        self.output.peek.give((datum, ts, 1));
+        self.output.peek.give((peek, ts, 1));
 
-        let key = (self.worker, uuid);
-        let existing = self.state.peek_stash.insert(key, self.time.as_nanos());
+        let existing = self.state.peek_stash.insert(uuid, self.time.as_nanos());
         if existing.is_some() {
             error!(
-                uuid = ?uuid, worker = ?self.worker,
+                uuid = ?uuid,
                 "peek already registered",
             );
         }
@@ -549,23 +526,17 @@ impl DemuxHandler<'_, '_> {
     fn handle_peek_retire(&mut self, peek: Peek) {
         let uuid = peek.uuid;
         let ts = self.ts();
-        let datum = PeekDatum {
-            peek,
-            worker: self.worker,
-        };
-        self.output.peek.give((datum, ts, -1));
+        self.output.peek.give((peek, ts, -1));
 
-        let key = (self.worker, uuid);
-        if let Some(start) = self.state.peek_stash.remove(&key) {
+        if let Some(start) = self.state.peek_stash.remove(&uuid) {
             let elapsed_ns = self.time.as_nanos() - start;
             let elapsed_pow = elapsed_ns.next_power_of_two();
             let elapsed_ns: i128 = elapsed_ns.try_into().expect("elapsed_ns too big");
-            let data = (self.worker, elapsed_pow);
             let diff = (elapsed_ns, 1);
-            self.output.peek_duration.give((data, ts, diff));
+            self.output.peek_duration.give((elapsed_pow, ts, diff));
         } else {
             error!(
-                uuid = ?uuid, worker = ?self.worker,
+                uuid = ?uuid,
                 "peek not yet registered",
             );
         }
@@ -575,7 +546,6 @@ impl DemuxHandler<'_, '_> {
         let ts = self.ts();
         let datum = FrontierDatum {
             export_id,
-            worker: self.worker,
             frontier,
         };
         self.output.frontier.give((datum, ts, diff.into()));
@@ -587,8 +557,7 @@ impl DemuxHandler<'_, '_> {
 
         // Check if we have imports associated to this export and report frontier advancement
         // delays.
-        let key = (export_id, self.worker);
-        if let Some(import_map) = self.state.export_imports.get_mut(&key) {
+        if let Some(import_map) = self.state.export_imports.get_mut(&export_id) {
             for (&import_id, delay_state) in import_map {
                 let FrontierDelayState {
                     time_deque,
@@ -607,7 +576,6 @@ impl DemuxHandler<'_, '_> {
                                 let datum = FrontierDelayDatum {
                                     export_id,
                                     import_id,
-                                    worker: self.worker,
                                     delay_pow: elapsed_pow,
                                     count,
                                     sum,
@@ -621,7 +589,6 @@ impl DemuxHandler<'_, '_> {
                         let datum = FrontierDelayDatum {
                             export_id,
                             import_id,
-                            worker: self.worker,
                             delay_pow: elapsed_pow,
                             count: *delay_count,
                             sum: *delay_sum,
@@ -647,7 +614,6 @@ impl DemuxHandler<'_, '_> {
         let datum = ImportFrontierDatum {
             export_id,
             import_id,
-            worker: self.worker,
             frontier,
         };
         self.output.import_frontier.give((datum, ts, diff.into()));
@@ -661,15 +627,14 @@ impl DemuxHandler<'_, '_> {
         // in `export_imports`. This behavior arises because `ImportFrontier` events are generated
         // by a dataflow `inspect_container` operator, which may outlive the corresponding trace or
         // sink recording in the current `ComputeState` until Timely eventually drops it.
-        let key = (export_id, self.worker);
-        if let Some(import_map) = self.state.export_imports.get_mut(&key) {
+        if let Some(import_map) = self.state.export_imports.get_mut(&export_id) {
             if let Some(delay_state) = import_map.get_mut(&import_id) {
                 delay_state
                     .time_deque
                     .push_back((frontier, self.time.as_nanos()));
             } else {
                 error!(
-                    export = ?export_id, import = ?import_id, worker = ?self.worker,
+                    export = ?export_id, import = ?import_id,
                     "tried to create update frontier for import that doesn't exist"
                 );
             }
