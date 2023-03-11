@@ -22,7 +22,7 @@ aws-sigv4 = { version = "0.53.0", features = ["sign-eventstream"] }
 aws-smithy-http = { version = "0.53.1", default-features = false, features = ["event-stream", "rt-tokio"] }
 axum = { git = "https://github.com/tokio-rs/axum.git", features = ["headers", "ws"] }
 base64 = { version = "0.13.1", features = ["alloc"] }
-bstr = { version = "0.2.14", features = ["serde1"] }
+bstr = { version = "0.2.14" }
 byteorder = { version = "1.4.3" }
 bytes = { version = "1.3.0" }
 chrono = { git = "https://github.com/chronotope/chrono.git", branch = "0.4.x", default-features = false, features = ["alloc", "clock", "serde"] }
@@ -119,7 +119,7 @@ aws-sigv4 = { version = "0.53.0", features = ["sign-eventstream"] }
 aws-smithy-http = { version = "0.53.1", default-features = false, features = ["event-stream", "rt-tokio"] }
 axum = { git = "https://github.com/tokio-rs/axum.git", features = ["headers", "ws"] }
 base64 = { version = "0.13.1", features = ["alloc"] }
-bstr = { version = "0.2.14", features = ["serde1"] }
+bstr = { version = "0.2.14" }
 byteorder = { version = "1.4.3" }
 bytes = { version = "1.3.0" }
 cc = { version = "1.0.78", default-features = false, features = ["parallel"] }
