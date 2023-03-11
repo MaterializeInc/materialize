@@ -23,7 +23,7 @@ use timely::communication::Push;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::Bundle;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{Capability, Enter, Inspect, OkErr};
+use timely::dataflow::operators::{Capability, Enter, Inspect, Map, OkErr, Operator};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
@@ -156,8 +156,23 @@ where
                 map_filter_project,
                 yield_fn,
             );
+            let rows = rows.unary(Pipeline, "batch_time", |_, _| {
+                let mut vector = Vec::new();
+                move |input, output| {
+                    input.for_each(|cap, data| {
+                        data.swap(&mut vector);
+                        output.session(&cap).give_iterator(vector.drain(..).map(
+                            |(result, data_time, diff)| {
+                                let Hybrid(data_ts, data_sort) = data_time;
+                                let batch_time = Hybrid(cap.time().0, data_sort);
+                                ((result, data_ts), batch_time, diff)
+                            },
+                        ));
+                    })
+                }
+            });
             rows.as_collection()
-                .consolidate()
+                .consolidate() // TODO: use the proper spine type
                 // .inner
                 // .inspect_core(|r| {
                 //     if let Err(f) = r {
@@ -168,6 +183,9 @@ where
                 // })
                 // .as_collection()
                 .leave()
+                .inner
+                .map(|((r, t), _, d)| (r, t, d))
+                .as_collection()
                 .inner
         })
     } else {
