@@ -20,7 +20,7 @@ aws-sdk-sts = { version = "0.23.0", default-features = false, features = ["nativ
 aws-sig-auth = { version = "0.53.0", default-features = false, features = ["sign-eventstream"] }
 aws-sigv4 = { version = "0.53.0", features = ["sign-eventstream"] }
 aws-smithy-http = { version = "0.53.1", default-features = false, features = ["event-stream", "rt-tokio"] }
-axum = { git = "https://github.com/tokio-rs/axum.git", features = ["headers", "ws"] }
+axum = { version = "0.6.7", features = ["headers", "ws"] }
 base64 = { version = "0.13.1", features = ["alloc"] }
 bstr = { version = "0.2.14" }
 byteorder = { version = "1.4.3" }
@@ -48,7 +48,7 @@ futures-task = { version = "0.3.25" }
 futures-util = { version = "0.3.25", features = ["channel", "io", "sink"] }
 globset = { version = "0.4.9", features = ["serde1"] }
 hashbrown = { git = "https://github.com/MaterializeInc/hashbrown.git", features = ["raw"] }
-hyper = { version = "0.14.23", features = ["full"] }
+hyper = { version = "0.14.25", features = ["full"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 k8s-openapi = { version = "0.16.0", features = ["v1_24"] }
 kube = { version = "0.77.0", features = ["derive", "runtime", "ws"] }
@@ -117,7 +117,7 @@ aws-sdk-sts = { version = "0.23.0", default-features = false, features = ["nativ
 aws-sig-auth = { version = "0.53.0", default-features = false, features = ["sign-eventstream"] }
 aws-sigv4 = { version = "0.53.0", features = ["sign-eventstream"] }
 aws-smithy-http = { version = "0.53.1", default-features = false, features = ["event-stream", "rt-tokio"] }
-axum = { git = "https://github.com/tokio-rs/axum.git", features = ["headers", "ws"] }
+axum = { version = "0.6.7", features = ["headers", "ws"] }
 base64 = { version = "0.13.1", features = ["alloc"] }
 bstr = { version = "0.2.14" }
 byteorder = { version = "1.4.3" }
@@ -146,7 +146,7 @@ futures-task = { version = "0.3.25" }
 futures-util = { version = "0.3.25", features = ["channel", "io", "sink"] }
 globset = { version = "0.4.9", features = ["serde1"] }
 hashbrown = { git = "https://github.com/MaterializeInc/hashbrown.git", features = ["raw"] }
-hyper = { version = "0.14.23", features = ["full"] }
+hyper = { version = "0.14.25", features = ["full"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 k8s-openapi = { version = "0.16.0", features = ["v1_24"] }
 kube = { version = "0.77.0", features = ["derive", "runtime", "ws"] }

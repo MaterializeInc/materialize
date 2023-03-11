@@ -6,6 +6,11 @@ multiple-versions = "deny"
 # transitive dependencies. If necessary, use patch directives in the root
 # Cargo.toml to point at a Materialize-maintained fork that avoids the
 # duplicated transitive dependencies.
+skip = [
+    # One-time exception for base64 due to its prevalence in the crate graph.
+    # Do NOT add other exceptions to this list.
+    { name = "base64", version = "0.13.1" }
+]
 
 # Use `tracing` instead.
 [[bans.deny]]
@@ -146,10 +151,6 @@ license-files = [
 unknown-git = "deny"
 unknown-registry = "deny"
 allow-git = [
-    # Waiting on https://github.com/tokio-rs/axum/pull/1598 to make it into a
-    # release.
-    "https://github.com/tokio-rs/axum.git",
-
     # Waiting for a new release of strip-ansi-escapes that avoids the indirect
     # dependency on arrayvec v0.5.2 via a dependency on vte v0.10.1.
     "https://github.com/alacritty/vte",
