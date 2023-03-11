@@ -47,14 +47,24 @@ pub type Logger = timely::logging_core::Logger<ComputeEvent, WorkerIdentifier>;
 /// A logged compute event.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub enum ComputeEvent {
-    /// Dataflow command, true for create and false for drop.
-    Dataflow(GlobalId, bool),
-    /// Dataflow depends on a named source of data.
-    DataflowDependency {
-        /// Globally unique identifier for the dataflow.
-        dataflow: GlobalId,
-        /// Globally unique identifier for the source on which the dataflow depends.
-        source: GlobalId,
+    /// A dataflow export was created.
+    Export {
+        /// Identifier of the export.
+        id: GlobalId,
+        /// Timely worker index of the exporting dataflow.
+        dataflow_index: usize,
+    },
+    /// A dataflow export was dropped.
+    ExportDropped {
+        /// Identifier of the export.
+        id: GlobalId,
+    },
+    /// Dataflow export depends on a named dataflow import.
+    ExportDependency {
+        /// Identifier of the export.
+        export_id: GlobalId,
+        /// Identifier of the import on which the export depends.
+        import_id: GlobalId,
     },
     /// Peek command, true for install and false for retire.
     Peek(Peek, bool),
@@ -126,7 +136,7 @@ pub fn construct<A: Allocate>(
         let mut demux = OperatorBuilder::new("Compute Logging Demux".to_string(), scope.clone());
         use timely::dataflow::channels::pact::Pipeline;
         let mut input = demux.new_input(&compute_logs, Pipeline);
-        let (mut dataflow_out, dataflow) = demux.new_output();
+        let (mut export_out, export) = demux.new_output();
         let (mut dependency_out, dependency) = demux.new_output();
         let (mut frontier_out, frontier) = demux.new_output();
         let (mut source_frontier_out, source_frontier) = demux.new_output();
@@ -136,9 +146,11 @@ pub fn construct<A: Allocate>(
 
         let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
-            let mut active_dataflows = BTreeMap::new();
+            let mut export_dataflows = BTreeMap::new();
             let mut peek_stash = BTreeMap::new();
-            /// State for tracking dataflow frontier lag
+
+            /// State for tracking export frontier lag.
+            #[derive(Default)]
             struct ImportDelayData {
                 /// A list of input timestamps that have appeared on the input
                 /// frontier, but that the output frontier has not yet advanced beyond,
@@ -147,10 +159,11 @@ pub fn construct<A: Allocate>(
                 /// A histogram of emitted delays (bucket size to (bucket_sum, bucket_count))
                 delay_map: BTreeMap<u128, (i128, i32)>,
             }
-            let mut dataflow_imports =
+            let mut export_imports =
                 BTreeMap::<(GlobalId, usize), BTreeMap<GlobalId, ImportDelayData>>::new();
+
             move |_frontiers| {
-                let mut dataflow = dataflow_out.activate();
+                let mut export = export_out.activate();
                 let mut dependency = dependency_out.activate();
                 let mut frontier = frontier_out.activate();
                 let mut source_frontier = source_frontier_out.activate();
@@ -161,7 +174,7 @@ pub fn construct<A: Allocate>(
                 input.for_each(|time, data| {
                     data.swap(&mut demux_buffer);
 
-                    let mut dataflow_session = dataflow.session(&time);
+                    let mut export_session = export.session(&time);
                     let mut dependency_session = dependency.session(&time);
                     let mut frontier_session = frontier.session(&time);
                     let mut source_frontier_session = source_frontier.session(&time);
@@ -175,71 +188,78 @@ pub fn construct<A: Allocate>(
                             .expect("must fit");
 
                         match datum {
-                            ComputeEvent::Dataflow(id, is_create) => {
-                                let diff = if is_create { 1 } else { -1 };
-                                dataflow_session.give(((id, worker), time_ms, diff));
+                            ComputeEvent::Export { id, dataflow_index } => {
+                                export_session.give(((id, worker, dataflow_index), time_ms, 1));
 
-                                // For now we know that these always happen in
-                                // the correct order, but it may be necessary
-                                // down the line to have dataflows keep a
-                                // reference to their own sources and a logger
-                                // that is called on them in a `with_drop` handler
-                                if is_create {
-                                    active_dataflows.insert((id, worker), vec![]);
+                                let key = (id, worker);
+                                export_dataflows.insert(key, dataflow_index);
+                                export_imports.insert(key, BTreeMap::new());
+                            }
+                            ComputeEvent::ExportDropped { id } => {
+                                let key = (id, worker);
+                                if let Some(dataflow_index) = export_dataflows.remove(&key) {
+                                    export_session.give((
+                                        (id, worker, dataflow_index),
+                                        time_ms,
+                                        -1,
+                                    ));
                                 } else {
-                                    let key = &(id, worker);
-                                    match active_dataflows.remove(key) {
-                                        Some(sources) => {
-                                            for (source, worker) in sources {
-                                                let n = key.0;
-                                                dependency_session.give((
-                                                    (n, source, worker),
-                                                    time_ms,
-                                                    -1,
-                                                ));
-                                            }
-                                        }
-                                        None => error!(
-                                            "no active dataflow exists at time of drop. \
-                                             name={} worker={}",
-                                            key.0, worker
-                                        ),
-                                    }
-                                    // Remove import frontier delay logging for this dataflow
-                                    if let Some(import_map) = dataflow_imports.remove(key) {
-                                        for (import_id, ImportDelayData { delay_map, .. }) in
-                                            import_map
+                                    error!(
+                                        export = ?id, worker = ?worker,
+                                        "missing export_dataflows entry at time of export drop"
+                                    );
+                                }
+
+                                // Remove dependency and frontier delay logging for this export.
+                                if let Some(imports) = export_imports.remove(&key) {
+                                    for (import_id, delay) in imports {
+                                        dependency_session.give((
+                                            (id, import_id, worker),
+                                            time_ms,
+                                            -1,
+                                        ));
+
+                                        for (delay_pow, (delay_sum, delay_count)) in delay.delay_map
                                         {
-                                            for (delay_pow, (delay_sum, delay_count)) in delay_map {
-                                                frontier_delay_session.give((
-                                                    (
-                                                        id,
-                                                        import_id,
-                                                        worker,
-                                                        delay_pow,
-                                                        delay_sum,
-                                                        delay_count,
-                                                    ),
-                                                    time_ms,
-                                                    -1,
-                                                ));
-                                            }
+                                            frontier_delay_session.give((
+                                                (
+                                                    id,
+                                                    import_id,
+                                                    worker,
+                                                    delay_pow,
+                                                    delay_sum,
+                                                    delay_count,
+                                                ),
+                                                time_ms,
+                                                -1,
+                                            ));
                                         }
                                     }
+                                } else {
+                                    error!(
+                                        export = ?id, worker = ?worker,
+                                        "missing export_imports entry at time of export drop"
+                                    );
                                 }
                             }
-                            ComputeEvent::DataflowDependency { dataflow, source } => {
-                                dependency_session.give(((dataflow, source, worker), time_ms, 1));
-                                let key = (dataflow, worker);
-                                match active_dataflows.get_mut(&key) {
-                                    Some(existing_sources) => {
-                                        existing_sources.push((source, worker))
-                                    }
-                                    None => error!(
-                                        "tried to create source for dataflow that doesn't exist: \
-                                         dataflow={} source={} worker={}",
-                                        key.0, source, worker,
-                                    ),
+                            ComputeEvent::ExportDependency {
+                                export_id,
+                                import_id,
+                            } => {
+                                dependency_session.give((
+                                    (export_id, import_id, worker),
+                                    time_ms,
+                                    1,
+                                ));
+
+                                let key = (export_id, worker);
+                                if let Some(imports) = export_imports.get_mut(&key) {
+                                    imports.insert(import_id, Default::default());
+                                } else {
+                                    error!(
+                                        export = ?export_id, import = ?import_id, worker = ?worker,
+                                        "tried to create import for export that doesn't exist"
+                                    );
                                 }
                             }
                             ComputeEvent::Frontier {
@@ -258,12 +278,10 @@ pub fn construct<A: Allocate>(
                                     i64::from(diff),
                                 ));
                                 if diff > 0 {
-                                    // check if we have imports associated to this dataflow
-                                    // and report frontier advancement delays
-                                    let dataflow_key = (id, worker);
-                                    if let Some(import_map) =
-                                        dataflow_imports.get_mut(&dataflow_key)
-                                    {
+                                    // Check if we have imports associated to this export
+                                    // and report frontier advancement delays.
+                                    let key = (id, worker);
+                                    if let Some(import_map) = export_imports.get_mut(&key) {
                                         for (
                                             import_id,
                                             ImportDelayData {
@@ -346,24 +364,22 @@ pub fn construct<A: Allocate>(
                                     i64::from(diff),
                                 ));
                                 if diff > 0 {
-                                    // We should record the import frontier here only if
-                                    // there is a corresponding active dataflow. This behavior
-                                    // arises because `ImportFrontier` events are generated by a
-                                    // dataflow `inspect_container` operator, which may outlive
-                                    // the corresponding trace or sink recording in the
+                                    // Note that it is possible that we receive frontier updates
+                                    // for exports no longer present in `export_imports`. This
+                                    // behavior arises because `ImportFrontier` events are
+                                    // generated by a dataflow `inspect_container` operator, which
+                                    // may outlive the corresponding trace or sink recording in the
                                     // current `ComputeState` until Timely eventually drops it.
-                                    let dataflow_key = (export_id, worker);
-                                    if let Some(_) = active_dataflows.get(&dataflow_key) {
-                                        let import_map = dataflow_imports
-                                            .entry(dataflow_key)
-                                            .or_insert_with(BTreeMap::new);
-                                        let time_entry = import_map.entry(import_id).or_insert(
-                                            ImportDelayData {
-                                                time_deque: VecDeque::new(),
-                                                delay_map: BTreeMap::new(),
-                                            },
-                                        );
-                                        time_entry.time_deque.push_back((logical, time.as_nanos()));
+                                    let key = (export_id, worker);
+                                    if let Some(import_map) = export_imports.get_mut(&key) {
+                                        if let Some(time_entry) = import_map.get_mut(&import_id) {
+                                            time_entry.time_deque.push_back((logical, time.as_nanos()));
+                                        } else {
+                                            error!(
+                                                export = ?export_id, import = ?import_id, worker = ?worker,
+                                                "tried to create update frontier for import that doesn't exist"
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -406,11 +422,12 @@ pub fn construct<A: Allocate>(
             }
         });
 
-        let dataflow_current = dataflow.as_collection().map({
-            move |(name, worker)| {
+        let dataflow_current = export.as_collection().map({
+            move |(name, worker, dataflow_id)| {
                 Row::pack_slice(&[
                     Datum::String(&name.to_string()),
                     Datum::UInt64(u64::cast_from(worker)),
+                    Datum::UInt64(u64::cast_from(dataflow_id)),
                 ])
             }
         });

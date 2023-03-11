@@ -729,6 +729,7 @@ impl LogVariant {
             LogVariant::Compute(ComputeLog::DataflowCurrent) => RelationDesc::empty()
                 .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
+                .with_column("dataflow_id", ScalarType::UInt64.nullable(false))
                 .with_key(vec![0, 1]),
 
             LogVariant::Compute(ComputeLog::DataflowDependency) => RelationDesc::empty()
