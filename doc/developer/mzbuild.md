@@ -438,6 +438,11 @@ publish: true
 * `description` (str) is a short description for the image. If `publish` is
   true, CI will automatically sync the description to Docker Hub.
 
+* `mainline` (bool) indicates whether the image participates in the main
+  Materialize versioning scheme. CI will automatically push version tags for
+  mainline images for unprefixed tag builds (e.g., `v0.27.0`). Non-mainline
+  images must handle their own release scheme. The default is `true`.
+
 * `build-args` (map[str, str]) a list of parameters to pass as [`--build-arg`][buildarg]
   to Docker. For example:
 

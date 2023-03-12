@@ -369,6 +369,7 @@ class Image:
             self.name: str = data.pop("name")
             self.publish: bool = data.pop("publish", True)
             self.description: Optional[str] = data.pop("description", None)
+            self.mainline: bool = data.pop("mainline", True)
             for pre_image in data.pop("pre-image", []):
                 typ = pre_image.pop("type", None)
                 if typ == "cargo-build":
