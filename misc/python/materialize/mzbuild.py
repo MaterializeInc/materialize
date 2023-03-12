@@ -407,11 +407,13 @@ class Image:
             ui.say(f"{self.name} has no README.md or description")
             return
 
+        docker_config = os.getenv("DOCKER_CONFIG")
         spawn.runv(
             [
                 "docker",
                 "pushrm",
                 f"--file={readme_path}",
+                *([f"--config={docker_config}/config.json"] if docker_config else []),
                 *([f"--short={self.description}"] if self.description else []),
                 f"materialize/{self.name}",
             ]
