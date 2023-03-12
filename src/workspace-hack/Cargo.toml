@@ -56,7 +56,7 @@ kube-client = { version = "0.77.0", default-features = false, features = ["jsonp
 kube-core = { version = "0.77.0", default-features = false, features = ["jsonpatch", "schema", "ws"] }
 libc = { version = "0.2.138", features = ["extra_traits", "use_std"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
-lru = { version = "0.8.1" }
+lru = { version = "0.10.0" }
 memchr = { version = "2.5.0", features = ["use_std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
 nix = { version = "0.26.1" }
@@ -154,7 +154,7 @@ kube-client = { version = "0.77.0", default-features = false, features = ["jsonp
 kube-core = { version = "0.77.0", default-features = false, features = ["jsonpatch", "schema", "ws"] }
 libc = { version = "0.2.138", features = ["extra_traits", "use_std"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
-lru = { version = "0.8.1" }
+lru = { version = "0.10.0" }
 memchr = { version = "2.5.0", features = ["use_std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
 nix = { version = "0.26.1" }
