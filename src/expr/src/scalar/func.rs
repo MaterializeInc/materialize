@@ -14,6 +14,8 @@ use std::iter;
 use std::ops::Deref;
 use std::str;
 use std::str::FromStr;
+use std::ffi::CString;
+use core::ffi::{c_char, c_int, c_float, c_void};
 
 use ::encoding::label::encoding_from_whatwg_label;
 use ::encoding::DecoderTrap;
@@ -1233,6 +1235,28 @@ fn uuid_generate_v5<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::Uuid(res)
 }
 
+fn llama_query<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+    extern "C" {
+        fn llama_init(model_path: *const c_char, seed: c_int, n_threads: c_int, n_predict: c_int, top_k: c_int, top_p: c_float, repeat_last_n: c_int, repeat_penalty: c_float, temp: c_float, n_batch: c_float) -> *mut c_void;
+        fn llama_query(session: *mut c_void, prompt: *const c_char, buf: *mut c_char, buf_size: usize) -> bool;
+        fn llama_free(session: *mut c_void);
+    }
+
+    let mut buf: Vec<i8> = Vec::with_capacity(1024 * 16);
+    let spare_capacity = buf.spare_capacity_mut();
+    let a = a.unwrap_str();
+    let model = CString::new(a).expect("CString::new failed");
+    let b = b.unwrap_str();
+    let query = CString::new(b).expect("CString::new failed");
+    unsafe {
+        let session = llama_init(model.as_ptr(), -1, 10, 128, 40, 0.95, 64, 1.30, 0.80, 8.0);
+        llama_query(session, query.as_ptr(), spare_capacity.as_mut_ptr().cast(), spare_capacity.len());
+        llama_free(session);
+        let result = CString::from_raw(spare_capacity.as_mut_ptr().cast()).into_string().expect("into_string() call failed");
+        Datum::String(temp_storage.push_string(result))
+    }
+}
+
 fn power_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let mut a = a.unwrap_numeric().0;
     let b = b.unwrap_numeric().0;
@@ -1991,6 +2015,7 @@ pub enum BinaryFunc {
     RangeIntersection,
     RangeDifference,
     UuidGenerateV5,
+    LlamaQuery,
 }
 
 impl BinaryFunc {
@@ -2314,6 +2339,7 @@ impl BinaryFunc {
             BinaryFunc::RangeIntersection => eager!(range_intersection, temp_storage),
             BinaryFunc::RangeDifference => eager!(range_difference, temp_storage),
             BinaryFunc::UuidGenerateV5 => Ok(eager!(uuid_generate_v5)),
+            BinaryFunc::LlamaQuery => Ok(eager!(llama_query, temp_storage)),
         }
     }
 
@@ -2468,6 +2494,8 @@ impl BinaryFunc {
             GetByte => ScalarType::Int32.nullable(in_nullable),
 
             UuidGenerateV5 => ScalarType::Uuid.nullable(true),
+
+            LlamaQuery => ScalarType::String.nullable(true),
 
             RangeContainsElem { .. }
             | RangeContainsRange { .. }
@@ -2804,6 +2832,7 @@ impl BinaryFunc {
             | ListRemove
             | LikeEscape
             | UuidGenerateV5
+            | LlamaQuery
             | GetByte => false,
         }
     }
@@ -3031,6 +3060,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::RangeIntersection => f.write_str("*"),
             BinaryFunc::RangeDifference => f.write_str("-"),
             BinaryFunc::UuidGenerateV5 => f.write_str("uuid_generate_v5"),
+            BinaryFunc::LlamaQuery=> f.write_str("llama_query"),
         }
     }
 }
@@ -3437,6 +3467,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::RangeIntersection => RangeIntersection(()),
             BinaryFunc::RangeDifference => RangeDifference(()),
             BinaryFunc::UuidGenerateV5 => UuidGenerateV5(()),
+            BinaryFunc::LlamaQuery => LlamaQuery(()),
         };
         ProtoBinaryFunc { kind: Some(kind) }
     }
@@ -3636,6 +3667,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 RangeIntersection(()) => Ok(BinaryFunc::RangeIntersection),
                 RangeDifference(()) => Ok(BinaryFunc::RangeDifference),
                 UuidGenerateV5(()) => Ok(BinaryFunc::UuidGenerateV5),
+                LlamaQuery(()) => Ok(BinaryFunc::LlamaQuery),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoBinaryFunc::kind"))

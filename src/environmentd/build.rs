@@ -79,6 +79,8 @@ use std::env;
 
 fn main() -> Result<(), anyhow::Error> {
     println!("cargo:rustc-env=TARGET_TRIPLE={}", env::var("TARGET")?);
+    println!("cargo:rustc-link-search=native=c-code/");
+    println!("cargo:rustc-link-lib=dylib=llama");
 
     cc::Build::new()
         .file("src/bin/environmentd/sys.c")
