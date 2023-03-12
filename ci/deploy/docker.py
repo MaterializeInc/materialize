@@ -42,6 +42,12 @@ def main() -> None:
         mzbuild.publish_multiarch_images("unstable", deps)
         mzbuild.publish_multiarch_images(f'unstable-{git.rev_parse("HEAD")}', deps)
 
+        # Sync image descriptions to Docker Hub. The image descriptions are the
+        # same across architectures, so we arbitrarily choose the first
+        # repository.
+        for image in repos[0]:
+            image.sync_description()
+
 
 if __name__ == "__main__":
     main()
