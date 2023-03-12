@@ -236,10 +236,12 @@ impl Codec64 for i64 {
         "i64".to_owned()
     }
 
+    #[inline(always)]
     fn encode(&self) -> [u8; 8] {
         self.to_le_bytes()
     }
 
+    #[inline(always)]
     fn decode(buf: [u8; 8]) -> Self {
         i64::from_le_bytes(buf)
     }
@@ -250,10 +252,12 @@ impl Codec64 for u64 {
         "u64".to_owned()
     }
 
+    #[inline(always)]
     fn encode(&self) -> [u8; 8] {
         self.to_le_bytes()
     }
 
+    #[inline(always)]
     fn decode(buf: [u8; 8]) -> Self {
         u64::from_le_bytes(buf)
     }

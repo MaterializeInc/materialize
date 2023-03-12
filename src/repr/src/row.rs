@@ -131,6 +131,7 @@ impl Arbitrary for Row {
 // Implement Clone manually to use SmallVec's more efficient from_slice.
 // TODO: Revisit once Rust supports specialization: https://github.com/rust-lang/rust/issues/31844
 impl Clone for Row {
+    #[inline]
     fn clone(&self) -> Self {
         Self {
             data: SmallVec::from_slice(self.data.as_slice()),
@@ -146,6 +147,7 @@ impl Row {
 /// This allows many comparisons to complete without dereferencing memory.
 /// Warning: These order by the u8 array representation, and NOT by Datum::cmp.
 impl PartialOrd for Row {
+    #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         match self.data.len().cmp(&other.data.len()) {
             std::cmp::Ordering::Less => Some(std::cmp::Ordering::Less),
@@ -156,6 +158,7 @@ impl PartialOrd for Row {
 }
 
 impl Ord for Row {
+    #[inline]
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         match self.data.len().cmp(&other.data.len()) {
             std::cmp::Ordering::Less => std::cmp::Ordering::Less,
@@ -293,6 +296,7 @@ impl<'a> Debug for DatumList<'a> {
 }
 
 impl Ord for DatumList<'_> {
+    #[inline]
     fn cmp(&self, other: &DatumList) -> Ordering {
         self.iter().cmp(other.iter())
     }
@@ -719,6 +723,7 @@ where
     data.extend_from_slice(&u32::to_le_bytes(time.nanosecond()));
 }
 
+#[inline]
 fn push_datum<D>(data: &mut D, datum: Datum)
 where
     D: Vector<u8>,
@@ -895,6 +900,7 @@ where
 }
 
 /// Return the number of bytes these Datums would use if packed as a Row.
+#[inline]
 pub fn row_size<'a, I>(a: I) -> usize
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -918,6 +924,7 @@ where
 /// Number of bytes required by the datum.
 ///
 /// This is used to optimistically pre-allocate buffers for packing rows.
+#[inline]
 pub fn datum_size(datum: &Datum) -> usize {
     match datum {
         Datum::Null => 1,
@@ -997,6 +1004,7 @@ pub fn datum_size(datum: &Datum) -> usize {
 ///
 /// This method can be used to right-size the allocation for a `Row`
 /// before calling [`RowPacker::extend`].
+#[inline]
 pub fn datums_size<'a, I, D>(iter: I) -> usize
 where
     I: IntoIterator<Item = D>,
@@ -1009,6 +1017,7 @@ where
 /// the given datums were packed into a list.
 ///
 /// This is used to optimistically pre-allocate buffers for packing rows.
+#[inline]
 pub fn datum_list_size<'a, I, D>(iter: I) -> usize
 where
     I: IntoIterator<Item = D>,
@@ -1035,6 +1044,7 @@ impl Row {
     ///
     /// This method relies on `data` being an appropriate row encoding, and can
     /// result in unsafety if this is not the case.
+    #[inline]
     pub unsafe fn from_bytes_unchecked(data: Vec<u8>) -> Self {
         Row { data: data.into() }
     }
@@ -1044,6 +1054,7 @@ impl Row {
     ///
     /// This method clears the existing contents of the row, but retains the
     /// allocation.
+    #[inline]
     pub fn packer(&mut self) -> RowPacker<'_> {
         self.data.clear();
         RowPacker { row: self }
@@ -1056,6 +1067,7 @@ impl Row {
     /// time, consider [`Row::with_capacity`] to right-size the allocation
     /// first, and then [`RowPacker::extend`] to populate it with `Datum`s.
     /// This avoids the repeated allocation resizing and copying.
+    #[inline]
     pub fn pack<'a, I, D>(iter: I) -> Row
     where
         I: IntoIterator<Item = D>,
@@ -1069,6 +1081,7 @@ impl Row {
     /// Like [`Row::pack`], but the provided iterator is allowed to produce an
     /// error, in which case the packing operation is aborted and the error
     /// returned.
+    #[inline]
     pub fn try_pack<'a, I, D, E>(iter: I) -> Result<Row, E>
     where
         I: IntoIterator<Item = Result<D, E>>,
@@ -1084,6 +1097,7 @@ impl Row {
     /// This method has the advantage over `pack` that it can determine the required
     /// allocation before packing the elements, ensuring only one allocation and no
     /// redundant copies required.
+    #[inline]
     pub fn pack_slice<'a>(slice: &[Datum<'a>]) -> Row {
         // Pre-allocate the needed number of bytes.
         let mut row = Row::with_capacity(datums_size(slice.iter()));
@@ -1092,6 +1106,7 @@ impl Row {
     }
 
     /// Returns the total amount of bytes used by this row.
+    #[inline]
     pub fn byte_len(&self) -> usize {
         let heap_size = if self.data.spilled() {
             self.data.len()
@@ -1329,6 +1344,7 @@ impl RowPacker<'_> {
     /// Convenience function to push a `DatumList` from an iter of `Datum`s
     ///
     /// See [`RowPacker::push_dict_with`] if you need to be able to handle errors
+    #[inline]
     pub fn push_list<'a, I, D>(&mut self, iter: I)
     where
         I: IntoIterator<Item = D>,
@@ -1663,6 +1679,7 @@ impl<'a> IntoIterator for &'a DatumList<'a> {
 
 impl<'a> Iterator for DatumListIter<'a> {
     type Item = Datum<'a>;
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.offset >= self.data.len() {
             None
@@ -1707,6 +1724,7 @@ impl<'a> IntoIterator for &'a DatumMap<'a> {
 
 impl<'a> Iterator for DatumDictIter<'a> {
     type Item = (&'a str, Datum<'a>);
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.offset >= self.data.len() {
             None
@@ -1744,6 +1762,7 @@ impl<'a> Iterator for DatumDictIter<'a> {
 }
 
 impl RowArena {
+    #[inline]
     pub fn new() -> Self {
         RowArena {
             inner: RefCell::new(vec![]),
@@ -1751,6 +1770,7 @@ impl RowArena {
     }
 
     /// Take ownership of `bytes` for the lifetime of the arena.
+    #[inline]
     #[allow(clippy::transmute_ptr_to_ptr)]
     pub fn push_bytes<'a>(&'a self, bytes: Vec<u8>) -> &'a [u8] {
         let mut inner = self.inner.borrow_mut();
@@ -1770,6 +1790,7 @@ impl RowArena {
     }
 
     /// Take ownership of `string` for the lifetime of the arena.
+    #[inline]
     pub fn push_string<'a>(&'a self, string: String) -> &'a str {
         let owned_bytes = self.push_bytes(string.into_bytes());
         unsafe {
@@ -1783,6 +1804,7 @@ impl RowArena {
     ///
     /// If we had an owned datum type, this method would be much clearer, and
     /// would be called `push_owned_datum`.
+    #[inline]
     pub fn push_unary_row<'a>(&'a self, row: Row) -> Datum<'a> {
         let mut inner = self.inner.borrow_mut();
         inner.push(row.data.into_vec());
@@ -1803,6 +1825,7 @@ impl RowArena {
 
     /// Equivalent to `push_unary_row` but returns a `DatumNested` rather than a
     /// `Datum`.
+    #[inline]
     fn push_unary_row_datum_nested<'a>(&'a self, row: Row) -> DatumNested<'a> {
         let mut inner = self.inner.borrow_mut();
         inner.push(row.data.into_vec());
@@ -1832,6 +1855,7 @@ impl RowArena {
     /// });
     /// assert_eq!(datum.unwrap_list().iter().collect::<Vec<_>>(), vec![Datum::String("hello"), Datum::String("world")]);
     /// ```
+    #[inline]
     pub fn make_datum<'a, F>(&'a self, f: F) -> Datum<'a>
     where
         F: FnOnce(&mut RowPacker),
@@ -1843,6 +1867,7 @@ impl RowArena {
 
     /// Convenience function identical to `make_datum` but instead returns a
     /// `DatumNested`.
+    #[inline]
     pub fn make_datum_nested<'a, F>(&'a self, f: F) -> DatumNested<'a>
     where
         F: FnOnce(&mut RowPacker),
@@ -1853,6 +1878,7 @@ impl RowArena {
     }
 
     /// Like [`RowArena::make_datum`], but the provided closure can return an error.
+    #[inline]
     pub fn try_make_datum<'a, F, E>(&'a self, f: F) -> Result<Datum<'a>, E>
     where
         F: FnOnce(&mut RowPacker) -> Result<(), E>,
@@ -1864,6 +1890,7 @@ impl RowArena {
 }
 
 impl Default for RowArena {
+    #[inline]
     fn default() -> RowArena {
         RowArena::new()
     }

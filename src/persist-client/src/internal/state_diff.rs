@@ -954,6 +954,7 @@ pub struct ProtoStateFieldDiffsIter<'a> {
 impl<'a> Iterator for ProtoStateFieldDiffsIter<'a> {
     type Item = Result<(ProtoStateField, ProtoStateFieldDiff<'a>), TryFromProtoError>;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.diff_idx >= self.len {
             return None;

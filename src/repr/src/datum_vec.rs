@@ -32,6 +32,7 @@ impl DatumVec {
     /// Borrow an instance with a specific lifetime.
     ///
     /// When the result is dropped, its allocation will be returned to `self`.
+    #[inline]
     pub fn borrow<'a>(&'a mut self) -> DatumVecBorrow<'a> {
         let inner = std::mem::take(&mut self.outer);
         DatumVecBorrow {
@@ -40,6 +41,7 @@ impl DatumVec {
         }
     }
     /// Borrow an instance with a specific lifetime, and pre-populate with a `Row`.
+    #[inline]
     pub fn borrow_with<'a>(&'a mut self, row: &'a Row) -> DatumVecBorrow<'a> {
         let mut borrow = self.borrow();
         borrow.extend(row.iter());
@@ -48,6 +50,7 @@ impl DatumVec {
 
     /// Borrow an instance with a specific lifetime, and pre-populate with `Row`s, for example
     /// first adding a key followed by its values.
+    #[inline]
     pub fn borrow_with_many<'a, 'b, D: ::std::borrow::Borrow<Row> + 'a>(
         &'a mut self,
         rows: &'b [&'a D],
@@ -71,6 +74,7 @@ pub struct DatumVecBorrow<'outer> {
 }
 
 impl<'outer> Drop for DatumVecBorrow<'outer> {
+    #[inline]
     fn drop(&mut self) {
         *self.outer = mz_ore::vec::repurpose_allocation(std::mem::take(&mut self.inner));
     }
