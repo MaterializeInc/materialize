@@ -34,6 +34,7 @@ also have a convenience script alongside it, which you can invoke as
     * [`mzbuild.yml`](#mzbuildyml)
     * [`mzcompose.py`](#mzcomposepy)
     * [mzbuild `Dockerfile`](#mzbuild-Dockerfile)
+    * [`README.md`](#readmemd)
   * [Motivation](#motivation)
     * [Why a new build system?](#why-a-new-build-system)
     * [Why Docker?](#why-docker)
@@ -368,6 +369,7 @@ The directory containing a `mzbuild.yml` file is called the "mzbuild context."
 
 ```yml
 name: environmentd
+description: "A Docker image containing just environmentd."
 pre-image:
   - type: cargo-build
     bin: environmentd
@@ -433,6 +435,9 @@ publish: true
   CI, but they must always be built from source. Use sparingly. The default is
   `true`.
 
+* `description` (str) is a short description for the image. If `publish` is
+  true, CI will automatically sync the description to Docker Hub.
+
 * `build-args` (map[str, str]) a list of parameters to pass as [`--build-arg`][buildarg]
   to Docker. For example:
 
@@ -478,6 +483,12 @@ COPY --from=0 ...
   specified mzbuild image. It is like the vanilla Dockerfile [FROM
   command][dockerfile-from], except that the image named must be a valid mzbuild
   image in the repository, not a vanilla Docker image.
+
+### README.md
+
+If an mzbuild.yml file contains a file named README.md and `publish` is true, CI
+will automatically sync that file to Docker Hub as the repository's "full
+description."
 
 ## Motivation
 

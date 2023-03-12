@@ -113,7 +113,9 @@ RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.3.0/au
     && rm shellcheck.tar.xz \
     && mkdir -p /usr/local/lib/docker/cli-plugins \
     && curl -fsSL https://github.com/docker/compose/releases/download/v2.15.1/docker-compose-linux-$ARCH_GCC > /usr/local/lib/docker/cli-plugins/docker-compose \
-    && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+    && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose \
+    && curl -fsSL https://github.com/christian-korneck/docker-pushrm/releases/download/v1.9.0/docker-pushrm_linux_$ARCH_GO > /usr/local/lib/docker/cli-plugins/docker-pushrm \
+    && chmod +x /usr/local/lib/docker/cli-plugins/docker-pushrm
 
 ENTRYPOINT ["autouseradd", "--user", "materialize"]
 
