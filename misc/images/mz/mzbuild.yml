@@ -9,6 +9,7 @@
 
 name: mz
 description: The CLI for Materialize.
+mainline: false
 pre-image:
   - type: cargo-build
     bin: [mz]

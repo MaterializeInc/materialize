@@ -23,9 +23,15 @@ def main() -> None:
     ]
     buildkite_tag = os.environ["BUILDKITE_TAG"]
 
+    def include_image(image: mzbuild.Image) -> bool:
+        # Images must always be publishable to be tagged. Only mainline images
+        # get tagged for releases, but even non-mainline images get `unstable`
+        # tags.
+        return image.publish and (not buildkite_tag or image.mainline)
+
     print(f"--- Tagging Docker images")
     deps = [
-        repo.resolve_dependencies(image for image in repo if image.publish)
+        repo.resolve_dependencies(image for image in repo if include_image(image))
         for repo in repos
     ]
 
