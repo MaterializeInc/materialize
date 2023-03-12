@@ -18,7 +18,7 @@ use mz_expr::EvalError;
 use mz_repr::{ColumnName, NotNullViolation, RelationDesc};
 use mz_sql::ast::NoticeSeverity;
 use mz_sql::plan::PlanError;
-use mz_sql::session::vars::ClientSeverity as AdapterClientSeverity;
+use mz_sql::session::vars::{ClientSeverity as AdapterClientSeverity, VarError};
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the
@@ -311,7 +311,7 @@ impl ErrorResponse {
         // those errors that are truly internal errors. At the moment we have
         // a various classes of uncategorized errors that use this error code
         // inappropriately.
-        let code = match e {
+        let code = match &e {
             // DATA_EXCEPTION to match what Postgres returns for degenerate
             // range bounds
             AdapterError::AbsurdSubscribeBounds { .. } => SqlState::DATA_EXCEPTION,
@@ -319,7 +319,6 @@ impl ErrorResponse {
             AdapterError::BadItemInStorageCluster { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Catalog(_) => SqlState::INTERNAL_ERROR,
             AdapterError::ChangedPlan => SqlState::FEATURE_NOT_SUPPORTED,
-            AdapterError::ConstrainedParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,
             AdapterError::ModifyLinkedCluster { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::DuplicateCursor(_) => SqlState::DUPLICATE_CURSOR,
             AdapterError::Eval(EvalError::CharacterNotValidForEncoding(_)) => {
@@ -333,13 +332,10 @@ impl ErrorResponse {
             }
             AdapterError::Eval(_) => SqlState::INTERNAL_ERROR,
             AdapterError::Explain(_) => SqlState::INTERNAL_ERROR,
-            AdapterError::FixedValueParameter(_) => SqlState::INVALID_PARAMETER_VALUE,
             AdapterError::IdExhaustionError => SqlState::INTERNAL_ERROR,
             AdapterError::Internal(_) => SqlState::INTERNAL_ERROR,
             AdapterError::IntrospectionDisabled { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidLogDependency { .. } => SqlState::FEATURE_NOT_SUPPORTED,
-            AdapterError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,
-            AdapterError::InvalidParameterValue { .. } => SqlState::INVALID_PARAMETER_VALUE,
             AdapterError::InvalidClusterReplicaAz { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidClusterReplicaSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidStorageClusterSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
@@ -354,7 +350,6 @@ impl ErrorResponse {
             AdapterError::PlanError(_) => SqlState::INTERNAL_ERROR,
             AdapterError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,
             AdapterError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
-            AdapterError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
             AdapterError::ReadWriteUnavailable => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::StatementTimeout => SqlState::QUERY_CANCELED,
             AdapterError::IdleInTransactionSessionTimeout => {
@@ -371,7 +366,6 @@ impl ErrorResponse {
             AdapterError::Unauthorized(_) => SqlState::INSUFFICIENT_PRIVILEGE,
             AdapterError::UncallableFunction { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::UnknownCursor(_) => SqlState::INVALID_CURSOR_NAME,
-            AdapterError::UnknownParameter(_) => SqlState::UNDEFINED_OBJECT,
             AdapterError::UnknownPreparedStatement(_) => SqlState::UNDEFINED_PSTATEMENT,
             AdapterError::UnknownLoginRole(_) => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
             AdapterError::UnknownClusterReplica { .. } => SqlState::UNDEFINED_OBJECT,
@@ -391,6 +385,14 @@ impl ErrorResponse {
                 SqlState::INTERNAL_ERROR
             }
             AdapterError::ConcurrentRoleDrop(_) => SqlState::UNDEFINED_OBJECT,
+            AdapterError::VarError(e) => match e {
+                VarError::ConstrainedParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,
+                VarError::FixedValueParameter(_) => SqlState::INVALID_PARAMETER_VALUE,
+                VarError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,
+                VarError::InvalidParameterValue { .. } => SqlState::INVALID_PARAMETER_VALUE,
+                VarError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
+                VarError::UnknownParameter(_) => SqlState::UNDEFINED_OBJECT,
+            },
         };
         ErrorResponse {
             severity,

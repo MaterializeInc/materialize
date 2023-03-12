@@ -60,7 +60,7 @@ use mz_sql::plan::{
     VariableValue, View,
 };
 use mz_sql::session::vars::{
-    IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
+    IsolationLevel, OwnedVarInput, Var, VarError, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
     TRANSACTION_ISOLATION_VAR_NAME,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
@@ -2013,7 +2013,9 @@ impl Coordinator {
             let row = Row::pack_slice(&[Datum::String(&variable.value())]);
             Ok(send_immediate_rows(vec![row]))
         } else {
-            Err(AdapterError::UnknownParameter(plan.name))
+            Err(AdapterError::VarError(VarError::UnknownParameter(
+                plan.name,
+            )))
         }
     }
 
