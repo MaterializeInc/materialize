@@ -9,7 +9,7 @@ rust-version.workspace = true
 [dependencies]
 anyhow = "1.0.66"
 axum = { version = "0.6.7" }
-clap = { version = "3.2.20", features = [ "derive" ] }
+clap = { version = "4.1.8", features = [ "derive" ] }
 dirs = "4.0.0"
 indicatif = "0.17.2"
 mz-build-info = { path = "../build-info" }
