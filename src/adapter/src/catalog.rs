@@ -68,7 +68,9 @@ use mz_sql::plan::{
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
     Plan, PlanContext, SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
 };
-use mz_sql::session::vars::{OwnedVarInput, SystemVars, Var, VarInput, CONFIG_HAS_SYNCED_ONCE};
+use mz_sql::session::vars::{
+    OwnedVarInput, SystemVars, Var, VarError, VarInput, CONFIG_HAS_SYNCED_ONCE,
+};
 use mz_sql::{plan, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{CreateSinkOption, CreateSourceOption, Statement, WithOptionValue};
 use mz_ssh_util::keys::SshKeyPairSet;
@@ -2884,7 +2886,7 @@ impl Catalog {
                 .insert_system_configuration(name, VarInput::Flat(value))
             {
                 Ok(_) => (),
-                Err(AdapterError::UnknownParameter(name)) => {
+                Err(AdapterError::VarError(VarError::UnknownParameter(name))) => {
                     warn!(%name, "cannot load unknown system parameter from stash");
                 }
                 Err(e) => return Err(e),
@@ -2896,7 +2898,7 @@ impl Catalog {
                 .insert_system_configuration(&name, VarInput::Flat(&value))
             {
                 Ok(_) => (),
-                Err(AdapterError::UnknownParameter(name)) => {
+                Err(AdapterError::VarError(VarError::UnknownParameter(name))) => {
                     warn!(%name, "cannot load unknown system parameter from stash");
                 }
                 Err(e) => return Err(e),

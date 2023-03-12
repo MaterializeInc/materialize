@@ -17,12 +17,14 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use uncased::UncasedStr;
 
-use crate::ast::Ident;
-use crate::DEFAULT_SCHEMA;
 use mz_build_info::BuildInfo;
 use mz_ore::cast;
+use mz_ore::str::StrExt;
 use mz_persist_client::cfg::PersistConfig;
 use mz_sql_parser::ast::TransactionIsolationLevel;
+
+use crate::ast::Ident;
+use crate::DEFAULT_SCHEMA;
 
 /// The action to take during end_transaction.
 ///
@@ -39,26 +41,73 @@ pub enum EndTransactionAction {
 /// Errors that can occur when working with [`Var`]s
 #[derive(Debug, thiserror::Error)]
 pub enum VarError {
-    #[error("unknown parameter: {0}")]
-    UnknownParameter(String),
-    #[error("value for parameter {0:?} has wrong type")]
-    InvalidParameterType(&'static (dyn Var + Send + Sync)),
-    #[error("value for parameter {parameter:?}: {values:?} is wrong because of {reason}")]
-    InvalidParameterValue {
-        parameter: &'static (dyn Var + Send + Sync),
-        values: Vec<String>,
-        reason: String,
-    },
-    #[error("specified parameter {0:?} is fixed to a specific value")]
-    FixedValueParameter(&'static (dyn Var + Send + Sync)),
-    #[error("specified parameter {0:?} is read only")]
-    ReadOnlyParameter(&'static (dyn Var + Send + Sync)),
-    #[error("value for parameter {parameter:?}: {values:?} is constrainted to {valid_values:?}")]
+    /// The specified session parameter is constrained to a finite set of
+    /// values.
+    #[error(
+        "invalid value for parameter {}: {}",
+        parameter.name().quoted(),
+        values.iter().map(|v| v.quoted()).join(",")
+    )]
     ConstrainedParameter {
         parameter: &'static (dyn Var + Send + Sync),
         values: Vec<String>,
         valid_values: Option<Vec<&'static str>>,
     },
+    /// The specified parameter is fixed to a single specific value.
+    ///
+    /// We allow setting the parameter to its fixed value for compatibility
+    /// with PostgreSQL-based tools.
+    #[error(
+        "parameter {} can only be set to {}",
+        .0.name().quoted(),
+        .0.value().quoted(),
+    )]
+    FixedValueParameter(&'static (dyn Var + Send + Sync)),
+    /// The value for the specified parameter does not have the right type.
+    #[error(
+        "parameter {} requires a {} value",
+        .0.name().quoted(),
+        .0.type_name().quoted()
+    )]
+    InvalidParameterType(&'static (dyn Var + Send + Sync)),
+    /// The value of the specified parameter is incorrect.
+    #[error(
+        "parameter {} cannot have value {}: {}",
+        parameter.name().quoted(),
+        values
+            .iter()
+            .map(|v| v.quoted().to_string())
+            .collect::<Vec<_>>()
+            .join(","),
+        reason,
+    )]
+    InvalidParameterValue {
+        parameter: &'static (dyn Var + Send + Sync),
+        values: Vec<String>,
+        reason: String,
+    },
+    /// The specified session parameter is read only.
+    #[error("parameter {} cannot be changed", .0.name().quoted())]
+    ReadOnlyParameter(&'static (dyn Var + Send + Sync)),
+    /// The named parameter is unknown to the system.
+    #[error("unrecognized configuration parameter {}", .0.quoted())]
+    UnknownParameter(String),
+}
+
+impl VarError {
+    pub fn detail(&self) -> Option<String> {
+        None
+    }
+
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            VarError::ConstrainedParameter {
+                valid_values: Some(valid_values),
+                ..
+            } => Some(format!("Available values: {}.", valid_values.join(", "))),
+            _ => None,
+        }
+    }
 }
 
 // We pretend to be Postgres v9.5.0, which is also what CockroachDB pretends to
