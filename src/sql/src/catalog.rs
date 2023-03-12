@@ -46,7 +46,7 @@ use crate::normalize;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
 use crate::plan::statement::StatementDesc;
 use crate::plan::PlanError;
-use crate::vars::SystemVars;
+use crate::session::vars::SystemVars;
 
 /// A catalog keeps track of SQL objects and session state available to the
 /// planner.

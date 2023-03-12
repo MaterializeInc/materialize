@@ -40,7 +40,7 @@ use mz_repr::{Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
-use mz_sql::vars::VarInput;
+use mz_sql::session::vars::VarInput;
 
 use crate::codec::FramedConn;
 use crate::message::{

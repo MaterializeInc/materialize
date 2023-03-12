@@ -59,7 +59,7 @@ use mz_sql::plan::{
     SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan,
     VariableValue, View,
 };
-use mz_sql::vars::{
+use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
     TRANSACTION_ISOLATION_VAR_NAME,
 };

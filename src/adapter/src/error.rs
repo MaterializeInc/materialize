@@ -23,7 +23,7 @@ use mz_repr::explain::ExplainError;
 use mz_repr::NotNullViolation;
 use mz_sql::names::RoleId;
 use mz_sql::plan::PlanError;
-use mz_sql::vars::Var;
+use mz_sql::session::vars::Var;
 use mz_storage_client::controller::StorageError;
 use mz_transform::TransformError;
 
@@ -650,14 +650,16 @@ impl From<mz_sql_parser::parser::ParserError> for AdapterError {
     }
 }
 
-impl From<mz_sql::vars::VarError> for AdapterError {
-    fn from(e: mz_sql::vars::VarError) -> Self {
+impl From<mz_sql::session::vars::VarError> for AdapterError {
+    fn from(e: mz_sql::session::vars::VarError) -> Self {
         match e {
-            mz_sql::vars::VarError::UnknownParameter(p) => AdapterError::UnknownParameter(p),
-            mz_sql::vars::VarError::InvalidParameterType(p) => {
+            mz_sql::session::vars::VarError::UnknownParameter(p) => {
+                AdapterError::UnknownParameter(p)
+            }
+            mz_sql::session::vars::VarError::InvalidParameterType(p) => {
                 AdapterError::InvalidParameterType(p)
             }
-            mz_sql::vars::VarError::InvalidParameterValue {
+            mz_sql::session::vars::VarError::InvalidParameterValue {
                 parameter,
                 values,
                 reason,
@@ -666,9 +668,13 @@ impl From<mz_sql::vars::VarError> for AdapterError {
                 values,
                 reason,
             },
-            mz_sql::vars::VarError::FixedValueParameter(p) => AdapterError::FixedValueParameter(p),
-            mz_sql::vars::VarError::ReadOnlyParameter(p) => AdapterError::ReadOnlyParameter(p),
-            mz_sql::vars::VarError::ConstrainedParameter {
+            mz_sql::session::vars::VarError::FixedValueParameter(p) => {
+                AdapterError::FixedValueParameter(p)
+            }
+            mz_sql::session::vars::VarError::ReadOnlyParameter(p) => {
+                AdapterError::ReadOnlyParameter(p)
+            }
+            mz_sql::session::vars::VarError::ConstrainedParameter {
                 parameter,
                 values,
                 valid_values,

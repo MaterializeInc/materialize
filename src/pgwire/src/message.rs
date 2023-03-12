@@ -18,7 +18,7 @@ use mz_expr::EvalError;
 use mz_repr::{ColumnName, NotNullViolation, RelationDesc};
 use mz_sql::ast::NoticeSeverity;
 use mz_sql::plan::PlanError;
-use mz_sql::vars::ClientSeverity as AdapterClientSeverity;
+use mz_sql::session::vars::ClientSeverity as AdapterClientSeverity;
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the

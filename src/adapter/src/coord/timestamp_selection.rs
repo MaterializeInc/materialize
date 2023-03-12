@@ -13,7 +13,7 @@ use std::fmt;
 
 use chrono::NaiveDateTime;
 use differential_dataflow::lattice::Lattice;
-use mz_sql::vars::IsolationLevel;
+use mz_sql::session::vars::IsolationLevel;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::{event, Level};
