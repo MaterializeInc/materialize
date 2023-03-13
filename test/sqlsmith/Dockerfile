@@ -22,15 +22,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpqxx-dev \
     nlohmann-json3-dev
 
-RUN git clone https://github.com/def-/sqlsmith
-
 # Rebuild since SQLsmith repo might have changed
 ADD https://api.github.com/repos/def-/sqlsmith/git/refs/heads/materialize version.json
 
 # Build SQLsmith
-RUN cd sqlsmith \
-    && git checkout materialize \
-    && git pull \
+RUN git clone --depth=1 --single-branch --branch=materialize https://github.com/def-/sqlsmith \
+    && cd sqlsmith \
     && cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=c++ . \
     && cmake --build . -j $(nproc)
 
