@@ -4404,7 +4404,6 @@ impl Catalog {
                         },
                     );
                     builtin_table_updates.push(state.pack_role_update(id, 1));
-
                 }
                 Op::AlterSink { id, cluster_config } => {
                     use mz_sql::ast::Value;
@@ -4494,13 +4493,7 @@ impl Catalog {
                     )?;
 
                     let to_name = entry.name().clone();
-                    update_item(
-                        state,
-                        builtin_table_updates,
-                            id,
-                            to_name,
-                            sink,
-                    )?;
+                    update_item(state, builtin_table_updates, id, to_name, sink)?;
                 }
                 Op::AlterSource { id, cluster_config } => {
                     use mz_sql::ast::Value;
@@ -4592,13 +4585,7 @@ impl Catalog {
                     )?;
 
                     let to_name = entry.name().clone();
-    update_item(
-                        state,
-                        builtin_table_updates,
-                            id,
-                            to_name,
-                            source
-                    )?;
+                    update_item(state, builtin_table_updates, id, to_name, source)?;
                 }
                 Op::CreateDatabase {
                     name,
@@ -4620,7 +4607,7 @@ impl Catalog {
                             name: name.clone(),
                         }),
                     )?;
-                 /*    catalog_action(
+                    /*    catalog_action(
                         state,
                         builtin_table_updates,
                         Action::CreateDatabase {
@@ -4641,10 +4628,11 @@ impl Catalog {
                             schemas_by_name: BTreeMap::new(),
                         },
                     );
-                    state.database_by_name.insert(name.clone(), database_id.clone());
+                    state
+                        .database_by_name
+                        .insert(name.clone(), database_id.clone());
                     builtin_table_updates
                         .push(state.pack_database_update(&state.database_by_id[&database_id], 1));
-
 
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -4663,10 +4651,10 @@ impl Catalog {
                     create_schema(
                         state,
                         builtin_table_updates,
-                            schema_id,
-                            public_schema_oid,
-                            database_id,
-                            DEFAULT_SCHEMA.to_string()
+                        schema_id,
+                        public_schema_oid,
+                        database_id,
+                        DEFAULT_SCHEMA.to_string(),
                     )?;
                     // catalog_action(
                     //     state,
@@ -4678,7 +4666,6 @@ impl Catalog {
                     //         schema_name: DEFAULT_SCHEMA.to_string(),
                     //     },
                     // )?;
-
                 }
                 Op::CreateSchema {
                     database_id,
@@ -4716,10 +4703,10 @@ impl Catalog {
                     create_schema(
                         state,
                         builtin_table_updates,
-                            schema_id,
-                            oid,
-                            database_id,
-                            schema_name
+                        schema_id,
+                        oid,
+                        database_id,
+                        schema_name,
                     )?;
                     // catalog_action(
                     //     state,
@@ -4848,7 +4835,6 @@ impl Catalog {
                     for id in arranged_introspection_source_ids {
                         builtin_table_updates.extend(state.pack_item_update(id, 1));
                     }
-
                 }
                 Op::CreateClusterReplica {
                     cluster_id,
@@ -4923,7 +4909,6 @@ impl Catalog {
                         );
                         builtin_table_updates.push(update);
                     }
-
                 }
                 Op::CreateItem {
                     id,
@@ -5036,7 +5021,6 @@ impl Catalog {
                     // )?;
                     state.insert_item(id, oid, name, item);
                     builtin_table_updates.extend(state.pack_item_update(id, 1));
-
                 }
                 Op::DropDatabase { id } => {
                     let database = &state.database_by_id[&id];
@@ -5094,15 +5078,15 @@ impl Catalog {
                     //     },
                     // )?;
                     let db = state
-                    .database_by_id
-                    .get_mut(&database_id)
-                    .expect("catalog out of sync");
-                let schema = db
-                    .schemas_by_id
-                    .get(&schema_id)
-                    .expect("catalog out of sync");
-                db.schemas_by_name.remove(&schema.name.schema);
-                db.schemas_by_id.remove(&schema_id);
+                        .database_by_id
+                        .get_mut(&database_id)
+                        .expect("catalog out of sync");
+                    let schema = db
+                        .schemas_by_id
+                        .get(&schema_id)
+                        .expect("catalog out of sync");
+                    db.schemas_by_name.remove(&schema.name.schema);
+                    db.schemas_by_id.remove(&schema_id);
                 }
                 Op::DropRole { id, name } => {
                     if is_reserved_name(&name) {
@@ -5167,26 +5151,26 @@ impl Catalog {
                     )?;
                     // catalog_action(state, builtin_table_updates, Action::DropCluster { id })?;
                     let cluster = state
-                    .clusters_by_id
-                    .remove(&id)
-                    .expect("can only drop known clusters");
-                state.clusters_by_name.remove(&cluster.name);
-
-                if let Some(linked_object_id) = cluster.linked_object_id {
-                    state
-                        .clusters_by_linked_object_id
-                        .remove(&linked_object_id)
+                        .clusters_by_id
+                        .remove(&id)
                         .expect("can only drop known clusters");
-                }
+                    state.clusters_by_name.remove(&cluster.name);
 
-                for id in cluster.log_indexes.values() {
-                    state.drop_item(*id);
-                }
+                    if let Some(linked_object_id) = cluster.linked_object_id {
+                        state
+                            .clusters_by_linked_object_id
+                            .remove(&linked_object_id)
+                            .expect("can only drop known clusters");
+                    }
 
-                assert!(
-                    cluster.bound_objects.is_empty() && cluster.replicas_by_id.is_empty(),
-                    "not all items dropped before cluster"
-                );
+                    for id in cluster.log_indexes.values() {
+                        state.drop_item(*id);
+                    }
+
+                    assert!(
+                        cluster.bound_objects.is_empty() && cluster.replicas_by_id.is_empty(),
+                        "not all items dropped before cluster"
+                    );
                 }
                 Op::DropClusterReplica {
                     cluster_id,
@@ -5307,7 +5291,7 @@ impl Catalog {
                     id,
                     to_name,
                     current_full_name,
-                } => {                   
+                } => {
                     let mut updates = Vec::new();
 
                     let entry = state.get_entry(&id);
@@ -5404,21 +5388,13 @@ impl Catalog {
                         }
                         builtin_table_updates.extend(state.pack_item_update(*id, -1));
 
-                        updates.push((
-                            id.clone(),
-                            dependent_item.name().clone(),
-                            to_item,
-                        ));
+                        updates.push((id.clone(), dependent_item.name().clone(), to_item));
                     }
                     if !item.is_temporary() {
                         tx.update_item(id, &to_full_name.item, &serialized_item)?;
                     }
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
-                    updates.push((
-                        id,
-                        to_qualified_name,
-                        item,
-                    ));
+                    updates.push((id, to_qualified_name, item));
                     for (id, to_name, to_item) in updates {
                         update_item(state, builtin_table_updates, id, to_name, to_item)?;
                     }
@@ -5449,18 +5425,13 @@ impl Catalog {
                         event.replica_id,
                         event.process_id,
                         1,
-                    ));                }
+                    ));
+                }
                 Op::UpdateItem { id, name, to_item } => {
                     let ser = Self::serialize_item(&to_item);
                     tx.update_item(id, &name.item, &ser)?;
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
-                    update_item(
-                        state,
-                        builtin_table_updates,
-                            id,
-                            name,
-                            to_item
-                    )?;
+                    update_item(state, builtin_table_updates, id, name, to_item)?;
                 }
                 Op::UpdateStorageUsage {
                     shard_id,
@@ -5546,7 +5517,8 @@ impl Catalog {
             builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
             id: GlobalId,
             to_name: QualifiedObjectName,
-            to_item: CatalogItem) -> Result<(), AdapterError> {
+            to_item: CatalogItem,
+        ) -> Result<(), AdapterError> {
             let old_entry = state.entry_by_id.remove(&id).expect("catalog out of sync");
             info!(
                 "update {} {} ({})",
