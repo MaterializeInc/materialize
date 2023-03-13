@@ -28,7 +28,7 @@ SELECT id FROM mz_sinks WHERE name = 'kafka_sink'
 
 $ set-regex match="\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d(\.\d\d\d)?" replacement="<TIMESTAMP>"
 
-# Verify we get a starting -- it's possible we move to running by the time this query runs.
+# Verify we get a starting status
 > SELECT * FROM mz_internal.mz_sink_status_history WHERE sink_id = '${sink_id}' ORDER BY occurred_at LIMIT 1;
 "<TIMESTAMP> UTC" ${sink_id} starting <null> <null>
 
