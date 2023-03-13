@@ -111,6 +111,9 @@ in how Persist ingests and compacts data over time (by virtue of its Spine inter
 typically smallest, parts will contain the most recent updates, allowing one to filter out the older/larger
 parts and their data effectively. This filtering is particularly relevant for append-only use cases where
 we may have accumulated considerable numbers of older, larger parts that are no longer relevant to the filter.
+
+![mfp-temporal-filtering](https://user-images.githubusercontent.com/785446/224154154-2276a7d1-4149-407f-8737-9acd4e929396.png)
+
 * Filtering on a prefix of the `(key, value)` columns. This is due to how parts within Persist are sorted 
 by `(key, value, ts)` in column/lexicographic ordering. In practice, the default column order is unlikely to
 be immediately useful for most collections, and column ordering would likely need to be user-specifiable
