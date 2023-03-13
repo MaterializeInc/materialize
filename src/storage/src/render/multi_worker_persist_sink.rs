@@ -129,19 +129,38 @@ struct BatchMetrics {
 
 impl AddAssign<&BatchMetrics> for BatchMetrics {
     fn add_assign(&mut self, rhs: &BatchMetrics) {
-        self.inserts += rhs.inserts;
-        self.retractions += rhs.retractions;
-        self.error_inserts += rhs.error_inserts;
-        self.error_retractions += rhs.error_retractions;
+        let BatchMetrics {
+            inserts: self_inserts,
+            retractions: self_retractions,
+            error_inserts: self_error_inserts,
+            error_retractions: self_error_retractions,
+        } = self;
+        let BatchMetrics {
+            inserts: rhs_inserts,
+            retractions: rhs_retractions,
+            error_inserts: rhs_error_inserts,
+            error_retractions: rhs_error_retractions,
+        } = rhs;
+        *self_inserts += rhs_inserts;
+        *self_retractions += rhs_retractions;
+        *self_error_inserts += rhs_error_inserts;
+        *self_error_retractions += rhs_error_retractions;
     }
 }
 
 impl BatchMetrics {
     fn is_empty(&self) -> bool {
-        self.inserts == 0
-            && self.retractions == 0
-            && self.error_inserts == 0
-            && self.error_retractions == 0
+        let BatchMetrics {
+            inserts: self_inserts,
+            retractions: self_retractions,
+            error_inserts: self_error_inserts,
+            error_retractions: self_error_retractions,
+        } = self;
+
+        *self_inserts == 0
+            && *self_retractions == 0
+            && *self_error_inserts == 0
+            && *self_error_retractions == 0
     }
 }
 
@@ -328,7 +347,10 @@ where
                 .await
                 .expect("could not open persist shard");
 
-            write.upper().clone()
+            let upper = write.upper().clone();
+            // explicitly expire the once-used write handle.
+            write.expire().await;
+            upper
         };
 
         // The current input frontiers.
@@ -674,16 +696,13 @@ where
 
                     let (batch_lower, batch_upper) = batch_description;
 
-                    let mut finalized_timestamps: Vec<_> = stashed_batches
+                    let finalized_timestamps: Vec<_> = stashed_batches
                         .keys()
                         .filter(|time| {
                             batch_lower.less_equal(time) && !batch_upper.less_equal(time)
                         })
                         .copied()
                         .collect();
-
-                    // TODO(guswynn): is this sorting required?
-                    finalized_timestamps.sort_unstable();
 
                     let mut batch_tokens = vec![];
                     for ts in finalized_timestamps {
@@ -771,6 +790,10 @@ where
     let hashed_id = collection_id.hashed();
     let active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
 
+    // Both of these inputs are disconnected from the output capabilities of this operator, as
+    // any output of this operator is entirely driven by the `compare_and_append`s. Currently
+    // this operator has no outputs, but they may be added in the future, when merging with
+    // the compute `persist_sink`.
     let mut descriptions_input = append_op.new_input_connection(
         batch_descriptions,
         Exchange::new(move |_| hashed_id),
