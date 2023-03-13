@@ -570,7 +570,6 @@ impl ColumnPush<Vec<u8>> for MutableBinaryArray<i32> {
 
 impl ColumnPush<Option<Vec<u8>>> for MutableBinaryArray<i32> {
     fn push<'a>(&mut self, val: Option<&'a [u8]>) {
-        assert!(self.validity().is_none());
         <MutableBinaryArray<i32>>::push(self, val)
     }
 }
