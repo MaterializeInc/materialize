@@ -433,20 +433,25 @@ impl LogView {
             ),
 
             LogView::MzDataflowOperatorParents => (
-                "WITH parent_addrs AS (
+                "WITH operator_addrs AS (
+                    SELECT
+                        id, address, worker_id
+                    FROM mz_internal.mz_dataflow_addresses_{}
+                        INNER JOIN mz_internal.mz_dataflow_operators_{}
+                            USING (id, worker_id)
+                ),
+                parent_addrs AS (
                     SELECT
                         id,
                         address[1:list_length(address) - 1] AS parent_address,
                         worker_id
-                    FROM mz_internal.mz_dataflow_addresses_{}
-                        INNER JOIN mz_internal.mz_dataflow_operators_{}
-                            USING (id, worker_id)
+                    FROM operator_addrs
                 )
-                SELECT pa.id, mda.id AS parent_id, pa.worker_id
+                SELECT pa.id, oa.id AS parent_id, pa.worker_id
                 FROM parent_addrs AS pa
-                    JOIN mz_internal.mz_dataflow_addresses_{} AS mda
-                        ON pa.parent_address = mda.address
-                        AND pa.worker_id = mda.worker_id",
+                    INNER JOIN operator_addrs AS oa
+                        ON pa.parent_address = oa.address
+                        AND pa.worker_id = oa.worker_id",
                 "mz_dataflow_operator_parents_{}",
             ),
 

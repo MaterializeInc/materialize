@@ -212,3 +212,11 @@ mv1_primary_idx mv1
     df.worker_id = 0 AND
     df.name LIKE '%my_unique_mv_name%';
 1
+
+# Test that each operator has at most one parent
+
+> SELECT max(count) FROM (
+    SELECT count(*)
+    FROM mz_internal.mz_dataflow_operator_parents mdop
+    GROUP BY mdop.id) counts
+1

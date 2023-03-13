@@ -2554,20 +2554,28 @@ pub const MZ_DATAFLOW_OPERATOR_PARENTS: BuiltinView = BuiltinView {
     name: "mz_dataflow_operator_parents",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_operator_parents AS
-WITH parent_addrs AS (
+WITH operator_addrs AS(
+    SELECT
+        id, address, worker_id
+    FROM mz_internal.mz_dataflow_addresses
+        INNER JOIN mz_internal.mz_dataflow_operators
+            USING (id, worker_id)
+),
+parent_addrs AS (
     SELECT
         id,
         address[1:list_length(address) - 1] AS parent_address,
         worker_id
-    FROM mz_internal.mz_dataflow_addresses
-        INNER JOIN mz_internal.mz_dataflow_operators
-            USING (id, worker_id)
+    FROM operator_addrs
 )
-SELECT pa.id, mda.id AS parent_id, pa.worker_id
+SELECT pa.id, oa.id AS parent_id, pa.worker_id
 FROM parent_addrs AS pa
-    JOIN mz_internal.mz_dataflow_addresses AS mda
-        ON pa.parent_address = mda.address
-        AND pa.worker_id = mda.worker_id",
+    INNER JOIN operator_addrs AS oa
+        ON pa.parent_address = oa.address
+        AND pa.worker_id = oa.worker_id
+    INNER JOIN mz_internal.mz_dataflow_operators AS mdo
+        ON mda.id = mdo.id
+        AND mda.worker_id = mdo.worker_id",
 };
 
 // NOTE: If you add real data to this implementation, then please update
