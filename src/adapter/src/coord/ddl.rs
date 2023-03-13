@@ -457,7 +457,7 @@ impl Coordinator {
             // `active_subscribes` until compute responds, hence the `dropping` flag.
             //
             // Note: Ideally we'd use .filter(...) on the iterator, but that would
-            // require simultaneously getting an immutable and mutable borrow of self
+            // require simultaneously getting an immutable and mutable borrow of self.
             let need_to_drop = self
                 .active_subscribes
                 .get(&sink.global_id)

@@ -2459,7 +2459,7 @@ fn test_dont_drop_sinks_twice() {
     // By inserting 10_000 rows into t1 and t2, it's very likely that the response from
     // compute indicating whether or not we successfully dropped the sink, will get 
     // queued behind the responses for the row insertions, which should trigger the race
-    // condition we're trying to exercise here
+    // condition we're trying to exercise here.
     client_b
         .batch_execute("INSERT INTO t1 SELECT generate_series(0, 10000)")
         .unwrap();
