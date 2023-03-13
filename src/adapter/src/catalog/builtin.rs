@@ -3648,7 +3648,7 @@ mod tests {
                             }
 
                             if imp.return_is_set != pg_fn.ret_set {
-                                println!(
+                                panic!(
                                 "funcs with oid {} ({}) don't match set-returning value: {:?} in mz, {:?} in pg",
                                 imp.oid, func.name, imp.return_is_set, pg_fn.ret_set
                             );
