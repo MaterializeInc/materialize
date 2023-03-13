@@ -481,6 +481,51 @@ impl Coordinator {
         global_timelines.get_mut(timeline).expect("inserted above")
     }
 
+    pub(crate) fn check_for_empty_timelines(
+        &self,
+        storage_ids: impl IntoIterator<Item = GlobalId> + Clone,
+        compute_ids: impl IntoIterator<Item = (ComputeInstanceId, GlobalId)> + Clone,
+    ) -> Vec<Timeline> {
+        // Collect all of the IDs together into a Bundle.
+        let mut compute: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
+        for (compute_id, id) in compute_ids.clone().into_iter() {
+            if let Some(ids) = compute.get_mut(&compute_id) {
+                ids.insert(id);
+            } else {
+                compute.insert(compute_id, BTreeSet::from([id]));
+            }
+        }
+        let bundle = CollectionIdBundle {
+            storage_ids: storage_ids.clone().into_iter().collect(),
+            compute_ids: compute,
+        };
+
+        // Get all of the Timelines for the given IDs.
+        let timelines: BTreeSet<_> = storage_ids
+            .into_iter()
+            .chain(compute_ids.into_iter().map(|(_compute, id)| id))
+            .filter_map(|id| match self.get_timeline_context(id) {
+                TimelineContext::TimelineDependent(timeline) => Some(timeline),
+                _ => None,
+            })
+            .collect();
+
+        // If our Bundle is a superset of the read_holds for a given Timeline, then
+        // removing all of the IDs would cause that timeline to be empty.
+        let mut empty_timelines = vec![];
+        for timeline in timelines.into_iter() {
+            let TimelineState { read_holds, .. } = self
+                .global_timelines
+                .get(&timeline)
+                .expect("all timelines have a timestamp oracle");
+            if read_holds.id_bundle().difference(&bundle).is_empty() {
+                empty_timelines.push(timeline);
+            }
+        }
+
+        empty_timelines
+    }
+
     pub(crate) fn remove_storage_ids_from_timeline<I>(&mut self, ids: I) -> Vec<Timeline>
     where
         I: IntoIterator<Item = GlobalId>,
@@ -494,7 +539,6 @@ impl Coordinator {
                     .expect("all timelines have a timestamp oracle");
                 read_holds.remove_storage_id(&id);
                 if read_holds.is_empty() {
-                    self.global_timelines.remove(&timeline);
                     empty_timelines.push(timeline);
                 }
             }
@@ -515,11 +559,45 @@ impl Coordinator {
                     .expect("all timelines have a timestamp oracle");
                 read_holds.remove_compute_id(&compute_instance, &id);
                 if read_holds.is_empty() {
-                    self.global_timelines.remove(&timeline);
                     empty_timelines.push(timeline);
                 }
             }
         }
+        empty_timelines
+    }
+
+    pub(crate) fn check_for_empty_timelines_compute_instance(
+        &mut self,
+        compute_instance: ComputeInstanceId,
+    ) -> Vec<Timeline> {
+        let mut empty_timelines = Vec::new();
+        for (timeline, TimelineState { read_holds, .. }) in &mut self.global_timelines {
+            // Collect all of the GlobalIDs associated with the provided ComputeInstance.
+            let compute_ids = read_holds
+                .compute_ids()
+                .filter(|(compute_inst, _ids)| **compute_inst == compute_instance);
+            let mut compute: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
+            for (compute_instance, id) in compute_ids {
+                let ids: BTreeSet<_> = id.into_iter().map(|(_chain, id)| id).copied().collect();
+                if let Some(existing_ids) = compute.get_mut(compute_instance) {
+                    existing_ids.extend(ids);
+                } else {
+                    compute.insert(*compute_instance, ids);
+                }
+            }
+
+            // Create a CollectionIdBundle we'll use to compare against the existing read_holds
+            let bundle = CollectionIdBundle {
+                storage_ids: BTreeSet::new(),
+                compute_ids: compute,
+            };
+            // If our Bundle is a superset of the read_holds for a given Timeline, then
+            // removing all of the IDs would cause that timeline to be empty.
+            if read_holds.id_bundle().difference(&bundle).is_empty() {
+                empty_timelines.push(timeline.clone());
+            }
+        }
+
         empty_timelines
     }
 
@@ -533,10 +611,6 @@ impl Coordinator {
             if read_holds.is_empty() {
                 empty_timelines.push(timeline.clone());
             }
-        }
-
-        for timeline in &empty_timelines {
-            self.global_timelines.remove(timeline);
         }
 
         empty_timelines

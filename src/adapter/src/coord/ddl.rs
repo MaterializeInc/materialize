@@ -177,7 +177,7 @@ impl Coordinator {
                     clusters_to_drop.push(*id);
 
                     // Drop timelines
-                    timelines_to_drop.extend(self.remove_compute_instance_from_timeline(*id));
+                    timelines_to_drop.extend(self.check_for_empty_timelines_compute_instance(*id));
                 }
                 catalog::Op::DropClusterReplica {
                     cluster_id,
@@ -258,25 +258,33 @@ impl Coordinator {
             }
         }
 
-        timelines_to_drop = self.remove_storage_ids_from_timeline(
-            sources_to_drop
+        let storage_ids_to_drop = sources_to_drop
+            .iter()
+            .chain(storage_sinks_to_drop.iter())
+            .chain(tables_to_drop.iter())
+            .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
+            .chain(log_sources_to_drop.iter().map(|(_, id)| id))
+            .cloned();
+        let compute_ids_to_drop = indexes_to_drop
+            .iter()
+            .chain(materialized_views_to_drop.iter())
+            .chain(log_sources_to_drop.iter())
+            .cloned();
+        // Check if any Timelines would become empty, if we dropped the specified storage or
+        // compute resources.
+        //
+        // Note: only after a Transaction succeeds do we actually drop the timeline
+        timelines_to_drop = self
+            .check_for_empty_timelines(storage_ids_to_drop.clone(), compute_ids_to_drop.clone());
+        ops.extend(
+            timelines_to_drop
                 .iter()
-                .chain(storage_sinks_to_drop.iter())
-                .chain(tables_to_drop.iter())
-                .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
-                .chain(log_sources_to_drop.iter().map(|(_, id)| id))
-                .cloned(),
+                .cloned()
+                .map(catalog::Op::DropTimeline),
         );
-        timelines_to_drop.extend(
-            self.remove_compute_ids_from_timeline(
-                indexes_to_drop
-                    .iter()
-                    .chain(materialized_views_to_drop.iter())
-                    .chain(log_sources_to_drop.iter())
-                    .cloned(),
-            ),
-        );
-        ops.extend(timelines_to_drop.into_iter().map(catalog::Op::DropTimeline));
+
+        let storage_ids_to_drop: Vec<_> = storage_ids_to_drop.collect();
+        let compute_ids_to_drop: Vec<_> = compute_ids_to_drop.collect();
 
         self.validate_resource_limits(
             &ops,
@@ -369,6 +377,35 @@ impl Coordinator {
             if !vpc_endpoints_to_drop.is_empty() {
                 self.drop_vpc_endpoints(vpc_endpoints_to_drop).await;
             }
+
+            let mut empty_timelines = Vec::new();
+            if !storage_ids_to_drop.is_empty() {
+                let timelines = self.remove_storage_ids_from_timeline(storage_ids_to_drop);
+                empty_timelines.extend(timelines);
+            }
+            if !compute_ids_to_drop.is_empty() {
+                let timelines = self.remove_compute_ids_from_timeline(compute_ids_to_drop);
+                empty_timelines.extend(timelines);
+            }
+            if !clusters_to_drop.is_empty() {
+                for compute_instance in &clusters_to_drop {
+                    let timelines = self.remove_compute_instance_from_timeline(*compute_instance);
+                    empty_timelines.extend(timelines);
+                }
+            }
+
+            // Make sure after dropping resouces the timelines that are empty, are the same
+            // as the ones we thought would be empty, before actually running the transaction.
+            empty_timelines.sort();
+            timelines_to_drop.sort();
+            assert_eq!(&empty_timelines, &timelines_to_drop);
+
+            if !timelines_to_drop.is_empty() {
+                for timeline in timelines_to_drop {
+                    self.global_timelines.remove(&timeline);
+                }
+            }
+
             if !cluster_replicas_to_drop.is_empty() {
                 fail::fail_point!("after_catalog_drop_replica");
                 for (cluster_id, replica_id) in cluster_replicas_to_drop {
