@@ -34,6 +34,7 @@ use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, ReadMetrics};
 use crate::internal::paths::PartialBatchKey;
 use crate::read::{LeasedReaderId, ReadHandle};
+use crate::stats::PartStats;
 use crate::ShardId;
 
 /// Capable of fetching [`LeasedBatchPart`] while not holding any capabilities.
@@ -341,6 +342,7 @@ where
     pub(crate) metadata: SerdeLeasedBatchPartMetadata,
     pub(crate) desc: Description<T>,
     pub(crate) key: PartialBatchKey,
+    pub(crate) stats: Option<Arc<PartStats>>,
     pub(crate) encoded_size_bytes: usize,
     /// The `SeqNo` from which this part originated; we track this value as
     /// long as necessary to ensure the `SeqNo` isn't garbage collected while a
@@ -619,6 +621,10 @@ impl<T: Timestamp + Codec64> LeasedBatchPart<T> {
             ),
             key: x.key,
             encoded_size_bytes: x.encoded_size_bytes,
+            // TODO(mfp): We don't need stats after the batch is Exchanged into
+            // the fetch operator. This is unfortunately non-obvious, so perhaps
+            // better would be to lift stats off LeasedBatchPart.
+            stats: None,
             leased_seqno: x.leased_seqno,
             reader_id: x.reader_id,
         }

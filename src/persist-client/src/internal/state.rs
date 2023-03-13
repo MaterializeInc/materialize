@@ -15,6 +15,7 @@ use std::marker::PhantomData;
 use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
 use std::ops::{Deref, DerefMut};
 use std::slice;
+use std::sync::Arc;
 use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
@@ -36,6 +37,7 @@ use crate::internal::gc::GcReq;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeReq, FueledMergeRes, Trace};
 use crate::read::LeasedReaderId;
+use crate::stats::PartStats;
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
 
@@ -140,6 +142,11 @@ pub struct HollowBatchPart {
     pub key: PartialBatchKey,
     /// The encoded size of this part.
     pub encoded_size_bytes: usize,
+    /// Aggregate statistics about data contained in this part.
+    ///
+    /// Stored inside an Arc because HollowBatchPart needs to be cheaply
+    /// clone-able.
+    pub stats: Option<Arc<PartStats>>,
 }
 
 /// A [Batch] but with the updates themselves stored externally.
@@ -1325,6 +1332,7 @@ mod tests {
                 .map(|x| HollowBatchPart {
                     key: PartialBatchKey((*x).to_owned()),
                     encoded_size_bytes: 0,
+                    stats: None,
                 })
                 .collect(),
             len,

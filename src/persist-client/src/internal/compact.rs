@@ -1011,6 +1011,7 @@ mod tests {
             .map(|encoded_size_bytes| HollowBatchPart {
                 key: PartialBatchKey("".into()),
                 encoded_size_bytes,
+                stats: None,
             })
             .collect::<Vec<_>>();
         let parse = |x: &str| {

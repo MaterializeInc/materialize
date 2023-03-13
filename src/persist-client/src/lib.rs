@@ -125,17 +125,18 @@ pub mod cli {
 pub mod critical;
 pub mod error;
 pub mod fetch;
-pub mod operators {
-    //! [timely] operators for reading and writing persist Shards.
-    pub mod shard_source;
-}
+pub mod internals_bench;
 pub mod metrics {
     //! Utilities related to metrics.
     pub use crate::internal::metrics::encode_ts_metric;
     pub use crate::internal::metrics::Metrics;
 }
-pub mod internals_bench;
+pub mod operators {
+    //! [timely] operators for reading and writing persist Shards.
+    pub mod shard_source;
+}
 pub mod read;
+pub mod stats;
 pub mod usage;
 pub mod write;
 

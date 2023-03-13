@@ -35,11 +35,12 @@ use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::sync::mpsc;
-use tracing::trace;
+use tracing::{info, trace};
 
 use crate::cache::PersistClientCache;
 use crate::fetch::{FetchedPart, SerdeLeasedBatchPart};
 use crate::read::ListenEvent;
+use crate::stats::{FetchAllPartFilter, PartFilter};
 use crate::{PersistLocation, ShardId};
 
 /// Creates a new source that reads from a persist shard, distributing the work
@@ -110,7 +111,8 @@ where
     ) = mpsc::unbounded_channel();
 
     let chosen_worker = usize::cast_from(name.hashed()) % scope.peers();
-    let (descs, descs_shutdown) = shard_source_descs::<K, V, D, G>(
+    let filter = FetchAllPartFilter;
+    let (descs, descs_shutdown) = shard_source_descs::<K, V, D, _, G>(
         scope,
         name,
         Arc::clone(&clients),
@@ -119,10 +121,12 @@ where
         as_of,
         until,
         flow_control,
+        consumed_part_tx.clone(),
         consumed_part_rx,
         chosen_worker,
         Arc::clone(&key_schema),
         Arc::clone(&val_schema),
+        filter,
     );
     let (parts, tokens) = shard_source_fetch(
         &descs, name, clients, location, shard_id, key_schema, val_schema,
@@ -146,7 +150,7 @@ pub struct FlowControl<G: Scope> {
     pub max_inflight_bytes: usize,
 }
 
-pub(crate) fn shard_source_descs<K, V, D, G>(
+pub(crate) fn shard_source_descs<K, V, D, F, G>(
     scope: &G,
     name: &str,
     clients: Arc<PersistClientCache>,
@@ -155,19 +159,23 @@ pub(crate) fn shard_source_descs<K, V, D, G>(
     as_of: Option<Antichain<G::Timestamp>>,
     until: Antichain<G::Timestamp>,
     flow_control: Option<FlowControl<G>>,
+    consumed_part_tx: mpsc::UnboundedSender<SerdeLeasedBatchPart>,
     mut consumed_part_rx: mpsc::UnboundedReceiver<SerdeLeasedBatchPart>,
     chosen_worker: usize,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
+    mut filter: F,
 ) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, ShutdownButton<()>)
 where
     K: Debug + Codec,
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
+    F: PartFilter<K, V>,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
 {
+    let cfg = clients.cfg().clone();
     let worker_index = scope.index();
     let num_workers = scope.peers();
 
@@ -316,6 +324,17 @@ where
                         let bytes_emitted = {
                             let mut bytes_emitted = 0;
                             for part_desc in std::mem::take(&mut batch_parts) {
+                                // TODO(mfp): Push the filter down into the Subscribe?
+                                if cfg.dynamic.stats_filter_enabled() {
+                                    let should_fetch = part_desc.stats.as_ref().map_or(true, |stats| filter.should_fetch(stats));
+                                    if !should_fetch {
+                                        // TODO(mfp): Downgrade this to debug! at some point.
+                                        info!("skipping part because of stats filter {:?}", part_desc.stats);
+                                        let _ = consumed_part_tx.send(part_desc.into_exchangeable_part());
+                                        continue;
+                                    }
+                                }
+
                                 bytes_emitted += part_desc.encoded_size_bytes();
                                 // Give the part to a random worker. This isn't
                                 // round robin in an attempt to avoid skew issues:
