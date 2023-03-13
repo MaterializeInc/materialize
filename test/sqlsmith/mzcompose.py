@@ -40,15 +40,11 @@ known_errors = [
     "operator does not exist",  # For list types
     "more than one record produced in subquery",
     "invalid range bound flags",
-    "argument list must have even number of elements",
-    "mz_row_size requires a record type",
     "invalid input syntax for type jsonb",
     "invalid regular expression",
-    "aggregate functions are not allowed in",
     "invalid input syntax for type date",
     "invalid escape string",
     "invalid hash algorithm",
-    "nested aggregate functions are not allowed",
     "is defined for numbers greater than or equal to",
     "is not defined for zero",
     "is not defined for negative numbers",
@@ -79,6 +75,8 @@ known_errors = [
     "expected expression, but found reserved keyword",  # Should fix, but only happens rarely with subqueries
     "Expected right parenthesis, found left parenthesis",  # Should fix, but only happens rarely with cast+coalesce
     "invalid selection: operation may only refer to user-defined tables",  # Seems expected when using catalog tables
+    "Unsupported temporal predicate",  # Expected, see https://github.com/MaterializeInc/materialize/issues/18048
+    "OneShot plan has temporal constraints",  # Expected, see https://github.com/MaterializeInc/materialize/issues/18048
 ]
 
 
