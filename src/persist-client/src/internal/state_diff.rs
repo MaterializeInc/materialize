@@ -866,11 +866,14 @@ fn apply_compaction_lenient<'a, T: Timestamp + Lattice>(
 
 impl ProtoStateFieldDiffs {
     pub fn encode_proto<M: prost::Message>(&mut self, msg: &M) {
-        let encoded_length = msg.encoded_len();
-        self.data_lens.push(u64::cast_from(encoded_length));
-        self.data_bytes.reserve(encoded_length);
+        self.data_bytes.reserve(msg.encoded_len());
+        let len_before = self.data_bytes.len();
         msg.encode(&mut self.data_bytes)
             .expect("reserved enough space");
+
+        // Record exactly how many bytes were written.
+        let written_len = self.data_bytes.len() - len_before;
+        self.data_lens.push(u64::cast_from(written_len));
     }
 
     pub fn iter<'a>(&'a self) -> ProtoStateFieldDiffsIter<'a> {
