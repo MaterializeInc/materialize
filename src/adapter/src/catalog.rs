@@ -4450,7 +4450,6 @@ impl Catalog {
                     };
                     tx.update_role(id, serialized_role)?;
 
-                    // NB: this will be re-incremented by the action below.
                     builtin_table_updates.push(state.pack_role_update(id, -1));
 
                     state.add_to_audit_log(
@@ -4466,15 +4465,20 @@ impl Catalog {
                             name: name.clone(),
                         }),
                     )?;
-                    catalog_action(
-                        state,
-                        builtin_table_updates,
-                        Action::UpdateRole {
+
+                    let old_role = state.roles_by_id.remove(&id).expect("catalog out of sync");
+                    info!("update role {name} ({id})");
+                    state.roles_by_id.insert(
+                        id,
+                        Role {
                             id,
+                            oid: old_role.oid,
                             name,
                             attributes,
                         },
-                    )?;
+                    );
+                    builtin_table_updates.push(state.pack_role_update(id, 1));
+
                 }
                 Op::AlterSink { id, cluster_config } => {
                     use mz_sql::ast::Value;
@@ -4564,14 +4568,12 @@ impl Catalog {
                     )?;
 
                     let to_name = entry.name().clone();
-                    catalog_action(
+                    update_item(
                         state,
                         builtin_table_updates,
-                        Action::UpdateItem {
                             id,
                             to_name,
-                            to_item: sink,
-                        },
+                            sink,
                     )?;
                 }
                 Op::AlterSource { id, cluster_config } => {
@@ -4664,14 +4666,12 @@ impl Catalog {
                     )?;
 
                     let to_name = entry.name().clone();
-                    catalog_action(
+    update_item(
                         state,
                         builtin_table_updates,
-                        Action::UpdateItem {
                             id,
                             to_name,
-                            to_item: source,
-                        },
+                            source
                     )?;
                 }
                 Op::CreateDatabase {
@@ -4694,7 +4694,7 @@ impl Catalog {
                             name: name.clone(),
                         }),
                     )?;
-                    catalog_action(
+                 /*    catalog_action(
                         state,
                         builtin_table_updates,
                         Action::CreateDatabase {
@@ -4702,7 +4702,24 @@ impl Catalog {
                             oid,
                             name: name.clone(),
                         },
-                    )?;
+                    )?; */
+
+                    info!("create database {}", name);
+                    state.database_by_id.insert(
+                        database_id.clone(),
+                        Database {
+                            name: name.clone(),
+                            id: database_id.clone(),
+                            oid,
+                            schemas_by_id: BTreeMap::new(),
+                            schemas_by_name: BTreeMap::new(),
+                        },
+                    );
+                    state.database_by_name.insert(name.clone(), database_id.clone());
+                    builtin_table_updates
+                        .push(state.pack_database_update(&state.database_by_id[&database_id], 1));
+
+
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -4841,16 +4858,40 @@ impl Catalog {
                             name: name.clone(),
                         }),
                     )?;
-                    catalog_action(
-                        state,
-                        builtin_table_updates,
-                        Action::CreateCluster {
-                            id,
-                            name,
+                    // catalog_action(
+                    //     state,
+                    //     builtin_table_updates,
+                    //     Action::CreateCluster {
+                    //         id,
+                    //         name,
+                    //         linked_object_id,
+                    //         arranged_introspection_sources,
+                    //     },
+                    // )?;
+                    info!("create cluster {}", name);
+                    let arranged_introspection_source_ids: Vec<GlobalId> =
+                        arranged_introspection_sources
+                            .iter()
+                            .map(|(_, id)| *id)
+                            .collect();
+                    state.insert_cluster(
+                        id,
+                        name.clone(),
+                        linked_object_id,
+                        arranged_introspection_sources,
+                    );
+                    builtin_table_updates.push(state.pack_cluster_update(&name, 1));
+                    if let Some(linked_object_id) = linked_object_id {
+                        builtin_table_updates.push(state.pack_cluster_link_update(
+                            &name,
                             linked_object_id,
-                            arranged_introspection_sources,
-                        },
-                    )?;
+                            1,
+                        ));
+                    }
+                    for id in arranged_introspection_source_ids {
+                        builtin_table_updates.extend(state.pack_item_update(id, 1));
+                    }
+
                 }
                 Op::CreateClusterReplica {
                     cluster_id,
@@ -4897,16 +4938,35 @@ impl Catalog {
                             details,
                         )?;
                     }
-                    catalog_action(
-                        state,
-                        builtin_table_updates,
-                        Action::CreateClusterReplica {
-                            id,
-                            name,
+                    // catalog_action(
+                    //     state,
+                    //     builtin_table_updates,
+                    //     Action::CreateClusterReplica {
+                    //         id,
+                    //         name,
+                    //         cluster_id,
+                    //         config,
+                    //     },
+                    // )?;
+                    let num_processes = config.location.num_processes();
+                    let introspection_ids: Vec<_> =
+                        config.compute.logging.source_and_view_ids().collect();
+                    state.insert_cluster_replica(cluster_id, name.clone(), id, config);
+                    for id in introspection_ids {
+                        builtin_table_updates.extend(state.pack_item_update(id, 1));
+                    }
+                    builtin_table_updates
+                        .push(state.pack_cluster_replica_update(cluster_id, &name, 1));
+                    for process_id in 0..num_processes {
+                        let update = state.pack_cluster_replica_status_update(
                             cluster_id,
-                            config,
-                        },
-                    )?;
+                            id,
+                            u64::cast_from(process_id),
+                            1,
+                        );
+                        builtin_table_updates.push(update);
+                    }
+
                 }
                 Op::CreateItem {
                     id,
@@ -5433,6 +5493,36 @@ impl Catalog {
                     )?;
                 }
             };
+        }
+
+        fn update_item(
+            state: &mut CatalogState,
+            builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+            id: GlobalId,
+            to_name: QualifiedObjectName,
+            to_item: CatalogItem) -> Result<(), AdapterError> {
+            let old_entry = state.entry_by_id.remove(&id).expect("catalog out of sync");
+            info!(
+                "update {} {} ({})",
+                old_entry.item_type(),
+                state.resolve_full_name(&old_entry.name, old_entry.conn_id()),
+                id
+            );
+            assert_eq!(old_entry.uses(), to_item.uses());
+            let conn_id = old_entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
+            let schema = &mut state.get_schema_mut(
+                &old_entry.name().qualifiers.database_spec,
+                &old_entry.name().qualifiers.schema_spec,
+                conn_id,
+            );
+            schema.items.remove(&old_entry.name().item);
+            let mut new_entry = old_entry.clone();
+            new_entry.name = to_name;
+            new_entry.item = to_item;
+            schema.items.insert(new_entry.name().item.clone(), id);
+            state.entry_by_id.insert(id, new_entry);
+            builtin_table_updates.extend(state.pack_item_update(id, 1));
+            Ok(())
         }
 
         fn catalog_action(
