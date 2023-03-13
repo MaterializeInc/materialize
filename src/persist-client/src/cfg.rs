@@ -11,7 +11,7 @@
 
 //! The tunable knobs for persist.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -137,6 +137,8 @@ impl PersistConfig {
                     Self::DEFAULT_SINK_MINIMUM_BATCH_UPDATES,
                 ),
                 next_listen_batch_retryer: RwLock::new(Self::DEFAULT_NEXT_LISTEN_BATCH_RETRYER),
+                stats_collection_enabled: AtomicBool::new(false),
+                stats_filter_enabled: AtomicBool::new(false),
             }),
             compaction_enabled: !compaction_disabled,
             compaction_concurrency_limit: 5,
@@ -266,6 +268,8 @@ pub struct DynamicConfig {
     usage_state_fetch_concurrency_limit: AtomicUsize,
     consensus_connect_timeout: RwLock<Duration>,
     sink_minimum_batch_updates: AtomicUsize,
+    stats_collection_enabled: AtomicBool,
+    stats_filter_enabled: AtomicBool,
 
     // NB: These parameters are not atomically updated together in LD.
     // We put them under a single RwLock to reduce the cost of reads
@@ -425,6 +429,22 @@ impl DynamicConfig {
     pub fn state_versions_recent_live_diffs_limit(&self) -> usize {
         self.state_versions_recent_live_diffs_limit
             .load(Self::LOAD_ORDERING)
+    }
+
+    /// Computes and stores statistics about each batch part.
+    ///
+    /// These can be used at read time to entirely skip fetching a part based on
+    /// its statistics. See [Self::stats_filter_enabled].
+    pub fn stats_collection_enabled(&self) -> bool {
+        self.stats_collection_enabled.load(Self::LOAD_ORDERING)
+    }
+
+    /// Uses previously computed statistics about batch parts to entirely skip
+    /// fetching them at read time.
+    ///
+    /// See [Self::stats_collection_enabled].
+    pub fn stats_filter_enabled(&self) -> bool {
+        self.stats_filter_enabled.load(Self::LOAD_ORDERING)
     }
 
     /// The maximum number of concurrent state fetches during usage computation.

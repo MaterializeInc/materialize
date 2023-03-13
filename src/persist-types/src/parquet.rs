@@ -101,8 +101,12 @@ pub fn validate_roundtrip<T: Default + PartialEq + Debug, S: Schema<T>>(
     val: &T,
 ) -> Result<(), String> {
     let mut part = PartBuilder::new(schema, &UnitSchema);
-    schema.encoder(part.key_mut())?.encode(val);
-    part.push_ts_diff(1, 1);
+    {
+        let part_mut = part.get_mut();
+        schema.encoder(part_mut.key)?.encode(val);
+        part_mut.ts.push(1);
+        part_mut.diff.push(1);
+    }
     let part = part.finish()?;
 
     let mut encoded = Vec::new();
