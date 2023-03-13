@@ -92,7 +92,7 @@ pub fn encode_trace_arrow<W: Write, T: Timestamp + Codec64>(
     );
     let schema = Schema::from(SCHEMA_ARROW_KVTD.fields.clone()).with_metadata(metadata);
     let options = WriteOptions { compression: None };
-    let mut writer = FileWriter::try_new(w, &schema, None, options)?;
+    let mut writer = FileWriter::try_new(w, schema, None, options)?;
     for records in batch.updates.iter() {
         writer.write(&encode_arrow_batch_kvtd(records), None)?;
     }
@@ -164,28 +164,24 @@ fn decode_arrow_file_kvtd<R: Read + Seek>(
 /// Converts a ColumnarRecords into an arrow [(K, V, T, D)] Chunk.
 pub fn encode_arrow_batch_kvtd(x: &ColumnarRecords) -> Chunk<Box<dyn Array>> {
     Chunk::try_new(vec![
-        convert::identity::<Box<dyn Array>>(Box::new(BinaryArray::from_data(
+        convert::identity::<Box<dyn Array>>(Box::new(BinaryArray::new(
             DataType::Binary,
             x.key_offsets.clone(),
             x.key_data.clone(),
             None,
         ))),
-        Box::new(BinaryArray::from_data(
+        Box::new(BinaryArray::new(
             DataType::Binary,
             x.val_offsets.clone(),
             x.val_data.clone(),
             None,
         )),
-        Box::new(PrimitiveArray::from_data(
+        Box::new(PrimitiveArray::new(
             DataType::Int64,
             x.timestamps.clone(),
             None,
         )),
-        Box::new(PrimitiveArray::from_data(
-            DataType::Int64,
-            x.diffs.clone(),
-            None,
-        )),
+        Box::new(PrimitiveArray::new(DataType::Int64, x.diffs.clone(), None)),
     ])
     .expect("schema matches fields")
 }

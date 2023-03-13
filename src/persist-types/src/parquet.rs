@@ -43,6 +43,7 @@ pub fn encode_part<W: Write>(w: &mut W, part: &Part) -> Result<(), anyhow::Error
         write_statistics: false,
         compression: CompressionOptions::Uncompressed,
         version: Version::V2,
+        data_pagesize_limit: None, // use default limit
     };
     let created_by = None;
     let mut writer = FileWriter::new(

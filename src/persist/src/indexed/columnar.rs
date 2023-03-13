@@ -14,6 +14,7 @@ use std::mem::size_of;
 use std::{cmp, fmt};
 
 use arrow2::buffer::Buffer;
+use arrow2::offset::OffsetsBuffer;
 use arrow2::types::Index;
 
 pub mod arrow;
@@ -84,9 +85,9 @@ const BYTES_PER_KEY_VAL_OFFSET: usize = 4;
 pub struct ColumnarRecords {
     len: usize,
     key_data: Buffer<u8>,
-    key_offsets: Buffer<i32>,
+    key_offsets: OffsetsBuffer<i32>,
     val_data: Buffer<u8>,
-    val_offsets: Buffer<i32>,
+    val_offsets: OffsetsBuffer<i32>,
     timestamps: Buffer<i64>,
     diffs: Buffer<i64>,
 }
@@ -456,9 +457,11 @@ impl ColumnarRecordsBuilder {
         let ret = ColumnarRecords {
             len: self.len,
             key_data: Buffer::from(self.key_data),
-            key_offsets: Buffer::from(self.key_offsets),
+            key_offsets: OffsetsBuffer::try_from(self.key_offsets)
+                .expect("constructed valid offsets"),
             val_data: Buffer::from(self.val_data),
-            val_offsets: Buffer::from(self.val_offsets),
+            val_offsets: OffsetsBuffer::try_from(self.val_offsets)
+                .expect("constructed valid offsets"),
             timestamps: Buffer::from(self.timestamps),
             diffs: Buffer::from(self.diffs),
         };
