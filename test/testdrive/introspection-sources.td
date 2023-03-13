@@ -217,6 +217,6 @@ mv1_primary_idx mv1
 
 > SELECT max(count) FROM (
     SELECT count(*)
-    FROM mz_internal.mz_dataflow_operator_parents mdop
-    GROUP BY mdop.id) counts
+    FROM mz_internal.mz_dataflow_operator_parents
+    GROUP BY id, worker_id) counts
 1
