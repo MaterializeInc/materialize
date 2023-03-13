@@ -32,3 +32,13 @@ security-framework = "2.7.0"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
+
+[package.metadata.deb]
+name = "materialize-cli"
+maintainer = "Materialize, Inc."
+copyright = "Materialize, Inc. and contributors"
+section = "utility"
+assets = [
+    ["target/release/mz", "usr/bin/", "755"],
+]
+depends = "postgresql-client, $auto"
