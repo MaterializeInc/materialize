@@ -320,6 +320,34 @@ impl Coordinator {
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.
         let _: () = async {
+            let mut empty_timelines = Vec::new();
+            if !storage_ids_to_drop.is_empty() {
+                let timelines = self.remove_storage_ids_from_timeline(storage_ids_to_drop);
+                empty_timelines.extend(timelines);
+            }
+            if !compute_ids_to_drop.is_empty() {
+                let timelines = self.remove_compute_ids_from_timeline(compute_ids_to_drop);
+                empty_timelines.extend(timelines);
+            }
+            if !clusters_to_drop.is_empty() {
+                for compute_instance in &clusters_to_drop {
+                    let timelines = self.remove_compute_instance_from_timeline(*compute_instance);
+                    empty_timelines.extend(timelines);
+                }
+            }
+
+            // Make sure after dropping resouces the timelines that are empty, are the same
+            // as the ones we thought would be empty, before actually running the transaction.
+            empty_timelines.sort();
+            timelines_to_drop.sort();
+            assert_eq!(&empty_timelines, &timelines_to_drop);
+
+            if !timelines_to_drop.is_empty() {
+                for timeline in timelines_to_drop {
+                    self.global_timelines.remove(&timeline);
+                }
+            }
+
             self.send_builtin_table_updates(builtin_table_updates, BuiltinTableUpdateSource::DDL)
                 .await;
 
@@ -377,35 +405,6 @@ impl Coordinator {
             if !vpc_endpoints_to_drop.is_empty() {
                 self.drop_vpc_endpoints(vpc_endpoints_to_drop).await;
             }
-
-            let mut empty_timelines = Vec::new();
-            if !storage_ids_to_drop.is_empty() {
-                let timelines = self.remove_storage_ids_from_timeline(storage_ids_to_drop);
-                empty_timelines.extend(timelines);
-            }
-            if !compute_ids_to_drop.is_empty() {
-                let timelines = self.remove_compute_ids_from_timeline(compute_ids_to_drop);
-                empty_timelines.extend(timelines);
-            }
-            if !clusters_to_drop.is_empty() {
-                for compute_instance in &clusters_to_drop {
-                    let timelines = self.remove_compute_instance_from_timeline(*compute_instance);
-                    empty_timelines.extend(timelines);
-                }
-            }
-
-            // Make sure after dropping resouces the timelines that are empty, are the same
-            // as the ones we thought would be empty, before actually running the transaction.
-            empty_timelines.sort();
-            timelines_to_drop.sort();
-            assert_eq!(&empty_timelines, &timelines_to_drop);
-
-            if !timelines_to_drop.is_empty() {
-                for timeline in timelines_to_drop {
-                    self.global_timelines.remove(&timeline);
-                }
-            }
-
             if !cluster_replicas_to_drop.is_empty() {
                 fail::fail_point!("after_catalog_drop_replica");
                 for (cluster_id, replica_id) in cluster_replicas_to_drop {
