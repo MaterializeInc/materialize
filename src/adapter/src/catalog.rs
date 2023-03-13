@@ -5228,14 +5228,6 @@ impl Catalog {
                         details,
                     )?;
 
-                    // catalog_action(
-                    //     state,
-                    //     builtin_table_updates,
-                    //     Action::DropClusterReplica {
-                    //         cluster_id,
-                    //         replica_id,
-                    //     },
-                    // )?;
                     let cluster = state
                         .clusters_by_id
                         .get_mut(&cluster_id)
@@ -5281,7 +5273,6 @@ impl Catalog {
                             }),
                         )?;
                     }
-                    // catalog_action(state, builtin_table_updates, Action::DropItem(id))?;
                     state.drop_item(id);
                 }
                 Op::DropTimeline(timeline) => {
@@ -5400,11 +5391,6 @@ impl Catalog {
                     }
                 }
                 Op::UpdateClusterReplicaStatus { event } => {
-                    // catalog_action(
-                    //     state,
-                    //     builtin_table_updates,
-                    //     Action::UpdateClusterReplicaStatus { event },
-                    // )?;
                     builtin_table_updates.push(state.pack_cluster_replica_status_update(
                         event.cluster_id,
                         event.replica_id,
@@ -5493,11 +5479,6 @@ impl Catalog {
                     }
                     let new_item = CatalogItem::Connection(connection);
 
-                    // catalog_action(
-                    //     state,
-                    //     builtin_table_updates,
-                    //     Action::UpdateRotatedKeys { id, new_item },
-                    // )?;
                     let old_entry = state.entry_by_id.remove(&id).expect("catalog out of sync");
                     info!(
                         "update {} {} ({})",
