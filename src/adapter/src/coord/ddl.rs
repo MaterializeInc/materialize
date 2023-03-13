@@ -452,7 +452,9 @@ impl Coordinator {
     pub(crate) fn drop_compute_sinks(&mut self, sinks: impl IntoIterator<Item = ComputeSinkId>) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for sink in sinks {
-            // Filter out sinks that have already been dropped.
+            // Filter out sinks that are currently being dropped. When dropping a sink
+            // we send a request to compute to drop it, but don't actually remove it from
+            // `active_subscribes` until compute responds, hence the `dropping` flag.
             //
             // Note: Ideally we'd use .filter(...) on the iterator, but that would
             // require simultaneously getting an immutable and mutable borrow of self

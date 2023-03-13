@@ -2438,9 +2438,6 @@ fn test_dont_drop_sinks_twice() {
 
     let (notice_tx, mut notice_rx) = futures::channel::mpsc::unbounded();
 
-    let (create_tx, create_rx) = futures::channel::oneshot::channel();
-    let (drop_tx, drop_rx) = futures::channel::oneshot::channel();
-
     let mut client_a = server
         .pg_config()
         .notice_callback(move |notice| {
@@ -2449,42 +2446,32 @@ fn test_dont_drop_sinks_twice() {
         .connect(postgres::NoTls)
         .unwrap();
 
-    let handle_a = std::thread::spawn(move || {
-        client_a.batch_execute("CREATE TABLE t1 (a INT)").unwrap();
-        client_a.batch_execute("CREATE TABLE t2 (a INT)").unwrap();
+    client_a.batch_execute("CREATE TABLE t1 (a INT)").unwrap();
+    client_a.batch_execute("CREATE TABLE t2 (a INT)").unwrap();
 
-        create_tx.send(()).unwrap();
-
-        let _out = client_a
-            .copy_out("COPY (SUBSCRIBE (SELECT * FROM t1,t2)) TO STDOUT")
-            .unwrap();
-
-        // Keep the subscribe alive until we drop the underlying tables.
-        futures::executor::block_on(drop_rx).unwrap();
-
-        // Drop our client so the notice channel closes.
-        drop(_out);
-        drop(client_a);
-    });
+    let _out = client_a
+        .copy_out("COPY (SUBSCRIBE (SELECT * FROM t1,t2)) TO STDOUT")
+        .unwrap();
 
     // Drop the tables that the subscribe depend on in a second session.
     let mut client_b = server.connect(postgres::NoTls).unwrap();
 
-    // Wait until the other thread finishes creating the tables.
-    futures::executor::block_on(create_rx).unwrap();
-
+    // By inserting 10_000 rows into t1 and t2, it's very likely that the response from
+    // compute indicating whether or not we successfully dropped the sink, will get 
+    // queued behind the responses for the row insertions, which should trigger the race
+    // condition we're trying to exercise here
     client_b
         .batch_execute("INSERT INTO t1 SELECT generate_series(0, 10000)")
         .unwrap();
     client_b
-        .batch_execute("INSERT INTO t1 SELECT generate_series(0, 10000)")
+        .batch_execute("INSERT INTO t2 SELECT generate_series(0, 10000)")
         .unwrap();
     client_b.batch_execute("DROP TABLE t1").unwrap();
     client_b.batch_execute("DROP TABLE t2").unwrap();
 
-    // Signal to the other thread that we've dropped the tables and thus it can end.
-    drop_tx.send(()).unwrap();
-    handle_a.join().unwrap();
+    // Drop our client so the notice channel closes.
+    drop(_out);
+    drop(client_a);    
 
     // Assert we only got one message.
     let mut msgs = vec![];
