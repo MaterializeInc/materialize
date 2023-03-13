@@ -4607,16 +4607,6 @@ impl Catalog {
                             name: name.clone(),
                         }),
                     )?;
-                    /*    catalog_action(
-                        state,
-                        builtin_table_updates,
-                        Action::CreateDatabase {
-                            id: database_id,
-                            oid,
-                            name: name.clone(),
-                        },
-                    )?; */
-
                     info!("create database {}", name);
                     state.database_by_id.insert(
                         database_id.clone(),
@@ -4656,16 +4646,6 @@ impl Catalog {
                         database_id,
                         DEFAULT_SCHEMA.to_string(),
                     )?;
-                    // catalog_action(
-                    //     state,
-                    //     builtin_table_updates,
-                    //     Action::CreateSchema {
-                    //         id: schema_id,
-                    //         oid: public_schema_oid,
-                    //         database_id,
-                    //         schema_name: DEFAULT_SCHEMA.to_string(),
-                    //     },
-                    // )?;
                 }
                 Op::CreateSchema {
                     database_id,
@@ -4708,16 +4688,6 @@ impl Catalog {
                         database_id,
                         schema_name,
                     )?;
-                    // catalog_action(
-                    //     state,
-                    //     builtin_table_updates,
-                    //     Action::CreateSchema {
-                    //         id: schema_id,
-                    //         oid,
-                    //         database_id,
-                    //         schema_name,
-                    //     },
-                    // )?;
                 }
                 Op::CreateRole {
                     name,
