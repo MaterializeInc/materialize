@@ -15,5 +15,3 @@
 
 > SELECT cnt > 0 FROM generator_view1;
 true
-
-> DROP SOURCE generator1 CASCADE;
