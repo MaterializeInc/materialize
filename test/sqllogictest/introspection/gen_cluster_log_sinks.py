@@ -58,6 +58,7 @@ SRC = [
     "mz_compute_import_frontiers",
     "mz_dataflow_addresses",
     "mz_dataflow_channels",
+    "mz_dataflow_channel_operators",
     "mz_dataflow_operator_dataflows",
     "mz_dataflow_operator_reachability",
     "mz_dataflow_operator_reachability_internal",

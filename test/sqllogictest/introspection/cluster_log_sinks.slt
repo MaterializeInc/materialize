@@ -127,6 +127,14 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_channels_1) EXCEPT (SELECT
 ----
 
 query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_channel_operators) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_channel_operators_1));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_channel_operators_1) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_channel_operators));
+----
+
+query T
 SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_operator_dataflows) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_operator_dataflows_1));
 ----
 
@@ -394,6 +402,14 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_channels) EXCEPT (SELECT *
 
 query T
 SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_channels_4) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_channels));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_channel_operators) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_channel_operators_4));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_channel_operators_4) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_channel_operators));
 ----
 
 query T
@@ -672,6 +688,14 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_channels) EXCEPT (SELECT *
 
 query T
 SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_channels_5) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_channels));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_channel_operators) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_channel_operators_5));
+----
+
+query T
+SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_channel_operators_5) EXCEPT (SELECT * FROM mz_internal.mz_dataflow_channel_operators));
 ----
 
 query T

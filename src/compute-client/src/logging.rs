@@ -332,18 +332,19 @@ pub static DEFAULT_LOG_VARIANTS: Lazy<Vec<LogVariant>> = Lazy::new(|| {
 pub enum LogView {
     MzArrangementSharing,
     MzArrangementSizes,
+    MzComputeFrontiers,
+    MzComputeImportFrontiers,
     MzComputeOperatorDurationsHistogram,
-    MzDataflowNames,
+    MzDataflows,
+    MzDataflowChannelOperators,
     MzDataflowOperatorDataflows,
     MzDataflowOperatorParents,
     MzDataflowOperatorReachability,
-    MzComputeFrontiers,
-    MzComputeImportFrontiers,
     MzMessageCounts,
-    MzRecordsPerDataflowOperator,
+    MzPeekDurationsHistogram,
     MzRecordsPerDataflow,
     MzRecordsPerDataflowGlobal,
-    MzPeekDurationsHistogram,
+    MzRecordsPerDataflowOperator,
     MzSchedulingElapsed,
     MzSchedulingParksHistogram,
     MzWorkerComputeDelaysHistogram,
@@ -354,19 +355,20 @@ pub static DEFAULT_LOG_VIEWS: Lazy<Vec<LogView>> = Lazy::new(|| {
     vec![
         LogView::MzArrangementSharing,
         LogView::MzArrangementSizes,
-        LogView::MzDataflowNames,
+        LogView::MzComputeFrontiers,
+        LogView::MzComputeImportFrontiers,
+        LogView::MzComputeOperatorDurationsHistogram,
+        LogView::MzDataflows,
+        LogView::MzDataflowChannelOperators,
         LogView::MzDataflowOperatorDataflows,
         LogView::MzDataflowOperatorParents,
         LogView::MzDataflowOperatorReachability,
-        LogView::MzComputeFrontiers,
-        LogView::MzComputeImportFrontiers,
         LogView::MzMessageCounts,
+        LogView::MzPeekDurationsHistogram,
         LogView::MzRecordsPerDataflowOperator,
         LogView::MzRecordsPerDataflow,
         LogView::MzRecordsPerDataflowGlobal,
-        LogView::MzPeekDurationsHistogram,
         LogView::MzSchedulingElapsed,
-        LogView::MzComputeOperatorDurationsHistogram,
         LogView::MzSchedulingParksHistogram,
         LogView::MzWorkerComputeDelaysHistogram,
     ]
@@ -415,7 +417,7 @@ impl LogView {
                 "mz_arrangement_sizes_{}",
             ),
 
-            LogView::MzDataflowNames => (
+            LogView::MzDataflows => (
                 "SELECT mz_dataflow_addresses_{}.id,
                         mz_dataflow_addresses_{}.worker_id,
                         mz_dataflow_addresses_{}.address[1] AS local_id,
@@ -428,6 +430,40 @@ impl LogView {
                         mz_dataflow_addresses_{}.worker_id = mz_dataflow_operators_{}.worker_id AND
                         mz_catalog.list_length(mz_dataflow_addresses_{}.address) = 1",
                 "mz_dataflows_{}",
+            ),
+
+            LogView::MzDataflowChannelOperators => (
+                "WITH
+                 channel_addresses(id, worker_id, address, from_index, to_index) AS (
+                     SELECT id, worker_id, address, from_index, to_index
+                     FROM mz_internal.mz_dataflow_channels_{} mdc
+                     INNER JOIN mz_internal.mz_dataflow_addresses_{} mda
+                     USING (id, worker_id)
+                 ),
+                 operator_addresses(channel_id, worker_id, from_address, to_address) AS (
+                     SELECT id AS channel_id, worker_id,
+                            address || from_index AS from_address,
+                            address || to_index AS to_address
+                     FROM channel_addresses
+                 )
+                 SELECT channel_id AS id,
+                        oa.worker_id,
+                        from_ops.id AS from_operator_id,
+                        to_ops.id AS to_operator_id
+                 FROM operator_addresses oa
+                      INNER JOIN mz_internal.mz_dataflow_addresses_{} mda_from
+                          ON oa.from_address = mda_from.address
+                          AND oa.worker_id = mda_from.worker_id
+                      INNER JOIN mz_internal.mz_dataflow_operators_{} from_ops
+                          ON mda_from.id = from_ops.id
+                          AND oa.worker_id = from_ops.worker_id
+                      INNER JOIN mz_internal.mz_dataflow_addresses_{} mda_to
+                          ON oa.to_address = mda_to.address
+                          AND oa.worker_id = mda_to.worker_id
+                      INNER JOIN mz_internal.mz_dataflow_operators_{} to_ops
+                          ON mda_to.id = to_ops.id
+                          AND oa.worker_id = to_ops.worker_id",
+                "mz_dataflow_channel_operators_{}",
             ),
 
             LogView::MzDataflowOperatorParents => (
