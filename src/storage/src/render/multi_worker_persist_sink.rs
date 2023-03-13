@@ -94,7 +94,7 @@ use std::ops::AddAssign;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use differential_dataflow::{Collection, Hashable};
+use differential_dataflow::{lattice::Lattice, Collection, Hashable};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, Inspect};
@@ -169,7 +169,7 @@ struct BatchBuilderAndMetdata<K, V, T, D>
 where
     K: Codec,
     V: Codec,
-    T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice + Codec64,
+    T: timely::progress::Timestamp + Lattice + Codec64,
 {
     builder: mz_persist_client::batch::BatchBuilder<K, V, T, D>,
     metrics: BatchMetrics,
@@ -179,7 +179,7 @@ impl<K, V, T, D> BatchBuilderAndMetdata<K, V, T, D>
 where
     K: Codec,
     V: Codec,
-    T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice + Codec64,
+    T: timely::progress::Timestamp + Lattice + Codec64,
 {
     fn new(bb: mz_persist_client::batch::BatchBuilder<K, V, T, D>) -> Self {
         BatchBuilderAndMetdata {
@@ -518,7 +518,12 @@ where
         let mut batch_descriptions_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
         let mut desired_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
 
-        let mut current_upper = Antichain::from_elem(TimelyTimestamp::minimum());
+        // The frontiers of the inputs we have processed, used to avoid redoing work
+        let mut processed_desired_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
+        let mut processed_descriptions_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
+
+        // A "safe" choice for the lower of new batches we are creating.
+        let mut operator_batch_lower = Antichain::from_elem(TimelyTimestamp::minimum());
 
         loop {
             tokio::select! {
@@ -585,19 +590,7 @@ where
                                 if write.upper().less_equal(&ts){
                                     let builder = stashed_batches.entry(ts).or_insert_with(|| {
                                         BatchBuilderAndMetdata::new(
-                                            write.builder(
-                                                // SUBTLE:
-                                                // The choice of the minimum antichain here
-                                                // over one that contains `ts` may seem odd, but
-                                                // currently, in persist, appended batches must
-                                                // be supersets of the of the `compare_and_append`
-                                                // description. This means we must choose a lower
-                                                // that is not greater than any batch description
-                                                // that may be grouped with this batch later on.
-                                                Antichain::from_elem(
-                                                    Timestamp::minimum()
-                                                ),
-                                            ),
+                                            write.builder(operator_batch_lower.clone()),
                                         )
                                     });
 
@@ -643,15 +636,25 @@ where
                 }
             }
 
-            // We may have the opportunity to commit updates.
-            if PartialOrder::less_equal(&current_upper, &desired_frontier) {
+            // We may have the opportunity to commit updates, if either frontier
+            // has moved
+            if PartialOrder::less_equal(&processed_desired_frontier, &desired_frontier)
+                || PartialOrder::less_equal(
+                    &processed_descriptions_frontier,
+                    &batch_descriptions_frontier,
+                )
+            {
                 trace!(
                     "persist_sink {collection_id}/{shard_id}: \
                         CAN emit: \
-                        current_upper: {:?}, \
-                        desired_frontier: {:?}",
-                    current_upper,
-                    desired_frontier
+                        processed_desired_frontier: {:?}, \
+                        processed_descriptions_frontier: {:?}, \
+                        desired_frontier: {:?}, \
+                        batch_descriptions_frontier: {:?}",
+                    processed_desired_frontier,
+                    processed_descriptions_frontier,
+                    desired_frontier,
+                    batch_descriptions_frontier,
                 );
 
                 trace!(
@@ -725,6 +728,18 @@ where
                                 batch_builder.metrics
                             );
                         }
+
+                        // The next "safe" lower for batches is the meet (max) of all the emitted
+                        // batches. These uppers all are not beyond the `desired_frontier`, which
+                        // means all updates received by this operator will be beyond this lower.
+                        // Additionally, the `mint_batch_descriptions` operator ensures that
+                        // later-received batch descriptions will start beyond these uppers as
+                        // well.
+                        //
+                        // It is impossible to emit a batch description that is
+                        // beyond a not-yet emitted description in `in_flight_batches`, as
+                        // a that description would also have been chosen as ready above.
+                        operator_batch_lower = operator_batch_lower.join(&batch_upper);
                         batch_tokens.push(HollowBatchAndMetadata {
                             lower: batch_lower.clone(),
                             upper: batch_upper.clone(),
@@ -735,14 +750,17 @@ where
 
                     output.give_container(&cap, &mut batch_tokens).await;
 
-                    current_upper = desired_frontier.clone();
+                    processed_desired_frontier = desired_frontier.clone();
+                    processed_descriptions_frontier = batch_descriptions_frontier.clone();
                 }
             } else {
                 trace!(
                     "persist_sink {collection_id}/{shard_id}: \
-                        cannot emit: current_upper: {:?}, \
+                        cannot emit: processed_desired_frontier: {:?}, \
+                        processed_descriptions_frontier: {:?}, \
                         desired_frontier: {:?}",
-                    current_upper,
+                    processed_desired_frontier,
+                    processed_descriptions_frontier,
                     desired_frontier
                 );
             }
