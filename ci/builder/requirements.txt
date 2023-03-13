@@ -35,7 +35,7 @@ PyMySQL==1.0.2
 pytest==7.2.1
 pytest-split==0.8.0
 pyyaml==6.0
-requests==2.28.1
+requests==2.28.2
 scipy==1.10.0
 semver==3.0.0.dev4
 shtab==1.5.8
