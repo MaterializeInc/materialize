@@ -4316,80 +4316,6 @@ impl Catalog {
         tx: &mut Transaction<'_>,
         state: &mut CatalogState,
     ) -> Result<(), AdapterError> {
-        #[derive(Debug, Clone)]
-        enum Action {
-            CreateDatabase {
-                id: DatabaseId,
-                oid: u32,
-                name: String,
-            },
-            CreateSchema {
-                id: SchemaId,
-                oid: u32,
-                database_id: DatabaseId,
-                schema_name: String,
-            },
-            CreateRole {
-                id: RoleId,
-                oid: u32,
-                name: String,
-                attributes: RoleAttributes,
-            },
-            CreateCluster {
-                id: ClusterId,
-                name: String,
-                linked_object_id: Option<GlobalId>,
-                arranged_introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
-            },
-            CreateClusterReplica {
-                cluster_id: ClusterId,
-                id: ReplicaId,
-                name: String,
-                config: ReplicaConfig,
-            },
-            CreateItem {
-                id: GlobalId,
-                oid: u32,
-                name: QualifiedObjectName,
-                item: CatalogItem,
-            },
-            DropDatabase {
-                id: DatabaseId,
-            },
-            DropSchema {
-                database_id: DatabaseId,
-                schema_id: SchemaId,
-            },
-            DropRole {
-                id: RoleId,
-            },
-            DropCluster {
-                id: ClusterId,
-            },
-            DropClusterReplica {
-                cluster_id: ClusterId,
-                replica_id: ReplicaId,
-            },
-            DropItem(GlobalId),
-            UpdateItem {
-                id: GlobalId,
-                to_name: QualifiedObjectName,
-                to_item: CatalogItem,
-            },
-            UpdateClusterReplicaStatus {
-                event: ClusterEvent,
-            },
-            UpdateRole {
-                id: RoleId,
-                name: String,
-                attributes: RoleAttributes,
-            },
-            UpdateRotatedKeys {
-                id: GlobalId,
-                new_item: CatalogItem,
-            },
-        }
-
         fn sql_type_to_object_type(sql_type: SqlCatalogItemType) -> ObjectType {
             match sql_type {
                 SqlCatalogItemType::Connection => ObjectType::Connection,
@@ -4450,7 +4376,6 @@ impl Catalog {
                     };
                     tx.update_role(id, serialized_role)?;
 
-                    // NB: this will be re-incremented by the action below.
                     builtin_table_updates.push(state.pack_role_update(id, -1));
 
                     state.add_to_audit_log(
@@ -4466,15 +4391,19 @@ impl Catalog {
                             name: name.clone(),
                         }),
                     )?;
-                    catalog_action(
-                        state,
-                        builtin_table_updates,
-                        Action::UpdateRole {
+
+                    let old_role = state.roles_by_id.remove(&id).expect("catalog out of sync");
+                    info!("update role {name} ({id})");
+                    state.roles_by_id.insert(
+                        id,
+                        Role {
                             id,
+                            oid: old_role.oid,
                             name,
                             attributes,
                         },
-                    )?;
+                    );
+                    builtin_table_updates.push(state.pack_role_update(id, 1));
                 }
                 Op::AlterSink { id, cluster_config } => {
                     use mz_sql::ast::Value;
@@ -4564,15 +4493,7 @@ impl Catalog {
                     )?;
 
                     let to_name = entry.name().clone();
-                    catalog_action(
-                        state,
-                        builtin_table_updates,
-                        Action::UpdateItem {
-                            id,
-                            to_name,
-                            to_item: sink,
-                        },
-                    )?;
+                    update_item(state, builtin_table_updates, id, to_name, sink)?;
                 }
                 Op::AlterSource { id, cluster_config } => {
                     use mz_sql::ast::Value;
@@ -4664,15 +4585,7 @@ impl Catalog {
                     )?;
 
                     let to_name = entry.name().clone();
-                    catalog_action(
-                        state,
-                        builtin_table_updates,
-                        Action::UpdateItem {
-                            id,
-                            to_name,
-                            to_item: source,
-                        },
-                    )?;
+                    update_item(state, builtin_table_updates, id, to_name, source)?;
                 }
                 Op::CreateDatabase {
                     name,
@@ -4694,15 +4607,23 @@ impl Catalog {
                             name: name.clone(),
                         }),
                     )?;
-                    catalog_action(
-                        state,
-                        builtin_table_updates,
-                        Action::CreateDatabase {
-                            id: database_id,
-                            oid,
+                    info!("create database {}", name);
+                    state.database_by_id.insert(
+                        database_id.clone(),
+                        Database {
                             name: name.clone(),
+                            id: database_id.clone(),
+                            oid,
+                            schemas_by_id: BTreeMap::new(),
+                            schemas_by_name: BTreeMap::new(),
                         },
-                    )?;
+                    );
+                    state
+                        .database_by_name
+                        .insert(name.clone(), database_id.clone());
+                    builtin_table_updates
+                        .push(state.pack_database_update(&state.database_by_id[&database_id], 1));
+
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -4717,15 +4638,13 @@ impl Catalog {
                             database_name: name,
                         }),
                     )?;
-                    catalog_action(
+                    create_schema(
                         state,
                         builtin_table_updates,
-                        Action::CreateSchema {
-                            id: schema_id,
-                            oid: public_schema_oid,
-                            database_id,
-                            schema_name: DEFAULT_SCHEMA.to_string(),
-                        },
+                        schema_id,
+                        public_schema_oid,
+                        database_id,
+                        DEFAULT_SCHEMA.to_string(),
                     )?;
                 }
                 Op::CreateSchema {
@@ -4761,15 +4680,13 @@ impl Catalog {
                             database_name: state.database_by_id[&database_id].name.clone(),
                         }),
                     )?;
-                    catalog_action(
+                    create_schema(
                         state,
                         builtin_table_updates,
-                        Action::CreateSchema {
-                            id: schema_id,
-                            oid,
-                            database_id,
-                            schema_name,
-                        },
+                        schema_id,
+                        oid,
+                        database_id,
+                        schema_name,
                     )?;
                 }
                 Op::CreateRole {
@@ -4800,16 +4717,18 @@ impl Catalog {
                             name: name.clone(),
                         }),
                     )?;
-                    catalog_action(
-                        state,
-                        builtin_table_updates,
-                        Action::CreateRole {
+                    info!("create role {}", name);
+                    state.roles_by_name.insert(name.clone(), id);
+                    state.roles_by_id.insert(
+                        id,
+                        Role {
+                            name,
                             id,
                             oid,
-                            name,
                             attributes,
                         },
-                    )?;
+                    );
+                    builtin_table_updates.push(state.pack_role_update(id, 1));
                 }
                 Op::CreateCluster {
                     id,
@@ -4841,16 +4760,29 @@ impl Catalog {
                             name: name.clone(),
                         }),
                     )?;
-                    catalog_action(
-                        state,
-                        builtin_table_updates,
-                        Action::CreateCluster {
-                            id,
-                            name,
+                    info!("create cluster {}", name);
+                    let arranged_introspection_source_ids: Vec<GlobalId> =
+                        arranged_introspection_sources
+                            .iter()
+                            .map(|(_, id)| *id)
+                            .collect();
+                    state.insert_cluster(
+                        id,
+                        name.clone(),
+                        linked_object_id,
+                        arranged_introspection_sources,
+                    );
+                    builtin_table_updates.push(state.pack_cluster_update(&name, 1));
+                    if let Some(linked_object_id) = linked_object_id {
+                        builtin_table_updates.push(state.pack_cluster_link_update(
+                            &name,
                             linked_object_id,
-                            arranged_introspection_sources,
-                        },
-                    )?;
+                            1,
+                        ));
+                    }
+                    for id in arranged_introspection_source_ids {
+                        builtin_table_updates.extend(state.pack_item_update(id, 1));
+                    }
                 }
                 Op::CreateClusterReplica {
                     cluster_id,
@@ -4897,16 +4829,24 @@ impl Catalog {
                             details,
                         )?;
                     }
-                    catalog_action(
-                        state,
-                        builtin_table_updates,
-                        Action::CreateClusterReplica {
-                            id,
-                            name,
+                    let num_processes = config.location.num_processes();
+                    let introspection_ids: Vec<_> =
+                        config.compute.logging.source_and_view_ids().collect();
+                    state.insert_cluster_replica(cluster_id, name.clone(), id, config);
+                    for id in introspection_ids {
+                        builtin_table_updates.extend(state.pack_item_update(id, 1));
+                    }
+                    builtin_table_updates
+                        .push(state.pack_cluster_replica_update(cluster_id, &name, 1));
+                    for process_id in 0..num_processes {
+                        let update = state.pack_cluster_replica_status_update(
                             cluster_id,
-                            config,
-                        },
-                    )?;
+                            id,
+                            u64::cast_from(process_id),
+                            1,
+                        );
+                        builtin_table_updates.push(update);
+                    }
                 }
                 Op::CreateItem {
                     id,
@@ -5006,17 +4946,8 @@ impl Catalog {
                             details,
                         )?;
                     }
-
-                    catalog_action(
-                        state,
-                        builtin_table_updates,
-                        Action::CreateItem {
-                            id,
-                            oid,
-                            name,
-                            item,
-                        },
-                    )?;
+                    state.insert_item(id, oid, name, item);
+                    builtin_table_updates.extend(state.pack_item_update(id, 1));
                 }
                 Op::DropDatabase { id } => {
                     let database = &state.database_by_id[&id];
@@ -5035,7 +4966,9 @@ impl Catalog {
                             name: database.name.clone(),
                         }),
                     )?;
-                    catalog_action(state, builtin_table_updates, Action::DropDatabase { id })?;
+                    let db = state.database_by_id.get(&id).expect("catalog out of sync");
+                    state.database_by_name.remove(db.name());
+                    state.database_by_id.remove(&id);
                 }
                 Op::DropSchema {
                     database_id,
@@ -5062,14 +4995,16 @@ impl Catalog {
                             database_name: state.database_by_id[&database_id].name.clone(),
                         }),
                     )?;
-                    catalog_action(
-                        state,
-                        builtin_table_updates,
-                        Action::DropSchema {
-                            database_id,
-                            schema_id,
-                        },
-                    )?;
+                    let db = state
+                        .database_by_id
+                        .get_mut(&database_id)
+                        .expect("catalog out of sync");
+                    let schema = db
+                        .schemas_by_id
+                        .get(&schema_id)
+                        .expect("catalog out of sync");
+                    db.schemas_by_name.remove(&schema.name.schema);
+                    db.schemas_by_id.remove(&schema_id);
                 }
                 Op::DropRole { id, name } => {
                     if is_reserved_name(&name) {
@@ -5093,7 +5028,8 @@ impl Catalog {
                             name: name.clone(),
                         }),
                     )?;
-                    catalog_action(state, builtin_table_updates, Action::DropRole { id })?;
+                    state.roles_by_name.remove(role.name());
+                    info!("drop role {}", role.name());
                 }
                 Op::DropCluster { id } => {
                     let cluster = state.get_cluster(id);
@@ -5128,7 +5064,27 @@ impl Catalog {
                             name: name.clone(),
                         }),
                     )?;
-                    catalog_action(state, builtin_table_updates, Action::DropCluster { id })?;
+                    let cluster = state
+                        .clusters_by_id
+                        .remove(&id)
+                        .expect("can only drop known clusters");
+                    state.clusters_by_name.remove(&cluster.name);
+
+                    if let Some(linked_object_id) = cluster.linked_object_id {
+                        state
+                            .clusters_by_linked_object_id
+                            .remove(&linked_object_id)
+                            .expect("can only drop known clusters");
+                    }
+
+                    for id in cluster.log_indexes.values() {
+                        state.drop_item(*id);
+                    }
+
+                    assert!(
+                        cluster.bound_objects.is_empty() && cluster.replicas_by_id.is_empty(),
+                        "not all items dropped before cluster"
+                    );
                 }
                 Op::DropClusterReplica {
                     cluster_id,
@@ -5186,14 +5142,25 @@ impl Catalog {
                         details,
                     )?;
 
-                    catalog_action(
-                        state,
-                        builtin_table_updates,
-                        Action::DropClusterReplica {
-                            cluster_id,
-                            replica_id,
-                        },
-                    )?;
+                    let cluster = state
+                        .clusters_by_id
+                        .get_mut(&cluster_id)
+                        .expect("can only drop replicas from known instances");
+                    let replica = cluster
+                        .replicas_by_id
+                        .remove(&replica_id)
+                        .expect("catalog out of sync");
+                    cluster
+                        .replica_id_by_name
+                        .remove(&replica.name)
+                        .expect("catalog out of sync");
+                    let persisted_log_ids = replica.config.compute.logging.source_and_view_ids();
+                    assert!(cluster.replica_id_by_name.len() == cluster.replicas_by_id.len());
+
+                    for id in persisted_log_ids {
+                        builtin_table_updates.extend(state.pack_item_update(id, -1));
+                        state.drop_item(id);
+                    }
                 }
                 Op::DropItem(id) => {
                     let entry = state.get_entry(&id);
@@ -5220,7 +5187,7 @@ impl Catalog {
                             }),
                         )?;
                     }
-                    catalog_action(state, builtin_table_updates, Action::DropItem(id))?;
+                    state.drop_item(id);
                 }
                 Op::DropTimeline(timeline) => {
                     tx.remove_timestamp(timeline);
@@ -5230,7 +5197,7 @@ impl Catalog {
                     to_name,
                     current_full_name,
                 } => {
-                    let mut actions = Vec::new();
+                    let mut updates = Vec::new();
 
                     let entry = state.get_entry(&id);
                     if let CatalogItem::Type(_) = entry.item() {
@@ -5326,45 +5293,45 @@ impl Catalog {
                         }
                         builtin_table_updates.extend(state.pack_item_update(*id, -1));
 
-                        actions.push(Action::UpdateItem {
-                            id: id.clone(),
-                            to_name: dependent_item.name().clone(),
-                            to_item,
-                        });
+                        updates.push((id.clone(), dependent_item.name().clone(), to_item));
                     }
                     if !item.is_temporary() {
                         tx.update_item(id, &to_full_name.item, &serialized_item)?;
                     }
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
-                    actions.push(Action::UpdateItem {
-                        id,
-                        to_name: to_qualified_name,
-                        to_item: item,
-                    });
-                    for action in actions {
-                        catalog_action(state, builtin_table_updates, action)?;
+                    updates.push((id, to_qualified_name, item));
+                    for (id, to_name, to_item) in updates {
+                        update_item(state, builtin_table_updates, id, to_name, to_item)?;
                     }
                 }
                 Op::UpdateClusterReplicaStatus { event } => {
-                    catalog_action(
-                        state,
-                        builtin_table_updates,
-                        Action::UpdateClusterReplicaStatus { event },
-                    )?;
+                    builtin_table_updates.push(state.pack_cluster_replica_status_update(
+                        event.cluster_id,
+                        event.replica_id,
+                        event.process_id,
+                        -1,
+                    ));
+                    state.ensure_cluster_status(
+                        event.cluster_id,
+                        event.replica_id,
+                        event.process_id,
+                        ClusterReplicaProcessStatus {
+                            status: event.status,
+                            time: event.time,
+                        },
+                    );
+                    builtin_table_updates.push(state.pack_cluster_replica_status_update(
+                        event.cluster_id,
+                        event.replica_id,
+                        event.process_id,
+                        1,
+                    ));
                 }
                 Op::UpdateItem { id, name, to_item } => {
                     let ser = Self::serialize_item(&to_item);
                     tx.update_item(id, &name.item, &ser)?;
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
-                    catalog_action(
-                        state,
-                        builtin_table_updates,
-                        Action::UpdateItem {
-                            id,
-                            to_name: name,
-                            to_item,
-                        },
-                    )?;
+                    update_item(state, builtin_table_updates, id, name, to_item)?;
                 }
                 Op::UpdateStorageUsage {
                     shard_id,
@@ -5426,316 +5393,6 @@ impl Catalog {
                     }
                     let new_item = CatalogItem::Connection(connection);
 
-                    catalog_action(
-                        state,
-                        builtin_table_updates,
-                        Action::UpdateRotatedKeys { id, new_item },
-                    )?;
-                }
-            };
-        }
-
-        fn catalog_action(
-            state: &mut CatalogState,
-            builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
-            action: Action,
-        ) -> Result<(), AdapterError> {
-            match action {
-                Action::CreateDatabase { id, oid, name } => {
-                    info!("create database {}", name);
-                    state.database_by_id.insert(
-                        id.clone(),
-                        Database {
-                            name: name.clone(),
-                            id: id.clone(),
-                            oid,
-                            schemas_by_id: BTreeMap::new(),
-                            schemas_by_name: BTreeMap::new(),
-                        },
-                    );
-                    state.database_by_name.insert(name, id.clone());
-                    builtin_table_updates
-                        .push(state.pack_database_update(&state.database_by_id[&id], 1));
-                }
-
-                Action::CreateSchema {
-                    id,
-                    oid,
-                    database_id,
-                    schema_name,
-                } => {
-                    info!(
-                        "create schema {}.{}",
-                        state.get_database(&database_id).name,
-                        schema_name
-                    );
-                    let db = state
-                        .database_by_id
-                        .get_mut(&database_id)
-                        .expect("catalog out of sync");
-                    db.schemas_by_id.insert(
-                        id.clone(),
-                        Schema {
-                            name: QualifiedSchemaName {
-                                database: ResolvedDatabaseSpecifier::Id(database_id.clone()),
-                                schema: schema_name.clone(),
-                            },
-                            id: SchemaSpecifier::Id(id.clone()),
-                            oid,
-                            items: BTreeMap::new(),
-                            functions: BTreeMap::new(),
-                        },
-                    );
-                    db.schemas_by_name.insert(schema_name, id.clone());
-                    builtin_table_updates.push(state.pack_schema_update(
-                        &ResolvedDatabaseSpecifier::Id(database_id.clone()),
-                        &id,
-                        1,
-                    ));
-                }
-
-                Action::CreateRole {
-                    id,
-                    oid,
-                    name,
-                    attributes,
-                } => {
-                    info!("create role {}", name);
-                    state.roles_by_name.insert(name.clone(), id);
-                    state.roles_by_id.insert(
-                        id,
-                        Role {
-                            name,
-                            id,
-                            oid,
-                            attributes,
-                        },
-                    );
-                    let role = &state.roles_by_id[&id];
-                    builtin_table_updates.push(state.pack_role_update(role.id, 1));
-                }
-
-                Action::CreateCluster {
-                    id,
-                    name,
-                    linked_object_id,
-                    arranged_introspection_sources,
-                } => {
-                    info!("create cluster {}", name);
-                    let arranged_introspection_source_ids: Vec<GlobalId> =
-                        arranged_introspection_sources
-                            .iter()
-                            .map(|(_, id)| *id)
-                            .collect();
-                    state.insert_cluster(
-                        id,
-                        name.clone(),
-                        linked_object_id,
-                        arranged_introspection_sources,
-                    );
-                    builtin_table_updates.push(state.pack_cluster_update(&name, 1));
-                    if let Some(linked_object_id) = linked_object_id {
-                        builtin_table_updates.push(state.pack_cluster_link_update(
-                            &name,
-                            linked_object_id,
-                            1,
-                        ));
-                    }
-                    for id in arranged_introspection_source_ids {
-                        builtin_table_updates.extend(state.pack_item_update(id, 1));
-                    }
-                }
-
-                Action::CreateClusterReplica {
-                    cluster_id,
-                    id,
-                    name,
-                    config,
-                } => {
-                    let num_processes = config.location.num_processes();
-                    let introspection_ids: Vec<_> =
-                        config.compute.logging.source_and_view_ids().collect();
-                    state.insert_cluster_replica(cluster_id, name.clone(), id, config);
-                    for id in introspection_ids {
-                        builtin_table_updates.extend(state.pack_item_update(id, 1));
-                    }
-                    builtin_table_updates
-                        .push(state.pack_cluster_replica_update(cluster_id, &name, 1));
-                    for process_id in 0..num_processes {
-                        let update = state.pack_cluster_replica_status_update(
-                            cluster_id,
-                            id,
-                            u64::cast_from(process_id),
-                            1,
-                        );
-                        builtin_table_updates.push(update);
-                    }
-                }
-
-                Action::CreateItem {
-                    id,
-                    oid,
-                    name,
-                    item,
-                } => {
-                    state.insert_item(id, oid, name, item);
-                    builtin_table_updates.extend(state.pack_item_update(id, 1));
-                }
-
-                Action::DropDatabase { id } => {
-                    let db = state.database_by_id.get(&id).expect("catalog out of sync");
-                    state.database_by_name.remove(db.name());
-                    state.database_by_id.remove(&id);
-                }
-
-                Action::DropSchema {
-                    database_id,
-                    schema_id,
-                } => {
-                    let db = state
-                        .database_by_id
-                        .get_mut(&database_id)
-                        .expect("catalog out of sync");
-                    let schema = db
-                        .schemas_by_id
-                        .get(&schema_id)
-                        .expect("catalog out of sync");
-                    db.schemas_by_name.remove(&schema.name.schema);
-                    db.schemas_by_id.remove(&schema_id);
-                }
-
-                Action::DropRole { id } => {
-                    if let Some(role) = state.roles_by_id.remove(&id) {
-                        state.roles_by_name.remove(role.name());
-                        info!("drop role {}", role.name());
-                    }
-                }
-
-                Action::DropCluster { id } => {
-                    let cluster = state
-                        .clusters_by_id
-                        .remove(&id)
-                        .expect("can only drop known clusters");
-                    state.clusters_by_name.remove(&cluster.name);
-
-                    if let Some(linked_object_id) = cluster.linked_object_id {
-                        state
-                            .clusters_by_linked_object_id
-                            .remove(&linked_object_id)
-                            .expect("can only drop known clusters");
-                    }
-
-                    for id in cluster.log_indexes.values() {
-                        state.drop_item(*id);
-                    }
-
-                    assert!(
-                        cluster.bound_objects.is_empty() && cluster.replicas_by_id.is_empty(),
-                        "not all items dropped before cluster"
-                    );
-                }
-
-                Action::DropClusterReplica {
-                    cluster_id,
-                    replica_id,
-                } => {
-                    let cluster = state
-                        .clusters_by_id
-                        .get_mut(&cluster_id)
-                        .expect("can only drop replicas from known instances");
-                    let replica = cluster
-                        .replicas_by_id
-                        .remove(&replica_id)
-                        .expect("catalog out of sync");
-                    cluster
-                        .replica_id_by_name
-                        .remove(&replica.name)
-                        .expect("catalog out of sync");
-                    let persisted_log_ids = replica.config.compute.logging.source_and_view_ids();
-                    assert!(cluster.replica_id_by_name.len() == cluster.replicas_by_id.len());
-
-                    for id in persisted_log_ids {
-                        builtin_table_updates.extend(state.pack_item_update(id, -1));
-                        state.drop_item(id);
-                    }
-                }
-
-                Action::DropItem(id) => {
-                    state.drop_item(id);
-                }
-
-                Action::UpdateItem {
-                    id,
-                    to_name,
-                    to_item,
-                } => {
-                    let old_entry = state.entry_by_id.remove(&id).expect("catalog out of sync");
-                    info!(
-                        "update {} {} ({})",
-                        old_entry.item_type(),
-                        state.resolve_full_name(&old_entry.name, old_entry.conn_id()),
-                        id
-                    );
-                    assert_eq!(old_entry.uses(), to_item.uses());
-                    let conn_id = old_entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
-                    let schema = &mut state.get_schema_mut(
-                        &old_entry.name().qualifiers.database_spec,
-                        &old_entry.name().qualifiers.schema_spec,
-                        conn_id,
-                    );
-                    schema.items.remove(&old_entry.name().item);
-                    let mut new_entry = old_entry.clone();
-                    new_entry.name = to_name;
-                    new_entry.item = to_item;
-                    schema.items.insert(new_entry.name().item.clone(), id);
-                    state.entry_by_id.insert(id, new_entry);
-                    builtin_table_updates.extend(state.pack_item_update(id, 1));
-                }
-
-                Action::UpdateClusterReplicaStatus { event } => {
-                    builtin_table_updates.push(state.pack_cluster_replica_status_update(
-                        event.cluster_id,
-                        event.replica_id,
-                        event.process_id,
-                        -1,
-                    ));
-                    state.ensure_cluster_status(
-                        event.cluster_id,
-                        event.replica_id,
-                        event.process_id,
-                        ClusterReplicaProcessStatus {
-                            status: event.status,
-                            time: event.time,
-                        },
-                    );
-                    builtin_table_updates.push(state.pack_cluster_replica_status_update(
-                        event.cluster_id,
-                        event.replica_id,
-                        event.process_id,
-                        1,
-                    ));
-                }
-
-                Action::UpdateRole {
-                    id,
-                    name,
-                    attributes,
-                } => {
-                    let old_role = state.roles_by_id.remove(&id).expect("catalog out of sync");
-                    info!("update role {name} ({id})");
-                    state.roles_by_id.insert(
-                        id,
-                        Role {
-                            id,
-                            oid: old_role.oid,
-                            name,
-                            attributes,
-                        },
-                    );
-                    builtin_table_updates.push(state.pack_role_update(id, 1));
-                }
-
-                Action::UpdateRotatedKeys { id, new_item } => {
                     let old_entry = state.entry_by_id.remove(&id).expect("catalog out of sync");
                     info!(
                         "update {} {} ({})",
@@ -5747,9 +5404,79 @@ impl Catalog {
                     new_entry.item = new_item;
                     state.entry_by_id.insert(id, new_entry);
                 }
-            }
+            };
+        }
+
+        fn update_item(
+            state: &mut CatalogState,
+            builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+            id: GlobalId,
+            to_name: QualifiedObjectName,
+            to_item: CatalogItem,
+        ) -> Result<(), AdapterError> {
+            let old_entry = state.entry_by_id.remove(&id).expect("catalog out of sync");
+            info!(
+                "update {} {} ({})",
+                old_entry.item_type(),
+                state.resolve_full_name(&old_entry.name, old_entry.conn_id()),
+                id
+            );
+            assert_eq!(old_entry.uses(), to_item.uses());
+            let conn_id = old_entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
+            let schema = &mut state.get_schema_mut(
+                &old_entry.name().qualifiers.database_spec,
+                &old_entry.name().qualifiers.schema_spec,
+                conn_id,
+            );
+            schema.items.remove(&old_entry.name().item);
+            let mut new_entry = old_entry.clone();
+            new_entry.name = to_name;
+            new_entry.item = to_item;
+            schema.items.insert(new_entry.name().item.clone(), id);
+            state.entry_by_id.insert(id, new_entry);
+            builtin_table_updates.extend(state.pack_item_update(id, 1));
             Ok(())
         }
+
+        fn create_schema(
+            state: &mut CatalogState,
+            builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+            id: SchemaId,
+            oid: u32,
+            database_id: DatabaseId,
+            schema_name: String,
+        ) -> Result<(), AdapterError> {
+            info!(
+                "create schema {}.{}",
+                state.get_database(&database_id).name,
+                schema_name
+            );
+            let db = state
+                .database_by_id
+                .get_mut(&database_id)
+                .expect("catalog out of sync");
+            db.schemas_by_id.insert(
+                id.clone(),
+                Schema {
+                    name: QualifiedSchemaName {
+                        database: ResolvedDatabaseSpecifier::Id(database_id.clone()),
+                        schema: schema_name.clone(),
+                    },
+                    id: SchemaSpecifier::Id(id.clone()),
+                    oid,
+                    items: BTreeMap::new(),
+                    functions: BTreeMap::new(),
+                },
+            );
+            db.schemas_by_name.insert(schema_name, id.clone());
+            builtin_table_updates.push(state.pack_schema_update(
+                &ResolvedDatabaseSpecifier::Id(database_id.clone()),
+                &id,
+                1,
+            ));
+            Ok(())
+        }
+
         Ok(())
     }
 
