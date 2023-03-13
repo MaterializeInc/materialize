@@ -40,11 +40,14 @@ use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::codec_impls::{TodoSchema, UnitSchema};
-use mz_persist_types::columnar::Schema;
+use mz_persist_types::columnar::{DataType, PartEncoder, Schema};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
-use mz_repr::{ColumnType, Datum, Diff, GlobalId, RelationDesc, RelationType, Row, ScalarType};
+use mz_repr::{
+    ColumnName, ColumnType, Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowEncoder,
+    ScalarType,
+};
 use mz_timely_util::order::{Interval, Partitioned, RangeBound};
 
 use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
@@ -2759,13 +2762,79 @@ impl Codec for SourceData {
     }
 }
 
+/// An implementation of [PartEncoder] for [SourceData].
+///
+/// This mostly delegates the encoding logic to [RowEncoder], but flatmaps in
+/// an Err column.
+#[derive(Debug)]
+pub struct SourceDataEncoder<'a> {
+    wrapped: RowEncoder<'a>,
+}
+
+impl<'a> PartEncoder<'a, SourceData> for SourceDataEncoder<'a> {
+    fn encode(&mut self, val: &SourceData) {
+        match val.as_ref() {
+            Ok(row) => {
+                // Append a fake Err datum.
+                let ok_datums = row.iter();
+                let err_datum = Datum::Null;
+                let datums = ok_datums.chain(std::iter::once(err_datum));
+                for (encoder, datum) in self.wrapped.col_encoders().iter_mut().zip(datums) {
+                    encoder.encode(datum);
+                }
+            }
+            Err(err) => {
+                let err = err.into_proto().encode_to_vec();
+
+                // Prepend a fake datum for every Ok column.
+                let ok_datums =
+                    std::iter::repeat(Datum::Null).take(self.wrapped.col_encoders().len());
+                let err_datum = Datum::Bytes(&err);
+                let datums = ok_datums.chain(std::iter::once(err_datum));
+                for (encoder, datum) in self.wrapped.col_encoders().iter_mut().zip(datums) {
+                    encoder.encode(datum);
+                }
+            }
+        }
+    }
+}
+
+const SOURCE_DATA_ERROR: &str = "mz_internal_super_secret_source_data_errors";
+fn fake_relation_desc(desc: &RelationDesc) -> RelationDesc {
+    let names = desc.iter_names().cloned();
+    let typs = desc.iter_types().map(|x| {
+        // TODO(mfp): This makes them all nullable so we can set them all to
+        // Null if the overall Result is an Err.
+        let mut x = x.clone();
+        x.nullable = true;
+        x
+    });
+    let names = names.chain(std::iter::once(ColumnName::from(SOURCE_DATA_ERROR)));
+    let typs = typs.chain(std::iter::once(ColumnType {
+        scalar_type: ScalarType::Bytes,
+        nullable: true,
+    }));
+    RelationDesc::new(RelationType::new(typs.collect()), names)
+}
+
+// TODO(mfp): This implements Schema for SourceData by flatmap-ing the Ok Row's
+// columns and the Err. This has the unfortunate effect of requiring us to make
+// all Row columns nullable (even if they aren't in the RelationDesc) so we have
+// something to store if the Err column is set. (Luckily, we could still check
+// it at decode time.)
+//
+// Better would be something like pushing the union structure of Result down to
+// parquet, but that's much harder and left for followup work (if we do it at
+// all).
 impl Schema<SourceData> for RelationDesc {
-    type Encoder<'a> = TodoSchema<SourceData>;
+    type Encoder<'a> = SourceDataEncoder<'a>;
 
     type Decoder<'a> = TodoSchema<SourceData>;
 
-    fn columns(&self) -> Vec<(String, mz_persist_types::columnar::DataType)> {
-        panic!("TODO")
+    fn columns(&self) -> Vec<(String, DataType)> {
+        // Constructing the fake RelationDesc is wasteful, but this only gets
+        // called when the feature flag is on.
+        Schema::<Row>::columns(&fake_relation_desc(self))
     }
 
     fn decoder<'a>(
@@ -2777,9 +2846,12 @@ impl Schema<SourceData> for RelationDesc {
 
     fn encoder<'a>(
         &self,
-        _cols: mz_persist_types::part::ColumnsMut<'a>,
+        cols: mz_persist_types::part::ColumnsMut<'a>,
     ) -> Result<Self::Encoder<'a>, String> {
-        panic!("TODO")
+        // Constructing the fake RelationDesc is wasteful, but this only gets
+        // called when the feature flag is on.
+        let wrapped = Schema::<Row>::encoder(&fake_relation_desc(self), cols)?;
+        Ok(SourceDataEncoder { wrapped })
     }
 }
 

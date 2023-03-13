@@ -44,7 +44,7 @@ use crate::scalar::arb_datum;
 use crate::scalar::DatumKind;
 use crate::{Datum, Timestamp};
 
-mod encoding;
+pub(crate) mod encoding;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.row.rs"));
 
