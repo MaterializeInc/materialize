@@ -136,6 +136,8 @@ pub enum Outcome<'a> {
 
 const NUM_OUTCOMES: usize = 10;
 const SUCCESS_OUTCOME: usize = NUM_OUTCOMES - 1;
+const CODE_BAIL: usize = 8;
+const CODE_SUCCESS: usize = 9;
 
 impl<'a> Outcome<'a> {
     fn code(&self) -> usize {
@@ -148,8 +150,8 @@ impl<'a> Outcome<'a> {
             Outcome::WrongColumnCount { .. } => 5,
             Outcome::WrongColumnNames { .. } => 6,
             Outcome::OutputFailure { .. } => 7,
-            Outcome::Bail { .. } => 8,
-            Outcome::Success => 9,
+            Outcome::Bail { .. } => CODE_BAIL,
+            Outcome::Success => CODE_SUCCESS,
         }
     }
 
@@ -1352,6 +1354,8 @@ pub struct RunConfig<'a> {
     pub fail_fast: bool,
     pub auto_index_tables: bool,
     pub persisted_introspection: bool,
+    pub timeout: Option<Duration>,
+    pub timeout_action: TimeoutAction,
 }
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {
@@ -1364,6 +1368,33 @@ fn print_record(config: &RunConfig<'_>, record: &Record) {
 }
 
 pub async fn run_string(
+    runner: &mut Runner<'_>,
+    source: &str,
+    input: &str,
+) -> Result<Outcomes, anyhow::Error> {
+    let timeout = async {
+        match runner.config.timeout {
+            Some(timeout) => tokio::time::sleep(timeout).await,
+            None => std::future::pending().await,
+        }
+    };
+
+    tokio::select! {
+        _ = timeout => {
+            writeln!(runner.config.stdout, "{} exceeded the timeout", source);
+            let code = match runner.config.timeout_action{
+                TimeoutAction::Succeed => CODE_SUCCESS,
+                TimeoutAction::Fail => CODE_BAIL,
+            };
+            let mut outcomes = Outcomes::default();
+            outcomes.0[code] += 1;
+            Ok(outcomes)
+        }
+        res = run_inner(runner, source, input) => res
+    }
+}
+
+pub async fn run_inner(
     runner: &mut Runner<'_>,
     source: &str,
     input: &str,
@@ -1672,6 +1703,12 @@ fn mutate(sql: &str) -> Vec<String> {
         }
     }
     additional
+}
+
+#[derive(clap::ValueEnum, Clone, Copy)]
+pub enum TimeoutAction {
+    Succeed,
+    Fail,
 }
 
 #[test]

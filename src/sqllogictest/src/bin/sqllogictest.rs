@@ -81,13 +81,14 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use chrono::Utc;
 use time::Instant;
 use walkdir::WalkDir;
 
 use mz_ore::cli::{self, CliConfig};
-use mz_sqllogictest::runner::{self, Outcomes, RunConfig, Runner, WriteFmt};
+use mz_sqllogictest::runner::{self, Outcomes, RunConfig, Runner, TimeoutAction, WriteFmt};
 use mz_sqllogictest::util;
 
 /// Runs sqllogictest scripts to verify database engine correctness.
@@ -128,6 +129,12 @@ struct Args {
     /// Run Materialize with persisted introspection sources enabled.
     #[clap(long)]
     persisted_introspection: bool,
+    /// Timeout a test, then perform `timeout_action`.
+    #[clap(long, parse(try_from_str = humantime::parse_duration))]
+    timeout: Option<Duration>,
+    /// Timeout a test, then perform `timeout_action`.
+    #[clap(long, arg_enum, default_value = "succeed")]
+    timeout_action: TimeoutAction,
 }
 
 #[tokio::main]
@@ -146,6 +153,8 @@ async fn main() -> ExitCode {
         fail_fast: args.fail_fast,
         auto_index_tables: args.auto_index_tables,
         persisted_introspection: args.persisted_introspection,
+        timeout: args.timeout,
+        timeout_action: args.timeout_action,
     };
 
     if args.rewrite_results {

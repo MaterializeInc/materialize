@@ -4726,6 +4726,7 @@ dependencies = [
  "clap",
  "fallible-iterator",
  "futures",
+ "humantime",
  "itertools",
  "junit-report",
  "md-5",
