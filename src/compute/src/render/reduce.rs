@@ -1407,8 +1407,7 @@ where
     };
 
     let debug_name = debug_name.to_string();
-    let debug_err_name = debug_name.clone();
-    let debug_err_full_aggrs = full_aggrs.clone();
+    let debug_full_aggrs = full_aggrs.clone();
     let (arranged_output, arranged_errs) = collection
         .arrange_named::<RowKeySpine<_, _, (Vec<Accum>, Diff)>>("ArrangeAccumulable")
         .reduce_pair::<_, RowSpine<_, _, _, _>, _, ErrValSpine<_, _, _>>("ReduceAccumulable", "AccumulableErrorCheck", {
@@ -1472,17 +1471,33 @@ where
                             | (
                                 AggregateFunc::SumUInt32,
                                 Accum::SimpleNumber { accum, .. },
-                            )
+                            ) => {
+                                if !accum.is_negative() {
+                                    // Our semantics of overflow are not clearly articulated wrt.
+                                    // unsigned vs. signed types (#17758). We adopt an unsigned
+                                    // wrapping behavior to match what we do above for signed types.
+                                    // TODO(vmarcos): remove potentially dangerous usage of `as`.
+                                    #[allow(clippy::as_conversions)]
+                                    Datum::UInt64(*accum as u64)
+                                } else {
+                                    // Note that we return a value here, but an error in the other
+                                    // operator of the reduce_pair. Therefore, we expect that this
+                                    // value will never be exposed as an output.
+                                    Datum::Null
+                                }
+                            }
                             | (
                                 AggregateFunc::SumUInt64,
                                 Accum::SimpleNumber { accum, .. },
                             ) => {
-                                if accum.is_negative() {
-                                    warn!("[customer-data] ReduceAccumulable observed a negative sum \
-                                        accumulation over an unsigned type: {aggr:?}: {accum:?} in dataflow {debug_name}");
-                                    soft_assert_or_log!(false, "Invalid negative unsigned aggregation in ReduceAccumulable");
+                                if !accum.is_negative() {
+                                    Datum::from(*accum)
+                                } else {
+                                    // Note that we return a value here, but an error in the other
+                                    // operator of the reduce_pair. Therefore, we expect that this
+                                    // value will never be exposed as an output.
+                                    Datum::Null
                                 }
-                                Datum::from(*accum)
                             }
                             (
                                 AggregateFunc::SumFloat32,
@@ -1573,7 +1588,7 @@ where
                                 }
                             }
                             _ => panic!(
-                                "Unexpected accumulation (aggr={:?}, accum={accum:?}) in dataflow {debug_name}",
+                                "Unexpected accumulation (aggr={:?}, accum={accum:?})",
                                 aggr.func
                             ),
                         }
@@ -1586,16 +1601,40 @@ where
         },
         move |key, input, output| {
             let (ref accums, total) = input[0].1;
-            for (aggr, accum) in debug_err_full_aggrs.iter().zip(accums) {
+            for (aggr, accum) in debug_full_aggrs.iter().zip(accums) {
                 // We first test here if inputs without net-positive records are present,
                 // producing an error to the logs and to the query output if that is the case.
                 if total == 0 && !accum.is_zero() {
                     warn!("[customer-data] ReduceAccumulable observed net-zero records \
-                        with non-zero accumulation: {aggr:?}: {accum:?} in dataflow {debug_err_name}");
+                        with non-zero accumulation: {aggr:?}: {accum:?} in dataflow {debug_name}");
                     soft_assert_or_log!(false, "Net-zero records with non-zero accumulation in ReduceAccumulable");
                     let message = format!("Invalid data in source, saw net-zero records for key {key} \
                         with non-zero accumulation in accumulable aggregate");
                     output.push((EvalError::Internal(message).into(), 1));
+                }
+                match (&aggr.func, &accum) {
+                    (
+                        AggregateFunc::SumUInt16,
+                        Accum::SimpleNumber { accum, .. },
+                    )
+                    | (
+                        AggregateFunc::SumUInt32,
+                        Accum::SimpleNumber { accum, .. },
+                    )
+                    | (
+                        AggregateFunc::SumUInt64,
+                        Accum::SimpleNumber { accum, .. },
+                    ) => {
+                        if accum.is_negative() {
+                            warn!("[customer-data] ReduceAccumulable observed a negative sum \
+                                accumulation over an unsigned type: {aggr:?}: {accum:?} in dataflow {debug_name}");
+                            soft_assert_or_log!(false, "Invalid negative unsigned aggregation in ReduceAccumulable");
+                            let message = format!("Invalid data in source, saw negative accumulation with \
+                            unsigned type for key {key}");
+                            output.push((EvalError::Internal(message).into(), 1));
+                        }
+                    }
+                    _ => (), // no more errors to check for at this point!
                 }
             }
         });

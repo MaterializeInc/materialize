@@ -663,10 +663,10 @@ def workflow_test_github_17177(c: Composition) -> None:
 
 def workflow_test_github_17510(c: Composition) -> None:
     """
-    Test that sum aggregations over uint2 and uint4 types do not produce a panic, but
-    rather a SQL-level error when faced with invalid accumulations due to too many
-    retractions in a source. Additionally, we verify that in these cases, an adequate
-    error message is written to the logs.
+    Test that sum aggregations over uint2 and uint4 types do not produce a panic
+    when soft assertions are turned off, but rather a SQL-level error when faced
+    with invalid accumulations due to too many retractions in a source. Additionally,
+    we verify that in these cases, an adequate error message is written to the logs.
 
     Regression test for https://github.com/MaterializeInc/materialize/issues/17510.
     """
@@ -718,6 +718,17 @@ def workflow_test_github_17510(c: Composition) -> None:
                   ) AS base (data2, data4, data8, diff),
                   repeat_row(diff)
               );
+              CREATE MATERIALIZED VIEW constant_wrapped_sums AS
+              SELECT SUM(data2) AS sum2, SUM(data4) AS sum4, SUM(data8) AS sum8
+              FROM (
+                  SELECT * FROM (
+                      VALUES (2::uint2, 2::uint4, 2::uint8, 9223372036854775807),
+                        (1::uint2, 1::uint4, 1::uint8, 1),
+                        (1::uint2, 1::uint4, 1::uint8, 1),
+                        (1::uint2, 1::uint4, 1::uint8, 1)
+                  ) AS base (data2, data4, data8, diff),
+                  repeat_row(diff)
+              );
             """
         )
         c.testdrive(
@@ -727,18 +738,19 @@ def workflow_test_github_17510(c: Composition) -> None:
 
             # Run a queries that would generate panics before the fix.
             ! SELECT SUM(data2) FROM data;
-            contains:uint8 out of range
+            contains:Invalid data in source, saw negative accumulation with unsigned type for key
 
             ! SELECT SUM(data4) FROM data;
-            contains:uint8 out of range
+            contains:Invalid data in source, saw negative accumulation with unsigned type for key
 
             ! SELECT * FROM constant_sums;
             contains:constant folding encountered reduce on collection with non-positive multiplicities
 
-            # The following statement succeeds with a negative accumulation,
-            # which is the behavior introduced in https://github.com/MaterializeInc/materialize/pull/16852
-            > SELECT SUM(data8) FROM data;
-            -1
+            # The following statement verifies that the behavior introduced in PR #16852
+            # is now rectified, i.e., instead of wrapping to a negative number, we produce
+            # an error upon seeing invalid multiplicities.
+            ! SELECT SUM(data8) FROM data;
+            contains:Invalid data in source, saw negative accumulation with unsigned type for key
 
             # Test repairs
             > INSERT INTO base VALUES (1, 1, 1, 1), (1, 1, 1, 1);
@@ -770,6 +782,36 @@ def workflow_test_github_17510(c: Composition) -> None:
             sum8 numeric
             sum2 uint8
             sum4 uint8
+
+            # Test wraparound behaviors
+            > INSERT INTO base VALUES (1, 1, 1, -1);
+
+            > INSERT INTO base VALUES (2, 2, 2, 9223372036854775807);
+
+            > SELECT sum(data2) FROM data;
+            18446744073709551614
+
+            > SELECT sum(data4) FROM data;
+            18446744073709551614
+
+            > SELECT sum(data8) FROM data;
+            18446744073709551614
+
+            > INSERT INTO base VALUES (1, 1, 1, 1), (1, 1, 1, 1), (1, 1, 1, 1);
+
+            # Constant-folding behavior matches for now the rendered behavior
+            # wrt. wraparound; this can be revisited as part of #17758.
+            > SELECT * FROM constant_wrapped_sums;
+            1 1 18446744073709551617
+
+            > SELECT SUM(data2) FROM data;
+            1
+
+            > SELECT SUM(data4) FROM data;
+            1
+
+            > SELECT SUM(data8) FROM data;
+            18446744073709551617
             """
             )
         )
