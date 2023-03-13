@@ -1233,8 +1233,6 @@ mod tests {
                 val: StateFieldValDiff::Insert(r1_rollup.key.clone()),
             }],
             diff_proto.field_diffs.as_mut().unwrap(),
-            |k| k.into_proto().encode_to_vec(),
-            |v| v.into_proto().encode_to_vec(),
         );
 
         let diff = StateDiff::<u64>::from_proto(diff_proto.clone()).unwrap();

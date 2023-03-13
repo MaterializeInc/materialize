@@ -869,12 +869,8 @@ impl ProtoStateFieldDiffs {
         let encoded_length = msg.encoded_len();
         self.data_lens.push(u64::cast_from(encoded_length));
         self.data_bytes.reserve(encoded_length);
-        msg.encode(&mut self.data_bytes).expect("reserved enough space");
-    }
-
-    pub fn push_data(&mut self, mut data: Vec<u8>) {
-        self.data_lens.push(u64::cast_from(data.len()));
-        self.data_bytes.append(&mut data);
+        msg.encode(&mut self.data_bytes)
+            .expect("reserved enough space");
     }
 
     pub fn iter<'a>(&'a self) -> ProtoStateFieldDiffsIter<'a> {
