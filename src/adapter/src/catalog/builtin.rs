@@ -2550,6 +2550,26 @@ FROM
         JOIN mz_internal.mz_cluster_replica_metrics AS m ON m.replica_id = r.id",
 };
 
+pub const MZ_DATAFLOW_OPERATOR_PARENTS: BuiltinView = BuiltinView {
+    name: "mz_dataflow_operator_parents",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_operator_parents AS
+WITH parent_addrs AS (
+    SELECT
+        id,
+        address[1:list_length(address) - 1] AS parent_address,
+        worker_id
+    FROM mz_internal.mz_dataflow_addresses
+        INNER JOIN mz_internal.mz_dataflow_operators
+            USING (id, worker_id)
+)
+SELECT pa.id, mda.id AS parent_id, pa.worker_id
+FROM parent_addrs AS pa
+    JOIN mz_internal.mz_dataflow_addresses AS mda
+        ON pa.parent_address = mda.address
+        AND pa.worker_id = mda.worker_id",
+};
+
 // NOTE: If you add real data to this implementation, then please update
 // the related `pg_` function implementations (like `pg_get_constraintdef`)
 pub const PG_CONSTRAINT: BuiltinView = BuiltinView {
@@ -3208,6 +3228,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY),
         Builtin::View(&MZ_CLUSTER_REPLICA_UTILIZATION),
+        Builtin::View(&MZ_DATAFLOW_OPERATOR_PARENTS),
         Builtin::View(&MZ_COMPUTE_FRONTIERS),
         Builtin::View(&MZ_DATAFLOW_CHANNEL_OPERATORS),
         Builtin::View(&MZ_COMPUTE_IMPORT_FRONTIERS),

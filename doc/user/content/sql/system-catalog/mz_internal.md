@@ -143,6 +143,17 @@ Field       | Type            | Meaning
 `worker_id` | [`bigint`]      | The ID of the worker thread hosting the channel or operator.
 `address`   | [`bigint list`] | A list of scope-local indexes indicating the path from the root to this channel or operator.
 
+### `mz_dataflow_operator_parents`
+
+The `mz_dataflow_operator_parents` view describes how operators are
+nested into scopes, by relating operators to their parent operators.
+
+| Field       | Type       | Meaning                                                                                     |
+|-------------|------------|---------------------------------------------------------------------------------------------|
+| `id`        | [`bigint`] | The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators) |
+| `parent_id` | [`bigint`] | The ID of the operator's parent operator.                                                   |
+| `worker_id` | [`bigint`] | The ID of the worker thread hosting the operators.                                          |
+
 ### `mz_dataflow_channels`
 
 The `mz_dataflow_channels` source describes the communication channels between

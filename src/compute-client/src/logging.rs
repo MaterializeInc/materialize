@@ -335,6 +335,7 @@ pub enum LogView {
     MzComputeOperatorDurations,
     MzDataflowNames,
     MzDataflowOperatorDataflows,
+    MzDataflowOperatorParents,
     MzDataflowOperatorReachability,
     MzComputeFrontiers,
     MzComputeImportFrontiers,
@@ -356,6 +357,7 @@ pub static DEFAULT_LOG_VIEWS: Lazy<Vec<LogView>> = Lazy::new(|| {
         LogView::MzArrangementSizes,
         LogView::MzDataflowNames,
         LogView::MzDataflowOperatorDataflows,
+        LogView::MzDataflowOperatorParents,
         LogView::MzDataflowOperatorReachability,
         LogView::MzComputeFrontiers,
         LogView::MzComputeImportFrontiers,
@@ -428,6 +430,24 @@ impl LogView {
                         mz_dataflow_addresses_{}.worker_id = mz_dataflow_operators_{}.worker_id AND
                         mz_catalog.list_length(mz_dataflow_addresses_{}.address) = 1",
                 "mz_dataflows_{}",
+            ),
+
+            LogView::MzDataflowOperatorParents => (
+                "WITH parent_addrs AS (
+                    SELECT
+                        id,
+                        address[1:list_length(address) - 1] AS parent_address,
+                        worker_id
+                    FROM mz_internal.mz_dataflow_addresses_{}
+                        INNER JOIN mz_internal.mz_dataflow_operators_{}
+                            USING (id, worker_id)
+                )
+                SELECT pa.id, mda.id AS parent_id, pa.worker_id
+                FROM parent_addrs AS pa
+                    JOIN mz_internal.mz_dataflow_addresses_{} AS mda
+                        ON pa.parent_address = mda.address
+                        AND pa.worker_id = mda.worker_id",
+                "mz_dataflow_operator_parents_{}",
             ),
 
             LogView::MzDataflowOperatorDataflows => (

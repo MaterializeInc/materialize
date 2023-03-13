@@ -260,6 +260,10 @@ mz_dataflow_operator_dataflows
 VIEW
 materialize
 mz_internal
+mz_dataflow_operator_parents
+VIEW
+materialize
+mz_internal
 mz_dataflow_operator_reachability
 VIEW
 materialize
