@@ -2421,11 +2421,11 @@ pub const MZ_SCHEDULING_PARKS_HISTOGRAM: BuiltinView = BuiltinView {
     name: "mz_scheduling_parks_histogram",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_scheduling_parks_histogram AS SELECT
-    worker_id, slept_for, requested, pg_catalog.count(*) AS count
+    worker_id, slept_for_ns, requested_ns, pg_catalog.count(*) AS count
 FROM
     mz_internal.mz_scheduling_parks_histogram_internal
 GROUP BY
-    worker_id, slept_for, requested",
+    worker_id, slept_for_ns, requested_ns",
 };
 
 pub const MZ_WORKER_COMPUTE_DELAYS_HISTOGRAM: BuiltinView = BuiltinView {

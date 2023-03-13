@@ -187,8 +187,10 @@ bar  mz_peek_durations_histogram_internal  mz_peek_durations_histogram_internal_
 bar  mz_scheduling_elapsed_internal  mz_scheduling_elapsed_internal_u6_primary_idx  1  id  NULL  false
 bar  mz_scheduling_elapsed_internal  mz_scheduling_elapsed_internal_u6_primary_idx  2  worker_id  NULL  false
 bar  mz_scheduling_parks_histogram_internal  mz_scheduling_parks_histogram_internal_u6_primary_idx  1  worker_id  NULL  false
-bar  mz_scheduling_parks_histogram_internal  mz_scheduling_parks_histogram_internal_u6_primary_idx  2  slept_for  NULL  false
-bar  mz_scheduling_parks_histogram_internal  mz_scheduling_parks_histogram_internal_u6_primary_idx  3  requested  NULL  false
+bar  mz_scheduling_parks_histogram_internal  mz_scheduling_parks_histogram_internal_u6_primary_idx
+2  slept_for_ns  NULL  false
+bar  mz_scheduling_parks_histogram_internal  mz_scheduling_parks_histogram_internal_u6_primary_idx
+3  requested_ns  NULL  false
 bar  mz_worker_compute_delays_histogram_internal  mz_worker_compute_delays_histogram_internal_u6_primary_idx  1  export_id  NULL  false
 bar  mz_worker_compute_delays_histogram_internal  mz_worker_compute_delays_histogram_internal_u6_primary_idx  2  import_id  NULL  false
 bar  mz_worker_compute_delays_histogram_internal  mz_worker_compute_delays_histogram_internal_u6_primary_idx  3  worker_id  NULL  false

@@ -625,11 +625,11 @@ impl LogView {
 
             LogView::MzSchedulingParksHistogram => (
                 "SELECT
-                    worker_id, slept_for, requested, pg_catalog.count(*) AS count
+                    worker_id, slept_for_ns, requested_ns, pg_catalog.count(*) AS count
                 FROM
                     mz_internal.mz_scheduling_parks_histogram_internal_{}
                 GROUP BY
-                    worker_id, slept_for, requested",
+                    worker_id, slept_for_ns, requested_ns",
                 "mz_scheduling_parks_histogram_{}",
             ),
 
@@ -703,8 +703,8 @@ impl LogVariant {
 
             LogVariant::Timely(TimelyLog::Parks) => RelationDesc::empty()
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("slept_for", ScalarType::UInt64.nullable(false))
-                .with_column("requested", ScalarType::UInt64.nullable(false)),
+                .with_column("slept_for_ns", ScalarType::UInt64.nullable(false))
+                .with_column("requested_ns", ScalarType::UInt64.nullable(false)),
 
             LogVariant::Timely(TimelyLog::MessagesReceived) => RelationDesc::empty()
                 .with_column("channel_id", ScalarType::UInt64.nullable(false))

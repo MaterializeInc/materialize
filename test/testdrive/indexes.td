@@ -290,7 +290,7 @@ mz_message_counts_received_internal_s2_primary_idx               mz_message_coun
 mz_message_counts_sent_internal_s2_primary_idx                   mz_message_counts_sent_internal                   mz_introspection    {channel_id,from_worker_id,to_worker_id}
 mz_peek_durations_histogram_internal_s2_primary_idx              mz_peek_durations_histogram_internal              mz_introspection    {worker_id,duration_ns}
 mz_scheduling_elapsed_internal_s2_primary_idx                    mz_scheduling_elapsed_internal                    mz_introspection    {id,worker_id}
-mz_scheduling_parks_histogram_internal_s2_primary_idx            mz_scheduling_parks_histogram_internal            mz_introspection    {worker_id,slept_for,requested}
+mz_scheduling_parks_histogram_internal_s2_primary_idx            mz_scheduling_parks_histogram_internal            mz_introspection    {worker_id,slept_for_ns,requested_ns}
 mz_show_all_objects_ind                                          mz_objects                                        mz_introspection    {schema_id}
 mz_show_cluster_replicas_ind                                     mz_show_cluster_replicas                          mz_introspection    {cluster,replica,size,ready}
 mz_show_clusters_ind                                             mz_clusters                                       mz_introspection    {name}
