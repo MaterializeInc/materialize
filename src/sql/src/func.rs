@@ -1574,7 +1574,12 @@ macro_rules! builtins {
         let mut builtins = BTreeMap::new();
         $(
             let impls = vec![$(impl_def!($params, $op, $return_type, $oid)),+];
-            let old = builtins.insert($name, Func::$ty(impls));
+            let func = Func::$ty(impls);
+            let expect_set_return = matches!(&func, Func::Table(_));
+            for imp in func.func_impls() {
+                assert_eq!(imp.return_is_set, expect_set_return, "wrong set return value for func with oid {}", imp.oid);
+            }
+            let old = builtins.insert($name, func);
             assert!(old.is_none(), "duplicate entry in builtins list {:?}", old);
         )+
         builtins
