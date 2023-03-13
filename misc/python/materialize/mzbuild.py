@@ -839,7 +839,9 @@ class Repository:
         return iter(self.images.values())
 
 
-def publish_multiarch_images(tag: str, dependency_sets: List[DependencySet]) -> None:
+def publish_multiarch_images(
+    tag: str, dependency_sets: Iterable[Iterable[ResolvedImage]]
+) -> None:
     """Publishes a set of docker images under a given tag."""
     for images in zip(*dependency_sets):
         names = set(image.image.name for image in images)
