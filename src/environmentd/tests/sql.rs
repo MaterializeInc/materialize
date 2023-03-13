@@ -2457,7 +2457,7 @@ fn test_dont_drop_sinks_twice() {
     let mut client_b = server.connect(postgres::NoTls).unwrap();
 
     // By inserting 10_000 rows into t1 and t2, it's very likely that the response from
-    // compute indicating whether or not we successfully dropped the sink, will get 
+    // compute indicating whether or not we successfully dropped the sink, will get
     // queued behind the responses for the row insertions, which should trigger the race
     // condition we're trying to exercise here.
     client_b
@@ -2471,7 +2471,7 @@ fn test_dont_drop_sinks_twice() {
 
     // Drop our client so the notice channel closes.
     drop(_out);
-    drop(client_a);    
+    drop(client_a);
 
     // Assert we only got one message.
     let mut msgs = vec![];
