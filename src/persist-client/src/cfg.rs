@@ -135,8 +135,8 @@ impl PersistConfig {
                 sink_minimum_batch_updates: AtomicUsize::new(
                     Self::DEFAULT_SINK_MINIMUM_BATCH_UPDATES,
                 ),
-                stats_collection_enabled: AtomicBool::new(false),
-                stats_filter_enabled: AtomicBool::new(false),
+                stats_collection_enabled: AtomicBool::new(true),
+                stats_filter_enabled: AtomicBool::new(true),
             }),
             compaction_enabled: !compaction_disabled,
             compaction_concurrency_limit: 5,
