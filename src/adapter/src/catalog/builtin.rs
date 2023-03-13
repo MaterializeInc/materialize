@@ -2572,10 +2572,7 @@ SELECT pa.id, oa.id AS parent_id, pa.worker_id
 FROM parent_addrs AS pa
     INNER JOIN operator_addrs AS oa
         ON pa.parent_address = oa.address
-        AND pa.worker_id = oa.worker_id
-    INNER JOIN mz_internal.mz_dataflow_operators AS mdo
-        ON mda.id = mdo.id
-        AND mda.worker_id = mdo.worker_id",
+        AND pa.worker_id = oa.worker_id",
 };
 
 // NOTE: If you add real data to this implementation, then please update
