@@ -2448,6 +2448,7 @@ fn test_dont_drop_sinks_twice() {
 
     client_a.batch_execute("CREATE TABLE t1 (a INT)").unwrap();
     client_a.batch_execute("CREATE TABLE t2 (a INT)").unwrap();
+    let client_a_token = client_a.cancel_token();
 
     let _out = client_a
         .copy_out("COPY (SUBSCRIBE (SELECT * FROM t1,t2)) TO STDOUT")
@@ -2469,9 +2470,11 @@ fn test_dont_drop_sinks_twice() {
     client_b.batch_execute("DROP TABLE t1").unwrap();
     client_b.batch_execute("DROP TABLE t2").unwrap();
 
-    // Drop our client so the notice channel closes.
+    client_a_token
+        .cancel_query(postgres::NoTls)
+        .expect("failed to cancel subscribe");
     drop(_out);
-    drop(client_a);
+    client_a.close().expect("failed to drop client");
 
     // Assert we only got one message.
     let mut msgs = vec![];
