@@ -40,7 +40,3 @@ $ set-regex match="\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d(\.\d\d\d)?" replacement="<T
 > SELECT status, sink_id, error, jsonb_object_keys(details) FROM mz_internal.mz_sink_status_history
   WHERE sink_id = '${sink_id}' AND status = 'stalled' LIMIT 1;
 stalled ${sink_id} "retriable transaction error" hint
-
-
-
-
