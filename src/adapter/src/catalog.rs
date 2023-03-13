@@ -4758,19 +4758,7 @@ impl Catalog {
                             attributes,
                         },
                     );
-                    let role = &state.roles_by_id[&id];
-                    builtin_table_updates.push(state.pack_role_update(role.id, 1));
-
-                    // catalog_action(
-                    //     state,
-                    //     builtin_table_updates,
-                    //     Action::CreateRole {
-                    //         id,
-                    //         oid,
-                    //         name,
-                    //         attributes,
-                    //     },
-                    // )?;
+                    builtin_table_updates.push(state.pack_role_update(id, 1));
                 }
                 Op::CreateCluster {
                     id,
@@ -4802,16 +4790,6 @@ impl Catalog {
                             name: name.clone(),
                         }),
                     )?;
-                    // catalog_action(
-                    //     state,
-                    //     builtin_table_updates,
-                    //     Action::CreateCluster {
-                    //         id,
-                    //         name,
-                    //         linked_object_id,
-                    //         arranged_introspection_sources,
-                    //     },
-                    // )?;
                     info!("create cluster {}", name);
                     let arranged_introspection_source_ids: Vec<GlobalId> =
                         arranged_introspection_sources
@@ -4881,16 +4859,6 @@ impl Catalog {
                             details,
                         )?;
                     }
-                    // catalog_action(
-                    //     state,
-                    //     builtin_table_updates,
-                    //     Action::CreateClusterReplica {
-                    //         id,
-                    //         name,
-                    //         cluster_id,
-                    //         config,
-                    //     },
-                    // )?;
                     let num_processes = config.location.num_processes();
                     let introspection_ids: Vec<_> =
                         config.compute.logging.source_and_view_ids().collect();
@@ -5008,17 +4976,6 @@ impl Catalog {
                             details,
                         )?;
                     }
-
-                    // catalog_action(
-                    //     state,
-                    //     builtin_table_updates,
-                    //     Action::CreateItem {
-                    //         id,
-                    //         oid,
-                    //         name,
-                    //         item,
-                    //     },
-                    // )?;
                     state.insert_item(id, oid, name, item);
                     builtin_table_updates.extend(state.pack_item_update(id, 1));
                 }
@@ -5039,7 +4996,6 @@ impl Catalog {
                             name: database.name.clone(),
                         }),
                     )?;
-                    // catalog_action(state, builtin_table_updates, Action::DropDatabase { id })?;
                     let db = state.database_by_id.get(&id).expect("catalog out of sync");
                     state.database_by_name.remove(db.name());
                     state.database_by_id.remove(&id);
@@ -5069,14 +5025,6 @@ impl Catalog {
                             database_name: state.database_by_id[&database_id].name.clone(),
                         }),
                     )?;
-                    // catalog_action(
-                    //     state,
-                    //     builtin_table_updates,
-                    //     Action::DropSchema {
-                    //         database_id,
-                    //         schema_id,
-                    //     },
-                    // )?;
                     let db = state
                         .database_by_id
                         .get_mut(&database_id)
@@ -5110,11 +5058,8 @@ impl Catalog {
                             name: name.clone(),
                         }),
                     )?;
-                    // catalog_action(state, builtin_table_updates, Action::DropRole { id })?;
-                    if let Some(role) = state.roles_by_id.remove(&id) {
-                        state.roles_by_name.remove(role.name());
-                        info!("drop role {}", role.name());
-                    }
+                    state.roles_by_name.remove(role.name());
+                    info!("drop role {}", role.name());
                 }
                 Op::DropCluster { id } => {
                     let cluster = state.get_cluster(id);
@@ -5149,7 +5094,6 @@ impl Catalog {
                             name: name.clone(),
                         }),
                     )?;
-                    // catalog_action(state, builtin_table_updates, Action::DropCluster { id })?;
                     let cluster = state
                         .clusters_by_id
                         .remove(&id)
