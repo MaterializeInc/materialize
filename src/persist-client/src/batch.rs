@@ -207,6 +207,8 @@ impl From<&PersistConfig> for BatchBuilderConfig {
 #[derive(Debug)]
 pub struct BatchBuilder<K, V, T, D>
 where
+    K: Codec,
+    V: Codec,
     T: Timestamp + Lattice + Codec64,
 {
     lower: Antichain<T>,
