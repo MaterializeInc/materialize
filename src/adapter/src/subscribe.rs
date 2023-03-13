@@ -24,6 +24,7 @@ use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
 
 /// A description of an active subscribe from coord's perspective
+#[derive(Debug)]
 pub struct ActiveSubscribe {
     /// The user of the session that created the subscribe.
     pub user: User,
@@ -43,6 +44,8 @@ pub struct ActiveSubscribe {
     pub depends_on: BTreeSet<GlobalId>,
     /// The time when the subscribe was started.
     pub start_time: EpochMillis,
+    /// Whether we are already in the process of dropping the resources related to this subscribe.
+    pub dropping: bool,
 }
 
 impl ActiveSubscribe {

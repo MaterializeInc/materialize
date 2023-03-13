@@ -2765,6 +2765,7 @@ impl Coordinator {
             cluster_id,
             depends_on: depends_on.into_iter().collect(),
             start_time: SYSTEM_TIME(),
+            dropping: false,
         };
         self.add_active_subscribe(sink_id, active_subscribe).await;
 
