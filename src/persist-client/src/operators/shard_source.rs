@@ -21,6 +21,11 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
 use futures::StreamExt;
 use futures_util::future::Either;
+use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
+use mz_ore::vec::VecExt;
+use mz_persist_types::{Codec, Codec64};
+use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::{Scope, ScopeParent, Stream};
@@ -29,12 +34,6 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::sync::mpsc;
 use tracing::trace;
-
-use mz_ore::cast::CastFrom;
-use mz_ore::collections::CollectionExt;
-use mz_ore::vec::VecExt;
-use mz_persist_types::{Codec, Codec64};
-use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 
 use crate::cache::PersistClientCache;
 use crate::fetch::{FetchedPart, SerdeLeasedBatchPart};
@@ -372,8 +371,6 @@ where
                         }
                         Some(ListenEvent::Progress(progress)) => {
                             let session_cap = cap_set.delayed(&current_ts);
-                            let mut descs_output = descs_output.activate();
-                            let mut descs_session = descs_output.session(&session_cap);
 
                             // NB: in order to play nice with downstream operators whose invariants
                             // depend on seeing the full contents of an individual batch, we must
@@ -391,7 +388,7 @@ where
                                     // doing instead here, but this has seemed to work
                                     // okay so far. Continue to revisit as necessary.
                                     let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
-                                    descs_session.give((worker_idx, part_desc.into_exchangeable_part()));
+                                    descs_output.give(&session_cap, (worker_idx, part_desc.into_exchangeable_part())).await;
                                 }
                                 bytes_emitted
                             };
@@ -565,8 +562,8 @@ where
                         // would prevent messages from being flushed from
                         // the shared timely output buffer.
                         fetched_output.give(&cap, fetched).await;
-                        tokens_output
-                            .give(&cap, token.into_exchangeable_part())
+                        completed_fetches_output
+                            .give(&cap, leased_part.into_exchangeable_part())
                             .await;
                     }
                 }
