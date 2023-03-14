@@ -507,7 +507,7 @@ impl CatalogState {
     #[tracing::instrument(level = "info", skip_all)]
     pub fn parse_view_item(&self, create_sql: String) -> Result<CatalogItem, anyhow::Error> {
         let mut session_catalog = ConnCatalog {
-            state: Cow::Borrowed(self),
+            state: self.clone(),
             conn_id: SYSTEM_CONN_ID,
             cluster: "default".into(),
             database: self
@@ -1282,7 +1282,7 @@ impl CatalogState {
 
 #[derive(Debug)]
 pub struct ConnCatalog<'a> {
-    state: Cow<'a, CatalogState>,
+    state: CatalogState,
     conn_id: ConnectionId,
     cluster: String,
     database: Option<DatabaseId>,
@@ -1297,12 +1297,12 @@ impl ConnCatalog<'_> {
     }
 
     pub fn state(&self) -> &CatalogState {
-        &*self.state
+        &self.state
     }
 
     pub fn into_owned(self) -> ConnCatalog<'static> {
         ConnCatalog {
-            state: Cow::Owned(self.state.into_owned()),
+            state: self.state.clone(),
             conn_id: self.conn_id,
             cluster: self.cluster,
             database: self.database,
@@ -3580,7 +3580,7 @@ impl Catalog {
             .map(|schema| (schema.name().database.clone(), schema.id().clone()))
             .collect();
         ConnCatalog {
-            state: Cow::Borrowed(state),
+            state: state.clone(),
             conn_id: session.conn_id(),
             cluster: session.vars().cluster().into(),
             database,
@@ -3592,7 +3592,7 @@ impl Catalog {
 
     pub fn for_sessionless_user(&self, role_id: RoleId) -> ConnCatalog {
         ConnCatalog {
-            state: Cow::Borrowed(&self.state),
+            state: self.state.clone(),
             conn_id: SYSTEM_CONN_ID,
             cluster: "default".into(),
             database: self
@@ -6438,7 +6438,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn system_vars_mut(&mut self) -> &mut SystemVars {
-        &mut self.state.to_mut().system_configuration
+        &mut self.state.system_configuration
     }
 }
 
