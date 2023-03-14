@@ -5013,8 +5013,9 @@ impl Catalog {
                         )));
                     }
                     tx.remove_role(&name)?;
-                    let role = &state.roles_by_id[&id];
-                    builtin_table_updates.push(state.pack_role_update(role.id, -1));
+                    builtin_table_updates.push(state.pack_role_update(id, -1));
+                    let role = state.roles_by_id.remove(&id).expect("catalog out of sync");
+                    state.roles_by_name.remove(role.name());
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -5028,7 +5029,6 @@ impl Catalog {
                             name: name.clone(),
                         }),
                     )?;
-                    state.roles_by_name.remove(role.name());
                     info!("drop role {}", role.name());
                 }
                 Op::DropCluster { id } => {
