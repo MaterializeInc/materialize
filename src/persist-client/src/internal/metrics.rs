@@ -23,7 +23,7 @@ use mz_ore::metrics::{
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist::location::{
-    Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData,
+    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, SeqNo, VersionedData,
 };
 use mz_persist::metrics::{PostgresConsensusMetrics, S3BlobMetrics};
 use mz_persist::retry::RetryStream;
@@ -147,8 +147,6 @@ struct MetricsVecs {
     external_op_failed: IntCounterVec,
     external_op_bytes: IntCounterVec,
     external_op_seconds: CounterVec,
-    external_consensus_cas_mismatch_versions_count: IntCounter,
-    external_consensus_cas_mismatch_versions_bytes: IntCounter,
     external_consensus_truncated_count: IntCounter,
     external_blob_delete_noop_count: IntCounter,
     external_blob_sizes: Histogram,
@@ -227,14 +225,6 @@ impl MetricsVecs {
                 name: "mz_persist_external_seconds",
                 help: "time spent in external service calls",
                 var_labels: ["op"],
-            )),
-            external_consensus_cas_mismatch_versions_count: registry.register(metric!(
-                name: "mz_persist_external_consensus_cas_mismatch_versions_count",
-                help: "count of versions returned by consensus cas mismatches",
-            )),
-            external_consensus_cas_mismatch_versions_bytes: registry.register(metric!(
-                name: "mz_persist_external_consensus_cas_mismatch_versions_bytes",
-                help: "total size of versions returned by consensus cas mismatches",
             )),
             external_consensus_truncated_count: registry.register(metric!(
                 name: "mz_persist_external_consensus_truncated_count",
@@ -439,12 +429,6 @@ impl MetricsVecs {
             scan: self.external_op_metrics("consensus_scan", false),
             truncate: self.external_op_metrics("consensus_truncate", false),
             truncated_count: self.external_consensus_truncated_count.clone(),
-            cas_mismatch_versions_count: self
-                .external_consensus_cas_mismatch_versions_count
-                .clone(),
-            cas_mismatch_versions_bytes: self
-                .external_consensus_cas_mismatch_versions_bytes
-                .clone(),
             rtt_latency: self.external_rtt_latency.with_label_values(&["consensus"]),
         }
     }
@@ -1580,8 +1564,6 @@ pub struct ConsensusMetrics {
     scan: ExternalOpMetrics,
     truncate: ExternalOpMetrics,
     truncated_count: IntCounter,
-    cas_mismatch_versions_count: IntCounter,
-    cas_mismatch_versions_bytes: IntCounter,
     pub rtt_latency: Gauge,
 }
 
@@ -1630,7 +1612,7 @@ impl Consensus for MetricsConsensus {
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
-    ) -> Result<Result<(), Vec<VersionedData>>, ExternalError> {
+    ) -> Result<CaSResult, ExternalError> {
         let bytes = new.data.len();
         let res = self
             .metrics
@@ -1642,24 +1624,13 @@ impl Consensus for MetricsConsensus {
             )
             .await;
         match res.as_ref() {
-            Ok(Ok(())) => self
+            Ok(CaSResult::Committed) => self
                 .metrics
                 .consensus
                 .compare_and_set
                 .bytes
                 .inc_by(u64::cast_from(bytes)),
-            Ok(Err(xs)) => {
-                self.metrics
-                    .consensus
-                    .cas_mismatch_versions_count
-                    .inc_by(u64::cast_from(xs.len()));
-                let total_size = u64::cast_from(xs.iter().map(|x| x.data.len()).sum::<usize>());
-                self.metrics
-                    .consensus
-                    .cas_mismatch_versions_bytes
-                    .inc_by(total_size);
-            }
-            Err(_) => {}
+            Ok(CaSResult::ExpectationMismatch) | Err(_) => {}
         }
         res
     }

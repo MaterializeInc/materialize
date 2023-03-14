@@ -20,7 +20,7 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 
 use mz_persist::location::{
-    Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData, SCAN_ALL,
+    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, SeqNo, VersionedData,
 };
 
 use crate::maelstrom::api::{ErrorCode, MaelstromError};
@@ -110,15 +110,14 @@ impl Consensus for MaelstromConsensus {
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
-    ) -> Result<Result<(), Vec<VersionedData>>, ExternalError> {
+    ) -> Result<CaSResult, ExternalError> {
         let create_if_not_exists = expected.is_none();
 
         let from = match expected {
             Some(expected) => match self.hydrate_seqno(key, expected).await? {
                 Ok(x) => Value::from(&MaelstromVersionedData::from(x)),
                 Err(_) => {
-                    let from = expected.next();
-                    return Ok(Err(self.scan(key, from, SCAN_ALL).await?));
+                    return Ok(CaSResult::ExpectationMismatch);
                 }
             },
             None => Value::Null,
@@ -140,16 +139,12 @@ impl Consensus for MaelstromConsensus {
                     .lock()
                     .await
                     .insert((key.to_string(), SeqNo(new.seqno)), new.data.clone());
-                Ok(Ok(()))
+                Ok(CaSResult::Committed)
             }
             Err(MaelstromError {
                 code: ErrorCode::PreconditionFailed,
                 ..
-            }) => {
-                let from = expected.map_or_else(SeqNo::minimum, |x| x.next());
-                let current = self.scan(key, from, SCAN_ALL).await?;
-                Ok(Err(current))
-            }
+            }) => Ok(CaSResult::ExpectationMismatch),
             Err(err) => Err(ExternalError::from(anyhow::Error::new(err))),
         }
     }
