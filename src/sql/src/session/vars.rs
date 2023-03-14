@@ -250,7 +250,7 @@ const IDLE_IN_TRANSACTION_SESSION_TIMEOUT: ServerVar<Duration> = ServerVar {
     value: &Duration::from_secs(60 * 2),
     description:
         "Sets the maximum allowed duration that a session can sit idle in a transaction before \
-         being terminated. If this value is specified without units, it is taken as milliseconds.\
+         being terminated. If this value is specified without units, it is taken as milliseconds. \
          A value of zero disables the timeout (PostgreSQL).",
     internal: false,
     safe: true,
