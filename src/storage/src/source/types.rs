@@ -319,20 +319,35 @@ pub struct SourcePersistSinkMetrics {
     pub(crate) error_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) error_retractions: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) processed_batches: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+
+    // TODO(guswynn): consider if this metric (and others) should be put into `StorageState`...
+    pub(crate) enable_multi_worker_storage_persist_sink:
+        DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
 }
 
 impl SourcePersistSinkMetrics {
-    /// Initialises source metrics for a given (source_id, worker_id)
+    /// Initialises source metrics used in the `persist_sink`.
     pub fn new(
         base: &SourceBaseMetrics,
-        shard_id: &mz_persist_client::ShardId,
         source_id: GlobalId,
+        parent_source_id: GlobalId,
+        worker_id: usize,
+        shard_id: &mz_persist_client::ShardId,
         output_index: usize,
     ) -> SourcePersistSinkMetrics {
         let shard = shard_id.to_string();
         SourcePersistSinkMetrics {
+            enable_multi_worker_storage_persist_sink: base
+                .source_specific
+                .enable_multi_worker_storage_persist_sink
+                .get_delete_on_drop_gauge(vec![
+                    source_id.to_string(),
+                    worker_id.to_string(),
+                    parent_source_id.to_string(),
+                    output_index.to_string(),
+                ]),
             progress: base.source_specific.progress.get_delete_on_drop_gauge(vec![
-                source_id.to_string(),
+                parent_source_id.to_string(),
                 output_index.to_string(),
                 shard.clone(),
             ]),
@@ -340,7 +355,7 @@ impl SourcePersistSinkMetrics {
                 .source_specific
                 .row_inserts
                 .get_delete_on_drop_counter(vec![
-                    source_id.to_string(),
+                    parent_source_id.to_string(),
                     output_index.to_string(),
                     shard.clone(),
                 ]),
@@ -348,7 +363,7 @@ impl SourcePersistSinkMetrics {
                 .source_specific
                 .row_retractions
                 .get_delete_on_drop_counter(vec![
-                    source_id.to_string(),
+                    parent_source_id.to_string(),
                     output_index.to_string(),
                     shard.clone(),
                 ]),
@@ -356,7 +371,7 @@ impl SourcePersistSinkMetrics {
                 .source_specific
                 .error_inserts
                 .get_delete_on_drop_counter(vec![
-                    source_id.to_string(),
+                    parent_source_id.to_string(),
                     output_index.to_string(),
                     shard.clone(),
                 ]),
@@ -364,7 +379,7 @@ impl SourcePersistSinkMetrics {
                 .source_specific
                 .error_retractions
                 .get_delete_on_drop_counter(vec![
-                    source_id.to_string(),
+                    parent_source_id.to_string(),
                     output_index.to_string(),
                     shard.clone(),
                 ]),
@@ -372,7 +387,7 @@ impl SourcePersistSinkMetrics {
                 .source_specific
                 .persist_sink_processed_batches
                 .get_delete_on_drop_counter(vec![
-                    source_id.to_string(),
+                    parent_source_id.to_string(),
                     output_index.to_string(),
                     shard,
                 ]),

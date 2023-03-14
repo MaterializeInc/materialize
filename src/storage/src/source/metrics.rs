@@ -82,6 +82,7 @@ impl KinesisMetrics {
 
 #[derive(Clone, Debug)]
 pub(super) struct SourceSpecificMetrics {
+    pub(super) enable_multi_worker_storage_persist_sink: IntGaugeVec,
     pub(super) capability: UIntGaugeVec,
     pub(super) resume_upper: IntGaugeVec,
     /// A timestamp gauge representing forward progress
@@ -98,6 +99,13 @@ pub(super) struct SourceSpecificMetrics {
 impl SourceSpecificMetrics {
     fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
+            enable_multi_worker_storage_persist_sink: registry.register(metric!(
+                name: "mz_source_enable_multi_worker_storage_persist_sink",
+                help: "Whether or not the new multi-worker persist_sink is actively being used",
+                var_labels: ["source_id", "worker_id", "parent_source_id", "output"],
+            )),
+            // TODO(guswynn): some of these metrics are broken when there are more than 1
+            // worker-id, and need to be fixed
             capability: registry.register(metric!(
                 name: "mz_capability",
                 help: "The current capability for this dataflow. This corresponds to min(mz_partition_closed_ts)",

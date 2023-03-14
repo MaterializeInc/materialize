@@ -16,4 +16,5 @@ package mz_storage_client.types.parameters;
 
 message ProtoStorageParameters {
     mz_persist_client.cfg.ProtoPersistParameters persist = 1;
+    bool enable_multi_worker_storage_persist_sink = 2;
 }

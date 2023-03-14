@@ -463,6 +463,18 @@ const PERSIST_COMPACTION_MINIMUM_TIMEOUT: ServerVar<Duration> = ServerVar {
     safe: true,
 };
 
+/// Controls whether or not to use the new storage `persist_sink` implementation in storage
+/// ingestions.
+const ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_multi_worker_storage_persist_sink"),
+    value: &false,
+    description: "Whether or not to use the new multi-worker storage `persist_sink` \
+                  implementation in storage ingestions. Is applied only \
+                  when a cluster or dataflow is restarted.",
+    internal: true,
+    safe: true,
+};
+
 /// Controls the connection timeout to Cockroach.
 ///
 /// Used by persist as [`mz_persist_client::cfg::DynamicConfig::consensus_connect_timeout`].
@@ -1215,6 +1227,9 @@ pub struct SystemVars {
     // features
     enable_with_mutually_recursive: SystemVar<bool>,
 
+    // storage configuration
+    enable_multi_worker_storage_persist_sink: SystemVar<bool>,
+
     // persist configuration
     persist_blob_target_size: SystemVar<usize>,
     persist_compaction_minimum_timeout: SystemVar<Duration>,
@@ -1251,6 +1266,9 @@ impl Default for SystemVars {
             max_roles: SystemVar::new(&MAX_ROLES),
             max_result_size: SystemVar::new(&MAX_RESULT_SIZE),
             allowed_cluster_replica_sizes: SystemVar::new(&ALLOWED_CLUSTER_REPLICA_SIZES),
+            enable_multi_worker_storage_persist_sink: SystemVar::new(
+                &ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK,
+            ),
             persist_blob_target_size: SystemVar::new(&PERSIST_BLOB_TARGET_SIZE),
             persist_compaction_minimum_timeout: SystemVar::new(&PERSIST_COMPACTION_MINIMUM_TIMEOUT),
             crdb_connect_timeout: SystemVar::new(&CRDB_CONNECT_TIMEOUT),
@@ -1285,6 +1303,7 @@ impl SystemVars {
             &self.max_roles,
             &self.max_result_size,
             &self.allowed_cluster_replica_sizes,
+            &self.enable_multi_worker_storage_persist_sink,
             &self.persist_blob_target_size,
             &self.persist_compaction_minimum_timeout,
             &self.crdb_connect_timeout,
@@ -1351,6 +1370,8 @@ impl SystemVars {
             Ok(&self.max_result_size)
         } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
             Ok(&self.allowed_cluster_replica_sizes)
+        } else if name == ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK.name {
+            Ok(&self.enable_multi_worker_storage_persist_sink)
         } else if name == PERSIST_BLOB_TARGET_SIZE.name {
             Ok(&self.persist_blob_target_size)
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
@@ -1412,6 +1433,9 @@ impl SystemVars {
             self.max_result_size.is_default(input)
         } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
             self.allowed_cluster_replica_sizes.is_default(input)
+        } else if name == ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK.name {
+            self.enable_multi_worker_storage_persist_sink
+                .is_default(input)
         } else if name == PERSIST_BLOB_TARGET_SIZE.name {
             self.persist_blob_target_size.is_default(input)
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
@@ -1484,6 +1508,8 @@ impl SystemVars {
             self.allowed_cluster_replica_sizes.set(input)
         } else if name == PERSIST_BLOB_TARGET_SIZE.name {
             self.persist_blob_target_size.set(input)
+        } else if name == ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK.name {
+            self.enable_multi_worker_storage_persist_sink.set(input)
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
             self.persist_compaction_minimum_timeout.set(input)
         } else if name == CRDB_CONNECT_TIMEOUT.name {
@@ -1549,6 +1575,8 @@ impl SystemVars {
             Ok(self.allowed_cluster_replica_sizes.reset())
         } else if name == PERSIST_BLOB_TARGET_SIZE.name {
             Ok(self.persist_blob_target_size.reset())
+        } else if name == ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK.name {
+            Ok(self.enable_multi_worker_storage_persist_sink.reset())
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
             Ok(self.persist_compaction_minimum_timeout.reset())
         } else if name == CRDB_CONNECT_TIMEOUT.name {
@@ -1645,6 +1673,11 @@ impl SystemVars {
             .into_iter()
             .map(|s| s.as_str().into())
             .collect()
+    }
+
+    /// Returns the `enable_multi_worker_storage_persist_sink` configuration parameter.
+    pub fn enable_multi_worker_storage_persist_sink(&self) -> bool {
+        *self.enable_multi_worker_storage_persist_sink.value()
     }
 
     /// Returns the `persist_blob_target_size` configuration parameter.
@@ -2582,7 +2615,7 @@ pub fn is_compute_config_var(name: &str) -> bool {
 
 /// Returns whether the named variable is a storage configuration parameter.
 pub fn is_storage_config_var(name: &str) -> bool {
-    is_persist_config_var(name)
+    name == ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK.name() || is_persist_config_var(name)
 }
 
 /// Returns whether the named variable is a persist configuration parameter.
