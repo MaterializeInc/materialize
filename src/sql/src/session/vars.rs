@@ -263,7 +263,7 @@ const SERVER_VERSION: ServerVar<str> = ServerVar {
         ".",
         SERVER_PATCH_VERSION
     ),
-    description: "Shows the server version (PostgreSQL).",
+    description: "Shows the PostgreSQL compatible server version (PostgreSQL).",
     internal: false,
     safe: true,
 };
@@ -273,7 +273,7 @@ const SERVER_VERSION_NUM: ServerVar<i32> = ServerVar {
     value: &((cast::u8_to_i32(SERVER_MAJOR_VERSION) * 10_000)
         + (cast::u8_to_i32(SERVER_MINOR_VERSION) * 100)
         + cast::u8_to_i32(SERVER_PATCH_VERSION)),
-    description: "Shows the server version as an integer (PostgreSQL).",
+    description: "Shows the PostgreSQL compatible server version as an integer (PostgreSQL).",
     internal: false,
     safe: true,
 };
@@ -2007,7 +2007,7 @@ impl Var for User {
     }
 
     fn description(&self) -> &'static str {
-        "Indicates whether the current session is a super user (PostgreSQL)."
+        "Reports whether the current session is a superuser (PostgreSQL)."
     }
 
     fn type_name(&self) -> &'static str {
