@@ -59,6 +59,11 @@ use mz_sql::plan::{
     SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan,
     VariableValue, View,
 };
+use mz_sql::session::user::SYSTEM_USER;
+use mz_sql::session::vars::{
+    IsolationLevel, OwnedVarInput, Var, VarError, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
+    TRANSACTION_ISOLATION_VAR_NAME,
+};
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
@@ -71,7 +76,6 @@ use crate::catalog::builtin::{
 use crate::catalog::{
     self, Catalog, CatalogItem, CatalogState, Cluster, Connection, DataSourceDesc,
     SerializedReplicaLocation, StorageSinkConnectionState, LINKED_CLUSTER_REPLICA_NAME,
-    SYSTEM_USER,
 };
 use crate::command::{Command, ExecuteResponse, Response};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, DeferredPlan, PendingWriteTxn};
@@ -87,13 +91,8 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
-use crate::session::vars::{
-    IsolationLevel, OwnedVarInput, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
-    TRANSACTION_ISOLATION_VAR_NAME,
-};
 use crate::session::{
-    EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, Var,
-    WriteOp,
+    EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
 };
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{send_immediate_rows, ClientTransmitter, ComputeSinkId, ResultExt};
@@ -2012,7 +2011,9 @@ impl Coordinator {
             let row = Row::pack_slice(&[Datum::String(&variable.value())]);
             Ok(send_immediate_rows(vec![row]))
         } else {
-            Err(AdapterError::UnknownParameter(plan.name))
+            Err(AdapterError::VarError(VarError::UnknownParameter(
+                plan.name,
+            )))
         }
     }
 
@@ -2764,6 +2765,7 @@ impl Coordinator {
             cluster_id,
             depends_on: depends_on.into_iter().collect(),
             start_time: SYSTEM_TIME(),
+            dropping: false,
         };
         self.add_active_subscribe(sink_id, active_subscribe).await;
 
@@ -3782,11 +3784,11 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         let cluster_config = alter_storage_cluster_config(size);
         if let Some(cluster_config) = cluster_config {
-            let mut ops = vec![catalog::Op::AlterSink {
+            let mut ops = self.alter_linked_cluster_ops(id, &cluster_config).await?;
+            ops.push(catalog::Op::AlterSink {
                 id,
                 cluster_config: cluster_config.clone(),
-            }];
-            ops.extend(self.alter_linked_cluster_ops(id, &cluster_config).await?);
+            });
             self.catalog_transact(Some(session), ops).await?;
 
             self.maybe_alter_linked_cluster(id).await;
@@ -3815,11 +3817,11 @@ impl Coordinator {
         }
         let cluster_config = alter_storage_cluster_config(size);
         if let Some(cluster_config) = cluster_config {
-            let mut ops = vec![catalog::Op::AlterSource {
+            let mut ops = self.alter_linked_cluster_ops(id, &cluster_config).await?;
+            ops.push(catalog::Op::AlterSource {
                 id,
                 cluster_config: cluster_config.clone(),
-            }];
-            ops.extend(self.alter_linked_cluster_ops(id, &cluster_config).await?);
+            });
             self.catalog_transact(Some(session), ops).await?;
 
             self.maybe_alter_linked_cluster(id).await;
@@ -3918,7 +3920,7 @@ impl Coordinator {
     }
 
     fn is_user_allowed_to_alter_system(&self, session: &Session) -> Result<(), AdapterError> {
-        if session.user() == &*SYSTEM_USER {
+        if session.user().is_system_user() {
             Ok(())
         } else {
             Err(AdapterError::Unauthorized(format!(

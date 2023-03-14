@@ -1084,3 +1084,21 @@ SELECT 'table_with_id'::regclass
 # fully qualified names are not yet supported
 statement error object "test.table_with_id" does not exist
 SELECT 'test.table_with_id'::regclass
+
+# Regression for 18020
+query B
+SELECT returns_set FROM mz_functions WHERE name in ('generate_series', 'generate_subscripts', 'regexp_extract', 'jsonb_array_elements', 'jsonb_array_elements_text', 'jsonb_each', 'jsonb_each_text', 'jsonb_object_keys');
+----
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true

@@ -55,6 +55,8 @@ class Materialized(Service):
         propagate_crashes: bool = True,
         external_cockroach: bool = False,
         external_minio: bool = False,
+        unsafe_mode: bool = True,
+        restart: Optional[str] = None,
     ) -> None:
         depends_on: Dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
@@ -77,7 +79,10 @@ class Materialized(Service):
             *environment_extra,
         ]
 
-        command = ["--unsafe-mode"]
+        command = []
+
+        if unsafe_mode:
+            command += ["--unsafe-mode"]
 
         if not environment_id:
             environment_id = DEFAULT_MZ_ENVIRONMENT_ID
@@ -121,6 +126,9 @@ class Materialized(Service):
             config["image"] = image
         else:
             config["mzbuild"] = "materialized"
+
+        if restart:
+            config["restart"] = restart
 
         # Depending on the Docker Compose version, this may either work or be
         # ignored with a warning. Unfortunately no portable way of setting the

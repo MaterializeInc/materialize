@@ -32,6 +32,7 @@ _src_name_  | The name for the source.
 **CONNECTION** _connection_name_ | The name of the PostgreSQL connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgresql) documentation page.
 **FOR ALL TABLES** | Create subsources for all tables in the publication.
 **FOR TABLES (** _table_list_ **)** | Create subsources for specific tables in the publication.
+**EXPOSE PROGRESS AS** _progress_subsource_name_ | The name of the progress collection for the source. If this is not specified, the progress collection will be named `<src_name>_progress`. For more information, see [Monitoring source progress](#monitoring-source-progress).
 
 ### `CONNECTION` options
 
@@ -122,6 +123,30 @@ CREATE SOURCE mz_source
   FOR TABLES (schema1.table_1 AS s1_table_1, schema2_table_1 AS s2_table_1)
   WITH (SIZE = '3xsmall');
 ```
+
+### Monitoring source progress
+
+By default, PostgreSQL sources expose progress metadata as a subsource that you
+can use to monitor source **ingestion progress**. The name of the progress
+subsource can be specified when creating a source using the `EXPOSE PROGRESS
+AS` clause; otherwise, it will be named `<src_name>_progress`.
+
+The following metadata is available for each source as a progress subsource:
+
+Field          | Type                                     | Meaning
+---------------|------------------------------------------|--------
+`lsn`          | [`uint8`](/sql/types/uint/#uint8-info)   | The last Log Sequence Number (LSN) consumed from the upstream PostgreSQL replication stream.
+
+And can be queried using:
+
+```sql
+SELECT lsn
+FROM <src_name>_progress;
+```
+
+The reported LSN should increase as Materialize consumes **new** WAL records
+from the upstream PostgreSQL database. For more details on monitoring source
+ingestion progress and debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
 
 ## Known limitations
 

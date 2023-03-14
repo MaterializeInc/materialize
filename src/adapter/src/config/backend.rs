@@ -11,7 +11,8 @@ use std::collections::BTreeMap;
 
 use tracing::{debug, error};
 
-use crate::catalog::SYSTEM_USER;
+use mz_sql::session::user::SYSTEM_USER;
+
 use crate::config::SynchronizedParameters;
 use crate::{AdapterError, Client, SessionClient};
 

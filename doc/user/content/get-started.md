@@ -9,6 +9,7 @@ menu:
 aliases:
   - /katacoda/
   - /quickstarts/
+  - /install/
 ---
 
 [//]: # "TODO(morsapaes) Once we're GA, add details about signing up and logging
@@ -110,16 +111,16 @@ The first step is to declare where to find and how to connect to the sample Kafk
 1. **Create secrets.** Secrets allow you to store sensitive credentials securely in Materialize. To retrieve the access credentials, navigate to the [Materialize UI](https://cloud.materialize.com/showSourceCredentials) and replace the placeholders below with the provided values.
 
     ```sql
-    CREATE SECRET qck.kafka_user AS '<KAFKA-USER>';
-    CREATE SECRET qck.kafka_password AS '<KAFKA-PASSWORD>';
-    CREATE SECRET qck.csr_user AS '<CSR-USER>';
-    CREATE SECRET qck.csr_password AS '<CSR-PASSWORD>';
+    CREATE SECRET kafka_user AS '<KAFKA-USER>';
+    CREATE SECRET kafka_password AS '<KAFKA-PASSWORD>';
+    CREATE SECRET csr_user AS '<CSR-USER>';
+    CREATE SECRET csr_password AS '<CSR-PASSWORD>';
     ```
 
 1. **Create connections.** Connections describe how to connect and authenticate to an external system you want Materialize to read data from. In this case, we want to [create a connection](/sql/create-connection/#kafka) to a Kafka cluster.
 
     ```sql
-    CREATE CONNECTION qck.kafka_connection TO KAFKA (
+    CREATE CONNECTION kafka_connection TO KAFKA (
       BROKER 'pkc-n00kk.us-east-1.aws.confluent.cloud:9092',
       SASL MECHANISMS = 'PLAIN',
       SASL USERNAME = SECRET kafka_user,
@@ -130,7 +131,7 @@ The first step is to declare where to find and how to connect to the sample Kafk
     In addition to Kafka, we need a connection to a Schema Registry that Materialize will use to fetch the schema of our sample data.
 
     ```sql
-    CREATE CONNECTION qck.csr_connection TO CONFLUENT SCHEMA REGISTRY (
+    CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
       URL 'https://psrc-ko92v.us-east-2.aws.confluent.cloud:443',
       USERNAME = SECRET csr_user,
       PASSWORD = SECRET csr_password
@@ -142,17 +143,17 @@ The first step is to declare where to find and how to connect to the sample Kafk
 1. **Create sources.** Now that we have the details to connect, we can create a source for each Kafka topic we want to use.
 
     ```sql
-    CREATE SOURCE qck.purchases
-      FROM KAFKA CONNECTION qck.kafka_connection (TOPIC 'mysql.shop.purchases')
-      FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION qck.csr_connection
+    CREATE SOURCE purchases
+      FROM KAFKA CONNECTION kafka_connection (TOPIC 'mysql.shop.purchases')
+      FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
       ENVELOPE DEBEZIUM
       WITH (SIZE = '3xsmall');
     ```
 
     ```sql
-    CREATE SOURCE qck.items
-      FROM KAFKA CONNECTION qck.kafka_connection (TOPIC 'mysql.shop.items')
-      FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION qck.csr_connection
+    CREATE SOURCE items
+      FROM KAFKA CONNECTION kafka_connection (TOPIC 'mysql.shop.items')
+      FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
       ENVELOPE DEBEZIUM
       WITH (SIZE = '3xsmall');
     ```
@@ -160,7 +161,7 @@ The first step is to declare where to find and how to connect to the sample Kafk
     To list the sources we just created:
 
     ```sql
-    SHOW SOURCES FROM qck;
+    SHOW SOURCES;
     ```
 
     ```nofmt
@@ -179,7 +180,7 @@ With data being ingested into Materialize, we can start building SQL statements 
 1. Create a [view](/overview/key-concepts/#non-materialized-views) `item_purchases` that calculates rolling aggregations for each item in the inventory:
 
     ```sql
-    CREATE VIEW qck.item_purchases AS
+    CREATE VIEW item_purchases AS
       SELECT
         item_id,
         SUM(quantity) AS items_sold,
@@ -220,7 +221,7 @@ Now that we are keeping track of purchases in the `item_purchases` indexed view,
 1. Create a [materialized view](/overview/key-concepts/#materialized-views) `item_summary` that joins `item_purchases` and `items` based on the item identifier:
 
     ```sql
-      CREATE MATERIALIZED VIEW qck.item_summary AS
+      CREATE MATERIALIZED VIEW item_summary AS
       SELECT
           ip.item_id AS item_id,
           i.name AS item_name,
@@ -249,7 +250,7 @@ In streaming, time keeps ticking along — unlike in batch, where data is frozen
 1. Create a view `item_summary_5min` that keeps track of any items that had orders in the past 5 minutes:
 
     ```sql
-    CREATE VIEW qck.item_summary_5min AS
+    CREATE VIEW item_summary_5min AS
     SELECT *
     FROM item_summary
     WHERE mz_now() >= latest_order
@@ -294,9 +295,15 @@ In streaming, time keeps ticking along — unlike in batch, where data is frozen
 That's it! You just created your first transformations on streaming data using common SQL patterns, and tried to break Materialize! We encourage you to continue exploring the sample Kafka source, or try one of the use-case specific quickstarts. If you’re done for the time being, remember to clean up the environment:
 
 ```sql
-DROP CLUSTER quickstart CASCADE;
-
 DROP SCHEMA qck CASCADE;
+
+DROP CLUSTER quickstart;
+
+-- Reset the session variables to their original values,
+-- so you can keep exploring
+RESET search_path;
+
+RESET cluster;
 ```
 
 For a more comprehensive overview of the basic concepts behind Materialize, take a break and read through ["What is Materialize?"](/overview/what-is-materialize).

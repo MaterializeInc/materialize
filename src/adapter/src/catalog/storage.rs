@@ -27,6 +27,7 @@ use mz_sql::names::{
     DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, RoleId, SchemaId,
     SchemaSpecifier,
 };
+use mz_sql::session::user::SYSTEM_USER;
 use mz_stash::{AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
 use mz_storage_client::types::sources::Timeline;
 

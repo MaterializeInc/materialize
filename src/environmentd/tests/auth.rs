@@ -119,7 +119,6 @@ use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::Message;
 use uuid::Uuid;
 
-use mz_adapter::catalog::{HTTP_DEFAULT_USER, SYSTEM_USER};
 use mz_environmentd::{TlsMode, WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
     ApiTokenArgs, ApiTokenResponse, Claims, FronteggAuthentication, FronteggConfig, RefreshToken,
@@ -130,6 +129,7 @@ use mz_ore::now::NowFn;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
 use mz_ore::task::RuntimeExt;
+use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
 
 pub mod util;
 

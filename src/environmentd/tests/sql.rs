@@ -103,13 +103,13 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_postgres::error::{DbError, SqlState};
 use tracing::info;
 
-use mz_adapter::catalog::{INTERNAL_USER_NAMES, INTROSPECTION_USER, SYSTEM_USER};
 use mz_adapter::{TimestampContext, TimestampExplanation};
 use mz_ore::assert_contains;
 use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
 use mz_ore::retry::Retry;
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 use mz_repr::Timestamp;
+use mz_sql::session::user::{INTERNAL_USER_NAMES, INTROSPECTION_USER, SYSTEM_USER};
 
 use crate::util::{MzTimestamp, PostgresErrorExt, Server, KAFKA_ADDRS};
 
@@ -2429,4 +2429,62 @@ fn test_query_on_dropped_source() {
             "query could not complete because materialize.public.t was dropped"
         )
     });
+}
+
+#[test]
+fn test_dont_drop_sinks_twice() {
+    let config = util::Config::default().workers(4);
+    let server = util::start_server(config).unwrap();
+
+    let (notice_tx, mut notice_rx) = futures::channel::mpsc::unbounded();
+
+    let mut client_a = server
+        .pg_config()
+        .notice_callback(move |notice| {
+            notice_tx.unbounded_send(notice).unwrap();
+        })
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    client_a.batch_execute("CREATE TABLE t1 (a INT)").unwrap();
+    client_a.batch_execute("CREATE TABLE t2 (a INT)").unwrap();
+    let client_a_token = client_a.cancel_token();
+
+    let _out = client_a
+        .copy_out("COPY (SUBSCRIBE (SELECT * FROM t1,t2)) TO STDOUT")
+        .unwrap();
+
+    // Drop the tables that the subscribe depend on in a second session.
+    let mut client_b = server.connect(postgres::NoTls).unwrap();
+
+    // By inserting 10_000 rows into t1 and t2, it's very likely that the response from
+    // compute indicating whether or not we successfully dropped the sink, will get
+    // queued behind the responses for the row insertions, which should trigger the race
+    // condition we're trying to exercise here.
+    client_b
+        .batch_execute("INSERT INTO t1 SELECT generate_series(0, 10000)")
+        .unwrap();
+    client_b
+        .batch_execute("INSERT INTO t2 SELECT generate_series(0, 10000)")
+        .unwrap();
+    client_b.batch_execute("DROP TABLE t1").unwrap();
+    client_b.batch_execute("DROP TABLE t2").unwrap();
+
+    client_a_token
+        .cancel_query(postgres::NoTls)
+        .expect("failed to cancel subscribe");
+    drop(_out);
+    client_a.close().expect("failed to drop client");
+
+    // Assert we only got one message.
+    let mut msgs = vec![];
+    while let Ok(Some(msg)) = notice_rx.try_next() {
+        msgs.push(msg);
+    }
+    assert!(matches!(notice_rx.try_next(), Ok(None)));
+    assert_eq!(msgs.len(), 1);
+
+    // Assert the message it the one we expect
+    let msg = msgs.pop().unwrap();
+    assert!(msg.message().starts_with("subscribe has been terminated"));
 }

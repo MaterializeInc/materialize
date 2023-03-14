@@ -13,8 +13,7 @@ use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_sql::ast::{AstInfo, Statement, StatementKind};
-
-use crate::session::User;
+use mz_sql::session::user::User;
 
 #[derive(Debug, Clone)]
 pub struct Metrics {

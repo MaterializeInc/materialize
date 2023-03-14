@@ -23,11 +23,11 @@ use mz_repr::explain::ExplainError;
 use mz_repr::NotNullViolation;
 use mz_sql::names::RoleId;
 use mz_sql::plan::PlanError;
+use mz_sql::session::vars::VarError;
 use mz_storage_client::controller::StorageError;
 use mz_transform::TransformError;
 
 use crate::catalog;
-use crate::session::Var;
 
 /// Errors that can occur in the coordinator.
 #[derive(Debug)]
@@ -45,23 +45,12 @@ pub enum AdapterError {
     Catalog(catalog::Error),
     /// The cached plan or descriptor changed.
     ChangedPlan,
-    /// The specified session parameter is constrained to a finite set of values.
-    ConstrainedParameter {
-        parameter: &'static (dyn Var + Send + Sync),
-        values: Vec<String>,
-        valid_values: Option<Vec<&'static str>>,
-    },
     /// The cursor already exists.
     DuplicateCursor(String),
     /// An error while evaluating an expression.
     Eval(EvalError),
     /// An error occurred while planning the statement.
     Explain(ExplainError),
-    /// The specified parameter is fixed to a single specific value.
-    ///
-    /// We allow setting the parameter to its fixed value for compatibility
-    /// with PostgreSQL-based tools.
-    FixedValueParameter(&'static (dyn Var + Send + Sync)),
     /// The ID allocator exhausted all valid IDs.
     IdExhaustionError,
     /// Unexpected internal state was encountered.
@@ -75,14 +64,6 @@ pub enum AdapterError {
     InvalidLogDependency {
         object_type: String,
         log_names: Vec<String>,
-    },
-    /// The value for the specified parameter does not have the right type.
-    InvalidParameterType(&'static (dyn Var + Send + Sync)),
-    /// The value of the specified parameter is incorrect
-    InvalidParameterValue {
-        parameter: &'static (dyn Var + Send + Sync),
-        values: Vec<String>,
-        reason: String,
     },
     /// No such cluster replica size has been configured.
     InvalidClusterReplicaAz {
@@ -125,14 +106,14 @@ pub enum AdapterError {
     OperationRequiresTransaction(String),
     /// An error occurred while planning the statement.
     PlanError(PlanError),
+    /// An error occurred with a session variable.
+    VarError(VarError),
     /// The named prepared statement already exists.
     PreparedStatementExists(String),
     /// Wrapper around parsing error
     ParseError(mz_sql_parser::parser::ParserError),
     /// The transaction is in read-only mode.
     ReadOnlyTransaction,
-    /// The specified session parameter is read-only.
-    ReadOnlyParameter(&'static (dyn Var + Send + Sync)),
     /// The transaction in in read-only mode and a read already occurred.
     ReadWriteUnavailable,
     /// The recursion limit of some operation was exceeded.
@@ -177,8 +158,6 @@ pub enum AdapterError {
     UnknownCursor(String),
     /// The named role does not exist.
     UnknownLoginRole(String),
-    /// The named parameter is unknown to the system.
-    UnknownParameter(String),
     UnknownPreparedStatement(String),
     /// The named cluster replica does not exist.
     UnknownClusterReplica {
@@ -269,6 +248,7 @@ impl AdapterError {
                 unstable_dependencies.join("\n    "),
             )),
             AdapterError::PlanError(e) => e.detail(),
+            AdapterError::VarError(e) => e.detail(),
             AdapterError::ConcurrentRoleDrop(_) => Some("Please disconnect and re-connect with a valid role.".into()),
             _ => None,
         }
@@ -283,10 +263,6 @@ impl AdapterError {
                     .to_string(),
             ),
             AdapterError::Catalog(c) => c.hint(),
-            AdapterError::ConstrainedParameter {
-                valid_values: Some(valid_values),
-                ..
-            } => Some(format!("Available values: {}.", valid_values.join(", "))),
             AdapterError::Eval(e) => e.hint(),
             AdapterError::InvalidClusterReplicaAz { expected, az: _ } => {
                 Some(if expected.is_empty() {
@@ -326,6 +302,7 @@ impl AdapterError {
                     .into(),
             ),
             AdapterError::PlanError(e) => e.hint(),
+            AdapterError::VarError(e) => e.hint(),
             _ => None,
         }
     }
@@ -354,29 +331,11 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::ChangedPlan => f.write_str("cached plan must not change result type"),
             AdapterError::Catalog(e) => e.fmt(f),
-            AdapterError::ConstrainedParameter {
-                parameter, values, ..
-            } => write!(
-                f,
-                "invalid value for parameter {}: {}",
-                parameter.name().quoted(),
-                values
-                    .iter()
-                    .map(|v| v.quoted().to_string())
-                    .collect::<Vec<_>>()
-                    .join(",")
-            ),
             AdapterError::DuplicateCursor(name) => {
                 write!(f, "cursor {} already exists", name.quoted())
             }
             AdapterError::Eval(e) => e.fmt(f),
             AdapterError::Explain(e) => e.fmt(f),
-            AdapterError::FixedValueParameter(p) => write!(
-                f,
-                "parameter {} can only be set to {}",
-                p.name().quoted(),
-                p.value().quoted()
-            ),
             AdapterError::IdExhaustionError => f.write_str("ID allocator exhausted all valid IDs"),
             AdapterError::Internal(e) => write!(f, "internal error: {}", e),
             AdapterError::IntrospectionDisabled { .. } => write!(
@@ -386,29 +345,8 @@ impl fmt::Display for AdapterError {
             AdapterError::InvalidLogDependency { object_type, .. } => {
                 write!(f, "{object_type} objects cannot depend on log sources")
             }
-            AdapterError::InvalidParameterType(p) => write!(
-                f,
-                "parameter {} requires a {} value",
-                p.name().quoted(),
-                p.type_name().quoted()
-            ),
             AdapterError::BadItemInStorageCluster { .. } => f.write_str(
                 "cannot create this kind of item in a cluster that contains sources or sinks",
-            ),
-            AdapterError::InvalidParameterValue {
-                parameter,
-                values,
-                reason,
-            } => write!(
-                f,
-                "parameter {} cannot have value {}: {}",
-                parameter.name().quoted(),
-                values
-                    .iter()
-                    .map(|v| v.quoted().to_string())
-                    .collect::<Vec<_>>()
-                    .join(","),
-                reason,
             ),
             AdapterError::InvalidClusterReplicaAz { az, expected: _ } => {
                 write!(f, "unknown cluster replica availability zone {az}",)
@@ -443,13 +381,11 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::ParseError(e) => e.fmt(f),
             AdapterError::PlanError(e) => e.fmt(f),
+            AdapterError::VarError(e) => e.fmt(f),
             AdapterError::PreparedStatementExists(name) => {
                 write!(f, "prepared statement {} already exists", name.quoted())
             }
             AdapterError::ReadOnlyTransaction => f.write_str("transaction in read-only mode"),
-            AdapterError::ReadOnlyParameter(p) => {
-                write!(f, "parameter {} cannot be changed", p.name().quoted())
-            }
             AdapterError::ReadWriteUnavailable => {
                 f.write_str("transaction read-write mode must be set before any query")
             }
@@ -503,9 +439,6 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::UnknownLoginRole(name) => {
                 write!(f, "role {} does not exist", name.quoted())
-            }
-            AdapterError::UnknownParameter(name) => {
-                write!(f, "unrecognized configuration parameter {}", name.quoted())
             }
             AdapterError::UnmaterializableFunction(func) => {
                 write!(f, "cannot materialize call to {}", func)
@@ -647,6 +580,12 @@ impl From<TimestampError> for AdapterError {
 impl From<mz_sql_parser::parser::ParserError> for AdapterError {
     fn from(e: mz_sql_parser::parser::ParserError) -> Self {
         AdapterError::ParseError(e)
+    }
+}
+
+impl From<VarError> for AdapterError {
+    fn from(e: VarError) -> Self {
+        AdapterError::VarError(e)
     }
 }
 

@@ -36,6 +36,7 @@ _src_name_  | The name for the source.
 **MAX CARDINALITY** | Valid for the `COUNTER` generator. Causes the generator to delete old values to keep the collection at most a given size. Defaults to unlimited.
 **FOR ALL TABLES** | Creates subsources for all tables in the load generator.
 **FOR TABLES (** _table_list_ **)** | Creates subsources for specific tables in the load generator.
+**EXPOSE PROGRESS AS** _progress_subsource_name_ | The name of the progress subsource for the source. If this is not specified, the subsource will be named `<src_name>_progress`. For more information, see [Monitoring source progress](#monitoring-source-progress).
 
 ### `WITH` options
 
@@ -115,6 +116,30 @@ The TPCH load generator implements the [TPC-H benchmark specification](https://w
 The TPCH source must be used with `FOR ALL TABLES`, which will create the standard TPCH relations.
 If `TICK INTERVAL` is specified, after the initial data load, an order and its lineitems will be changed at this interval.
 If not specified, the dataset will not change over time.
+
+### Monitoring source progress
+
+By default, load generator sources expose progress metadata as a subsource that
+you can use to monitor source **ingestion progress**. The name of the progress
+subsource can be specified when creating a source using the `EXPOSE PROGRESS
+AS` clause; otherwise, it will be named `<src_name>_progress`.
+
+The following metadata is available for each source as a progress subsource:
+
+Field          | Type                                     | Meaning
+---------------|------------------------------------------|--------
+`offset`       | [`uint8`](/sql/types/uint/#uint8-info)   | The greatest offset generated, which equates to the number of times the load generator has emitted data.
+
+And can be queried using:
+
+```sql
+SELECT "offset"
+FROM <src_name>_progress;
+```
+
+As long as the offset continues increasing, Materialize is generating data. For
+more details on monitoring source ingestion progress and debugging related
+issues, see [Troubleshooting](/ops/troubleshooting/).
 
 ## Examples
 

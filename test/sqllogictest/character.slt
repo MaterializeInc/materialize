@@ -1,0 +1,27 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on June 10, 2019 from:
+#
+#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/json_builtins
+#
+# The original source code is subject to the terms of the Apache
+# 2.0 license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+# Fixes #17871
+
+query T
+SELECT 'a'::character = 'a'::"char";
+----
+true
+
+query error coalesce could not convert type character to "char"
+SELECT pg_typeof(coalesce('1'::"char", '1'::char));

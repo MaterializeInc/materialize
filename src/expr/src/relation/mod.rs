@@ -2748,26 +2748,29 @@ impl RowSetFinishing {
 
         let limit = self.limit.unwrap_or(usize::MAX);
 
-        // The code below is logically equivalent to:
-        //
-        // let mut total = 0;
-        // for (_, count) in &rows[offset_nth_row..] {
-        //     total += count.get();
-        // }
-        // let return_size = std::cmp::min(total, limit);
-        //
-        // but it breaks early if the limit is reached, instead of scanning the entire code.
-        let return_size = rows[offset_nth_row..]
-            .iter()
-            .try_fold(0, |sum, (_, count)| {
-                let new_sum = sum + count.get();
-                if new_sum > limit {
-                    None
-                } else {
-                    Some(new_sum)
-                }
-            })
-            .unwrap_or(limit);
+        // Count how many rows we'd expand into, returning early from the whole function
+        // if we don't have enough memory to expand the result, or break early from the
+        // iteration once we pass our limit.
+        let mut num_rows = 0;
+        let mut num_bytes: usize = 0;
+        for (row, count) in &rows[offset_nth_row..] {
+            num_rows += count.get();
+            num_bytes = num_bytes.saturating_add(count.get().saturating_mul(row.byte_len()));
+
+            // Check that result fits into max_result_size.
+            if num_bytes > max_result_size {
+                return Err(format!(
+                    "result exceeds max size of {}",
+                    ByteSize::b(u64::cast_from(max_result_size))
+                ));
+            }
+
+            // Stop iterating if we've passed limit.
+            if num_rows > limit {
+                break;
+            }
+        }
+        let return_size = std::cmp::min(num_rows, limit);
 
         let mut ret = Vec::with_capacity(return_size);
         let mut remaining = limit;

@@ -16,6 +16,7 @@ use std::sync::Arc;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
+use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{
     Broadcast, Capability, CapabilitySet, ConnectLoop, Feedback, Inspect,
@@ -29,7 +30,7 @@ use tracing::trace;
 use mz_compute_client::types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
-use mz_persist_client::batch::Batch;
+use mz_persist_client::batch::{Batch, BatchBuilder};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriterEnrichedHollowBatch;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -459,9 +460,7 @@ where
                     batch_description
                 );
 
-                let mut output = output.activate();
-                let mut session = output.session(&cap);
-                session.give(batch_description);
+                output.give(&cap, batch_description).await;
 
                 // WIP: We downgrade our capability so that downstream
                 // operators (writer and appender) can know when all the
@@ -493,6 +492,16 @@ where
     (output_stream, token)
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+enum BatchOrData {
+    Batch(WriterEnrichedHollowBatch<Timestamp>),
+    Data {
+        lower: Antichain<Timestamp>,
+        upper: Antichain<Timestamp>,
+        contents: Vec<(Result<Row, DataflowError>, Timestamp, Diff)>,
+    },
+}
+
 /// Writes `desired_stream - persist_stream` to persist, but only for updates
 /// that fall into batch a description that we get via `batch_descriptions`.
 /// This forwards a `HollowBatch` for any batch of updates that was written.
@@ -504,7 +513,7 @@ fn write_batches<G>(
     desired_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     persist_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     persist_clients: Arc<PersistClientCache>,
-) -> (Stream<G, WriterEnrichedHollowBatch<Timestamp>>, Rc<dyn Any>)
+) -> (Stream<G, BatchOrData>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -774,33 +783,46 @@ where
                         .filter(|(_, time, _)| {
                             batch_lower.less_equal(time) && !batch_upper.less_equal(time)
                         })
-                        .map(|(data, time, diff)| ((SourceData(data.clone()), ()), time, diff))
                         .peekable();
 
-                    let mut batch_tokens = if to_append.peek().is_some() {
-                        let batch = write
-                            .batch(to_append, batch_lower.clone(), batch_upper.clone())
-                            .await
-                            .expect("invalid usage");
+                    if to_append.peek().is_some() {
+                        // We want to pass along the data directly if `to_append` is small, but to avoid
+                        // having to iterate through everything twice we'll check if `correction`
+                        // is small as a reasonable proxy.
+                        let minimum_batch_updates =
+                            persist_clients.cfg().sink_minimum_batch_updates();
+                        let batch_or_data = if correction.len() >= minimum_batch_updates {
+                            let batch = write
+                                .batch(
+                                    to_append.map(|(data, time, diff)| {
+                                        ((SourceData(data.clone()), ()), time, diff)
+                                    }),
+                                    batch_lower.clone(),
+                                    batch_upper.clone(),
+                                )
+                                .await
+                                .expect("invalid usage");
 
-                        if sink_id.is_user() {
-                            trace!(
-                                "persist_sink {sink_id}/{shard_id}: \
+                            if sink_id.is_user() {
+                                trace!(
+                                    "persist_sink {sink_id}/{shard_id}: \
                                     wrote batch from worker {}: ({:?}, {:?})",
-                                worker_index,
-                                batch.lower(),
-                                batch.upper()
-                            );
-                        }
+                                    worker_index,
+                                    batch.lower(),
+                                    batch.upper()
+                                );
+                            }
+                            BatchOrData::Batch(batch.into_writer_hollow_batch())
+                        } else {
+                            BatchOrData::Data {
+                                lower: batch_lower.clone(),
+                                upper: batch_upper.clone(),
+                                contents: to_append.cloned().collect(),
+                            }
+                        };
 
-                        vec![batch.into_writer_hollow_batch()]
-                    } else {
-                        vec![]
-                    };
-
-                    let mut output = output.activate();
-                    let mut session = output.session(&cap);
-                    session.give_vec(&mut batch_tokens);
+                        output.give(&cap, batch_or_data).await;
+                    }
                 }
             } else {
                 trace!(
@@ -826,12 +848,16 @@ where
 /// we know that no future batches will arrive, that is, for those batch
 /// descriptions that are not beyond the frontier of both the
 /// `batch_descriptions` and `batches` inputs.
+///
+/// To avoid contention over the persist shard, we route all batches to a single worker.
+/// This worker may also batch up individual records sent by the upstream operator, as
+/// a way to coalesce what would otherwise be many tiny batches into fewer, larger ones.
 fn append_batches<G>(
     sink_id: GlobalId,
     operator_name: String,
     target: &CollectionMetadata,
     batch_descriptions: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
-    batches: &Stream<G, WriterEnrichedHollowBatch<Timestamp>>,
+    batches: &Stream<G, BatchOrData>,
     persist_clients: Arc<PersistClientCache>,
 ) -> (Stream<G, ()>, Rc<dyn Any>)
 where
@@ -893,9 +919,15 @@ where
             (Antichain<Timestamp>, Antichain<Timestamp>)
         >::new();
 
+        #[derive(Debug, Default)]
+        struct BatchSet {
+            finished: Vec<Batch<SourceData, (), Timestamp, Diff>>,
+            incomplete: Option<BatchBuilder<SourceData, (), Timestamp, Diff>>,
+        }
+
         let mut in_flight_batches = HashMap::<
             (Antichain<Timestamp>, Antichain<Timestamp>),
-            Vec<Batch<_, _, _, _>>,
+            BatchSet,
         >::new();
 
         // TODO(aljoscha): We need to figure out what to do with error results from these calls.
@@ -959,14 +991,31 @@ where
                         Event::Data(_cap, data) => {
                             // Ingest new written batches
                             for batch in data.drain(..) {
-                                let batch = write.batch_from_hollow_batch(batch);
-                                let batch_description = (batch.lower().clone(), batch.upper().clone());
+                                match batch {
+                                    BatchOrData::Batch(batch) => {
+                                        let batch = write.batch_from_hollow_batch(batch);
+                                        let batch_description = (batch.lower().clone(), batch.upper().clone());
 
-                                let batches = in_flight_batches
-                                    .entry(batch_description)
-                                    .or_insert_with(Vec::new);
+                                        let batches = in_flight_batches
+                                            .entry(batch_description)
+                                            .or_default();
 
-                                batches.push(batch);
+                                        batches.finished.push(batch);
+                                    }
+                                    BatchOrData::Data { lower, upper, contents } => {
+                                        let batches = in_flight_batches
+                                            .entry((lower.clone(), upper))
+                                            .or_default();
+                                        let builder = batches.incomplete.get_or_insert_with(|| {
+                                            write.builder(lower)
+                                        });
+                                        for (data, time, diff) in contents {
+                                            persist_client.metrics().sink.forwarded_updates.inc();
+                                            builder.add(&SourceData(data), &(), &time, &diff).await.expect("invalid usage");
+                                        }
+                                    }
+                                }
+
                             }
 
                             continue;
@@ -1024,9 +1073,17 @@ where
             for done_batch_metadata in done_batches.into_iter() {
                 in_flight_descriptions.remove(&done_batch_metadata);
 
-                let mut batches = in_flight_batches
+                let batch_set = in_flight_batches
                     .remove(&done_batch_metadata)
-                    .unwrap_or_else(Vec::new);
+                    .unwrap_or_default();
+
+                let mut batches = batch_set.finished;
+                if let Some(builder) = batch_set.incomplete {
+                    let (_lower, upper) = &done_batch_metadata;
+                    let batch = builder.finish(upper.clone()).await.expect("invalid usage");
+                    batches.push(batch);
+                    persist_client.metrics().sink.forwarded_batches.inc();
+                }
 
                 trace!(
                     "persist_sink {sink_id}/{shard_id}: \

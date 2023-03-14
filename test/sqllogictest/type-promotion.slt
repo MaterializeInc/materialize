@@ -284,6 +284,28 @@ Map (lower(char_to_text(text_to_char(text_to_char("a")))))
 
 EOF
 
+# Check that "char" vs varchar promotes to text
+query T multiline
+EXPLAIN RAW PLAN FOR
+    SELECT 'a'::"char" < 'a'::varchar;
+----
+Map (("char"_to_text(text_to_"char"("a")) < varchar_to_text(text_to_varchar("a"))))
+  Constant
+    - ()
+
+EOF
+
+# Check that "char" vs char promotes to text
+query T multiline
+EXPLAIN RAW PLAN FOR
+    SELECT 'a'::"char" < 'a'::char;
+----
+Map (("char"_to_text(text_to_"char"("a")) < char_to_text(text_to_char(text_to_char("a")))))
+  Constant
+    - ()
+
+EOF
+
 # Check that varchar promotes to char
 query T multiline
 EXPLAIN RAW PLAN FOR

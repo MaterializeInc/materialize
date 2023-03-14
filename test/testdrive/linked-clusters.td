@@ -73,17 +73,15 @@ mz_system               r1      1
 materialize_public_lg1  linked  1
 materialize_public_lg2  linked  2
 
-# Test that changing a source size results in the cluster being dropped and
-# recreated.
-> ALTER SOURCE lg2 SET (SIZE = '4')
-> SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_lg2'
-materialize_public_lg2  linked  4
-
 # Test altering the size of a source.
 > ALTER SOURCE lg2 SET (SIZE = '4')
+> SELECT size FROM (SHOW SOURCES) WHERE name = 'lg2'
+4
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_lg2'
 materialize_public_lg2  linked  4
 > ALTER SOURCE lg2 RESET (SIZE)
+> SELECT size FROM (SHOW SOURCES) WHERE name = 'lg2'
+\${arg.default-storage-size}
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_lg2'
 materialize_public_lg2  linked  ${arg.default-storage-size}
 
@@ -178,17 +176,15 @@ mz_system                r1      1
 materialize_public_snk1  linked  1
 materialize_public_snk2  linked  2
 
-# Test that changing a sink size results in the cluster being dropped and
-# recreated.
-> ALTER SINK snk2 SET (SIZE = '4')
-> SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_snk2'
-materialize_public_snk2  linked  4
-
 # Test altering the size of a sink.
 > ALTER SINK snk2 SET (SIZE = '4')
+> SELECT size FROM (SHOW SINKS) WHERE name = 'snk2'
+4
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_snk2'
 materialize_public_snk2  linked  4
 > ALTER SINK snk2 RESET (SIZE)
+> SELECT size FROM (SHOW SINKS) WHERE name = 'snk2'
+\${arg.default-storage-size}
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_snk2'
 materialize_public_snk2  linked  ${arg.default-storage-size}
 

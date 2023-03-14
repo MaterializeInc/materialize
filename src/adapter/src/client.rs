@@ -25,12 +25,12 @@ use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_ore::thread::JoinOnDropHandle;
 use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
+use mz_sql::session::user::{User, INTROSPECTION_USER};
 
-use crate::catalog::INTROSPECTION_USER;
 use crate::command::{Canceled, Command, ExecuteResponse, Response, StartupResponse};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
-use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionId, User};
+use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionId};
 use crate::PeekResponseUnary;
 
 /// An abstraction allowing us to name different connections.

@@ -14,7 +14,7 @@ use timely::progress::Antichain;
 use timely::synchronization::Sequencer;
 use timely::worker::Worker as TimelyWorker;
 
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_client::types::sources::IngestionDescription;
@@ -39,6 +39,8 @@ pub enum InternalStorageCommand {
         ingestion_description: IngestionDescription<CollectionMetadata>,
         /// The frontier at which we should (re-)start ingestion.
         resumption_frontier: Antichain<mz_repr::Timestamp>,
+        /// The frontier at which we should (re-)start ingestion in the source time domain.
+        source_resumption_frontier: Vec<Row>,
     },
     /// Render a sink dataflow.
     CreateSinkDataflow(

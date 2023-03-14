@@ -19,14 +19,16 @@ use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::generic::{
     operator::{self, Operator},
-    InputHandle, OperatorInfo, OutputHandle, OutputWrapper,
+    InputHandle, OperatorInfo, OutputHandle,
 };
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
 
 use crate::buffer::ConsolidateBuffer;
-use crate::builder_async::{AsyncInputHandle, OperatorBuilder as OperatorBuilderAsync};
+use crate::builder_async::{
+    AsyncInputHandle, AsyncOutputHandle, OperatorBuilder as OperatorBuilderAsync,
+};
 
 /// Extension methods for timely [`Stream`]s.
 pub trait StreamExt<G, D1>
@@ -75,7 +77,7 @@ where
             Capability<G::Timestamp>,
             OperatorInfo,
             AsyncInputHandle<G::Timestamp, Vec<D1>, P::Puller>,
-            OutputWrapper<G::Timestamp, Vec<D2>, Tee<G::Timestamp, D2>>,
+            AsyncOutputHandle<G::Timestamp, Vec<D2>, Tee<G::Timestamp, D2>>,
         ) -> BFut,
         BFut: Future + 'static,
         P: ParallelizationContract<G::Timestamp, D1>;
@@ -99,7 +101,7 @@ where
             OperatorInfo,
             AsyncInputHandle<G::Timestamp, Vec<D1>, P1::Puller>,
             AsyncInputHandle<G::Timestamp, Vec<D2>, P2::Puller>,
-            OutputWrapper<G::Timestamp, Vec<D3>, Tee<G::Timestamp, D3>>,
+            AsyncOutputHandle<G::Timestamp, Vec<D3>, Tee<G::Timestamp, D3>>,
         ) -> BFut,
         BFut: Future + 'static,
         P1: ParallelizationContract<G::Timestamp, D1>,
@@ -253,7 +255,7 @@ where
             Capability<G::Timestamp>,
             OperatorInfo,
             AsyncInputHandle<G::Timestamp, Vec<D1>, P::Puller>,
-            OutputWrapper<G::Timestamp, Vec<D2>, Tee<G::Timestamp, D2>>,
+            AsyncOutputHandle<G::Timestamp, Vec<D2>, Tee<G::Timestamp, D2>>,
         ) -> BFut,
         BFut: Future + 'static,
         P: ParallelizationContract<G::Timestamp, D1>,
@@ -289,7 +291,7 @@ where
             OperatorInfo,
             AsyncInputHandle<G::Timestamp, Vec<D1>, P1::Puller>,
             AsyncInputHandle<G::Timestamp, Vec<D2>, P2::Puller>,
-            OutputWrapper<G::Timestamp, Vec<D3>, Tee<G::Timestamp, D3>>,
+            AsyncOutputHandle<G::Timestamp, Vec<D3>, Tee<G::Timestamp, D3>>,
         ) -> BFut,
         BFut: Future + 'static,
         P1: ParallelizationContract<G::Timestamp, D1>,
@@ -451,7 +453,7 @@ where
     B: FnOnce(
         Capability<G::Timestamp>,
         OperatorInfo,
-        OutputWrapper<G::Timestamp, Vec<D>, Tee<G::Timestamp, D>>,
+        AsyncOutputHandle<G::Timestamp, Vec<D>, Tee<G::Timestamp, D>>,
     ) -> BFut,
     BFut: Future + 'static,
 {

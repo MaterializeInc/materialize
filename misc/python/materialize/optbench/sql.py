@@ -42,7 +42,7 @@ class Query:
         m = re.search(p, self.query, re.MULTILINE)
         return m.group("name") if m else "anonoymous"
 
-    def explain(self, timing: bool, dialect: Dialect) -> str:
+    def explain(self, timing: bool, dialect: Dialect = Dialect.MZ) -> str:
         """Prepends 'EXPLAIN ...' to the query respecting the given dialect."""
 
         if dialect == Dialect.PG:

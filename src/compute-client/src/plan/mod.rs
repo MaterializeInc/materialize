@@ -1191,13 +1191,9 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                         // later.
                         let source_arrangement = (
                             (0..key.len())
-                                .into_iter()
                                 .map(MirScalarExpr::Column)
                                 .collect::<Vec<_>>(),
-                            (0..key.len())
-                                .into_iter()
-                                .map(|i| (i, i))
-                                .collect::<BTreeMap<_, _>>(),
+                            (0..key.len()).map(|i| (i, i)).collect::<BTreeMap<_, _>>(),
                             Vec::<usize>::new(),
                         );
                         let (ljp, missing) = LinearJoinPlan::create_from(

@@ -49,8 +49,7 @@ h5 {
     margin: var(--small) 0 var(--nano);
 }
 
-strong,
-em {
+strong {
     font-weight: 500;
 }
 
@@ -85,52 +84,16 @@ p+p {
         border: none;
     }
 
-    ul,
-    ol {
-        list-style-position: inside;
-
-        li>p {
-            display: inline;
-        }
-    }
-
     &>*:first-child {
         margin-top: var(--small);
     }
 
     ul {
         margin: var(--micro) 0;
-    }
-
-    ul li {
-        p:not(:first-child) {
-            display: block;
-        }
-
-        &>p:not(:first-child),
-        &>.highlight,
-        &>table {
-            margin-left: var(--milli);
-        }
+        padding-left: var(--small);
     }
 
     li {
-        position: relative;
-
-        p:first-child {
-            margin-top: 0;
-        }
-
-        ul,
-        ol {
-            margin-top: var(--micro);
-            margin-left: var(--milli);
-        }
-
-        &:not(:last-child) {
-            margin-bottom: var(--pico);
-        }
-
         .highlight {
             display: block;
         }

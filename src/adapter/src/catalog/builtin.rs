@@ -33,10 +33,11 @@ use mz_repr::{RelationDesc, RelationType, ScalarType};
 use mz_sql::catalog::{
     CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, RoleAttributes, TypeReference,
 };
+use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::healthcheck::{MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC};
 
-use crate::catalog::{DEFAULT_CLUSTER_REPLICA_NAME, INTROSPECTION_USER, SYSTEM_USER};
+use crate::catalog::DEFAULT_CLUSTER_REPLICA_NAME;
 
 pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
 pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
@@ -2549,6 +2550,31 @@ FROM
         JOIN mz_internal.mz_cluster_replica_metrics AS m ON m.replica_id = r.id",
 };
 
+pub const MZ_DATAFLOW_OPERATOR_PARENTS: BuiltinView = BuiltinView {
+    name: "mz_dataflow_operator_parents",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_operator_parents AS
+WITH operator_addrs AS(
+    SELECT
+        id, address, worker_id
+    FROM mz_internal.mz_dataflow_addresses
+        INNER JOIN mz_internal.mz_dataflow_operators
+            USING (id, worker_id)
+),
+parent_addrs AS (
+    SELECT
+        id,
+        address[1:list_length(address) - 1] AS parent_address,
+        worker_id
+    FROM operator_addrs
+)
+SELECT pa.id, oa.id AS parent_id, pa.worker_id
+FROM parent_addrs AS pa
+    INNER JOIN operator_addrs AS oa
+        ON pa.parent_address = oa.address
+        AND pa.worker_id = oa.worker_id",
+};
+
 // NOTE: If you add real data to this implementation, then please update
 // the related `pg_` function implementations (like `pg_get_constraintdef`)
 pub const PG_CONSTRAINT: BuiltinView = BuiltinView {
@@ -2964,6 +2990,46 @@ IN CLUSTER mz_introspection
 ON mz_catalog.mz_secrets (schema_id)",
 };
 
+pub const MZ_CLUSTERS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_clusters_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_clusters_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_clusters (id)",
+};
+
+pub const MZ_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_replicas_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_cluster_replicas_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_cluster_replicas (id)",
+};
+
+pub const MZ_CLUSTER_REPLICA_UTILIZATION_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_replica_utilization_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_cluster_replica_utilization_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_cluster_replica_utilization (replica_id)",
+};
+
+pub const MZ_SOURCE_STATUSES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_source_statuses_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_source_statuses_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_source_statuses (id)",
+};
+
+pub const MZ_SOURCE_STATUS_HISTORY_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_source_status_history_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_source_status_history_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_source_status_history (source_id)",
+};
+
 pub static MZ_SYSTEM_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*SYSTEM_USER.name,
     attributes: RoleAttributes::new().with_all(),
@@ -3167,6 +3233,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY),
         Builtin::View(&MZ_CLUSTER_REPLICA_UTILIZATION),
+        Builtin::View(&MZ_DATAFLOW_OPERATOR_PARENTS),
         Builtin::View(&MZ_COMPUTE_FRONTIERS),
         Builtin::View(&MZ_DATAFLOW_CHANNEL_OPERATORS),
         Builtin::View(&MZ_COMPUTE_IMPORT_FRONTIERS),
@@ -3232,6 +3299,11 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_SHOW_CLUSTERS_IND),
         Builtin::Index(&MZ_SHOW_CLUSTER_REPLICAS_IND),
         Builtin::Index(&MZ_SHOW_SECRETS_IND),
+        Builtin::Index(&MZ_CLUSTERS_IND),
+        Builtin::Index(&MZ_CLUSTER_REPLICAS_IND),
+        Builtin::Index(&MZ_CLUSTER_REPLICA_UTILIZATION_IND),
+        Builtin::Index(&MZ_SOURCE_STATUSES_IND),
+        Builtin::Index(&MZ_SOURCE_STATUS_HISTORY_IND),
     ]);
 
     builtins
@@ -3576,7 +3648,7 @@ mod tests {
                             }
 
                             if imp.return_is_set != pg_fn.ret_set {
-                                println!(
+                                panic!(
                                 "funcs with oid {} ({}) don't match set-returning value: {:?} in mz, {:?} in pg",
                                 imp.oid, func.name, imp.return_is_set, pg_fn.ret_set
                             );

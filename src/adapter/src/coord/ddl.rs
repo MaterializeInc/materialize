@@ -26,6 +26,7 @@ use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::ResolvedDatabaseSpecifier;
+use mz_sql::session::vars::{self, SystemVars, Var};
 use mz_storage_client::controller::{CreateExportToken, ExportDescription, ReadPolicy};
 use mz_storage_client::types::sinks::{SinkAsOf, StorageSinkConnection};
 use mz_storage_client::types::sources::{GenericSourceConnection, Timeline};
@@ -37,8 +38,7 @@ use crate::catalog::{
 use crate::client::ConnectionId;
 use crate::coord::appends::BuiltinTableUpdateSource;
 use crate::coord::Coordinator;
-use crate::session::vars::SystemVars;
-use crate::session::{self, Session, Var};
+use crate::session::Session;
 use crate::telemetry::SegmentClientExt;
 use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterError, AdapterNotice};
@@ -86,7 +86,6 @@ impl Coordinator {
         let mut log_sources_to_drop = vec![];
         let mut tables_to_drop = vec![];
         let mut storage_sinks_to_drop = vec![];
-        let mut subscribe_sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
         let mut materialized_views_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(mz_postgres_util::Config, String)> = vec![];
@@ -201,9 +200,9 @@ impl Coordinator {
                 }
                 catalog::Op::ResetSystemConfiguration { name }
                 | catalog::Op::UpdateSystemConfiguration { name, .. } => {
-                    update_compute_config |= session::vars::is_compute_config_var(name);
-                    update_storage_config |= session::vars::is_storage_config_var(name);
-                    update_metrics_retention |= name == session::vars::METRICS_RETENTION.name();
+                    update_compute_config |= vars::is_compute_config_var(name);
+                    update_storage_config |= vars::is_storage_config_var(name);
+                    update_metrics_retention |= name == vars::METRICS_RETENTION.name();
                 }
                 _ => (),
             }
@@ -217,25 +216,33 @@ impl Coordinator {
             .chain(indexes_to_drop.iter().map(|(_, id)| id))
             .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
             .collect();
+
         // Clean up any active subscribes that rely on dropped relations.
-        for (sink_id, active_subscribe) in &self.active_subscribes {
-            if let Some(id) = active_subscribe
-                .depends_on
-                .iter()
-                .find(|id| relations_to_drop.contains(id))
-            {
+        let subscribe_sinks_to_drop: Vec<_> = self
+            .active_subscribes
+            .iter()
+            .filter(|(_id, sub)| !sub.dropping)
+            .filter_map(|(sink_id, sub)| {
+                sub.depends_on
+                    .iter()
+                    .find(|id| relations_to_drop.contains(id))
+                    .map(|dependent_id| (dependent_id, sink_id, sub))
+            })
+            .map(|(dependent_id, sink_id, active_subscribe)| {
                 let conn_id = active_subscribe.conn_id;
-                let entry = self.catalog.get_entry(id);
+                let entry = self.catalog.get_entry(dependent_id);
                 let name = self.catalog.resolve_full_name(entry.name(), Some(conn_id));
-                subscribe_sinks_to_drop.push((
+
+                (
                     (conn_id, name.to_string()),
                     ComputeSinkId {
                         cluster_id: active_subscribe.cluster_id,
                         global_id: *sink_id,
                     },
-                ));
-            }
-        }
+                )
+            })
+            .collect();
+
         // Clean up any pending peeks that rely on dropped relations.
         for (uuid, pending_peek) in &self.pending_peeks {
             if let Some(id) = pending_peek
@@ -445,11 +452,31 @@ impl Coordinator {
     pub(crate) fn drop_compute_sinks(&mut self, sinks: impl IntoIterator<Item = ComputeSinkId>) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for sink in sinks {
+            // Filter out sinks that are currently being dropped. When dropping a sink
+            // we send a request to compute to drop it, but don't actually remove it from
+            // `active_subscribes` until compute responds, hence the `dropping` flag.
+            //
+            // Note: Ideally we'd use .filter(...) on the iterator, but that would
+            // require simultaneously getting an immutable and mutable borrow of self.
+            let need_to_drop = self
+                .active_subscribes
+                .get(&sink.global_id)
+                .map(|meta| !meta.dropping)
+                .unwrap_or(false);
+            if !need_to_drop {
+                continue;
+            }
+
             if self.drop_compute_read_policy(&sink.global_id) {
                 by_cluster
                     .entry(sink.cluster_id)
                     .or_default()
                     .push(sink.global_id);
+
+                // Mark the sink as dropped so we don't try to drop it again.
+                if let Some(sink) = self.active_subscribes.get_mut(&sink.global_id) {
+                    sink.dropping = true;
+                }
             } else {
                 tracing::error!("Instructed to drop a compute sink that isn't one");
             }

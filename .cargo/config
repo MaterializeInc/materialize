@@ -6,3 +6,7 @@
 # See: https://github.com/rust-lang/rust/issues/56068
 # See: https://reviews.llvm.org/D74169#1990180
 rustflags = ["-C", "link-arg=-Wl,--compress-debug-sections=zlib-gabi", "-Csymbol-mangling-version=v0"]
+
+[build]
+# Always reserve at least one core so Cargo doesn't pin our CPU
+jobs = -1

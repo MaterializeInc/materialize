@@ -13,6 +13,7 @@ use std::fmt;
 
 use chrono::NaiveDateTime;
 use differential_dataflow::lattice::Lattice;
+use mz_sql::session::vars::IsolationLevel;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::{event, Level};
@@ -28,7 +29,7 @@ use crate::coord::dataflows::{prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::TimelineContext;
 use crate::coord::Coordinator;
-use crate::session::{vars, Session};
+use crate::session::Session;
 use crate::AdapterError;
 
 /// The timeline and timestamp context of a read.
@@ -166,7 +167,7 @@ impl Coordinator {
         if let Some(timeline) = &timeline {
             if when.must_advance_to_timeline_ts()
                 || (when.can_advance_to_timeline_ts()
-                    && isolation_level == &vars::IsolationLevel::StrictSerializable)
+                    && isolation_level == &IsolationLevel::StrictSerializable)
             {
                 let timestamp_oracle = self.get_timestamp_oracle(timeline);
                 oracle_read_ts = Some(timestamp_oracle.read_ts());
@@ -183,7 +184,7 @@ impl Coordinator {
         // - The `when` requires us to advance to the upper (ex: read-then-write queries).
         if when.must_advance_to_upper()
             || (when.can_advance_to_upper()
-                && (isolation_level == &vars::IsolationLevel::Serializable || timeline.is_none()))
+                && (isolation_level == &IsolationLevel::Serializable || timeline.is_none()))
         {
             candidate.join_assign(&largest_not_in_advance_of_upper);
         }
@@ -191,7 +192,7 @@ impl Coordinator {
         if let Some(real_time_recency_ts) = real_time_recency_ts {
             assert!(
                 session.vars().real_time_recency()
-                    && isolation_level == &vars::IsolationLevel::StrictSerializable,
+                    && isolation_level == &IsolationLevel::StrictSerializable,
                 "real time recency timestamp should only be supplied when real time recency \
                     is enabled and the isolation level is strict serializable"
             );

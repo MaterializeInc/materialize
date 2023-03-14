@@ -39,12 +39,7 @@ steps:
           - { value: zippy-cluster-replicas }
           - { value: zippy-crdb-latest }
           - { value: secrets }
-          - { value: checks-oneatatime-drop-create-default-replica }
-          - { value: checks-oneatatime-restart-clusterd-compute }
-          - { value: checks-oneatatime-restart-entire-mz }
-          - { value: checks-oneatatime-restart-environmentd-clusterd-storage }
-          - { value: checks-oneatatime-kill-clusterd-storage }
-          - { value: checks-oneatatime-restart-redpanda }
+          - { value: checks-restart-cockroach }
           - { value: checks-parallel-drop-create-default-replica }
           - { value: checks-parallel-restart-clusterd-compute }
           - { value: checks-parallel-restart-entire-mz }
@@ -59,9 +54,12 @@ steps:
           - { value: persist-maelstrom-single-node }
           - { value: persist-maelstrom-multi-node }
           - { value: unused-deps }
+          - { value: sql-feature-flags }
           - { value: launchdarkly }
           - { value: bounded-memory }
           - { value: cloud-canary }
+          - { value: sqlsmith-2-joins }
+          - { value: sqlsmith-explain }
         multiple: true
         required: false
     if: build.source == "ui"
@@ -341,71 +339,17 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: secrets
 
-  - id: checks-oneatatime-drop-create-default-replica
-    label: "Checks oneatatime + DROP/CREATE replica"
-    timeout_in_minutes: 300
+  - id: checks-restart-cockroach
+    label: "Checks + restart Cockroach"
+    depends_on: build-x86_64
+    timeout_in_minutes: 60
+    artifact_paths: junit_*.xml
     agents:
       queue: linux-x86_64
-    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=DropCreateDefaultReplica, --execution-mode=oneatatime]
-
-  - id: checks-oneatatime-restart-clusterd-compute
-    label: "Checks oneatatime + restart compute clusterd"
-    timeout_in_minutes: 300
-    agents:
-      queue: linux-x86_64
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=RestartClusterdCompute, --execution-mode=oneatatime]
-
-  - id: checks-oneatatime-restart-entire-mz
-    label: "Checks oneatatime + restart of the entire Mz"
-    timeout_in_minutes: 300
-    agents:
-      queue: linux-x86_64
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=RestartEntireMz, --execution-mode=oneatatime]
-
-  - id: checks-oneatatime-restart-environmentd-clusterd-storage
-    label: "Checks oneatatime + restart of environmentd & storage clusterd"
-    timeout_in_minutes: 300
-    agents:
-      queue: linux-x86_64
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=RestartEnvironmentdClusterdStorage, --execution-mode=oneatatime]
-
-  - id: checks-oneatatime-kill-clusterd-storage
-    label: "Checks oneatatime + kill storage clusterd"
-    timeout_in_minutes: 300
-    agents:
-      queue: linux-x86_64
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=KillClusterdStorage, --execution-mode=oneatatime]
-
-  - id: checks-oneatatime-restart-redpanda-debezium
-    label: "Checks oneatatime + restart Redpanda & Debezium"
-    timeout_in_minutes: 300
-    agents:
-      queue: linux-x86_64
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=RestartRedpandaDebezium, --execution-mode=oneatatime]
+          args: [--scenario=RestartCockroach, "--seed=$BUILDKITE_JOB_ID"]
 
   - id: checks-parallel-drop-create-default-replica
     label: "Checks parallel + DROP/CREATE replica"
@@ -573,6 +517,16 @@ steps:
     agents:
       queue: linux-x86_64
 
+  - id: sql-feature-flags
+    label: "SQL-level feature flags"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sql-feature-flags
+
   - id: launchdarkly
     label: "LaunchDarkly"
     artifact_paths: junit_*.xml
@@ -602,6 +556,30 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cloud-canary
+
+  - id: sqlsmith-2-joins
+    label: "SQLsmith 2 joins"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 70
+    agents:
+      # A larger instance is needed since SQLsmith likes creating
+      # large queries and going out of memory
+      queue: builder-linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlsmith
+          args: [--max-joins=2, --runtime=3600]
+
+  - id: sqlsmith-explain
+    label: "SQLsmith explain"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 70
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlsmith
+          args: [--max-joins=15, --explain-only, --runtime=3600]
 
   - wait: ~
     continue_on_failure: true

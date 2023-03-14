@@ -165,7 +165,6 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
 impl TimelyConfig {
     pub fn split_command(&self, parts: usize) -> Vec<Self> {
         (0..parts)
-            .into_iter()
             .map(|part| TimelyConfig {
                 process: part,
                 ..self.clone()

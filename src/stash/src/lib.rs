@@ -1059,11 +1059,9 @@ where
     K: Data,
     V: Data,
 {
-    consolidate_updates(rows)
-        .into_iter()
-        .map(|((key, value), ts, diff)| {
-            let key: K = serde_json::from_value(key).expect("must deserialize");
-            let value: V = serde_json::from_value(value).expect("must deserialize");
-            ((key, value), ts, diff)
-        })
+    consolidate_updates(rows).map(|((key, value), ts, diff)| {
+        let key: K = serde_json::from_value(key).expect("must deserialize");
+        let value: V = serde_json::from_value(value).expect("must deserialize");
+        ((key, value), ts, diff)
+    })
 }

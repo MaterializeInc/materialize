@@ -94,15 +94,16 @@ use mz_ore::task::RuntimeExt;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::TimestampManipulation;
-use mz_repr::{Diff, GlobalId, RelationDesc, Timestamp};
+use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage::internal_control::{InternalCommandSender, InternalStorageCommand};
 use mz_storage::sink::SinkBaseMetrics;
 use mz_storage::source::metrics::SourceBaseMetrics;
 use mz_storage::source::testscript::ScriptCommand;
+use mz_storage::source::types::{SourceConnectionBuilder, SourceReader};
 use mz_storage::DecodeMetrics;
 use mz_storage_client::types::sources::{
     encoding::SourceDataEncoding, GenericSourceConnection, SourceData, SourceDesc, SourceEnvelope,
-    TestScriptSourceConnection,
+    SourceTimestamp, TestScriptSourceConnection,
 };
 
 pub fn run_script_source(
@@ -263,6 +264,15 @@ where
                 let async_storage_worker = Rc::clone(&worker.storage_state.async_worker);
                 let internal_command_fabric = &mut HaltingInternalCommandSender::new();
 
+                let source_resumption_frontier = match &desc.connection {
+                    GenericSourceConnection::Kafka(c) => minimum_frontier(c),
+                    GenericSourceConnection::S3(c) => minimum_frontier(c),
+                    GenericSourceConnection::Postgres(c) => minimum_frontier(c),
+                    GenericSourceConnection::Kinesis(c) => minimum_frontier(c),
+                    GenericSourceConnection::TestScript(c) => minimum_frontier(c),
+                    GenericSourceConnection::LoadGenerator(c) => minimum_frontier(c),
+                };
+
                 // NOTE: We only feed internal commands into the worker,
                 // bypassing "external" StorageCommand and the async worker that
                 // also sits into the normal processing loop. If you ever
@@ -291,6 +301,7 @@ where
                             },
                         // TODO: test resumption as well!
                         resumption_frontier: Antichain::from_elem(Timestamp::minimum()),
+                        source_resumption_frontier,
                     },
                 );
             }
@@ -336,6 +347,9 @@ where
                 //
                 // TODO(guswynn): consider using `AllowCompaction` here,
                 // if it works.
+                //
+                // TODO: Do not use `drop_dataflow`
+                #[allow(clippy::disallowed_methods)]
                 worker
                     .timely_worker
                     .drop_dataflow(worker.timely_worker.installed_dataflows()[0]);
@@ -359,6 +373,12 @@ where
 
     // There is always exactly one worker.
     Ok(value.unwrap())
+}
+
+/// Calculates the minimum frontier for a particular source connection using the source specific
+/// timestamp
+fn minimum_frontier<C: SourceConnectionBuilder>(_conn: &C) -> Vec<Row> {
+    vec![<C::Reader as SourceReader>::Time::minimum().encode_row()]
 }
 
 struct HaltingInternalCommandSender {}

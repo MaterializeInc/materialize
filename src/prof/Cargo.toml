@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
 anyhow = "1.0.66"
-axum = { version = "0.6.1", features = ["headers"] }
+axum = { version = "0.6.7", features = ["headers"] }
 backtrace = "0.3.66"
 bytesize = "1.1.0"
 cfg-if = "1.0.0"
@@ -22,7 +22,7 @@ mime = "0.3.16"
 mz-build-info = { path = "../build-info" }
 mz-http-util = { path = "../http-util" }
 mz-ore = { path = "../ore" }
-pprof = { git = "https://github.com/MaterializeInc/pprof-rs.git" }
+pprof = "0.11.1"
 serde = { version = "1.0.152", features = ["derive"] }
 tempfile = "3.2.0"
 tikv-jemalloc-ctl = { version = "0.5.0", features = ["use_std"], optional = true }

@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use mz_ore::cast::CastFrom;
+use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::metric;
 use mz_ore::metrics::{
     ComputedGauge, ComputedIntGauge, Counter, CounterVecExt, DeleteOnDropCounter,
@@ -71,6 +71,9 @@ pub struct Metrics {
     /// Metrics for auditing persist usage
     pub audit: UsageAuditMetrics,
 
+    /// Metrics for the persist sink.
+    pub sink: SinkMetrics,
+
     /// Metrics for S3-backed blob implementation
     pub s3_blob: S3BlobMetrics,
     /// Metrics for Postgres-backed consensus implementation
@@ -107,6 +110,7 @@ impl Metrics {
             state: StateMetrics::new(registry),
             shards: ShardsMetrics::new(registry),
             audit: UsageAuditMetrics::new(registry),
+            sink: SinkMetrics::new(registry),
             s3_blob: S3BlobMetrics::new(registry),
             postgres_consensus: PostgresConsensusMetrics::new(registry),
             _vecs: vecs,
@@ -147,6 +151,7 @@ struct MetricsVecs {
     external_consensus_cas_mismatch_versions_bytes: IntCounter,
     external_consensus_truncated_count: IntCounter,
     external_blob_delete_noop_count: IntCounter,
+    external_blob_sizes: Histogram,
     external_rtt_latency: GaugeVec,
     external_op_latency: HistogramVec,
 
@@ -238,6 +243,11 @@ impl MetricsVecs {
             external_blob_delete_noop_count: registry.register(metric!(
                 name: "mz_persist_external_blob_delete_noop_count",
                 help: "count of blob delete calls that deleted a non-existent key",
+            )),
+            external_blob_sizes: registry.register(metric!(
+                name: "mz_persist_external_blob_sizes",
+                help: "histogram of blob sizes at put time",
+                buckets: mz_ore::stats::HISTOGRAM_BYTE_BUCKETS.to_vec(),
             )),
             external_rtt_latency: registry.register(metric!(
                 name: "mz_persist_external_rtt_latency",
@@ -417,6 +427,7 @@ impl MetricsVecs {
             list_keys: self.external_op_metrics("blob_list_keys", false),
             delete: self.external_op_metrics("blob_delete", false),
             delete_noop: self.external_blob_delete_noop_count.clone(),
+            blob_sizes: self.external_blob_sizes.clone(),
             rtt_latency: self.external_rtt_latency.with_label_values(&["blob"]),
         }
     }
@@ -1360,6 +1371,31 @@ impl UsageAuditMetrics {
     }
 }
 
+/// Metrics for the persist sink. (While this lies slightly outside the usual
+/// abstraction boundary of the client, it's convenient to manage them together.
+#[derive(Debug)]
+pub struct SinkMetrics {
+    /// Number of small batches that were forwarded to the central append operator
+    pub forwarded_batches: Counter,
+    /// Number of updates that were forwarded to the centralized append operator
+    pub forwarded_updates: Counter,
+}
+
+impl SinkMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        SinkMetrics {
+            forwarded_batches: registry.register(metric!(
+                name: "mz_persist_sink_forwarded_batches",
+                help: "number of batches forwarded to the central append operator",
+            )),
+            forwarded_updates: registry.register(metric!(
+                name: "mz_persist_sink_forwarded_updates",
+                help: "number of updates forwarded to the central append operator",
+            )),
+        }
+    }
+}
+
 /// A minimal set of metrics imported into honeycomb for alerting.
 #[derive(Debug)]
 pub struct AlertsMetrics {
@@ -1432,6 +1468,7 @@ pub struct BlobMetrics {
     list_keys: ExternalOpMetrics,
     delete: ExternalOpMetrics,
     delete_noop: IntCounter,
+    blob_sizes: Histogram,
     pub rtt_latency: Gauge,
 }
 
@@ -1515,6 +1552,7 @@ impl Blob for MetricsBlob {
             .await;
         if res.is_ok() {
             self.metrics.blob.set.bytes.inc_by(u64::cast_from(bytes));
+            self.metrics.blob.blob_sizes.observe(f64::cast_lossy(bytes));
         }
         res
     }

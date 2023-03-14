@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.66"
 askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
-axum = { version = "0.6.1", features = ["headers"] }
+axum = { version = "0.6.7", features = ["headers"] }
 headers = "0.3.8"
 http = "0.2.8"
 hyper = { version = "0.14.23", features = ["http1", "server"] }

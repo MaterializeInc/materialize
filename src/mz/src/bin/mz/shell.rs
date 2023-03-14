@@ -24,8 +24,6 @@ use mz::configuration::ValidProfile;
 fn run_psql_shell(valid_profile: ValidProfile<'_>, environment: &Environment) -> Result<()> {
     let error = Command::new("psql")
         .arg(environment.sql_url(&valid_profile).to_string())
-        // Enable query timing output by default.
-        .args(["-c", "\\timing", "-f", "-"])
         .env("PGPASSWORD", valid_profile.app_password)
         .exec();
 

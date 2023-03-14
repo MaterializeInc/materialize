@@ -1175,7 +1175,7 @@ pub fn plan_ctes(
             }
         }
         CteBlock::MutuallyRecursive(ctes) => {
-            qcx.scx.require_unsafe_mode("WITH MUTUALLY_RECURSIVE")?;
+            qcx.scx.require_with_mutually_recursive()?;
 
             // Insert column types into `qcx.ctes` first for recursive bindings.
             for cte in ctes.iter() {
@@ -4330,10 +4330,18 @@ fn plan_function<'a>(
             )
         }
         Func::Aggregate(_) => {
-            sql_bail!("aggregate functions are not allowed in {}", ecx.name);
+            sql_bail!(
+                "aggregate functions are not allowed in {} (function {})",
+                ecx.name,
+                unresolved_name
+            );
         }
         Func::Table(_) => {
-            sql_bail!("table functions are not allowed in {}", ecx.name);
+            sql_bail!(
+                "table functions are not allowed in {} (function {})",
+                ecx.name,
+                unresolved_name
+            );
         }
         Func::Scalar(impls) => impls,
         Func::ScalarWindow(impls) => {
@@ -4625,7 +4633,11 @@ fn validate_window_function_plan<'a>(
     PlanError,
 > {
     if !ecx.allow_windows {
-        sql_bail!("window functions are not allowed in {}", ecx.name);
+        sql_bail!(
+            "window functions are not allowed in {} (function {})",
+            ecx.name,
+            name
+        );
     }
 
     // Various things are duplicated here and in `plan_function` to improve error messages.
@@ -5075,8 +5087,11 @@ impl<'a> VisitMut<'_, Aug> for AggregateTableFuncVisitor<'a> {
                 if let Ok(item) = self.scx.resolve_function(func.name.clone()) {
                     if let Ok(Func::Table { .. }) = item.func() {
                         if let Some(context) = self.table_disallowed_context.last() {
-                            self.err =
-                                Some(sql_err!("table functions are not allowed in {}", context));
+                            self.err = Some(sql_err!(
+                                "table functions are not allowed in {} (function {})",
+                                context,
+                                func.name
+                            ));
                             return;
                         }
                         table_func = Some(func.clone());

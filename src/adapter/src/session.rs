@@ -20,7 +20,6 @@ use derivative::Derivative;
 use rand::Rng;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::OwnedMutexGuard;
-use uuid::Uuid;
 
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_pgrepr::Format;
@@ -28,74 +27,23 @@ use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType, TimestampManipulation};
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
 use mz_sql::names::RoleId;
 use mz_sql::plan::{Params, PlanContext, StatementDesc};
+use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES, SYSTEM_USER};
+use mz_sql::session::vars::{IsolationLevel, VarInput};
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_client::types::sources::Timeline;
 
-use crate::catalog::{INTERNAL_USER_NAMES, SYSTEM_USER};
 use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
-use crate::session::vars::IsolationLevel;
 use crate::AdapterNotice;
 
-pub use self::vars::{
-    ClientSeverity, SessionVars, Var, VarInput, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
+pub use mz_sql::session::vars::{
+    EndTransactionAction, SessionVars, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
     SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
 };
 
-pub(crate) mod vars;
-
 const DUMMY_CONNECTION_ID: ConnectionId = 0;
-
-/// Identifies a user.
-#[derive(Debug, Clone)]
-pub struct User {
-    /// The name of the user within the system.
-    ///
-    /// When possible prefer using some [`RoleId`] over this field.
-    pub name: String,
-    /// Metadata about this user in an external system.
-    pub external_metadata: Option<ExternalUserMetadata>,
-}
-
-/// Metadata about a [`User`] in an external system.
-#[derive(Debug, Clone)]
-pub struct ExternalUserMetadata {
-    /// The ID of the user in the external system.
-    pub user_id: Uuid,
-    /// The ID of the user's active group in the external system.
-    pub group_id: Uuid,
-    /// Indicates if the user is an admin in the external system.
-    pub admin: bool,
-}
-
-impl PartialEq for User {
-    fn eq(&self, other: &User) -> bool {
-        self.name == other.name
-    }
-}
-
-impl User {
-    /// Returns whether this is an internal user.
-    pub fn is_internal(&self) -> bool {
-        INTERNAL_USER_NAMES.contains(&self.name)
-    }
-
-    /// Returns whether this user is an admin in an external system.
-    pub fn is_external_admin(&self) -> bool {
-        self.external_metadata
-            .as_ref()
-            .map(|metadata| metadata.admin)
-            .clone()
-            .unwrap_or(false)
-    }
-
-    /// Returns whether this user is a superuser.
-    pub fn is_superuser(&self) -> bool {
-        self.is_external_admin() || self.name == SYSTEM_USER.name
-    }
-}
 
 /// A session holds per-connection state.
 #[derive(Debug)]
@@ -105,7 +53,6 @@ pub struct Session<T = mz_repr::Timestamp> {
     portals: BTreeMap<String, Portal>,
     transaction: TransactionStatus<T>,
     pcx: Option<PlanContext>,
-    user: User,
     /// The role ID of the current user.
     ///
     /// Invariant: role_id must be `Some` after the user has
@@ -157,10 +104,12 @@ impl<T: TimestampManipulation> Session<T> {
     ) -> Session<T> {
         let (notices_tx, notices_rx) = mpsc::unbounded_channel();
         let (external_metadata_tx, external_metadata_rx) = mpsc::unbounded_channel();
-        let mut vars = SessionVars::new(build_info);
-        vars.set_superuser(user.is_superuser());
-        if INTERNAL_USER_NAMES.contains(&user.name) {
-            vars.set_cluster(user.name.clone());
+        let default_cluster = INTERNAL_USER_NAMES
+            .contains(&user.name)
+            .then(|| user.name.clone());
+        let mut vars = SessionVars::new(build_info, user);
+        if let Some(default_cluster) = default_cluster {
+            vars.set_cluster(default_cluster);
         }
         Session {
             conn_id,
@@ -168,7 +117,6 @@ impl<T: TimestampManipulation> Session<T> {
             pcx: None,
             prepared_statements: BTreeMap::new(),
             portals: BTreeMap::new(),
-            user,
             role_id: None,
             vars,
             notices_tx,
@@ -643,13 +591,12 @@ impl<T: TimestampManipulation> Session<T> {
     pub fn reset(&mut self) {
         let _ = self.clear_transaction();
         self.prepared_statements.clear();
-        self.vars = SessionVars::new(self.vars.build_info());
-        self.vars.set_superuser(self.is_superuser());
+        self.vars = SessionVars::new(self.vars.build_info(), self.vars.user().clone());
     }
 
     /// Returns the user who owns this session.
     pub fn user(&self) -> &User {
-        &self.user
+        self.vars.user()
     }
 
     /// Returns a reference to the variables in this session.
@@ -680,11 +627,6 @@ impl<T: TimestampManipulation> Session<T> {
         }
     }
 
-    /// Returns whether the current session is a superuser.
-    pub fn is_superuser(&self) -> bool {
-        self.user.is_superuser()
-    }
-
     /// Returns a channel on which to send external metadata to the session.
     pub fn retain_external_metadata_transmitter(
         &mut self,
@@ -694,10 +636,9 @@ impl<T: TimestampManipulation> Session<T> {
 
     /// Drains any external metadata updates and applies the changes from the latest update.
     pub fn apply_external_metadata_updates(&mut self) {
-        while let Ok(external_user_metadata) = self.external_metadata_rx.try_recv() {
-            self.user.external_metadata = Some(external_user_metadata);
+        while let Ok(metadata) = self.external_metadata_rx.try_recv() {
+            self.vars.set_external_user_metadata(metadata);
         }
-        self.vars.set_superuser(self.is_superuser());
     }
 
     /// Initializes the session's role ID.
@@ -1047,13 +988,4 @@ pub struct WriteOp {
     pub id: GlobalId,
     /// The data rows.
     pub rows: Vec<(Row, Diff)>,
-}
-
-/// The action to take during end_transaction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EndTransactionAction {
-    /// Commit the transaction.
-    Commit,
-    /// Rollback the transaction.
-    Rollback,
 }

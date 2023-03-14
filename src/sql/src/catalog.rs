@@ -46,6 +46,7 @@ use crate::normalize;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
 use crate::plan::statement::StatementDesc;
 use crate::plan::PlanError;
+use crate::session::vars::SystemVars;
 
 /// A catalog keeps track of SQL objects and session state available to the
 /// planner.
@@ -212,6 +213,17 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
 
     /// Returns the set of supported AWS PrivateLink availability zone ids.
     fn aws_privatelink_availability_zones(&self) -> Option<BTreeSet<String>>;
+
+    /// Returns system vars
+    fn system_vars(&self) -> &SystemVars;
+
+    /// Returns mutable system vars
+    ///
+    /// Clients should use this this method carefully, as changes to the backing
+    /// state here are not guarateed to be persisted. The motivating use case
+    /// for this method was ensuring that features are temporary turned on so
+    /// catalog rehydration does not break due to unsupported SQL syntax.
+    fn system_vars_mut(&mut self) -> &mut SystemVars;
 }
 
 /// Configuration associated with a catalog.

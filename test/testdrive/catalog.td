@@ -552,6 +552,7 @@ mz_arrangement_sizes
 mz_dataflows
 mz_dataflow_channel_operators
 mz_dataflow_operator_dataflows
+mz_dataflow_operator_parents
 mz_dataflow_operator_reachability
 mz_cluster_replica_utilization
 mz_compute_frontiers
@@ -589,7 +590,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-72
+77
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

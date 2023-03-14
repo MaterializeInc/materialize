@@ -207,7 +207,7 @@ use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_client::types::sources::IngestionDescription;
@@ -231,6 +231,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
     id: GlobalId,
     description: IngestionDescription<CollectionMetadata>,
     resume_upper: Antichain<mz_repr::Timestamp>,
+    source_resume_upper: Vec<Row>,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let debug_name = id.to_string();
@@ -252,6 +253,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 id,
                 description.clone(),
                 resume_upper,
+                source_resume_upper,
                 storage_state,
             );
             tokens.push(token);

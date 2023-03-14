@@ -11,9 +11,12 @@
 //!
 //! This source is constructed as a collection of Tokio tasks that communicate over local
 //! (worker-pinned) queues to send data into dataflow. We spin up a single "downloader" task which
-//! is responsible for performing s3 object downloads and shuffling the data into dataflow. Then,
-//! for each object source, we spin up another task which is responsible for collecting object names
-//! from an object name source and sending that name to the downloader.
+//! is responsible for performing s3 object downloads and shuffling the data into dataflow. The
+//! downloader will currently download the entirety of each file and emit a degenerate `ByteStream`
+//! into the dataflow containing a single chunk. This will have to be improved before we release S3
+//! sources to production. Then, for each object source, we spin up another task which is
+//! responsible for collecting object names from an object name source and sending that name to the
+//! downloader.
 //!
 //! ```text
 //! +----------------+
@@ -39,15 +42,15 @@ use aws_sdk_s3::types::SdkError;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sqs::model::{ChangeMessageVisibilityBatchRequestEntry, Message as SqsMessage};
 use aws_sdk_sqs::Client as SqsClient;
-use futures::{FutureExt, StreamExt, TryStreamExt};
+use futures::{FutureExt, TryStreamExt};
 use globset::GlobMatcher;
 use timely::dataflow::operators::Capability;
 use timely::progress::Antichain;
 use timely::scheduling::SyncActivator;
-use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{self, Duration};
-use tokio_util::io::{ReaderStream, StreamReader};
+use tokio_util::io::StreamReader;
 use tracing::{debug, error, trace, warn};
 
 use mz_cloud_resources::AwsExternalIdPrefix;
@@ -63,7 +66,7 @@ use mz_storage_client::types::sources::{Compression, MzOffset, S3KeySource, S3So
 use self::metrics::{BucketMetrics, ScanBucketMetrics};
 use self::notifications::{Event, EventType, TestEvent};
 use crate::source::commit::LogCommitter;
-use crate::source::types::SourceConnectionBuilder;
+use crate::source::types::{ByteStream, SourceConnectionBuilder};
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };
@@ -72,12 +75,6 @@ use super::metrics::SourceBaseMetrics;
 
 mod metrics;
 mod notifications;
-
-struct InternalMessage {
-    record: Option<Vec<u8>>,
-}
-/// Size of data chunks we send to dataflow
-const CHUNK_SIZE: usize = 4096;
 
 /// Information required to load data from S3
 pub struct S3SourceReader {
@@ -88,7 +85,7 @@ pub struct S3SourceReader {
     /// Global source ID
     id: GlobalId,
     /// Receiver channel that ingests records
-    receiver_stream: Receiver<S3Result<InternalMessage>>,
+    receiver_stream: Receiver<S3Result<Vec<u8>>>,
     dataflow_status: tokio::sync::watch::Sender<DataflowStatus>,
     /// Total number of records that this source has read
     offset: S3Offset,
@@ -138,7 +135,7 @@ struct KeyInfo {
 async fn download_objects_task(
     source_id: GlobalId,
     mut rx: Receiver<S3Result<KeyInfo>>,
-    tx: Sender<S3Result<InternalMessage>>,
+    tx: Sender<S3Result<Vec<u8>>>,
     mut shutdown_rx: tokio::sync::watch::Receiver<DataflowStatus>,
     aws_config: AwsConfig,
     aws_external_id_prefix: Option<AwsExternalIdPrefix>,
@@ -675,7 +672,7 @@ impl From<S3Error> for std::io::Error {
 type S3Result<R> = Result<R, S3Error>;
 
 async fn download_object(
-    tx: &Sender<S3Result<InternalMessage>>,
+    tx: &Sender<S3Result<Vec<u8>>>,
     activator: &SyncActivator,
     client: &S3Client,
     bucket: &str,
@@ -740,11 +737,11 @@ async fn download_object(
         Err(err) => return Err(DownloadError::Failed { err }),
     };
 
-    let mut download_result = match compression {
-        Compression::None => read_object_chunked(source_id, reader, tx).await,
+    let download_result = match compression {
+        Compression::None => read_object_chunked(reader, tx).await,
         Compression::Gzip => {
             let decoder = GzipDecoder::new(reader);
-            read_object_chunked(source_id, decoder, tx).await
+            read_object_chunked(decoder, tx).await
         }
     };
 
@@ -753,59 +750,31 @@ async fn download_object(
         source_id, bucket, key, download_result,
     );
 
-    if download_result.is_ok() {
-        let sent = tx.send(Ok(InternalMessage { record: None }));
-        if sent.await.is_err() {
-            download_result = Err(DownloadError::SendFailed);
-        }
-    };
     activator.activate().expect("s3 reader activation failed");
     download_result
 }
 
 async fn read_object_chunked<R>(
-    source_id: &str,
-    reader: R,
-    tx: &Sender<Result<InternalMessage, S3Error>>,
+    mut reader: R,
+    tx: &Sender<Result<Vec<u8>, S3Error>>,
 ) -> Result<DownloadMetricUpdate, DownloadError>
 where
     R: Unpin + AsyncRead,
 {
-    let (mut bytes_read, mut chunks) = (0, 0);
+    let mut data = vec![];
 
-    let mut stream = ReaderStream::with_capacity(reader, CHUNK_SIZE);
+    let bytes_read = match reader.read_to_end(&mut data).await {
+        Ok(bytes_read) => bytes_read,
+        Err(err) => return Err(DownloadError::Failed { err }),
+    };
 
-    while let Some(result) = stream.next().await {
-        match result {
-            Ok(chunk) => {
-                bytes_read += chunk.len();
-                chunks += 1;
-                if tx
-                    .send(Ok(InternalMessage {
-                        // ReaderStream return's `None` if the underlying `AsyncRead`
-                        // gives out 0 bytes, so the chunk is always !empty.
-                        // See https://github.com/tokio-rs/tokio/blob/e8f19e771f501408427f7f9ee6ba4f54b2d4094c/tokio-util/src/io/reader_stream.rs#L102-L108
-                        record: Some(chunk.to_vec()),
-                    }))
-                    .await
-                    .is_err()
-                {
-                    return Err(DownloadError::SendFailed);
-                }
-            }
-            Err(err) => return Err(DownloadError::Failed { err }),
-        }
+    if tx.send(Ok(data)).await.is_err() {
+        return Err(DownloadError::SendFailed);
     }
 
-    trace!(
-        "source_id={} finished sending object to dataflow chunks={} bytes={}",
-        source_id,
-        chunks,
-        bytes_read
-    );
     Ok(DownloadMetricUpdate {
         bytes: bytes_read.try_into().expect("usize <= u64"),
-        messages: chunks,
+        messages: 1,
     })
 }
 
@@ -927,9 +896,9 @@ impl SourceConnectionBuilder for S3SourceConnection {
 
 impl SourceReader for S3SourceReader {
     type Key = ();
-    type Value = Option<Vec<u8>>;
+    type Value = ByteStream;
     type Time = MzOffset;
-    type Diff = ();
+    type Diff = u32;
 
     fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Time, Self::Diff> {
         if !self.active_read_worker {
@@ -937,13 +906,13 @@ impl SourceReader for S3SourceReader {
         }
 
         match self.receiver_stream.recv().now_or_never() {
-            Some(Some(Ok(InternalMessage { record }))) => {
+            Some(Some(Ok(record))) => {
                 self.offset += 1;
                 let msg = SourceMessage {
                     output: 0,
                     upstream_time_millis: None,
                     key: (),
-                    value: record,
+                    value: ByteStream::from_vec(record),
                     headers: None,
                 };
                 let ts = MzOffset::from(self.offset);
@@ -951,7 +920,7 @@ impl SourceReader for S3SourceReader {
                 let next_ts = ts + 1;
                 self.data_capability.downgrade(&next_ts);
                 self.upper_capability.downgrade(&next_ts);
-                NextMessage::Ready(SourceMessageType::Message(Ok(msg), cap, ()))
+                NextMessage::Ready(SourceMessageType::Message(Ok(msg), cap, 1))
             }
             Some(Some(Err(e))) => match e {
                 S3Error::GetObjectError { .. } => {
@@ -970,7 +939,7 @@ impl SourceReader for S3SourceReader {
                     let next_ts = not_definite_ts + 1;
                     self.data_capability.downgrade(&next_ts);
                     self.upper_capability.downgrade(&next_ts);
-                    NextMessage::Ready(SourceMessageType::Message(Err(err), cap, ()))
+                    NextMessage::Ready(SourceMessageType::Message(Err(err), cap, 1))
                 }
             },
             None => NextMessage::Pending,

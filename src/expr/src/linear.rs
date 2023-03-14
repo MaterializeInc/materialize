@@ -1376,7 +1376,6 @@ pub mod util {
             .enumerate()
             .collect();
         let thinning = (0..unthinned_arity)
-            .into_iter()
             .filter(|c| !columns_in_key.contains_key(c))
             .collect();
         (permutation, thinning)

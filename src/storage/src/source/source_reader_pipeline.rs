@@ -27,6 +27,7 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::fmt::Display;
 use std::future::Future;
 use std::pin::Pin;
@@ -35,6 +36,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
+use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::{FutureExt, StreamExt};
@@ -44,7 +46,6 @@ use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::capture::capture::Capture;
 use timely::dataflow::operators::capture::Event;
-use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::operators::{Broadcast, CapabilitySet, Partition};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::frontier::MutableAntichain;
@@ -59,7 +60,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
-use mz_repr::{Diff, GlobalId, RelationDesc};
+use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_client::client::SourceStatisticsUpdate;
 use mz_storage_client::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use mz_storage_client::healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC;
@@ -68,7 +69,9 @@ use mz_storage_client::types::errors::SourceError;
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
 use mz_storage_client::types::sources::{MzOffset, SourceConnection, SourceTimestamp, SourceToken};
 use mz_timely_util::antichain::AntichainExt;
-use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::builder_async::{
+    AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
+};
 use mz_timely_util::capture::UnboundedTokioCapture;
 use mz_timely_util::operator::StreamExt as _;
 
@@ -112,6 +115,11 @@ pub struct RawSourceCreationConfig {
     pub storage_metadata: CollectionMetadata,
     /// The upper frontier this source should resume ingestion at
     pub resume_upper: Antichain<mz_repr::Timestamp>,
+    /// The upper frontier this source should resume ingestion at in the source time domain. Since
+    /// every source has a different timestamp type we carry the timestamps of this frontier in an
+    /// encoded `Vec<Row>` form which will get decoded once we reach the connection specialized
+    /// functions.
+    pub source_resume_upper: Vec<Row>,
     /// A handle to the persist client cache
     pub persist_clients: Arc<PersistClientCache>,
     /// Place to share statistics updates with storage state.
@@ -141,16 +149,13 @@ pub fn create_raw_source<RootG, G, C, R>(
 ) -> (
     (
         Vec<
-            Stream<
+            Collection<
                 G,
-                SourceOutput<
-                    <C::Reader as SourceReader>::Key,
-                    <C::Reader as SourceReader>::Value,
-                    <C::Reader as SourceReader>::Diff,
-                >,
+                SourceOutput<<C::Reader as SourceReader>::Key, <C::Reader as SourceReader>::Value>,
+                <C::Reader as SourceReader>::Diff,
             >,
         >,
-        Stream<G, SourceError>,
+        Collection<G, SourceError, Diff>,
     ),
     Option<Rc<dyn Any>>,
 )
@@ -158,6 +163,7 @@ where
     RootG: Scope<Timestamp = ()> + Clone,
     G: Scope<Timestamp = mz_repr::Timestamp> + Clone,
     C: SourceConnection + SourceConnectionBuilder + Clone + 'static,
+    <C::Reader as SourceReader>::Diff: Into<Diff>,
     R: ResumptionFrontierCalculator<mz_repr::Timestamp> + 'static,
 {
     let worker_id = config.worker_id;
@@ -191,14 +197,12 @@ where
 
     let (token, health_token) = {
         let config = config.clone();
-        let reclock_follower = reclock_follower.share();
         root_scope.scoped("SourceTimeDomain", move |scope| {
             let (source, source_upper, health_stream, token) = source_reader_operator(
                 scope,
                 config.clone(),
                 source_connection,
                 connection_context,
-                reclock_follower,
                 reclocked_resume_stream,
             );
 
@@ -263,11 +267,10 @@ fn source_reader_operator<G, C, R>(
     config: RawSourceCreationConfig,
     source_connection: C,
     connection_context: ConnectionContext,
-    reclock_follower: ReclockFollower<R::Time, mz_repr::Timestamp>,
     resume_uppers: impl futures::Stream<Item = Antichain<R::Time>> + 'static,
 ) -> (
     Collection<G, Result<SourceMessage<R::Key, R::Value>, SourceReaderError>, R::Diff>,
-    Stream<G, ()>,
+    Stream<G, Infallible>,
     Stream<G, (WorkerId, HealthStatusUpdate)>,
     Rc<dyn Any>,
 )
@@ -285,7 +288,8 @@ where
         timestamp_interval,
         encoding,
         storage_metadata: _,
-        resume_upper,
+        resume_upper: _,
+        source_resume_upper,
         base_metrics,
         now: _,
         persist_clients: _,
@@ -312,22 +316,9 @@ where
 
         let mut source_metrics = SourceReaderMetrics::new(&base_metrics, id);
 
-        // TODO(petrosagg): this shouldn't be done by render or even this operator, but it's
-        // tricky lifting this to dataflow construction time due to async-ness. Find a solution
-        let source_upper = loop {
-            match reclock_follower.source_upper_at_frontier(resume_upper.borrow()) {
-                Ok(frontier) => break frontier,
-                Err(ReclockError::BeyondUpper(_) | ReclockError::Uninitialized) => {
-                    tokio::time::sleep(Duration::from_millis(100)).await
-                }
-                Err(err) => panic!("unexpected reclock error {err:?}"),
-            }
-        };
-        // Drop the reclock follower to release the read hold of the trace
-        drop(reclock_follower);
+        let source_upper = Antichain::from_iter(source_resume_upper.iter().map(R::Time::decode_row));
         info!(
-            "timely-{worker_id} source({id}) initial resume upper: into_upper={} source_upper={}",
-            resume_upper.pretty(),
+            "timely-{worker_id} source({id}) initial resume upper: source_upper={}",
             source_upper.pretty()
         );
 
@@ -366,10 +357,10 @@ where
         tokio::pin!(source_stream);
         tokio::pin!(resume_uppers);
 
-        health_output.activate().session(&health_cap).give((worker_id, HealthStatusUpdate {
+        health_output.give(&health_cap, (worker_id, HealthStatusUpdate {
             update: HealthStatus::Starting,
             should_halt: false,
-        }));
+        })).await;
         let mut prev_status = HealthStatusUpdate {
             update: HealthStatus::Starting,
             should_halt: false,
@@ -412,7 +403,6 @@ where
                     // We want to efficiently batch up messages that are ready. To do that we will
                     // activate the output handle here and then drain the currently available
                     // messages until we either run out of messages or run out of time.
-                    let mut output = output.activate();
                     while timer.elapsed() < YIELD_INTERVAL {
                         match source_stream.next().now_or_never() {
                             Some(Some(SourceMessageType::Message(message, cap, diff))) => {
@@ -430,10 +420,7 @@ where
 
                                 if prev_status != new_status_update {
                                     prev_status = new_status_update.clone();
-                                    health_output
-                                        .activate()
-                                        .session(&health_cap)
-                                        .give((worker_id, new_status_update));
+                                    health_output.give(&health_cap, (worker_id, new_status_update)).await;
                                 }
 
                                 if let Ok(message) = &message {
@@ -448,7 +435,7 @@ where
                                     // If cap is not beyond emit_cap we can't re-use emit_cap so
                                     // flush the current batch
                                     Some(emit_cap) => if !PartialOrder::less_equal(emit_cap, &cap) {
-                                        output.session(&emit_cap).give_container(&mut batch);
+                                        output.give_container(&*emit_cap, &mut batch).await;
                                         batch.clear();
                                         *emit_cap = cap;
                                     },
@@ -458,12 +445,12 @@ where
                             }
                             Some(Some(SourceMessageType::SourceStatus(new_status))) => {
                                 prev_status = new_status.clone();
-                                health_output.activate().session(&health_cap).give((worker_id, new_status));
+                                health_output.give(&health_cap, (worker_id, new_status)).await;
                             }
                             Some(None) => {
                                 trace!("timely-{worker_id} source({id}): source ended, dropping capabilities");
                                 if let Some(emit_cap) = emit_cap.take() {
-                                    output.session(&emit_cap).give_container(&mut batch);
+                                    output.give_container(&emit_cap, &mut batch).await;
                                     batch.clear();
                                 }
                                 return;
@@ -472,14 +459,10 @@ where
                         }
                     }
                     if let Some(emit_cap) = emit_cap.take() {
-                        output.session(&emit_cap).give_container(&mut batch);
+                        output.give_container(&emit_cap, &mut batch).await;
                         batch.clear();
                     }
                     assert!(batch.is_empty());
-                    // Now we drop the activated output handle to force timely to emit any pending
-                    // batch. It's crucial that this happens before our attempt to yield otherwise
-                    // the buffer would get stuck in this operator.
-                    drop(output);
                     if timer.elapsed() > YIELD_INTERVAL {
                         tokio::task::yield_now().await;
                     }
@@ -678,9 +661,9 @@ impl futures::Stream for RemapClock {
 fn remap_operator<G, FromTime>(
     scope: &G,
     config: RawSourceCreationConfig,
-    mut source_upper_rx: UnboundedReceiver<Event<FromTime, ()>>,
+    mut source_upper_rx: UnboundedReceiver<Event<FromTime, Infallible>>,
     remap_relation_desc: RelationDesc,
-) -> (Stream<G, (FromTime, mz_repr::Timestamp, Diff)>, Rc<dyn Any>)
+) -> (Collection<G, FromTime, Diff>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     FromTime: SourceTimestamp,
@@ -695,6 +678,7 @@ where
         encoding: _,
         storage_metadata,
         resume_upper,
+        source_resume_upper: _,
         base_metrics: _,
         now,
         persist_clients,
@@ -751,15 +735,10 @@ where
             &initial_batch.updates
         );
 
-        // Out of an abundance of caution, do not hold the output handle
-        // across an await, and drop it before we downgrade the capability.
-        {
-            let mut remap_output = remap_output.activate();
-            let cap = cap_set.delayed(cap_set.first().unwrap());
-            let mut session = remap_output.session(&cap);
-            session.give_vec(&mut initial_batch.updates);
-            cap_set.downgrade(initial_batch.upper);
-        }
+        let cap = cap_set.delayed(cap_set.first().unwrap());
+        remap_output.give_container(&cap, &mut initial_batch.updates).await;
+        drop(cap);
+        cap_set.downgrade(initial_batch.upper);
 
         let mut ticker = tokio::time::interval(timestamp_interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -780,14 +759,8 @@ where
                         remap_trace_batch.upper.pretty()
                     );
 
-                    // Out of an abundance of caution, do not hold the output handle
-                    // across an await, and drop it before we downgrade the capability.
-                    {
-                        let mut remap_output = remap_output.activate();
-                        let cap = cap_set.delayed(cap_set.first().unwrap());
-                        let mut session = remap_output.session(&cap);
-                        session.give_vec(&mut remap_trace_batch.updates);
-                    }
+                    let cap = cap_set.delayed(cap_set.first().unwrap());
+                    remap_output.give_container(&cap, &mut remap_trace_batch.updates).await;
 
                     // If the last remap trace closed the input, we no longer
                     // need to (or can) advance the timestamper.
@@ -799,18 +772,18 @@ where
 
                     let mut remap_trace_batch = timestamper.advance().await;
 
-                    // Out of an abundance of caution, do not hold the output handle
-                    // across an await, and drop it before we downgrade the capability.
-                    {
-                        let mut remap_output = remap_output.activate();
-                        let cap = cap_set.delayed(cap_set.first().unwrap());
-                        let mut session = remap_output.session(&cap);
-                        session.give_vec(&mut remap_trace_batch.updates);
-                    }
+                    let cap = cap_set.delayed(cap_set.first().unwrap());
+                    remap_output.give_container(&cap, &mut remap_trace_batch.updates).await;
 
                     cap_set.downgrade(remap_trace_batch.upper);
                 }
-                Some(Event::Progress(progress)) = source_upper_rx.recv() => {
+                Some(event) = source_upper_rx.recv() => {
+                    let head = std::iter::once(event);
+                    let tail = std::iter::from_fn(|| source_upper_rx.try_recv().ok());
+                    let progress = head.chain(tail).flat_map(|event| match event {
+                        Event::Progress(progress) => progress,
+                        Event::Messages(_, _) => unreachable!(),
+                    });
                     source_upper.update_iter(progress);
                     trace!("timely-{worker_id} remap({id}) received source upper: {}", source_upper.pretty());
                 }
@@ -818,7 +791,10 @@ where
         }
     });
 
-    (remap_stream, Rc::new(button.press_on_drop()))
+    (
+        remap_stream.as_collection(),
+        Rc::new(button.press_on_drop()),
+    )
 }
 
 /// Receives un-timestamped batches from the source reader and updates to the
@@ -831,11 +807,11 @@ fn reclock_operator<G, K, V, FromTime, D>(
     mut source_rx: UnboundedReceiver<
         Event<FromTime, (Result<SourceMessage<K, V>, SourceReaderError>, FromTime, D)>,
     >,
-    remap_trace_updates: Stream<G, (FromTime, mz_repr::Timestamp, Diff)>,
+    remap_trace_updates: Collection<G, FromTime, Diff>,
 ) -> (
     (
-        Vec<Stream<G, SourceOutput<K, V, D>>>,
-        Stream<G, SourceError>,
+        Vec<Collection<G, SourceOutput<K, V>, D>>,
+        Collection<G, SourceError, Diff>,
     ),
     Option<SourceToken>,
 )
@@ -844,7 +820,7 @@ where
     K: timely::Data + MaybeLength,
     V: timely::Data + MaybeLength,
     FromTime: SourceTimestamp,
-    D: timely::Data,
+    D: Semigroup + Into<Diff>,
 {
     let RawSourceCreationConfig {
         name,
@@ -856,6 +832,7 @@ where
         encoding: _,
         storage_metadata: _,
         resume_upper,
+        source_resume_upper: _,
         base_metrics,
         now: _,
         persist_clients: _,
@@ -876,7 +853,7 @@ where
     let (mut reclocked_output, reclocked_stream) = reclock_op.new_output();
 
     // Need to broadcast the remap changes to all workers.
-    let remap_trace_updates = remap_trace_updates.broadcast();
+    let remap_trace_updates = remap_trace_updates.inner.broadcast();
     let mut remap_input = reclock_op.new_input(&remap_trace_updates, Pipeline);
 
     reclock_op.build(move |capabilities| async move {
@@ -956,16 +933,11 @@ where
                     let total_buffered: usize = untimestamped_batches.iter().map(|(_, b)| b.len()).sum();
                     let reclock_source_upper = timestamper.source_upper();
 
-                    // This is another subtle point. Normally we would be free to emit the
-                    // untimestamped messages in any order so long as the frontiers are respected.
-                    // Unfortunately, downstream decoding operators rely on the messages being
-                    // presented at the exact order produced even if the messages happen at the
-                    // same timestamp. This should be fixed, but until this happens we need to
-                    // preserve the order here.
-                    //
-                    // We will treat the vector of untimestamped batches as a flat list of messages
-                    // and we will compute the size of the reclockable prefix. The messages in this
-                    // prefix can be reclocked immediately and emitted in the original order.
+                    // Peel as many consequtive reclockable items as possible. It is not benefitial
+                    // to go further even if theoretically there may be more messages ready to be
+                    // reclocked further along because in the common case the message order is
+                    // correleated with time and therefore in the common case we would be wasting
+                    // work trying to compare all the buffered messages with the frontier.
                     let mut reclockable_count = untimestamped_batches
                         .iter()
                         .flat_map(|(_, batch)| batch)
@@ -986,7 +958,6 @@ where
                     // Accumulate updates to offsets for Prometheus and system table metrics collection
                     let mut metric_updates = BTreeMap::new();
 
-                    let mut output = reclocked_output.activate();
                     let mut total_processed = 0;
                     for ((message, from_ts, diff), into_ts) in timestamper.reclock(msgs) {
                         let into_ts = into_ts.expect("reclock for update not beyond upper failed");
@@ -996,11 +967,11 @@ where
                             diff,
                             &mut bytes_read,
                             &cap_set,
-                            &mut output,
+                            &mut reclocked_output,
                             &mut metric_updates,
                             into_ts,
                             id,
-                        );
+                        ).await;
                         total_processed += 1;
                     }
                     // The loop above might have completely emptied batches. We can now remove them
@@ -1068,16 +1039,21 @@ where
 
     // TODO(petrosagg): output the two streams directly
     let (ok_muxed_stream, err_stream) =
-        reclocked_stream.map_fallible("reclock-demux-ok-err", |(output, r)| match r {
-            Ok(ok) => Ok((output, ok)),
-            Err(err) => Err(err),
+        reclocked_stream.map_fallible("reclock-demux-ok-err", |((output, r), ts, diff)| match r {
+            Ok(ok) => Ok(((output, ok), ts, diff)),
+            Err(err) => Err((err, ts, diff.into())),
         });
 
-    let ok_streams = ok_muxed_stream.partition(u64::cast_from(num_outputs), |(output, data)| {
-        (u64::cast_from(output), data)
-    });
+    let ok_streams = ok_muxed_stream
+        .partition(
+            u64::cast_from(num_outputs),
+            |((output, data), time, diff)| (u64::cast_from(output), (data, time, diff)),
+        )
+        .into_iter()
+        .map(|stream| stream.as_collection())
+        .collect();
 
-    ((ok_streams, err_stream), None)
+    ((ok_streams, err_stream.as_collection()), None)
 }
 
 /// Reclocks an `IntoTime` frontier stream into a `FromTime` frontier stream. This is used for the
@@ -1145,16 +1121,27 @@ where
 ///
 /// TODO: This function is a bit of a mess rn but hopefully this function makes
 /// the existing mess more obvious and points towards ways to improve it.
-fn handle_message<K, V, T, D>(
+async fn handle_message<K, V, T, D>(
     message: Result<SourceMessage<K, V>, SourceReaderError>,
     time: T,
     diff: D,
     bytes_read: &mut usize,
     cap_set: &CapabilitySet<mz_repr::Timestamp>,
-    output_handle: &mut OutputHandle<
+    output_handle: &mut AsyncOutputHandle<
         mz_repr::Timestamp,
-        (usize, Result<SourceOutput<K, V, D>, SourceError>),
-        Tee<mz_repr::Timestamp, (usize, Result<SourceOutput<K, V, D>, SourceError>)>,
+        Vec<(
+            (usize, Result<SourceOutput<K, V>, SourceError>),
+            mz_repr::Timestamp,
+            D,
+        )>,
+        Tee<
+            mz_repr::Timestamp,
+            (
+                (usize, Result<SourceOutput<K, V>, SourceError>),
+                mz_repr::Timestamp,
+                D,
+            ),
+        >,
     >,
     metric_updates: &mut BTreeMap<PartitionId, (MzOffset, mz_repr::Timestamp, Diff)>,
     ts: mz_repr::Timestamp,
@@ -1163,7 +1150,7 @@ fn handle_message<K, V, T, D>(
     K: timely::Data + MaybeLength,
     V: timely::Data + MaybeLength,
     T: SourceTimestamp,
-    D: timely::Data,
+    D: Semigroup,
 {
     let (partition, offset) = time
         .try_into_compat_ts()
@@ -1188,7 +1175,6 @@ fn handle_message<K, V, T, D>(
                     message.upstream_time_millis,
                     partition.clone(),
                     message.headers,
-                    diff,
                 )),
             )
         }
@@ -1204,7 +1190,7 @@ fn handle_message<K, V, T, D>(
     };
 
     let ts_cap = cap_set.delayed(&ts);
-    output_handle.session(&ts_cap).give(output);
+    output_handle.give(&ts_cap, (output, ts, diff)).await;
     match metric_updates.entry(partition) {
         Entry::Occupied(mut entry) => {
             entry.insert((offset, ts, entry.get().2 + 1));

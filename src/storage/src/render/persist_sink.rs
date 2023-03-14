@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use differential_dataflow::{Collection, Hashable};
 use mz_persist_types::codec_impls::UnitSchema;
+use mz_persist_types::Codec;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::Scope;
 use timely::progress::frontier::Antichain;
@@ -32,6 +33,8 @@ use crate::storage_state::StorageState;
 
 struct BatchBuilderAndCounts<K, V, T, D>
 where
+    K: Codec,
+    V: Codec,
     T: timely::progress::Timestamp
         + differential_dataflow::lattice::Lattice
         + mz_persist_types::Codec64,
@@ -45,6 +48,8 @@ where
 
 impl<K, V, T, D> BatchBuilderAndCounts<K, V, T, D>
 where
+    K: Codec,
+    V: Codec,
     T: timely::progress::Timestamp
         + differential_dataflow::lattice::Lattice
         + mz_persist_types::Codec64,

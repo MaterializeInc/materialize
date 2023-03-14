@@ -715,6 +715,13 @@ impl<'a> StatementContext<'a> {
         Ok(())
     }
 
+    pub fn require_with_mutually_recursive(&self) -> Result<(), PlanError> {
+        if !self.unsafe_mode() && !self.catalog.system_vars().enable_with_mutually_recursive() {
+            sql_bail!("`WITH MUTUALLY RECURSIVE` syntax is not enabled")
+        }
+        Ok(())
+    }
+
     pub fn finalize_param_types(self) -> Result<Vec<ScalarType>, PlanError> {
         let param_types = self.param_types.into_inner();
         let mut out = vec![];

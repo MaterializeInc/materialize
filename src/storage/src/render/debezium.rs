@@ -11,10 +11,10 @@ use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, VecDeque};
 use std::str::FromStr;
 
-use differential_dataflow::{Collection, Hashable};
+use differential_dataflow::{AsCollection, Collection, Hashable};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{Capability, OkErr, Operator};
-use timely::dataflow::{Scope, ScopeParent, Stream};
+use timely::dataflow::{Scope, ScopeParent};
 
 use mz_expr::EvalError;
 use mz_ore::cast::CastFrom;
@@ -29,17 +29,15 @@ use crate::source::types::DecodeResult;
 
 pub(crate) fn render<G: Scope>(
     envelope: &DebeziumEnvelope,
-    input: &Stream<G, DecodeResult>,
-) -> (
-    Stream<G, (Row, Timestamp, Diff)>,
-    Stream<G, (DataflowError, Timestamp, Diff)>,
-)
+    input: &Collection<G, DecodeResult, Diff>,
+) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
 where
     G: ScopeParent<Timestamp = Timestamp>,
 {
     let (before_idx, after_idx) = (envelope.before_idx, envelope.after_idx);
     // TODO(guswynn): !!! Correctly deduplicate even in the upsert case
-    input
+    let (oks, errs) = input
+        .inner
         .unary(Pipeline, "envelope-debezium", move |_, _| {
             let mut dedup_state = BTreeMap::new();
             let envelope = envelope.clone();
@@ -48,14 +46,17 @@ where
                 while let Some((cap, refmut_data)) = input.next() {
                     let mut session = output.session(&cap);
                     refmut_data.swap(&mut data);
-                    for result in data.drain(..) {
+                    for (result, time, diff) in data.drain(..) {
+                        // TODO(petrosagg): any positive diff should be accepted
+                        assert_eq!(
+                            diff, 1,
+                            "Debezium should only be used with append-only sources"
+                        );
+
                         let value = match result.value {
-                            Some(Ok((value, 1))) => value,
-                            Some(Ok(_)) => unreachable!(
-                                "Debezium should only be used with sources with no explicit diff"
-                            ),
+                            Some(Ok(value)) => value,
                             Some(Err(err)) => {
-                                session.give((Err(err.into()), cap.time().clone(), 1));
+                                session.give((Err(err.into()), time, diff));
                                 continue;
                             }
                             None => continue,
@@ -71,11 +72,7 @@ where
                                 match res {
                                     Ok(b) => b,
                                     Err(err) => {
-                                        session.give((
-                                            Err(DataflowError::from(err)),
-                                            cap.time().clone(),
-                                            1,
-                                        ));
+                                        session.give((Err(DataflowError::from(err)), time, 1));
                                         continue;
                                     }
                                 }
@@ -85,16 +82,12 @@ where
 
                         if should_use {
                             match value.iter().nth(before_idx).unwrap() {
-                                Datum::List(l) => {
-                                    session.give((Ok(Row::pack(&l)), cap.time().clone(), -1))
-                                }
+                                Datum::List(l) => session.give((Ok(Row::pack(&l)), time, -diff)),
                                 Datum::Null => {}
                                 d => panic!("type error: expected record, found {:?}", d),
                             }
                             match value.iter().nth(after_idx).unwrap() {
-                                Datum::List(l) => {
-                                    session.give((Ok(Row::pack(&l)), cap.time().clone(), 1))
-                                }
+                                Datum::List(l) => session.give((Ok(Row::pack(&l)), time, diff)),
                                 Datum::Null => {}
                                 d => panic!("type error: expected record, found {:?}", d),
                             }
@@ -106,17 +99,15 @@ where
         .ok_err(|(res, time, diff)| match res {
             Ok(v) => Ok((v, time, diff)),
             Err(e) => Err((e, time, diff)),
-        })
+        });
+    (oks.as_collection(), errs.as_collection())
 }
 
 pub(crate) fn render_tx<G: Scope>(
     envelope: &DebeziumEnvelope,
-    input: &Stream<G, DecodeResult>,
+    input: &Collection<G, DecodeResult, Diff>,
     tx_ok: Collection<G, Row, Diff>,
-) -> (
-    Stream<G, (Row, Timestamp, Diff)>,
-    Stream<G, (DataflowError, Timestamp, Diff)>,
-)
+) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
 where
     G: ScopeParent<Timestamp = Timestamp>,
 {
@@ -149,12 +140,14 @@ where
         _ => time.hashed(),
     };
 
-    let data_dist = move |result: &DecodeResult| {
+    let data_dist = move |(result, _, diff): &(DecodeResult, _, _)| {
+        // TODO(petrosagg): any positive diff should be accepted
+        assert_eq!(
+            *diff, 1,
+            "Debezium should only be used with append-only sources"
+        );
         let value = match &result.value {
-            Some(Ok((v, 1))) => Some(Ok(v)),
-            Some(Ok(_)) => {
-                unreachable!("Debezium should only be used with sources with no explicit diff")
-            }
+            Some(Ok(v)) => Some(Ok(v)),
             Some(Err(e)) => Some(Err(e)),
             None => None,
         };
@@ -181,10 +174,10 @@ where
             .hashed()
     };
 
-    tx_ok
+    let (oks, errs) = tx_ok
         .inner
         .binary_frontier(
-            input,
+            &input.inner,
             Exchange::new(tx_dist),
             Exchange::new(data_dist),
             "envelope-debezium-tx",
@@ -271,12 +264,12 @@ where
                             let data_cap = data_cap.retain();
                             data_buffer.extend(data.drain(..).map(|r| (r, data_cap.clone())));
                         }
-                        while let Some((result, data_cap)) = data_buffer.pop_front() {
+                        while let Some(((result, time, diff), data_cap)) = data_buffer.pop_front() {
+                            // TODO(petrosagg): any positive diff should be accepted
+                            assert_eq!(diff, 1, "Debezium should only be used with append-only sources");
+
                             let value = match result.value.clone() {
-                                Some(Ok((value, 1))) => value,
-                                Some(Ok(_)) => unreachable!(
-                                    "Debezium should only be used with sources with no explicit diff"
-                                ),
+                                Some(Ok(value)) => value,
                                 Some(Err(err)) => {
                                     output.session(&data_cap).give((
                                         Err(err.into()),
@@ -294,7 +287,7 @@ where
                                     let tx_time: Timestamp = match tx_mapping.get(&tx_id) {
                                         Some(time) => *time,
                                         None => {
-                                            data_buffer.push_front((result, data_cap));
+                                            data_buffer.push_front(((result, time, diff), data_cap));
                                             break;
                                         },
                                     };
@@ -400,7 +393,8 @@ where
         .ok_err(|(res, time, diff)| match res {
             Ok(v) => Ok((v, time, diff)),
             Err(e) => Err((e, time, diff)),
-        })
+        });
+    (oks.as_collection(), errs.as_collection())
 }
 
 /// Track whether or not we should skip a specific debezium message
