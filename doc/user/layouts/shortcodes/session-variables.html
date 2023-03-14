@@ -20,12 +20,14 @@ emit_timestamp_notice                       | `false`                   | Boolea
 emit_trace_id_notice                        | `false`                   | Boolean flag indicating whether to send a `notice` specifying the trace ID, when available.
 extra_float_digits                          | `3`                       | Adjusts the number of digits displayed for floating-point values.
 failpoints                                  |                           | Allows failpoints to be dynamically activated.
+idle_in_transaction_session_timeout         | `120 seconds`             | The maximum allowed duration that a session can sit idle in a transaction before being terminated. If this value is specified without units, it is taken as milliseconds. A value of zero disables the timeout.
 integer_datetimes                           | `true`                    | **Read-only.** Reports whether the server uses 64-bit-integer dates and times.
 intervalstyle                               | `postgres`                | The display format for interval values. The only supported value is `postgres`.
-server_version                              | Version-dependent         | **Read-only.** The server version.
-server_version_num                          | Version-dependent         | **Read-only.** The server version as an integer.
+is_superuser                                |                           | **Read-only.** Reports whether the current session is a superuser.
+mz_version                                  | Version-dependent         | **Read-only.** Shows the Materialize server version.
+server_version                              | Version-dependent         | **Read-only.** The PostgreSQL compatible server version.
+server_version_num                          | Version-dependent         | **Read-only.** The PostgreSQL compatible server version as an integer.
 sql_safe_updates                            | `false`                   | Prohibits SQL statements that may be overly destructive.
 standard_conforming_strings                 | `true`                    | Causes ordinary string literals (`'...'`) to treat backslashes literally. The only supported value is `true`.
-statement_timeout                           | `10 seconds`              | The maximum allowed duration of `INSERT`, `SELECT`, `UPDATE`, and `DELETE` operations.
-idle_in_transaction_session_timeout         | `120 seconds`             | The maximum allowed duration that a session can sit idle in a transaction before being terminated. A value of zero disables the timeout.
+statement_timeout                           | `10 seconds`              | The maximum allowed duration of `INSERT`, `SELECT`, `UPDATE`, and `DELETE` operations. If this value is specified without units, it is taken as milliseconds.
 timezone                                    | `UTC`                     | The time zone for displaying and interpreting timestamps. The only supported value is `UTC`.

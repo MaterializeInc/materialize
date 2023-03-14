@@ -22,7 +22,7 @@ emit_timestamp_notice                   off                    "Boolean flag ind
 emit_trace_id_notice                    off                    "Boolean flag indicating whether to send a NOTICE specifying the trace id when available (Materialize)."
 extra_float_digits                      3                      "Adjusts the number of digits displayed for floating-point values (PostgreSQL)."
 failpoints                              ""                     "Allows failpoints to be dynamically activated."
-idle_in_transaction_session_timeout     "2 min"                "Sets the maximum allowed duration that a session can sit idle in a transaction before being terminated. A value of zero disables the timeout (PostgreSQL)."
+idle_in_transaction_session_timeout     "2 min"                "Sets the maximum allowed duration that a session can sit idle in a transaction before being terminated. If this value is specified without units, it is taken as milliseconds. A value of zero disables the timeout (PostgreSQL)."
 integer_datetimes                       on                     "Reports whether the server uses 64-bit-integer dates and times (PostgreSQL)."
 IntervalStyle                           postgres               "Sets the display format for interval values (PostgreSQL)."
 max_aws_privatelink_connections         0                      "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize)."
@@ -40,14 +40,14 @@ max_sources                             25                     "The maximum numb
 max_tables                              25                     "The maximum number of tables in the region, across all schemas (Materialize)."
 mz_version                              <VARIES>               "Shows the Materialize server version (Materialize)."
 search_path                             "public"               "Sets the schema search order for names that are not schema-qualified (PostgreSQL)."
-server_version                          9.5.0                  "Shows the server version (PostgreSQL)."
-server_version_num                      90500                  "Shows the server version as an integer (PostgreSQL)."
+server_version                          9.5.0                  "Shows the PostgreSQL compatible server version (PostgreSQL)."
+server_version_num                      90500                  "Shows the PostgreSQL compatible server version as an integer (PostgreSQL)."
 sql_safe_updates                        off                    "Prohibits SQL statements that may be overly destructive (CockroachDB)."
 standard_conforming_strings             on                     "Causes '...' strings to treat backslashes literally (PostgreSQL)."
-statement_timeout                       "10 s"                 "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations."
+statement_timeout                       "10 s"                 "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations. If this value is specified without units, it is taken as milliseconds."
 TimeZone                                UTC                    "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
 transaction_isolation                   "strict serializable"  "Sets the current transaction's isolation level (PostgreSQL)."
-is_superuser                            off                    "Indicates whether the current session is a super user (PostgreSQL)."
+is_superuser                            off                    "Reports whether the current session is a superuser (PostgreSQL)."
 
 > SET application_name = 'foo'
 

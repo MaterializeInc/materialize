@@ -239,7 +239,8 @@ const STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("statement_timeout"),
     value: &Duration::from_secs(10),
     description:
-        "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations.",
+        "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations. \
+        If this value is specified without units, it is taken as milliseconds.",
     internal: false,
     safe: true,
 };
@@ -249,7 +250,8 @@ const IDLE_IN_TRANSACTION_SESSION_TIMEOUT: ServerVar<Duration> = ServerVar {
     value: &Duration::from_secs(60 * 2),
     description:
         "Sets the maximum allowed duration that a session can sit idle in a transaction before \
-         being terminated. A value of zero disables the timeout (PostgreSQL).",
+         being terminated. If this value is specified without units, it is taken as milliseconds. \
+         A value of zero disables the timeout (PostgreSQL).",
     internal: false,
     safe: true,
 };
@@ -263,7 +265,7 @@ const SERVER_VERSION: ServerVar<str> = ServerVar {
         ".",
         SERVER_PATCH_VERSION
     ),
-    description: "Shows the server version (PostgreSQL).",
+    description: "Shows the PostgreSQL compatible server version (PostgreSQL).",
     internal: false,
     safe: true,
 };
@@ -273,7 +275,7 @@ const SERVER_VERSION_NUM: ServerVar<i32> = ServerVar {
     value: &((cast::u8_to_i32(SERVER_MAJOR_VERSION) * 10_000)
         + (cast::u8_to_i32(SERVER_MINOR_VERSION) * 100)
         + cast::u8_to_i32(SERVER_PATCH_VERSION)),
-    description: "Shows the server version as an integer (PostgreSQL).",
+    description: "Shows the PostgreSQL compatible server version as an integer (PostgreSQL).",
     internal: false,
     safe: true,
 };
@@ -2071,7 +2073,7 @@ impl Var for User {
     }
 
     fn description(&self) -> &'static str {
-        "Indicates whether the current session is a super user (PostgreSQL)."
+        "Reports whether the current session is a superuser (PostgreSQL)."
     }
 
     fn type_name(&self) -> &'static str {
