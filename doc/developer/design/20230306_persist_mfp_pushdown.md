@@ -342,6 +342,7 @@ feature set it helps enable.
 -->
 
 * The specific interface Persist can give to Compute to apply MFPs to part stats
+* For record fields, whether we compute mins/maxs for each individual subcolumn, or do a lexicographical sort (sort col 1 first, secondary sort on col 2, tertiary sort on col 3, ... etc) for the whole value. e.g. if our dataset is `[(5, 10), (0, 20)]` do we return `(0, 20)` as the min, or store a min per column where the first field is `0` and the second field is `10`? Spitballing: since this is similar to how we return both min columns and rows at the outermost level, maybe we want to mirror that behavior and do both
 * What format part statistics are stored in (Parquet with the same schema as the data? Proto? Something custom?), as well
 where they are stored (Consensus vs Blob)
 
