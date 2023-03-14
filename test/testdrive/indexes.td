@@ -279,7 +279,6 @@ mz_active_peeks_s2_primary_idx                              mz_active_peeks     
 mz_arrangement_batches_internal_s2_primary_idx              mz_arrangement_batches_internal             mz_introspection    {operator_id,worker_id}
 mz_arrangement_records_internal_s2_primary_idx              mz_arrangement_records_internal             mz_introspection    {operator_id,worker_id}
 mz_arrangement_sharing_internal_s2_primary_idx              mz_arrangement_sharing_internal             mz_introspection    {operator_id,worker_id}
-mz_cluster_replicas_ind                                     mz_cluster_replicas                         mz_introspection    {id}
 mz_clusters_ind                                             mz_clusters                                 mz_introspection    {id}
 mz_compute_exports_s2_primary_idx                           mz_compute_exports                          mz_introspection    {export_id,worker_id}
 mz_dataflow_addresses_s2_primary_idx                        mz_dataflow_addresses                       mz_introspection    {id,worker_id}

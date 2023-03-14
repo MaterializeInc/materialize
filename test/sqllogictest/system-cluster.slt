@@ -248,7 +248,6 @@ Explained Query:
 
 Used Indexes:
   - mz_internal.mz_clusters_ind
-  - mz_internal.mz_cluster_replicas_ind
 
 EOF
 
