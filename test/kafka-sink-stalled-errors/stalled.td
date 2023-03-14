@@ -37,6 +37,6 @@ $ set-regex match="\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d(\.\d\d\d)?" replacement="<T
 > INSERT INTO sink_table VALUES (2);
 
 # We should get a stalled error message next
-> SELECT status, sink_id, error, jsonb_object_keys(details) FROM mz_internal.mz_sink_status_history
+> SELECT status, sink_id, error, details::json#>>'{hint}' as hint FROM mz_internal.mz_sink_status_history
   WHERE sink_id = '${sink_id}' AND status = 'stalled' LIMIT 1;
-stalled ${sink_id} "retriable transaction error" hint
+stalled ${sink_id} "retriable transaction error" "If you're running a single Kafka broker, ensure that the configs transaction.state.log.replication.factor, transaction.state.log.min.isr, and offsets.topic.replication.factor are set to 1 on the broker"

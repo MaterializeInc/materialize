@@ -929,10 +929,9 @@ impl KafkaSinkState {
                             {
                                 Some(
                                     "If you're running a single Kafka broker, ensure \
-                                    that the following configs are set to 1 on the broker:\n\
-                                    - transaction.state.log.replication.factor\n\
-                                    - transaction.state.log.min.isr\n\
-                                    - offsets.topic.replication.factor"
+                                    that the configs transaction.state.log.replication.factor, \
+                                    transaction.state.log.min.isr, and \
+                                    offsets.topic.replication.factor are set to 1 on the broker"
                                         .to_string(),
                                 )
                             } else {
