@@ -4245,6 +4245,9 @@ impl Catalog {
         F: FnOnce(&CatalogState) -> Result<R, AdapterError>,
     {
         trace!("transact: {:?}", ops);
+        fail::fail_point!("catalog_transact", |arg| {
+            Err(AdapterError::Unstructured(anyhow::anyhow!("failpoint: {arg:?}")))
+        });
 
         let drop_ids: BTreeSet<_> = ops
             .iter()
