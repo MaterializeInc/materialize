@@ -7555,6 +7555,7 @@ mod tests {
 
     // Test that if a large catalog item is somehow committed, then we can still load the catalog.
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // slow
     async fn test_large_catalog_item() {
         let view_def = "CREATE VIEW \"materialize\".\"public\".\"v\" AS SELECT 1 FROM (SELECT 1";
         let column = ", 1";

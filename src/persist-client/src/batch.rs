@@ -742,6 +742,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn batch_builder_flushing() {
         mz_ore::test::init_logging();
         let data = vec![
@@ -815,6 +816,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn batch_builder_keys() {
         mz_ore::test::init_logging();
 

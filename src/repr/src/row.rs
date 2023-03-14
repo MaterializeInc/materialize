@@ -2151,6 +2151,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_datum_sizes() {
         let arena = RowArena::new();
 

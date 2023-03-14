@@ -133,7 +133,7 @@ steps:
   - id: miri-test
     label: Miri test
     command: bin/ci-builder run nightly ci/test/cargo-test-miri.sh
-    inputs: [src/repr]
+    inputs: [src]
     timeout_in_minutes: 30
     agents:
       queue: builder-linux-x86_64

@@ -98,6 +98,7 @@ pub static C2: TypedCollection<i64, i64> = TypedCollection::new("c2");
 pub static C_SAVEPOINT: TypedCollection<i64, i64> = TypedCollection::new("c_savepoint");
 
 #[tokio::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_stash_postgres() {
     mz_ore::test::init_logging();
 
@@ -924,6 +925,7 @@ async fn test_stash_table(stash: &mut Stash) {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // Broken, see #18122
 fn test_table() {
     fn uniqueness_violation(a: &String, b: &String) -> bool {
         a == b

@@ -901,6 +901,7 @@ mod tests {
     // ignore by default.
     proptest! {
         #[test]
+        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn reduce_plan_protobuf_roundtrip(expect in any::<ReducePlan>() ) {
             let actual = protobuf_roundtrip::<_, ProtoReducePlan>(&expect);
             assert!(actual.is_ok());

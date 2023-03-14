@@ -1826,6 +1826,7 @@ mod tests {
 
     proptest! {
         #[test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn parse_error_protobuf_roundtrip(expect in any::<ParseError>()) {
             let actual = protobuf_roundtrip::<_, ProtoParseError>(&expect);
             assert!(actual.is_ok());

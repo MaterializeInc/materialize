@@ -509,6 +509,7 @@ mod tests {
     use super::*;
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn postgres_consensus() -> Result<(), ExternalError> {
         let config = match PostgresConsensusConfig::new_for_test()? {
             Some(config) => config,

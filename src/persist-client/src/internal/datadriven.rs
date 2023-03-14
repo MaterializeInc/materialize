@@ -173,6 +173,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn machine() {
         use crate::internal::machine::datadriven as machine_dd;
 

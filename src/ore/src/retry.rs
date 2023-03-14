@@ -516,6 +516,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
     async fn test_retry_async_success() {
         let mut states = vec![];
         let res = Retry::default()
@@ -581,6 +582,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
     async fn test_retry_async_fatal() {
         let mut states = vec![];
         let res = Retry::default()
@@ -613,6 +615,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
     async fn test_retry_fail_max_tries() {
         let mut states = vec![];
         let res = Retry::default()
@@ -643,6 +646,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
     async fn test_retry_async_fail_max_tries() {
         let mut states = vec![];
         let res = Retry::default()
@@ -674,6 +678,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
     fn test_retry_fail_max_duration() {
         let mut states = vec![];
         let res = Retry::default()
@@ -713,6 +718,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
     async fn test_retry_async_fail_max_duration() {
         let mut states = vec![];
         let res = Retry::default()
@@ -756,6 +762,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
     fn test_retry_fail_clamp_backoff() {
         let mut states = vec![];
         let res = Retry::default()
@@ -791,6 +798,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
     async fn test_retry_async_fail_clamp_backoff() {
         let mut states = vec![];
         let res = Retry::default()
@@ -829,6 +837,7 @@ mod tests {
     /// Test that canceling retry operations surface the last error when the
     /// underlying future is not explicitly timed out.
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
     async fn test_retry_async_canceling_uncanceled_failure() {
         let res = Retry::default()
             .max_duration(Duration::from_millis(100))
@@ -840,6 +849,7 @@ mod tests {
     /// Test that canceling retry operations surface the last error when the
     /// underlying future *is* not explicitly timed out.
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
     async fn test_retry_async_canceling_canceled_failure() {
         let res = Retry::default()
             .max_duration(Duration::from_millis(100))
@@ -858,6 +868,7 @@ mod tests {
     /// Test that the "deadline has elapsed" error is surfaced when there is
     /// no other error to surface.
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
     async fn test_retry_async_canceling_canceled_first_failure() {
         let res = Retry::default()
             .max_duration(Duration::from_millis(100))
@@ -870,6 +881,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
     async fn test_retry_reader() {
         use tokio::io::AsyncReadExt;
 

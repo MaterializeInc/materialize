@@ -85,6 +85,7 @@ use mz_storage_client::types::sources::{encoding::SourceDataEncoding, SourceEnve
 mod setup;
 
 #[test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_datadriven() {
     datadriven::walk("tests/datadriven", |f| {
         let mut sources: BTreeMap<

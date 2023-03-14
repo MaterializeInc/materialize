@@ -103,6 +103,7 @@ use mz_sql_parser::parser::{
 };
 
 #[test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn datadriven() {
     use datadriven::{walk, TestCase};
 
@@ -179,6 +180,7 @@ fn datadriven() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn op_precedence() -> Result<(), Box<dyn Error>> {
     struct RemoveParens;
 
@@ -249,6 +251,7 @@ fn format_ident() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
     struct Visitor<'a> {
         seen_idents: Vec<&'a str>,
@@ -356,6 +359,7 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // too slow
 fn test_max_statement_batch_size() {
     let statement = "SELECT 1;";
     let size = statement.bytes().count();

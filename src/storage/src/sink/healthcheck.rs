@@ -180,6 +180,7 @@ mod tests {
 
     // Test suite
     #[tokio::test(start_paused = true)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn test_startup() {
         let persist_cache = persist_cache();
         let healthchecker = simple_healthchecker(ShardId::new(), 1, &persist_cache).await;
@@ -196,6 +197,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn test_bootstrap_different_sources() {
         let shard_id = ShardId::new();
         let persist_cache = persist_cache();
@@ -216,6 +218,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn test_repeated_update() {
         let shard_id = ShardId::new();
         let persist_cache = persist_cache();
@@ -255,6 +258,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn test_forbidden_transition() {
         let shard_id = ShardId::new();
         let persist_cache = persist_cache();

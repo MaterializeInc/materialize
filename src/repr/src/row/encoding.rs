@@ -542,6 +542,7 @@ mod tests {
     // catch any changes in the encoding.
 
     #[test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn roundtrip() {
         let mut row = Row::default();
         let mut packer = row.packer();

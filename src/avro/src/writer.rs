@@ -531,6 +531,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `deflateInit2_` on OS `linux`
     fn test_writer_with_codec() {
         let schema = Schema::from_str(SCHEMA).unwrap();
         let mut writer = Writer::with_codec(schema.clone(), Vec::new(), Codec::Deflate);
