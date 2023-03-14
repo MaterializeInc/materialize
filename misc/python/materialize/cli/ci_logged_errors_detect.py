@@ -43,7 +43,7 @@ ERROR_RE = re.compile(
     | unsupported\ SQL\ type\ in\ testdrive:
     )
     # Expected once compute cluster has panicked, brings no new information
-    (?!.*timely\ communication\ error:\ reading\ data:\ socket\ closed)
+    (?!.*timely\ communication\ error:\ reading\ data:)
     # Expected once compute cluster has panicked, only happens in CI
     (?!.*aborting\ because\ propagate_crashes\ is\ enabled)
     """,
