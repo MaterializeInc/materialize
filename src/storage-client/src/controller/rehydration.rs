@@ -445,6 +445,8 @@ where
                 }
             }
             StorageResponse::DroppedIds(dropped_ids) => {
+                tracing::debug!("dropped IDs: {:?}", dropped_ids);
+
                 for id in dropped_ids.iter() {
                     self.sources.remove(id);
                     self.sinks.remove(id);
