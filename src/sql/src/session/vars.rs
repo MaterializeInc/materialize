@@ -239,7 +239,8 @@ const STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("statement_timeout"),
     value: &Duration::from_secs(10),
     description:
-        "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations.",
+        "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations. \
+        If this value is specified without units, it is taken as milliseconds.",
     internal: false,
     safe: true,
 };
@@ -249,7 +250,8 @@ const IDLE_IN_TRANSACTION_SESSION_TIMEOUT: ServerVar<Duration> = ServerVar {
     value: &Duration::from_secs(60 * 2),
     description:
         "Sets the maximum allowed duration that a session can sit idle in a transaction before \
-         being terminated. A value of zero disables the timeout (PostgreSQL).",
+         being terminated. If this value is specified without units, it is taken as milliseconds.\
+         A value of zero disables the timeout (PostgreSQL).",
     internal: false,
     safe: true,
 };
