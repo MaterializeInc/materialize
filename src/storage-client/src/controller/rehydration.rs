@@ -44,7 +44,6 @@ use crate::client::{
     CreateSinkCommand, CreateSourceCommand, StorageClient, StorageCommand, StorageGrpcClient,
     StorageResponse,
 };
-use crate::controller::ResumptionFrontierCalculator;
 use crate::metrics::RehydratingStorageClientMetrics;
 use crate::types::parameters::StorageParameters;
 
@@ -69,10 +68,13 @@ where
     /// a storage replica.
     pub fn new(
         build_info: &'static BuildInfo,
-        persist: Arc<PersistClientCache>,
+        _persist: Arc<PersistClientCache>,
         metrics: RehydratingStorageClientMetrics,
         envd_epoch: NonZeroI64,
     ) -> RehydratingStorageClient<T> {
+        // NOTE: We currently don't need access to persist, so we could remove
+        // it from new() as well.
+
         let (command_tx, command_rx) = unbounded_channel();
         let (response_tx, response_rx) = unbounded_channel();
         let mut task = RehydrationTask {
@@ -86,7 +88,6 @@ where
             initialized: false,
             current_epoch: ClusterStartupEpoch::new(envd_epoch, 0),
             config: Default::default(),
-            persist,
             metrics,
         };
         let task = mz_ore::task::spawn(|| "rehydration", async move { task.run().await });
@@ -152,8 +153,6 @@ struct RehydrationTask<T> {
     current_epoch: ClusterStartupEpoch,
     /// Storage configuration that has been observed.
     config: StorageParameters,
-    /// A handle to Persist
-    persist: Arc<PersistClientCache>,
     /// Prometheus metrics
     metrics: RehydratingStorageClientMetrics,
 }
@@ -295,15 +294,6 @@ where
 
             break (client, timely_command);
         };
-
-        for ingest in self.sources.values_mut() {
-            let mut state = ingest.description.initialize_state(&self.persist).await;
-            let resume_upper = ingest
-                .description
-                .calculate_resumption_frontier(&mut state)
-                .await;
-            ingest.resume_upper = resume_upper;
-        }
 
         // Rehydrate all commands.
         let mut commands = vec![
