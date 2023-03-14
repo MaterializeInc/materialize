@@ -57,8 +57,8 @@ In this query, the frame extends 4 rows backwards, and ends at the current row (
 
 The exact meaning of the offset depends on the _frame mode_:
 - In `ROWS` mode (such as above), the frame extends for the specified number of rows (or less, for rows near the beginning or end of the partition).
-- In `GROUPS` mode, the frame extends for the specified number of peer groups, where a peer group is a set of rows that are equal on both the `PARTITION BY` and the `ORDER BY`.
-- In `RANGE` mode, the frame extends to those rows whose difference from the current row on the `ORDER BY` column is not greater than the offset (only one ORDER BY column is allowed for this frame mode). For example, the following query computes a moving average with a frame size of 5 minutes (which might be more useful than a `ROWS` offset when the measurement values are at irregular times):
+- In `GROUPS` mode, the frame extends for the specified number of peer groups.
+- In `RANGE` mode, the frame extends to those rows whose difference from the current row on the `ORDER BY` column is not greater than the offset (only one ORDER BY column is allowed for this frame mode). For example, the following query computes a moving average with a frame size of 5 minutes (which might be more useful than a `ROWS` offset when the measurements are taken at irregular times):
 ```SQL
 SELECT sensor_id, time, AVG(measurement_value)
     OVER (ORDER BY time PARTITION BY sensor_id
@@ -116,9 +116,9 @@ The current way of executing window functions is to put entire window partitions
 We'll use several approaches to solve the many cases mentioned in [Goals](#goals):
 
 1. We'll use [DD's prefix_sum](https://github.com/TimelyDataflow/differential-dataflow/blob/master/src/algorithms/prefix_sum.rs) with some tricky sum functions and some generalizations.
-2. We'll use a special-purpose rendering for LAG/LEAD of offset 1 with no IGNORE NULLS, which will be simpler and more efficient than Prefix Sum.
+2. We'll use a [special-purpose rendering](#Special-rendering-for-LAG-and-LEAD) for LAG/LEAD of offset 1 with no IGNORE NULLS, which will be simpler and more efficient than Prefix Sum.
 3. As an extension of 1., we'll use a generalization of DD's prefix sum to arbitrary intervals (i.e., not just prefixes).
-4. We'll transform away window functions in some special cases (e.g., to TopK, or a simple grouped aggregation + self-join)
+4. We'll transform away window functions in some special cases (e.g., to TopK, or a simple grouped aggregation + self-join).
 5. Initially, we will resort to the old window function implementation in some cases, but this should become less and less over time. I think it will be possible to eventually implement all window function usage with the above 1.-4. approaches, but it will take time to get there.
 
 ### Getting window functions from SQL to the rendering
@@ -141,7 +141,7 @@ from cities;
 
 To avoid creating a new enum variant in MirRelationExpr, we will recognize the above pattern during the MIR-to-LIR lowering, and create a new LIR enum variant for window functions. I estimate this pattern recognition to need about 15-20 if/match statements. It can happen that this pattern recognition approach turns out to be too brittle: we might accidentally leave out cases when the pattern is slightly different due to unrelated MIR transforms, plus we might break it from time to time with unrelated MIR transform changes. If this happens, then we might reconsider creating a new MIR enum variant later. (Which would be easier after the optimizer refactoring/cleanup.) For an extended discussion on alternative representations in HIR/MIR/LIR, see the [Representing window functions in each of the IRs](#Representing-window-functions-in-each-of-the-IRs) section.
 
-Also, we will want to entirely transform away certain window function patterns; most notable is the ROW_NUMBER-to-TopK transform. For this, we need to canonicalize scalar expressions, which I think we usually do in MIR. This means that transforming away these window function patterns should happen on MIR. This will start by again recognizing the above general windowing pattern, and then performing pattern recognition of the TopK pattern.
+Also, we will want to entirely transform away certain window function patterns; most notable is the ROW_NUMBER-to-TopK transform. For this, we need to canonicalize scalar expressions, which I think we usually do in MIR. This means that transforming away these window function patterns should happen on MIR. This will start by, again, recognizing the above general windowing pattern, and then performing pattern recognition of the TopK-expressed-with-ROW_NUMBER pattern.
 
 ### Prefix Sum
 
@@ -236,7 +236,7 @@ SELECT name, pop, CAST(pop AS float) / LAG(pop) OVER (PARTITION BY state ORDER B
 FROM cities;
 ```
 
-For LAG/LEAD with an offset of 1, the sum function will just remember the previous value if it exists, and `None` if it does not. (And we can have a similar one for LEAD.) This has the following properties:
+For LAG with an offset of 1, the sum function will just remember the previous value if it exists, and `None` if it does not. (And we can have a similar one for LEAD.) This has the following properties:
 
 - It's associative.
 - It's not commutative, but that isn't a problem for Prefix Sum.
@@ -249,7 +249,7 @@ For LAG/LEAD with *k > 1* (which computes the given expression not for the previ
 ##### 1.b. ROW_NUMBER, RANK, DENSE_RANK, PERCENT_RANK, CUME_DIST, NTILE
 
 For example: List the two biggest cities of each state:
-(Note that we can't directly write `ROW_NUMBER() <= 2`, because window functions are not allowed in WHERE clause, since window functions are executed _after_ WHERE, GROUP BY, HAVING.)
+(Note that we can't directly write `ROW_NUMBER() <= 2`, because window functions are not allowed in the WHERE clause, since window functions are executed _after_ WHERE, GROUP BY, and HAVING.)
 
 ```sql
 SELECT state, name
@@ -261,7 +261,7 @@ FROM (
 WHERE row_num <= 2;
 ```
 
-There is the **TopK** special case, i.e., where the user specifies `ROW_NUMBER() <= k` (or similar). We want to transform this pattern to our efficient TopK implementation, rather than using prefix sum. This should probably be an MIR transform. This way we can rely on MirScalarExpr canonicalization when detecting different variations of `rownum <= k`, e.g., `k >= rownum`, `rownum < k+1`, `rownum - 1 < k`.
+There is the **TopK** special case, i.e., where the user specifies `ROW_NUMBER() <= k` (or similar). We want to transform this pattern (and its variations) to our efficient TopK/Top1 implementation, rather than using prefix sum. This should probably be an MIR transform, because then we can rely on `MirScalarExpr` canonicalization when detecting different variations of `rownum <= k`, e.g., `k >= rownum`, `rownum < k+1`, `rownum - 1 < k`.
 
 In most situations other than TopK, these functions cannot be implemented efficiently in a streaming setting, because small input changes often lead to big output changes. However, as noted in the [Goals](#Goals) section, there are some special cases where small input changes will lead to small output changes. These will be possible to support efficiently by performing a Prefix Sum with an appropriate sum function.
 
@@ -317,11 +317,11 @@ SELECT state, name, pop,
 FROM cities;
 ```
 
-These also operate based on a **frame**, similarly to window aggregations. (The above example query doesn't specify a frame, therefore it uses the default frame: from the beginning of the partition to the current row) They can be similarly implemented to window aggregations, i.e., we could “sum” up the relevant interval (that is not necessarily a prefix) with an appropriate sum function.
+These also operate based on a **frame**, similarly to window aggregations. (The above example query doesn't specify a frame, therefore it uses the default frame: from the beginning of the partition to the current row.)
 
-Alternatively, we could make these a bit faster (except for NTH_VALUE) if we just find the index of the relevant end of the interval (i.e., left end for FIRST_VALUE), and then self-join.
+These could be implemented similarly to window aggregations, i.e., we could “sum” up the relevant interval (that is not necessarily a prefix) with an appropriate sum function. However, we will use a faster way to implement them (except for NTH_VALUE): we just find the index of the relevant end of the frame interval (i.e., left end for FIRST_VALUE), and then self-join. (This will happen in the MIR-to-LIR lowering, since finding the end of the interval is not expressible in MIR, as it is the same operation as finding the ends of frames for window aggregations.)
 
-(And there are some special cases when we can transform away the window function usage: FIRST_VALUE with UNBOUNDED PRECEDING and LAST_VALUE with UNBOUNDED FOLLOWING should be transformed to just a (non-windowed) grouped aggregation + self-join instead of prefix sum trickery. Also, similarly for the case when there is no ORDER BY.)
+There are also some special cases where we can transform away the window function usage: FIRST_VALUE with UNBOUNDED PRECEDING and LAST_VALUE with UNBOUNDED FOLLOWING should be transformed to just a Top1 on the PARTITION BY key + a self-join on the same key instead of prefix sum trickery. This approach also works for the case when there is no ORDER BY, since in this case an entire partition is a single peer group.
 
 ----------------------
 
@@ -392,7 +392,7 @@ How many bits we should chop off in one step involves a similar trade-off as a h
 
 This will reduce the time overhead of `aggregate`. It will also reduce the memory overhead of `aggregate` by reducing the memory need of the internal operations, but it won't reduce the total output size of `aggregate`.
 
-#### Special rendering for LAG/LEAD
+#### Special rendering for LAG and LEAD
 
 Instead of prefix sum, we will have a special rendering for LAG/LEAD: A similar iteration to `aggregate` will chop off 6 bits of the indexes in each step, but the `reduce` logic will simply perform the LAG/LEAD on those elements that went into one invocation of the logic (instead of summing intervals). It can perform the LAG on all but the first element of the list of elements that go into a single invocation of the logic. The first element it will just send onwards to later steps. Therefore, the output will include two kinds of values: one will be final LAG values, and the other will be values that are still waiting for their LAG results. These special values will be met up with the last elements of the input list of the `reduce` logic of the next step.
 
@@ -507,7 +507,7 @@ The 3 representation options in MIR are:
 
 *1. Create a dedicated enum variant in `MirRelationExpr`*
 
-I think this is better than 2., because Map (and MirScalarExprs in general) should have the semantics that they can be evaluated by just looking at one input element, while a window function needs to look at large parts of a window partition. If we were to put window functions into scalar expressions, then we would need to check lots of existing code that is processing MirScalarExprs that they are not getting unpleasantly surprised by window functions.
+I think this is better than 2., because Map (and `MirScalarExpr`s in general) should have the semantics that they can be evaluated by just looking at one input element, while a window function needs to look at large parts of a window partition. If we were to put window functions into scalar expressions, then we would need to check lots of existing code that is processing `MirScalarExpr`s that they are not getting unpleasantly surprised by window functions.
 
 Compared to 3., it might be easier to skip window functions in many transforms. This is both good and bad:
   - We can get a first version done more quickly. (And then potentially add optimizations later.)
