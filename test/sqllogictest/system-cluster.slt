@@ -224,19 +224,30 @@ ORDER BY r.id;
 ----
 Explained Query:
   Finish order_by=[#0 asc nulls_last] output=[#0..=#5]
-    Project (#0..=#3, #6, #10)
-      Join on=(#0 = #7 AND #2 = #5) type=differential
-        ArrangeBy keys=[[#0]]
-          Get mz_catalog.mz_cluster_replicas
+    Project (#0..=#3, #5, #7)
+      Join on=(#0 = #6 AND #2 = #4) type=differential
+        ArrangeBy keys=[[#2]]
+          Project (#0..=#3)
+            Get mz_catalog.mz_cluster_replicas
         ArrangeBy keys=[[#0]]
           Get mz_catalog.mz_clusters
         ArrangeBy keys=[[#0]]
-          Get mz_internal.mz_cluster_replica_utilization
+          Project (#0, #6)
+            Map (((uint8_to_double(#5) / uint8_to_double(#3)) * 100))
+              Join on=(#0 = #4 AND #1 = #2) type=differential
+                ArrangeBy keys=[[#1]]
+                  Project (#0, #3)
+                    Filter (#3) IS NOT NULL
+                      Get mz_catalog.mz_cluster_replicas
+                ArrangeBy keys=[[#0]]
+                  Project (#0, #4)
+                    Get mz_internal.mz_cluster_replica_sizes
+                ArrangeBy keys=[[#0]]
+                  Project (#0, #3)
+                    Get mz_internal.mz_cluster_replica_metrics
 
 Used Indexes:
   - mz_internal.mz_clusters_ind
-  - mz_internal.mz_cluster_replicas_ind
-  - mz_internal.mz_cluster_replica_utilization_ind
 
 EOF
 
