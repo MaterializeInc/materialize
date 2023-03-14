@@ -47,7 +47,7 @@ standard_conforming_strings             on                     "Causes '...' str
 statement_timeout                       "10 s"                 "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations. If this value is specified without units, it is taken as milliseconds."
 TimeZone                                UTC                    "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
 transaction_isolation                   "strict serializable"  "Sets the current transaction's isolation level (PostgreSQL)."
-is_superuser                            off                    "Indicates whether the current session is a super user (PostgreSQL)."
+is_superuser                            off                    "Reports whether the current session is a super user (PostgreSQL)."
 
 > SET application_name = 'foo'
 
