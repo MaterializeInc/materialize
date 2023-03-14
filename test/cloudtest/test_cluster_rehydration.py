@@ -13,8 +13,8 @@ from materialize.cloudtest.application import MaterializeApplication
 
 
 # Test that a crashed (and restarted) cluster replica handles rehydration
-# correctly. Currently only tests #18102.
-def test_crash_clusterd(mz: MaterializeApplication) -> None:
+# correctly by not recreating dropped sources. Tests #18102.
+def test_create_drop_source(mz: MaterializeApplication) -> None:
     mz.testdrive.run(
         input=dedent(
             """
@@ -51,8 +51,9 @@ def test_crash_clusterd(mz: MaterializeApplication) -> None:
             > SELECT COUNT(*) FROM (SHOW SOURCES);
             0
 
+            # Ensure that there are no sources currently running from the perspective of mz_source_status_history
             > SELECT COUNT(*) FROM mz_internal.mz_source_status_history JOIN ( SELECT source_id AS src, max(occurred_at) AS ocr FROM mz_internal.mz_source_status_history GROUP BY source_id ) AS newest ON newest.src = source_id AND newest.ocr = occurred_at WHERE status = 'running';
-            1
+            0
             """
         ),
         no_reset=True,
