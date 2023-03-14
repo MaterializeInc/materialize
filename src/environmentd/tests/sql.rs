@@ -2488,3 +2488,44 @@ fn test_dont_drop_sinks_twice() {
     let msg = msgs.pop().unwrap();
     assert!(msg.message().starts_with("subscribe has been terminated"));
 }
+
+#[test]
+fn test_concurrent_role_drop() {
+    const ROLE_NAME: &str = "foo";
+    let config = util::Config::default().with_now(NOW_ZERO.clone());
+    let server = util::start_server(config).unwrap();
+    let mut foo_client = server
+        .pg_config()
+        .user(ROLE_NAME)
+        .connect(postgres::NoTls)
+        .unwrap();
+    let mut sys_client = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+    sys_client
+        .execute("ALTER SYSTEM SET enable_rbac_checks TO true", &[])
+        .unwrap();
+    assert_eq!(
+        1,
+        foo_client
+            .query_one("SELECT 1;", &[])
+            .unwrap()
+            .get::<_, i32>(0)
+    );
+
+    sys_client
+        .execute(&format!("DROP ROLE {ROLE_NAME}"), &[])
+        .unwrap();
+    let err = foo_client
+        .query_one("SELECT 1;", &[])
+        .unwrap_err()
+        .unwrap_db_error();
+
+    assert_eq!(&SqlState::UNDEFINED_OBJECT, err.code());
+    assert!(
+        err.message().contains("was concurrently dropped"),
+        "unexpected error: {err:?}",
+    );
+}

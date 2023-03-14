@@ -38,12 +38,16 @@ use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{PreparedStatement, Session, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
-use crate::{catalog, metrics};
+use crate::{catalog, metrics, rbac};
 
 impl Coordinator {
     pub(crate) async fn handle_command(&mut self, mut cmd: Command) {
         if let Some(session) = cmd.session() {
             session.apply_external_metadata_updates();
+        }
+        if let Err(e) = rbac::check_command(&self.catalog, &cmd) {
+            cmd.send_error(e.into());
+            return;
         }
         match cmd {
             Command::Startup {

@@ -293,6 +293,8 @@ pub trait CatalogSchema {
     fn has_items(&self) -> bool;
 }
 
+// TODO(jkosh44) When https://github.com/MaterializeInc/materialize/issues/17824 is implemented
+//  then switch this to a bitflag (https://docs.rs/bitflags/latest/bitflags/)
 /// Attributes belonging to a [`CatalogRole`].
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct RoleAttributes {

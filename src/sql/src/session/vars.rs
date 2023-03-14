@@ -561,6 +561,16 @@ static MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<mz_repr::Timestamp>> = Serve
     safe: false,
 };
 
+pub const ENABLE_RBAC_CHECKS: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_rbac_checks"),
+    // TODO(jkosh44) Once RBAC is complete, change this to `true` and write a migration to update
+    //  it to false for existing users.
+    value: &false,
+    description: "Boolean flag indicating whether to apply RBAC checks before executing statements (Materialize).",
+    internal: true,
+    safe: true,
+};
+
 /// Represents the input to a variable.
 ///
 /// Each variable has different rules for how it handles each style of input.
@@ -1185,6 +1195,11 @@ impl SessionVars {
         *self.emit_trace_id_notice.value()
     }
 
+    /// Returns the value of `is_superuser` configuration parameter.
+    pub fn is_superuser(&self) -> bool {
+        self.user.is_superuser()
+    }
+
     /// Returns the user associated with this `SessionVars` instance.
     pub fn user(&self) -> &User {
         &self.user
@@ -1226,6 +1241,7 @@ pub struct SystemVars {
 
     // features
     enable_with_mutually_recursive: SystemVar<bool>,
+    enable_rbac_checks: SystemVar<bool>,
 
     // storage configuration
     enable_multi_worker_storage_persist_sink: SystemVar<bool>,
@@ -1277,6 +1293,7 @@ impl Default for SystemVars {
             metrics_retention: SystemVar::new(&METRICS_RETENTION),
             mock_audit_event_timestamp: SystemVar::new(&MOCK_AUDIT_EVENT_TIMESTAMP),
             enable_with_mutually_recursive: SystemVar::new(&ENABLE_WITH_MUTUALLY_RECURSIVE),
+            enable_rbac_checks: SystemVar::new(&ENABLE_RBAC_CHECKS),
         }
     }
 }
@@ -1312,6 +1329,7 @@ impl SystemVars {
             &self.metrics_retention,
             &self.mock_audit_event_timestamp,
             &self.enable_with_mutually_recursive,
+            &self.enable_rbac_checks,
         ];
         vars.into_iter()
     }
@@ -1388,6 +1406,8 @@ impl SystemVars {
             Ok(&self.mock_audit_event_timestamp)
         } else if name == ENABLE_WITH_MUTUALLY_RECURSIVE.name {
             Ok(&self.enable_with_mutually_recursive)
+        } else if name == ENABLE_RBAC_CHECKS.name {
+            Ok(&self.enable_rbac_checks)
         } else {
             Err(VarError::UnknownParameter(name.into()))
         }
@@ -1452,6 +1472,8 @@ impl SystemVars {
             self.mock_audit_event_timestamp.is_default(input)
         } else if name == ENABLE_WITH_MUTUALLY_RECURSIVE.name {
             self.enable_with_mutually_recursive.is_default(input)
+        } else if name == ENABLE_RBAC_CHECKS.name {
+            self.enable_rbac_checks.is_default(input)
         } else {
             Err(VarError::UnknownParameter(name.into()))
         }
@@ -1524,6 +1546,8 @@ impl SystemVars {
             self.mock_audit_event_timestamp.set(input)
         } else if name == ENABLE_WITH_MUTUALLY_RECURSIVE.name {
             self.enable_with_mutually_recursive.set(input)
+        } else if name == ENABLE_RBAC_CHECKS.name {
+            self.enable_rbac_checks.set(input)
         } else {
             Err(VarError::UnknownParameter(name.into()))
         }
@@ -1591,6 +1615,8 @@ impl SystemVars {
             Ok(self.mock_audit_event_timestamp.reset())
         } else if name == ENABLE_WITH_MUTUALLY_RECURSIVE.name {
             Ok(self.enable_with_mutually_recursive.reset())
+        } else if name == ENABLE_RBAC_CHECKS.name {
+            Ok(self.enable_rbac_checks.reset())
         } else {
             Err(VarError::UnknownParameter(name.into()))
         }
@@ -1725,6 +1751,11 @@ impl SystemVars {
         self.enable_with_mutually_recursive
             .set(VarInput::Flat(value.format().as_str()))
             .expect("valid parameter value")
+    }
+
+    /// Returns the `enable_rbac_checks` configuration parameter.
+    pub fn enable_rbac_checks(&self) -> bool {
+        *self.enable_rbac_checks.value()
     }
 }
 
