@@ -38,15 +38,21 @@ use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
 
+pub use error::PlanError;
+pub use explain::normalize_subqueries;
 use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
+use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_client::types::instances::StorageInstanceId;
 use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage_client::types::sources::{SourceDesc, Timeline};
+pub use optimize::OptimizerConfig;
+pub use query::{QueryContext, QueryLifetime};
+pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
 
 use crate::ast::{
     ExplainStage, Expr, FetchDirection, IndexOptionName, NoticeSeverity, ObjectType, Raw,
@@ -56,6 +62,10 @@ use crate::catalog::{CatalogType, IdReference, RoleAttributes};
 use crate::names::{
     Aug, DatabaseId, FullObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier, RoleId,
     SchemaId,
+};
+
+pub use self::expr::{
+    AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType,
 };
 
 pub(crate) mod error;
@@ -72,16 +82,6 @@ pub(crate) mod transform_expr;
 pub(crate) mod typeconv;
 pub(crate) mod with_options;
 
-pub use self::expr::{
-    AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType,
-};
-pub use error::PlanError;
-pub use explain::normalize_subqueries;
-use mz_sql_parser::ast::TransactionIsolationLevel;
-pub use optimize::OptimizerConfig;
-pub use query::{QueryContext, QueryLifetime};
-pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
-
 /// Instructions for executing a SQL query.
 #[derive(Debug, EnumKind)]
 #[enum_kind(PlanKind)]
@@ -93,6 +93,7 @@ pub enum Plan {
     CreateCluster(CreateClusterPlan),
     CreateClusterReplica(CreateClusterReplicaPlan),
     CreateSource(CreateSourcePlan),
+    CreateSources(Vec<CreateSourcePlans>),
     CreateSecret(CreateSecretPlan),
     CreateSink(CreateSinkPlan),
     CreateTable(CreateTablePlan),
@@ -114,12 +115,13 @@ pub enum Plan {
     SetVariable(SetVariablePlan),
     ResetVariable(ResetVariablePlan),
     StartTransaction(StartTransactionPlan),
-    CommitTransaction,
-    AbortTransaction,
+    CommitTransaction(CommitTransactionPlan),
+    AbortTransaction(AbortTransactionPlan),
     Peek(PeekPlan),
     Subscribe(SubscribePlan),
     SendRows(SendRowsPlan),
     CopyFrom(CopyFromPlan),
+    CopyRows(CopyRowsPlan),
     Explain(ExplainPlan),
     SendDiffs(SendDiffsPlan),
     Insert(InsertPlan),
@@ -241,6 +243,7 @@ impl Plan {
             Plan::CreateCluster(_) => "create cluster",
             Plan::CreateClusterReplica(_) => "create cluster replica",
             Plan::CreateSource(_) => "create source",
+            Plan::CreateSources(_) => "create sources",
             Plan::CreateSecret(_) => "create secret",
             Plan::CreateSink(_) => "create sink",
             Plan::CreateTable(_) => "create table",
@@ -276,11 +279,12 @@ impl Plan {
             Plan::SetVariable(_) => "set variable",
             Plan::ResetVariable(_) => "reset variable",
             Plan::StartTransaction(_) => "start transaction",
-            Plan::CommitTransaction => "commit",
-            Plan::AbortTransaction => "abort",
+            Plan::CommitTransaction(_) => "commit",
+            Plan::AbortTransaction(_) => "abort",
             Plan::Peek(_) => "select",
             Plan::Subscribe(_) => "subscribe",
             Plan::SendRows(_) => "send rows",
+            Plan::CopyRows(_) => "copy rows",
             Plan::CopyFrom(_) => "copy from",
             Plan::Explain(_) => "explain",
             Plan::SendDiffs(plan) => match plan.kind {
@@ -337,6 +341,32 @@ impl Plan {
 pub struct StartTransactionPlan {
     pub access: Option<TransactionAccessMode>,
     pub isolation_level: Option<TransactionIsolationLevel>,
+}
+
+#[derive(Debug)]
+pub enum TransactionType {
+    Explicit,
+    Implicit,
+}
+
+impl TransactionType {
+    pub fn is_explicit(&self) -> bool {
+        matches!(self, TransactionType::Explicit)
+    }
+
+    pub fn is_implicit(&self) -> bool {
+        matches!(self, TransactionType::Implicit)
+    }
+}
+
+#[derive(Debug)]
+pub struct CommitTransactionPlan {
+    pub transaction_type: TransactionType,
+}
+
+#[derive(Debug)]
+pub struct AbortTransactionPlan {
+    pub transaction_type: TransactionType,
 }
 
 #[derive(Debug)]
@@ -410,6 +440,23 @@ pub struct CreateSourcePlan {
     pub if_not_exists: bool,
     pub timeline: Timeline,
     pub cluster_config: SourceSinkClusterConfig,
+}
+
+#[derive(Debug)]
+pub struct CreateSourcePlans {
+    pub source_id: GlobalId,
+    pub plan: CreateSourcePlan,
+    pub depends_on: Vec<GlobalId>,
+}
+
+impl From<(GlobalId, CreateSourcePlan, Vec<GlobalId>)> for CreateSourcePlans {
+    fn from(plan: (GlobalId, CreateSourcePlan, Vec<GlobalId>)) -> Self {
+        CreateSourcePlans {
+            source_id: plan.0,
+            plan: plan.1,
+            depends_on: plan.2,
+        }
+    }
 }
 
 /// Specifies the cluster for a source or a sink.
@@ -597,6 +644,13 @@ pub struct CopyFromPlan {
     pub id: GlobalId,
     pub columns: Vec<usize>,
     pub params: CopyFormatParams<'static>,
+}
+
+#[derive(Debug)]
+pub struct CopyRowsPlan {
+    pub id: GlobalId,
+    pub columns: Vec<usize>,
+    pub rows: Vec<Row>,
 }
 
 #[derive(Debug)]

@@ -197,6 +197,7 @@ fn generate_plan_attribute(plan: &Plan) -> Option<Attribute> {
         | Plan::GrantRole(_)
         | Plan::RevokeRole(_) => Some(Attribute::CreateRole),
         Plan::CreateSource(_)
+        | Plan::CreateSources(_)
         | Plan::CreateTable(_)
         | Plan::CreateMaterializedView(_)
         | Plan::CreateConnection(_)
@@ -220,11 +221,12 @@ fn generate_plan_attribute(plan: &Plan) -> Option<Attribute> {
         | Plan::SetVariable(_)
         | Plan::ResetVariable(_)
         | Plan::StartTransaction(_)
-        | Plan::CommitTransaction
-        | Plan::AbortTransaction
+        | Plan::CommitTransaction(_)
+        | Plan::AbortTransaction(_)
         | Plan::Peek(_)
         | Plan::Subscribe(_)
         | Plan::SendRows(_)
+        | Plan::CopyRows(_)
         | Plan::CopyFrom(_)
         | Plan::Explain(_)
         | Plan::SendDiffs(_)

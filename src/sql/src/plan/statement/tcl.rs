@@ -17,7 +17,10 @@ use crate::ast::{
     TransactionAccessMode, TransactionMode,
 };
 use crate::plan::statement::{StatementContext, StatementDesc};
-use crate::plan::{Plan, PlanError, StartTransactionPlan};
+use crate::plan::{
+    AbortTransactionPlan, CommitTransactionPlan, Plan, PlanError, StartTransactionPlan,
+    TransactionType,
+};
 use mz_sql_parser::ast::TransactionIsolationLevel;
 
 pub fn describe_start_transaction(
@@ -86,7 +89,9 @@ pub fn plan_rollback(
     RollbackStatement { chain }: RollbackStatement,
 ) -> Result<Plan, PlanError> {
     verify_chain(chain)?;
-    Ok(Plan::AbortTransaction)
+    Ok(Plan::AbortTransaction(AbortTransactionPlan {
+        transaction_type: TransactionType::Explicit,
+    }))
 }
 
 pub fn describe_commit(
@@ -101,7 +106,9 @@ pub fn plan_commit(
     CommitStatement { chain }: CommitStatement,
 ) -> Result<Plan, PlanError> {
     verify_chain(chain)?;
-    Ok(Plan::CommitTransaction)
+    Ok(Plan::CommitTransaction(CommitTransactionPlan {
+        transaction_type: TransactionType::Explicit,
+    }))
 }
 
 fn verify_chain(chain: bool) -> Result<(), PlanError> {
