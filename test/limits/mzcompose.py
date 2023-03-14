@@ -73,8 +73,6 @@ class Generator:
 
 
 class Connections(Generator):
-    COUNT = 25  # https://github.com/MaterializeInc/materialize/issues/12775
-
     @classmethod
     def body(cls) -> None:
         for i in cls.all():
