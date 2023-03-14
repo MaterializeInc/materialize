@@ -75,6 +75,8 @@ use std::thread;
 
 use crossbeam_channel::TryRecvError;
 use differential_dataflow::lattice::Lattice;
+use fail::fail_point;
+use mz_ore::vec::VecExt;
 use mz_persist_types::codec_impls::UnitSchema;
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
@@ -908,6 +910,31 @@ impl<'w, A: Allocate> Worker<'w, A> {
             .keys()
             .collect::<BTreeSet<_>>();
         let mut stale_exports = self.storage_state.exports.keys().collect::<BTreeSet<_>>();
+
+        // First, we collect all "drop commands". These are `AllowCompaction`
+        // commands that compact to the empty since. Then, later, we make sure
+        // we retain only those `Create*` commands that are not dropped. We
+        // assume that the `AllowCompaction` command is ordered after the
+        // `Create*` commands but don't assert that.
+        // WIP: Should we assert?
+        let mut drop_commands = BTreeSet::new();
+
+        for command in &mut commands {
+            match command {
+                StorageCommand::CreateTimely { .. } => {
+                    panic!("CreateTimely must be captured before")
+                }
+                StorageCommand::AllowCompaction(sinces) => {
+                    let drops = sinces.drain_filter_swapping(|(_id, since)| since.is_empty());
+                    drop_commands.extend(drops.map(|(id, _since)| id));
+                }
+                StorageCommand::InitializationComplete
+                | StorageCommand::UpdateConfiguration(_)
+                | StorageCommand::CreateSources(_)
+                | StorageCommand::CreateSinks(_) => (),
+            }
+        }
+
         for command in &mut commands {
             match command {
                 StorageCommand::CreateTimely { .. } => {
@@ -915,8 +942,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 }
                 StorageCommand::CreateSources(ingestions) => {
                     ingestions.retain_mut(|ingestion| {
+                        if drop_commands.remove(&ingestion.id) {
+                            // Make sure that we report back that the ID was
+                            // dropped.
+                            self.storage_state.dropped_ids.push(ingestion.id.clone());
 
-                        if let Some(existing) = self.storage_state.ingestions.get(&ingestion.id) {
+                            false
+                        } else if let Some(existing) = self.storage_state.ingestions.get(&ingestion.id) {
                             trace!(
                                 worker_id = self.timely_worker.index(),
                                 has_token = self.storage_state.source_tokens.contains_key(&ingestion.id),
@@ -943,7 +975,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 }
                 StorageCommand::CreateSinks(exports) => {
                     exports.retain_mut(|export| {
-                        if let Some(existing) = self.storage_state.exports.get(&export.id) {
+                        if drop_commands.remove(&export.id) {
+                            // Make sure that we report back that the ID was
+                            // dropped.
+                            self.storage_state.dropped_ids.push(export.id.clone());
+
+                            false
+                        } else if let Some(existing) = self.storage_state.exports.get(&export.id) {
                             stale_exports.remove(&export.id);
                             // If we've been asked to create an export that is
                             // already installed, the descriptions must match
@@ -964,6 +1002,15 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 | StorageCommand::AllowCompaction(_) => (),
             }
         }
+
+        // Make sure all the "drop commands" matched up with a source or sink.
+        // This is also what the regular handler logic for `AllowCompaction`
+        // would do.
+        assert!(
+            drop_commands.is_empty(),
+            "AllowCompaction commands for non-existent IDs {:?}",
+            drop_commands
+        );
 
         trace!(
             worker_id = self.timely_worker.index(),
@@ -1112,11 +1159,12 @@ impl StorageState {
                                 self.sink_handles.get(&id).expect("missing SinkHandle");
                             sink_handle.downgrade_since(frontier.clone());
                         }
-                        None if self.ingestions.contains_key(&id) => continue,
+                        None if self.ingestions.contains_key(&id) => (),
                         None => panic!("AllowCompaction command for non-existent {id}"),
                     }
 
                     if frontier.is_empty() {
+                        fail_point!("crash_on_drop");
                         // Indicates that we may drop `id`, as there are no more valid times to read.
                         //
                         // This handler removes state that is put in place by

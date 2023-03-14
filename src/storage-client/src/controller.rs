@@ -1052,7 +1052,6 @@ where
     fn create_instance(&mut self, id: StorageInstanceId) {
         let mut client = RehydratingStorageClient::new(
             self.build_info,
-            Arc::clone(&self.persist),
             self.metrics.for_instance(id),
             self.state.envd_epoch,
         );
