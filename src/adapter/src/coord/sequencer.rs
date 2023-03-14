@@ -59,8 +59,9 @@ use mz_sql::plan::{
     SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan,
     VariableValue, View,
 };
-use mz_sql::vars::{
-    IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
+use mz_sql::session::user::SYSTEM_USER;
+use mz_sql::session::vars::{
+    IsolationLevel, OwnedVarInput, Var, VarError, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
     ENABLE_RBAC_CHECKS, TRANSACTION_ISOLATION_VAR_NAME,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
@@ -75,7 +76,6 @@ use crate::catalog::builtin::{
 use crate::catalog::{
     self, Catalog, CatalogItem, CatalogState, Cluster, Connection, DataSourceDesc,
     SerializedReplicaLocation, StorageSinkConnectionState, LINKED_CLUSTER_REPLICA_NAME,
-    SYSTEM_USER,
 };
 use crate::command::{Command, ExecuteResponse, Response};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, DeferredPlan, PendingWriteTxn};
@@ -1980,7 +1980,7 @@ impl Coordinator {
             .vars()
             .iter()
             .chain(catalog.system_config().iter())
-            .filter(|v| !v.experimental() && v.visible(session.user().is_system_user()))
+            .filter(|v| !v.experimental() && v.visible(session.user()))
             .filter(|v| v.safe() || catalog.unsafe_mode())
     }
 
@@ -1994,13 +1994,13 @@ impl Coordinator {
             .get(&plan.name)
             .or_else(|_| self.catalog.system_config().get(&plan.name))?;
 
-        if variable.visible(session.user().is_system_user())
-            && (variable.safe() || self.catalog.unsafe_mode())
-        {
+        if variable.visible(session.user()) && (variable.safe() || self.catalog.unsafe_mode()) {
             let row = Row::pack_slice(&[Datum::String(&variable.value())]);
             Ok(send_immediate_rows(vec![row]))
         } else {
-            Err(AdapterError::UnknownParameter(plan.name))
+            Err(AdapterError::VarError(VarError::UnknownParameter(
+                plan.name,
+            )))
         }
     }
 
@@ -2752,6 +2752,7 @@ impl Coordinator {
             cluster_id,
             depends_on: depends_on.into_iter().collect(),
             start_time: SYSTEM_TIME(),
+            dropping: false,
         };
         self.add_active_subscribe(sink_id, active_subscribe).await;
 
@@ -3770,11 +3771,11 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         let cluster_config = alter_storage_cluster_config(size);
         if let Some(cluster_config) = cluster_config {
-            let mut ops = vec![catalog::Op::AlterSink {
+            let mut ops = self.alter_linked_cluster_ops(id, &cluster_config).await?;
+            ops.push(catalog::Op::AlterSink {
                 id,
                 cluster_config: cluster_config.clone(),
-            }];
-            ops.extend(self.alter_linked_cluster_ops(id, &cluster_config).await?);
+            });
             self.catalog_transact(Some(session), ops).await?;
 
             self.maybe_alter_linked_cluster(id).await;
@@ -3803,11 +3804,11 @@ impl Coordinator {
         }
         let cluster_config = alter_storage_cluster_config(size);
         if let Some(cluster_config) = cluster_config {
-            let mut ops = vec![catalog::Op::AlterSource {
+            let mut ops = self.alter_linked_cluster_ops(id, &cluster_config).await?;
+            ops.push(catalog::Op::AlterSource {
                 id,
                 cluster_config: cluster_config.clone(),
-            }];
-            ops.extend(self.alter_linked_cluster_ops(id, &cluster_config).await?);
+            });
             self.catalog_transact(Some(session), ops).await?;
 
             self.maybe_alter_linked_cluster(id).await;

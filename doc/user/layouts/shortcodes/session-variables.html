@@ -1,0 +1,31 @@
+## Session variables
+
+Name                                        | Default value             |  Description  |
+--------------------------------------------|---------------------------|---------------|
+cluster                                     | `default`                 | The current cluster.
+cluster_replica                             |                           | The target cluster replica for `SELECT` queries.
+database                                    | `materialize`             | The current database.
+search_path                                 | `public`                  | The schema search order for names that are not schema-qualified.
+transaction_isolation                       | `strict serializable`     | The transaction isolation level. For more information, see [Consistency guarantees](/overview/isolation-level/). <br/><br/> Accepts values: `serializable`, `strict serializable`.
+
+#### Other session variables
+
+Name                                        | Default value             |  Description  |
+--------------------------------------------|---------------------------|---------------|
+application_name                            |                           | The application name to be reported in statistics and logs. This variable is typically set by an application upon connection to Materialize (e.g. `psql`).
+client_encoding                             | `UTF8`                    | The client's character set encoding. The only supported value is `UTF-8`.
+client_min_messages                         | `notice`                  | The message levels that are sent to the client. <br/><br/> Accepts values: `debug5`, `debug4`, `debug3`, `debug2`, `debug1`, `log`, `notice`, `warning`, `error`. Each level includes all the levels that follow it.
+datestyle                                   | `ISO, MDY`                | The display format for date and time values. The only supported value is `ISO, MDY`.
+emit_timestamp_notice                       | `false`                   | Boolean flag indicating whether to send a `notice` specifying query timestamps.
+emit_trace_id_notice                        | `false`                   | Boolean flag indicating whether to send a `notice` specifying the trace ID, when available.
+extra_float_digits                          | `3`                       | Adjusts the number of digits displayed for floating-point values.
+failpoints                                  |                           | Allows failpoints to be dynamically activated.
+integer_datetimes                           | `true`                    | **Read-only.** Reports whether the server uses 64-bit-integer dates and times.
+intervalstyle                               | `postgres`                | The display format for interval values. The only supported value is `postgres`.
+server_version                              | Version-dependent         | **Read-only.** The server version.
+server_version_num                          | Version-dependent         | **Read-only.** The server version as an integer.
+sql_safe_updates                            | `false`                   | Prohibits SQL statements that may be overly destructive.
+standard_conforming_strings                 | `true`                    | Causes ordinary string literals (`'...'`) to treat backslashes literally. The only supported value is `true`.
+statement_timeout                           | `10 seconds`              | The maximum allowed duration of `INSERT`, `SELECT`, `UPDATE`, and `DELETE` operations.
+idle_in_transaction_session_timeout         | `120 seconds`             | The maximum allowed duration that a session can sit idle in a transaction before being terminated. A value of zero disables the timeout.
+timezone                                    | `UTC`                     | The time zone for displaying and interpreting timestamps. The only supported value is `UTC`.

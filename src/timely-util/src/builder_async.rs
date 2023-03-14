@@ -22,16 +22,20 @@ use differential_dataflow::operators::arrange::agent::ShutdownButton;
 use futures_util::task::ArcWake;
 use futures_util::FutureExt;
 use polonius_the_crab::{polonius, WithLifetime};
-use timely::communication::{message::RefOrMut, Pull};
+use timely::communication::{message::RefOrMut, Pull, Push};
 use timely::dataflow::channels::pact::ParallelizationContractCore;
+use timely::dataflow::channels::pushers::buffer::Session;
+use timely::dataflow::channels::pushers::counter::CounterCore as PushCounter;
 use timely::dataflow::channels::pushers::TeeCore;
 use timely::dataflow::channels::BundleCore;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
+use timely::dataflow::operators::generic::OutputHandleCore;
 use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo, OutputWrapper};
 use timely::dataflow::operators::{Capability, InputCapability};
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::{Activator, SyncActivator};
+use timely::Data;
 use timely::{Container, PartialOrder};
 
 /// Builds async operators with generic shape.
@@ -46,9 +50,12 @@ pub struct OperatorBuilder<G: Scope> {
     activator: Activator,
     /// The waker set up to activate this timely operator when woken
     operator_waker: Arc<TimelyWaker>,
-    /// Holds type erased closures that should drain a handle when called. These handles will be
+    /// Holds type erased closures that drain an input handle when called. These handles will be
     /// automatically drained when the operator is scheduled and the logic future has exited
     drain_pipe: Rc<RefCell<Vec<Box<dyn FnMut()>>>>,
+    /// Holds type erased closures that flush an output handle when called. These handles will be
+    /// automatically drained when the operator is scheduled after the logic future has been polled
+    output_flushes: Vec<Box<dyn FnMut()>>,
 }
 
 /// An async Waker that activates a specific operator when woken and marks the task as ready
@@ -212,6 +219,115 @@ impl<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> Future
     }
 }
 
+// TODO: delete and use CapabilityTrait instead once TimelyDataflow/timely-dataflow#512 gets merged
+pub trait CapabilityTrait<T: Timestamp> {
+    fn session<'a, D, P>(
+        &'a self,
+        handle: &'a mut OutputHandleCore<'_, T, D, P>,
+    ) -> Session<'a, T, D, PushCounter<T, D, P>>
+    where
+        D: Container,
+        P: Push<BundleCore<T, D>>;
+}
+
+impl<T: Timestamp> CapabilityTrait<T> for InputCapability<T> {
+    #[inline]
+    fn session<'a, D, P>(
+        &'a self,
+        handle: &'a mut OutputHandleCore<'_, T, D, P>,
+    ) -> Session<'a, T, D, PushCounter<T, D, P>>
+    where
+        D: Container,
+        P: Push<BundleCore<T, D>>,
+    {
+        handle.session(self)
+    }
+}
+
+impl<T: Timestamp> CapabilityTrait<T> for Capability<T> {
+    #[inline]
+    fn session<'a, D, P>(
+        &'a self,
+        handle: &'a mut OutputHandleCore<'_, T, D, P>,
+    ) -> Session<'a, T, D, PushCounter<T, D, P>>
+    where
+        D: Container,
+        P: Push<BundleCore<T, D>>,
+    {
+        handle.session(self)
+    }
+}
+
+pub struct AsyncOutputHandle<T: Timestamp, D: Container, P: Push<BundleCore<T, D>> + 'static> {
+    // The field order is important here as the handle is borrowing from the wrapper. See also the
+    // safety argument in the constructor
+    handle: Rc<RefCell<OutputHandleCore<'static, T, D, P>>>,
+    wrapper: Rc<Pin<Box<OutputWrapper<T, D, P>>>>,
+}
+
+impl<T, D, P> AsyncOutputHandle<T, D, P>
+where
+    T: Timestamp,
+    D: Container,
+    P: Push<BundleCore<T, D>> + 'static,
+{
+    fn new(wrapper: OutputWrapper<T, D, P>) -> Self {
+        let mut wrapper = Box::pin(wrapper);
+        // SAFETY:
+        // get_unchecked_mut is safe because we are not moving the wrapper
+        //
+        // transmute is safe because:
+        // * We're erasing the lifetime but we guarantee through field order that the handle will
+        //   be dropped before the wrapper, thus manually enforcing the lifetime.
+        // * We never touch wrapper again after this point
+        let handle = unsafe {
+            let handle = wrapper.as_mut().get_unchecked_mut().activate();
+            std::mem::transmute::<OutputHandleCore<'_, T, D, P>, OutputHandleCore<'static, T, D, P>>(
+                handle,
+            )
+        };
+        Self {
+            handle: Rc::new(RefCell::new(handle)),
+            wrapper: Rc::new(wrapper),
+        }
+    }
+
+    #[allow(clippy::unused_async)]
+    #[inline]
+    pub async fn give_container<C: CapabilityTrait<T>>(&mut self, cap: &C, container: &mut D) {
+        let mut handle = self.handle.borrow_mut();
+        cap.session(&mut handle).give_container(container);
+    }
+
+    fn cease(&mut self) {
+        self.handle.borrow_mut().cease()
+    }
+}
+
+impl<'a, T, D, P> AsyncOutputHandle<T, Vec<D>, P>
+where
+    T: Timestamp,
+    D: Data,
+    P: Push<BundleCore<T, Vec<D>>> + 'static,
+{
+    #[allow(clippy::unused_async)]
+    pub async fn give<C: CapabilityTrait<T>>(&mut self, cap: &C, data: D) {
+        let mut handle = self.handle.borrow_mut();
+        cap.session(&mut handle).give(data);
+    }
+}
+
+impl<T: Timestamp, D: Container, P: Push<BundleCore<T, D>> + 'static> Clone
+    for AsyncOutputHandle<T, D, P>
+{
+    fn clone(&self) -> Self {
+        Self {
+            handle: Rc::clone(&self.handle),
+            wrapper: Rc::clone(&self.wrapper),
+        }
+    }
+}
+
 impl<G: Scope> OperatorBuilder<G> {
     /// Allocates a new generic async operator builder from its containing scope.
     pub fn new(name: String, scope: G) -> Self {
@@ -232,6 +348,7 @@ impl<G: Scope> OperatorBuilder<G> {
             activator,
             operator_waker: Arc::new(operator_waker),
             drain_pipe: Default::default(),
+            output_flushes: Default::default(),
         }
     }
 
@@ -291,10 +408,12 @@ impl<G: Scope> OperatorBuilder<G> {
     pub fn new_output<D: Container>(
         &mut self,
     ) -> (
-        OutputWrapper<G::Timestamp, D, TeeCore<G::Timestamp, D>>,
+        AsyncOutputHandle<G::Timestamp, D, TeeCore<G::Timestamp, D>>,
         StreamCore<G, D>,
     ) {
-        self.builder.new_output()
+        let connection =
+            vec![Antichain::from_elem(Default::default()); self.builder.shape().inputs()];
+        self.new_output_connection(connection)
     }
 
     /// Adds a new output with connetion information, returning the output handle and stream.
@@ -311,10 +430,18 @@ impl<G: Scope> OperatorBuilder<G> {
         &mut self,
         connection: Vec<Antichain<<G::Timestamp as Timestamp>::Summary>>,
     ) -> (
-        OutputWrapper<G::Timestamp, D, TeeCore<G::Timestamp, D>>,
+        AsyncOutputHandle<G::Timestamp, D, TeeCore<G::Timestamp, D>>,
         StreamCore<G, D>,
     ) {
-        self.builder.new_output_connection(connection)
+        let (wrapper, stream) = self.builder.new_output_connection(connection);
+
+        let handle = AsyncOutputHandle::new(wrapper);
+
+        let mut flush_handle = handle.clone();
+        self.output_flushes
+            .push(Box::new(move || flush_handle.cease()));
+
+        (handle, stream)
     }
 
     /// Creates an operator implementation from supplied logic constructor. It returns a shutdown
@@ -330,6 +457,7 @@ impl<G: Scope> OperatorBuilder<G> {
         let registered_wakers = self.registered_wakers;
         let shared_frontiers = self.shared_frontiers;
         let drain_pipe = self.drain_pipe;
+        let mut output_flushes = self.output_flushes;
         let token = Rc::new(RefCell::new(Some(())));
         let button = ShutdownButton::new(Rc::clone(&token), self.activator);
         self.builder.build_reschedule(move |caps| {
@@ -373,6 +501,10 @@ impl<G: Scope> OperatorBuilder<G> {
                         if Pin::new(fut).poll(&mut cx).is_ready() {
                             // We're done with logic so deallocate the task
                             logic_fut = None;
+                        }
+                        // Flush all the outputs before exiting
+                        for flush in output_flushes.iter_mut() {
+                            (flush)();
                         }
                     }
                 }
@@ -429,9 +561,7 @@ mod test {
                                 let cap = cap.retain();
                                 for item in data.iter().copied() {
                                     tokio::time::sleep(Duration::from_millis(10)).await;
-                                    let mut output_handle = output.activate();
-                                    let mut session = output_handle.session(&cap);
-                                    session.give(item);
+                                    output.give(&cap, item).await;
                                 }
                             }
                             Event::Progress(_frontier) => {}

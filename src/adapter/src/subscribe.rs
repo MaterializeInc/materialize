@@ -18,12 +18,13 @@ use mz_compute_client::protocol::response::{SubscribeBatch, SubscribeResponse};
 use mz_controller::clusters::ClusterId;
 use mz_repr::adt::numeric;
 use mz_repr::{Datum, GlobalId, Row};
+use mz_sql::session::user::User;
 
 use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
-use crate::session::User;
 
 /// A description of an active subscribe from coord's perspective
+#[derive(Debug)]
 pub struct ActiveSubscribe {
     /// The user of the session that created the subscribe.
     pub user: User,
@@ -43,6 +44,8 @@ pub struct ActiveSubscribe {
     pub depends_on: BTreeSet<GlobalId>,
     /// The time when the subscribe was started.
     pub start_time: EpochMillis,
+    /// Whether we are already in the process of dropping the resources related to this subscribe.
+    pub dropping: bool,
 }
 
 impl ActiveSubscribe {

@@ -310,6 +310,8 @@ op_cast ::=
   val '::' type
 prepare ::=
   'PREPARE' name 'AS' statement
+reset_session_variable ::=
+  'RESET' variable_name
 rollback ::=
   'ROLLBACK'
 select_stmt ::=
@@ -327,6 +329,8 @@ select_stmt ::=
   ( 'LIMIT' integer )?
   ( 'OFFSET' integer )?
   ( ( 'UNION' | 'INTERSECT' | 'EXCEPT' ) ( 'ALL' | 'DISTINCT' )? another_select_stmt )?
+set_session_variable ::=
+  'SET' ( 'SESSION' | 'LOCAL' )? variable_name ( 'TO' | '=' ) ( variable_value | 'DEFAULT' )
 set_transaction_isolation ::=
   'SET' 'TRANSACTION_ISOLATION' ( 'TO' | '=' ) isolation_level
 show_columns ::=
@@ -366,6 +370,8 @@ show_materialized_views ::=
     'SHOW' 'MATERIALIZED VIEWS' ('FROM' schema_name)? ('IN CLUSTER' cluster_name)?
 show_secrets ::=
     'SHOW' 'SECRETS' ('FROM' schema_name)? ('LIKE' 'pattern' | 'WHERE' expr)?
+show_variable ::=
+  'SHOW' ( variable_name | 'ALL' )
 show_schemas ::=
     'SHOW' 'SCHEMAS' ('FROM' database_name)?
 show_sinks ::=

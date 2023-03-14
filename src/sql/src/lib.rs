@@ -184,4 +184,4 @@ pub mod normalize;
 pub mod parse;
 pub mod plan;
 pub mod pure;
-pub mod vars;
+pub mod session;

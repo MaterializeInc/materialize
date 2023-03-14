@@ -368,6 +368,8 @@ class Image:
             data = yaml.safe_load(f)
             self.name: str = data.pop("name")
             self.publish: bool = data.pop("publish", True)
+            self.description: Optional[str] = data.pop("description", None)
+            self.mainline: bool = data.pop("mainline", True)
             for pre_image in data.pop("pre-image", []):
                 typ = pre_image.pop("type", None)
                 if typ == "cargo-build":
@@ -391,6 +393,32 @@ class Image:
                 match = self._DOCKERFILE_MZFROM_RE.match(line)
                 if match:
                     self.depends_on.append(match.group(1).decode())
+
+    def sync_description(self) -> None:
+        """Sync the description to Docker Hub if the image is publishable
+        and either a description or a README.md file exists."""
+
+        if not self.publish:
+            ui.say(f"{self.name} is not publishable")
+            return
+
+        readme_path = self.path / "README.md"
+        has_readme = readme_path.exists()
+        if not (self.description or has_readme):
+            ui.say(f"{self.name} has no README.md or description")
+            return
+
+        docker_config = os.getenv("DOCKER_CONFIG")
+        spawn.runv(
+            [
+                "docker",
+                "pushrm",
+                f"--file={readme_path}",
+                *([f"--config={docker_config}/config.json"] if docker_config else []),
+                *([f"--short={self.description}"] if self.description else []),
+                f"materialize/{self.name}",
+            ]
+        )
 
     def docker_name(self, tag: str) -> str:
         """Return the name of the image on Docker Hub at the given tag."""
@@ -811,7 +839,9 @@ class Repository:
         return iter(self.images.values())
 
 
-def publish_multiarch_images(tag: str, dependency_sets: List[DependencySet]) -> None:
+def publish_multiarch_images(
+    tag: str, dependency_sets: Iterable[Iterable[ResolvedImage]]
+) -> None:
     """Publishes a set of docker images under a given tag."""
     for images in zip(*dependency_sets):
         names = set(image.image.name for image in images)

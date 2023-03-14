@@ -111,10 +111,7 @@ debug = 1
 #
 # The reasons for each of these overrides are listed in deny.toml.
 [patch.crates-io]
-axum = { git = "https://github.com/tokio-rs/axum.git" }
 chrono = { git = "https://github.com/chronotope/chrono.git", branch = "0.4.x" }
-csv = { git = "https://github.com/BurntSushi/rust-csv.git" }
-csv-core = { git = "https://github.com/BurntSushi/rust-csv.git" }
 hashbrown = { git = "https://github.com/MaterializeInc/hashbrown.git" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }

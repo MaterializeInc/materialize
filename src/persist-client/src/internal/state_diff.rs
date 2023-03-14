@@ -865,9 +865,19 @@ fn apply_compaction_lenient<'a, T: Timestamp + Lattice>(
 }
 
 impl ProtoStateFieldDiffs {
-    pub fn push_data(&mut self, mut data: Vec<u8>) {
-        self.data_lens.push(u64::cast_from(data.len()));
-        self.data_bytes.append(&mut data);
+    pub fn encode_proto<M: prost::Message>(&mut self, msg: &M) {
+        let len_before = self.data_bytes.len();
+        self.data_bytes.reserve(msg.encoded_len());
+
+        // Note: we use `encode_raw` as opposed to `encode` because all `encode` does is
+        // check to make sure there's enough bytes in the buffer to fit our message
+        // which we know there are because we just reserved the space. When benchmarking
+        // `encode_raw` does offer a slight performance improvement over `encode`.
+        msg.encode_raw(&mut self.data_bytes);
+
+        // Record exactly how many bytes were written.
+        let written_len = self.data_bytes.len() - len_before;
+        self.data_lens.push(u64::cast_from(written_len));
     }
 
     pub fn iter<'a>(&'a self) -> ProtoStateFieldDiffsIter<'a> {

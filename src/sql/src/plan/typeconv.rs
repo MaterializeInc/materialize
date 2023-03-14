@@ -970,15 +970,8 @@ pub fn plan_cast(
 pub fn can_cast(
     ecx: &ExprContext,
     ccx: CastContext,
-    mut cast_from: &ScalarType,
-    mut cast_to: &ScalarType,
+    cast_from: &ScalarType,
+    cast_to: &ScalarType,
 ) -> bool {
-    // All stringlike types are treated like `ScalarType::String` during casts.
-    if TypeCategory::from_type(cast_from) == TypeCategory::String {
-        cast_from = &ScalarType::String;
-    }
-    if TypeCategory::from_type(cast_to) == TypeCategory::String {
-        cast_to = &ScalarType::String;
-    }
     get_cast(ecx, ccx, cast_from, cast_to).is_some()
 }

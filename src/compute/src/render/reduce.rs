@@ -21,7 +21,6 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::reduce::ReduceCore;
-use differential_dataflow::operators::Reduce;
 use differential_dataflow::Collection;
 use mz_expr::MirScalarExpr;
 use serde::{Deserialize, Serialize};
@@ -160,7 +159,10 @@ where
         match self {
             ArrangementOrCollection::Arrangement(arrangement) => CollectionBundle::from_columns(
                 0..key_arity,
-                ArrangementFlavor::Local(arrangement, err_input.arrange()),
+                ArrangementFlavor::Local(
+                    arrangement,
+                    err_input.arrange_named("Arrange bundle err"),
+                ),
             ),
             ArrangementOrCollection::Collection(oks) => {
                 CollectionBundle::from_collections(oks, err_input)
@@ -460,7 +462,7 @@ where
 {
     let negated_result = collection
         .arrange_named::<RowSpine<Row, _, _, _>>("Arranged DistinctBy Retractions input")
-        .reduce_named("Reduce DistinctBy Retractions", {
+        .reduce_abelian::<_, RowSpine<_, _, _, _>>("Reduce DistinctBy Retractions", {
             |key, input, output| {
                 output.push((key.clone(), -1));
                 output.extend(
@@ -469,7 +471,8 @@ where
                         .map(|(values, count)| ((*values).clone(), *count)),
                 );
             }
-        });
+        })
+        .as_collection(|k, v| (k.clone(), v.clone()));
     use timely::dataflow::operators::Map;
     negated_result
         .negate()

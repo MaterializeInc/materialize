@@ -41,14 +41,13 @@ use tokio_openssl::SslStream;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
-use mz_adapter::catalog::{HTTP_DEFAULT_USER, SYSTEM_USER};
-use mz_adapter::session::{ExternalUserMetadata, User};
 use mz_adapter::{AdapterError, Client, SessionClient};
 use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
 use mz_ore::cast::u64_to_usize;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::result::ResultExt;
 use mz_ore::tracing::TracingHandle;
+use mz_sql::session::user::{ExternalUserMetadata, User, HTTP_DEFAULT_USER, SYSTEM_USER};
 
 use crate::server::{ConnectionHandler, Server};
 use crate::BUILD_INFO;

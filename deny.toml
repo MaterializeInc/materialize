@@ -6,6 +6,11 @@ multiple-versions = "deny"
 # transitive dependencies. If necessary, use patch directives in the root
 # Cargo.toml to point at a Materialize-maintained fork that avoids the
 # duplicated transitive dependencies.
+skip = [
+    # One-time exception for base64 due to its prevalence in the crate graph.
+    # Do NOT add other exceptions to this list.
+    { name = "base64", version = "0.13.1" }
+]
 
 # Use `tracing` instead.
 [[bans.deny]]
@@ -146,17 +151,9 @@ license-files = [
 unknown-git = "deny"
 unknown-registry = "deny"
 allow-git = [
-    # Waiting on https://github.com/tokio-rs/axum/pull/1598 to make it into a
-    # release.
-    "https://github.com/tokio-rs/axum.git",
-
     # Waiting for a new release of strip-ansi-escapes that avoids the indirect
     # dependency on arrayvec v0.5.2 via a dependency on vte v0.10.1.
     "https://github.com/alacritty/vte",
-
-    # Waiting for a new release that bumps to itoa v1.0.
-    # See: https://github.com/BurntSushi/rust-csv/issues/271
-    "https://github.com/BurntSushi/rust-csv.git",
 
     # Waiting for https://github.com/chronotope/chrono/pull/906
     # to be released in the v0.4.x series.
@@ -170,10 +167,6 @@ allow-git = [
     # v0.18 of opentelemetry.
     "https://github.com/MaterializeInc/tracing.git",
 
-    # Waiting on https://github.com/tikv/pprof-rs/pull/181 to make it into a
-    # release.
-    "https://github.com/MaterializeInc/pprof-rs.git",
-
     # Waiting on https://github.com/AltSysrq/proptest/pull/264.
     "https://github.com/MaterializeInc/proptest.git",
 
@@ -186,10 +179,6 @@ allow-git = [
 
     # Waiting on https://github.com/edenhill/librdkafka/pull/4051.
     "https://github.com/MaterializeInc/rust-rdkafka.git",
-
-    # Waiting on https://github.com/jorgecarleitao/arrow2/pull/1297 to make it
-    # into a release.
-    "https://github.com/jorgecarleitao/arrow2.git",
 
     # Waiting for hashlink, indexmap, and lru to upgrade to hashbrown v0.13,
     # which depends on ahash v0.8 instead of v0.7. In the meantime we've

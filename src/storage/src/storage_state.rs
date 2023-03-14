@@ -545,6 +545,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 id,
                 ingestion_description,
                 resumption_frontier,
+                source_resumption_frontier,
             ) => {
                 // NOTE: If we want to share the load of async processing we
                 // have to change `handle_storage_command` and change this
@@ -558,6 +559,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     id,
                     ingestion_description,
                     resumption_frontier,
+                    source_resumption_frontier,
                 });
             }
         }
@@ -642,6 +644,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 id: ingestion_id,
                 ingestion_description,
                 resumption_frontier,
+                source_resumption_frontier,
             } => {
                 info!(
                     "worker {}/{} trying to (re-)start ingestion {ingestion_id} at resumption frontier {:?}",
@@ -700,6 +703,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         ingestion_id,
                         ingestion_description,
                         resumption_frontier,
+                        source_resumption_frontier,
                     );
                 }
             }

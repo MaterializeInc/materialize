@@ -18,20 +18,17 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use differential_dataflow::difference::Semigroup;
-use differential_dataflow::Hashable;
 use futures::stream::LocalBoxStream;
 use prometheus::core::{AtomicI64, AtomicU64};
 use serde::{Deserialize, Serialize};
 use std::rc::Rc;
-use timely::dataflow::channels::pact::{Exchange, ParallelizationContract};
 use timely::dataflow::operators::Capability;
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::activate::SyncActivator;
-use timely::Data;
 
 use mz_expr::PartitionId;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::{GlobalId, Row};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::{DecodeError, SourceErrorDetails};
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
@@ -237,7 +234,7 @@ pub struct SourceMessage<Key, Value> {
 
 /// A record produced by a source
 #[derive(Clone, Serialize, Debug, Deserialize)]
-pub struct SourceOutput<K, V, D> {
+pub struct SourceOutput<K, V> {
     /// The record's key (or some empty/default value for sources without the concept of key)
     pub key: K,
     /// The record's value
@@ -253,17 +250,9 @@ pub struct SourceOutput<K, V, D> {
     /// Headers, if the source is configured to pass them along. If it is, but there are none, it
     /// passes `Some([])`
     pub headers: Option<Vec<(String, Option<Vec<u8>>)>>,
-
-    /// Indicator for what the differential `diff` value
-    /// for this decoded message should be
-    pub diff: D,
 }
 
-impl<K, V, D> SourceOutput<K, V, D>
-where
-    K: Data,
-    V: Data,
-{
+impl<K, V> SourceOutput<K, V> {
     /// Build a new SourceOutput
     pub fn new(
         key: K,
@@ -272,8 +261,7 @@ where
         upstream_time_millis: Option<i64>,
         partition: PartitionId,
         headers: Option<Vec<(String, Option<Vec<u8>>)>>,
-        diff: D,
-    ) -> SourceOutput<K, V, D> {
+    ) -> SourceOutput<K, V> {
         SourceOutput {
             key,
             value,
@@ -281,27 +269,7 @@ where
             upstream_time_millis,
             partition,
             headers,
-            diff,
         }
-    }
-}
-
-impl<K, V, D> SourceOutput<K, V, D>
-where
-    K: Data + Serialize + for<'a> Deserialize<'a> + Send + Sync,
-    V: Data + Serialize + for<'a> Deserialize<'a> + Send + Sync,
-    D: Data + Serialize + for<'a> Deserialize<'a> + Send + Sync,
-{
-    /// A parallelization contract that hashes by positions (if available)
-    /// and otherwise falls back to hashing by value. Values can be just as
-    /// skewed as keys, whereas positions are generally known to be unique or
-    /// close to unique in a source. For example, Kafka offsets are unique per-partition.
-    /// Most decode logic should use this instead of `key_contract`.
-    pub fn position_value_contract() -> impl ParallelizationContract<mz_repr::Timestamp, Self>
-    where
-        V: Hashable<Output = u64>,
-    {
-        Exchange::new(|x: &Self| x.position.hashed())
     }
 }
 
@@ -313,7 +281,7 @@ pub struct DecodeResult {
     /// The decoded value, as well as the the
     /// differential `diff` value for this value, if the value
     /// is present and not and error.
-    pub value: Option<Result<(Row, Diff), DecodeError>>,
+    pub value: Option<Result<Row, DecodeError>>,
     /// The index of the decoded value in the stream
     pub position: MzOffset,
     /// The time the record was created in the upstream system, as milliseconds since the epoch

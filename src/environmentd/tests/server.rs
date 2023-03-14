@@ -85,7 +85,6 @@ use anyhow::bail;
 use chrono::{DateTime, Utc};
 use http::StatusCode;
 use itertools::Itertools;
-use mz_adapter::catalog::SYSTEM_USER;
 use reqwest::blocking::Client;
 use reqwest::Url;
 use tokio_postgres::error::SqlState;
@@ -96,6 +95,7 @@ use tungstenite::{Error, Message};
 use mz_environmentd::WebSocketResponse;
 use mz_ore::retry::Retry;
 use mz_pgrepr::UInt8;
+use mz_sql::session::user::SYSTEM_USER;
 
 use crate::util::{PostgresErrorExt, KAFKA_ADDRS};
 

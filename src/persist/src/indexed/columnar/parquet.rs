@@ -93,6 +93,7 @@ fn encode_parquet_kvtd<W: Write>(
         write_statistics: false,
         compression: CompressionOptions::Uncompressed,
         version: Version::V2,
+        data_pagesize_limit: None, // use default limit
     };
     let row_groups = RowGroupIterator::try_new(
         iter,

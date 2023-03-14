@@ -17,12 +17,15 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use uncased::UncasedStr;
 
-use crate::ast::Ident;
-use crate::DEFAULT_SCHEMA;
 use mz_build_info::BuildInfo;
 use mz_ore::cast;
+use mz_ore::str::StrExt;
 use mz_persist_client::cfg::PersistConfig;
 use mz_sql_parser::ast::TransactionIsolationLevel;
+
+use crate::ast::Ident;
+use crate::session::user::{ExternalUserMetadata, User, SYSTEM_USER};
+use crate::DEFAULT_SCHEMA;
 
 /// The action to take during end_transaction.
 ///
@@ -39,26 +42,73 @@ pub enum EndTransactionAction {
 /// Errors that can occur when working with [`Var`]s
 #[derive(Debug, thiserror::Error)]
 pub enum VarError {
-    #[error("unknown parameter: {0}")]
-    UnknownParameter(String),
-    #[error("value for parameter {0:?} has wrong type")]
-    InvalidParameterType(&'static (dyn Var + Send + Sync)),
-    #[error("value for parameter {parameter:?}: {values:?} is wrong because of {reason}")]
-    InvalidParameterValue {
-        parameter: &'static (dyn Var + Send + Sync),
-        values: Vec<String>,
-        reason: String,
-    },
-    #[error("specified parameter {0:?} is fixed to a specific value")]
-    FixedValueParameter(&'static (dyn Var + Send + Sync)),
-    #[error("specified parameter {0:?} is read only")]
-    ReadOnlyParameter(&'static (dyn Var + Send + Sync)),
-    #[error("value for parameter {parameter:?}: {values:?} is constrainted to {valid_values:?}")]
+    /// The specified session parameter is constrained to a finite set of
+    /// values.
+    #[error(
+        "invalid value for parameter {}: {}",
+        parameter.name().quoted(),
+        values.iter().map(|v| v.quoted()).join(",")
+    )]
     ConstrainedParameter {
         parameter: &'static (dyn Var + Send + Sync),
         values: Vec<String>,
         valid_values: Option<Vec<&'static str>>,
     },
+    /// The specified parameter is fixed to a single specific value.
+    ///
+    /// We allow setting the parameter to its fixed value for compatibility
+    /// with PostgreSQL-based tools.
+    #[error(
+        "parameter {} can only be set to {}",
+        .0.name().quoted(),
+        .0.value().quoted(),
+    )]
+    FixedValueParameter(&'static (dyn Var + Send + Sync)),
+    /// The value for the specified parameter does not have the right type.
+    #[error(
+        "parameter {} requires a {} value",
+        .0.name().quoted(),
+        .0.type_name().quoted()
+    )]
+    InvalidParameterType(&'static (dyn Var + Send + Sync)),
+    /// The value of the specified parameter is incorrect.
+    #[error(
+        "parameter {} cannot have value {}: {}",
+        parameter.name().quoted(),
+        values
+            .iter()
+            .map(|v| v.quoted().to_string())
+            .collect::<Vec<_>>()
+            .join(","),
+        reason,
+    )]
+    InvalidParameterValue {
+        parameter: &'static (dyn Var + Send + Sync),
+        values: Vec<String>,
+        reason: String,
+    },
+    /// The specified session parameter is read only.
+    #[error("parameter {} cannot be changed", .0.quoted())]
+    ReadOnlyParameter(&'static str),
+    /// The named parameter is unknown to the system.
+    #[error("unrecognized configuration parameter {}", .0.quoted())]
+    UnknownParameter(String),
+}
+
+impl VarError {
+    pub fn detail(&self) -> Option<String> {
+        None
+    }
+
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            VarError::ConstrainedParameter {
+                valid_values: Some(valid_values),
+                ..
+            } => Some(format!("Available values: {}.", valid_values.join(", "))),
+            _ => None,
+        }
+    }
 }
 
 // We pretend to be Postgres v9.5.0, which is also what CockroachDB pretends to
@@ -173,6 +223,7 @@ const INTERVAL_STYLE: ServerVar<str> = ServerVar {
 };
 
 const MZ_VERSION_NAME: &UncasedStr = UncasedStr::new("mz_version");
+const IS_SUPERUSER_NAME: &UncasedStr = UncasedStr::new("is_superuser");
 
 static DEFAULT_SEARCH_PATH: Lazy<Vec<Ident>> = Lazy::new(|| vec![Ident::new(DEFAULT_SCHEMA)]);
 static SEARCH_PATH: Lazy<ServerVar<Vec<Ident>>> = Lazy::new(|| ServerVar {
@@ -498,14 +549,6 @@ static MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<mz_repr::Timestamp>> = Serve
     safe: false,
 };
 
-const IS_SUPERUSER: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("is_superuser"),
-    value: &false,
-    description: "Indicates whether the current session is a super user (PostgreSQL).",
-    internal: false,
-    safe: true,
-};
-
 pub const ENABLE_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_rbac_checks"),
     // TODO(jkosh44) Once RBAC is complete, change this to `true` and write a migration to update
@@ -589,8 +632,8 @@ impl OwnedVarInput {
 /// important.
 #[derive(Debug)]
 pub struct SessionVars {
+    // Normal variables.
     application_name: SessionVar<str>,
-    build_info: &'static BuildInfo,
     client_encoding: ServerVar<str>,
     client_min_messages: SessionVar<ClientSeverity>,
     cluster: SessionVar<str>,
@@ -613,15 +656,16 @@ pub struct SessionVars {
     real_time_recency: SessionVar<bool>,
     emit_timestamp_notice: SessionVar<bool>,
     emit_trace_id_notice: SessionVar<bool>,
-    is_superuser: SessionVar<bool>,
+    // Inputs to computed variables.
+    build_info: &'static BuildInfo,
+    user: User,
 }
 
 impl SessionVars {
     /// Creates a new [`SessionVars`].
-    pub fn new(build_info: &'static BuildInfo) -> SessionVars {
+    pub fn new(build_info: &'static BuildInfo, user: User) -> SessionVars {
         SessionVars {
             application_name: SessionVar::new(&APPLICATION_NAME),
-            build_info,
             client_encoding: CLIENT_ENCODING,
             client_min_messages: SessionVar::new(&CLIENT_MIN_MESSAGES),
             cluster: SessionVar::new(&CLUSTER),
@@ -646,7 +690,8 @@ impl SessionVars {
             real_time_recency: SessionVar::new(&REAL_TIME_RECENCY),
             emit_timestamp_notice: SessionVar::new(&EMIT_TIMESTAMP_NOTICE),
             emit_trace_id_notice: SessionVar::new(&EMIT_TRACE_ID_NOTICE),
-            is_superuser: SessionVar::new(&IS_SUPERUSER),
+            build_info,
+            user,
         }
     }
 
@@ -655,7 +700,6 @@ impl SessionVars {
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
         let vars: [&dyn Var; 25] = [
             &self.application_name,
-            self.build_info,
             &self.client_encoding,
             &self.client_min_messages,
             &self.cluster,
@@ -678,7 +722,8 @@ impl SessionVars {
             &self.real_time_recency,
             &self.emit_timestamp_notice,
             &self.emit_trace_id_notice,
-            &self.is_superuser,
+            self.build_info,
+            &self.user,
         ];
         vars.into_iter()
     }
@@ -766,8 +811,8 @@ impl SessionVars {
             Ok(&self.emit_timestamp_notice)
         } else if name == EMIT_TRACE_ID_NOTICE.name {
             Ok(&self.emit_trace_id_notice)
-        } else if name == IS_SUPERUSER.name {
-            Ok(&self.is_superuser)
+        } else if name == IS_SUPERUSER_NAME {
+            Ok(&self.user)
         } else {
             Err(VarError::UnknownParameter(name.into()))
         }
@@ -852,7 +897,7 @@ impl SessionVars {
             }
             Ok(())
         } else if name == INTEGER_DATETIMES.name {
-            Err(VarError::ReadOnlyParameter(&INTEGER_DATETIMES))
+            Err(VarError::ReadOnlyParameter(INTEGER_DATETIMES.name()))
         } else if name == INTERVAL_STYLE.name {
             match extract_single_value(input) {
                 Ok(value) if UncasedStr::new(value) == INTERVAL_STYLE.value => Ok(()),
@@ -861,9 +906,9 @@ impl SessionVars {
         } else if name == SEARCH_PATH.name {
             self.search_path.set(input, local)
         } else if name == SERVER_VERSION.name {
-            Err(VarError::ReadOnlyParameter(&SERVER_VERSION))
+            Err(VarError::ReadOnlyParameter(SERVER_VERSION.name()))
         } else if name == SERVER_VERSION_NUM.name {
-            Err(VarError::ReadOnlyParameter(&SERVER_VERSION_NUM))
+            Err(VarError::ReadOnlyParameter(SERVER_VERSION_NUM.name()))
         } else if name == SQL_SAFE_UPDATES.name {
             self.sql_safe_updates.set(input, local)
         } else if name == STANDARD_CONFORMING_STRINGS.name {
@@ -902,8 +947,8 @@ impl SessionVars {
             self.emit_timestamp_notice.set(input, local)
         } else if name == EMIT_TRACE_ID_NOTICE.name {
             self.emit_trace_id_notice.set(input, local)
-        } else if name == IS_SUPERUSER.name {
-            Err(VarError::FixedValueParameter(&IS_SUPERUSER))
+        } else if name == IS_SUPERUSER_NAME {
+            Err(VarError::ReadOnlyParameter(self.user.name()))
         } else {
             Err(VarError::UnknownParameter(name.into()))
         }
@@ -958,7 +1003,7 @@ impl SessionVars {
             || name == SERVER_VERSION.name
             || name == SERVER_VERSION_NUM.name
             || name == STANDARD_CONFORMING_STRINGS.name
-            || name == IS_SUPERUSER.name
+            || name == IS_SUPERUSER_NAME
         {
             // fixed value
         } else {
@@ -974,7 +1019,6 @@ impl SessionVars {
         // call to `end_transaction` below.
         let SessionVars {
             application_name,
-            build_info: _,
             client_encoding: _,
             client_min_messages,
             cluster,
@@ -997,7 +1041,8 @@ impl SessionVars {
             real_time_recency,
             emit_timestamp_notice,
             emit_trace_id_notice,
-            is_superuser: _,
+            build_info: _,
+            user: _,
         } = self;
         application_name.end_transaction(action);
         client_min_messages.end_transaction(action);
@@ -1138,17 +1183,18 @@ impl SessionVars {
         *self.emit_trace_id_notice.value()
     }
 
-    /// Returns the value of `is_superuser` configuration parameter.
-    pub fn is_superuser(&self) -> bool {
-        *self.is_superuser.value()
+    /// Returns the user associated with this `SessionVars` instance.
+    pub fn user(&self) -> &User {
+        &self.user
+    }
+
+    /// Sets the external metadata associated with the user.
+    pub fn set_external_user_metadata(&mut self, metadata: ExternalUserMetadata) {
+        self.user.external_metadata = Some(metadata);
     }
 
     pub fn set_cluster(&mut self, cluster: String) {
         self.cluster.session_value = Some(cluster);
-    }
-
-    pub fn set_superuser(&mut self, is_superuser: bool) {
-        self.is_superuser.session_value = Some(is_superuser);
     }
 }
 
@@ -1694,11 +1740,11 @@ pub trait Var: fmt::Debug {
     /// Returns the name of the type of this variable.
     fn type_name(&self) -> &'static str;
 
-    /// Indicates wither the [`Var`] is visible given is_system_user.
+    /// Indicates wither the [`Var`] is visible for the given [`User`].
     ///
     /// Variables marked as `internal` are only visible for the
     /// system user.
-    fn visible(&self, is_system_user: bool) -> bool;
+    fn visible(&self, user: &User) -> bool;
 
     /// Indicates wither the [`Var`] is only visible in unsafe mode.
     ///
@@ -1747,8 +1793,8 @@ where
         V::TYPE_NAME
     }
 
-    fn visible(&self, is_system_user: bool) -> bool {
-        !self.internal || is_system_user
+    fn visible(&self, user: &User) -> bool {
+        !self.internal || user == &*SYSTEM_USER
     }
 
     fn safe(&self) -> bool {
@@ -1839,8 +1885,8 @@ where
         V::TYPE_NAME
     }
 
-    fn visible(&self, is_system_user: bool) -> bool {
-        self.parent.visible(is_system_user)
+    fn visible(&self, user: &User) -> bool {
+        self.parent.visible(user)
     }
 
     fn safe(&self) -> bool {
@@ -1942,8 +1988,8 @@ where
         V::TYPE_NAME
     }
 
-    fn visible(&self, is_system_user: bool) -> bool {
-        self.parent.visible(is_system_user)
+    fn visible(&self, user: &User) -> bool {
+        self.parent.visible(user)
     }
 
     fn safe(&self) -> bool {
@@ -1953,7 +1999,7 @@ where
 
 impl Var for BuildInfo {
     fn name(&self) -> &'static str {
-        "mz_version"
+        MZ_VERSION_NAME.as_str()
     }
 
     fn value(&self) -> String {
@@ -1968,7 +2014,33 @@ impl Var for BuildInfo {
         str::TYPE_NAME
     }
 
-    fn visible(&self, _: bool) -> bool {
+    fn visible(&self, _: &User) -> bool {
+        true
+    }
+
+    fn safe(&self) -> bool {
+        true
+    }
+}
+
+impl Var for User {
+    fn name(&self) -> &'static str {
+        IS_SUPERUSER_NAME.as_str()
+    }
+
+    fn value(&self) -> String {
+        self.is_superuser().format()
+    }
+
+    fn description(&self) -> &'static str {
+        "Indicates whether the current session is a super user (PostgreSQL)."
+    }
+
+    fn type_name(&self) -> &'static str {
+        bool::TYPE_NAME
+    }
+
+    fn visible(&self, _: &User) -> bool {
         true
     }
 

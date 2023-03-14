@@ -37,7 +37,17 @@ pub struct Endpoint {
 impl Endpoint {
     /// Returns the URL for the cloud regions.
     pub fn cloud_regions_url(&self) -> Url {
-        self.with_path(&["_metadata", "cloud-regions.json"])
+        let host = self
+            .url
+            .host()
+            .to_owned()
+            .expect("endpoint url has a valid host");
+        let url_str = format!("https://sync.{host}");
+        let mut url = Url::parse(&url_str).expect("sync endpoint name should be valid");
+        url.path_segments_mut()
+            .expect("constructor validated URL can be a base")
+            .extend(["api", "cloud-regions"]);
+        url
     }
 
     /// Returns the URL for the OAuth token exchange.

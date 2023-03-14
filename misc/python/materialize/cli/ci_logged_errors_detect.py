@@ -14,7 +14,7 @@ import argparse
 import os
 import re
 import sys
-from typing import Any, List
+from typing import Any, Dict, List
 
 import junit_xml
 import requests
@@ -30,6 +30,7 @@ ERROR_RE = re.compile(
     | [Oo]ut\ [Oo]f\ [Mm]emory
     | cannot\ migrate\ from\ catalog
     | halting\ process: # Rust unwrap
+    | \[SQLsmith\] # Unknown errors are logged
     # From src/testdrive/src/action/sql.rs
     | column\ name\ mismatch
     | non-matching\ rows:
@@ -41,6 +42,10 @@ ERROR_RE = re.compile(
     | expected\ .*,\ but\ found\ none
     | unsupported\ SQL\ type\ in\ testdrive:
     )
+    # Expected once compute cluster has panicked, brings no new information
+    (?!.*timely\ communication\ error:\ reading\ data:)
+    # Expected once compute cluster has panicked, only happens in CI
+    (?!.*aborting\ because\ propagate_crashes\ is\ enabled)
     """,
     re.VERBOSE,
 )
@@ -88,9 +93,13 @@ def annotate_logged_errors(log_files: List[str]) -> None:
     junit_suite = junit_xml.TestSuite(suite_name)
 
     artifacts = ci_util.get_artifacts()
-    job = os.environ["BUILDKITE_JOB_ID"]
+    job = os.getenv("BUILDKITE_JOB_ID")
 
-    for i, error in enumerate(error_logs):
+    # Keep track of known errors so we log each only once, and attach the
+    # additional occurences to the same junit-xml test case.
+    dict_issue_number_to_test_case_index: Dict[int, int] = {}
+
+    for error in error_logs:
         for artifact in artifacts:
             if artifact["job_id"] == job and artifact["path"] == error.file:
                 org = os.environ["BUILDKITE_ORGANIZATION_SLUG"]
@@ -103,20 +112,60 @@ def annotate_logged_errors(log_files: List[str]) -> None:
 
         for issue in known_issues:
             match = issue.regex.search(error.line)
-            if match:
-                test_case = junit_xml.TestCase(f"log error {i + 1} (known)", suite_name)
-                test_case.add_failure_info(
-                    message=f"Known error in logs: <a href=\"{issue.info['html_url']}\">{issue.info['title']} (#{issue.info['number']})</a><br/>In {linked_file}:{error.line_nr}:",
-                    output=error.line,
-                )
+            if match and issue.info["state"] == "open":
+                message = f"Known error in logs: <a href=\"{issue.info['html_url']}\">{issue.info['title']} (#{issue.info['number']})</a><br/>In {linked_file}:{error.line_nr}:"
+                if issue.info["number"] in dict_issue_number_to_test_case_index:
+                    junit_suite.test_cases[
+                        dict_issue_number_to_test_case_index[issue.info["number"]]
+                    ].add_failure_info(message=message, output=error.line)
+                else:
+                    test_case = junit_xml.TestCase(
+                        f"log error {len(junit_suite.test_cases) + 1} (known)",
+                        suite_name,
+                        allow_multiple_subelements=True,
+                    )
+                    test_case.add_failure_info(message=message, output=error.line)
+                    dict_issue_number_to_test_case_index[issue.info["number"]] = len(
+                        junit_suite.test_cases
+                    )
+                    junit_suite.test_cases.append(test_case)
                 break
         else:
-            test_case = junit_xml.TestCase(f"log error {i + 1} (new)", suite_name)
-            test_case.add_failure_info(
-                message=f'Unknown error in logs (<a href="https://github.com/MaterializeInc/materialize/blob/main/doc/developer/ci-regexp.md">ci-regexp guide</a>)<br/>In {linked_file}:{error.line_nr}:',
-                output=error.line,
-            )
-        junit_suite.test_cases.append(test_case)
+            for issue in known_issues:
+                match = issue.regex.search(error.line)
+                if match and issue.info["state"] == "closed":
+                    message = f"Potential regression in logs: <a href=\"{issue.info['html_url']}\">{issue.info['title']} (#{issue.info['number']}, closed)</a><br/>In {linked_file}:{error.line_nr}:"
+                    if issue.info["number"] in dict_issue_number_to_test_case_index:
+                        junit_suite.test_cases[
+                            dict_issue_number_to_test_case_index[issue.info["number"]]
+                        ].add_failure_info(message=message, output=error.line)
+                    else:
+                        test_case = junit_xml.TestCase(
+                            f"log error {len(junit_suite.test_cases) + 1} (regression)",
+                            suite_name,
+                            allow_multiple_subelements=True,
+                        )
+                        test_case.add_failure_info(
+                            message=message,
+                            output=error.line,
+                        )
+                        dict_issue_number_to_test_case_index[
+                            issue.info["number"]
+                        ] = len(junit_suite.test_cases)
+                        junit_suite.test_cases.append(test_case)
+                    break
+            else:
+                message = f'Unknown error in logs (<a href="https://github.com/MaterializeInc/materialize/blob/main/doc/developer/ci-regexp.md">ci-regexp guide</a>)<br/>In {linked_file}:{error.line_nr}:'
+                test_case = junit_xml.TestCase(
+                    f"log error {len(junit_suite.test_cases) + 1} (new)",
+                    suite_name,
+                    allow_multiple_subelements=True,
+                )
+                test_case.add_failure_info(message=message, output=error.line)
+                dict_issue_number_to_test_case_index[issue.info["number"]] = len(
+                    junit_suite.test_cases
+                )
+                junit_suite.test_cases.append(test_case)
 
     junit_name = f"{step_key}_logged_errors" if step_key else "logged_errors"
 
@@ -150,7 +199,7 @@ def get_known_issues_from_github() -> list[KnownIssue]:
         headers["Authorization"] = f"Bearer {token}"
 
     response = requests.get(
-        f"https://api.github.com/search/issues?q=type:repo:MaterializeInc/materialize%20type:issue%20state:open%20label:ci-flake",
+        f'https://api.github.com/search/issues?q=repo:MaterializeInc/materialize%20type:issue%20in:body%20"ci-regexp%3A"',
         headers=headers,
     )
 
@@ -162,10 +211,9 @@ def get_known_issues_from_github() -> list[KnownIssue]:
 
     known_issues = []
     for issue in issues_json["items"]:
-        match = CI_RE.search(issue["body"])
-        if not match:
-            continue
-        known_issues.append(KnownIssue(match.group(1), issue))
+        matches = CI_RE.findall(issue["body"])
+        for match in matches:
+            known_issues.append(KnownIssue(match.strip(), issue))
     return known_issues
 
 

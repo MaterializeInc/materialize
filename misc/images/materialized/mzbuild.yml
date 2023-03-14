@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 name: materialized
+description: Materialize is a fast, distributed SQL database built on streaming internals.
 pre-image:
   - type: cargo-build
     bin: [clusterd, environmentd]

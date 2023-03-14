@@ -1,7 +1,7 @@
 [package]
 name = "mz-persist-client"
 description = "Client for Materialize pTVC durability system"
-version = "0.46.0-dev"
+version = "0.47.0-dev"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -62,7 +62,7 @@ tokio-console = ["mz-ore/tokio-console"]
 
 [dev-dependencies]
 async-trait = "0.1.59"
-axum = { version = "0.6.1" }
+axum = { version = "0.6.7" }
 clap = { version = "3.2.20", features = ["derive", "env"] }
 criterion = { version = "0.4.0", features = ["html_reports"] }
 datadriven = { version = "0.6.0", features = ["async"] }

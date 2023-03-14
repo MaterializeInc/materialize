@@ -337,17 +337,20 @@ async fn main() -> Result<()> {
                 .await
                 .with_context(|| "Enabling region.")?;
 
-                let environment = get_region_environment(&client, &valid_profile, &region)
-                    .await
-                    .with_context(|| "Retrieving environment data.")?;
+                loading_spinner.finish_with_message(format!("{cloud_provider_region} enabled"));
 
+                let health_spinner =
+                    run_loading_spinner("Waiting for region to come online...".to_string());
                 loop {
+                    let environment = get_region_environment(&client, &valid_profile, &region)
+                        .await
+                        .with_context(|| "Retrieving environment data.")?;
                     if check_environment_health(&valid_profile, &environment)? {
                         break;
                     }
                 }
 
-                loading_spinner.finish_with_message(format!("{cloud_provider_region} enabled"));
+                health_spinner.finish_with_message(format!("{cloud_provider_region} is online"));
                 profile.set_default_region(cloud_provider_region);
             }
 
@@ -380,7 +383,7 @@ async fn main() -> Result<()> {
                     .await
                     .with_context(|| "Retrieving cloud providers.")?;
                 let cloud_providers_regions =
-                    list_regions(&cloud_providers, &client, &valid_profile)
+                    list_regions(&cloud_providers.data, &client, &valid_profile)
                         .await
                         .with_context(|| "Listing regions.")?;
                 cloud_providers_regions

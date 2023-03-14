@@ -13,21 +13,32 @@
 //! CAUTION: This is not meant for high-throughput data processing but for
 //! one-off requests that we need to do every now and then.
 
+use std::fmt::Display;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
+use timely::order::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc;
 use tracing::Instrument;
 
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::read::ListenEvent;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec64;
-use mz_repr::GlobalId;
+use mz_repr::{Diff, GlobalId, Row};
 use mz_service::local::Activatable;
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::controller::ResumptionFrontierCalculator;
-use mz_storage_client::types::sources::IngestionDescription;
+use mz_storage_client::types::sources::{
+    GenericSourceConnection, IngestionDescription, KafkaSourceConnection, KinesisSourceConnection,
+    LoadGeneratorSourceConnection, PostgresSourceConnection, S3SourceConnection, SourceConnection,
+    SourceData, SourceTimestamp, TestScriptSourceConnection,
+};
+
+use crate::source::reclock::{ReclockBatch, ReclockFollower};
+use crate::source::types::{SourceConnectionBuilder, SourceReader};
 
 /// A worker that can execute commands that come in on a channel and returns
 /// responses on another channel. This is useful in places where we can't
@@ -57,10 +68,79 @@ pub enum AsyncStorageWorkerResponse<T: Timestamp + Lattice + Codec64> {
         GlobalId,
         IngestionDescription<CollectionMetadata>,
         Antichain<T>,
+        Vec<Row>,
     ),
 }
 
-impl<T: Timestamp + Lattice + Codec64> AsyncStorageWorker<T> {
+async fn reclock_resume_frontier<C, IntoTime>(
+    persist_clients: &PersistClientCache,
+    ingestion_description: &IngestionDescription<CollectionMetadata>,
+    resume_upper: &Antichain<IntoTime>,
+) -> Antichain<<C::Reader as SourceReader>::Time>
+where
+    C: SourceConnection + SourceConnectionBuilder,
+    IntoTime: Timestamp + Lattice + Codec64 + Display,
+{
+    if **resume_upper == [IntoTime::minimum()] {
+        return Antichain::from_elem(<C::Reader as SourceReader>::Time::minimum());
+    }
+
+    let metadata = &ingestion_description.ingestion_metadata;
+
+    let persist_client = persist_clients
+        .open(metadata.persist_location.clone())
+        .await
+        .expect("location unavailable");
+
+    let read_handle = persist_client
+        .open_leased_reader::<SourceData, (), IntoTime, Diff>(
+            metadata.remap_shard.clone().unwrap(),
+            "reclock",
+            Arc::new(ingestion_description.desc.connection.timestamp_desc()),
+            Arc::new(UnitSchema),
+        )
+        .await
+        .expect("shard unavailable");
+
+    let as_of = read_handle.since().clone();
+
+    let mut remap_updates = vec![];
+
+    let mut subscription = read_handle
+        .subscribe(as_of.clone())
+        .await
+        .expect("always valid to read at since");
+
+    let mut upper = as_of.clone();
+    while PartialOrder::less_than(&upper, resume_upper) {
+        for event in subscription.fetch_next().await {
+            match event {
+                ListenEvent::Updates(updates) => {
+                    for ((k, v), t, d) in updates {
+                        let row: Row = k.expect("invalid binding").0.expect("invalid binding");
+                        let _v: () = v.expect("invalid binding");
+                        let from_ts = <C::Reader as SourceReader>::Time::decode_row(&row);
+                        remap_updates.push((from_ts, t, d));
+                    }
+                }
+                ListenEvent::Progress(f) => upper = f,
+            }
+        }
+    }
+
+    let reclock_batch = ReclockBatch {
+        updates: remap_updates,
+        upper,
+    };
+
+    let mut timestamper = ReclockFollower::new(as_of);
+    timestamper.push_trace_batch(reclock_batch);
+    timestamper
+        .source_upper_at_frontier(resume_upper.borrow())
+        .expect("enough data is loaded")
+}
+
+impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
     /// Creates a new [`AsyncStorageWorker`].
     ///
     /// IMPORTANT: The passed in `activatable` is activated when new responses
@@ -92,11 +172,73 @@ impl<T: Timestamp + Lattice + Codec64> AsyncStorageWorker<T> {
                             .calculate_resumption_frontier(&mut state)
                             .instrument(span)
                             .await;
+
+                        // Create a specialized description to be able to call the generic method
+                        let source_resume_upper = match ingestion_description.desc.connection {
+                            GenericSourceConnection::Kafka(_) => {
+                                let upper = reclock_resume_frontier::<KafkaSourceConnection, _>(
+                                    &persist_clients,
+                                    &ingestion_description,
+                                    &resume_upper,
+                                )
+                                .await;
+                                upper.into_iter().map(|ts| ts.encode_row()).collect()
+                            }
+                            GenericSourceConnection::Kinesis(_) => {
+                                let upper = reclock_resume_frontier::<KinesisSourceConnection, _>(
+                                    &persist_clients,
+                                    &ingestion_description,
+                                    &resume_upper,
+                                )
+                                .await;
+                                upper.into_iter().map(|ts| ts.encode_row()).collect()
+                            }
+                            GenericSourceConnection::Postgres(_) => {
+                                let upper = reclock_resume_frontier::<PostgresSourceConnection, _>(
+                                    &persist_clients,
+                                    &ingestion_description,
+                                    &resume_upper,
+                                )
+                                .await;
+                                upper.into_iter().map(|ts| ts.encode_row()).collect()
+                            }
+                            GenericSourceConnection::S3(_) => {
+                                let upper = reclock_resume_frontier::<S3SourceConnection, _>(
+                                    &persist_clients,
+                                    &ingestion_description,
+                                    &resume_upper,
+                                )
+                                .await;
+                                upper.into_iter().map(|ts| ts.encode_row()).collect()
+                            }
+                            GenericSourceConnection::LoadGenerator(_) => {
+                                let upper =
+                                    reclock_resume_frontier::<LoadGeneratorSourceConnection, _>(
+                                        &persist_clients,
+                                        &ingestion_description,
+                                        &resume_upper,
+                                    )
+                                    .await;
+                                upper.into_iter().map(|ts| ts.encode_row()).collect()
+                            }
+                            GenericSourceConnection::TestScript(_) => {
+                                let upper =
+                                    reclock_resume_frontier::<TestScriptSourceConnection, _>(
+                                        &persist_clients,
+                                        &ingestion_description,
+                                        &resume_upper,
+                                    )
+                                    .await;
+                                upper.into_iter().map(|ts| ts.encode_row()).collect()
+                            }
+                        };
+
                         let res = response_tx.send(
                             AsyncStorageWorkerResponse::IngestDescriptionWithResumeUpper(
                                 id,
                                 ingestion_description,
                                 resume_upper,
+                                source_resume_upper,
                             ),
                         );
 

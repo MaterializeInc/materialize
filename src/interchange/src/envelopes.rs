@@ -9,18 +9,17 @@
 
 use std::collections::BTreeMap;
 use std::iter;
-use std::rc::Rc;
 
-use differential_dataflow::{
-    lattice::Lattice,
-    trace::BatchReader,
-    trace::{implementations::ord::OrdValBatch, Cursor},
-};
+use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::trace::{Batch, BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Collection};
 use itertools::{EitherOrBoth, Itertools};
 use maplit::btreemap;
 use once_cell::sync::Lazy;
-use timely::dataflow::{channels::pact::Pipeline, operators::Operator, Scope, Stream};
+use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::Operator;
+use timely::dataflow::{Scope, Stream};
 
 use mz_ore::cast::CastFrom;
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, Row, RowPacker, ScalarType};
@@ -33,15 +32,18 @@ use crate::avro::DiffPair;
 // This is useful for some sink envelopes (e.g., Debezium and Upsert), which
 // need to do specific logic based on the _entire_ set of before/after diffs for
 // a given key at each timestamp.
-pub fn combine_at_timestamp<G: Scope>(
-    batches: Stream<G, Rc<OrdValBatch<Option<Row>, Row, G::Timestamp, Diff>>>,
+pub fn combine_at_timestamp<G: Scope, Tr>(
+    arranged: Arranged<G, Tr>,
 ) -> Collection<G, (Option<Row>, Vec<DiffPair<Row>>), Diff>
 where
     G::Timestamp: Lattice + Copy,
+    Tr: Clone + TraceReader<Key = Option<Row>, Val = Row, Time = G::Timestamp, R = Diff>,
+    Tr::Batch: Batch,
 {
     let mut rows_buf = vec![];
-    let x: Stream<G, ((Option<Row>, Vec<DiffPair<Row>>), G::Timestamp, Diff)> =
-        batches.unary(Pipeline, "combine_at_timestamp", move |_, _| {
+    let x: Stream<G, ((Option<Row>, Vec<DiffPair<Row>>), G::Timestamp, Diff)> = arranged
+        .stream
+        .unary(Pipeline, "combine_at_timestamp", move |_, _| {
             move |input, output| {
                 while let Some((cap, batches)) = input.next() {
                     let mut session = output.session(&cap);

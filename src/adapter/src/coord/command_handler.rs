@@ -25,7 +25,7 @@ use mz_repr::ScalarType;
 use mz_sql::ast::{InsertSource, Query, Raw, SetExpr, Statement};
 use mz_sql::catalog::{RoleAttributes, SessionCatalog};
 use mz_sql::plan::{CreateRolePlan, Params};
-use mz_sql::vars::OwnedVarInput;
+use mz_sql::session::vars::OwnedVarInput;
 
 use crate::client::ConnectionId;
 use crate::command::{
