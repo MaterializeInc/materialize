@@ -194,6 +194,7 @@ mod tests {
     use timely::progress::Antichain;
 
     use mz_build_info::DUMMY_BUILD_INFO;
+    use mz_ore::collections::CollectionExt;
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::cfg::PersistConfig;
@@ -297,17 +298,18 @@ mod tests {
         // Now update status to Failed
         tokio::time::advance(Duration::from_millis(1)).await;
         let error = String::from("some error here");
+        let hint = String::from("more explanation");
         healthchecker
             .update_status(SinkStatus::Failed {
                 error: error.clone(),
-                hint: None,
+                hint: Some(hint.clone()),
             })
             .await;
         assert_eq!(
             healthchecker.current_status,
             Some(SinkStatus::Failed {
                 error: error.clone(),
-                hint: None,
+                hint: Some(hint.clone()),
             })
         );
 
@@ -316,23 +318,33 @@ mod tests {
         healthchecker.update_status(SinkStatus::Running).await;
         assert_eq!(
             healthchecker.current_status,
-            Some(SinkStatus::Failed { error, hint: None })
+            Some(SinkStatus::Failed {
+                error,
+                hint: Some(hint.clone())
+            })
         );
 
-        // Check that the error message is persisted
-        let error_message = dump_storage_collection(shard_id, &persist_cache)
+        // Check that the error message and the hint are persisted
+        let (error_message, hint_message) = dump_storage_collection(shard_id, &persist_cache)
             .await
             .into_iter()
             .find_map(|row| {
-                let error = row.unpack()[3];
-                if !error.is_null() {
-                    Some(error.unwrap_str().to_string())
+                let cols = row.unpack();
+                let error = cols[3];
+                let details = cols[4];
+                if !error.is_null() && !details.is_null() {
+                    let hint = details.unwrap_map().iter().into_first().1;
+                    Some((
+                        error.unwrap_str().to_string(),
+                        hint.unwrap_str().to_string(),
+                    ))
                 } else {
                     None
                 }
             })
             .unwrap();
-        assert_eq!(error_message, "some error here")
+        assert_eq!(error_message, "some error here");
+        assert_eq!(hint_message, "more explanation");
     }
 
     #[test]
