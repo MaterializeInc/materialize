@@ -436,6 +436,7 @@ class Cockroach(Service):
         name: str = "cockroach",
         image: Optional[str] = None,
         setup_materialize: bool = True,
+        in_memory: bool = False,
     ):
         volumes = []
 
@@ -448,12 +449,18 @@ class Cockroach(Service):
                 loader.composition_path,
             )
             volumes += [f"{path}:/docker-entrypoint-initdb.d/setup_materialize.sql"]
+
+        command = ["start-single-node", "--insecure"]
+
+        if in_memory:
+            command.append("--store=type=mem,size=2G")
+
         super().__init__(
             name=name,
             config={
                 "image": image,
                 "ports": [26257],
-                "command": ["start-single-node", "--insecure"],
+                "command": command,
                 "volumes": volumes,
                 "init": True,
                 "healthcheck": {

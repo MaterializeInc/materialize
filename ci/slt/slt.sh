@@ -30,7 +30,7 @@ sqllogictest \
     test/sqllogictest/transform/*.slt \
     | tee -a target/slt.log
 
-sqllogictest --auto-index-tables \
+sqllogictest --auto-index-tables --auto-transactions \
     -v "$@" \
     test/sqllogictest/sqlite/test \
     | tee -a target/slt.log
