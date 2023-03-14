@@ -22,6 +22,7 @@
 
 use differential_dataflow::lattice::Lattice;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fmt;
 use std::hash::Hash;
 
 use timely::progress::frontier::MutableAntichain;
@@ -179,6 +180,14 @@ impl<T: Eq + Hash + Ord> ReadHolds<T> {
             id_bundle.compute_ids.remove(compute_instance);
         }
         self.holds.retain(|_, id_bundle| !id_bundle.is_empty());
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for ReadHolds<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReadHolds")
+            .field("holds", &self.holds)
+            .finish()
     }
 }
 

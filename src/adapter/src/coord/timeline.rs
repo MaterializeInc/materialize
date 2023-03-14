@@ -11,6 +11,7 @@
 
 use std::cmp;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::future::Future;
 use std::thread;
 use std::time::Duration;
@@ -83,6 +84,14 @@ pub struct WriteTimestamp<T = mz_repr::Timestamp> {
 pub(crate) struct TimelineState<T> {
     pub(crate) oracle: DurableTimestampOracle<T>,
     pub(crate) read_holds: ReadHolds<T>,
+}
+
+impl<T: fmt::Debug> fmt::Debug for TimelineState<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TimelineState")
+            .field("read_holds", &self.read_holds)
+            .finish()
+    }
 }
 
 /// A timeline can perform reads and writes. Reads happen at the read timestamp
@@ -530,40 +539,32 @@ impl Coordinator {
     where
         I: IntoIterator<Item = GlobalId>,
     {
-        let mut empty_timelines = Vec::new();
+        let mut empty_timelines = BTreeSet::new();
         for id in ids {
-            if let TimelineContext::TimelineDependent(timeline) = self.get_timeline_context(id) {
-                let TimelineState { read_holds, .. } = self
-                    .global_timelines
-                    .get_mut(&timeline)
-                    .expect("all timelines have a timestamp oracle");
+            for (timeline, TimelineState { read_holds, .. }) in &mut self.global_timelines {
                 read_holds.remove_storage_id(&id);
                 if read_holds.is_empty() {
-                    empty_timelines.push(timeline);
+                    empty_timelines.insert(timeline.clone());
                 }
             }
         }
-        empty_timelines
+        empty_timelines.into_iter().collect()
     }
 
     pub(crate) fn remove_compute_ids_from_timeline<I>(&mut self, ids: I) -> Vec<Timeline>
     where
         I: IntoIterator<Item = (ComputeInstanceId, GlobalId)>,
     {
-        let mut empty_timelines = Vec::new();
+        let mut empty_timelines = BTreeSet::new();
         for (compute_instance, id) in ids {
-            if let TimelineContext::TimelineDependent(timeline) = self.get_timeline_context(id) {
-                let TimelineState { read_holds, .. } = self
-                    .global_timelines
-                    .get_mut(&timeline)
-                    .expect("all timelines have a timestamp oracle");
+            for (timeline, TimelineState { read_holds, .. }) in &mut self.global_timelines {
                 read_holds.remove_compute_id(&compute_instance, &id);
                 if read_holds.is_empty() {
-                    empty_timelines.push(timeline);
+                    empty_timelines.insert(timeline.clone());
                 }
             }
         }
-        empty_timelines
+        empty_timelines.into_iter().collect()
     }
 
     pub(crate) fn check_for_empty_timelines_compute_instance(

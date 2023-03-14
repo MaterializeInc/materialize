@@ -320,6 +320,9 @@ impl Coordinator {
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.
         let _: () = async {
+            self.send_builtin_table_updates(builtin_table_updates, BuiltinTableUpdateSource::DDL)
+                .await;
+
             let mut empty_timelines = Vec::new();
             if !storage_ids_to_drop.is_empty() {
                 let timelines = self.remove_storage_ids_from_timeline(storage_ids_to_drop);
@@ -347,9 +350,6 @@ impl Coordinator {
                     self.global_timelines.remove(&timeline);
                 }
             }
-
-            self.send_builtin_table_updates(builtin_table_updates, BuiltinTableUpdateSource::DDL)
-                .await;
 
             if !sources_to_drop.is_empty() {
                 self.drop_sources(sources_to_drop);
