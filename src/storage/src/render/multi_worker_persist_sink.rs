@@ -110,6 +110,7 @@ use mz_persist_client::batch::Batch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriterEnrichedHollowBatch;
 use mz_persist_types::codec_impls::UnitSchema;
+use mz_persist_types::{Codec, Codec64};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::errors::DataflowError;
@@ -166,9 +167,9 @@ impl BatchMetrics {
 
 struct BatchBuilderAndMetdata<K, V, T, D>
 where
-    T: timely::progress::Timestamp
-        + differential_dataflow::lattice::Lattice
-        + mz_persist_types::Codec64,
+    K: Codec,
+    V: Codec,
+    T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice + Codec64,
 {
     builder: mz_persist_client::batch::BatchBuilder<K, V, T, D>,
     metrics: BatchMetrics,
@@ -176,9 +177,9 @@ where
 
 impl<K, V, T, D> BatchBuilderAndMetdata<K, V, T, D>
 where
-    T: timely::progress::Timestamp
-        + differential_dataflow::lattice::Lattice
-        + mz_persist_types::Codec64,
+    K: Codec,
+    V: Codec,
+    T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice + Codec64,
 {
     fn new(bb: mz_persist_client::batch::BatchBuilder<K, V, T, D>) -> Self {
         BatchBuilderAndMetdata {
