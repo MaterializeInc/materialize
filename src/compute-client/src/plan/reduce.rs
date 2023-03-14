@@ -71,7 +71,7 @@ use mz_expr::permutation_for_arrangement;
 use mz_expr::AggregateExpr;
 use mz_expr::AggregateFunc;
 use mz_expr::MirScalarExpr;
-use mz_ore::soft_assert_or_log;
+use mz_ore::{cast::CastFrom, soft_assert_or_log};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 
 use super::AvailableCollections;
@@ -678,10 +678,8 @@ impl ReducePlan {
                     // a balance between how many inputs each layer gets from
                     // the preceding layer, while also limiting the number of
                     // layers.
-                    while current < limit {
-                        // TODO(benesch): fix this dangerous use of `as`.
-                        #[allow(clippy::as_conversions)]
-                        buckets.push(current as u64);
+                    while current < u64::cast_from(limit) {
+                        buckets.push(current);
                         current = current.saturating_mul(16);
                     }
                     // We need to store the bucket numbers in decreasing order.
