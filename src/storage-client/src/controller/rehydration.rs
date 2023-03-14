@@ -17,7 +17,6 @@
 
 use std::collections::BTreeMap;
 use std::num::NonZeroI64;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
@@ -35,7 +34,6 @@ use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
 use mz_ore::retry::Retry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
-use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::Codec64;
 use mz_repr::GlobalId;
 use mz_service::client::{GenericClient, Partitioned};
@@ -68,13 +66,9 @@ where
     /// a storage replica.
     pub fn new(
         build_info: &'static BuildInfo,
-        _persist: Arc<PersistClientCache>,
         metrics: RehydratingStorageClientMetrics,
         envd_epoch: NonZeroI64,
     ) -> RehydratingStorageClient<T> {
-        // NOTE: We currently don't need access to persist, so we could remove
-        // it from new() as well.
-
         let (command_tx, command_rx) = unbounded_channel();
         let (response_tx, response_rx) = unbounded_channel();
         let mut task = RehydrationTask {
