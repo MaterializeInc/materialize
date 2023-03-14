@@ -110,7 +110,7 @@ pub enum SinkStatus {
         /// in the mz_sink_status_history table
         error: String,
         /// the optional hint string, will be added to the details column in
-        /// the mz_sink_status_history table
+        /// the `mz_sink_status_history` table
         hint: Option<String>,
     },
     /// Represents a irrecoverable failure in the pipeline. Data from this collection
