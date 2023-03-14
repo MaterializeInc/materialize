@@ -800,7 +800,13 @@ impl KeyValPlan {
 ///
 /// This function requires that all of the elements in `indexes` are strictly
 /// increasing.
-/// E.g. [3, 6, 10, 15] turns into [3, 3, 4, 5]
+///
+/// # Examples
+///
+/// ```
+/// use mz_compute_client::plan::reduce::convert_indexes_to_skips;
+/// assert_eq!(convert_indexes_to_skips(vec![3, 6, 10, 15]), [3, 2, 3, 4])
+/// ```
 pub fn convert_indexes_to_skips(mut indexes: Vec<usize>) -> Vec<usize> {
     for i in 1..indexes.len() {
         soft_assert_or_log!(
