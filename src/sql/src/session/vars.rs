@@ -1183,6 +1183,11 @@ impl SessionVars {
         *self.emit_trace_id_notice.value()
     }
 
+    /// Returns the value of `is_superuser` configuration parameter.
+    pub fn is_superuser(&self) -> bool {
+        self.user.is_superuser()
+    }
+
     /// Returns the user associated with this `SessionVars` instance.
     pub fn user(&self) -> &User {
         &self.user
