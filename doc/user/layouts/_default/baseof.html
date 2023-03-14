@@ -113,13 +113,13 @@ Apache License, Version 2.0. */}}
       // Add click handlers for all top-level items with children.
       const menus = $("nav[role=navigation] li.has-children");
       menus.find("a:not([href])").click((e) => {
-        $(e.target).parents("li").toggleClass("open");
+        $(e.target).parents("li").first().toggleClass("open");
         e.preventDefault();
         return false;
       });
       // When an item is already active, and it's clicked, just collapse it
       menus.find("a.active").click((e) => {
-        $(e.target).parents("li").toggleClass("open");
+        $(e.target).parents("li").first().toggleClass("open");
         e.preventDefault();
         return false;
       });
