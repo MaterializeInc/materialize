@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
 use differential_dataflow::lattice::Lattice;
+use fail::fail_point;
 use futures::{stream::LocalBoxStream, StreamExt};
 use mz_persist_types::codec_impls::UnitSchema;
 use timely::order::PartialOrder;
@@ -111,6 +112,9 @@ where
 
         let upper = write_handle.upper();
 
+        // Allow manually simulating the scenario where the since of the remap
+        // shard has advanced to far.
+        fail_point!("invalid_remap_as_of");
         assert!(
             PartialOrder::less_equal(since, &as_of),
             "invalid as_of: as_of({as_of:?}) < since({since:?}), \

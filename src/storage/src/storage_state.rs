@@ -75,6 +75,7 @@ use std::thread;
 
 use crossbeam_channel::TryRecvError;
 use differential_dataflow::lattice::Lattice;
+use fail::fail_point;
 use mz_persist_types::codec_impls::UnitSchema;
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
@@ -1096,6 +1097,7 @@ impl StorageState {
                     }
 
                     if frontier.is_empty() {
+                        fail_point!("crash_on_drop");
                         // Indicates that we may drop `id`, as there are no more valid times to read.
                         //
                         // This handler removes state that is put in place by
