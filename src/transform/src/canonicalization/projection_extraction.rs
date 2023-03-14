@@ -19,6 +19,10 @@ use mz_expr::{MirRelationExpr, MirScalarExpr};
 pub struct ProjectionExtraction;
 
 impl crate::Transform for ProjectionExtraction {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

@@ -20,6 +20,10 @@ use mz_expr::MirRelationExpr;
 pub struct Project;
 
 impl crate::Transform for Project {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

@@ -24,6 +24,10 @@ use mz_repr::RelationType;
 pub struct UnionNegateFusion;
 
 impl crate::Transform for UnionNegateFusion {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

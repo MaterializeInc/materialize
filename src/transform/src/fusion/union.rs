@@ -8,9 +8,6 @@
 // by the Apache License, Version 2.0.
 
 //! Fuses multiple `Union` operators into one.
-//!
-//! Nested negated unions are merged into the parent one by pushing
-//! the Negate to all their branches.
 
 use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
@@ -20,6 +17,10 @@ use mz_expr::MirRelationExpr;
 pub struct Union;
 
 impl crate::Transform for Union {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

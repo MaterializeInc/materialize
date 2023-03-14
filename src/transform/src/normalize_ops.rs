@@ -18,6 +18,10 @@ use crate::TransformArgs;
 pub struct NormalizeOps;
 
 impl crate::Transform for NormalizeOps {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

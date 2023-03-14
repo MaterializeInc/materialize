@@ -19,6 +19,10 @@ use mz_expr::MirRelationExpr;
 pub struct TopK;
 
 impl crate::Transform for TopK {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

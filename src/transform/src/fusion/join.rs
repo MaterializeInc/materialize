@@ -34,6 +34,10 @@ use mz_repr::RelationType;
 pub struct Join;
 
 impl crate::Transform for Join {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

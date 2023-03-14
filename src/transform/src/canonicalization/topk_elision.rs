@@ -18,6 +18,10 @@ use mz_expr::MirRelationExpr;
 pub struct TopKElision;
 
 impl crate::Transform for TopKElision {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
