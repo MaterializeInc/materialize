@@ -128,9 +128,9 @@ where
 
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
-    let ((ok_sources, err_source), capability) = match connection {
+    let (streams, capability) = match connection {
         GenericSourceConnection::Kafka(connection) => {
-            let ((oks, err), cap) = source::create_raw_source(
+            let (streams, cap) = source::create_raw_source(
                 root_scope,
                 scope,
                 base_source_config,
@@ -139,11 +139,14 @@ where
                 resumption_calculator,
                 internal_cmd_tx,
             );
-            let oks: Vec<_> = oks.into_iter().map(SourceType::Delimited).collect();
-            ((oks, err), cap)
+            let streams: Vec<_> = streams
+                .into_iter()
+                .map(|(ok, err)| (SourceType::Delimited(ok), err))
+                .collect();
+            (streams, cap)
         }
         GenericSourceConnection::Postgres(connection) => {
-            let ((oks, err), cap) = source::create_raw_source(
+            let (streams, cap) = source::create_raw_source(
                 root_scope,
                 scope,
                 base_source_config,
@@ -152,11 +155,14 @@ where
                 resumption_calculator,
                 internal_cmd_tx,
             );
-            let oks = oks.into_iter().map(SourceType::Row).collect();
-            ((oks, err), cap)
+            let streams: Vec<_> = streams
+                .into_iter()
+                .map(|(ok, err)| (SourceType::Row(ok), err))
+                .collect();
+            (streams, cap)
         }
         GenericSourceConnection::LoadGenerator(connection) => {
-            let ((oks, err), cap) = source::create_raw_source(
+            let (streams, cap) = source::create_raw_source(
                 root_scope,
                 scope,
                 base_source_config,
@@ -165,11 +171,14 @@ where
                 resumption_calculator,
                 internal_cmd_tx,
             );
-            let oks = oks.into_iter().map(SourceType::Row).collect();
-            ((oks, err), cap)
+            let streams: Vec<_> = streams
+                .into_iter()
+                .map(|(ok, err)| (SourceType::Row(ok), err))
+                .collect();
+            (streams, cap)
         }
         GenericSourceConnection::TestScript(connection) => {
-            let ((oks, err), cap) = source::create_raw_source(
+            let (streams, cap) = source::create_raw_source(
                 root_scope,
                 scope,
                 base_source_config,
@@ -178,8 +187,11 @@ where
                 resumption_calculator,
                 internal_cmd_tx,
             );
-            let oks: Vec<_> = oks.into_iter().map(SourceType::Delimited).collect();
-            ((oks, err), cap)
+            let streams: Vec<_> = streams
+                .into_iter()
+                .map(|(ok, err)| (SourceType::Delimited(ok), err))
+                .collect();
+            (streams, cap)
         }
     };
 
@@ -188,7 +200,7 @@ where
     needed_tokens.push(source_token);
 
     let mut outputs = vec![];
-    for ok_source in ok_sources {
+    for (ok_source, err_source) in streams {
         // All sources should push their various error streams into this vector,
         // whose contents will be concatenated and inserted along the collection.
         // All subsources include the non-definite errors of the ingestion

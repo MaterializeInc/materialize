@@ -155,10 +155,10 @@ pub fn create_raw_source<RootG, G, C, R>(
     calc: R,
     internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
 ) -> (
-    (
-        Vec<Collection<G, SourceOutput<C::Key, C::Value>, Diff>>,
+    Vec<(
+        Collection<G, SourceOutput<C::Key, C::Value>, Diff>,
         Collection<G, SourceError, Diff>,
-    ),
+    )>,
     Option<Rc<dyn Any>>,
 )
 where
@@ -221,12 +221,12 @@ where
     let (remap_stream, remap_token) =
         remap_operator(scope, config.clone(), source_upper_rx, timestamp_desc);
 
-    let ((reclocked_stream, reclocked_err_stream), _reclock_token) =
+    let (streams, _reclock_token) =
         reclock_operator(scope, config, reclock_follower, source_rx, remap_stream);
 
     let token = Rc::new((token, remap_token, resume_token, health_token));
 
-    ((reclocked_stream, reclocked_err_stream), Some(token))
+    (streams, Some(token))
 }
 
 type WorkerId = usize;
