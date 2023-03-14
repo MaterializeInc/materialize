@@ -653,10 +653,10 @@ fn reclock_operator<G, K, V, FromTime, D>(
     >,
     remap_trace_updates: Collection<G, FromTime, Diff>,
 ) -> (
-    (
-        Vec<Collection<G, SourceOutput<K, V>, D>>,
+    Vec<(
+        Collection<G, SourceOutput<K, V>, D>,
         Collection<G, SourceError, Diff>,
-    ),
+    )>,
     Option<SourceToken>,
 )
 where
@@ -883,13 +883,13 @@ where
     });
 
     // TODO(petrosagg): output the two streams directly
-    let (ok_muxed_stream, err_stream) =
+    let (ok_muxed_stream, err_muxed_stream) =
         reclocked_stream.map_fallible("reclock-demux-ok-err", |((output, r), ts, diff)| match r {
             Ok(ok) => Ok(((output, ok), ts, diff)),
-            Err(err) => Err((err, ts, diff.into())),
+            Err(err) => Err(((output, err), ts, diff.into())),
         });
 
-    let ok_streams = ok_muxed_stream
+    let ok_streams: Vec<_> = ok_muxed_stream
         .partition(
             u64::cast_from(num_outputs),
             |((output, data), time, diff)| (u64::cast_from(output), (data, time, diff)),
@@ -898,7 +898,22 @@ where
         .map(|stream| stream.as_collection())
         .collect();
 
-    ((ok_streams, err_stream.as_collection()), None)
+    let err_streams: Vec<_> = err_muxed_stream
+        .partition(
+            u64::cast_from(num_outputs),
+            |((output, err), time, diff)| (u64::cast_from(output), (err, time, diff)),
+        )
+        .into_iter()
+        .map(|stream| stream.as_collection())
+        .collect();
+
+    (
+        ok_streams
+            .into_iter()
+            .zip_eq(err_streams.into_iter())
+            .collect(),
+        None,
+    )
 }
 
 /// Reclocks an `IntoTime` frontier stream into a `FromTime` frontier stream. This is used for the
