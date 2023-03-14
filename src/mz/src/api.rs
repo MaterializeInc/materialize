@@ -70,6 +70,7 @@ pub struct Region {
 pub struct Environment {
     pub environmentd_pgwire_address: String,
     pub environmentd_https_address: String,
+    pub resolvable: bool,
 }
 
 impl Environment {
