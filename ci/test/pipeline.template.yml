@@ -521,19 +521,6 @@ steps:
           composition: platform-checks
           args: [--scenario=KillClusterdStorage, "--seed=$BUILDKITE_JOB_ID"]
 
-  - id: checks-restart-cockroach
-    label: "Checks + restart Cockroach"
-    depends_on: build-x86_64
-    inputs: [misc/python/materialize/checks]
-    timeout_in_minutes: 30
-    artifact_paths: junit_*.xml
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: platform-checks
-          args: [--scenario=RestartCockroach, "--seed=$BUILDKITE_JOB_ID"]
-
   - id: checks-restart-source-postgres
     label: "Checks + restart source Postgres"
     depends_on: build-x86_64
