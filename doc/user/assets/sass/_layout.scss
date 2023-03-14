@@ -212,7 +212,7 @@
     }
 
     .no-children>a,
-    .level-3 a {
+    .level-4 a {
         border-left: 2px solid var(--divider-light);
 
         &:hover,
@@ -249,8 +249,9 @@
         }
     }
 
-    li.level-2 {
-        ul {
+    li.level-2,
+    li.level-3 {
+        >ul {
             display: none;
             padding-top: 0.5rem;
             margin-bottom: 0.625rem;
@@ -274,17 +275,23 @@
         }
 
         &.open {
-            .hidden-when-open {
-                visibility: hidden;
+            >a {
+                .hidden-when-open {
+                    visibility: hidden;
+                }
             }
 
-            ul {
+            >ul {
                 display: block;
             }
         }
     }
 
     li.level-2.has-children.open {
+        padding-bottom: 4px;
+    }
+
+    li.level-3.has-children.open {
         padding-bottom: 4px;
     }
 }
@@ -451,6 +458,16 @@ body.dark {
     }
 
     li.level-2 {
+        li.level-3 {
+            ul {
+
+                &:before,
+                &:after {
+                    content: "";
+                    background-image: url("../images/level_three_transition_dark.svg");
+                }
+            }
+        }
         ul {
 
             &:before,
