@@ -346,6 +346,18 @@ impl<T: TimestampManipulation> DurableTimestampOracle<T> {
     }
 }
 
+/// An "object" that currently, or used to, exist on a [`Timeline`]
+///
+/// Before running a catalog transaction we'll check if any timelines would become empty
+/// after dropping resources, if so, we'll drop that timeline. But we only remove the
+/// timeline and/or the objects that are on it, after the transaction was successful.
+#[derive(Debug)]
+pub enum TimelineAssociation {
+    StorageId(GlobalId),
+    ComputeId((ComputeInstanceId, GlobalId)),
+    ComputeInstance(ComputeInstanceId),
+}
+
 impl Coordinator {
     pub(crate) fn now(&self) -> EpochMillis {
         (self.catalog.config().now)()
@@ -490,65 +502,112 @@ impl Coordinator {
         global_timelines.get_mut(timeline).expect("inserted above")
     }
 
-    pub(crate) fn check_for_empty_timelines(
+    pub(crate) fn associate_with_timelines(
         &self,
         storage_ids: impl IntoIterator<Item = GlobalId> + Clone,
         compute_ids: impl IntoIterator<Item = (ComputeInstanceId, GlobalId)> + Clone,
-    ) -> Vec<Timeline> {
-        // Collect all of the IDs together into a Bundle.
-        let mut compute: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
-        for (compute_id, id) in compute_ids.clone().into_iter() {
-            if let Some(ids) = compute.get_mut(&compute_id) {
-                ids.insert(id);
-            } else {
-                compute.insert(compute_id, BTreeSet::from([id]));
-            }
-        }
-        let bundle = CollectionIdBundle {
-            storage_ids: storage_ids.clone().into_iter().collect(),
-            compute_ids: compute,
-        };
+        clusters: impl IntoIterator<Item = ComputeInstanceId> + Clone,
+    ) -> BTreeMap<Timeline, (bool, Vec<TimelineAssociation>)> {
+        // Map our resources to Timelines.
+        let mut timelines: BTreeMap<_, (bool, Vec<TimelineAssociation>)> = BTreeMap::new();
 
-        // Get all of the Timelines for the given IDs.
-        let timelines: BTreeSet<_> = storage_ids
-            .into_iter()
-            .chain(compute_ids.into_iter().map(|(_compute, id)| id))
-            .filter_map(|id| match self.get_timeline_context(id) {
-                TimelineContext::TimelineDependent(timeline) => Some(timeline),
-                _ => None,
-            })
-            .collect();
-
-        // If our Bundle is a superset of the read_holds for a given Timeline, then
-        // removing all of the IDs would cause that timeline to be empty.
-        let mut empty_timelines = vec![];
-        for timeline in timelines.into_iter() {
-            let TimelineState { read_holds, .. } = self
-                .global_timelines
-                .get(&timeline)
-                .expect("all timelines have a timestamp oracle");
-            if read_holds.id_bundle().difference(&bundle).is_empty() {
-                empty_timelines.push(timeline);
-            }
-        }
-
-        empty_timelines
-    }
-
-    pub(crate) fn remove_storage_ids_from_timeline<I>(&mut self, ids: I) -> Vec<Timeline>
-    where
-        I: IntoIterator<Item = GlobalId>,
-    {
-        let mut empty_timelines = BTreeSet::new();
-        for id in ids {
-            for (timeline, TimelineState { read_holds, .. }) in &mut self.global_timelines {
-                read_holds.remove_storage_id(&id);
-                if read_holds.is_empty() {
-                    empty_timelines.insert(timeline.clone());
+        for id in storage_ids.into_iter() {
+            if let TimelineContext::TimelineDependent(timeline) = self.get_timeline_context(id) {
+                let assoc = TimelineAssociation::StorageId(id);
+                if let Some(assocs) = timelines.get_mut(&timeline) {
+                    assocs.1.push(assoc);
+                } else {
+                    timelines.insert(timeline, (false, vec![assoc]));
                 }
             }
         }
-        empty_timelines.into_iter().collect()
+
+        for (compute_id, id) in compute_ids.into_iter() {
+            if let TimelineContext::TimelineDependent(timeline) = self.get_timeline_context(id) {
+                let assoc = TimelineAssociation::ComputeId((compute_id, id));
+                if let Some(assocs) = timelines.get_mut(&timeline) {
+                    assocs.1.push(assoc);
+                } else {
+                    timelines.insert(timeline, (false, vec![assoc]));
+                }
+            }
+        }
+
+        let clusters: BTreeSet<_> = clusters.into_iter().collect();
+        for (timeline, TimelineState { read_holds, .. }) in &self.global_timelines {
+            for id in read_holds
+                .compute_ids()
+                .map(|(cluster_id, _id)| *cluster_id)
+                .filter(|cluster_id| clusters.contains(cluster_id))
+            {
+                let assoc = TimelineAssociation::ComputeInstance(id);
+                if let Some(assocs) = timelines.get_mut(timeline) {
+                    assocs.1.push(assoc);
+                } else {
+                    timelines.insert(timeline.clone(), (false, vec![assoc]));
+                }
+            }
+        }
+
+        // Check if any of our Timelines would be empty, after removing all of
+        // the associated resources.
+        for (timeline, (empty, resources)) in &mut timelines {
+            let TimelineState { read_holds, .. } = self
+                .global_timelines
+                .get(timeline)
+                .expect("all timeslines have a timestamp oracle");
+
+            // Clone the read holds which we'll use to check for emptiness.
+            //
+            // Note: there might be a more memory efficient, but complex, way
+            // to do this check, for now we're opting to keep the logic simple.
+            let mut read_holds_clone = read_holds.clone();
+            for resource in resources {
+                use TimelineAssociation::*;
+
+                match resource {
+                    StorageId(id) => read_holds_clone.remove_storage_id(id),
+                    ComputeId((compute_instance, id)) => {
+                        read_holds_clone.remove_compute_id(compute_instance, id)
+                    }
+                    ComputeInstance(compute_instance) => {
+                        read_holds_clone.remove_compute_instance(compute_instance)
+                    }
+                };
+            }
+
+            *empty = read_holds_clone.is_empty();
+        }
+
+        timelines
+    }
+
+    pub(crate) fn remove_resources_associate_with_timeline<I>(&mut self, associations: I)
+    where
+        I: IntoIterator<Item = (Timeline, (bool, Vec<TimelineAssociation>))>,
+    {
+        for (timeline, (empty, resources)) in associations {
+            let TimelineState { read_holds, .. } = self
+                .global_timelines
+                .get_mut(&timeline)
+                .expect("all timeslines have a timestamp oracle");
+            for resource in resources {
+                use TimelineAssociation::*;
+                match resource {
+                    StorageId(id) => read_holds.remove_storage_id(&id),
+                    ComputeId((compute_id, id)) => read_holds.remove_compute_id(&compute_id, &id),
+                    ComputeInstance(compute_id) => read_holds.remove_compute_instance(&compute_id),
+                }
+            }
+
+            // If we thought this Timeline should now be empty, let's assert that it is.
+            assert_eq!(empty, read_holds.is_empty());
+
+            // Finally, remove the Timeline if it's empty.
+            if empty {
+                self.global_timelines.remove(&timeline);
+            }
+        }
     }
 
     pub(crate) fn remove_compute_ids_from_timeline<I>(&mut self, ids: I) -> Vec<Timeline>
@@ -565,56 +624,6 @@ impl Coordinator {
             }
         }
         empty_timelines.into_iter().collect()
-    }
-
-    pub(crate) fn check_for_empty_timelines_compute_instance(
-        &mut self,
-        compute_instance: ComputeInstanceId,
-    ) -> Vec<Timeline> {
-        let mut empty_timelines = Vec::new();
-        for (timeline, TimelineState { read_holds, .. }) in &mut self.global_timelines {
-            // Collect all of the GlobalIDs associated with the provided ComputeInstance.
-            let compute_ids = read_holds
-                .compute_ids()
-                .filter(|(compute_inst, _ids)| **compute_inst == compute_instance);
-            let mut compute: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
-            for (compute_instance, id) in compute_ids {
-                let ids: BTreeSet<_> = id.into_iter().map(|(_chain, id)| id).copied().collect();
-                if let Some(existing_ids) = compute.get_mut(compute_instance) {
-                    existing_ids.extend(ids);
-                } else {
-                    compute.insert(*compute_instance, ids);
-                }
-            }
-
-            // Create a CollectionIdBundle we'll use to compare against the existing read_holds
-            let bundle = CollectionIdBundle {
-                storage_ids: BTreeSet::new(),
-                compute_ids: compute,
-            };
-            // If our Bundle is a superset of the read_holds for a given Timeline, then
-            // removing all of the IDs would cause that timeline to be empty.
-            if read_holds.id_bundle().difference(&bundle).is_empty() {
-                empty_timelines.push(timeline.clone());
-            }
-        }
-
-        empty_timelines
-    }
-
-    pub(crate) fn remove_compute_instance_from_timeline(
-        &mut self,
-        compute_instance: ComputeInstanceId,
-    ) -> Vec<Timeline> {
-        let mut empty_timelines = Vec::new();
-        for (timeline, TimelineState { read_holds, .. }) in &mut self.global_timelines {
-            read_holds.remove_compute_instance(&compute_instance);
-            if read_holds.is_empty() {
-                empty_timelines.push(timeline.clone());
-            }
-        }
-
-        empty_timelines
     }
 
     pub(crate) fn ids_in_timeline(&self, timeline: &Timeline) -> CollectionIdBundle {

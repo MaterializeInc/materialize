@@ -175,9 +175,6 @@ impl Coordinator {
 
                     // Drop the cluster itself.
                     clusters_to_drop.push(*id);
-
-                    // Drop timelines
-                    timelines_to_drop.extend(self.check_for_empty_timelines_compute_instance(*id));
                 }
                 catalog::Op::DropClusterReplica {
                     cluster_id,
@@ -274,17 +271,23 @@ impl Coordinator {
         // compute resources.
         //
         // Note: only after a Transaction succeeds do we actually drop the timeline
-        timelines_to_drop = self
-            .check_for_empty_timelines(storage_ids_to_drop.clone(), compute_ids_to_drop.clone());
+        let timeline_associations = self.associate_with_timelines(
+            storage_ids_to_drop,
+            compute_ids_to_drop,
+            clusters_to_drop.clone(),
+        );
+        timelines_to_drop.extend(
+            timeline_associations
+                .iter()
+                .filter_map(|(timeline, (is_empty, _))| is_empty.then_some(timeline))
+                .cloned(),
+        );
         ops.extend(
             timelines_to_drop
                 .iter()
                 .cloned()
                 .map(catalog::Op::DropTimeline),
         );
-
-        let storage_ids_to_drop: Vec<_> = storage_ids_to_drop.collect();
-        let compute_ids_to_drop: Vec<_> = compute_ids_to_drop.collect();
 
         self.validate_resource_limits(
             &ops,
@@ -323,34 +326,9 @@ impl Coordinator {
             self.send_builtin_table_updates(builtin_table_updates, BuiltinTableUpdateSource::DDL)
                 .await;
 
-            let mut empty_timelines = Vec::new();
-            if !storage_ids_to_drop.is_empty() {
-                let timelines = self.remove_storage_ids_from_timeline(storage_ids_to_drop);
-                empty_timelines.extend(timelines);
+            if !timeline_associations.is_empty() {
+                self.remove_resources_associate_with_timeline(timeline_associations);
             }
-            if !compute_ids_to_drop.is_empty() {
-                let timelines = self.remove_compute_ids_from_timeline(compute_ids_to_drop);
-                empty_timelines.extend(timelines);
-            }
-            if !clusters_to_drop.is_empty() {
-                for compute_instance in &clusters_to_drop {
-                    let timelines = self.remove_compute_instance_from_timeline(*compute_instance);
-                    empty_timelines.extend(timelines);
-                }
-            }
-
-            // Make sure after dropping resouces the timelines that are empty, are the same
-            // as the ones we thought would be empty, before actually running the transaction.
-            empty_timelines.sort();
-            timelines_to_drop.sort();
-            assert_eq!(&empty_timelines, &timelines_to_drop);
-
-            if !timelines_to_drop.is_empty() {
-                for timeline in timelines_to_drop {
-                    self.global_timelines.remove(&timeline);
-                }
-            }
-
             if !sources_to_drop.is_empty() {
                 self.drop_sources(sources_to_drop);
             }
