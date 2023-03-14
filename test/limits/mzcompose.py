@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import argparse
 import contextlib
 import os
 import sys
@@ -1227,36 +1226,7 @@ SERVICES = [
 ]
 
 
-def run_test(c: Composition, args: argparse.Namespace) -> None:
-    c.up("testdrive", persistent=True)
-
-    scenarios = (
-        [globals()[args.scenario]] if args.scenario else Generator.__subclasses__()
-    )
-
-    for scenario in scenarios:
-        with tempfile.NamedTemporaryFile(mode="w", dir=c.path) as tmp:
-            with contextlib.redirect_stdout(tmp):
-                scenario.generate()
-                sys.stdout.flush()
-                c.exec("testdrive", os.path.basename(tmp.name))
-
-
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    parser.add_argument(
-        "--scenario", metavar="SCENARIO", type=str, help="Scenario to run."
-    )
-
-    args = parser.parse_args()
-
-    c.up("zookeeper", "kafka", "schema-registry")
-
-    c.up("materialized")
-
-    run_test(c, args)
-
-
-def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run all the limits tests against a multi-node, multi-replica cluster"""
 
     parser.add_argument(
@@ -1287,7 +1257,8 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         c.sql(
             f"""
-            CREATE CLUSTER cluster1 REPLICAS (
+            DROP CLUSTER DEFAULT cascade;
+            CREATE CLUSTER default REPLICAS (
                 replica1 (
                     STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
                     STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
@@ -1306,7 +1277,18 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
         """
         )
 
-        run_test(c, args)
+        c.up("testdrive", persistent=True)
+
+        scenarios = (
+            [globals()[args.scenario]] if args.scenario else Generator.__subclasses__()
+        )
+
+        for scenario in scenarios:
+            with tempfile.NamedTemporaryFile(mode="w", dir=c.path) as tmp:
+                with contextlib.redirect_stdout(tmp):
+                    scenario.generate()
+                    sys.stdout.flush()
+                    c.exec("testdrive", os.path.basename(tmp.name))
 
 
 def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> None:
