@@ -106,21 +106,19 @@ pub enum SinkStatus {
     /// Represents a stall in the export process that might get resolved.
     /// Existing data is still available and queryable.
     Stalled {
-        /// the error string, will be used to populate the error column
-        /// in the mz_sink_status_history table
+        /// Error string used to populate the `error` column in the `mz_sink_status_history` table.
         error: String,
-        /// the optional hint string, will be added to the details column in
-        /// the `mz_sink_status_history` table
+        /// Optional hint string which if present, will be added to the `details` column in
+        /// the `mz_sink_status_history` table.
         hint: Option<String>,
     },
     /// Represents a irrecoverable failure in the pipeline. Data from this collection
     /// is not queryable any longer. The only valid transition from Failed is Dropped.
     Failed {
-        /// the error string, will be used to populate the error column
-        /// in the mz_sink_status_history table
+        /// Error string used to populate the `error` column in the `mz_sink_status_history` table.
         error: String,
-        /// the optional hint string, will be added to the details column in
-        /// the mz_sink_status_history table
+        /// Optional hint string which if present, will be added to the `details` column in
+        /// the `mz_sink_status_history` table.
         hint: Option<String>,
     },
     /// Represents a sink that was dropped.
