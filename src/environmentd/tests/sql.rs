@@ -2536,7 +2536,7 @@ fn test_timelines_persist_after_failed_transaction() {
     let server = util::start_server(config).unwrap();
 
     let mut client = server.connect(postgres::NoTls).unwrap();
-    
+
     client.batch_execute(
         "CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (TICK INTERVAL '10ms') WITH (TIMELINE 'my_timline')"
     )
