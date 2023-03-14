@@ -598,27 +598,21 @@ def workflow_test_github_17177(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     with c.override(
-        Clusterd(
-            name="clusterd_nopanic",
-            environment_extra=[
-                "MZ_SOFT_ASSERTIONS=0",
-            ],
-        ),
         Testdrive(no_reset=True),
     ):
         c.up("testdrive", persistent=True)
         c.up("materialized")
-        c.up("clusterd_nopanic")
+        c.up("clusterd1")
 
         # set up a test cluster and run a testdrive regression script
         c.sql(
             """
             CREATE CLUSTER cluster1 REPLICAS (
                 r1 (
-                    STORAGECTL ADDRESSES ['clusterd_nopanic:2100'],
-                    STORAGE ADDRESSES ['clusterd_nopanic:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_nopanic:2101'],
-                    COMPUTE ADDRESSES ['clusterd_nopanic:2102'],
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
                     WORKERS 2
                 )
             );
@@ -638,7 +632,7 @@ def workflow_test_github_17177(c: Composition) -> None:
 
             > INSERT INTO base VALUES (1.01, -1);
 
-            # The query below would not fail previously, but now now should produce
+            # The query below would not fail previously, but now should produce
             # a SQL-level error that is observable by users.
             ! SELECT SUM(data) FROM data;
             contains:Invalid data in source, saw net-zero records for key
@@ -654,7 +648,7 @@ def workflow_test_github_17177(c: Composition) -> None:
         )
 
         # ensure that an error was put into the logs
-        c1 = c.invoke("logs", "clusterd_nopanic", capture=True)
+        c1 = c.invoke("logs", "clusterd1", capture=True)
         assert (
             "Net-zero records with non-zero accumulation in ReduceAccumulable"
             in c1.stdout
@@ -673,27 +667,21 @@ def workflow_test_github_17510(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     with c.override(
-        Clusterd(
-            name="clusterd_nopanic",
-            environment_extra=[
-                "MZ_SOFT_ASSERTIONS=0",
-            ],
-        ),
         Testdrive(no_reset=True),
     ):
         c.up("testdrive", persistent=True)
         c.up("materialized")
-        c.up("clusterd_nopanic")
+        c.up("clusterd1")
 
         # set up a test cluster and run a testdrive regression script
         c.sql(
             """
             CREATE CLUSTER cluster1 REPLICAS (
                 r1 (
-                    STORAGECTL ADDRESSES ['clusterd_nopanic:2100'],
-                    STORAGE ADDRESSES ['clusterd_nopanic:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_nopanic:2101'],
-                    COMPUTE ADDRESSES ['clusterd_nopanic:2102'],
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
                     WORKERS 2
                 )
             );
@@ -817,7 +805,7 @@ def workflow_test_github_17510(c: Composition) -> None:
         )
 
         # ensure that an error was put into the logs
-        c1 = c.invoke("logs", "clusterd_nopanic", capture=True)
+        c1 = c.invoke("logs", "clusterd1", capture=True)
         assert "Invalid negative unsigned aggregation in ReduceAccumulable" in c1.stdout
 
 

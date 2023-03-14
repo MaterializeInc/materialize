@@ -23,17 +23,16 @@ use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::operators::Reduce;
 use differential_dataflow::Collection;
-use mz_expr::{EvalError, MirScalarExpr};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
-use tracing::warn;
+use tracing::{error, warn};
 
 use mz_compute_client::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
     ReducePlan, ReductionType,
 };
-use mz_expr::{AggregateExpr, AggregateFunc};
+use mz_expr::{AggregateExpr, AggregateFunc, EvalError, MirScalarExpr};
 use mz_ore::soft_assert_or_log;
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena};
@@ -1407,7 +1406,7 @@ where
     };
 
     let debug_name = debug_name.to_string();
-    let debug_full_aggrs = full_aggrs.clone();
+    let err_full_aggrs = full_aggrs.clone();
     let (arranged_output, arranged_errs) = collection
         .arrange_named::<RowKeySpine<_, _, (Vec<Accum>, Diff)>>("ArrangeAccumulable")
         .reduce_pair::<_, RowSpine<_, _, _, _>, _, ErrValSpine<_, _, _>>("ReduceAccumulable", "AccumulableErrorCheck", {
@@ -1601,13 +1600,13 @@ where
         },
         move |key, input, output| {
             let (ref accums, total) = input[0].1;
-            for (aggr, accum) in debug_full_aggrs.iter().zip(accums) {
+            for (aggr, accum) in err_full_aggrs.iter().zip(accums) {
                 // We first test here if inputs without net-positive records are present,
                 // producing an error to the logs and to the query output if that is the case.
                 if total == 0 && !accum.is_zero() {
                     warn!("[customer-data] ReduceAccumulable observed net-zero records \
                         with non-zero accumulation: {aggr:?}: {accum:?} in dataflow {debug_name}");
-                    soft_assert_or_log!(false, "Net-zero records with non-zero accumulation in ReduceAccumulable");
+                    error!("Net-zero records with non-zero accumulation in ReduceAccumulable");
                     let message = format!("Invalid data in source, saw net-zero records for key {key} \
                         with non-zero accumulation in accumulable aggregate");
                     output.push((EvalError::Internal(message).into(), 1));
@@ -1628,7 +1627,7 @@ where
                         if accum.is_negative() {
                             warn!("[customer-data] ReduceAccumulable observed a negative sum \
                                 accumulation over an unsigned type: {aggr:?}: {accum:?} in dataflow {debug_name}");
-                            soft_assert_or_log!(false, "Invalid negative unsigned aggregation in ReduceAccumulable");
+                            error!("Invalid negative unsigned aggregation in ReduceAccumulable");
                             let message = format!("Invalid data in source, saw negative accumulation with \
                             unsigned type for key {key}");
                             output.push((EvalError::Internal(message).into(), 1));
