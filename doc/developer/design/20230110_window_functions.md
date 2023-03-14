@@ -145,7 +145,7 @@ Also, we will want to entirely transform away certain window function patterns; 
 
 ### Prefix Sum
 
-This section defines prefix sum, then discusses various properties/caveats/limitations of DD's prefix sum implementation from the caller's point of view, and then discusses the implementation itself.
+This section defines prefix sum, then discusses various properties/caveats/limitations of DD's prefix sum implementation from the caller's point of view, and then discusses the implementation itself. The implementation will need to be generalized and extended in various ways, therefore we'll copy it into the Materialize codebase, and make improvements there.
 
 #### Definition
 
@@ -180,6 +180,8 @@ The implementation is data-parallel not just across keys, but inside each key as
 We’ll use the word **index** in this document to mean the values of the ORDER BY column of the OVER clause, i.e., they are simply the values that determine the ordering. (Note that it’s sparse indexing, i.e., not every number occurs from 1 to n, but there are usually (big) gaps.)
 
 As mentioned above, DD's prefix sum needs the index type to be `usize`. It is actually a fundamental limitation of the algorithm that it only works with integer indexes, and therefore we will have to map other types to integers. We discuss this in the ["ORDER BY types" section](#order-by-types).
+
+A technical detail is that we will need to [control the container types of prefix sum's internal arrangements](https://github.com/MaterializeInc/materialize/issues/16549) to make them columnation-backed. We should check every DD operator call in prefix sum when copying over the prefix sum code from DD to the Materialize codebase.
 
 #### Implementation details of DD's prefix sum
 
