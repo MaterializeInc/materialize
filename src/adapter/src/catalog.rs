@@ -5259,16 +5259,21 @@ impl Catalog {
                     grantor_id,
                 } => {
                     let member_role = state.get_role(&member_id);
-                    if is_reserved_name(state.get_role(&member_id).name()) {
+                    if is_reserved_name(member_role.name()) {
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReservedRoleName(member_role.name().to_string()),
                         )));
                     }
+                    let group_role = state.get_role(&role_id);
+                    if is_reserved_name(group_role.name()) {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReservedRoleName(group_role.name().to_string()),
+                        )));
+                    }
                     if state.collect_role_membership(&role_id).contains(&member_id) {
-                        let role = state.get_role(&role_id);
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::CircularRoleMembership {
-                                role_name: role.name().to_string(),
+                                role_name: group_role.name().to_string(),
                                 member_name: member_role.name().to_string(),
                             },
                         )));
@@ -5299,6 +5304,12 @@ impl Catalog {
                     if is_reserved_name(&member_role.name) {
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReservedRoleName(member_role.name.clone()),
+                        )));
+                    }
+                    let group_role = state.get_role(&role_id);
+                    if is_reserved_name(group_role.name()) {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReservedRoleName(group_role.name().to_string()),
                         )));
                     }
                     builtin_table_updates

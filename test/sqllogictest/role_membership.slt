@@ -119,3 +119,11 @@ DROP ROLE group2
 query TTT
 SELECT * FROM mz_role_members
 ----
+
+# Cannot grant system role
+
+statement error role name "mz_system" is reserved
+GRANT mz_system TO joe
+
+statement error role name "mz_system" is reserved
+GRANT joe TO mz_system
