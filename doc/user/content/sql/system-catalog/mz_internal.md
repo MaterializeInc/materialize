@@ -573,7 +573,7 @@ Field         | Type                          | Meaning
 `source_id`   | [`text`]                      | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).
 `status`      | [`text`]                      | The status of the source: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.
 `error`       | [`text`]                      | If the source is in an error state, the error message.
-`details`     | [`jsonb`]                     | Additional metadata provided by the source.
+`details`     | [`jsonb`]                     | Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions.
 
 ### `mz_sink_statuses`
 
@@ -603,7 +603,7 @@ Field         | Type                          | Meaning
 `sink_id`     | [`text`]                      | The ID of the sink. Corresponds to [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks).
 `status`      | [`text`]                      | The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.
 `error`       | [`text`]                      | If the sink is in an error state, the error message.
-`details`     | [`jsonb`]                     | Additional metadata provided by the sink.
+`details`     | [`jsonb`]                     | Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions.
 
 
 [`bigint`]: /sql/types/bigint
