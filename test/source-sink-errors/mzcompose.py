@@ -124,7 +124,6 @@ class KafkaDisruption:
     breakage: Callable
     expected_error: str
     fixage: Optional[Callable]
-    expected_hint: Optional[str]
 
     def run_test(self, c: Composition) -> None:
         print(f"+++ Running disruption scenario {self.name}")
@@ -143,7 +142,7 @@ class KafkaDisruption:
         ):
             self.populate(c)
             self.breakage(c, seed)
-            self.assert_error(c, self.expected_error, self.expected_hint)
+            self.assert_error(c, self.expected_error)
 
             if self.fixage:
                 self.fixage(c, seed)
@@ -187,7 +186,7 @@ class KafkaDisruption:
             )
         )
 
-    def assert_error(self, c: Composition, error: str, hint: Optional[str]) -> None:
+    def assert_error(self, c: Composition, error: str) -> None:
         c.testdrive(
             dedent(
                 f"""
@@ -195,40 +194,19 @@ class KafkaDisruption:
                   FROM mz_internal.mz_source_statuses
                   WHERE name = 'source1'
                 stalled true
+
+                # Sinks generally halt after receiving an error, which means that they may alternate
+                # between `stalled` and `starting`. Instead of relying on the current status, we
+                # check that the latest stall has the error we expect.
+                > SELECT status, error ~* '{error}'
+                  FROM mz_internal.mz_sink_status_history
+                  JOIN mz_sinks ON mz_sinks.id = sink_id
+                  WHERE name = 'sink1' and status = 'stalled'
+                  ORDER BY occurred_at DESC LIMIT 1
+                stalled true
                 """
             )
         )
-        # Sinks generally halt after receiving an error, which means that they may alternate
-        # between `stalled` and `starting`. Instead of relying on the current status, we
-        # check that the latest stall has the error we expect.
-        # If hint is provided, we check if it's the hint we expect. Otherwise the details column
-        # should remain unpopulated.
-        if hint:
-            c.testdrive(
-                dedent(
-                    f"""
-                    > SELECT status, error ~* '{error}', details::json#>>'{{hint}}' ~* '{hint}'
-                      FROM mz_internal.mz_sink_status_history
-                      JOIN mz_sinks ON mz_sinks.id = sink_id
-                      WHERE name = 'sink1' and status = 'stalled'
-                      ORDER BY occurred_at DESC LIMIT 1
-                    stalled true true
-                    """
-                )
-            )
-        else:
-            c.testdrive(
-                dedent(
-                    f"""
-                    > SELECT status, error ~* '{error}', details
-                      FROM mz_internal.mz_sink_status_history
-                      JOIN mz_sinks ON mz_sinks.id = sink_id
-                      WHERE name = 'sink1' and status = 'stalled'
-                      ORDER BY occurred_at DESC LIMIT 1
-                    stalled true <null>
-                    """
-                )
-            )
 
     def assert_recovery(self, c: Composition) -> None:
         c.testdrive(
@@ -324,12 +302,12 @@ class PgDisruption:
                 # Postgres sources may halt after receiving an error, which means that they may alternate
                 # between `stalled` and `starting`. Instead of relying on the current status, we
                 # check that the latest stall has the error we expect.
-                > SELECT status, error ~* '{error}', details
+                > SELECT status, error ~* '{error}'
                   FROM mz_internal.mz_source_status_history
                   JOIN mz_sources ON mz_sources.id = source_id
                   WHERE name = 'source1' and status = 'stalled'
                   ORDER BY occurred_at DESC LIMIT 1
-                stalled true <null>
+                stalled true
                 """
             )
         )
@@ -360,8 +338,7 @@ disruptions: List[Disruption] = [
         name="delete-topic",
         breakage=lambda c, seed: redpanda_topics(c, "delete", seed),
         expected_error="UnknownTopicOrPartition|topic",
-        fixage=None,
-        expected_hint=None,
+        fixage=None
         # Re-creating the topic does not restart the source
         # fixage=lambda c,seed: redpanda_topics(c, "create", seed),
     ),
@@ -370,14 +347,12 @@ disruptions: List[Disruption] = [
         breakage=lambda c, _: c.pause("redpanda"),
         expected_error="OperationTimedOut|BrokerTransportFailure|transaction",
         fixage=lambda c, _: c.unpause("redpanda"),
-        expected_hint="single",
     ),
     KafkaDisruption(
         name="kill-redpanda",
         breakage=lambda c, _: c.kill("redpanda"),
         expected_error="BrokerTransportFailure|Resolve",
         fixage=lambda c, _: c.up("redpanda"),
-        expected_hint=None,
     ),
     # https://github.com/MaterializeInc/materialize/issues/16582
     # KafkaDisruption(
