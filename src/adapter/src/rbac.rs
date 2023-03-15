@@ -169,15 +169,11 @@ pub fn check_plan(
         return Ok(());
     }
 
-    let all_roles: Vec<_> = catalog
-        .collect_role_membership(role_id)
-        .into_iter()
-        .map(|id| catalog.get_role(&id))
-        .collect();
-
     if let Some(required_attribute) = generate_plan_attribute(plan) {
-        if !all_roles
+        if !catalog
+            .collect_role_membership(role_id)
             .into_iter()
+            .map(|id| catalog.get_role(&id))
             .any(|role| required_attribute.check_role(role))
         {
             return Err(AdapterError::Unauthorized(UnauthorizedError::attribute(
