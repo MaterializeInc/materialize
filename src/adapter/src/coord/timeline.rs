@@ -511,7 +511,7 @@ impl Coordinator {
                 .filter(|(instance_id, _id)| cluster_set.contains(instance_id));
             for (instance_id, ids) in holds {
                 let ids = ids.map(|(_antichain, id)| id);
-                if let Some(set) = compute.get_mut(&instance_id) {
+                if let Some(set) = compute.get_mut(instance_id) {
                     set.extend(ids);
                 } else {
                     compute.insert(*instance_id, ids.copied().collect());
