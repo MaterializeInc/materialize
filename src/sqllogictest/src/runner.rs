@@ -344,6 +344,7 @@ pub struct RunnerInner {
     client: tokio_postgres::Client,
     clients: BTreeMap<String, tokio_postgres::Client>,
     auto_index_tables: bool,
+    auto_transactions: bool,
     _shutdown_trigger: oneshot::Sender<()>,
     _server_thread: JoinOnDropHandle<()>,
     _temp_dir: TempDir,
@@ -676,6 +677,7 @@ impl<'a> Runner<'a> {
     async fn run_record<'r>(
         &mut self,
         record: &'r Record<'r>,
+        in_transaction: &mut bool,
     ) -> Result<Outcome<'r>, anyhow::Error> {
         if let Record::ResetServer = record {
             self.reset().await?;
@@ -684,7 +686,7 @@ impl<'a> Runner<'a> {
             self.inner
                 .as_mut()
                 .expect("RunnerInner missing")
-                .run_record(record)
+                .run_record(record, in_transaction)
                 .await
         }
     }
@@ -950,12 +952,14 @@ impl RunnerInner {
             client,
             clients: BTreeMap::new(),
             auto_index_tables: config.auto_index_tables,
+            auto_transactions: config.auto_transactions,
         })
     }
 
     async fn run_record<'r>(
         &mut self,
         record: &'r Record<'r>,
+        in_transaction: &mut bool,
     ) -> Result<Outcome<'r>, anyhow::Error> {
         match &record {
             Record::Statement {
@@ -964,6 +968,10 @@ impl RunnerInner {
                 sql,
                 location,
             } => {
+                if self.auto_transactions && *in_transaction {
+                    self.client.execute("COMMIT", &[]).await?;
+                    *in_transaction = false;
+                }
                 match self
                     .run_statement(*expected_error, *rows_affected, sql, location.clone())
                     .await?
@@ -996,7 +1004,10 @@ impl RunnerInner {
                 sql,
                 output,
                 location,
-            } => self.run_query(sql, output, location.clone()).await,
+            } => {
+                self.run_query(sql, output, location.clone(), in_transaction)
+                    .await
+            }
             Record::Simple {
                 conn,
                 user,
@@ -1082,6 +1093,7 @@ impl RunnerInner {
         sql: &'a str,
         output: &'a Result<QueryOutput<'_>, &'a str>,
         location: Location,
+        in_transaction: &mut bool,
     ) -> Result<Outcome<'a>, anyhow::Error> {
         // get statement
         let statements = match mz_sql::parse::parse(sql) {
@@ -1120,6 +1132,35 @@ impl RunnerInner {
                     return Ok(Outcome::Success);
                 }
             }
+        }
+
+        match output {
+            Ok(_) => {
+                if self.auto_transactions && !*in_transaction {
+                    // No ISOLATION LEVEL SERIALIZABLE because of #18136
+                    self.client.execute("BEGIN", &[]).await?;
+                    *in_transaction = true;
+                }
+            }
+            Err(_) => {
+                if self.auto_transactions && *in_transaction {
+                    self.client.execute("COMMIT", &[]).await?;
+                    *in_transaction = false;
+                }
+            }
+        }
+
+        // `SHOW` commands reference catalog schema, thus are not in the same timedomain and not
+        // allowed in the same transaction, see:
+        // https://materialize.com/docs/sql/begin/#same-timedomain-error
+        match statement {
+            Statement::Show(..) => {
+                if self.auto_transactions && *in_transaction {
+                    self.client.execute("COMMIT", &[]).await?;
+                    *in_transaction = false;
+                }
+            }
+            _ => (),
         }
 
         let rows = match self.client.query(sql, &[]).await {
@@ -1351,6 +1392,7 @@ pub struct RunConfig<'a> {
     pub no_fail: bool,
     pub fail_fast: bool,
     pub auto_index_tables: bool,
+    pub auto_transactions: bool,
     pub persisted_introspection: bool,
 }
 
@@ -1372,6 +1414,9 @@ pub async fn run_string(
 
     let mut outcomes = Outcomes::default();
     let mut parser = crate::parser::Parser::new(source, input);
+    // Transactions are currently relatively slow. Since sqllogictest runs in a single connection
+    // there should be no difference in having longer running transactions.
+    let mut in_transaction = false;
     writeln!(runner.config.stdout, "==> {}", source);
 
     for record in parser.parse_records()? {
@@ -1383,7 +1428,7 @@ pub async fn run_string(
         }
 
         let outcome = runner
-            .run_record(&record)
+            .run_record(&record, &mut in_transaction)
             .await
             .map_err(|err| format!("In {}:\n{}", source, err))
             .unwrap();
@@ -1438,9 +1483,11 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
 
     let mut parser = crate::parser::Parser::new(filename.to_str().unwrap_or(""), &input);
     writeln!(runner.config.stdout, "==> {}", filename.display());
+    let mut in_transaction = false;
+
     for record in parser.parse_records()? {
         let record = record;
-        let outcome = runner.run_record(&record).await?;
+        let outcome = runner.run_record(&record, &mut in_transaction).await?;
 
         match (&record, &outcome) {
             // If we see an output failure for a query, rewrite the expected output

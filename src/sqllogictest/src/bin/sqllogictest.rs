@@ -125,6 +125,9 @@ struct Args {
     /// Inject `CREATE INDEX` after all `CREATE TABLE` statements.
     #[clap(long)]
     auto_index_tables: bool,
+    /// Inject `BEGIN` and `COMMIT` to create longer running transactions for faster testing.
+    #[clap(long)]
+    auto_transactions: bool,
     /// Run Materialize with persisted introspection sources enabled.
     #[clap(long)]
     persisted_introspection: bool,
@@ -145,6 +148,7 @@ async fn main() -> ExitCode {
         no_fail: args.no_fail,
         fail_fast: args.fail_fast,
         auto_index_tables: args.auto_index_tables,
+        auto_transactions: args.auto_transactions,
         persisted_introspection: args.persisted_introspection,
     };
 
