@@ -522,6 +522,8 @@ impl Coordinator {
         }
     }
 
+    /// Given a [`Timeline`] and a [`CollectionIdBundle`], removes all of the "storage ids"
+    /// and "compute ids" in the bundle, from the timeline.
     pub(crate) fn remove_resources_associated_with_timeline(
         &mut self,
         timeline: Timeline,
