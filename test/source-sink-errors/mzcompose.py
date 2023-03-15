@@ -19,6 +19,9 @@ from materialize.mzcompose.services import (
     Postgres,
     Redpanda,
     Testdrive,
+    Kafka,
+    Zookeeper,
+    SchemaRegistry,
 )
 
 SERVICES = [
@@ -27,12 +30,92 @@ SERVICES = [
     Testdrive(),
     Clusterd(),
     Postgres(),
+    Zookeeper(),
+    Kafka(),
+    SchemaRegistry(),
 ]
 
 
 class Disruption(Protocol):
     def run_test(self, c: Composition) -> None:
         ...
+
+
+@dataclass
+class BadKafkaDisruption:
+    name: str
+
+    def run_test(self, c: Composition) -> None:
+        print(f"+++ Running disruption scenario {self.name}")
+        seed = random.randint(0, 256 ** 4)
+
+        c.down(destroy_volumes=True)
+        c.up("testdrive", persistent=True)
+
+        with c.override(
+            Kafka(
+                name="badkafka",
+                environment=[
+                    "KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181",
+                    # Setting the following values to 3 to trigger a failure
+                    # sets the transaction.state.log.min.isr config
+                    "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=3",
+                    # sets the transaction.state.log.replication.factor config
+                    "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=3",
+                ],
+            ),
+            SchemaRegistry(
+                kafka_servers=[("badkafka", "9092")]
+            ),
+            Testdrive(
+                no_reset=True,
+                seed=seed,
+                entrypoint_extra=["--initial-backoff=1s", "--backoff-factor=0", "--kafka-addr=badkafka"],
+            ),
+        ):
+            c.up("zookeeper", "badkafka", "schema-registry", "materialized")
+            self.populate(c)
+            self.assert_error(c, "retriable transaction error", "running a single Kafka broker")
+
+    def populate(self, c: Composition) -> None:
+        # Create a source and a sink
+        c.testdrive(
+            dedent(
+                """
+                > CREATE CONNECTION kafka_conn
+                  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+                
+                > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+                    URL '${testdrive.schema-registry-url}'
+                  );
+                
+                > CREATE TABLE sink_table (f1 INTEGER);
+                
+                > INSERT INTO sink_table VALUES (1);
+
+                > INSERT INTO sink_table VALUES (2);
+                
+                > CREATE SINK kafka_sink FROM sink_table
+                  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${testdrive.seed}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE DEBEZIUM
+                """
+            ),
+        )
+
+    def assert_error(self, c: Composition, error: str, hint: str) -> None:
+        c.testdrive(
+            dedent(
+                f"""
+                > SELECT status, error ~* '{error}', details::json#>>'{{hint}}' ~* '{hint}'
+                  FROM mz_internal.mz_sink_status_history
+                  JOIN mz_sinks ON mz_sinks.id = sink_id
+                  WHERE name = 'kafka_sink' and status = 'stalled'
+                  ORDER BY occurred_at DESC LIMIT 1
+                stalled true true
+                """
+            )
+        )
 
 
 @dataclass
@@ -335,6 +418,10 @@ disruptions: List[Disruption] = [
         breakage=lambda c, _: unsupported_pg_table(c),
         expected_error="invalid input syntax for type array",
         fixage=None,
+    ),
+    # One-off disruption with a badly configured kafka sink
+    BadKafkaDisruption(
+        name="bad-kafka-sink",
     ),
 ]
 
