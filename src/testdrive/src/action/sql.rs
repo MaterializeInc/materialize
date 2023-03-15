@@ -169,7 +169,7 @@ async fn try_run_sql(
         .prepare(query)
         .await
         .context("preparing query failed")?;
-    let mut actual: Vec<_> = state
+    let rows: Vec<_> = state
         .pgclient
         .query(&stmt, &[])
         .await
@@ -177,6 +177,26 @@ async fn try_run_sql(
         .into_iter()
         .map(|row| decode_row(state, row))
         .collect::<Result<_, _>>()?;
+
+    let (mut actual, raw_actual): (Vec<_>, Vec<_>) = rows.into_iter().unzip();
+
+    let raw_actual: Option<Vec<_>> = if raw_actual.iter().any(|r| r.is_some()) {
+        // TODO(guswynn): Note we don't sort the raw rows, because
+        // there is no easy way of ensuring they sort the same way as actual.
+        Some(
+            actual
+                .iter()
+                .zip(raw_actual.into_iter())
+                .map(|(actual, unreplaced)| match unreplaced {
+                    Some(raw_row) => raw_row,
+                    None => actual.clone(),
+                })
+                .collect(),
+        )
+    } else {
+        None
+    };
+
     actual.sort();
 
     match expected_output {
@@ -223,12 +243,22 @@ async fn try_run_sql(
                     writeln!(buf, "+ {}", TestdriveRow(a)).unwrap();
                     right += 1;
                 }
-                bail!(
-                    "non-matching rows: expected:\n{:?}\ngot:\n{:?}\nPoor diff:\n{}",
-                    expected_rows,
-                    actual,
-                    buf
-                )
+                if let Some(raw_actual) = raw_actual {
+                    bail!(
+                        "non-matching rows: expected:\n{:?}\ngot:\n{:?}\ngot raw rows:\n{:?}\nPoor diff:\n{}",
+                        expected_rows,
+                        actual,
+                        raw_actual,
+                        buf,
+                    )
+                } else {
+                    bail!(
+                        "non-matching rows: expected:\n{:?}\ngot:\n{:?}\nPoor diff:\n{}",
+                        expected_rows,
+                        actual,
+                        buf
+                    )
+                }
             }
         }
         SqlOutput::Hashed { num_values, md5 } => {
@@ -473,7 +503,11 @@ pub fn print_query(query: &str, stmt: Option<&Statement<Raw>>) {
     }
 }
 
-pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error> {
+// Returns the row after regex replacments, and the before, if its different
+pub fn decode_row(
+    state: &State,
+    row: Row,
+) -> Result<(Vec<String>, Option<Vec<String>>), anyhow::Error> {
     enum ArrayElement<T> {
         Null,
         NonNull(T),
@@ -543,6 +577,7 @@ pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error>
     }
 
     let mut out = vec![];
+    let mut raw_out = vec![];
     for (i, col) in row.columns().iter().enumerate() {
         let ty = col.type_();
         let mut value: String = match *ty {
@@ -675,6 +710,7 @@ pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error>
         }
         .unwrap_or_else(|| "<null>".into());
 
+        raw_out.push(value.clone());
         if let Some(regex) = &state.regex {
             value = regex
                 .replace_all(&value, state.regex_replacement.as_str())
@@ -683,7 +719,8 @@ pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error>
 
         out.push(value);
     }
-    Ok(out)
+    let raw_out = if out != raw_out { Some(raw_out) } else { None };
+    Ok((out, raw_out))
 }
 
 struct MzTimestamp(String);
