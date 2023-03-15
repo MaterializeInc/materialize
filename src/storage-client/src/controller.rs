@@ -2103,7 +2103,8 @@ where
             self.state.introspection_ids[&IntrospectionType::SourceStatusHistory];
         let mut updates = vec![];
         for id in self.state.pending_source_drops.drain(..) {
-            let status_row = healthcheck::pack_status_row(id, "dropped", None, (self.state.now)());
+            let status_row =
+                healthcheck::pack_status_row(id, "dropped", None, (self.state.now)(), None);
             updates.push((status_row, 1));
         }
         self.append_to_managed_collection(source_status_history_id, updates)
@@ -2114,7 +2115,8 @@ where
             self.state.introspection_ids[&IntrospectionType::SinkStatusHistory];
         let mut updates = vec![];
         for id in self.state.pending_sink_drops.drain(..) {
-            let status_row = healthcheck::pack_status_row(id, "dropped", None, (self.state.now)());
+            let status_row =
+                healthcheck::pack_status_row(id, "dropped", None, (self.state.now)(), None);
             updates.push((status_row, 1));
         }
         self.append_to_managed_collection(sink_status_history_id, updates)

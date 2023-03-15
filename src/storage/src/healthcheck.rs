@@ -28,6 +28,7 @@ pub async fn write_to_persist(
     client: &PersistClient,
     status_shard: ShardId,
     relation_desc: &RelationDesc,
+    hint: Option<&str>,
 ) {
     let now_ms = now();
     let row = mz_storage_client::healthcheck::pack_status_row(
@@ -35,6 +36,7 @@ pub async fn write_to_persist(
         new_status,
         new_error,
         now_ms,
+        hint,
     );
 
     let mut handle = client

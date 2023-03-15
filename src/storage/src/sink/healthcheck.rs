@@ -83,6 +83,7 @@ impl Healthchecker {
                 &self.persist_client,
                 self.status_shard,
                 &*MZ_SINK_STATUS_HISTORY_DESC,
+                status_update.hint(),
             )
             .await;
 
@@ -104,10 +105,22 @@ pub enum SinkStatus {
     Running,
     /// Represents a stall in the export process that might get resolved.
     /// Existing data is still available and queryable.
-    Stalled(String),
+    Stalled {
+        /// Error string used to populate the `error` column in the `mz_sink_status_history` table.
+        error: String,
+        /// Optional hint string which if present, will be added to the `details` column in
+        /// the `mz_sink_status_history` table.
+        hint: Option<String>,
+    },
     /// Represents a irrecoverable failure in the pipeline. Data from this collection
     /// is not queryable any longer. The only valid transition from Failed is Dropped.
-    Failed(String),
+    Failed {
+        /// Error string used to populate the `error` column in the `mz_sink_status_history` table.
+        error: String,
+        /// Optional hint string which if present, will be added to the `details` column in
+        /// the `mz_sink_status_history` table.
+        hint: Option<String>,
+    },
     /// Represents a sink that was dropped.
     Dropped,
 }
@@ -118,16 +131,27 @@ impl SinkStatus {
             SinkStatus::Setup => "setup",
             SinkStatus::Starting => "starting",
             SinkStatus::Running => "running",
-            SinkStatus::Stalled(_) => "stalled",
-            SinkStatus::Failed(_) => "failed",
+            SinkStatus::Stalled { .. } => "stalled",
+            SinkStatus::Failed { .. } => "failed",
             SinkStatus::Dropped => "dropped",
         }
     }
 
     fn error(&self) -> Option<&str> {
         match self {
-            SinkStatus::Stalled(e) => Some(&*e),
-            SinkStatus::Failed(e) => Some(&*e),
+            SinkStatus::Stalled { error, .. } => Some(&*error),
+            SinkStatus::Failed { error, .. } => Some(&*error),
+            SinkStatus::Setup => None,
+            SinkStatus::Starting => None,
+            SinkStatus::Running => None,
+            SinkStatus::Dropped => None,
+        }
+    }
+
+    fn hint(&self) -> Option<&str> {
+        match self {
+            SinkStatus::Stalled { error: _, hint } => hint.as_deref(),
+            SinkStatus::Failed { error: _, hint } => hint.as_deref(),
             SinkStatus::Setup => None,
             SinkStatus::Starting => None,
             SinkStatus::Running => None,
@@ -139,7 +163,7 @@ impl SinkStatus {
         match old_status {
             None => true,
             // Failed can only transition to Dropped
-            Some(SinkStatus::Failed(_)) => matches!(new_status, SinkStatus::Dropped),
+            Some(SinkStatus::Failed { .. }) => matches!(new_status, SinkStatus::Dropped),
             // Dropped is a terminal state
             Some(SinkStatus::Dropped) => false,
             // All other states can transition freely to any other state
@@ -147,7 +171,7 @@ impl SinkStatus {
                 old @ SinkStatus::Setup
                 | old @ SinkStatus::Starting
                 | old @ SinkStatus::Running
-                | old @ SinkStatus::Stalled(_),
+                | old @ SinkStatus::Stalled { .. },
             ) => old != new_status,
         }
     }
@@ -170,6 +194,7 @@ mod tests {
     use timely::progress::Antichain;
 
     use mz_build_info::DUMMY_BUILD_INFO;
+    use mz_ore::collections::CollectionExt;
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::cfg::PersistConfig;
@@ -189,11 +214,17 @@ mod tests {
     }
 
     fn stalled() -> SinkStatus {
-        SinkStatus::Stalled("".into())
+        SinkStatus::Stalled {
+            error: "".into(),
+            hint: None,
+        }
     }
 
     fn failed() -> SinkStatus {
-        SinkStatus::Failed("".into())
+        SinkStatus::Failed {
+            error: "".into(),
+            hint: None,
+        }
     }
 
     #[tokio::test(start_paused = true)]
@@ -271,12 +302,19 @@ mod tests {
         // Now update status to Failed
         tokio::time::advance(Duration::from_millis(1)).await;
         let error = String::from("some error here");
+        let hint = String::from("more explanation");
         healthchecker
-            .update_status(SinkStatus::Failed(error.clone()))
+            .update_status(SinkStatus::Failed {
+                error: error.clone(),
+                hint: Some(hint.clone()),
+            })
             .await;
         assert_eq!(
             healthchecker.current_status,
-            Some(SinkStatus::Failed(error.clone()))
+            Some(SinkStatus::Failed {
+                error: error.clone(),
+                hint: Some(hint.clone()),
+            })
         );
 
         // Validate that we can't transition back to Running
@@ -284,23 +322,33 @@ mod tests {
         healthchecker.update_status(SinkStatus::Running).await;
         assert_eq!(
             healthchecker.current_status,
-            Some(SinkStatus::Failed(error))
+            Some(SinkStatus::Failed {
+                error,
+                hint: Some(hint.clone())
+            })
         );
 
-        // Check that the error message is persisted
-        let error_message = dump_storage_collection(shard_id, &persist_cache)
+        // Check that the error message and the hint are persisted
+        let (error_message, hint_message) = dump_storage_collection(shard_id, &persist_cache)
             .await
             .into_iter()
             .find_map(|row| {
-                let error = row.unpack()[3];
-                if !error.is_null() {
-                    Some(error.unwrap_str().to_string())
+                let cols = row.unpack();
+                let error = cols[3];
+                let details = cols[4];
+                if !error.is_null() && !details.is_null() {
+                    let hint = details.unwrap_map().iter().into_first().1;
+                    Some((
+                        error.unwrap_str().to_string(),
+                        hint.unwrap_str().to_string(),
+                    ))
                 } else {
                     None
                 }
             })
             .unwrap();
-        assert_eq!(error_message, "some error here")
+        assert_eq!(error_message, "some error here");
+        assert_eq!(hint_message, "more explanation");
     }
 
     #[test]

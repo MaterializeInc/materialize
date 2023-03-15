@@ -25,7 +25,7 @@ use maplit::btreemap;
 use prometheus::core::AtomicU64;
 use rdkafka::client::ClientContext;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
-use rdkafka::error::{KafkaError, KafkaResult, RDKafkaErrorCode};
+use rdkafka::error::{KafkaError, KafkaResult, RDKafkaError, RDKafkaErrorCode};
 use rdkafka::message::{Header, Message, OwnedHeaders, OwnedMessage, ToBytes};
 use rdkafka::producer::Producer;
 use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedProducer};
@@ -237,7 +237,10 @@ impl ClientContext for SinkProducerContext {
         MzClientContext.log(level, fac, log_message)
     }
     fn error(&self, error: KafkaError, reason: &str) {
-        let status = SinkStatus::Stalled(error.to_string());
+        let status = SinkStatus::Stalled {
+            error: error.to_string(),
+            hint: None,
+        };
         let _ = self.status_tx.try_send(status);
         MzClientContext.error(error, reason)
     }
@@ -414,7 +417,10 @@ impl ClientContext for SinkConsumerContext {
         MzClientContext.log(level, fac, log_message)
     }
     fn error(&self, error: KafkaError, reason: &str) {
-        let status = SinkStatus::Stalled(error.to_string());
+        let status = SinkStatus::Stalled {
+            error: error.to_string(),
+            hint: None,
+        };
         let _ = self.status_tx.try_send(status);
         MzClientContext.error(error, reason)
     }
@@ -567,10 +573,10 @@ impl KafkaSinkState {
                         continue;
                     } else {
                         // We've received an error that is not transient
-                        self.halt_on_err(Err(format!(
+                        self.halt_on_err(Err(anyhow!(format!(
                             "fatal error while producing message in {}: {e}",
                             self.name
-                        )))
+                        ))))
                         .await
                     }
                 }
@@ -910,16 +916,38 @@ impl KafkaSinkState {
     }
 
     /// Report a SinkStatus::Stalled and then halt with the same message.
-    pub async fn halt_on_err<T>(&self, result: Result<T, impl ToString + Debug>) -> T {
+    pub async fn halt_on_err<T>(&self, result: Result<T, anyhow::Error>) -> T {
         match result {
             Ok(t) => t,
-            Err(msg) => {
-                self.update_status(SinkStatus::Stalled(msg.to_string()))
-                    .await;
+            Err(error) => {
+                let hint: Option<String> =
+                    error
+                        .downcast_ref::<RDKafkaError>()
+                        .and_then(|kafka_error| {
+                            if kafka_error.is_retriable()
+                                && kafka_error.code() == RDKafkaErrorCode::OperationTimedOut
+                            {
+                                Some(
+                                    "If you're running a single Kafka broker, ensure \
+                                    that the configs transaction.state.log.replication.factor, \
+                                    transaction.state.log.min.isr, and \
+                                    offsets.topic.replication.factor are set to 1 on the broker"
+                                        .to_string(),
+                                )
+                            } else {
+                                None
+                            }
+                        });
+
+                self.update_status(SinkStatus::Stalled {
+                    error: error.to_string(),
+                    hint,
+                })
+                .await;
                 self.internal_cmd_tx.borrow_mut().broadcast(
                     InternalStorageCommand::SuspendAndRestart {
                         id: self.sink_id.clone(),
-                        reason: msg.to_string(),
+                        reason: error.to_string(),
                     },
                 );
 

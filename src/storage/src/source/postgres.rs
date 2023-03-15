@@ -439,7 +439,10 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
                 let _ = task_info
                     .sender
                     .send(InternalMessage::Status(HealthStatusUpdate {
-                        update: HealthStatus::StalledWithError(e.to_string_alt()),
+                        update: HealthStatus::StalledWithError {
+                            error: e.to_string_alt(),
+                            hint: None,
+                        },
                         should_halt: false,
                     }))
                     .await;
@@ -455,7 +458,10 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
                 let _ = task_info
                     .sender
                     .send(InternalMessage::Status(HealthStatusUpdate {
-                        update: HealthStatus::StalledWithError(e.to_string_alt()),
+                        update: HealthStatus::StalledWithError {
+                            error: e.to_string_alt(),
+                            hint: None,
+                        },
                         // TODO: In the future we probably want to handle this more gracefully,
                         // but for now halting is the easiest way to dump the data in the pipe.
                         // The restarted clusterd instance will restart the snapshot fresh, which will

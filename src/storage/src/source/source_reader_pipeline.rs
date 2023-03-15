@@ -235,7 +235,7 @@ where
 pub enum HealthStatus {
     Starting,
     Running,
-    StalledWithError(String),
+    StalledWithError { error: String, hint: Option<String> },
 }
 
 impl HealthStatus {
@@ -243,14 +243,21 @@ impl HealthStatus {
         match self {
             HealthStatus::Starting => "starting",
             HealthStatus::Running => "running",
-            HealthStatus::StalledWithError(_) => "stalled",
+            HealthStatus::StalledWithError { .. } => "stalled",
         }
     }
 
     fn error(&self) -> Option<&str> {
         match self {
             HealthStatus::Starting | HealthStatus::Running => None,
-            HealthStatus::StalledWithError(e) => Some(e),
+            HealthStatus::StalledWithError { error, .. } => Some(error),
+        }
+    }
+
+    fn hint(&self) -> Option<&str> {
+        match self {
+            HealthStatus::Starting | HealthStatus::Running => None,
+            HealthStatus::StalledWithError { error: _, hint } => hint.as_deref(),
         }
     }
 }
@@ -409,7 +416,7 @@ where
                                 let new_status = match message {
                                     Ok(_) => HealthStatus::Running,
                                     Err(ref error) => {
-                                        HealthStatus::StalledWithError(error.inner.to_string())
+                                        HealthStatus::StalledWithError {error: error.inner.to_string(), hint: None }
                                     }
                                 };
 
@@ -574,6 +581,7 @@ fn health_operator<G: Scope>(
                                 &persist_client,
                                 status_shard,
                                 &*MZ_SOURCE_STATUS_HISTORY_DESC,
+                                new_status.hint(),
                             )
                             .await;
                         }
