@@ -469,14 +469,19 @@ impl Coordinator {
             Statement::CreateSource(stmt) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let conn_id = session.conn_id();
-                let purify_fut = mz_sql::pure::purify_create_source(
-                    Box::new(catalog.into_owned()),
-                    self.now(),
-                    stmt,
-                    self.connection_context.clone(),
-                );
+                let now = self.now();
+                let connection_context = self.connection_context.clone();
                 let otel_ctx = OpenTelemetryContext::obtain();
+
+                let catalog = Box::new(catalog.into_owned());
                 task::spawn(|| format!("purify:{conn_id}"), async move {
+                    //let catalog = catalog;
+                    let purify_fut = mz_sql::pure::purify_create_source(
+                        &*catalog,
+                        now,
+                        stmt,
+                        connection_context,
+                    );
                     let result = purify_fut.await.map_err(|e| e.into());
                     // It is not an error for purification to complete after `internal_cmd_rx` is dropped.
                     let result = internal_cmd_tx.send(Message::CreateSourceStatementReady(
@@ -507,7 +512,7 @@ impl Coordinator {
             _ => match self.plan_statement(&mut session, stmt, &params) {
                 Ok(plan) => self.sequence_plan(tx, session, plan, depends_on).await,
                 Err(e) => tx.send(Err(e), session),
-            },
+        },
         }
     }
 
