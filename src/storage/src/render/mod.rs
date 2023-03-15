@@ -291,7 +291,9 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     .dataflow_parameters
                     .enable_multi_worker_storage_persist_sink
                 {
-                    tracing::info!("rendering {} with multi-worker persist_sink", target);
+                    tracing::info!(
+                        "timely-{worker_id} rendering {target} with multi-worker persist_sink",
+                    );
                     crate::render::multi_worker_persist_sink::render(
                         into_time_scope,
                         target,
@@ -302,7 +304,9 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                         export.output_index,
                     )
                 } else {
-                    tracing::info!("rendering {} with single-worker persist_sink", target);
+                    tracing::info!(
+                        "timely-{worker_id} rendering {target} with single-worker persist_sink",
+                    );
                     crate::render::persist_sink::render(
                         into_time_scope,
                         target,
