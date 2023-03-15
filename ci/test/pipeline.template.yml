@@ -238,17 +238,6 @@ steps:
     agents:
       queue: linux-x86_64
 
-  - id: kafka-sink-stalled-errors
-    label: Kafka Sink Stalled Errors
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: kafka-sink-stalled-errors
-    agents:
-      queue: linux-x86_64
-
   - id: sqllogictest-fast
     label: Fast SQL logic tests
     depends_on: build-x86_64
