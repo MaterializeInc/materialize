@@ -15,7 +15,7 @@ privileges of the other role.
 
 {{< warning >}}
 Roles in Materialize are currently limited in functionality. In the future they
-will be used for role-based access control. See GitHub issue {{% gh 677 %}}
+will be used for role-based access control. See GitHub issue {{% gh 11579 %}}
 for details.
 {{< /warning >}}
 
