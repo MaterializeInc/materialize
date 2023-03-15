@@ -156,6 +156,9 @@ where
                 map_filter_project,
                 yield_fn,
             );
+            // A slightly awkward consolidation dance. We timestamp each record with the timestamp of
+            // the part they're in, keeping the actual timestamp along with the data; then after consolidating
+            // we'll swap the timestamp back into its normal position. This ensures b
             let rows = rows.unary(Pipeline, "batch_time", |_, _| {
                 let mut vector = Vec::new();
                 move |input, output| {
@@ -174,19 +177,42 @@ where
             rows.as_collection()
                 .consolidate() // TODO: use the proper spine type
                 // .inner
-                // .inspect_core(|r| {
-                //     if let Err(f) = r {
-                //         if f.iter().any(|t| t.1 != Sort::minimum()) {
-                //             panic!("Great news! {f:?}")
+                // .inspect_core({
+                //     // The main reason to consolidate in the inner scope is so that we don't have
+                //     // to buffer all the records with the same mztime, which means that we should
+                //     // see the consolidate start to emit data before the time ticks over.
+                //     let mut time_map = BTreeMap::new();
+                //     move |data_or_frontier| match data_or_frontier {
+                //         Ok((time, records)) => {
+                //             let count = time_map.entry(time.clone()).or_insert(0);
+                //             *count += records.len();
+                //         }
+                //         Err(frontier) => {
+                //             let antichain = AntichainRef::new(frontier);
+                //             let mut optimizable_count = 0;
+                //             while let Some((k, v)) = time_map.first_key_value() {
+                //                 if antichain.less_equal(k) {
+                //                     // Stop discarding the counts once we're up to the frontier.
+                //                     break;
+                //                 }
+                //                 if let Some(at) = antichain.as_option() {
+                //                     if k.0 == at.0 {
+                //                         // Found some records that were emitted early within the current
+                //                         // frontier.
+                //                         optimizable_count += v;
+                //                     }
+                //                 }
+                //                 time_map.pop_first();
+                //             }
+                //             if optimizable_count > 0 {
+                //                 info!("Good news: emitted {optimizable_count} records before time advanced to {frontier:?}");
+                //             }
                 //         }
                 //     }
-                // })
-                // .as_collection()
+                // }).as_collection()
                 .leave()
                 .inner
                 .map(|((r, t), _, d)| (r, t, d))
-                .as_collection()
-                .inner
         })
     } else {
         decode_and_mfp(&fetched, &name, until, map_filter_project, yield_fn)
@@ -327,10 +353,10 @@ where
 
                 let sort = Sort::Data(sort);
                 if is_probably_ordered {
+                    // The sort of the data matches the sort of the file.
                     match time_sort.1.cmp(&sort) {
                         Ordering::Less => {
-                            time_sort.1 = sort;
-                            front.capability.downgrade(&time_sort.clone().to_outer())
+                            time_sort.1 = sort.clone();
                         }
                         Ordering::Equal => {}
                         Ordering::Greater => {
@@ -356,7 +382,7 @@ where
                                     Ok((row, time, diff)) => {
                                         // Additional `until` filtering due to temporal filters.
                                         if !until.less_equal(&time) {
-                                            let time = Hybrid(time, Sort::minimum()).to_outer();
+                                            let time = Hybrid(time, sort.clone()).to_outer();
                                             output
                                                 .give_at(&front.capability, (Ok(row), time, diff));
                                             *work += 1;
@@ -365,8 +391,7 @@ where
                                     Err((err, time, diff)) => {
                                         // Additional `until` filtering due to temporal filters.
                                         if !until.less_equal(&time) {
-                                            let time = Hybrid(time, Sort::minimum()).to_outer();
-
+                                            let time = Hybrid(time, sort.clone()).to_outer();
                                             output
                                                 .give_at(&front.capability, (Err(err), time, diff));
                                             *work += 1;
@@ -375,15 +400,13 @@ where
                                 }
                             }
                         } else {
-                            let time = Hybrid(time, Sort::minimum()).to_outer();
-
+                            let time = Hybrid(time, sort).to_outer();
                             output.give_at(&front.capability, (Ok(row), time, diff));
                             *work += 1;
                         }
                     }
                     SourceData(Err(err)) => {
-                        let time = Hybrid(time, Sort::minimum()).to_outer();
-
+                        let time = Hybrid(time, sort).to_outer();
                         output.give_at(&front.capability, (Err(err), time, diff));
                         *work += 1;
                     }
@@ -391,12 +414,14 @@ where
 
                 if let Some(Reverse((next_best, _))) = self.queue.peek() {
                     if time_sort > *next_best {
+                        front.capability.downgrade(&time_sort.clone().to_outer());
                         self.queue.push(Reverse((time_sort, id)));
                         continue 'work_loop;
                     }
                 }
 
                 if yield_fn(start_time, *work) {
+                    front.capability.downgrade(&time_sort.clone().to_outer());
                     self.queue.push(Reverse((time_sort, id)));
                     return false;
                 }
