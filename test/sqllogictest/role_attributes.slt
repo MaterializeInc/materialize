@@ -532,3 +532,10 @@ DROP DATABASE foo;
 
 statement ok
 DROP CLUSTER foo;
+
+# Disable RBAC checks
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0

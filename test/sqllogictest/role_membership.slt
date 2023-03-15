@@ -127,3 +127,10 @@ GRANT mz_system TO joe
 
 statement error role name "mz_system" is reserved
 GRANT joe TO mz_system
+
+# Disable RBAC checks
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0
