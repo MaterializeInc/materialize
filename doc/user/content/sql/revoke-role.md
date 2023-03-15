@@ -36,7 +36,7 @@ You may not set up circular membership loops.
 ## Examples
 
 ```sql
-GRANT data_scientist TO joe;
+REVOKE data_scientist FROM joe;
 ```
 
 ## Related pages
