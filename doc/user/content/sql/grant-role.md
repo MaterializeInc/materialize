@@ -32,7 +32,7 @@ _member_name_ | The role name to add to _role_name_ as a member.
 ## Examples
 
 ```sql
-REVOKE data_scientist FROM joe;
+GRANT data_scientist TO joe;
 ```
 
 ## Related pages
