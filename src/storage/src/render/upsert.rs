@@ -254,9 +254,27 @@ fn extract_decode_results<G: Scope>(
                 }),
             ),
             None => {
-                // We should not silently ignore NULL-keys. Will be fixed in
-                // next commit.
-                return None;
+                // NOTE: We need to make sure that when we see a "retraction" for this, that is, a
+                // message with _both_ a NULL key and NULL value, we can match this to the original
+                // `DecodeError`. Therefore, we cannot put more information in here than the
+                // partition. It would seem desirable to have more information, for example the
+                // offset, but with that the future "retraction" message will not match this
+                // message and the original error will not go away.
+                let key_error =
+                    UpsertError::NullKey(mz_storage_client::types::errors::UpsertNullKeyError {});
+                (
+                    Some(Err(key_error.clone())),
+                    // Match what we do in `extract_kv_from_previous`, though
+                    // the value is not really important when we have a key
+                    // error. Plus, we can't map any value error to an
+                    // UpsertValueError because we don't have a real key that we
+                    // could give to it.
+                    //
+                    // This makes sure that `None` stays `None`, meaning we
+                    // retract when we get a `None` value, and that a `Some`
+                    // value gets mapped to an error.
+                    value.map(|_value| Err(key_error)),
+                )
             }
         };
 
@@ -323,6 +341,10 @@ fn extract_kv_from_previous<G: Scope>(
             Err(UpsertError::KeyDecode(err)) => (
                 Err(UpsertError::KeyDecode(err.clone())),
                 Err(UpsertError::KeyDecode(err)),
+            ),
+            Err(UpsertError::NullKey(null_key_err)) => (
+                Err(UpsertError::NullKey(null_key_err.clone())),
+                Err(UpsertError::NullKey(null_key_err)),
             ),
             Err(UpsertError::Value(UpsertValueError { inner, for_key })) => (
                 Ok(for_key.clone()),
