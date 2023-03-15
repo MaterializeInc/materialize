@@ -375,12 +375,6 @@ DROP DATABASE foo;
 statement ok
 DROP CLUSTER foo;
 
-# Disable rbac checks.
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_rbac_checks TO false;
-----
-COMPLETE 0
-
 # Test that the attribute check apply through role membership
 
 # Parent
@@ -403,8 +397,8 @@ DETAIL: You must have the CREATEROLE attribute to alter role
 simple conn=joe,user=joe
 DROP ROLE foo;
 ----
-db error: ERROR: permission denied to drop role
-DETAIL: You must have the CREATEROLE attribute to drop role
+db error: ERROR: permission denied to drop roles
+DETAIL: You must have the CREATEROLE attribute to drop roles
 
 simple conn=joe,user=joe
 CREATE DATABASE foo;
@@ -481,8 +475,8 @@ DETAIL: You must have the CREATEROLE attribute to alter role
 simple conn=joe,user=joe
 DROP ROLE foo;
 ----
-db error: ERROR: permission denied to drop role
-DETAIL: You must have the CREATEROLE attribute to drop role
+db error: ERROR: permission denied to drop roles
+DETAIL: You must have the CREATEROLE attribute to drop roles
 
 simple conn=joe,user=joe
 CREATE DATABASE foo;
