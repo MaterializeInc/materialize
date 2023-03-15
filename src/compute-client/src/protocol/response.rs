@@ -102,11 +102,11 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     ///
     /// For each subscribe that was installed by a previous [`CreateDataflows` command], the
     /// replica must emit [`Batch`] responses that cover the entire time interval from the
-    /// subscribe dataflow's `as_of` until the subscribe advances to the empty frontier or is
+    /// minimum time until the subscribe advances to the empty frontier or is
     /// dropped. The time intervals of consecutive [`Batch`]es must be increasing, contiguous,
     /// non-overlapping, and non-empty. All updates transmitted in a batch must have times within
-    /// that batch’s time interval. The `upper` of the first [`Batch`] of a subscribe must not be
-    /// less than that subscribe's initial `as_of` frontier.
+    /// that batch’s time interval. The `upper` of the first [`Batch`] of a subscribe must
+    /// exactly the subscribe's initial `as_of` frontier, and it must be empty.
     ///
     /// The replica must send [`DroppedAt`] responses if the subscribe was dropped in response to
     /// an [`AllowCompaction` command] that advanced its read frontier to the empty frontier. The
