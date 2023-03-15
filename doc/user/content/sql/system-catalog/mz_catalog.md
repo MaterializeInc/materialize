@@ -262,11 +262,25 @@ Field       | Type       | Meaning
 
 The `mz_roles` table contains a row for each role in the system.
 
-Field  | Type       | Meaning
--------|------------|--------
-`id`   | [`text`]   | Materialize's unique ID for the role.
-`oid`  | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the role.
-`name` | [`text`]   | The name of the role.
+Field            | Type       | Meaning
+-----------------|------------|--------
+`id`             | [`text`]   | Materialize's unique ID for the role.
+`oid`            | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the role.
+`name`           | [`text`]   | The name of the role.
+`inherit`        | [`bool`]   | Indicates whether the role has inheritance of privileges.
+`create_role`    | [`bool`]   | Indicates whether the role is allowed to create, alter, drop, grant, and revoke roles.
+`create_db`      | [`bool`]   | Indicates whether the role is allowed to create databases.
+`create_cluster` | [`bool`]   | Indicates whether the role is allowed to create clusters.
+
+### `mz_role_members`
+
+The `mz_role_members` table contains a row for role membership in the system.
+
+Field     | Type       | Meaning
+----------|------------|--------
+`role_id` | [`text`]   | The role id of the role that `member` is a meber of. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`member`  | [`text`]   | The role id that is a member of `role_id`. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`grantor` | [`text`]   | The role id that granted membership of `member` to `role_id`. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 
 ### `mz_schemas`
 

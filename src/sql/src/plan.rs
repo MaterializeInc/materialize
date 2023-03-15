@@ -143,6 +143,8 @@ pub enum Plan {
     Deallocate(DeallocatePlan),
     Raise(RaisePlan),
     RotateKeys(RotateKeysPlan),
+    GrantRole(GrantRolePlan),
+    RevokeRole(RevokeRolePlan),
 }
 
 impl Plan {
@@ -207,10 +209,12 @@ impl Plan {
             StatementKind::Execute => vec![PlanKind::Execute],
             StatementKind::Explain => vec![PlanKind::Explain],
             StatementKind::Fetch => vec![PlanKind::Fetch],
+            StatementKind::GrantRole => vec![PlanKind::GrantRole],
             StatementKind::Insert => vec![PlanKind::Insert],
             StatementKind::Prepare => vec![PlanKind::Prepare],
             StatementKind::Raise => vec![PlanKind::Raise],
             StatementKind::ResetVariable => vec![PlanKind::ResetVariable],
+            StatementKind::RevokeRole => vec![PlanKind::RevokeRole],
             StatementKind::Rollback => vec![PlanKind::AbortTransaction],
             StatementKind::Select => vec![PlanKind::Peek],
             StatementKind::SetTransaction => vec![],
@@ -323,6 +327,8 @@ impl Plan {
             Plan::Deallocate(_) => "deallocate",
             Plan::Raise(_) => "raise",
             Plan::RotateKeys(_) => "rotate keys",
+            Plan::GrantRole(_) => "grant role",
+            Plan::RevokeRole(_) => "revoke role",
         }
     }
 }
@@ -746,6 +752,24 @@ pub struct DeallocatePlan {
 #[derive(Debug)]
 pub struct RaisePlan {
     pub severity: NoticeSeverity,
+}
+
+#[derive(Debug)]
+pub struct GrantRolePlan {
+    /// The role that is gaining a member.
+    pub role_id: RoleId,
+    /// The role that will be added to `role_id`.
+    pub member_id: RoleId,
+    /// The role who executed the plan.
+    pub grantor_id: RoleId,
+}
+
+#[derive(Debug)]
+pub struct RevokeRolePlan {
+    /// The role that is losing a member.
+    pub role_id: RoleId,
+    /// The role that will be removed from `role_id`.
+    pub member_id: RoleId,
 }
 
 #[derive(Clone, Debug)]

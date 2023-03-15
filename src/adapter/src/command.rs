@@ -334,12 +334,16 @@ pub enum ExecuteResponse {
         /// How long to wait for results to arrive.
         timeout: ExecuteTimeout,
     },
+    /// The requested role was granted.
+    GrantedRole,
     /// The specified number of rows were inserted into the requested table.
     Inserted(usize),
     /// The specified prepared statement was created.
     Prepare,
     /// A user-requested warning was raised.
     Raised,
+    /// The requested role was revoked.
+    RevokedRole,
     /// Rows will be delivered via the specified future.
     SendingRows {
         #[derivative(Debug = "ignore")]
@@ -415,6 +419,7 @@ impl ExecuteResponse {
             DroppedSecret => Some("DROP SECRET".into()),
             EmptyQuery => None,
             Fetch { .. } => None,
+            GrantedRole => Some("GRANT ROLE".into()),
             Inserted(n) => {
                 // "On successful completion, an INSERT command returns a
                 // command tag of the form `INSERT <oid> <count>`."
@@ -427,6 +432,7 @@ impl ExecuteResponse {
             }
             Prepare => Some("PREPARE".into()),
             Raised => Some("RAISE".into()),
+            RevokedRole => Some("REVOKE ROLE".into()),
             SendingRows { .. } => None,
             SetVariable { reset: true, .. } => Some("RESET".into()),
             SetVariable { reset: false, .. } => Some("SET".into()),
@@ -499,9 +505,11 @@ impl ExecuteResponse {
             }
             Execute | ReadThenWrite | SendDiffs => vec![Deleted, Inserted, SendingRows, Updated],
             PlanKind::Fetch => vec![ExecuteResponseKind::Fetch],
+            GrantRole => vec![GrantedRole],
             Insert => vec![Inserted, SendingRows],
             PlanKind::Prepare => vec![ExecuteResponseKind::Prepare],
             PlanKind::Raise => vec![ExecuteResponseKind::Raised],
+            RevokeRole => vec![RevokedRole],
             PlanKind::SetVariable | ResetVariable => vec![ExecuteResponseKind::SetVariable],
             PlanKind::Subscribe => vec![Subscribing, CopyTo],
             StartTransaction => vec![StartedTransaction],

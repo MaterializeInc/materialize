@@ -148,6 +148,8 @@ pub enum EventType {
     Create,
     Drop,
     Alter,
+    Grant,
+    Revoke,
 }
 
 impl EventType {
@@ -156,6 +158,8 @@ impl EventType {
             EventType::Create => "Created",
             EventType::Drop => "Dropped",
             EventType::Alter => "Altered",
+            EventType::Grant => "Granted",
+            EventType::Revoke => "Revoked",
         }
     }
 }
@@ -215,6 +219,8 @@ pub enum EventDetails {
     CreateSourceSinkV1(CreateSourceSinkV1),
     CreateSourceSinkV2(CreateSourceSinkV2),
     AlterSourceSinkV1(AlterSourceSinkV1),
+    GrantRoleV1(GrantRoleV1),
+    RevokeRoleV1(RevokeRoleV1),
     IdFullNameV1(IdFullNameV1),
     RenameItemV1(RenameItemV1),
     IdNameV1(IdNameV1),
@@ -297,6 +303,19 @@ pub struct AlterSourceSinkV1 {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct GrantRoleV1 {
+    pub role_id: String,
+    pub member_id: String,
+    pub grantor_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct RevokeRoleV1 {
+    pub role_id: String,
+    pub member_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct SchemaV1 {
     pub id: String,
     pub name: String,
@@ -319,6 +338,8 @@ impl EventDetails {
             EventDetails::CreateSourceSinkV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::CreateSourceSinkV2(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::AlterSourceSinkV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::GrantRoleV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::RevokeRoleV1(v) => serde_json::to_value(v).expect("must serialize"),
         }
     }
 }

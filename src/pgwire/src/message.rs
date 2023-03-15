@@ -427,6 +427,8 @@ impl ErrorResponse {
             AdapterNotice::DroppedSubscribe { .. } => SqlState::WARNING,
             AdapterNotice::BadStartupSetting { .. } => SqlState::WARNING,
             AdapterNotice::RbacDisabled => SqlState::WARNING,
+            AdapterNotice::RoleMembershipAlreadyExists { .. } => SqlState::WARNING,
+            AdapterNotice::RoleMembershipDoesNotExists { .. } => SqlState::WARNING,
         };
         ErrorResponse {
             severity: Severity::for_adapter_notice(&notice),
@@ -585,6 +587,8 @@ impl Severity {
             AdapterNotice::DroppedSubscribe { .. } => Severity::Notice,
             AdapterNotice::BadStartupSetting { .. } => Severity::Notice,
             AdapterNotice::RbacDisabled => Severity::Notice,
+            AdapterNotice::RoleMembershipAlreadyExists { .. } => Severity::Notice,
+            AdapterNotice::RoleMembershipDoesNotExists { .. } => Severity::Warning,
         }
     }
 }

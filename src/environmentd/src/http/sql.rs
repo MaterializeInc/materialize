@@ -752,8 +752,10 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::DroppedSecret
         | ExecuteResponse::DroppedConnection
         | ExecuteResponse::EmptyQuery
+        | ExecuteResponse::GrantedRole
         | ExecuteResponse::Inserted(_)
         | ExecuteResponse::Raised
+        | ExecuteResponse::RevokedRole
         | ExecuteResponse::SetVariable { .. }
         | ExecuteResponse::StartedTransaction { .. }
         | ExecuteResponse::TransactionCommitted

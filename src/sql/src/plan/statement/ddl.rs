@@ -38,7 +38,8 @@ use mz_sql_parser::ast::{
     AlterRoleStatement, AlterSinkAction, AlterSinkStatement, AlterSourceAction,
     AlterSourceStatement, AlterSystemResetAllStatement, AlterSystemResetStatement,
     AlterSystemSetStatement, CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption,
-    CreateTypeMapOptionName, DeferredObjectName, SshConnectionOption, UnresolvedObjectName, Value,
+    CreateTypeMapOptionName, DeferredObjectName, GrantRoleStatement, RevokeRoleStatement,
+    SshConnectionOption, UnresolvedObjectName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -112,9 +113,9 @@ use crate::plan::{
     CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
     CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
     DropClusterReplicasPlan, DropClustersPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
-    DropSchemaPlan, FullObjectName, HirScalarExpr, Index, Ingestion, MaterializedView, Params,
-    Plan, QueryContext, ReplicaConfig, RotateKeysPlan, Secret, Sink, Source,
-    SourceSinkClusterConfig, Table, Type, View,
+    DropSchemaPlan, FullObjectName, GrantRolePlan, HirScalarExpr, Index, Ingestion,
+    MaterializedView, Params, Plan, QueryContext, ReplicaConfig, RevokeRolePlan, RotateKeysPlan,
+    Secret, Sink, Source, SourceSinkClusterConfig, Table, Type, View,
 };
 
 pub fn describe_create_database(
@@ -4122,5 +4123,47 @@ pub fn plan_alter_role(
         id: name.id,
         name: name.name,
         attributes: (role, attributes).into(),
+    }))
+}
+
+pub fn describe_grant_role(
+    _: &StatementContext,
+    _: GrantRoleStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_grant_role(
+    scx: &StatementContext,
+    GrantRoleStatement {
+        role_name,
+        member_name,
+    }: GrantRoleStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let grantor_id = scx.catalog.active_role_id().clone();
+    Ok(Plan::GrantRole(GrantRolePlan {
+        role_id: role_name.id,
+        member_id: member_name.id,
+        grantor_id,
+    }))
+}
+
+pub fn describe_revoke_role(
+    _: &StatementContext,
+    _: RevokeRoleStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_revoke_role(
+    _: &StatementContext,
+    RevokeRoleStatement {
+        role_name,
+        member_name,
+    }: RevokeRoleStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    Ok(Plan::RevokeRole(RevokeRolePlan {
+        role_id: role_name.id,
+        member_id: member_name.id,
     }))
 }

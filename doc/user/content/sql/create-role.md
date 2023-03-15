@@ -70,3 +70,5 @@ SELECT name FROM mz_roles;
 - [ALTER ROLE](../alter-role)
 - [DROP ROLE](../drop-role)
 - [DROP USER](../drop-user)
+- [GRANT ROLE](../grant-role)
+- [REVOKE ROLE](../revoke-role)

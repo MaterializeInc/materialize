@@ -40,9 +40,9 @@ use crate::catalog::builtin::{
     MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS, MZ_DATABASES, MZ_EGRESS_IPS,
     MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS,
     MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS,
-    MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES,
-    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPES,
-    MZ_VIEWS,
+    MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS,
+    MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS,
+    MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connection, DataSourceDesc, Database, Error, ErrorKind, Func, Index,
@@ -133,6 +133,29 @@ impl CatalogState {
                 Datum::from(role.attributes.create_role),
                 Datum::from(role.attributes.create_db),
                 Datum::from(role.attributes.create_cluster),
+            ]),
+            diff,
+        }
+    }
+
+    pub(super) fn pack_role_members_update(
+        &self,
+        role_id: RoleId,
+        member_id: RoleId,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        let grantor_id = self
+            .get_role(&member_id)
+            .membership
+            .map
+            .get(&role_id)
+            .expect("catalog out of sync");
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_ROLE_MEMBERS),
+            row: Row::pack_slice(&[
+                Datum::String(&role_id.to_string()),
+                Datum::String(&member_id.to_string()),
+                Datum::String(&grantor_id.to_string()),
             ]),
             diff,
         }

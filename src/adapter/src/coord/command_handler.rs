@@ -437,7 +437,9 @@ impl Coordinator {
                     | Statement::DropRoles(_)
                     | Statement::DropClusters(_)
                     | Statement::DropClusterReplicas(_)
+                    | Statement::GrantRole(_)
                     | Statement::Insert(_)
+                    | Statement::RevokeRole(_)
                     | Statement::Update(_) => {
                         return tx.send(
                             Err(AdapterError::OperationProhibitsTransaction(
