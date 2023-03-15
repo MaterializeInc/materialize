@@ -925,7 +925,6 @@ async fn test_stash_table(stash: &mut Stash) {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)] // Broken, see #18122
 fn test_table() {
     fn uniqueness_violation(a: &String, b: &String) -> bool {
         a == b

@@ -51,11 +51,21 @@ use crate::env;
 // The rules about what you can do in a `ctor` function are somewhat fuzzy,
 // because Rust does not explicitly support constructors. But a scan of the
 // stdlib suggests that reading environment variables is safe enough.
+#[cfg(not(miri))]
 #[ctor::ctor]
 pub static SOFT_ASSERTIONS: AtomicBool = {
     let default = cfg!(debug_assertions) || env::is_var_truthy("MZ_SOFT_ASSERTIONS");
     AtomicBool::new(default)
 };
+
+/// Always enable soft assertions when running [Miri].
+/// 
+/// Note: Miri also doesn't seem to support a [`ctor`], if it ever does we could
+/// get rid of this second definition.
+/// 
+/// [Miri]: https://github.com/rust-lang/miri
+#[cfg(miri)]
+pub static SOFT_ASSERTIONS: AtomicBool = AtomicBool::new(true);
 
 /// Asserts that a condition is true if soft assertions are enabled.
 ///
