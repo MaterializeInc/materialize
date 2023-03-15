@@ -14,9 +14,11 @@ use mz_repr::{Datum, Row};
 use mz_storage_client::types::sources::{Generator, GeneratorMessageType};
 
 pub struct Counter {
-    /// How many values will be emitted
-    /// before old ones are retracted, or `None` for
-    /// an append-only collection.
+    /// How many values will be emitted before old ones are retracted,
+    /// or `None` for an append-only collection.  (If this retraction
+    /// behavior is changed,
+    /// `mz_storage_client::types::sources::LoadGenerator::is_monotonic`
+    /// must be updated.
     ///
     /// This is verified by the planner to be nonnegative. We encode it as
     /// an `i64` to make the code in `Counter::by_seed` simpler.
