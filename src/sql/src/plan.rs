@@ -121,7 +121,6 @@ pub enum Plan {
     SendRows(SendRowsPlan),
     CopyFrom(CopyFromPlan),
     Explain(ExplainPlan),
-    SendDiffs(SendDiffsPlan),
     Insert(InsertPlan),
     AlterNoop(AlterNoopPlan),
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
@@ -172,12 +171,7 @@ impl Plan {
             StatementKind::AlterSystemSet => vec![PlanKind::AlterNoop, PlanKind::AlterSystemSet],
             StatementKind::Close => vec![PlanKind::Close],
             StatementKind::Commit => vec![PlanKind::CommitTransaction],
-            StatementKind::Copy => vec![
-                PlanKind::CopyFrom,
-                PlanKind::Peek,
-                PlanKind::SendDiffs,
-                PlanKind::Subscribe,
-            ],
+            StatementKind::Copy => vec![PlanKind::CopyFrom, PlanKind::Peek, PlanKind::Subscribe],
             StatementKind::CreateCluster => vec![PlanKind::CreateCluster],
             StatementKind::CreateClusterReplica => vec![PlanKind::CreateClusterReplica],
             StatementKind::CreateConnection => vec![PlanKind::CreateConnection],
@@ -279,11 +273,6 @@ impl Plan {
             Plan::SendRows(_) => "send rows",
             Plan::CopyFrom(_) => "copy from",
             Plan::Explain(_) => "explain",
-            Plan::SendDiffs(plan) => match plan.kind {
-                MutationKind::Insert => "insert",
-                MutationKind::Update => "update",
-                MutationKind::Delete => "delete",
-            },
             Plan::Insert(_) => "insert",
             Plan::AlterNoop(plan) => match plan.object_type {
                 ObjectType::Table => "alter table",
@@ -610,6 +599,7 @@ pub struct SendDiffsPlan {
     pub updates: Vec<(Row, Diff)>,
     pub kind: MutationKind,
     pub returning: Vec<(Row, NonZeroUsize)>,
+    pub max_result_size: u32,
 }
 
 #[derive(Debug)]

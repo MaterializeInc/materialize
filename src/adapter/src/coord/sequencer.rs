@@ -85,7 +85,7 @@ use crate::coord::peek::FastPathPlan;
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
-    peek, Coordinator, Message, PendingReadTxn, PendingTxn, RealTimeRecencyContext, SendDiffs,
+    peek, Coordinator, Message, PendingReadTxn, PendingTxn, RealTimeRecencyContext,
     SinkConnectionReady, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
@@ -322,9 +322,6 @@ impl Coordinator {
             }
             Plan::Explain(plan) => {
                 self.sequence_explain(tx, session, plan);
-            }
-            Plan::SendDiffs(plan) => {
-                tx.send(self.sequence_send_diffs(&mut session, plan), session);
             }
             Plan::Insert(plan) => {
                 self.sequence_insert(tx, session, plan).await;
@@ -3160,7 +3157,6 @@ impl Coordinator {
 
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn sequence_send_diffs(
-        &mut self,
         session: &mut Session,
         mut plan: SendDiffsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -3216,10 +3212,7 @@ impl Coordinator {
                 offset: 0,
                 project: (0..plan.returning[0].0.iter().count()).collect(),
             };
-            return match finishing.finish(
-                plan.returning,
-                self.catalog.system_config().max_result_size(),
-            ) {
+            return match finishing.finish(plan.returning, plan.max_result_size) {
                 Ok(rows) => Ok(send_immediate_rows(rows)),
                 Err(e) => Err(AdapterError::ResultSize(e)),
             };
@@ -3337,8 +3330,9 @@ impl Coordinator {
                     updates: rows,
                     kind: MutationKind::Insert,
                     returning: Vec::new(),
+                    max_result_size: self.catalog.system_config().max_result_size(),
                 };
-                self.sequence_send_diffs(session, diffs_plan)
+                Self::sequence_send_diffs(session, diffs_plan)
             }
             None => panic!(
                 "tried using sequence_insert_constant on non-constant MirRelationExpr {:?}",
@@ -3461,6 +3455,7 @@ impl Coordinator {
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let strict_serializable_reads_tx = self.strict_serializable_reads_tx.clone();
+        let max_result_size = self.catalog.system_config().max_result_size();
         task::spawn(|| format!("sequence_read_then_write:{id}"), async move {
             let (peek_response, mut session) = match peek_rx.await {
                 Ok(Response {
@@ -3646,17 +3641,25 @@ impl Coordinator {
                 }
             }
 
-            // It is not an error for these results to be ready after `internal_cmd_rx` has been dropped.
-            let result = internal_cmd_tx.send(Message::SendDiffs(SendDiffs {
-                session,
-                tx,
-                id,
-                diffs,
-                kind,
-                returning: returning_rows,
-            }));
-            if let Err(e) = result {
-                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+            match diffs {
+                Ok(diffs) => {
+                    tx.send(
+                        Self::sequence_send_diffs(
+                            &mut session,
+                            SendDiffsPlan {
+                                id,
+                                updates: diffs,
+                                kind,
+                                returning: returning_rows,
+                                max_result_size,
+                            },
+                        ),
+                        session,
+                    );
+                }
+                Err(e) => {
+                    tx.send(Err(e), session);
+                }
             }
         });
     }
@@ -4016,7 +4019,6 @@ impl Coordinator {
             | Plan::DropClusters(_)
             | Plan::DropClusterReplicas(_)
             | Plan::DropItems(_)
-            | Plan::SendDiffs(_)
             | Plan::Insert(_)
             | Plan::AlterNoop(_)
             | Plan::AlterIndexSetOptions(_)
