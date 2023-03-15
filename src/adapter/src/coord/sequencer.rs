@@ -3980,7 +3980,7 @@ impl Coordinator {
             grantor_id,
         }: GrantRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let member_membership = self.catalog.get_role(&member_id).membership();
+        let member_membership: BTreeSet<_> = self.catalog.get_role(&member_id).membership();
         if member_membership.contains(&role_id) {
             let role_name = self.catalog.get_role(&role_id).name().to_string();
             let member_name = self.catalog.get_role(&member_id).name().to_string();
@@ -4006,7 +4006,7 @@ impl Coordinator {
         session: &mut Session,
         RevokeRolePlan { role_id, member_id }: RevokeRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let member_membership = self.catalog.get_role(&member_id).membership();
+        let member_membership: BTreeSet<_> = self.catalog.get_role(&member_id).membership();
         if !member_membership.contains(&role_id) {
             let role_name = self.catalog.get_role(&role_id).name().to_string();
             let member_name = self.catalog.get_role(&member_id).name().to_string();

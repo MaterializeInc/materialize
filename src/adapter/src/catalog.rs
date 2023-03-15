@@ -45,6 +45,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
+use mz_ore::soft_assert;
 use mz_persist_client::cfg::PersistParameters;
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_repr::{explain::ExprHumanizer, Diff, GlobalId, RelationDesc, ScalarType};
@@ -425,7 +426,7 @@ impl CatalogState {
     }
 
     fn get_role(&self, id: &RoleId) -> &Role {
-        &self.roles_by_id[id]
+        self.roles_by_id.get(id).expect("catalog out of sync")
     }
 
     fn get_role_mut(&mut self, id: &RoleId) -> &mut Role {
@@ -6482,10 +6483,14 @@ impl SessionCatalog for ConnCatalog<'_> {
     fn collect_role_membership(&self, id: &RoleId) -> BTreeSet<RoleId> {
         let mut membership = BTreeSet::new();
         let mut queue = VecDeque::from(vec![id]);
-        while let Some(id) = queue.pop_front() {
-            if !membership.contains(id) {
-                membership.insert(id.clone());
-                let role = self.get_role(id);
+        while let Some(cur_id) = queue.pop_front() {
+            if !membership.contains(cur_id) {
+                membership.insert(cur_id.clone());
+                let role = self.get_role(cur_id);
+                soft_assert!(
+                    !role.membership().contains(id),
+                    "circular membership exists in the catalog"
+                );
                 queue.extend(role.membership().into_iter());
             }
         }
