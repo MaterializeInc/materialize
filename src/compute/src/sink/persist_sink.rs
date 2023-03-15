@@ -50,6 +50,7 @@ where
 {
     fn render_continuous_sink(
         &self,
+        scope: &mut G,
         compute_state: &mut ComputeState,
         sink: &ComputeSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
@@ -68,6 +69,7 @@ where
         }
 
         persist_sink(
+            scope,
             sink_id,
             &self.storage_metadata,
             desired_collection,
@@ -79,6 +81,7 @@ where
 }
 
 pub(crate) fn persist_sink<G>(
+    scope: &mut G,
     sink_id: GlobalId,
     target: &CollectionMetadata,
     desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,
@@ -95,7 +98,7 @@ where
     // current shard upper anyway.
     let source_as_of = None;
     let (ok_stream, err_stream, token) = mz_storage_client::source::persist_source::persist_source(
-        &desired_collection.scope(),
+        scope,
         sink_id,
         Arc::clone(&compute_state.persist_clients),
         target.clone(),
