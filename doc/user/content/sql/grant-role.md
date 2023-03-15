@@ -10,8 +10,8 @@ menu:
 
 ## Conceptual framework
 
-Roles can be a member of another role and inherit all the attributes and
-privileges of the other role.
+Roles can be members of other roles and inherit all the attributes and
+privileges of the other roles.
 
 {{< warning >}}
 Roles in Materialize are currently limited in functionality. In the future they
