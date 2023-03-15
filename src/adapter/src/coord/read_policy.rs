@@ -71,7 +71,7 @@ impl<T: timely::progress::Timestamp> ReadCapability<T> {
 }
 
 /// Relevant information for acquiring or releasing a bundle of read holds.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct ReadHolds<T> {
     holds: HashMap<Antichain<T>, CollectionIdBundle>,
 }
@@ -168,15 +168,6 @@ impl<T: Eq + Hash + Ord> ReadHolds<T> {
                     id_bundle.compute_ids.remove(compute_instance);
                 }
             }
-        }
-        self.holds.retain(|_, id_bundle| !id_bundle.is_empty());
-    }
-
-    /// If the read hold contains a compute instance equal `compute_instance`, removes it from
-    /// the read hold and drops it.
-    pub fn remove_compute_instance(&mut self, compute_instance: &ComputeInstanceId) {
-        for (_, id_bundle) in &mut self.holds {
-            id_bundle.compute_ids.remove(compute_instance);
         }
         self.holds.retain(|_, id_bundle| !id_bundle.is_empty());
     }

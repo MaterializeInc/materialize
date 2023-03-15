@@ -2529,3 +2529,42 @@ fn test_concurrent_role_drop() {
         "unexpected error: {err:?}",
     );
 }
+
+#[test]
+fn test_timelines_persist_after_failed_transaction() {
+    let config = util::Config::default().unsafe_mode();
+    let server = util::start_server(config).unwrap();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client.batch_execute(
+        "CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (TICK INTERVAL '10ms') WITH (TIMELINE 'my_timline')"
+    )
+    .unwrap();
+
+    // Should be able to query the source.
+    client
+        .query("SELECT * FROM counter", &[])
+        .expect("failed to select from LOAD GENERATOR");
+
+    fail::cfg("catalog_transact", "return(1)").expect("failed to set the fail_point");
+
+    // Should fail to drop the source, because of the fail_point.
+    let result = client.batch_execute("DROP SOURCE counter");
+
+    // Assert the error we get back is from our fail_point
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("failpoint: Some(\"1\")"));
+
+    fail::remove("catalog_transact");
+
+    // Should still be able to query the source, since we shouldn't have cleaned up the
+    // timeline or source because of the failed transaction.
+    client
+        .query("SELECT * FROM counter", &[])
+        .expect("failed to select from LOAD GENERATOR");
+
+    // Dropping the source should also work now.
+    client.batch_execute("DROP SOURCE counter").unwrap();
+}
