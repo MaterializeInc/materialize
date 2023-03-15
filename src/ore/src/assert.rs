@@ -59,11 +59,11 @@ pub static SOFT_ASSERTIONS: AtomicBool = {
 };
 
 /// Always enable soft assertions when running [Miri].
-/// 
+///
 /// Note: Miri also doesn't support global constructors, aka [`ctor`], if it ever does we could
-/// get rid of this second definition. See <https://github.com/rust-lang/miri/issues/450> for 
+/// get rid of this second definition. See <https://github.com/rust-lang/miri/issues/450> for
 /// more details.
-/// 
+///
 /// [Miri]: https://github.com/rust-lang/miri
 #[cfg(miri)]
 pub static SOFT_ASSERTIONS: AtomicBool = AtomicBool::new(true);
