@@ -43,6 +43,8 @@ use crate::telemetry::SegmentClientExt;
 use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterError, AdapterNotice};
 
+use super::timeline::{TimelineContext, TimelineState};
+
 /// State provided to a catalog transaction closure.
 pub struct CatalogTxn<'a, T> {
     pub(crate) dataflow_client: &'a mz_controller::Controller<T>,
@@ -267,15 +269,32 @@ impl Coordinator {
             .chain(materialized_views_to_drop.iter())
             .chain(log_sources_to_drop.iter())
             .cloned();
+
         // Check if any Timelines would become empty, if we dropped the specified storage or
         // compute resources.
         //
         // Note: only after a Transaction succeeds do we actually drop the timeline
-        let timeline_associations = self.associate_with_timelines(
+        let collection_id_bundle = self.build_collection_id_bundle(
             storage_ids_to_drop,
             compute_ids_to_drop,
             clusters_to_drop.clone(),
         );
+        let timeline_associations: BTreeMap<_, _> = self
+            .partition_ids_by_timeline_context(&collection_id_bundle)
+            .filter_map(|(context, bundle)| {
+                let TimelineContext::TimelineDependent(timeline) = context else {
+                    return None;
+                };
+                let TimelineState { read_holds, .. } = self
+                    .global_timelines
+                    .get(&timeline)
+                    .expect("all timeslines have a timestamp oracle");
+
+                let empty = read_holds.id_bundle().difference(&bundle).is_empty();
+
+                Some((timeline, (empty, bundle)))
+            })
+            .collect();
         timelines_to_drop.extend(
             timeline_associations
                 .iter()
@@ -327,7 +346,11 @@ impl Coordinator {
                 .await;
 
             if !timeline_associations.is_empty() {
-                self.remove_resources_associate_with_timeline(timeline_associations);
+                for (timeline, (should_be_empty, id_bundle)) in timeline_associations {
+                    let became_empty =
+                        self.remove_resources_associated_with_timeline(timeline, id_bundle);
+                    assert_eq!(should_be_empty, became_empty, "emptiness did not match!");
+                }
             }
             if !sources_to_drop.is_empty() {
                 self.drop_sources(sources_to_drop);
