@@ -13,12 +13,13 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mz_build_info::BuildInfo;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_persist::cfg::{BlobKnobs, ConsensusKnobs};
+use mz_persist::retry::Retry;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use semver::Version;
@@ -135,6 +136,7 @@ impl PersistConfig {
                 sink_minimum_batch_updates: AtomicUsize::new(
                     Self::DEFAULT_SINK_MINIMUM_BATCH_UPDATES,
                 ),
+                next_listen_batch_retryer: RwLock::new(Self::DEFAULT_NEXT_LISTEN_BATCH_RETRYER),
             }),
             compaction_enabled: !compaction_disabled,
             compaction_concurrency_limit: 5,
@@ -184,6 +186,13 @@ impl PersistConfig {
 
     /// Default value for [`PersistConfig::sink_minimum_batch_updates`].
     pub const DEFAULT_SINK_MINIMUM_BATCH_UPDATES: usize = 0;
+
+    /// Default value for [`DynamicConfig::next_listen_batch_retry_params`].
+    pub const DEFAULT_NEXT_LISTEN_BATCH_RETRYER: RetryParameters = RetryParameters {
+        initial_backoff: Duration::from_millis(4),
+        multiplier: 2,
+        clamp: Duration::from_secs(16),
+    };
 
     // Move this to a PersistConfig field when we actually have read leases.
     //
@@ -258,10 +267,65 @@ pub struct DynamicConfig {
     consensus_connect_timeout: RwLock<Duration>,
     sink_minimum_batch_updates: AtomicUsize,
 
+    next_listen_batch_retryer: RwLock<RetryParameters>,
+
     // TODO: Figure out how to make these dynamic.
     compaction_minimum_timeout: Duration,
     consensus_connection_pool_ttl: Duration,
     consensus_connection_pool_ttl_stagger: Duration,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Arbitrary, Serialize, Deserialize)]
+pub struct RetryParameters {
+    pub initial_backoff: Duration,
+    pub multiplier: u32,
+    pub clamp: Duration,
+}
+
+impl RetryParameters {
+    pub(crate) fn into_retry(self, now: SystemTime) -> Retry {
+        let seed = now
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |x| u64::from(x.subsec_nanos()));
+        Retry {
+            initial_backoff: self.initial_backoff,
+            multiplier: self.multiplier,
+            clamp_backoff: self.clamp,
+            seed,
+        }
+    }
+}
+
+impl RustType<ProtoRetryParameters> for RetryParameters {
+    fn into_proto(&self) -> ProtoRetryParameters {
+        ProtoRetryParameters {
+            initial_backoff: Some(self.initial_backoff.into_proto()),
+            multiplier: self.multiplier,
+            clamp: Some(self.clamp.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoRetryParameters) -> Result<Self, TryFromProtoError> {
+        let initial_backoff: Option<Duration> = proto.initial_backoff.into_rust()?;
+        let clamp: Option<Duration> = proto.clamp.into_rust()?;
+
+        let Some(initial_backoff) = initial_backoff else {
+            return Err(TryFromProtoError::MissingField(
+                "ProtoRetryParameters should always set initial_backoff".to_string(),
+            ));
+        };
+        let Some(clamp)= clamp else {
+            return Err(TryFromProtoError::MissingField(
+                "ProtoRetryParameters should always set clamp".to_string(),
+            ));
+        };
+
+        Ok(Self {
+            initial_backoff,
+            multiplier: proto.multiplier.into_rust()?,
+            clamp,
+        })
+    }
 }
 
 impl DynamicConfig {
@@ -376,6 +440,14 @@ impl DynamicConfig {
             .load(Self::LOAD_ORDERING)
     }
 
+    /// Retry configuration for `next_listen_batch`.
+    pub fn next_listen_batch_retry_params(&self) -> RetryParameters {
+        *self
+            .next_listen_batch_retryer
+            .read()
+            .expect("lock poisoned")
+    }
+
     // TODO: Get rid of these in favor of using PersistParameters at the
     // relevant callsites.
     #[cfg(test)]
@@ -428,6 +500,8 @@ pub struct PersistParameters {
     pub compaction_minimum_timeout: Option<Duration>,
     /// Configures [`DynamicConfig::consensus_connect_timeout`].
     pub consensus_connect_timeout: Option<Duration>,
+    /// Configures [`DynamicConfig::next_listen_batch_retry_params`].
+    pub next_listen_batch_retryer: Option<RetryParameters>,
     /// Configures [`PersistConfig::sink_minimum_batch_updates`].
     pub sink_minimum_batch_updates: Option<usize>,
 }
@@ -442,12 +516,14 @@ impl PersistParameters {
             compaction_minimum_timeout: self_compaction_minimum_timeout,
             consensus_connect_timeout: self_consensus_connect_timeout,
             sink_minimum_batch_updates: self_sink_minimum_batch_updates,
+            next_listen_batch_retryer: self_next_listen_batch_retryer,
         } = self;
         let Self {
             blob_target_size: other_blob_target_size,
             compaction_minimum_timeout: other_compaction_minimum_timeout,
             consensus_connect_timeout: other_consensus_connect_timeout,
             sink_minimum_batch_updates: other_sink_minimum_batch_updates,
+            next_listen_batch_retryer: other_next_listen_batch_retryer,
         } = other;
         if let Some(v) = other_blob_target_size {
             *self_blob_target_size = Some(v);
@@ -460,6 +536,9 @@ impl PersistParameters {
         }
         if let Some(v) = other_sink_minimum_batch_updates {
             *self_sink_minimum_batch_updates = Some(v);
+        }
+        if let Some(v) = other_next_listen_batch_retryer {
+            *self_next_listen_batch_retryer = Some(v);
         }
     }
 
@@ -474,11 +553,13 @@ impl PersistParameters {
             compaction_minimum_timeout,
             consensus_connect_timeout,
             sink_minimum_batch_updates,
+            next_listen_batch_retryer,
         } = self;
         blob_target_size.is_none()
             && compaction_minimum_timeout.is_none()
             && consensus_connect_timeout.is_none()
             && sink_minimum_batch_updates.is_none()
+            && next_listen_batch_retryer.is_none()
     }
 
     /// Applies the parameter values to persist's in-memory config object.
@@ -493,6 +574,7 @@ impl PersistParameters {
             compaction_minimum_timeout,
             consensus_connect_timeout,
             sink_minimum_batch_updates,
+            next_listen_batch_retryer,
         } = self;
         if let Some(blob_target_size) = blob_target_size {
             cfg.dynamic
@@ -515,6 +597,14 @@ impl PersistParameters {
                 .sink_minimum_batch_updates
                 .store(*sink_minimum_batch_updates, DynamicConfig::STORE_ORDERING);
         }
+        if let Some(retry_params) = next_listen_batch_retryer {
+            let mut retry = cfg
+                .dynamic
+                .next_listen_batch_retryer
+                .write()
+                .expect("lock poisoned");
+            *retry = *retry_params;
+        }
     }
 }
 
@@ -525,6 +615,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             compaction_minimum_timeout: self.compaction_minimum_timeout.into_proto(),
             consensus_connect_timeout: self.consensus_connect_timeout.into_proto(),
             sink_minimum_batch_updates: self.sink_minimum_batch_updates.into_proto(),
+            next_listen_batch_retryer: self.next_listen_batch_retryer.into_proto(),
         }
     }
 
@@ -534,6 +625,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             compaction_minimum_timeout: proto.compaction_minimum_timeout.into_rust()?,
             consensus_connect_timeout: proto.consensus_connect_timeout.into_rust()?,
             sink_minimum_batch_updates: proto.sink_minimum_batch_updates.into_rust()?,
+            next_listen_batch_retryer: proto.next_listen_batch_retryer.into_rust()?,
         })
     }
 }

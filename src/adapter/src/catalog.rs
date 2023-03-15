@@ -46,7 +46,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::soft_assert;
-use mz_persist_client::cfg::PersistParameters;
+use mz_persist_client::cfg::{PersistParameters, RetryParameters};
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_repr::{explain::ExprHumanizer, Diff, GlobalId, RelationDesc, ScalarType};
 use mz_secrets::InMemorySecretsController;
@@ -6011,6 +6011,11 @@ impl Catalog {
             compaction_minimum_timeout: Some(config.persist_compaction_minimum_timeout()),
             consensus_connect_timeout: Some(config.crdb_connect_timeout()),
             sink_minimum_batch_updates: Some(config.persist_sink_minimum_batch_updates()),
+            next_listen_batch_retryer: Some(RetryParameters {
+                initial_backoff: config.persist_next_listen_batch_retryer_initial_backoff(),
+                multiplier: config.persist_next_listen_batch_retryer_multiplier(),
+                clamp: config.persist_next_listen_batch_retryer_clamp(),
+            }),
         }
     }
 }
