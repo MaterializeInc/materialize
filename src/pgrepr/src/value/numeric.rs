@@ -237,6 +237,7 @@ impl<'a> FromSql<'a> for Numeric {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_to_from_sql_roundtrip() {
     fn inner(s: &str) {
         let mut cx = numeric::cx_datum();

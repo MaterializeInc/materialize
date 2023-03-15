@@ -232,6 +232,7 @@ fn test_source_sink_size_required() {
 
 // Test the POST and WS server endpoints.
 #[test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_http_sql() {
     // Datadriven directives for WebSocket are "ws-text" and "ws-binary" to send
     // text or binary websocket messages that are the input. Output is
@@ -321,6 +322,7 @@ fn test_http_sql() {
 
 // Test that the server properly handles cancellation requests.
 #[test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_long_running_query() {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
@@ -363,6 +365,7 @@ fn test_cancel_long_running_query() {
 
 // Test that dataflow uninstalls cancelled peeks.
 #[test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_dataflow_removal() {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
@@ -745,6 +748,7 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_default_cluster_sizes() {
     let config = util::Config::default()
         .with_builtin_cluster_replica_size("1".to_string())
@@ -776,6 +780,7 @@ fn test_default_cluster_sizes() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_max_request_size() {
     let statement = "SELECT $1::text";
     let statement_size = statement.bytes().count();
@@ -833,6 +838,7 @@ fn test_max_request_size() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // too slow
 fn test_max_statement_batch_size() {
     let statement = "SELECT 1;";
     let statement_size = statement.bytes().count();
@@ -914,6 +920,7 @@ fn test_max_statement_batch_size() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_mz_system_user_admin() {
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();

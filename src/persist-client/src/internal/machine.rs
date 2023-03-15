@@ -1687,6 +1687,7 @@ pub mod tests {
     use crate::ShardId;
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn apply_unbatched_cmd_truncate() {
         mz_ore::test::init_logging();
 
@@ -1740,6 +1741,7 @@ pub mod tests {
     // state invariant being violated which resulted in gc being permanently
     // wedged for the shard.
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn regression_gc_skipped_req_and_interrupted() {
         let mut client = new_test_client().await;
         let intercept = InterceptHandle::default();

@@ -245,6 +245,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn file_blob() -> Result<(), ExternalError> {
         let temp_dir = tempfile::tempdir().map_err(Error::from)?;
         blob_impl_test(move |path| {

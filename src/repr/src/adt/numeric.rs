@@ -415,6 +415,7 @@ pub fn twos_complement_be_to_numeric_inner<D: Dec<N>, const N: usize>(
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_twos_complement_roundtrip() {
     fn inner(s: &str) {
         let mut cx = cx_datum();
@@ -450,6 +451,7 @@ fn test_twos_complement_roundtrip() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_twos_comp_numeric_primitive() {
     fn inner_inner<P>(i: P, i_be_bytes: &mut [u8])
     where
@@ -577,6 +579,7 @@ fn test_twos_comp_numeric_primitive() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_twos_complement_to_numeric_fail() {
     fn inner(b: &mut [u8]) {
         let r = twos_complement_be_to_numeric(b, 0);
@@ -594,6 +597,7 @@ fn test_twos_complement_to_numeric_fail() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_wide_twos_complement_roundtrip() {
     fn inner(s: &str) {
         let mut cx = cx_datum();

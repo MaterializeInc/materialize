@@ -127,6 +127,7 @@ mod tests {
 
     proptest! {
         #[test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn regex_protobuf_roundtrip( expect in any_regex() ) {
             let actual =  protobuf_roundtrip::<_, ProtoRegex>(&expect);
             assert!(actual.is_ok());

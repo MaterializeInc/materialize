@@ -542,6 +542,7 @@ mod test {
     use timely::dataflow::operators::{Capture, ToStream};
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn async_operator() {
         // Run timely in a separate thread
         #[allow(clippy::disallowed_methods)]

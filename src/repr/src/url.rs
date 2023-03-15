@@ -43,6 +43,7 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(4096))]
 
         #[test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn url_protobuf_roundtrip(expect in any_url() ) {
             let actual = protobuf_roundtrip::<_, ProtoUrl>(&expect);
             assert!(actual.is_ok());

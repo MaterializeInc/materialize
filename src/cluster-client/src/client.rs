@@ -202,6 +202,7 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(32))]
 
         #[test]
+        #[cfg_attr(miri, ignore)] // slow
         fn timely_config_protobuf_roundtrip(expect in any::<TimelyConfig>() ) {
             let actual = protobuf_roundtrip::<_, ProtoTimelyConfig>(&expect);
             assert!(actual.is_ok());

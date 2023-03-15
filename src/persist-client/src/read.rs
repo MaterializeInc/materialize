@@ -1072,6 +1072,7 @@ mod tests {
 
     // Verifies `Subscribe` can be dropped while holding snapshot batches.
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn drop_unused_subscribe() {
         let data = vec![
             (("0".to_owned(), "zero".to_owned()), 0, 1),
