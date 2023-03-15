@@ -606,3 +606,14 @@ query TI
 SELECT a.*, ROW_NUMBER() OVER() from (SELECT TRUE::text as x FROM(SELECT AVG(0) FROM qs)) a
 ----
 true 1
+
+statement ok
+CREATE TABLE t_16 (i16 smallint)
+
+statement ok
+INSERT INTO t_16 VALUES (0), (-1), (1)
+
+query TT
+SELECT MIN(i16), MAX(i16) from t_16
+----
+-1 1
