@@ -86,6 +86,11 @@ pub enum ErrorKind {
     UnexpectedStashState,
     #[error(transparent)]
     Uuid(#[from] uuid::Error),
+    #[error("role \"{role_name}\" is a member of role \"{member_name}\"")]
+    CircularRoleMembership {
+        role_name: String,
+        member_name: String,
+    },
 }
 
 impl Error {

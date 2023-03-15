@@ -4140,13 +4140,6 @@ pub fn plan_grant_role(
         member_name,
     }: GrantRoleStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let role_membership = scx.catalog.collect_role_membership(&role_name.id);
-    if role_membership.contains(&member_name.id) {
-        return Err(PlanError::CircularRoleMembership {
-            role_name: role_name.name,
-            member_name: member_name.name,
-        });
-    }
     let grantor_id = scx.catalog.active_role_id().clone();
     Ok(Plan::GrantRole(GrantRolePlan {
         role_id: role_name.id,

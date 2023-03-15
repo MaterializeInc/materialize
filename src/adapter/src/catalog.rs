@@ -433,6 +433,23 @@ impl CatalogState {
         self.roles_by_id.get_mut(id).expect("catalog out of sync")
     }
 
+    fn collect_role_membership(&self, id: &RoleId) -> BTreeSet<RoleId> {
+        let mut membership = BTreeSet::new();
+        let mut queue = VecDeque::from(vec![id]);
+        while let Some(cur_id) = queue.pop_front() {
+            if !membership.contains(cur_id) {
+                membership.insert(cur_id.clone());
+                let role = self.get_role(cur_id);
+                soft_assert!(
+                    !role.membership().contains(id),
+                    "circular membership exists in the catalog"
+                );
+                queue.extend(role.membership().into_iter());
+            }
+        }
+        membership
+    }
+
     /// Create and insert the per replica log sources and log views.
     #[tracing::instrument(level = "info", skip_all)]
     fn insert_replica_introspection_items(&mut self, logging: &ReplicaLogging, replica_id: u64) {
@@ -5241,14 +5258,24 @@ impl Catalog {
                     member_id,
                     grantor_id,
                 } => {
-                    let existing_role = state.get_role_mut(&member_id);
-                    if is_reserved_name(&existing_role.name) {
+                    let member_role = state.get_role(&member_id);
+                    if is_reserved_name(state.get_role(&member_id).name()) {
                         return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReservedRoleName(existing_role.name.clone()),
+                            ErrorKind::ReservedRoleName(member_role.name().to_string()),
                         )));
                     }
-                    existing_role.membership.map.insert(role_id, grantor_id);
-                    tx.update_role(member_id, existing_role.clone().into())?;
+                    if state.collect_role_membership(&role_id).contains(&member_id) {
+                        let role = state.get_role(&role_id);
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::CircularRoleMembership {
+                                role_name: role.name().to_string(),
+                                member_name: member_role.name().to_string(),
+                            },
+                        )));
+                    }
+                    let member_role = state.get_role_mut(&member_id);
+                    member_role.membership.map.insert(role_id, grantor_id);
+                    tx.update_role(member_id, member_role.clone().into())?;
                     builtin_table_updates
                         .push(state.pack_role_members_update(role_id, member_id, 1));
 
@@ -5268,17 +5295,17 @@ impl Catalog {
                     )?;
                 }
                 Op::RevokeRole { role_id, member_id } => {
-                    let existing_role = state.get_role(&member_id);
-                    if is_reserved_name(&existing_role.name) {
+                    let member_role = state.get_role(&member_id);
+                    if is_reserved_name(&member_role.name) {
                         return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReservedRoleName(existing_role.name.clone()),
+                            ErrorKind::ReservedRoleName(member_role.name.clone()),
                         )));
                     }
                     builtin_table_updates
                         .push(state.pack_role_members_update(role_id, member_id, -1));
-                    let existing_role = state.get_role_mut(&member_id);
-                    existing_role.membership.map.remove(&role_id);
-                    tx.update_role(member_id, existing_role.clone().into())?;
+                    let member_role = state.get_role_mut(&member_id);
+                    member_role.membership.map.remove(&role_id);
+                    tx.update_role(member_id, member_role.clone().into())?;
 
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -6477,24 +6504,11 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn get_role(&self, id: &RoleId) -> &dyn mz_sql::catalog::CatalogRole {
-        &self.state.roles_by_id[id]
+        self.state.get_role(id)
     }
 
     fn collect_role_membership(&self, id: &RoleId) -> BTreeSet<RoleId> {
-        let mut membership = BTreeSet::new();
-        let mut queue = VecDeque::from(vec![id]);
-        while let Some(cur_id) = queue.pop_front() {
-            if !membership.contains(cur_id) {
-                membership.insert(cur_id.clone());
-                let role = self.get_role(cur_id);
-                soft_assert!(
-                    !role.membership().contains(id),
-                    "circular membership exists in the catalog"
-                );
-                queue.extend(role.membership().into_iter());
-            }
-        }
-        membership
+        self.state.collect_role_membership(id)
     }
 
     fn resolve_cluster(
