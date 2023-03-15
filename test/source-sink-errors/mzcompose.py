@@ -42,14 +42,14 @@ class Disruption(Protocol):
 
 
 @dataclass
-class BadKafkaDisruption:
+class KafkaTransactionLogGreaterThan1:
     name: str
 
+    # override the `run_test`, as we need `Kafka` (not `Redpanda`), and need to change some other things
     def run_test(self, c: Composition) -> None:
         print(f"+++ Running disruption scenario {self.name}")
         seed = random.randint(0, 256 ** 4)
 
-        c.down(destroy_volumes=True)
         c.up("testdrive", persistent=True)
 
         with c.override(
@@ -420,7 +420,7 @@ disruptions: List[Disruption] = [
         fixage=None,
     ),
     # One-off disruption with a badly configured kafka sink
-    BadKafkaDisruption(
+    KafkaTransactionLogGreaterThan1(
         name="bad-kafka-sink",
     ),
 ]
