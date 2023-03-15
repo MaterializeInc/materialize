@@ -320,11 +320,12 @@ where
             // We need to prefix every line in `s` with the current timestamp.
 
             let timestamp = Utc::now();
+            let timestamp_str = timestamp.format("%Y-%m-%d %H:%M:%S.%f %Z");
 
             // If the last character we outputted was a newline, then output a
             // timestamp prefix at the start of this line.
             if self.need_timestamp.replace(false) {
-                self.emit_str(&format!("[{}] ", timestamp));
+                self.emit_str(&format!("[{}] ", timestamp_str));
             }
 
             // Emit `s`, installing a timestamp at the start of every line
@@ -333,7 +334,7 @@ where
                 None => (&*s, false),
                 Some(s) => (s, true),
             };
-            self.emit_str(&s.replace('\n', &format!("\n[{}] ", timestamp)));
+            self.emit_str(&s.replace('\n', &format!("\n[{}] ", timestamp_str)));
 
             // If the line ended with a newline, output the newline but *not*
             // the timestamp prefix. We want the timestamp to reflect the moment
