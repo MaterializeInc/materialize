@@ -102,6 +102,34 @@ class Tables(Generator):
         print("> COMMIT")
 
 
+class Subscribe(Generator):
+    COUNT = 100  # Each SUBSCRIBE instantiates a dataflow, so impossible to do 1K
+
+    @classmethod
+    def body(cls) -> None:
+        print("> DROP TABLE IF EXISTS t1 CASCADE;")
+        print("> CREATE TABLE t1 (f1 INTEGER);")
+        print("> INSERT INTO t1 VALUES (-1);")
+        print("> CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;")
+
+        for i in cls.all():
+            print(
+                f"$ postgres-connect name=conn{i} url=postgres://materialize:materialize@${{testdrive.materialize-sql-addr}}"
+            )
+
+        for i in cls.all():
+            print(f"$ postgres-execute connection=conn{i}")
+            print("BEGIN;")
+
+        for i in cls.all():
+            print(f"$ postgres-execute connection=conn{i}")
+            print(f"DECLARE c{i} CURSOR FOR SUBSCRIBE v1")
+
+        for i in cls.all():
+            print(f"$ postgres-execute connection=conn{i}")
+            print(f"FETCH ALL FROM c{i};")
+
+
 class Indexes(Generator):
     COUNT = min(
         Generator.COUNT, 100
