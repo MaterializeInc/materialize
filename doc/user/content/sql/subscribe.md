@@ -116,6 +116,9 @@ with several additional columns that describe the nature of the update:
 
 The `AS OF` clause allows specifying a timestamp at which the `SUBSCRIBE` should begin returning results, in order to inspect the historical state of a relation. If `AS OF` is specified, no rows whose timestamp is less than the specified timestamp will be returned. If the timestamp specified is earlier than the earliest historical state retained by the source relations, an error will be signaled.
 
+If `AS OF` is unspecified, the system automatically chooses an `AS OF`
+timestamp.
+
 Currently, all user-defined sources and tables have a retention window of one second, so `AS OF` is of limited usefulness except when subscribing to queries over certain internal relations.
 
 ### `UP TO`
@@ -126,7 +129,9 @@ The `UP TO` clause allows specifying a timestamp at which the `SUBSCRIBE` will c
 
 The lower timestamp bound specified by `AS OF` is inclusive, whereas the upper bound specified by `UP TO` is exclusive. Thus, a `SUBSCRIBE` query whose `AS OF` is equal to its `UP TO` will terminate after returning zero rows.
 
-A `SUBSCRIBE` whose `UP TO` is less than its "as of" timestamp (whether that timestamp was specified in an `AS OF` clause or chosen by the system) will signal an error.
+A `SUBSCRIBE` whose `UP TO` is less than its `AS OF` timestamp (whether that
+timestamp was specified in an `AS OF` clause or chosen by the system) will
+signal an error.
 
 ### Duration
 
@@ -150,25 +155,30 @@ See the [examples](#examples) for details.
 
 By default, `SUBSCRIBE` begins by emitting a snapshot of the subscribed relation, which
 consists of a series of updates describing the contents of the relation at its
-initial timestamp. After the snapshot, `SUBSCRIBE` emits further updates as
+[`AS OF`](#as-of) timestamp. After the snapshot, `SUBSCRIBE` emits further updates as
 they occur.
 
-For updates in the snapshot, the `mz_timestamp` field will be fast-forwarded to the initial timestamp.
+For updates in the snapshot, the `mz_timestamp` field will be fast-forwarded to the `AS OF` timestamp.
 For example, an insert that occurred before the `SUBSCRIBE` began would appear in the snapshot.
 
 To see only updates after the initial timestamp, specify `WITH (SNAPSHOT = false)`.
 
 ### `PROGRESS`
 
+If the `PROGRESS` option is specified via `WITH (PROGRESS)`:
+
+  * An additional `mz_progressed` column appears in the output. When the column
+    is `false`, the rest of the row is a valid update. When the column is `true`
+    the rest of the row is not a valid update and its content should be ignored;
+    the row exists only to communicate that timestamps have advanced.
+
+  * The first update emitted by the `SUBSCRIBE` is guaranteed to be a progress
+    message indicating the subscribe's [`AS OF`](#as-of) timestamp.
+
 Intuitively, progress messages communicate that no updates have occurred in a
 given time window. Without explicit progress messages, it is impossible to
 distinguish between a stall in Materialize and a legitimate period of no
 updates.
-
-If the `PROGRESS` option is specified via `WITH (PROGRESS)`, an additional `mz_progressed` column appears in the output.
-When the column is `false`, the rest of the row is a valid update.
-When the column is `true` the rest of the row is not a valid update and its content should be ignored;
-the row exists only to communicate that timestamps have advanced.
 
 Not all timestamps that appear will have a corresponding row with `mz_progressed` set to `true`.
 For example, the following is a valid sequence of updates:
