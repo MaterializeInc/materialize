@@ -35,10 +35,17 @@ SERVICES = [
 known_errors = [
     "no connection to the server",  # Expected AFTER a crash, the query before this is interesting, not the ones after
     "failed: Connection refused",  # Expected AFTER a crash, the query before this is interesting, not the ones after
+    "function pg_catalog.array_remove(",
+    "function pg_catalog.array_cat(",
+    "function mz_catalog.list_append(",
+    "function mz_catalog.list_prepend(",
+    "does not support implicitly casting from",
+    "aggregate functions that refer exclusively to outer columns not yet supported",  # https://github.com/MaterializeInc/materialize/issues/3720
+    "range lower bound must be less than or equal to range upper bound",
     "violates not-null constraint",
     "division by zero",
     "operator does not exist",  # For list types
-    "function sin is only defined for finite arguments",
+    "is only defined for finite arguments",
     "more than one record produced in subquery",
     "invalid range bound flags",
     "invalid input syntax for type jsonb",
