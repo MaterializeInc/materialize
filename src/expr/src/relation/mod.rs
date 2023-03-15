@@ -288,6 +288,23 @@ pub enum MirRelationExpr {
     },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub enum TypeError {
+    Mismatch {
+        got: RelationType,
+        expected: RelationType,
+        message: String,
+    },
+    BadConstantRow {
+        got: Row,
+        expected: Vec<ColumnType>,
+    },
+    BadProject {
+        got: Vec<usize>,
+        input_type: Vec<ColumnType>,
+    },
+}
+
 impl MirRelationExpr {
     /// Reports the schema of the relation.
     ///
@@ -366,6 +383,70 @@ impl MirRelationExpr {
             input_types.iter().map(|i| &i.keys),
         );
         RelationType::new(column_types).with_keys(unique_keys)
+    }
+
+    /// Returns the type of a relation expression or a type error.
+    ///
+    /// This function is careful to check validity, not just find out the type.
+    ///
+    /// It should be linear in the size of the AST.
+    pub fn typecheck(&self) -> Result<Vec<ColumnType>, TypeError> {
+        use MirRelationExpr::*;
+
+        match self {
+            Constant { typ, rows } => {
+                if let Ok(rows) = rows {
+                    for (row, _id) in rows {
+                        let datums = row.unpack();
+
+                        // correct length
+                        if datums.len() != typ.column_types.len() {
+                            return Err(TypeError::BadConstantRow {
+                                got: row.clone(),
+                                expected: typ.column_types.clone(),
+                            });
+                        }
+
+                        // correct types
+                        if datums
+                            .iter()
+                            .zip_eq(typ.column_types.iter())
+                            .any(|(d, ty)| !d.is_instance_of(ty))
+                        {
+                            return Err(TypeError::BadConstantRow {
+                                got: row.clone(),
+                                expected: typ.column_types.clone(),
+                            });
+                        }
+                    }
+                }
+
+                Ok(typ.column_types.clone())
+            }
+            Get { typ, id } => {
+                match id {
+                    Id::Local(_local_id) => (),   // todo!("where do you look this up?"),
+                    Id::Global(_global_id) => (), // todo!("where do you look this up?"),
+                }
+
+                Ok(typ.column_types.clone())
+            }
+            Project { input, outputs } => {
+                let t_in = input.typecheck()?;
+
+                for x in outputs {
+                    if *x >= t_in.len() {
+                        return Err(TypeError::BadProject {
+                            got: outputs.clone(),
+                            input_type: t_in.into(),
+                        });
+                    }
+                }
+
+                Ok(outputs.iter().map(|col| t_in[*col].clone()).collect())
+            }
+            _ => unimplemented!(),
+        }
     }
 
     /// Reports the column types of the relation given the column types of the input relations.
