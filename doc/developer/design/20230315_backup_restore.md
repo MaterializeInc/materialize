@@ -1,4 +1,6 @@
 # Backup and restore
+- Feature name: backup/restore
+- Associated: [#17605](https://github.com/MaterializeInc/materialize/issues/17605)
 
 # Summary
 
