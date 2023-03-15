@@ -536,6 +536,12 @@ SELECT a AS t FROM int4range_values EXCEPT SELECT column1 FROM (VALUES
 ----
 NULL
 
+query error range constructor flags argument must not be null
+SELECT int4range(1,2,null);
+
+query error range constructor flags argument must not be null
+SELECT int4range(null,null,null);
+
 #
 # int4range upper, lower
 query TT
@@ -1703,6 +1709,12 @@ SELECT a AS t FROM int8range_values EXCEPT SELECT column1 FROM (VALUES
 ----
 NULL
 
+query error range constructor flags argument must not be null
+SELECT int8range(1,2,null);
+
+query error range constructor flags argument must not be null
+SELECT int8range(null,null,null);
+
 #
 # int8range upper, lower
 query TT
@@ -2836,6 +2848,12 @@ SELECT a AS t FROM daterange_values EXCEPT SELECT column1 FROM (VALUES
 ----
 NULL
 
+query error range constructor flags argument must not be null
+SELECT daterange('1970-01-01','1970-01-01',null);
+
+query error range constructor flags argument must not be null
+SELECT daterange(null,null,null);
+
 
 # Test range in list
 query T
@@ -3919,6 +3937,12 @@ SELECT a AS t FROM numrange_values EXCEPT SELECT column1 FROM (VALUES
 ) t;
 ----
 NULL
+
+query error range constructor flags argument must not be null
+SELECT numrange(1,2,null);
+
+query error range constructor flags argument must not be null
+SELECT numrange(null,null,null);
 
 #
 # numrange upper, lower
@@ -5652,6 +5676,13 @@ SELECT a AS t FROM tsrange_values EXCEPT SELECT column1 FROM (VALUES
 ----
 NULL
 
+query error range constructor flags argument must not be null
+SELECT tsrange('1970-01-01 00:00:01','1970-01-01 00:00:01',null);
+
+query error range constructor flags argument must not be null
+SELECT tsrange(null,null,null);
+
+
 #
 # tsrange upper, lower
 query TT
@@ -7371,6 +7402,12 @@ SELECT a AS t FROM tstzrange_values EXCEPT SELECT column1 FROM (VALUES
 ) t;
 ----
 NULL
+
+query error range constructor flags argument must not be null
+SELECT tstzrange('1970-01-01 00:00:01','1970-01-01 00:00:01',null);
+
+query error range constructor flags argument must not be null
+SELECT tstzrange(null,null,null);
 
 #
 # tstzrange upper, lower

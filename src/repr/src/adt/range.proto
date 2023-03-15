@@ -20,5 +20,6 @@ message ProtoInvalidRangeError {
         google.protobuf.Empty invalid_range_bound_flags = 3;
         google.protobuf.Empty discontiguous_union = 4;
         google.protobuf.Empty discontiguous_difference = 5;
+        google.protobuf.Empty null_range_bound_flags = 6;
     }
 }
