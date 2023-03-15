@@ -23,7 +23,6 @@ steps:
           - { value: redpanda-testdrive }
 #         - { value: redpanda-testdrive-aarch64 }
           - { value: limits }
-          - { value: cluster-limits }
           - { value: limits-instance-size }
           - { value: testdrive-partitions-5 }
           - { value: testdrive-replicas-4}
@@ -152,17 +151,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: limits
-    timeout_in_minutes: 50
-
-  - id: cluster-limits
-    label: "Cluster Product limits"
-    agents:
-      queue: linux-x86_64
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: limits
-          run: cluster
     timeout_in_minutes: 50
 
   - id: limits-instance-size
@@ -341,7 +329,6 @@ steps:
 
   - id: checks-restart-cockroach
     label: "Checks + restart Cockroach"
-    depends_on: build-x86_64
     timeout_in_minutes: 60
     artifact_paths: junit_*.xml
     agents:
