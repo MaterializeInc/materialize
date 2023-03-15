@@ -88,17 +88,17 @@ class KafkaTransactionLogGreaterThan1:
                 """
                 > CREATE CONNECTION kafka_conn
                   TO KAFKA (BROKER '${testdrive.kafka-addr}');
-               
+
                 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
                     URL '${testdrive.schema-registry-url}'
                   );
-               
+
                 > CREATE TABLE sink_table (f1 INTEGER);
-               
+
                 > INSERT INTO sink_table VALUES (1);
 
                 > INSERT INTO sink_table VALUES (2);
-               
+
                 > CREATE SINK kafka_sink FROM sink_table
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
