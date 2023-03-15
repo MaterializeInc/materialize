@@ -5928,8 +5928,16 @@ fn create_range<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
-    let (lower_inclusive, upper_inclusive) =
-        range::parse_range_bound_flags(datums[2].unwrap_str())?;
+    let flags = match datums[2] {
+        Datum::Null => {
+            return Err(EvalError::InvalidRange(
+                range::InvalidRangeError::NullRangeBoundFlags,
+            ));
+        }
+        o => o.unwrap_str(),
+    };
+
+    let (lower_inclusive, upper_inclusive) = range::parse_range_bound_flags(flags)?;
 
     let mut range = Range::new(Some((
         RangeBound::new(datums[0], lower_inclusive),
