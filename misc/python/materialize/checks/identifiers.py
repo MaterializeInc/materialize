@@ -82,6 +82,7 @@ class Identifiers(Check):
             "sink1": "16",
             "sink2": "17",
             "alias": "18",
+            "role": "19",
         },
         # Disabled because of timeouts, revisit if we want to accept longer runtime
         # {
@@ -105,6 +106,7 @@ class Identifiers(Check):
         #     "sink1": "16.0",
         #     "sink2": "17.0",
         #     "alias": "18.0",
+        #     "role": "19.0",
         # },
         {
             "db": "\u0001\u0002\u0003\u0004\u0005\u0006\u0007\b\u000e\u000f\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001a\u001b\u001c\u001d\u001e\u001f^?",
@@ -127,6 +129,7 @@ class Identifiers(Check):
             "sink1": "￾",
             "sink2": "﻿",
             "alias": "₀₁₂",
+            "role": "⁰⁴⁵₀₁₂",
         },
         {
             "db": "찦차를 타고 온 펲시맨과 쑛다리 똠방각하",
@@ -149,6 +152,7 @@ class Identifiers(Check):
             "sink1": "Ⱦ",
             "sink2": "｀ｨ(´∀｀∩",
             "alias": "⅛⅜⅝⅞",
+            "role": "ЁЂЃЄЅІЇЈЉЊЋЌЍЎЏАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдежзийклмнопрстуфхцчшщъыьэюя",
         },
         # Disabled because of timeouts, revisit if we want to accept longer runtime
         # {
@@ -194,6 +198,7 @@ class Identifiers(Check):
         #     "sink1": "⁦test⁧",
         #     "sink2": "‪‪᚛                 ᚜‪",
         #     "alias": "0xabad1dea",
+        #     "role": "0xffffffffffffffff",
         # },
     ]
 
@@ -202,6 +207,7 @@ class Identifiers(Check):
             [
                 f"""
             > SET cluster=identifiers;
+            > CREATE ROLE {dq(ident["role"])};
             > CREATE DATABASE {dq(ident["db"])};
             > SET DATABASE={dq(ident["db"])};
             > CREATE SCHEMA {dq(ident["schema"])};
@@ -270,6 +276,9 @@ class Identifiers(Check):
         for ident in self.IDENTS:
             cmds += f"""
 > SET DATABASE={dq(ident["db"])};
+
+> SELECT name FROM mz_roles WHERE name LIKE {sq(ident["role"])}
+{dq_print(ident["role"])}
 
 > SHOW TYPES;
 {dq_print(ident["type"])}
