@@ -20,7 +20,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_persist::cfg::{BlobKnobs, ConsensusKnobs};
 use mz_persist::retry::Retry;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -267,6 +267,9 @@ pub struct DynamicConfig {
     consensus_connect_timeout: RwLock<Duration>,
     sink_minimum_batch_updates: AtomicUsize,
 
+    // NB: These parameters are not atomically updated together in LD.
+    // We put them under a single RwLock to reduce the cost of reads
+    // and to logically group them together.
     next_listen_batch_retryer: RwLock<RetryParameters>,
 
     // TODO: Figure out how to make these dynamic.
@@ -306,24 +309,14 @@ impl RustType<ProtoRetryParameters> for RetryParameters {
     }
 
     fn from_proto(proto: ProtoRetryParameters) -> Result<Self, TryFromProtoError> {
-        let initial_backoff: Option<Duration> = proto.initial_backoff.into_rust()?;
-        let clamp: Option<Duration> = proto.clamp.into_rust()?;
-
-        let Some(initial_backoff) = initial_backoff else {
-            return Err(TryFromProtoError::MissingField(
-                "ProtoRetryParameters should always set initial_backoff".to_string(),
-            ));
-        };
-        let Some(clamp)= clamp else {
-            return Err(TryFromProtoError::MissingField(
-                "ProtoRetryParameters should always set clamp".to_string(),
-            ));
-        };
-
         Ok(Self {
-            initial_backoff,
+            initial_backoff: proto
+                .initial_backoff
+                .into_rust_if_some("ProtoRetryParameters::initial_backoff")?,
             multiplier: proto.multiplier.into_rust()?,
-            clamp,
+            clamp: proto
+                .clamp
+                .into_rust_if_some("ProtoRetryParameters::clamp")?,
         })
     }
 }
