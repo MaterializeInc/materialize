@@ -24,7 +24,7 @@ use mz_controller::ControllerResponse;
 use mz_ore::now::EpochMillis;
 use mz_ore::task;
 use mz_sql::ast::Statement;
-use mz_sql::plan::{Plan, SendDiffsPlan};
+use mz_sql::plan::Plan;
 use mz_storage_client::controller::CollectionMetadata;
 
 use crate::client::ConnectionId;
@@ -33,7 +33,7 @@ use crate::coord::appends::{BuiltinTableUpdateSource, Deferred};
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
     Coordinator, CreateSourceStatementReady, Message, PendingReadTxn, RealTimeRecencyContext,
-    SendDiffs, SinkConnectionReady,
+    SinkConnectionReady,
 };
 use crate::util::ResultExt;
 use crate::{catalog, AdapterError, AdapterNotice};
@@ -59,7 +59,6 @@ impl Coordinator {
             Message::WriteLockGrant(write_lock_guard) => {
                 self.message_write_lock_grant(write_lock_guard).await;
             }
-            Message::SendDiffs(diffs) => self.message_send_diffs(diffs),
             Message::GroupCommitInitiate => {
                 self.try_group_commit().await;
             }
@@ -552,40 +551,6 @@ impl Coordinator {
         }
         // N.B. if no deferred plans, write lock is released by drop
         // here.
-    }
-
-    #[tracing::instrument(level = "debug", skip_all, fields(id, kind))]
-    fn message_send_diffs(
-        &mut self,
-        SendDiffs {
-            mut session,
-            tx,
-            id,
-            diffs,
-            kind,
-            returning,
-        }: SendDiffs,
-    ) {
-        event!(Level::TRACE, diffs = format!("{:?}", diffs));
-        match diffs {
-            Ok(diffs) => {
-                tx.send(
-                    self.sequence_send_diffs(
-                        &mut session,
-                        SendDiffsPlan {
-                            id,
-                            updates: diffs,
-                            kind,
-                            returning,
-                        },
-                    ),
-                    session,
-                );
-            }
-            Err(e) => {
-                tx.send(Err(e), session);
-            }
-        }
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
