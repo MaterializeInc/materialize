@@ -1417,3 +1417,18 @@ query T
 SELECT CONCAT('a'::text, 'b'::char(3), 'c');
 ----
 ab  c
+
+# Regression for https://github.com/MaterializeInc/materialize/issues/18095
+
+statement ok
+CREATE TABLE gh18095_0(c0 VARCHAR(55))
+
+statement ok
+CREATE TABLE gh18095_1(c0 CHAR(96));
+
+statement ok
+INSERT INTO gh18095_1 VALUES('''%ꆔA?')
+
+query T
+SELECT FROM gh18095_1 JOIN gh18095_0 ON (gh18095_1.c0)LIKE((gh18095_1.c0)::VARCHAR(4));
+----
