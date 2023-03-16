@@ -100,8 +100,10 @@ use mz_ore::id_gen::IdGen;
 use mz_repr::GlobalId;
 
 pub mod attribute;
+pub mod canonicalization;
 pub mod canonicalize_mfp;
 pub mod column_knowledge;
+pub mod compound;
 pub mod cse;
 pub mod demand;
 pub mod fold_constants;
@@ -110,12 +112,13 @@ pub mod join_implementation;
 pub mod literal_constraints;
 pub mod literal_lifting;
 pub mod monotonic;
+pub mod movement;
 pub mod nonnull_requirements;
 pub mod nonnullable;
-pub mod normalize;
 pub mod normalize_lets;
+pub mod normalize_ops;
+pub mod ordering;
 pub mod predicate_pushdown;
-pub mod projection_extraction;
 pub mod projection_lifting;
 pub mod projection_pushdown;
 pub mod reduce_elision;
@@ -123,7 +126,6 @@ pub mod reduction_pushdown;
 pub mod redundant_join;
 pub mod semijoin_idempotence;
 pub mod threshold_elision;
-pub mod topk_elision;
 pub mod union_cancel;
 
 pub mod dataflow;
@@ -223,6 +225,7 @@ impl IndexOracle for EmptyIndexOracle {
 /// A sequence of transformations iterated some number of times.
 #[derive(Debug)]
 pub struct Fixpoint {
+    name: &'static str,
     transforms: Vec<Box<dyn crate::Transform>>,
     limit: usize,
 }
@@ -236,7 +239,7 @@ impl Transform for Fixpoint {
         target = "optimizer"
         level = "trace",
         skip_all,
-        fields(path.segment = "fixpoint")
+        fields(path.segment = self.name)
     )]
     fn transform(
         &self,
@@ -322,14 +325,14 @@ impl Default for FuseAndCollapse {
             // TODO (#6542): All the transforms here except for `ProjectionLifting`
             //  and `RedundantJoin` can be implemented as free functions.
             transforms: vec![
-                Box::new(crate::projection_extraction::ProjectionExtraction),
+                Box::new(crate::canonicalization::ProjectionExtraction),
                 Box::new(crate::projection_lifting::ProjectionLifting::default()),
                 Box::new(crate::fusion::Fusion),
-                Box::new(crate::fusion::flatmap_to_map::FlatMapToMap),
+                Box::new(crate::canonicalization::FlatMapToMap),
                 Box::new(crate::fusion::join::Join),
                 Box::new(crate::normalize_lets::NormalizeLets::new(false)),
                 Box::new(crate::fusion::reduce::Reduce),
-                Box::new(crate::fusion::union::UnionNegate),
+                Box::new(crate::compound::UnionNegateFusion),
                 // This goes after union fusion so we can cancel out
                 // more branches at a time.
                 Box::new(crate::union_cancel::UnionBranchCancellation),
@@ -380,6 +383,26 @@ impl Transform for FuseAndCollapse {
     }
 }
 
+/// Construct a normalizing transform that runs transforms that normalize the
+/// structure of the tree until a fixpoint.
+///
+/// All actions that run here should strictly reduce the size of the tree, so
+/// one can argue with reasonable confidence that the fixpoint will always exist
+/// (in other words, there is no way to end up oscillating between trees).
+pub fn normalize() -> crate::Fixpoint {
+    crate::Fixpoint {
+        name: "normalize",
+        limit: 100,
+        transforms: vec![
+            Box::new(crate::normalize_lets::NormalizeLets::new(false)),
+            Box::new(crate::normalize_ops::NormalizeOps),
+            Box::new(crate::fusion::reduce::Reduce), // TODO: remove
+            Box::new(crate::compound::UnionNegateFusion), // TODO: remove
+            Box::new(crate::projection_lifting::ProjectionLifting::default()),
+        ],
+    }
+}
+
 /// A naive optimizer for relation expressions.
 ///
 /// The optimizer currently applies only peep-hole optimizations, from a limited
@@ -398,40 +421,66 @@ impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
     pub fn logical_optimizer() -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
-            Box::new(crate::normalize::Normalize::new()),
-            // 1. Structure-agnostic cleanup
-            Box::new(crate::topk_elision::TopKElision),
+            // Plan preparation
+            // - Enrich with derived predicates. This might enable FoldConstants
+            //   For example: NonNullRequirements converts `{ (null) }` to `{}`
             Box::new(crate::nonnull_requirements::NonNullRequirements::default()),
-            // 2. Collapse constants, joins, unions, and lets as much as possible.
-            // TODO: lift filters/maps to maximize ability to collapse
-            // things down?
+            // - Normalize input
+            Box::new(normalize()),
+            Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
+            // 2. Structural simplifications
             Box::new(crate::Fixpoint {
+                name: "remove_branches",
                 limit: 100,
-                transforms: vec![Box::new(crate::FuseAndCollapse::default())],
+                transforms: vec![
+                    // Remove Union branches that cancel each other.
+                    // This goes after union fusion so we can cancel out
+                    // more branches at a time.
+                    Box::new(crate::union_cancel::UnionBranchCancellation),
+                    // Removes redundant inputs from joins.
+                    // Note that this eliminates one redundant input per join,
+                    // so it is necessary to run this section in a loop.
+                    // TODO: (#6748) Predicate pushdown unlocks the ability to
+                    // remove some redundant joins but also prevents other
+                    // redundant joins from being removed. When predicate pushdown
+                    // no longer works against redundant join, check if it is still
+                    // necessary to run RedundantJoin here.
+                    Box::new(crate::redundant_join::RedundantJoin::default()),
+                    // Remove Threshold operators that have no effect.
+                    Box::new(crate::threshold_elision::ThresholdElision),
+                    // Normalize input (do we need this?)
+                    Box::new(normalize()),
+                    Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
+                ],
             }),
-            // 3. Structure-aware cleanup that needs to happen before ColumnKnowledge
-            Box::new(crate::threshold_elision::ThresholdElision),
             // 4. Move predicate information up and down the tree.
             //    This also fixes the shape of joins in the plan.
             Box::new(crate::Fixpoint {
+                name: "predicates",
                 limit: 100,
                 transforms: vec![
-                    // Predicate pushdown sets the equivalence classes of joins.
-                    Box::new(crate::predicate_pushdown::PredicatePushdown::default()),
-                    // Lifts the information `!isnull(col)`
-                    Box::new(crate::nonnullable::NonNullable),
-                    // Lifts the information `col = literal`
+                    // Lifts the information `col = literal`.
+                    // This might enable more PredicatePushdown cases so it's important
+                    // it runs first, as the two don't commute.
                     // TODO (#6613): this also tries to lift `!isnull(col)` but
                     // less well than the previous transform. Eliminate
                     // redundancy between the two transforms.
                     Box::new(crate::column_knowledge::ColumnKnowledge::default()),
+                    // Lifts the information `!isnull(col)`
+                    Box::new(crate::nonnullable::NonNullable),
+                    // Predicate pushdown sets the equivalence classes of joins.
+                    Box::new(crate::predicate_pushdown::PredicatePushdown::default()),
                     // Lifts the information `col1 = col2`
+                    // TODO (#17546): not sure whether the above statement is accurate.
+                    // We want to remove Demand either way (#14605) so in theory this
+                    // should not be contributing valuable information.
                     Box::new(crate::demand::Demand::default()),
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
             }),
             // 5. Reduce/Join simplifications.
             Box::new(crate::Fixpoint {
+                name: "join_and_reduce",
                 limit: 100,
                 transforms: vec![
                     Box::new(crate::semijoin_idempotence::SemijoinIdempotence),
@@ -485,6 +534,7 @@ impl Optimizer {
             //             - ()
             Box::new(crate::literal_constraints::LiteralConstraints),
             Box::new(crate::Fixpoint {
+                name: "fixpoint",
                 limit: 100,
                 transforms: vec![
                     Box::new(crate::join_implementation::JoinImplementation::default()),
@@ -519,6 +569,7 @@ impl Optimizer {
             // Delete unnecessary maps.
             Box::new(crate::fusion::Fusion),
             Box::new(crate::Fixpoint {
+                name: "fixpoint",
                 limit: 100,
                 transforms: vec![
                     Box::new(crate::canonicalize_mfp::CanonicalizeMfp),
@@ -529,7 +580,7 @@ impl Optimizer {
                     Box::new(crate::redundant_join::RedundantJoin::default()),
                     // Redundant join produces projects that need to be fused.
                     Box::new(crate::fusion::Fusion),
-                    Box::new(crate::fusion::union::UnionNegate),
+                    Box::new(crate::compound::UnionNegateFusion),
                     // This goes after union fusion so we can cancel out
                     // more branches at a time.
                     Box::new(crate::union_cancel::UnionBranchCancellation),

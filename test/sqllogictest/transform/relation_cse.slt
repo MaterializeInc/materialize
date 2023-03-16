@@ -755,18 +755,18 @@ Explained Query:
         %1:l2 » %0:l1[×]Ae » %2:l1[×]Ae » %3:l2[×]Ae
         %2:l1 » %0:l1[×]Ae » %1:l2[×]Ae » %3:l2[×]Ae
         %3:l2 » %0:l1[×]Ae » %1:l2[×]Ae » %2:l1[×]Ae
-      Get l1 // { arity: 0 }
-      Get l2 // { arity: 1 }
-      Get l1 // { arity: 0 }
-      Get l2 // { arity: 1 }
+      Get l1 // { arity: 1 }
+      Get l2 // { arity: 0 }
+      Get l1 // { arity: 1 }
+      Get l2 // { arity: 0 }
   With
     cte l2 =
-      ArrangeBy keys=[[]] // { arity: 1 }
-        Project (#0) // { arity: 1 }
-          Get l0 // { arity: 3 }
-    cte l1 =
       ArrangeBy keys=[[]] // { arity: 0 }
         Project () // { arity: 0 }
+          Get l0 // { arity: 3 }
+    cte l1 =
+      ArrangeBy keys=[[]] // { arity: 1 }
+        Project (#0) // { arity: 1 }
           Get l0 // { arity: 3 }
     cte l0 =
       ReadExistingIndex materialize.public.t1 lookup_value=(1)
@@ -791,17 +791,17 @@ Explained Query:
         %1:l1 » %0:l1[×]Ae » %2:l2[×]Ae » %3:l2[×]Ae
         %2:l2 » %0:l1[×]Ae » %1:l1[×]Ae » %3:l2[×]Ae
         %3:l2 » %0:l1[×]Ae » %1:l1[×]Ae » %2:l2[×]Ae
-      ArrangeBy keys=[[]] // { arity: 0 }
-        Project () // { arity: 0 }
-          Get l1 // { arity: 3 }
       ArrangeBy keys=[[]] // { arity: 1 }
         Project (#0) // { arity: 1 }
           Get l1 // { arity: 3 }
       ArrangeBy keys=[[]] // { arity: 0 }
         Project () // { arity: 0 }
+          Get l1 // { arity: 3 }
+      ArrangeBy keys=[[]] // { arity: 1 }
+        Project (#0) // { arity: 1 }
           Get l2 // { arity: 3 }
-      ArrangeBy keys=[[]] // { arity: 1 }
-        Project (#0) // { arity: 1 }
+      ArrangeBy keys=[[]] // { arity: 0 }
+        Project () // { arity: 0 }
           Get l2 // { arity: 3 }
   With
     cte l2 =

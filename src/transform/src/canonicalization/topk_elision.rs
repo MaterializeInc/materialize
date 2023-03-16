@@ -29,15 +29,15 @@ impl crate::Transform for TopKElision {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        let result = relation.try_visit_mut_post(&mut |e| self.action(e));
+        relation.visit_mut_post(&mut Self::action)?;
         mz_repr::explain::trace_plan(&*relation);
-        result
+        Ok(())
     }
 }
 
 impl TopKElision {
     /// Remove TopK operators with both an offset of zero and no limit.
-    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
+    pub fn action(relation: &mut MirRelationExpr) {
         if let MirRelationExpr::TopK {
             input,
             group_key: _,
@@ -53,6 +53,5 @@ impl TopKElision {
                 relation.take_safely();
             }
         }
-        Ok(())
     }
 }
