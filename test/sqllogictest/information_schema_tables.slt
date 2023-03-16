@@ -244,8 +244,12 @@ mz_compute_import_frontiers
 VIEW
 materialize
 mz_internal
-mz_compute_operator_durations
+mz_compute_operator_durations_histogram
 VIEW
+materialize
+mz_internal
+mz_compute_operator_durations_histogram_internal
+SOURCE
 materialize
 mz_internal
 mz_dataflow_addresses
@@ -300,28 +304,16 @@ mz_object_dependencies
 BASE TABLE
 materialize
 mz_internal
-mz_peek_durations
+mz_peek_durations_histogram
 VIEW
+materialize
+mz_internal
+mz_peek_durations_histogram_internal
+SOURCE
 materialize
 mz_internal
 mz_postgres_sources
 BASE TABLE
-materialize
-mz_internal
-mz_raw_compute_operator_durations
-VIEW
-materialize
-mz_internal
-mz_raw_compute_operator_durations_internal
-SOURCE
-materialize
-mz_internal
-mz_raw_peek_durations
-SOURCE
-materialize
-mz_internal
-mz_raw_worker_compute_delays
-SOURCE
 materialize
 mz_internal
 mz_records_per_dataflow
@@ -344,11 +336,11 @@ mz_scheduling_elapsed_internal
 SOURCE
 materialize
 mz_internal
-mz_scheduling_parks
+mz_scheduling_parks_histogram
 VIEW
 materialize
 mz_internal
-mz_scheduling_parks_internal
+mz_scheduling_parks_histogram_internal
 SOURCE
 materialize
 mz_internal
@@ -408,8 +400,12 @@ mz_view_keys
 BASE TABLE
 materialize
 mz_internal
-mz_worker_compute_delays
+mz_worker_compute_delays_histogram
 VIEW
+materialize
+mz_internal
+mz_worker_compute_delays_histogram_internal
+SOURCE
 materialize
 mz_internal
 mz_worker_compute_dependencies

@@ -1206,14 +1206,14 @@ pub const MZ_SCHEDULING_ELAPSED_INTERNAL: BuiltinLog = BuiltinLog {
     variant: LogVariant::Timely(TimelyLog::Elapsed),
 };
 
-pub const MZ_RAW_COMPUTE_OPERATOR_DURATIONS_INTERNAL: BuiltinLog = BuiltinLog {
-    name: "mz_raw_compute_operator_durations_internal",
+pub const MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_INTERNAL: BuiltinLog = BuiltinLog {
+    name: "mz_compute_operator_durations_histogram_internal",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Histogram),
 };
 
-pub const MZ_SCHEDULING_PARKS_INTERNAL: BuiltinLog = BuiltinLog {
-    name: "mz_scheduling_parks_internal",
+pub const MZ_SCHEDULING_PARKS_HISTOGRAM_INTERNAL: BuiltinLog = BuiltinLog {
+    name: "mz_scheduling_parks_histogram_internal",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Parks),
 };
@@ -1254,8 +1254,8 @@ pub const MZ_WORKER_COMPUTE_IMPORT_FRONTIERS: BuiltinLog = BuiltinLog {
     variant: LogVariant::Compute(ComputeLog::ImportFrontierCurrent),
 };
 
-pub const MZ_RAW_WORKER_COMPUTE_DELAYS: BuiltinLog = BuiltinLog {
-    name: "mz_raw_worker_compute_delays",
+pub const MZ_WORKER_COMPUTE_DELAYS_HISTOGRAM_INTERNAL: BuiltinLog = BuiltinLog {
+    name: "mz_worker_compute_delays_histogram_internal",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::FrontierDelay),
 };
@@ -1266,8 +1266,8 @@ pub const MZ_ACTIVE_PEEKS: BuiltinLog = BuiltinLog {
     variant: LogVariant::Compute(ComputeLog::PeekCurrent),
 };
 
-pub const MZ_RAW_PEEK_DURATIONS: BuiltinLog = BuiltinLog {
-    name: "mz_raw_peek_durations",
+pub const MZ_PEEK_DURATIONS_HISTOGRAM_INTERNAL: BuiltinLog = BuiltinLog {
+    name: "mz_peek_durations_histogram_internal",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::PeekDuration),
 };
@@ -2384,6 +2384,17 @@ pub const PG_AUTH_MEMBERS: BuiltinView = BuiltinView {
 WHERE false",
 };
 
+pub const MZ_PEEK_DURATIONS_HISTOGRAM: BuiltinView = BuiltinView {
+    name: "mz_peek_durations_histogram",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_peek_durations_histogram AS SELECT
+    worker_id, duration_ns, pg_catalog.count(*) AS count
+FROM
+    mz_internal.mz_peek_durations_histogram_internal
+GROUP BY
+    worker_id, duration_ns",
+};
+
 pub const MZ_SCHEDULING_ELAPSED: BuiltinView = BuiltinView {
     name: "mz_scheduling_elapsed",
     schema: MZ_INTERNAL_SCHEMA,
@@ -2395,59 +2406,37 @@ GROUP BY
     id, worker_id",
 };
 
-pub const MZ_RAW_COMPUTE_OPERATOR_DURATIONS: BuiltinView = BuiltinView {
-    name: "mz_raw_compute_operator_durations",
+pub const MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM: BuiltinView = BuiltinView {
+    name: "mz_compute_operator_durations_histogram",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_raw_compute_operator_durations AS SELECT
+    sql: "CREATE VIEW mz_internal.mz_compute_operator_durations_histogram AS SELECT
     id, worker_id, duration_ns, pg_catalog.count(*) AS count
 FROM
-    mz_internal.mz_raw_compute_operator_durations_internal
+    mz_internal.mz_compute_operator_durations_histogram_internal
 GROUP BY
     id, worker_id, duration_ns",
 };
 
-pub const MZ_COMPUTE_OPERATOR_DURATIONS: BuiltinView = BuiltinView {
-    name: "mz_compute_operator_durations",
+pub const MZ_SCHEDULING_PARKS_HISTOGRAM: BuiltinView = BuiltinView {
+    name: "mz_scheduling_parks_histogram",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_compute_operator_durations AS SELECT
-    id,
-    worker_id,
-    duration_ns/1000 * '1 microsecond'::interval AS duration,
-    count
-FROM mz_internal.mz_raw_compute_operator_durations",
-};
-
-pub const MZ_WORKER_COMPUTE_DELAYS: BuiltinView = BuiltinView {
-    name: "mz_worker_compute_delays",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_worker_compute_delays AS SELECT
-    export_id,
-    import_id,
-    worker_id,
-    delay_ns/1000 * '1 microsecond'::interval AS delay,
-    count
-FROM mz_internal.mz_raw_worker_compute_delays",
-};
-
-pub const MZ_PEEK_DURATIONS: BuiltinView = BuiltinView {
-    name: "mz_peek_durations",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_peek_durations AS SELECT
-    worker_id,
-    duration_ns/1000 * '1 microsecond'::interval AS duration,
-    count
-FROM mz_internal.mz_raw_peek_durations",
-};
-
-pub const MZ_SCHEDULING_PARKS: BuiltinView = BuiltinView {
-    name: "mz_scheduling_parks",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_scheduling_parks AS SELECT
-    worker_id, slept_for, requested, pg_catalog.count(*) AS count
+    sql: "CREATE VIEW mz_internal.mz_scheduling_parks_histogram AS SELECT
+    worker_id, slept_for_ns, requested_ns, pg_catalog.count(*) AS count
 FROM
-    mz_internal.mz_scheduling_parks_internal
+    mz_internal.mz_scheduling_parks_histogram_internal
 GROUP BY
-    worker_id, slept_for, requested",
+    worker_id, slept_for_ns, requested_ns",
+};
+
+pub const MZ_WORKER_COMPUTE_DELAYS_HISTOGRAM: BuiltinView = BuiltinView {
+    name: "mz_worker_compute_delays_histogram",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_worker_compute_delays_histogram AS SELECT
+    export_id, import_id, worker_id, delay_ns, pg_catalog.count(*) AS count
+FROM
+    mz_internal.mz_worker_compute_delays_histogram_internal
+GROUP BY
+    export_id, import_id, worker_id, delay_ns",
 };
 
 pub const MZ_MESSAGE_COUNTS: BuiltinView = BuiltinView {
@@ -3170,13 +3159,13 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL),
         Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_INTERNAL),
         Builtin::Log(&MZ_ACTIVE_PEEKS),
-        Builtin::Log(&MZ_RAW_PEEK_DURATIONS),
+        Builtin::Log(&MZ_PEEK_DURATIONS_HISTOGRAM_INTERNAL),
         Builtin::Log(&MZ_SCHEDULING_ELAPSED_INTERNAL),
-        Builtin::Log(&MZ_RAW_COMPUTE_OPERATOR_DURATIONS_INTERNAL),
-        Builtin::Log(&MZ_SCHEDULING_PARKS_INTERNAL),
+        Builtin::Log(&MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_INTERNAL),
+        Builtin::Log(&MZ_SCHEDULING_PARKS_HISTOGRAM_INTERNAL),
         Builtin::Log(&MZ_WORKER_COMPUTE_FRONTIERS),
         Builtin::Log(&MZ_WORKER_COMPUTE_IMPORT_FRONTIERS),
-        Builtin::Log(&MZ_RAW_WORKER_COMPUTE_DELAYS),
+        Builtin::Log(&MZ_WORKER_COMPUTE_DELAYS_HISTOGRAM_INTERNAL),
         Builtin::Table(&MZ_VIEW_KEYS),
         Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
         Builtin::Table(&MZ_KAFKA_SINKS),
@@ -3232,15 +3221,14 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_DATAFLOW_CHANNEL_OPERATORS),
         Builtin::View(&MZ_COMPUTE_IMPORT_FRONTIERS),
         Builtin::View(&MZ_MESSAGE_COUNTS),
-        Builtin::View(&MZ_RAW_COMPUTE_OPERATOR_DURATIONS),
-        Builtin::View(&MZ_COMPUTE_OPERATOR_DURATIONS),
-        Builtin::View(&MZ_WORKER_COMPUTE_DELAYS),
-        Builtin::View(&MZ_PEEK_DURATIONS),
+        Builtin::View(&MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM),
         Builtin::View(&MZ_RECORDS_PER_DATAFLOW_OPERATOR),
         Builtin::View(&MZ_RECORDS_PER_DATAFLOW),
         Builtin::View(&MZ_RECORDS_PER_DATAFLOW_GLOBAL),
+        Builtin::View(&MZ_PEEK_DURATIONS_HISTOGRAM),
         Builtin::View(&MZ_SCHEDULING_ELAPSED),
-        Builtin::View(&MZ_SCHEDULING_PARKS),
+        Builtin::View(&MZ_SCHEDULING_PARKS_HISTOGRAM),
+        Builtin::View(&MZ_WORKER_COMPUTE_DELAYS_HISTOGRAM),
         Builtin::View(&MZ_SHOW_MATERIALIZED_VIEWS),
         Builtin::View(&MZ_SHOW_INDEXES),
         Builtin::View(&MZ_SHOW_CLUSTER_REPLICAS),

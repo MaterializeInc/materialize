@@ -504,30 +504,30 @@ SELECT ${arg.replicas} > 1;
 > SHOW SOURCES FROM mz_internal
 name                                           type   size
 ------------------------------------------------------------
-mz_arrangement_batches_internal                 log   <null>
-mz_arrangement_records_internal                 log   <null>
-mz_arrangement_sharing_internal                 log   <null>
-mz_dataflow_channels                            log   <null>
-mz_dataflow_addresses                           log   <null>
-mz_dataflow_operator_reachability_internal      log   <null>
-mz_dataflow_operators                           log   <null>
-mz_worker_compute_dependencies                  log   <null>
-mz_compute_exports                              log   <null>
-mz_message_counts_received_internal             log   <null>
-mz_message_counts_sent_internal                 log   <null>
-mz_raw_peek_durations                           log   <null>
-mz_raw_worker_compute_delays                    log   <null>
-mz_active_peeks                                 log   <null>
-mz_scheduling_elapsed_internal                  log   <null>
-mz_raw_compute_operator_durations_internal      log   <null>
-mz_scheduling_parks_internal                    log   <null>
-mz_sink_status_history                          source <null>
-mz_source_status_history                        source <null>
-mz_source_statistics                            source <null>
-mz_sink_statistics                              source <null>
-mz_storage_shards                               source <null>
-mz_worker_compute_frontiers                     log   <null>
-mz_worker_compute_import_frontiers              log   <null>
+mz_active_peeks                                   log   <null>
+mz_arrangement_batches_internal                   log   <null>
+mz_arrangement_records_internal                   log   <null>
+mz_arrangement_sharing_internal                   log   <null>
+mz_compute_exports                                log   <null>
+mz_compute_operator_durations_histogram_internal  log   <null>
+mz_dataflow_addresses                             log   <null>
+mz_dataflow_channels                              log   <null>
+mz_dataflow_operator_reachability_internal        log   <null>
+mz_dataflow_operators                             log   <null>
+mz_message_counts_received_internal               log   <null>
+mz_message_counts_sent_internal                   log   <null>
+mz_peek_durations_histogram_internal              log   <null>
+mz_scheduling_elapsed_internal                    log   <null>
+mz_scheduling_parks_histogram_internal            log   <null>
+mz_sink_statistics                                source <null>
+mz_sink_status_history                            source <null>
+mz_source_statistics                              source <null>
+mz_source_status_history                          source <null>
+mz_storage_shards                                 source <null>
+mz_worker_compute_delays_histogram_internal       log   <null>
+mz_worker_compute_dependencies                    log   <null>
+mz_worker_compute_frontiers                       log   <null>
+mz_worker_compute_import_frontiers                log   <null>
 
 > SHOW TABLES FROM mz_internal
 name
@@ -550,29 +550,28 @@ name
 -------------------------------------
 mz_arrangement_sharing
 mz_arrangement_sizes
-mz_dataflows
+mz_cluster_replica_utilization
+mz_compute_frontiers
+mz_compute_import_frontiers
+mz_compute_operator_durations_histogram
 mz_dataflow_channel_operators
 mz_dataflow_operator_dataflows
 mz_dataflow_operator_parents
 mz_dataflow_operator_reachability
-mz_cluster_replica_utilization
-mz_compute_frontiers
-mz_compute_import_frontiers
-mz_compute_operator_durations
+mz_dataflows
 mz_message_counts
-mz_peek_durations
-mz_raw_compute_operator_durations
+mz_peek_durations_histogram
 mz_records_per_dataflow
 mz_records_per_dataflow_global
 mz_records_per_dataflow_operator
 mz_scheduling_elapsed
-mz_scheduling_parks
-mz_sink_statuses
-mz_source_statuses
-mz_worker_compute_delays
+mz_scheduling_parks_histogram
 mz_show_cluster_replicas
 mz_show_indexes
 mz_show_materialized_views
+mz_sink_statuses
+mz_source_statuses
+mz_worker_compute_delays_histogram
 
 > SET database = materialize
 
