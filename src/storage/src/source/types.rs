@@ -586,8 +586,7 @@ impl SourceReaderPartitionMetrics {
 /// Metrics about committing offsets
 pub struct OffsetCommitMetrics {
     /// The offset-domain resume_upper for a source.
-    //TODO(petrosagg): produce these metrics
-    pub(crate) _offset_commit_failures: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) offset_commit_failures: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
 
 impl OffsetCommitMetrics {
@@ -595,7 +594,7 @@ impl OffsetCommitMetrics {
     pub fn new(base_metrics: &SourceBaseMetrics, source_id: GlobalId) -> OffsetCommitMetrics {
         let base = &base_metrics.source_specific;
         OffsetCommitMetrics {
-            _offset_commit_failures: base
+            offset_commit_failures: base
                 .offset_commit_failures
                 .get_delete_on_drop_counter(vec![source_id.to_string()]),
         }

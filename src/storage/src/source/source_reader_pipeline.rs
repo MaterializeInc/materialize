@@ -322,6 +322,7 @@ where
         let data_cap = capabilities.pop().unwrap();
 
         let mut source_metrics = SourceReaderMetrics::new(&base_metrics, id);
+        let offset_commit_metrics = source_metrics.offset_commit_metrics();
 
         let source_upper = Antichain::from_iter(source_resume_upper.iter().map(R::Time::decode_row));
         info!(
@@ -383,8 +384,8 @@ where
                     frontier.pretty()
                 );
                 if let Err(e) = offset_committer.commit_offsets(frontier.clone()).await {
-                    // TODO(guswynn): stats for this error
-                    tracing::error!(
+                    offset_commit_metrics.offset_commit_failures.inc();
+                    tracing::warn!(
                         %e,
                         "timely-{worker_id} source({id}) failed to commit offsets: resume_upper={}",
                         frontier.pretty()
