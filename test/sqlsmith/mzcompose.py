@@ -35,6 +35,7 @@ SERVICES = [
 known_errors = [
     "no connection to the server",  # Expected AFTER a crash, the query before this is interesting, not the ones after
     "failed: Connection refused",  # Expected AFTER a crash, the query before this is interesting, not the ones after
+    "range constructor flags argument must not be null",  # expected after https://github.com/MaterializeInc/materialize/issues/18036 has been fixed
     "function pg_catalog.array_remove(",
     "function pg_catalog.array_cat(",
     "function mz_catalog.list_append(",
