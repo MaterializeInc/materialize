@@ -22,7 +22,6 @@ use futures::Stream;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::RuntimeExt;
 use mz_persist::location::{Blob, SeqNo};
-use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
@@ -872,11 +871,13 @@ where
             // Only sleep after the first fetch, because the first time through
             // maybe our state was just out of date.
             retry = Some(match retry.take() {
-                None => self
-                    .metrics
-                    .retries
-                    .next_listen_batch
-                    .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream()),
+                None => self.metrics.retries.next_listen_batch.stream(
+                    self.cfg
+                        .dynamic
+                        .next_listen_batch_retry_params()
+                        .into_retry(SystemTime::now())
+                        .into_retry_stream(),
+                ),
                 Some(retry) => {
                     // Wait a bit and try again. Intentionally don't ever log
                     // this at info level.
@@ -884,7 +885,8 @@ where
                     // TODO: See if we can watch for changes in Consensus to be
                     // more reactive here.
                     debug!(
-                        "next_listen_batch didn't find new data, retrying in {:?}",
+                        "{}: next_listen_batch didn't find new data, retrying in {:?}",
+                        self.reader_id,
                         retry.next_sleep()
                     );
                     let retry = retry.sleep().instrument(trace_span!("listen::sleep")).await;
