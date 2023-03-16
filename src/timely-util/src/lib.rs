@@ -94,4 +94,5 @@ pub mod order;
 pub mod panic;
 pub mod probe;
 pub mod progress;
+pub mod reduce;
 pub mod replay;
