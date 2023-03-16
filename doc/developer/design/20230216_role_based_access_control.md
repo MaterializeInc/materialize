@@ -200,7 +200,14 @@ NOTE: Since we won't support `SET ROLE` yet, these functions will all behave ide
 - `SET ROLE`
 - `RESET ROLE`
 
-### Phase 3 - Privileges
+### Phase 3 - `PUBLIC` role
+
+See [Grant](https://www.postgresql.org/docs/current/sql-grant.html) for PostgreSQL `PUBLIC` details (grep for PUBLIC).
+
+`PUBLIC` is a special keyword that is accepted anywhere a role name would be accepted. The key word PUBLIC indicates
+that the changes are to be applied to all roles, including those that might be created later.
+
+### Phase 4 - Privileges
 
 See [Privileges](https://www.postgresql.org/docs/current/ddl-priv.html) for PostgreSQL privileges.
 
@@ -365,13 +372,6 @@ We will update `DROP <object>` so that it revokes all privileges on `<object>`.
     - `Table column`
     - `TABLESPACE`
 - Adding the necessary pg views to support all role based `psql` meta-commands.
-
-### Phase 4 - `PUBLIC` role
-
-See [Grant](https://www.postgresql.org/docs/current/sql-grant.html) for PostgreSQL `PUBLIC` details (grep for PUBLIC).
-
-`PUBLIC` is a special keyword that is accepted anywhere a role name would be accepted. The key word PUBLIC indicates
-that the changes are to be applied to all roles, including those that might be created later.
 
 ### Phase 5 - Utility Commands/Syntactic Sugar (Optional)
 
