@@ -46,7 +46,7 @@ use crate::coord::ddl::CatalogTxn;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::{Coordinator, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS};
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
-use crate::util::ResultExt;
+use crate::util::{viewable_variables, ResultExt};
 use crate::AdapterError;
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
@@ -751,7 +751,7 @@ fn eval_unmaterializable_func(
             )
         }
         UnmaterializableFunc::ViewableVariables => pack_dict(
-            Coordinator::viewable_variables(state, session)
+            viewable_variables(state, session)
                 .map(|var| (var.name().to_lowercase(), var.value()))
                 .collect(),
         ),

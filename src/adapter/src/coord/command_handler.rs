@@ -24,8 +24,11 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::ScalarType;
 use mz_sql::ast::{InsertSource, Query, Raw, SetExpr, Statement};
 use mz_sql::catalog::{RoleAttributes, SessionCatalog};
-use mz_sql::plan::{CreateRolePlan, Params};
-use mz_sql::session::vars::OwnedVarInput;
+use mz_sql::plan::{
+    AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, Params, Plan,
+    TransactionType,
+};
+use mz_sql::session::vars::{EndTransactionAction, OwnedVarInput};
 
 use crate::client::ConnectionId;
 use crate::command::{
@@ -115,11 +118,16 @@ impl Coordinator {
                 id,
                 columns,
                 rows,
-                mut session,
+                session,
                 tx,
             } => {
-                let result = self.sequence_copy_rows(&mut session, id, columns, rows);
-                let _ = tx.send(Response { result, session });
+                self.sequence_plan(
+                    ClientTransmitter::new(tx, self.internal_cmd_tx.clone()),
+                    session,
+                    Plan::CopyRows(CopyRowsPlan { id, columns, rows }),
+                    Vec::new(),
+                )
+                .await;
             }
 
             Command::GetSystemVars { session, tx } => {
@@ -174,7 +182,19 @@ impl Coordinator {
                 tx,
             } => {
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                self.sequence_end_transaction(tx, session, action);
+                let plan = match action {
+                    EndTransactionAction::Commit => {
+                        Plan::CommitTransaction(CommitTransactionPlan {
+                            transaction_type: TransactionType::Implicit,
+                        })
+                    }
+                    EndTransactionAction::Rollback => {
+                        Plan::AbortTransaction(AbortTransactionPlan {
+                            transaction_type: TransactionType::Implicit,
+                        })
+                    }
+                };
+                self.sequence_plan(tx, session, plan, Vec::new()).await;
             }
 
             Command::VerifyPreparedStatement {
@@ -210,7 +230,7 @@ impl Coordinator {
                 name: session.user().name.to_string(),
                 attributes,
             };
-            if let Err(err) = self.sequence_create_role(&session, plan).await {
+            if let Err(err) = self.sequence_create_role_for_startup(&session, plan).await {
                 let _ = tx.send(Response {
                     result: Err(err),
                     session,

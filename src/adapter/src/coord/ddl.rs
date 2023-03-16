@@ -21,7 +21,7 @@ use tracing::{event, warn};
 
 use mz_audit_log::VersionedEvent;
 use mz_compute_client::protocol::response::PeekResponse;
-use mz_controller::clusters::ClusterId;
+use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
@@ -37,7 +37,7 @@ use crate::catalog::{
 };
 use crate::client::ConnectionId;
 use crate::coord::appends::BuiltinTableUpdateSource;
-use crate::coord::Coordinator;
+use crate::coord::{Coordinator, ReplicaMetadata};
 use crate::session::Session;
 use crate::telemetry::SegmentClientExt;
 use crate::util::{ComputeSinkId, ResultExt};
@@ -474,6 +474,44 @@ impl Coordinator {
         }
 
         Ok(result)
+    }
+
+    async fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
+        if let Some(Some(ReplicaMetadata {
+            last_heartbeat,
+            metrics,
+            write_frontiers,
+        })) = self.transient_replica_metadata.insert(replica_id, None)
+        {
+            let mut updates = vec![];
+            if let Some(last_heartbeat) = last_heartbeat {
+                let retraction = self.catalog.state().pack_replica_heartbeat_update(
+                    replica_id,
+                    last_heartbeat,
+                    -1,
+                );
+                updates.push(retraction);
+            }
+            if let Some(metrics) = metrics {
+                let retraction = self
+                    .catalog
+                    .state()
+                    .pack_replica_metric_updates(replica_id, &metrics, -1);
+                updates.extend(retraction.into_iter());
+            }
+            let retraction = self.catalog.state().pack_replica_write_frontiers_updates(
+                replica_id,
+                &write_frontiers,
+                -1,
+            );
+            updates.extend(retraction.into_iter());
+            self.send_builtin_table_updates(updates, BuiltinTableUpdateSource::Background)
+                .await;
+        }
+        self.controller
+            .drop_replica(cluster_id, replica_id)
+            .await
+            .expect("dropping replica must not fail");
     }
 
     fn drop_sources(&mut self, sources: Vec<GlobalId>) {
