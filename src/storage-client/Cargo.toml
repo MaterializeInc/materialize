@@ -46,6 +46,7 @@ prometheus = { version = "0.13.3", default-features = false }
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git", features = ["boxed_union"]}
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
+ref-cast = "1"
 regex = { version = "1.7.0" }
 serde = { version = "1.0.152", features = ["derive"] }
 thiserror = "1.0.37"

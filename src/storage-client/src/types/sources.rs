@@ -26,6 +26,7 @@ use once_cell::sync::Lazy;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
+use ref_cast::RefCast;
 use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::{Antichain, AntichainRef};
@@ -2460,8 +2461,15 @@ impl RustType<ProtoTestScriptSourceConnection> for TestScriptSourceConnection {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, RefCast)]
+#[repr(transparent)]
 pub struct SourceData(pub Result<Row, DataflowError>);
+
+impl SourceData {
+    pub fn from_ref<'a>(inner: &'a Result<Row, DataflowError>) -> &'a Self {
+        Self::ref_cast(inner)
+    }
+}
 
 impl Deref for SourceData {
     type Target = Result<Row, DataflowError>;
