@@ -10,7 +10,6 @@
 //! Logic for  processing client [`Command`]s. Each [`Command`] is initiated by a
 //! client via some external Materialize API (ex: HTTP and psql).
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -482,10 +481,8 @@ impl Coordinator {
                     let database = catalog.database;
                     let search_path = catalog.search_path;
                     let role_id = catalog.role_id;
-                    let prepared_statements = catalog
-                        .prepared_statements
-                        .clone()
-                        .map(|s| Cow::Owned(s.into_owned()));
+
+                    let raw_prepared_statements = catalog.prepared_statements.map(|s| s.clone());
 
                     async move {
                         let catalog = ConnCatalog {
@@ -495,7 +492,7 @@ impl Coordinator {
                             database,
                             search_path,
                             role_id,
-                            prepared_statements,
+                            prepared_statements: raw_prepared_statements.as_ref(),
                         };
                         let purify_fut = mz_sql::pure::purify_create_source(
                             &catalog,

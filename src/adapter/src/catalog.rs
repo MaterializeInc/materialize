@@ -1294,7 +1294,7 @@ pub struct ConnCatalog<'a> {
     pub(crate) database: Option<DatabaseId>,
     pub(crate) search_path: Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
     pub(crate) role_id: RoleId,
-    pub(crate) prepared_statements: Option<Cow<'a, BTreeMap<String, PreparedStatement>>>,
+    pub(crate) prepared_statements: Option<&'a BTreeMap<String, PreparedStatement>>,
 }
 
 impl ConnCatalog<'_> {
@@ -3580,7 +3580,7 @@ impl Catalog {
             database,
             search_path,
             role_id: session.role_id().clone(),
-            prepared_statements: Some(Cow::Borrowed(session.prepared_statements())),
+            prepared_statements: Some(session.prepared_statements()),
         }
     }
 
