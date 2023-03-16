@@ -353,7 +353,7 @@ fn is_match_subpatterns(subpatterns: &[Subpattern], mut text: &str) -> bool {
             match found {
                 None => return false,
                 Some(offset) => {
-                    let end = offset + subpattern.suffix.len();
+                    let mut end = offset + subpattern.suffix.len();
                     if is_match_subpatterns(subpatterns, &text[end..]) {
                         return true;
                     }
@@ -361,7 +361,14 @@ fn is_match_subpatterns(subpatterns: &[Subpattern], mut text: &str) -> bool {
                     if offset == 0 {
                         return false;
                     }
-                    found = text[..(end - 1)].rfind(&subpattern.suffix);
+                    // Find the previous valid char byte.
+                    loop {
+                        end -= 1;
+                        if text.is_char_boundary(end) {
+                            break;
+                        }
+                    }
+                    found = text[..end].rfind(&subpattern.suffix);
                 }
             }
         }
