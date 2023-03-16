@@ -1844,6 +1844,15 @@ impl<'a, E> DatumType<'a, E> for RegType {
     }
 }
 
+impl<S> AsColumnType for Char<S>
+where
+    S: AsRef<str>,
+{
+    fn as_column_type() -> ColumnType {
+        ScalarType::Char { length: None }.nullable(false)
+    }
+}
+
 impl<'a, E> DatumType<'a, E> for Char<&'a str> {
     fn nullable() -> bool {
         false
@@ -1875,6 +1884,15 @@ impl<'a, E> DatumType<'a, E> for Char<String> {
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::String(temp_storage.push_string(self.0)))
+    }
+}
+
+impl<S> AsColumnType for VarChar<S>
+where
+    S: AsRef<str>,
+{
+    fn as_column_type() -> ColumnType {
+        ScalarType::Char { length: None }.nullable(false)
     }
 }
 
