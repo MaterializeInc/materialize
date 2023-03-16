@@ -787,8 +787,9 @@ impl Coordinator {
                         source_status_collection_id,
                     )
                 }
+                // Subsources use source statuses.
+                DataSourceDesc::Source => (DataSource::Other, source_status_collection_id),
                 DataSourceDesc::Progress => (DataSource::Progress, None),
-                DataSourceDesc::Source => (DataSource::Other, None),
                 DataSourceDesc::Introspection(introspection) => {
                     (DataSource::Introspection(*introspection), None)
                 }
