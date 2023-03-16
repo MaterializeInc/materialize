@@ -285,9 +285,6 @@ impl Coordinator {
             Plan::Explain(plan) => {
                 self.sequence_explain(tx, session, plan);
             }
-            Plan::SendDiffs(plan) => {
-                tx.send(self.sequence_send_diffs(&mut session, plan), session);
-            }
             Plan::Insert(plan) => {
                 self.sequence_insert(tx, session, plan).await;
             }
@@ -595,7 +592,6 @@ impl Coordinator {
             | Plan::DropClusters(_)
             | Plan::DropClusterReplicas(_)
             | Plan::DropItems(_)
-            | Plan::SendDiffs(_)
             | Plan::Insert(_)
             | Plan::AlterNoop(_)
             | Plan::AlterIndexSetOptions(_)

@@ -68,7 +68,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
-use std::num::NonZeroUsize;
 use std::ops::Neg;
 use std::sync::Arc;
 use std::thread;
@@ -101,12 +100,12 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{stack, task};
 use mz_persist_client::usage::{ShardsUsage, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
-use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
+use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::Aug;
-use mz_sql::plan::{CopyFormat, MutationKind, Params, QueryWhen};
+use mz_sql::plan::{CopyFormat, Params, QueryWhen};
 use mz_storage_client::controller::{
     CollectionDescription, CreateExportToken, DataSource, StorageError,
 };
@@ -181,7 +180,6 @@ pub enum Message<T = mz_repr::Timestamp> {
     ControllerReady,
     CreateSourceStatementReady(CreateSourceStatementReady),
     SinkConnectionReady(SinkConnectionReady),
-    SendDiffs(SendDiffs),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     /// Initiates a group commit.
     GroupCommitInitiate,
@@ -207,18 +205,6 @@ pub enum Message<T = mz_repr::Timestamp> {
         transient_revision: u64,
         real_time_recency_ts: Timestamp,
     },
-}
-
-#[derive(Derivative)]
-#[derivative(Debug)]
-pub struct SendDiffs {
-    session: Session,
-    #[derivative(Debug = "ignore")]
-    tx: ClientTransmitter<ExecuteResponse>,
-    pub id: GlobalId,
-    pub diffs: Result<Vec<(Row, Diff)>, AdapterError>,
-    pub kind: MutationKind,
-    pub returning: Vec<(Row, NonZeroUsize)>,
 }
 
 #[derive(Derivative)]

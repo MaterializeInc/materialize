@@ -465,6 +465,34 @@ const PERSIST_COMPACTION_MINIMUM_TIMEOUT: ServerVar<Duration> = ServerVar {
     safe: true,
 };
 
+/// Controls initial backoff of [`mz_persist_client::cfg::DynamicConfig::next_listen_batch_retry_params`].
+const PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("persist_next_listen_batch_retryer_initial_backoff"),
+    value: &PersistConfig::DEFAULT_NEXT_LISTEN_BATCH_RETRYER.initial_backoff,
+    description: "The initial backoff when polling for new batches from a Listen or Subscribe.",
+    internal: true,
+    safe: true,
+};
+
+/// Controls backoff multiplier of [`mz_persist_client::cfg::DynamicConfig::next_listen_batch_retry_params`].
+const PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("persist_next_listen_batch_retryer_multiplier"),
+    value: &PersistConfig::DEFAULT_NEXT_LISTEN_BATCH_RETRYER.multiplier,
+    description: "The backoff multiplier when polling for new batches from a Listen or Subscribe.",
+    internal: true,
+    safe: true,
+};
+
+/// Controls backoff clamp of [`mz_persist_client::cfg::DynamicConfig::next_listen_batch_retry_params`].
+const PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("persist_next_listen_batch_retryer_clamp"),
+    value: &PersistConfig::DEFAULT_NEXT_LISTEN_BATCH_RETRYER.clamp,
+    description:
+        "The backoff clamp duration when polling for new batches from a Listen or Subscribe.",
+    internal: true,
+    safe: true,
+};
+
 /// Controls whether or not to use the new storage `persist_sink` implementation in storage
 /// ingestions.
 const ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK: ServerVar<bool> = ServerVar {
@@ -1253,6 +1281,10 @@ pub struct SystemVars {
     persist_compaction_minimum_timeout: SystemVar<Duration>,
     persist_sink_minimum_batch_updates: SystemVar<usize>,
 
+    persist_next_listen_batch_retryer_initial_backoff: SystemVar<Duration>,
+    persist_next_listen_batch_retryer_multiplier: SystemVar<u32>,
+    persist_next_listen_batch_retryer_clamp: SystemVar<Duration>,
+
     // crdb configuration
     crdb_connect_timeout: SystemVar<Duration>,
 
@@ -1292,6 +1324,15 @@ impl Default for SystemVars {
             crdb_connect_timeout: SystemVar::new(&CRDB_CONNECT_TIMEOUT),
             dataflow_max_inflight_bytes: SystemVar::new(&DATAFLOW_MAX_INFLIGHT_BYTES),
             persist_sink_minimum_batch_updates: SystemVar::new(&PERSIST_SINK_MINIMUM_BATCH_UPDATES),
+            persist_next_listen_batch_retryer_initial_backoff: SystemVar::new(
+                &PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF,
+            ),
+            persist_next_listen_batch_retryer_multiplier: SystemVar::new(
+                &PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER,
+            ),
+            persist_next_listen_batch_retryer_clamp: SystemVar::new(
+                &PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP,
+            ),
             metrics_retention: SystemVar::new(&METRICS_RETENTION),
             mock_audit_event_timestamp: SystemVar::new(&MOCK_AUDIT_EVENT_TIMESTAMP),
             enable_with_mutually_recursive: SystemVar::new(&ENABLE_WITH_MUTUALLY_RECURSIVE),
@@ -1325,6 +1366,9 @@ impl SystemVars {
             &self.enable_multi_worker_storage_persist_sink,
             &self.persist_blob_target_size,
             &self.persist_compaction_minimum_timeout,
+            &self.persist_next_listen_batch_retryer_initial_backoff,
+            &self.persist_next_listen_batch_retryer_multiplier,
+            &self.persist_next_listen_batch_retryer_clamp,
             &self.crdb_connect_timeout,
             &self.dataflow_max_inflight_bytes,
             &self.persist_sink_minimum_batch_updates,
@@ -1398,6 +1442,12 @@ impl SystemVars {
             Ok(&self.persist_compaction_minimum_timeout)
         } else if name == CRDB_CONNECT_TIMEOUT.name {
             Ok(&self.crdb_connect_timeout)
+        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name {
+            Ok(&self.persist_next_listen_batch_retryer_multiplier)
+        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name {
+            Ok(&self.persist_next_listen_batch_retryer_clamp)
+        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name {
+            Ok(&self.persist_next_listen_batch_retryer_initial_backoff)
         } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
             Ok(&self.dataflow_max_inflight_bytes)
         } else if name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name {
@@ -1460,6 +1510,15 @@ impl SystemVars {
                 .is_default(input)
         } else if name == PERSIST_BLOB_TARGET_SIZE.name {
             self.persist_blob_target_size.is_default(input)
+        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name {
+            self.persist_next_listen_batch_retryer_initial_backoff
+                .is_default(input)
+        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name {
+            self.persist_next_listen_batch_retryer_multiplier
+                .is_default(input)
+        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name {
+            self.persist_next_listen_batch_retryer_clamp
+                .is_default(input)
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
             self.persist_compaction_minimum_timeout.is_default(input)
         } else if name == CRDB_CONNECT_TIMEOUT.name {
@@ -1532,6 +1591,13 @@ impl SystemVars {
             self.allowed_cluster_replica_sizes.set(input)
         } else if name == PERSIST_BLOB_TARGET_SIZE.name {
             self.persist_blob_target_size.set(input)
+        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name {
+            self.persist_next_listen_batch_retryer_initial_backoff
+                .set(input)
+        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name {
+            self.persist_next_listen_batch_retryer_multiplier.set(input)
+        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name {
+            self.persist_next_listen_batch_retryer_clamp.set(input)
         } else if name == ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK.name {
             self.enable_multi_worker_storage_persist_sink.set(input)
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
@@ -1601,6 +1667,14 @@ impl SystemVars {
             Ok(self.allowed_cluster_replica_sizes.reset())
         } else if name == PERSIST_BLOB_TARGET_SIZE.name {
             Ok(self.persist_blob_target_size.reset())
+        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name {
+            Ok(self
+                .persist_next_listen_batch_retryer_initial_backoff
+                .reset())
+        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name {
+            Ok(self.persist_next_listen_batch_retryer_multiplier.reset())
+        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name {
+            Ok(self.persist_next_listen_batch_retryer_clamp.reset())
         } else if name == ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK.name {
             Ok(self.enable_multi_worker_storage_persist_sink.reset())
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
@@ -1711,6 +1785,23 @@ impl SystemVars {
     /// Returns the `persist_blob_target_size` configuration parameter.
     pub fn persist_blob_target_size(&self) -> usize {
         *self.persist_blob_target_size.value()
+    }
+
+    /// Returns the `persist_next_listen_batch_retryer_initial_backoff` configuration parameter.
+    pub fn persist_next_listen_batch_retryer_initial_backoff(&self) -> Duration {
+        *self
+            .persist_next_listen_batch_retryer_initial_backoff
+            .value()
+    }
+
+    /// Returns the `persist_next_listen_batch_retryer_multiplier` configuration parameter.
+    pub fn persist_next_listen_batch_retryer_multiplier(&self) -> u32 {
+        *self.persist_next_listen_batch_retryer_multiplier.value()
+    }
+
+    /// Returns the `persist_next_listen_batch_retryer_clamp` configuration parameter.
+    pub fn persist_next_listen_batch_retryer_clamp(&self) -> Duration {
+        *self.persist_next_listen_batch_retryer_clamp.value()
     }
 
     /// Returns the `persist_compaction_minimum_timeout` configuration parameter.
@@ -2657,4 +2748,7 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
         || name == CRDB_CONNECT_TIMEOUT.name()
         || name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
+        || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name()
+        || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name()
+        || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name()
 }

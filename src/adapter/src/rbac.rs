@@ -229,7 +229,6 @@ fn generate_plan_attribute(plan: &Plan) -> Option<Attribute> {
         | Plan::CopyRows(_)
         | Plan::CopyFrom(_)
         | Plan::Explain(_)
-        | Plan::SendDiffs(_)
         | Plan::Insert(_)
         | Plan::AlterNoop(_)
         | Plan::AlterIndexSetOptions(_)

@@ -503,7 +503,7 @@ impl ExecuteResponse {
             Explain | Peek | SendRows | ShowAllVariables | ShowVariable => {
                 vec![CopyTo, SendingRows]
             }
-            Execute | ReadThenWrite | SendDiffs => vec![Deleted, Inserted, SendingRows, Updated],
+            Execute | ReadThenWrite => vec![Deleted, Inserted, SendingRows, Updated],
             PlanKind::Fetch => vec![ExecuteResponseKind::Fetch],
             GrantRole => vec![GrantedRole],
             CopyRows => vec![Inserted],
