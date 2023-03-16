@@ -92,7 +92,7 @@ impl SourceRender for TestScriptSourceConnection {
             futures::future::pending::<()>().await;
         });
 
-        let status = [HealthStatusUpdate::from(HealthStatus::Running)].to_stream(scope);
+        let status = [HealthStatusUpdate::status(0, HealthStatus::Running)].to_stream(scope);
         (
             stream.as_collection(),
             None,

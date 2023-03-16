@@ -141,7 +141,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
             }
         });
 
-        let status = [HealthStatusUpdate::from(HealthStatus::Running)].to_stream(scope);
+        let status = [HealthStatusUpdate::status(0, HealthStatus::Running)].to_stream(scope);
         (
             stream.as_collection(),
             None,
