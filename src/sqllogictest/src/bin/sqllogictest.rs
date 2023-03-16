@@ -125,7 +125,8 @@ struct Args {
     /// Inject `CREATE INDEX` after all `CREATE TABLE` statements.
     #[clap(long)]
     auto_index_tables: bool,
-    /// Inject `BEGIN` and `COMMIT` to create longer running transactions for faster testing.
+    /// Inject `BEGIN` and `COMMIT` to create longer running transactions for faster testing of the
+    /// ported SQLite SLT files. Does not work generally, so don't use it for other tests.
     #[clap(long)]
     auto_transactions: bool,
     /// Run Materialize with persisted introspection sources enabled.
