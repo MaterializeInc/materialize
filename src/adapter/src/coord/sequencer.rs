@@ -43,7 +43,7 @@ use crate::util::{send_immediate_rows, ClientTransmitter};
 // DO NOT make this visible in anyway, i.e. do not add any version of
 // `pub` to this mod. The inner `sequence_X` methods are hidden in this
 // private module to prevent anyone from calling them directly. All
-// sequencing should be done through the `sequence_plan` method method.
+// sequencing should be done through the `sequence_plan` method.
 // This allows us to add catch-all logic that should be applied to all
 // plans in `sequence_plan` and guarantee that no caller can circumvent
 // that logic.
