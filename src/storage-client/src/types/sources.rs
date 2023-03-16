@@ -1740,9 +1740,9 @@ impl SourceDesc<GenericSourceConnection> {
             } => false,
             // Loadgen can produce retractions (deletes)
             SourceDesc {
-                connection: GenericSourceConnection::LoadGenerator(_),
+                connection: GenericSourceConnection::LoadGenerator(g),
                 ..
-            } => false,
+            } => g.load_generator.is_monotonic(),
             // Other sources the `None` envelope are append-only.
             SourceDesc {
                 envelope: SourceEnvelope::None(_),
@@ -2422,6 +2422,18 @@ impl LoadGenerator {
                     ),
                 ]
             }
+        }
+    }
+
+    pub fn is_monotonic(&self) -> bool {
+        match self {
+            LoadGenerator::Auction => true,
+            LoadGenerator::Counter {
+                max_cardinality: None,
+            } => true,
+            LoadGenerator::Counter { .. } => false,
+            LoadGenerator::Datums => true,
+            LoadGenerator::Tpch { .. } => false,
         }
     }
 }
