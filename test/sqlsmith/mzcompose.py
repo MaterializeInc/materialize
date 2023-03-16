@@ -35,6 +35,9 @@ SERVICES = [
 known_errors = [
     "no connection to the server",  # Expected AFTER a crash, the query before this is interesting, not the ones after
     "failed: Connection refused",  # Expected AFTER a crash, the query before this is interesting, not the ones after
+    "value too long for type",
+    "list_agg on char not yet supported",
+    "does not allow subqueries",
     "range constructor flags argument must not be null",  # expected after https://github.com/MaterializeInc/materialize/issues/18036 has been fixed
     "function pg_catalog.array_remove(",
     "function pg_catalog.array_cat(",
@@ -96,8 +99,27 @@ def is_known_error(e: str) -> bool:
     return False
 
 
+def run_sqlsmith(c: Composition, cmd: str, aggregate: Dict[str, Any]) -> None:
+    result = c.run(
+        *cmd,
+        capture=True,
+        check=False,  # We still get back parsable json on failure, so keep going
+    )
+
+    if result.returncode not in (0, 1):
+        raise Exception(
+            f"[SQLsmith] Unexpected return code in SQLsmith\n{result.stdout}"
+        )
+
+    data = json.loads(result.stdout)
+    aggregate["version"] = data["version"]
+    aggregate["queries"] += data["queries"]
+    aggregate["errors"].extend(data["errors"])
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    # parser.add_argument("--max-queries", default=100000, type=int)
+    parser.add_argument("--num-sqlsmith", default=2, type=int)
+    # parser.add_argument("--queries", default=10000, type=int)
     parser.add_argument("--runtime", default=600, type=int)
     # https://github.com/MaterializeInc/materialize/issues/2392
     parser.add_argument("--max-joins", default=2, type=int)
@@ -126,7 +148,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
           WITH (SIZE = '1');"""
     )
 
-    seed = args.seed or random.randint(0, 2**31 - 1)
+    seed = args.seed or random.randint(0, 2**31 - args.num_sqlsmith)
 
     def kill_sqlsmith_with_delay() -> None:
         time.sleep(args.runtime)
@@ -135,34 +157,30 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     killer = Thread(target=kill_sqlsmith_with_delay)
     killer.start()
 
-    cmd = [
-        "sqlsmith",
-        # f"--max-queries={args.queries}",
-        f"--max-joins={args.max_joins}",
-        f"--seed={seed}",
-        "--log-json",
-        f"--target=host=materialized port=6875 dbname=materialize user=materialize",
-    ]
-    if args.exclude_catalog:
-        cmd.append("--exclude-catalog")
-    if args.explain_only:
-        cmd.append("--explain-only")
+    threads: List[Thread] = []
+    aggregate: Dict[str, Any] = {"errors": [], "version": "", "queries": 0}
+    for i in range(args.num_sqlsmith):
+        cmd = [
+            "sqlsmith",
+            # f"--max-queries={args.queries}",
+            f"--max-joins={args.max_joins}",
+            f"--seed={seed + i}",
+            "--log-json",
+            f"--target=host=materialized port=6875 dbname=materialize user=materialize",
+        ]
+        if args.exclude_catalog:
+            cmd.append("--exclude-catalog")
+        if args.explain_only:
+            cmd.append("--explain-only")
 
-    result = c.run(
-        *cmd,
-        capture=True,
-        check=False,  # We still get back parsable json on failure, so keep going
-    )
+        threads.append(Thread(target=run_sqlsmith, args=[c, cmd, aggregate]))
+        threads[-1].start()
 
-    if result.returncode not in (0, 1):
-        raise Exception(
-            f"[SQLsmith] Unexpected return code in SQLsmith\n{result.stdout}"
-        )
-
-    data = json.loads(result.stdout)
+    for thread in threads:
+        thread.join()
 
     new_errors: Dict[FrozenSet[Tuple[str, Any]], List[Dict[str, Any]]] = {}
-    for error in data["errors"]:
+    for error in aggregate["errors"]:
         if not is_known_error(error["message"]):
             frozen_key = frozenset(
                 {x: error[x] for x in ["type", "sqlstate", "message"]}.items()
@@ -171,7 +189,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 new_errors[frozen_key] = []
             new_errors[frozen_key].append({x: error[x] for x in ["timestamp", "query"]})
 
-    print(f"SQLsmith: {data['version']} seed: {seed} queries: {data['queries']}")
+    print(
+        f"SQLsmith: {aggregate['version']} seed: {seed} queries: {aggregate['queries']}"
+    )
     for frozen_key, errors in new_errors.items():
         key = dict(frozen_key)
         occurences = f" ({len(errors)} occurences)" if len(errors) > 1 else ""
