@@ -27,9 +27,11 @@ class CreateRole(Check):
             for s in [
                 """
                 > CREATE ROLE create_role1;
+                > GRANT create_role1 TO materialize;
                 """,
                 """
                 > CREATE ROLE create_role2;
+                > GRANT create_role2 TO materialize;
                 """,
             ]
         ]
@@ -41,6 +43,9 @@ class CreateRole(Check):
                 > SELECT name FROM mz_roles WHERE name LIKE 'create_role%';
                 create_role1
                 create_role2
+                > SELECT role.name, member.name, grantor.name from mz_role_members JOIN mz_roles role ON mz_role_members.role_id = role.id JOIN mz_roles member ON mz_role_members.member = member.id JOIN mz_roles grantor ON mz_role_members.grantor = grantor.id WHERE role.name LIKE 'create_role%';
+                create_role1 materialize materialize
+                create_role2 materialize materialize
             """
             )
         )
@@ -55,6 +60,7 @@ class DropRole(Check):
             dedent(
                 """
                 > CREATE ROLE drop_role1;
+                > GRANT drop_role1 TO materialize;
             """
             )
         )
@@ -64,10 +70,13 @@ class DropRole(Check):
             Testdrive(dedent(s))
             for s in [
                 """
+                > REVOKE drop_role1 FROM materialize;
                 > DROP ROLE drop_role1;
                 > CREATE ROLE drop_role2;
+                > GRANT drop_role2 TO materialize;
                 """,
                 """
+                > REVOKE drop_role2 FROM materialize;
                 > DROP ROLE drop_role2;
                 """,
             ]
@@ -78,6 +87,8 @@ class DropRole(Check):
             dedent(
                 """
                 > SELECT COUNT(*) FROM mz_roles WHERE name LIKE 'drop_role%';
+                0
+                > SELECT COUNT(*) FROM mz_role_members JOIN mz_roles ON mz_role_members.role_id = mz_roles.id WHERE name LIKE 'drop_role%';
                 0
             """
             )
