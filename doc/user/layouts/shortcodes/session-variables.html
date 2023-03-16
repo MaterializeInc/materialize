@@ -23,7 +23,7 @@ failpoints                                  |                           | Allows
 idle_in_transaction_session_timeout         | `120 seconds`             | The maximum allowed duration that a session can sit idle in a transaction before being terminated. If this value is specified without units, it is taken as milliseconds. A value of zero disables the timeout.
 integer_datetimes                           | `true`                    | **Read-only.** Reports whether the server uses 64-bit-integer dates and times.
 intervalstyle                               | `postgres`                | The display format for interval values. The only supported value is `postgres`.
-is_superuser                                |                           | **Read-only.** Reports whether the current session is a superuser.
+is_superuser                                |                           | **Read-only.** Reports whether the current session is a _superuser_ with admin privileges.
 mz_version                                  | Version-dependent         | **Read-only.** Shows the Materialize server version.
 server_version                              | Version-dependent         | **Read-only.** The PostgreSQL compatible server version.
 server_version_num                          | Version-dependent         | **Read-only.** The PostgreSQL compatible server version as an integer.
