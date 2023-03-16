@@ -196,6 +196,7 @@ impl SourceRender for KafkaSourceConnection {
                 Ok(consumer) => Arc::new(consumer),
                 Err(e) => {
                     let update = HealthStatusUpdate {
+                        output_index: 0,
                         update: HealthStatus::StalledWithError {
                             error: format!(
                                 "failed creating kafka consumer: {}",
@@ -443,10 +444,10 @@ impl SourceRender for KafkaSourceConnection {
                                 "kafka error when polling consumer for source: {} topic: {} : {}",
                                 reader.source_name, reader.topic_name, e
                             );
-                            let status = HealthStatusUpdate::from(HealthStatus::StalledWithError {
-                                error,
-                                hint: None,
-                            });
+                            let status = HealthStatusUpdate::status(
+                                0,
+                                HealthStatus::StalledWithError { error, hint: None },
+                            );
                             health_output.give(&health_cap, status).await;
                         }
                         Ok(message) => {
@@ -493,7 +494,9 @@ impl SourceRender for KafkaSourceConnection {
                                     ),
                                     hint: None,
                                 };
-                                health_output.give(&health_cap, status.into()).await;
+                                health_output
+                                    .give(&health_cap, HealthStatusUpdate::status(0, status))
+                                    .await;
                             }
                         }
                     }
@@ -511,7 +514,9 @@ impl SourceRender for KafkaSourceConnection {
 
                 let status = reader.health_status.lock().unwrap().take();
                 if let Some(status) = status {
-                    health_output.give(&health_cap, status.into()).await;
+                    health_output
+                        .give(&health_cap, HealthStatusUpdate::status(0, status))
+                        .await;
                 }
 
                 // Wait to be notified while also making progress with offset committing

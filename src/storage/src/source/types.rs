@@ -81,6 +81,7 @@ pub trait SourceRender {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct HealthStatusUpdate {
+    pub output_index: usize,
     pub update: HealthStatus,
     pub should_halt: bool,
 }
@@ -119,9 +120,15 @@ impl HealthStatus {
     }
 }
 
-impl From<HealthStatus> for HealthStatusUpdate {
-    fn from(update: HealthStatus) -> Self {
+impl HealthStatusUpdate {
+    /// Generates a [`HealthStatusUpdate`] with `update`, which should be output to the
+    /// health stream at `output_index`.
+    ///
+    /// `output_index` should be 0 for any primary sources, but can be other values for to provide
+    /// updates about subsources.
+    pub(crate) fn status(output_index: usize, update: HealthStatus) -> Self {
         HealthStatusUpdate {
+            output_index,
             update,
             should_halt: false,
         }
