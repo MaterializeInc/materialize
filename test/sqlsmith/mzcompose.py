@@ -89,6 +89,7 @@ known_errors = [
     "invalid selection: operation may only refer to user-defined tables",  # Seems expected when using catalog tables
     "Unsupported temporal predicate",  # Expected, see https://github.com/MaterializeInc/materialize/issues/18048
     "OneShot plan has temporal constraints",  # Expected, see https://github.com/MaterializeInc/materialize/issues/18048
+    "internal error: cannot evaluate unmaterializable function",  # Currently expected, see https://github.com/MaterializeInc/materialize/issues/14290
 ]
 
 
@@ -145,7 +146,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         CREATE SOURCE counter
           FROM LOAD GENERATOR COUNTER (SCALE FACTOR 0.0001)
-          WITH (SIZE = '1');"""
+          WITH (SIZE = '1');
+
+        CREATE TABLE t (a int, b int);
+        INSERT INTO t VALUES (1, 2), (3, 4), (5, 6), (7, 8), (9, 10), (11, 12), (13, 14), (15, 16);
+        CREATE MATERIALIZED VIEW mv AS SELECT a + b FROM t;
+        CREATE MATERIALIZED VIEW mv2 AS SELECT count(*) FROM mv;
+        CREATE DEFAULT INDEX ON mv;
+        """
     )
 
     seed = args.seed or random.randint(0, 2**31 - args.num_sqlsmith)
