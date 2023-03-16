@@ -3959,6 +3959,8 @@ derive_unary!(
     CastTimestampTzToString,
     CastTimestampTzToTime,
     CastPgLegacyCharToString,
+    CastPgLegacyCharToChar,
+    CastPgLegacyCharToVarChar,
     CastPgLegacyCharToInt32,
     CastBytesToString,
     CastStringToJsonb,
@@ -4328,6 +4330,10 @@ impl Arbitrary for UnaryFunc {
             CastPgLegacyCharToString::arbitrary()
                 .prop_map_into()
                 .boxed(),
+            CastPgLegacyCharToChar::arbitrary().prop_map_into().boxed(),
+            CastPgLegacyCharToVarChar::arbitrary()
+                .prop_map_into()
+                .boxed(),
             CastPgLegacyCharToInt32::arbitrary().prop_map_into().boxed(),
             CastBytesToString::arbitrary().prop_map_into().boxed(),
             CastStringToJsonb::arbitrary().prop_map_into().boxed(),
@@ -4667,6 +4673,8 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::CastTimestampTzToString(_) => CastTimestampTzToString(()),
             UnaryFunc::CastTimestampTzToTime(_) => CastTimestampTzToTime(()),
             UnaryFunc::CastPgLegacyCharToString(_) => CastPgLegacyCharToString(()),
+            UnaryFunc::CastPgLegacyCharToChar(_) => CastPgLegacyCharToChar(()),
+            UnaryFunc::CastPgLegacyCharToVarChar(_) => CastPgLegacyCharToVarChar(()),
             UnaryFunc::CastPgLegacyCharToInt32(_) => CastPgLegacyCharToInt32(()),
             UnaryFunc::CastBytesToString(_) => CastBytesToString(()),
             UnaryFunc::CastStringToJsonb(_) => CastStringToJsonb(()),
@@ -5038,6 +5046,8 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 CastTimestampTzToString(()) => Ok(impls::CastTimestampTzToString.into()),
                 CastTimestampTzToTime(()) => Ok(impls::CastTimestampTzToTime.into()),
                 CastPgLegacyCharToString(()) => Ok(impls::CastPgLegacyCharToString.into()),
+                CastPgLegacyCharToChar(()) => Ok(impls::CastPgLegacyCharToChar.into()),
+                CastPgLegacyCharToVarChar(()) => Ok(impls::CastPgLegacyCharToVarChar.into()),
                 CastPgLegacyCharToInt32(()) => Ok(impls::CastPgLegacyCharToInt32.into()),
                 CastBytesToString(()) => Ok(impls::CastBytesToString.into()),
                 CastStringToJsonb(()) => Ok(impls::CastStringToJsonb.into()),
