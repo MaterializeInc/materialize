@@ -383,11 +383,10 @@ where
                 // The maximal description range we can produce.
                 let batch_description = (current_upper.to_owned(), desired_frontier.to_owned());
 
-                let lower = batch_description.0.as_option().unwrap().clone();
-                let batch_ts = batch_description.0.as_option().unwrap().clone();
+                let lower = batch_description.0.as_option().copied().unwrap();
 
                 let cap = cap_set
-                    .try_delayed(&batch_ts)
+                    .try_delayed(&lower)
                     .ok_or_else(|| {
                         format!(
                             "minter cannot delay {:?} to {:?}. \
@@ -406,18 +405,15 @@ where
 
                 output.give(&cap, batch_description).await;
 
-                // WIP: We downgrade our capability so that downstream
-                // operators (writer and appender) can know when all the
-                // writers have had a chance to write updates to persist for
-                // a given batch. Just stepping forward feels a bit icky,
-                // though.
-                let new_batch_frontier = Antichain::from_elem(batch_ts.step_forward());
+                // We downgrade our capability to the batch
+                // description upper, as there will never be
+                // any overlapping descriptions.
                 trace!(
                     "persist_sink {collection_id}/{shard_id}: \
                         downgrading to {:?}",
-                    new_batch_frontier
+                    desired_frontier
                 );
-                cap_set.downgrade(new_batch_frontier.iter());
+                cap_set.downgrade(desired_frontier.iter());
 
                 // After successfully emitting a new description, we can update the upper for the
                 // operator.
@@ -538,14 +534,15 @@ where
                                         batch_descriptions_frontier,
                                     );
                                 }
-                                let time = description.0.as_option().copied().unwrap();
                                 match in_flight_batches.entry(
                                     description,
                                 ){
                                     std::collections::hash_map::Entry::Vacant(v) => {
-                                        v.insert(
-                                            cap.delayed(&time)
-                                        );
+                                        // This _should_ be `.retain`, but rust
+                                        // currently thinks we can't use `cap`
+                                        // as an owned value when using the
+                                        // match guard `Some(event)`
+                                        v.insert(cap.delayed(cap.time()));
                                     }
                                     std::collections::hash_map::Entry::Occupied(o) => {
                                         let (description, _) = o.remove_entry();
