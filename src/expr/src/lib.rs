@@ -101,7 +101,7 @@ pub use id::{Id, LocalId, PartitionId, SourceInstanceId};
 pub use id::{ProtoId, ProtoLocalId};
 pub use linear::{
     memoize_expr,
-    plan::{MfpPlan, SafeMfpPlan},
+    plan::{MfpPlan, MfpPushdown, SafeMfpPlan},
     util::{join_permutations, permutation_for_arrangement},
     MapFilterProject, ProtoMapFilterProject, ProtoMfpPlan, ProtoSafeMfpPlan,
 };

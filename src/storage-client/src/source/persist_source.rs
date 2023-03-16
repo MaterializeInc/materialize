@@ -15,7 +15,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use mz_persist_client::operators::shard_source::shard_source;
+use mz_persist_client::stats::{PartFilter, PartStats};
 use mz_persist_types::codec_impls::UnitSchema;
+use mz_repr::stats::{PersistPartStats, PersistPartStatsFilter};
 use timely::communication::Push;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::Bundle;
@@ -25,10 +27,10 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::scheduling::Activator;
 
-use mz_expr::MfpPlan;
+use mz_expr::{MfpPlan, MfpPushdown};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::fetch::FetchedPart;
-use mz_repr::{DatumVec, Diff, GlobalId, Row, Timestamp};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 
 use crate::controller::CollectionMetadata;
 use crate::types::errors::DataflowError;
@@ -122,6 +124,11 @@ where
     YFn: Fn(Instant, usize) -> bool + 'static,
 {
     let name = source_id.to_string();
+    let mfp_pushdown = MfpPushdown::new(
+        metadata.relation_desc.clone(),
+        map_filter_project.as_ref().map(|x| &**x),
+        as_of.as_ref().and_then(|x| x.as_option().copied()),
+    );
     let (fetched, token) = shard_source(
         scope,
         &name,
@@ -133,6 +140,7 @@ where
         flow_control,
         Arc::new(metadata.relation_desc),
         Arc::new(UnitSchema),
+        PartFilterImpl { mfp_pushdown },
     );
     let rows = decode_and_mfp(&fetched, &name, until, map_filter_project, yield_fn);
     (rows, token)
@@ -293,5 +301,58 @@ impl PendingWork {
             }
         }
         true
+    }
+}
+
+#[derive(Debug)]
+struct PartFilterImpl {
+    mfp_pushdown: MfpPushdown,
+}
+
+impl<K, V> PartFilter<K, V> for PartFilterImpl {
+    fn should_fetch(&mut self, stats: &PartStats) -> bool {
+        self.mfp_pushdown
+            .should_fetch(PersistPartStatsImpl { stats })
+    }
+}
+
+#[derive(Debug)]
+struct PersistPartStatsImpl<'a> {
+    stats: &'a PartStats,
+}
+
+impl PersistPartStats for PersistPartStatsImpl<'_> {
+    fn len(&self) -> Option<usize> {
+        None
+    }
+
+    fn err_count(&self) -> Option<usize> {
+        None
+    }
+
+    fn col_min<'a>(&self, name: &str, arena: &'a RowArena) -> Option<Datum<'a>> {
+        self.stats
+            .opt_u64_key_col_min_max_nulls(name)
+            .map(|(min, _, _)| arena.make_datum(|p| p.push(Datum::from(min))))
+    }
+
+    fn col_max<'a>(&self, name: &str, arena: &'a RowArena) -> Option<Datum<'a>> {
+        self.stats
+            .opt_u64_key_col_min_max_nulls(name)
+            .map(|(_, max, _)| arena.make_datum(|p| p.push(Datum::from(max))))
+    }
+
+    fn col_null_count(&self, name: &str) -> Option<usize> {
+        self.stats
+            .opt_u64_key_col_min_max_nulls(name)
+            .map(|(_, _, nulls)| nulls)
+    }
+
+    fn row_min(&self, _row: &mut Row) -> Option<usize> {
+        None
+    }
+
+    fn row_max(&self, _row: &mut Row) -> Option<usize> {
+        None
     }
 }

@@ -40,7 +40,7 @@ use tracing::{info, trace};
 use crate::cache::PersistClientCache;
 use crate::fetch::{FetchedPart, SerdeLeasedBatchPart};
 use crate::read::ListenEvent;
-use crate::stats::{FetchAllPartFilter, PartFilter};
+use crate::stats::PartFilter;
 use crate::{PersistLocation, ShardId};
 
 /// Creates a new source that reads from a persist shard, distributing the work
@@ -65,7 +65,7 @@ use crate::{PersistLocation, ShardId};
 /// using [`timely::dataflow::operators::generic::operator::empty`].
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn shard_source<K, V, D, G>(
+pub fn shard_source<K, V, D, F, G>(
     scope: &G,
     name: &str,
     clients: Arc<PersistClientCache>,
@@ -76,11 +76,13 @@ pub fn shard_source<K, V, D, G>(
     flow_control: Option<FlowControl<G>>,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
+    filter: F,
 ) -> (Stream<G, FetchedPart<K, V, G::Timestamp, D>>, Rc<dyn Any>)
 where
     K: Debug + Codec,
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
+    F: PartFilter<K, V>,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
@@ -111,7 +113,6 @@ where
     ) = mpsc::unbounded_channel();
 
     let chosen_worker = usize::cast_from(name.hashed()) % scope.peers();
-    let filter = FetchAllPartFilter;
     let (descs, descs_shutdown) = shard_source_descs::<K, V, D, _, G>(
         scope,
         name,

@@ -1426,12 +1426,13 @@ pub mod plan {
     use std::collections::BTreeMap;
     use std::iter;
 
+    use mz_repr::stats::{PersistPartStats, PersistPartStatsFilter};
     use proptest::prelude::*;
     use proptest_derive::Arbitrary;
     use serde::{Deserialize, Serialize};
 
     use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-    use mz_repr::{Datum, Diff, Row, RowArena};
+    use mz_repr::{Datum, Diff, RelationDesc, Row, RowArena, Timestamp};
 
     use crate::{
         func, BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, ProtoMfpPlan,
@@ -1879,6 +1880,116 @@ pub mod plan {
             self.mfp.could_error()
                 || self.lower_bounds.iter().any(|e| e.could_error())
                 || self.upper_bounds.iter().any(|e| e.could_error())
+        }
+    }
+
+    /// An implementation of [PersistPartStatsFilter] for [MfpPlan].
+    #[derive(Debug)]
+    pub struct MfpPushdown {
+        relation_desc: RelationDesc,
+        // TODO(mfp): Probably some preprocessing we could do to make `should_fetch`
+        // calls more efficient.
+        mfp: Option<MfpPlan>,
+        _timestamp: Option<Timestamp>,
+    }
+
+    impl MfpPushdown {
+        pub fn new(
+            relation_desc: RelationDesc,
+            mfp: Option<&MfpPlan>,
+            timestamp: Option<Timestamp>,
+        ) -> Self {
+            if relation_desc
+                .iter_names()
+                .any(|x| x.as_str().contains("wip"))
+            {
+                eprintln!("WIP mfp {:?}", mfp);
+            }
+            MfpPushdown {
+                relation_desc,
+                mfp: mfp.cloned(),
+                _timestamp: timestamp,
+            }
+        }
+
+        fn provably_not_in_part<S: PersistPartStats>(
+            &self,
+            stats: &S,
+            expr: &MirScalarExpr,
+        ) -> Option<bool> {
+            let arena = RowArena::default();
+            // TODO: This is entirely just a placeholder impl so that we can get
+            // at least one query to work end-to-end. The real structure would
+            // certainly look different than this.
+            if let MirScalarExpr::CallBinary { func, expr1, expr2 } = expr {
+                let col_idx = Self::one_column_reference(expr1)?;
+                let col_name = self.relation_desc.get_name(col_idx);
+                let min_or_max = match func {
+                    BinaryFunc::Lt | BinaryFunc::Lte => stats.col_min(col_name.as_str(), &arena)?,
+                    BinaryFunc::Gt | BinaryFunc::Gte => stats.col_max(col_name.as_str(), &arena)?,
+                    _ => return None,
+                };
+                if !Self::zero_column_references(expr2)? {
+                    return None;
+                }
+                let mut datums = Vec::with_capacity(self.relation_desc.arity());
+                while datums.len() < col_idx {
+                    datums.push(Datum::Null);
+                }
+                datums.push(min_or_max);
+                while datums.len() < self.relation_desc.arity() {
+                    datums.push(Datum::Null);
+                }
+                eprintln!("WIP {} {} {:?} {:?}", col_idx, col_name, datums, expr);
+                let res = expr.eval(datums.as_slice(), &arena);
+                eprintln!("WIP {:?}", res);
+                match res {
+                    Ok(Datum::False) => return Some(true),
+                    _ => return Some(false),
+                }
+            }
+            None
+        }
+
+        fn zero_column_references(expr: &MirScalarExpr) -> Option<bool> {
+            match expr {
+                MirScalarExpr::Literal(..) => Some(true),
+                _ => None,
+            }
+        }
+
+        fn one_column_reference(expr: &MirScalarExpr) -> Option<usize> {
+            match expr {
+                MirScalarExpr::Column(idx) => Some(*idx),
+                MirScalarExpr::CallUnary {
+                    func:
+                        UnaryFunc::CastUint64ToNumeric(..) | UnaryFunc::CastUint64ToMzTimestamp(..),
+                    expr,
+                } => Self::one_column_reference(expr),
+                _ => None,
+            }
+        }
+    }
+
+    impl PersistPartStatsFilter for MfpPushdown {
+        fn should_fetch<S: PersistPartStats>(&mut self, stats: S) -> bool {
+            let mfp = match self.mfp.as_ref() {
+                Some(x) => x,
+                None => return true,
+            };
+            for (support, predicate) in mfp.mfp.predicates.iter() {
+                if mfp.mfp.input_arity < *support {
+                    // We'd need the result of map to evaluate this predicate.
+                    return true;
+                }
+                match self.provably_not_in_part(&stats, predicate) {
+                    Some(false) | None => continue,
+                    // The predicates are ANDed, so if any of them are provably
+                    // not in the part, we can confidently skip fetching it.
+                    Some(true) => return false,
+                }
+            }
+            true
         }
     }
 }
