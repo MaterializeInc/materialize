@@ -120,13 +120,33 @@ query TTT
 SELECT * FROM mz_role_members
 ----
 
-# Cannot grant system role
+# Cannot grant or revoke system role
 
 statement error role name "mz_system" is reserved
 GRANT mz_system TO joe
 
 statement error role name "mz_system" is reserved
 GRANT joe TO mz_system
+
+statement error role name "mz_system" is reserved
+REVOKE mz_system FROM joe
+
+statement error role name "mz_system" is reserved
+REVOKE joe FROM mz_system
+
+# Prevent granting and revoking to/from PUBLIC role
+
+statement error role name "public" is reserved
+GRANT group1 TO public
+
+statement error role name "public" is reserved
+GRANT public TO group1
+
+statement error role name "public" is reserved
+REVOKE group1 FROM public
+
+statement error role name "public" is reserved
+REVOKE public FROM group1
 
 # Disable RBAC checks
 

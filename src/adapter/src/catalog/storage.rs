@@ -27,7 +27,7 @@ use mz_repr::GlobalId;
 use mz_sql::catalog::{CatalogError as SqlCatalogError, CatalogItemType, RoleAttributes};
 use mz_sql::names::{
     DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, RoleId, SchemaId,
-    SchemaSpecifier,
+    SchemaSpecifier, PUBLIC_ROLE_NAME,
 };
 use mz_sql::session::user::SYSTEM_USER;
 use mz_stash::{AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
@@ -369,7 +369,7 @@ async fn migrate(
         //
         // Introduced in v0.45.0
         //
-        // TODO(jkosh44) Can be cleared (patched to be empty) in v0.46.0
+        // TODO(jkosh44) Can be cleared (patched to be empty) in v0.48.0
         |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
             txn.roles.update(|_role_key, role_value| {
                 let mut role_value = role_value.clone();
@@ -389,7 +389,7 @@ async fn migrate(
         //
         // Introduced in v0.46.0
         //
-        // TODO(jkosh44) Can be cleared (patched to be empty) in v0.47.0
+        // TODO(jkosh44) Can be cleared (patched to be empty) in v0.49.0
         |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
             txn.roles.update(|_role_key, role_value| {
                 let mut role_value = role_value.clone();
@@ -398,6 +398,50 @@ async fn migrate(
                 }
                 Some(role_value)
             })?;
+            Ok(())
+        },
+        // The PUBLIC psuedo role was added.
+        //
+        // Introduced in v0.48.0
+        //
+        // TODO(jkosh44) Can be coalesced into the first migration in v0.50.0
+        |txn: &mut Transaction<'_>, now, _bootstrap_args| {
+            // Delete any existing PUBLIC role.
+            let roles = txn.roles.delete(|_role_key, role_value| {
+                role_value.role.name.as_str() == &*PUBLIC_ROLE_NAME
+            });
+            assert!(roles.len() <= 1, "duplicate roles are not allowed");
+            for (role_key, role_value) in roles {
+                let id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+                txn.audit_log_updates.push((
+                    AuditLogKey {
+                        event: VersionedEvent::V1(EventV1 {
+                            id,
+                            event_type: EventType::Drop,
+                            object_type: ObjectType::Role,
+                            details: EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                                id: role_key.id.to_string(),
+                                name: role_value.role.name,
+                            }),
+                            user: None,
+                            occurred_at: now,
+                        }),
+                    },
+                    (),
+                    1,
+                ));
+            }
+
+            txn.roles.insert(
+                RoleKey { id: RoleId::Public },
+                RoleValue {
+                    role: SerializedRole {
+                        name: PUBLIC_ROLE_NAME.as_str().to_lowercase(),
+                        attributes: Some(RoleAttributes::new()),
+                        membership: Some(RoleMembership::new()),
+                    },
+                },
+            )?;
             Ok(())
         },
         // Add new migrations above.
