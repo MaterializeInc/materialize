@@ -26,7 +26,7 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::btree_map::Entry;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::fmt::Display;
 use std::future::Future;
@@ -198,10 +198,10 @@ where
 
     let timestamp_desc = source_connection.timestamp_desc();
 
-    let (token, health_token) = {
+    let (token, health_tokens) = {
         let config = config.clone();
         root_scope.scoped("SourceTimeDomain", move |scope| {
-            let (source, source_upper, health_stream, token) = source_render_operator(
+            let (source, source_upper, mut health_streams, token) = source_render_operator(
                 scope,
                 config.clone(),
                 source_connection,
@@ -214,9 +214,23 @@ where
             source.inner.capture_into(UnboundedTokioCapture(source_tx));
             source_upper.capture_into(UnboundedTokioCapture(source_upper_tx));
 
-            let health_token = health_operator(scope, config, health_stream, internal_cmd_tx);
+            let health_configs = HealthOperatorConfig::generate_health_configs(&config);
+            let mut health_tokens = Vec::with_capacity(health_configs.len());
 
-            (token, health_token)
+            // We identify source exports by their output index, which is some arbitrary `usize`; to
+            // support this, we provision as many health_streams as required by the
+            // max(outout_index); to ensure that the tokens we create have the right health stream,
+            // we have to take the stream with the same index.
+            for (idx, config) in health_configs.into_iter() {
+                // We want to take the health stream with our index, but that index has been shifted
+                // to the left by the number of other health streams we've already removed.
+                let stream = health_streams.remove(idx - health_tokens.len());
+                let health_token =
+                    health_operator(scope, config, stream, Rc::clone(&internal_cmd_tx));
+                health_tokens.push(health_token);
+            }
+
+            (token, health_tokens)
         })
     };
 
@@ -226,7 +240,7 @@ where
     let (streams, _reclock_token) =
         reclock_operator(scope, config, reclock_follower, source_rx, remap_stream);
 
-    let token = Rc::new((token, remap_token, resume_token, health_token));
+    let token = Rc::new((token, remap_token, resume_token, health_tokens));
 
     (streams, Some(token))
 }
@@ -247,7 +261,7 @@ fn source_render_operator<G, C>(
 ) -> (
     Collection<G, Result<SourceMessage<C::Key, C::Value>, SourceReaderError>, Diff>,
     Stream<G, Infallible>,
-    Stream<G, (WorkerId, HealthStatusUpdate)>,
+    Vec<Stream<G, (WorkerId, HealthStatusUpdate)>>,
     Rc<dyn Any>,
 )
 where
@@ -263,6 +277,17 @@ where
         trace!(%upper, "timely-{worker_id} source({source_id}) received resume upper");
     });
 
+    // We use the output index from the source export to route values to its ok and err streams. We
+    // do this obliquely by generating as many partitions as there are output indices and then
+    // dropping all unused partitions.
+    let active_output_indices: BTreeSet<_> = config
+        .source_exports
+        .iter()
+        .map(|(_, export)| export.output_index)
+        // Ensure 0 is included irrespective of source exports
+        .chain(std::iter::once(0))
+        .collect();
+
     let (data, progress, health, token) =
         source_connection.render(scope, config, connection_context, resume_uppers);
 
@@ -273,6 +298,19 @@ where
     let (mut data_output, data) = builder.new_output();
     let (mut _progress_output, derived_progress) = builder.new_output();
     let (mut health_output, derived_health) = builder.new_output();
+
+    let partition_count = u64::cast_from(
+        active_output_indices
+            .iter()
+            .max()
+            .cloned()
+            .expect("always contains > 0 elements")
+            + 1,
+    );
+
+    let health_streams: Vec<_> = health
+        .concat(&derived_health)
+        .partition(partition_count, |update: HealthStatusUpdate| (0, update));
 
     builder.build(move |mut caps| async move {
         let health_cap = caps.pop().unwrap();
@@ -313,9 +351,13 @@ where
         }
     });
 
-    let health = health
-        .concat(&derived_health)
-        .map(move |status| (worker_id, status));
+    let health = health_streams
+        .into_iter()
+        .map(|h| {
+            h.concat(&derived_health)
+                .map(move |status| (worker_id, status))
+        })
+        .collect();
 
     (
         data.as_collection(),
@@ -325,6 +367,55 @@ where
     )
 }
 
+/// Fields extracted from [`RawSourceCreationConfig`] needed to generate health operators.
+#[derive(Clone)]
+pub struct HealthOperatorConfig {
+    /// The ID of this instantiation of this source.
+    pub id: GlobalId,
+    /// The ID of the worker on which this operator is executing
+    pub worker_id: usize,
+    /// The total count of workers
+    pub worker_count: usize,
+    /// The function to return a now time.
+    pub now: NowFn,
+    /// Storage Metadata
+    pub storage_metadata: CollectionMetadata,
+    /// A handle to the persist client cache
+    pub persist_clients: Arc<PersistClientCache>,
+}
+
+impl HealthOperatorConfig {
+    // Generates a set of `HealthOperatorConfig`s appropriate to generate all of the health
+    // operators implied by the `RawSourceCreationConfig`.
+    fn generate_health_configs(
+        RawSourceCreationConfig {
+            worker_id,
+            worker_count,
+            now,
+            persist_clients,
+            source_exports,
+            ..
+        }: &RawSourceCreationConfig,
+    ) -> BTreeMap<usize, HealthOperatorConfig> {
+        source_exports
+            .iter()
+            .map(|(id, export)| {
+                (
+                    export.output_index,
+                    HealthOperatorConfig {
+                        id: *id,
+                        worker_id: *worker_id,
+                        worker_count: *worker_count,
+                        now: now.clone(),
+                        storage_metadata: export.storage_metadata.clone(),
+                        persist_clients: Arc::clone(persist_clients),
+                    },
+                )
+            })
+            .collect()
+    }
+}
+
 /// Mints new contents for the remap shard based on summaries about the source
 /// upper it receives from the raw reader operators.
 ///
@@ -332,18 +423,17 @@ where
 /// upper summaries will be exchanged to it.
 fn health_operator<G: Scope>(
     scope: &G,
-    config: RawSourceCreationConfig,
+    config: HealthOperatorConfig,
     health_stream: Stream<G, (usize, HealthStatusUpdate)>,
     internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
 ) -> Rc<dyn Any> {
-    let RawSourceCreationConfig {
+    let HealthOperatorConfig {
         worker_id: healthcheck_worker_id,
         worker_count,
         id: source_id,
         storage_metadata,
         persist_clients,
         now,
-        ..
     } = config;
 
     // We'll route all the work to a single arbitrary worker;
