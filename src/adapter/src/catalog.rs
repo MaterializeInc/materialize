@@ -1303,7 +1303,7 @@ impl ConnCatalog<'_> {
     }
 
     pub fn state(&self) -> &CatalogState {
-        &self.state
+        self.state
     }
 
     /// Returns the schemas:
@@ -3574,7 +3574,7 @@ impl Catalog {
             .map(|schema| (schema.name().database.clone(), schema.id().clone()))
             .collect();
         ConnCatalog {
-            state: &state,
+            state,
             conn_id: session.conn_id(),
             cluster: session.vars().cluster().into(),
             database,
