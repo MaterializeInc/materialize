@@ -376,7 +376,7 @@ where
                 );
                 if let Err(e) = offset_committer.commit_offsets(frontier.clone()).await {
                     // TODO(guswynn): stats for this error
-                    tracing::error!(
+                    tracing::warn!(
                         %e,
                         "timely-{worker_id} source({id}) failed to commit offsets: resume_upper={}",
                         frontier.pretty()
