@@ -99,19 +99,18 @@ use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, Inspect};
 use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
-use timely::progress::Timestamp as TimelyTimestamp;
+use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::trace;
 
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::HashMap;
+use mz_ore::collections::{CollectionExt, HashMap};
 use mz_persist_client::batch::Batch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriterEnrichedHollowBatch;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec, Codec64};
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::errors::DataflowError;
 use mz_storage_client::types::sources::SourceData;
@@ -165,24 +164,24 @@ impl BatchMetrics {
     }
 }
 
-struct BatchBuilderAndMetdata<K, V, T, D>
+struct BatchBuilderAndMetadata<K, V, T, D>
 where
     K: Codec,
     V: Codec,
-    T: timely::progress::Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64,
 {
     builder: mz_persist_client::batch::BatchBuilder<K, V, T, D>,
     metrics: BatchMetrics,
 }
 
-impl<K, V, T, D> BatchBuilderAndMetdata<K, V, T, D>
+impl<K, V, T, D> BatchBuilderAndMetadata<K, V, T, D>
 where
     K: Codec,
     V: Codec,
-    T: timely::progress::Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64,
 {
     fn new(bb: mz_persist_client::batch::BatchBuilder<K, V, T, D>) -> Self {
-        BatchBuilderAndMetdata {
+        BatchBuilderAndMetadata {
             builder: bb,
             metrics: Default::default(),
         }
@@ -191,9 +190,9 @@ where
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct HollowBatchAndMetadata {
-    lower: Antichain<Timestamp>,
-    upper: Antichain<Timestamp>,
-    batch: WriterEnrichedHollowBatch<Timestamp>,
+    lower: Antichain<mz_repr::Timestamp>,
+    upper: Antichain<mz_repr::Timestamp>,
+    batch: WriterEnrichedHollowBatch<mz_repr::Timestamp>,
     metrics: BatchMetrics,
 }
 
@@ -216,6 +215,8 @@ struct HollowBatchAndMetadata {
 ///    batches. Whenever the frontiers sufficiently advance, we take a batch
 ///    description and all the batches that belong to it and append it to the
 ///    persist shard.
+///
+/// This operator assumes that the `desired_collection` comes pre-sharded.
 pub(crate) fn render<G>(
     scope: &mut G,
     collection_id: GlobalId,
@@ -226,29 +227,28 @@ pub(crate) fn render<G>(
     output_index: usize,
 ) -> Rc<dyn Any>
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
 {
     let persist_clients = Arc::clone(&storage_state.persist_clients);
-    let shard_id = target.data_shard;
 
-    let operator_name = format!("persist_sink({})", shard_id);
+    let operator_name = format!("persist_sink({})", collection_id);
 
     let (batch_descriptions, mint_token) = mint_batch_descriptions(
         scope,
         collection_id,
-        operator_name.clone(),
+        &operator_name,
         &target,
-        &desired_collection.inner,
+        &desired_collection,
         Arc::clone(&persist_clients),
     );
 
     let (written_batches, write_token) = write_batches(
         scope,
         collection_id.clone(),
-        operator_name.clone(),
+        &operator_name,
         &target,
         &batch_descriptions,
-        &desired_collection.inner,
+        &desired_collection,
         Arc::clone(&persist_clients),
         storage_state,
     );
@@ -280,16 +280,16 @@ where
 fn mint_batch_descriptions<G>(
     scope: &mut G,
     collection_id: GlobalId,
-    operator_name: String,
+    operator_name: &str,
     target: &CollectionMetadata,
-    desired_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
+    desired_collection: &Collection<G, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
 ) -> (
-    Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
+    Stream<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
     Rc<dyn Any>,
 )
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
 {
     let persist_location = target.persist_location.clone();
     let shard_id = target.data_shard;
@@ -313,10 +313,10 @@ where
 
     let (mut output, output_stream) = mint_op.new_output();
 
-    let mut desired_input = mint_op.new_input(desired_stream, Pipeline);
+    let mut desired_input = mint_op.new_input(&desired_collection.inner, Pipeline);
 
-    let shutdown_button = mint_op.build(move |mut capabilities| async move {
-        let mut cap_set = CapabilitySet::from_elem(capabilities.pop().expect("missing capability"));
+    let shutdown_button = mint_op.build(move |capabilities| async move {
+        let mut cap_set = CapabilitySet::from_elem(capabilities.into_element());
 
         if !active_worker {
             // The non-active workers report that they are done snapshotting.
@@ -336,7 +336,7 @@ where
                 .expect("could not open persist client");
 
             let write = persist_client
-                .open_writer::<SourceData, (), Timestamp, Diff>(
+                .open_writer::<SourceData, (), mz_repr::Timestamp, Diff>(
                     shard_id,
                     &format!(
                         "compute::persist_sink::mint_batch_descriptions {}",
@@ -363,7 +363,7 @@ where
                     Event::Data(_cap, _data) => {
                         // Just read away data.
                         // TODO(guswynn): this, and the same code in the compute version of this
-                        // code, is inefficient, and can be improved.
+                        // code, is inefficient, and can be improved, likely by using 2 outputs.
                         // See
                         // <https://github.com/MaterializeInc/materialize/pull/17589#discussion_r1106016139>
                         // for more info.
@@ -383,8 +383,8 @@ where
                 // The maximal description range we can produce.
                 let batch_description = (current_upper.to_owned(), desired_frontier.to_owned());
 
-                let lower = batch_description.0.first().unwrap();
-                let batch_ts = batch_description.0.first().unwrap().clone();
+                let lower = batch_description.0.as_option().unwrap().clone();
+                let batch_ts = batch_description.0.as_option().unwrap().clone();
 
                 let cap = cap_set
                     .try_delayed(&batch_ts)
@@ -417,11 +417,7 @@ where
                         downgrading to {:?}",
                     new_batch_frontier
                 );
-                let res = cap_set.try_downgrade(new_batch_frontier.iter());
-                match res {
-                    Ok(_) => (),
-                    Err(e) => panic!("in minter: {:?}", e),
-                }
+                cap_set.downgrade(new_batch_frontier.iter());
 
                 // After successfully emitting a new description, we can update the upper for the
                 // operator.
@@ -430,32 +426,30 @@ where
         }
     });
 
-    if collection_id.is_user() {
-        output_stream.inspect(|d| trace!("batch_description: {:?}", d));
-    }
-
     let token = Rc::new(shutdown_button.press_on_drop());
     (output_stream, token)
 }
 
-/// Writes `desired_stream` to persist, but only for updates
+/// Writes `desired_collection` to persist, but only for updates
 /// that fall into batch a description that we get via `batch_descriptions`.
 /// This forwards a `HollowBatch` (with additional metadata)
 /// for any batch of updates that was written.
+///
+/// This operator assumes that the `desired_collection` comes pre-sharded.
 ///
 /// This also and updates various metrics.
 fn write_batches<G>(
     scope: &mut G,
     collection_id: GlobalId,
-    operator_name: String,
+    operator_name: &str,
     target: &CollectionMetadata,
-    batch_descriptions: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
-    desired_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
+    batch_descriptions: &Stream<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
+    desired_collection: &Collection<G, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
     storage_state: &mut StorageState,
 ) -> (Stream<G, HollowBatchAndMetadata>, Rc<dyn Any>)
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
 {
     let worker_index = scope.index();
 
@@ -475,7 +469,7 @@ where
     let (mut output, output_stream) = write_op.new_output();
 
     let mut descriptions_input = write_op.new_input(&batch_descriptions.broadcast(), Pipeline);
-    let mut desired_input = write_op.new_input(desired_stream, Pipeline);
+    let mut desired_input = write_op.new_input(&desired_collection.inner, Pipeline);
 
     // This operator accepts the current and desired update streams for a `persist` shard.
     // It attempts to write out updates, starting from the current's upper frontier, that
@@ -494,8 +488,8 @@ where
         // through the map, so we cannot use the `mz_ore` wrapper either.
         #[allow(clippy::disallowed_types)]
         let mut in_flight_batches = std::collections::HashMap::<
-            (Antichain<Timestamp>, Antichain<Timestamp>),
-            Capability<Timestamp>,
+            (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>),
+            Capability<mz_repr::Timestamp>,
         >::new();
 
         // TODO(aljoscha): We need to figure out what to do with error results from these calls.
@@ -505,7 +499,7 @@ where
             .expect("could not open persist client");
 
         let mut write = persist_client
-            .open_writer::<SourceData, (), Timestamp, Diff>(
+            .open_writer::<SourceData, (), mz_repr::Timestamp, Diff>(
                 shard_id,
                 &format!("compute::persist_sink::write_batches {}", collection_id),
                 Arc::new(target_relation_desc),
@@ -515,15 +509,15 @@ where
             .expect("could not open persist shard");
 
         // The current input frontiers.
-        let mut batch_descriptions_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
-        let mut desired_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
+        let mut batch_descriptions_frontier = Antichain::from_elem(Timestamp::minimum());
+        let mut desired_frontier = Antichain::from_elem(Timestamp::minimum());
 
         // The frontiers of the inputs we have processed, used to avoid redoing work
-        let mut processed_desired_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
-        let mut processed_descriptions_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
+        let mut processed_desired_frontier = Antichain::from_elem(Timestamp::minimum());
+        let mut processed_descriptions_frontier = Antichain::from_elem(Timestamp::minimum());
 
         // A "safe" choice for the lower of new batches we are creating.
-        let mut operator_batch_lower = Antichain::from_elem(TimelyTimestamp::minimum());
+        let mut operator_batch_lower = Antichain::from_elem(Timestamp::minimum());
 
         loop {
             tokio::select! {
@@ -544,18 +538,26 @@ where
                                         batch_descriptions_frontier,
                                     );
                                 }
-                                let existing = in_flight_batches.insert(
-                                    description.clone(),
-                                    cap.delayed(description.0.first().unwrap()),
-                                );
-                                assert!(
-                                    existing.is_none(),
-                                    "write_batches: sink {} got more than one \
-                                        batch for description {:?}, in-flight: {:?}",
-                                    collection_id,
+                                let time = description.0.as_option().copied().unwrap();
+                                match in_flight_batches.entry(
                                     description,
-                                    in_flight_batches
-                                );
+                                ){
+                                    std::collections::hash_map::Entry::Vacant(v) => {
+                                        v.insert(
+                                            cap.delayed(&time)
+                                        );
+                                    }
+                                    std::collections::hash_map::Entry::Occupied(o) => {
+                                        let (description, _) = o.remove_entry();
+                                        panic!(
+                                            "write_batches: sink {} got more than one \
+                                                batch for description {:?}, in-flight: {:?}",
+                                            collection_id,
+                                            description,
+                                            in_flight_batches
+                                        );
+                                    }
+                                }
                             }
 
                             continue;
@@ -583,13 +585,10 @@ where
                                 );
                             }
 
-                            // TODO: come up with a better default batch size here
-                            // (100 was chosen arbitrarily), and avoid having to make a batch
-                            // per-timestamp.
                             for (row, ts, diff) in data.drain(..) {
                                 if write.upper().less_equal(&ts){
                                     let builder = stashed_batches.entry(ts).or_insert_with(|| {
-                                        BatchBuilderAndMetdata::new(
+                                        BatchBuilderAndMetadata::new(
                                             write.builder(operator_batch_lower.clone()),
                                         )
                                     });
@@ -686,7 +685,7 @@ where
                     ready_batches,
                 );
 
-                for batch_description in ready_batches.into_iter() {
+                for batch_description in ready_batches {
                     let cap = in_flight_batches.remove(&batch_description).unwrap();
 
                     if collection_id.is_user() {
@@ -789,7 +788,7 @@ fn append_batches<G>(
     collection_id: GlobalId,
     operator_name: String,
     target: &CollectionMetadata,
-    batch_descriptions: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
+    batch_descriptions: &Stream<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
     batches: &Stream<G, HollowBatchAndMetadata>,
     persist_clients: Arc<PersistClientCache>,
     storage_state: &mut StorageState,
@@ -797,7 +796,7 @@ fn append_batches<G>(
     metrics: SourcePersistSinkMetrics,
 ) -> Rc<dyn Any>
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
 {
     let persist_location = target.persist_location.clone();
     let shard_id = target.data_shard;
@@ -854,19 +853,22 @@ where
         // `Antichain` does not implement `Ord`, so we cannot use a `BTreeSet`. We need to search
         // through the set, so we cannot use the `mz_ore` wrapper either.
         #[allow(clippy::disallowed_types)]
-        let mut in_flight_descriptions =
-            std::collections::HashSet::<(Antichain<Timestamp>, Antichain<Timestamp>)>::new();
+        let mut in_flight_descriptions = std::collections::HashSet::<(
+            Antichain<mz_repr::Timestamp>,
+            Antichain<mz_repr::Timestamp>,
+        )>::new();
 
         // In flight batches that haven't been `compare_and_append`'d yet, plus metrics about
         // the batch.
         let mut in_flight_batches = HashMap::<
-            (Antichain<Timestamp>, Antichain<Timestamp>),
+            (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>),
             Vec<(Batch<_, _, _, _>, BatchMetrics)>,
         >::new();
 
         if !active_worker {
             // The non-active workers report that they are done snapshotting.
-            source_statistics.initialize_snapshot_committed(&Antichain::<Timestamp>::new());
+            source_statistics
+                .initialize_snapshot_committed(&Antichain::<mz_repr::Timestamp>::new());
             return;
         }
 
@@ -877,7 +879,7 @@ where
             .expect("could not open persist client");
 
         let mut write = persist_client
-            .open_writer::<SourceData, (), Timestamp, Diff>(
+            .open_writer::<SourceData, (), mz_repr::Timestamp, Diff>(
                 shard_id,
                 &format!("persist_sink::append_batches {}", collection_id),
                 Arc::new(target_relation_desc),
@@ -897,8 +899,8 @@ where
         source_statistics.initialize_snapshot_committed(write.upper());
 
         // The current input frontiers.
-        let mut batch_description_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
-        let mut batches_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
+        let mut batch_description_frontier = Antichain::from_elem(Timestamp::minimum());
+        let mut batches_frontier = Antichain::from_elem(Timestamp::minimum());
 
         // Pause the source to prevent committing the snapshot,
         // if the failpoint is configured
@@ -1024,7 +1026,7 @@ where
                 }
             });
 
-            for done_batch_metadata in done_batches.into_iter() {
+            for done_batch_metadata in done_batches {
                 in_flight_descriptions.remove(&done_batch_metadata);
 
                 let mut batches = in_flight_batches
