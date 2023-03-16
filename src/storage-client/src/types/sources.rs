@@ -1369,10 +1369,6 @@ pub trait SourceConnection: Clone {
     /// progress relation.
     fn timestamp_desc(&self) -> RelationDesc;
 
-    /// The number of outputs. This will be 1 for sources with no subsources or 1 + num_subsources
-    /// otherwise.
-    fn num_outputs(&self) -> usize;
-
     /// The id of the connection object (i.e the one obtained from running `CREATE CONNECTION`) in
     /// the catalog, if any.
     fn connection_id(&self) -> Option<GlobalId>;
@@ -1429,10 +1425,6 @@ impl SourceConnection for KafkaSourceConnection {
 
     fn timestamp_desc(&self) -> RelationDesc {
         KAFKA_PROGRESS_DESC.clone()
-    }
-
-    fn num_outputs(&self) -> usize {
-        1
     }
 
     fn connection_id(&self) -> Option<GlobalId> {
@@ -1793,15 +1785,6 @@ impl SourceConnection for GenericSourceConnection {
         }
     }
 
-    fn num_outputs(&self) -> usize {
-        match self {
-            Self::Kafka(conn) => conn.num_outputs(),
-            Self::Postgres(conn) => conn.num_outputs(),
-            Self::LoadGenerator(conn) => conn.num_outputs(),
-            Self::TestScript(conn) => conn.num_outputs(),
-        }
-    }
-
     fn connection_id(&self) -> Option<GlobalId> {
         match self {
             Self::Kafka(conn) => conn.connection_id(),
@@ -1919,10 +1902,6 @@ impl SourceConnection for PostgresSourceConnection {
 
     fn timestamp_desc(&self) -> RelationDesc {
         PG_PROGRESS_DESC.clone()
-    }
-
-    fn num_outputs(&self) -> usize {
-        self.publication_details.tables.len() + 1
     }
 
     fn connection_id(&self) -> Option<GlobalId> {
@@ -2052,10 +2031,6 @@ impl SourceConnection for LoadGeneratorSourceConnection {
 
     fn timestamp_desc(&self) -> RelationDesc {
         LOAD_GEN_PROGRESS_DESC.clone()
-    }
-
-    fn num_outputs(&self) -> usize {
-        self.load_generator.views().len() + 1
     }
 
     fn connection_id(&self) -> Option<GlobalId> {
@@ -2398,10 +2373,6 @@ impl SourceConnection for TestScriptSourceConnection {
 
     fn timestamp_desc(&self) -> RelationDesc {
         TEST_SCRIPT_PROGRESS_DESC.clone()
-    }
-
-    fn num_outputs(&self) -> usize {
-        1
     }
 
     fn connection_id(&self) -> Option<GlobalId> {
