@@ -29,7 +29,7 @@ pub struct ComputeSinkDesc<S: 'static = (), T = mz_repr::Timestamp> {
     pub from: GlobalId,
     pub from_desc: RelationDesc,
     pub connection: ComputeSinkConnection<S>,
-    pub as_of: SinkAsOf<T>,
+    pub with_snapshot: bool,
     pub up_to: Antichain<T>,
 }
 
@@ -42,15 +42,15 @@ impl Arbitrary for ComputeSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
             any::<GlobalId>(),
             any::<RelationDesc>(),
             any::<ComputeSinkConnection<CollectionMetadata>>(),
-            any::<SinkAsOf<mz_repr::Timestamp>>(),
+            any::<bool>(),
             proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4),
         )
             .prop_map(
-                |(from, from_desc, connection, as_of, up_to_frontier)| ComputeSinkDesc {
+                |(from, from_desc, connection, with_snapshot, up_to_frontier)| ComputeSinkDesc {
                     from,
                     from_desc,
                     connection,
-                    as_of,
+                    with_snapshot,
                     up_to: Antichain::from(up_to_frontier),
                 },
             )
@@ -64,7 +64,7 @@ impl RustType<ProtoComputeSinkDesc> for ComputeSinkDesc<CollectionMetadata, mz_r
             connection: Some(self.connection.into_proto()),
             from: Some(self.from.into_proto()),
             from_desc: Some(self.from_desc.into_proto()),
-            as_of: Some(self.as_of.into_proto()),
+            with_snapshot: self.with_snapshot,
             up_to: Some(self.up_to.into_proto()),
         }
     }
@@ -78,9 +78,7 @@ impl RustType<ProtoComputeSinkDesc> for ComputeSinkDesc<CollectionMetadata, mz_r
             connection: proto
                 .connection
                 .into_rust_if_some("ProtoComputeSinkDesc::connection")?,
-            as_of: proto
-                .as_of
-                .into_rust_if_some("ProtoComputeSinkDesc::as_of")?,
+            with_snapshot: proto.with_snapshot,
             up_to: proto
                 .up_to
                 .into_rust_if_some("ProtoComputeSinkDesc::up_to")?,
@@ -161,47 +159,6 @@ impl RustType<ProtoPersistSinkConnection> for PersistSinkConnection<CollectionMe
             storage_metadata: proto
                 .storage_metadata
                 .into_rust_if_some("ProtoPersistSinkConnection::storage_metadata")?,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct SinkAsOf<T = mz_repr::Timestamp> {
-    pub frontier: Antichain<T>,
-    pub strict: bool,
-}
-
-impl Arbitrary for SinkAsOf<mz_repr::Timestamp> {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4),
-            any::<bool>(),
-        )
-            .prop_map(|(frontier, strict)| SinkAsOf {
-                frontier: Antichain::from(frontier),
-                strict,
-            })
-            .boxed()
-    }
-}
-
-impl RustType<ProtoSinkAsOf> for SinkAsOf<mz_repr::Timestamp> {
-    fn into_proto(&self) -> ProtoSinkAsOf {
-        ProtoSinkAsOf {
-            frontier: Some(self.frontier.into_proto()),
-            strict: self.strict,
-        }
-    }
-
-    fn from_proto(proto: ProtoSinkAsOf) -> Result<Self, TryFromProtoError> {
-        Ok(SinkAsOf {
-            frontier: proto
-                .frontier
-                .into_rust_if_some("ProtoSinkAsOf::frontier")?,
-            strict: proto.strict,
         })
     }
 }

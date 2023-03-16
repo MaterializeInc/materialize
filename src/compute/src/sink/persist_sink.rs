@@ -53,6 +53,7 @@ where
         compute_state: &mut ComputeState,
         sink: &ComputeSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
+        as_of: Antichain<Timestamp>,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
         probes: Vec<probe::Handle<Timestamp>>,
@@ -71,7 +72,7 @@ where
             sink_id,
             &self.storage_metadata,
             desired_collection,
-            sink.as_of.frontier.clone(),
+            as_of,
             compute_state,
             probes,
         )

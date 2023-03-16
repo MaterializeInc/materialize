@@ -930,14 +930,10 @@ impl Coordinator {
                         .insert(entry.id());
 
                     // Re-create the sink on the compute instance.
-                    let id_bundle = self
-                        .index_oracle(mview.cluster_id)
-                        .sufficient_collections(&mview.depends_on);
-                    let as_of = self.least_valid_read(&id_bundle);
                     let internal_view_id = self.allocate_transient_id()?;
                     let df = self
                         .dataflow_builder(mview.cluster_id)
-                        .build_materialized_view_dataflow(entry.id(), as_of, internal_view_id)?;
+                        .build_materialized_view_dataflow(entry.id(), internal_view_id)?;
                     self.must_ship_dataflow(df, mview.cluster_id).await;
                 }
                 CatalogItem::Sink(sink) => {

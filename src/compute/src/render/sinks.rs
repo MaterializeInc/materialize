@@ -15,6 +15,7 @@ use std::rc::Rc;
 
 use differential_dataflow::Collection;
 use timely::dataflow::{scopes::Child, Scope};
+use timely::progress::Antichain;
 
 use mz_compute_client::types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use mz_expr::{permutation_for_arrangement, MapFilterProject};
@@ -84,6 +85,7 @@ where
                     compute_state,
                     sink,
                     sink_id,
+                    self.as_of_frontier.clone(),
                     ok_collection.enter_region(inner),
                     err_collection.enter_region(inner),
                     probes,
@@ -117,6 +119,7 @@ where
         compute_state: &mut crate::compute_state::ComputeState,
         sink: &ComputeSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
+        as_of: Antichain<mz_repr::Timestamp>,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
         probes: Vec<probe::Handle<mz_repr::Timestamp>>,

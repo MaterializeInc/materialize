@@ -26,7 +26,7 @@ use mz_compute_client::types::dataflows::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc,
 };
 use mz_compute_client::types::sinks::{
-    ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection, SinkAsOf,
+    ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection,
 };
 use mz_expr::visit::Visit;
 use mz_expr::{
@@ -445,7 +445,6 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         id: GlobalId,
         sink_description: ComputeSinkDesc,
     ) -> Result<(), AdapterError> {
-        dataflow.set_as_of(sink_description.as_of.frontier.clone());
         self.import_into_dataflow(&sink_description.from, dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
             prep_relation_expr(self.catalog, plan, ExprPrepStyle::Index)?;
@@ -467,7 +466,6 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
     pub fn build_materialized_view_dataflow(
         &mut self,
         id: GlobalId,
-        as_of: Antichain<Timestamp>,
         internal_view_id: GlobalId,
     ) -> Result<DataflowDesc, AdapterError> {
         let mview_entry = self.catalog.get_entry(&id);
@@ -493,10 +491,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                 value_desc: mview.desc.clone(),
                 storage_metadata: (),
             }),
-            as_of: SinkAsOf {
-                frontier: as_of,
-                strict: false,
-            },
+            with_snapshot: true,
             up_to: Antichain::default(),
         };
         self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
