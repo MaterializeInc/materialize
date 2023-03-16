@@ -1397,6 +1397,7 @@ pub async fn serve(
     let metrics = Metrics::register_into(&metrics_registry);
     let metrics_clone = metrics.clone();
     let span = tracing::Span::current();
+    let coord_now = now.clone();
     let thread = thread::Builder::new()
         // The Coordinator thread tends to keep a lot of data on its stack. To
         // prevent a stack overflow we allocate a stack twice as big as the default
@@ -1409,7 +1410,7 @@ pub async fn serve(
                 handle.block_on(Coordinator::ensure_timeline_state_with_initial_time(
                     &timeline,
                     initial_timestamp,
-                    now.clone(),
+                    coord_now.clone(),
                     |ts| catalog.persist_timestamp(&timeline, ts),
                     &mut timestamp_oracles,
                 ));
@@ -1475,7 +1476,7 @@ pub async fn serve(
                 start_instant,
                 _thread: thread.join_on_drop(),
             };
-            let client = Client::new(build_info, cmd_tx.clone(), metrics_clone);
+            let client = Client::new(build_info, cmd_tx.clone(), metrics_clone, now);
             Ok((handle, client))
         }
         Err(e) => Err(e),
