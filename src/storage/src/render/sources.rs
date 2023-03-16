@@ -97,7 +97,7 @@ where
     let base_source_config = RawSourceCreationConfig {
         name: source_name,
         id,
-        num_outputs: description.desc.connection.num_outputs(),
+        source_exports: description.source_exports.clone(),
         timestamp_interval: description.desc.timestamp_interval,
         worker_id: scope.index(),
         worker_count: scope.peers(),
