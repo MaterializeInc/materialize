@@ -510,7 +510,9 @@ impl CatalogState {
         // Existing catalog items might have been created while a
         // specific feature flag turned on, so we need to ensure that this is also the
         // case during catalog rehydration in order to avoid panics.
-        state.system_configuration.set_enable_with_mutually_recursive(true);
+        state
+            .system_configuration
+            .set_enable_with_mutually_recursive(true);
         let session_catalog = ConnCatalog {
             state: &state,
             conn_id: SYSTEM_CONN_ID,
@@ -5544,7 +5546,9 @@ impl Catalog {
         // Existing catalog items might have been created while a
         // specific feature flag turned on, so we need to ensure that this is also the
         // case during catalog rehydration in order to avoid panics.
-        state.system_configuration.set_enable_with_mutually_recursive(true);
+        state
+            .system_configuration
+            .set_enable_with_mutually_recursive(true);
         session_catalog.state = &state;
 
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();

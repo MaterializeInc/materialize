@@ -482,33 +482,45 @@ impl Coordinator {
                     let database = catalog.database;
                     let search_path = catalog.search_path;
                     let role_id = catalog.role_id;
-                    let prepared_statements = catalog.prepared_statements.clone().map(|s| Cow::Owned(s.into_owned()));
-    
-                     async move {
-                    let catalog = ConnCatalog{state: &state, conn_id: catalog_conn_id, cluster, database, search_path, role_id, prepared_statements};
-                    let purify_fut = mz_sql::pure::purify_create_source(
-                        &catalog,
-                        now,
-                        stmt,
-                        connection_context,
-                    );
-                    let result = purify_fut.await.map_err(|e| e.into());
-                    // It is not an error for purification to complete after `internal_cmd_rx` is dropped.
-                    let result = internal_cmd_tx.send(Message::CreateSourceStatementReady(
-                        CreateSourceStatementReady {
-                            session,
-                            tx,
-                            result,
-                            params,
-                            depends_on,
-                            original_stmt,
-                            otel_ctx,
-                        },
-                    ));
-                    if let Err(e) = result {
-                        tracing::warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                    let prepared_statements = catalog
+                        .prepared_statements
+                        .clone()
+                        .map(|s| Cow::Owned(s.into_owned()));
+
+                    async move {
+                        let catalog = ConnCatalog {
+                            state: &state,
+                            conn_id: catalog_conn_id,
+                            cluster,
+                            database,
+                            search_path,
+                            role_id,
+                            prepared_statements,
+                        };
+                        let purify_fut = mz_sql::pure::purify_create_source(
+                            &catalog,
+                            now,
+                            stmt,
+                            connection_context,
+                        );
+                        let result = purify_fut.await.map_err(|e| e.into());
+                        // It is not an error for purification to complete after `internal_cmd_rx` is dropped.
+                        let result = internal_cmd_tx.send(Message::CreateSourceStatementReady(
+                            CreateSourceStatementReady {
+                                session,
+                                tx,
+                                result,
+                                params,
+                                depends_on,
+                                original_stmt,
+                                otel_ctx,
+                            },
+                        ));
+                        if let Err(e) = result {
+                            tracing::warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                        }
                     }
-                }});
+                });
             }
 
             // `CREATE SUBSOURCE` statements are disallowed for users and are only generated
@@ -522,7 +534,7 @@ impl Coordinator {
             _ => match self.plan_statement(&mut session, stmt, &params) {
                 Ok(plan) => self.sequence_plan(tx, session, plan, depends_on).await,
                 Err(e) => tx.send(Err(e), session),
-        },
+            },
         }
     }
 
