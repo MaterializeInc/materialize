@@ -6,14 +6,10 @@ menu:
     parent: commands
 ---
 
-`CREATE ROLE` creates a new role.
+`CREATE ROLE` creates a new role, which is a user account in Materialize.
 
-## Conceptual framework
-
-A role is a user account in a Materialize instance.
-
-When you [connect to a Materialize instance](/integrations/psql), you must specify
-the name of a valid role in the system.
+When you connect to Materialize, you must specify the name of a valid role in
+the system.
 
 {{< warning >}}
 Role-Based Access Control is under development {{% gh 11579 %}}. Currently, no
@@ -28,6 +24,7 @@ release.
 
 Field               | Use
 --------------------|-------------------------------------------------------------------------
+_role_name_         | A name for the role.
 **INHERIT**         | Grants the role the ability to inheritance of privileges of other roles.
 **CREATEROLE**      | Grants the role the ability to create, alter, and delete roles.
 **NOCREATEROLE**    | Denies the role the ability to create, alter, and delete roles.
@@ -35,7 +32,6 @@ Field               | Use
 **NOCREATEDB**      | Denies the role the ability to create databases.
 **CREATECLUSTER**   | Grants the role the ability to create clusters.
 **NOCREATECLUSTER** | Denies the role the ability to create clusters.
-_role_name_         | A name for the role.
 
 ## Details
 
