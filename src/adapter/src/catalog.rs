@@ -429,6 +429,12 @@ impl CatalogState {
         self.roles_by_id.get(id).expect("catalog out of sync")
     }
 
+    fn try_get_role_by_name(&self, role_name: &str) -> Option<&Role> {
+        self.roles_by_name
+            .get(role_name)
+            .map(|id| &self.roles_by_id[id])
+    }
+
     fn get_role_mut(&mut self, id: &RoleId) -> &mut Role {
         self.roles_by_id.get_mut(id).expect("catalog out of sync")
     }
@@ -3959,6 +3965,10 @@ impl Catalog {
         self.state.get_role(id)
     }
 
+    pub fn try_get_role_by_name(&self, role_name: &str) -> Option<&Role> {
+        self.state.try_get_role_by_name(role_name)
+    }
+
     /// Creates a new schema in the `Catalog` for temporary items
     /// indicated by the TEMPORARY or TEMP keywords.
     pub fn create_temporary_schema(&mut self, conn_id: ConnectionId) -> Result<(), Error> {
@@ -6513,8 +6523,8 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self,
         role_name: &str,
     ) -> Result<&dyn mz_sql::catalog::CatalogRole, SqlCatalogError> {
-        match self.state.roles_by_name.get(role_name) {
-            Some(id) => Ok(&self.state.roles_by_id[id]),
+        match self.state.try_get_role_by_name(role_name) {
+            Some(role) => Ok(role),
             None => Err(SqlCatalogError::UnknownRole(role_name.into())),
         }
     }
