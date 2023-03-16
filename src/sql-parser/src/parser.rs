@@ -119,13 +119,19 @@ pub fn parse_data_type(sql: &str) -> Result<RawDataType, ParserError> {
 ///
 /// This is analogous to the `SplitIdentifierString` function in PostgreSQL.
 pub fn split_identifier_string(s: &str) -> Result<Vec<String>, ParserError> {
-    let tokens = lexer::lex(s)?;
-    let mut parser = Parser::new(s, tokens);
-    let values = parser.parse_comma_separated(Parser::parse_set_variable_value)?;
-    Ok(values
-        .into_iter()
-        .map(|v| v.into_unquoted_value())
-        .collect())
+    // SplitIdentifierString ignores leading and trailing whitespace, and
+    // accepts empty input as a 0-length result.
+    if s.trim().is_empty() {
+        Ok(vec![])
+    } else {
+        let tokens = lexer::lex(s)?;
+        let mut parser = Parser::new(s, tokens);
+        let values = parser.parse_comma_separated(Parser::parse_set_variable_value)?;
+        Ok(values
+            .into_iter()
+            .map(|v| v.into_unquoted_value())
+            .collect())
+    }
 }
 
 macro_rules! maybe {
