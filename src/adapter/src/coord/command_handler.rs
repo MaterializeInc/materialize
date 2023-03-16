@@ -481,8 +481,7 @@ impl Coordinator {
                     let database = catalog.database;
                     let search_path = catalog.search_path;
                     let role_id = catalog.role_id;
-
-                    let raw_prepared_statements = catalog.prepared_statements.map(|s| s.clone());
+                    let prepared_statements = catalog.prepared_statements.cloned();
 
                     async move {
                         let catalog = ConnCatalog {
@@ -492,7 +491,7 @@ impl Coordinator {
                             database,
                             search_path,
                             role_id,
-                            prepared_statements: raw_prepared_statements.as_ref(),
+                            prepared_statements: prepared_statements.as_ref(),
                         };
                         let purify_fut = mz_sql::pure::purify_create_source(
                             &catalog,
