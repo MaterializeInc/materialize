@@ -609,6 +609,7 @@ Field         | Type                          | Meaning
 [`bigint`]: /sql/types/bigint
 [`bigint list`]: /sql/types/list
 [`boolean`]: /sql/types/boolean
+[`jsonb`]: /sql/types/jsonb
 [`mz_timestamp`]: /sql/types/mz_timestamp
 [`numeric`]: /sql/types/numeric
 [`text`]: /sql/types/text
