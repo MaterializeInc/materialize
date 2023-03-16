@@ -137,8 +137,8 @@ impl PersistConfig {
                     Self::DEFAULT_SINK_MINIMUM_BATCH_UPDATES,
                 ),
                 next_listen_batch_retryer: RwLock::new(Self::DEFAULT_NEXT_LISTEN_BATCH_RETRYER),
-                stats_collection_enabled: AtomicBool::new(false),
-                stats_filter_enabled: AtomicBool::new(false),
+                stats_collection_enabled: AtomicBool::new(Self::DEFAULT_STATS_COLLECTION_ENABLED),
+                stats_filter_enabled: AtomicBool::new(Self::DEFAULT_STATS_FILTER_ENABLED),
             }),
             compaction_enabled: !compaction_disabled,
             compaction_concurrency_limit: 5,
@@ -185,6 +185,10 @@ impl PersistConfig {
     pub const DEFAULT_COMPACTION_MINIMUM_TIMEOUT: Duration = Duration::from_secs(90);
     /// Default value for [`DynamicConfig::consensus_connect_timeout`].
     pub const DEFAULT_CRDB_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+    /// Default value for [`DynamicConfig::stats_collection_enabled`].
+    pub const DEFAULT_STATS_COLLECTION_ENABLED: bool = false;
+    /// Default value for [`DynamicConfig::stats_filter_enabled`].
+    pub const DEFAULT_STATS_FILTER_ENABLED: bool = false;
 
     /// Default value for [`PersistConfig::sink_minimum_batch_updates`].
     pub const DEFAULT_SINK_MINIMUM_BATCH_UPDATES: usize = 0;
@@ -517,6 +521,10 @@ pub struct PersistParameters {
     pub next_listen_batch_retryer: Option<RetryParameters>,
     /// Configures [`PersistConfig::sink_minimum_batch_updates`].
     pub sink_minimum_batch_updates: Option<usize>,
+    /// Configures [`DynamicConfig::stats_collection_enabled`].
+    pub stats_collection_enabled: Option<bool>,
+    /// Configures [`DynamicConfig::stats_filter_enabled`].
+    pub stats_filter_enabled: Option<bool>,
 }
 
 impl PersistParameters {
@@ -530,6 +538,8 @@ impl PersistParameters {
             consensus_connect_timeout: self_consensus_connect_timeout,
             sink_minimum_batch_updates: self_sink_minimum_batch_updates,
             next_listen_batch_retryer: self_next_listen_batch_retryer,
+            stats_collection_enabled: self_stats_collection_enabled,
+            stats_filter_enabled: self_stats_filter_enabled,
         } = self;
         let Self {
             blob_target_size: other_blob_target_size,
@@ -537,6 +547,8 @@ impl PersistParameters {
             consensus_connect_timeout: other_consensus_connect_timeout,
             sink_minimum_batch_updates: other_sink_minimum_batch_updates,
             next_listen_batch_retryer: other_next_listen_batch_retryer,
+            stats_collection_enabled: other_stats_collection_enabled,
+            stats_filter_enabled: other_stats_filter_enabled,
         } = other;
         if let Some(v) = other_blob_target_size {
             *self_blob_target_size = Some(v);
@@ -553,6 +565,12 @@ impl PersistParameters {
         if let Some(v) = other_next_listen_batch_retryer {
             *self_next_listen_batch_retryer = Some(v);
         }
+        if let Some(v) = other_stats_collection_enabled {
+            *self_stats_collection_enabled = Some(v)
+        }
+        if let Some(v) = other_stats_filter_enabled {
+            *self_stats_filter_enabled = Some(v)
+        }
     }
 
     /// Return whether all parameters are unset.
@@ -567,12 +585,16 @@ impl PersistParameters {
             consensus_connect_timeout,
             sink_minimum_batch_updates,
             next_listen_batch_retryer,
+            stats_collection_enabled,
+            stats_filter_enabled,
         } = self;
         blob_target_size.is_none()
             && compaction_minimum_timeout.is_none()
             && consensus_connect_timeout.is_none()
             && sink_minimum_batch_updates.is_none()
             && next_listen_batch_retryer.is_none()
+            && stats_collection_enabled.is_none()
+            && stats_filter_enabled.is_none()
     }
 
     /// Applies the parameter values to persist's in-memory config object.
@@ -588,6 +610,8 @@ impl PersistParameters {
             consensus_connect_timeout,
             sink_minimum_batch_updates,
             next_listen_batch_retryer,
+            stats_collection_enabled,
+            stats_filter_enabled,
         } = self;
         if let Some(blob_target_size) = blob_target_size {
             cfg.dynamic
@@ -618,6 +642,16 @@ impl PersistParameters {
                 .expect("lock poisoned");
             *retry = *retry_params;
         }
+        if let Some(stats_collection_enabled) = stats_collection_enabled {
+            cfg.dynamic
+                .stats_collection_enabled
+                .store(*stats_collection_enabled, DynamicConfig::STORE_ORDERING);
+        }
+        if let Some(stats_filter_enabled) = stats_filter_enabled {
+            cfg.dynamic
+                .stats_filter_enabled
+                .store(*stats_filter_enabled, DynamicConfig::STORE_ORDERING);
+        }
     }
 }
 
@@ -629,6 +663,8 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             consensus_connect_timeout: self.consensus_connect_timeout.into_proto(),
             sink_minimum_batch_updates: self.sink_minimum_batch_updates.into_proto(),
             next_listen_batch_retryer: self.next_listen_batch_retryer.into_proto(),
+            stats_collection_enabled: self.stats_collection_enabled.into_proto(),
+            stats_filter_enabled: self.stats_filter_enabled.into_proto(),
         }
     }
 
@@ -639,6 +675,8 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             consensus_connect_timeout: proto.consensus_connect_timeout.into_rust()?,
             sink_minimum_batch_updates: proto.sink_minimum_batch_updates.into_rust()?,
             next_listen_batch_retryer: proto.next_listen_batch_retryer.into_rust()?,
+            stats_collection_enabled: proto.stats_collection_enabled.into_rust()?,
+            stats_filter_enabled: proto.stats_filter_enabled.into_rust()?,
         })
     }
 }
