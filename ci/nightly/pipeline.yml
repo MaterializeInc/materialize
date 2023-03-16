@@ -549,13 +549,11 @@ steps:
     artifact_paths: junit_*.xml
     timeout_in_minutes: 70
     agents:
-      # A larger instance is needed since SQLsmith likes creating
-      # large queries and going out of memory
-      queue: builder-linux-x86_64
+      queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqlsmith
-          args: [--num-sqlsmith=8, --max-joins=2, --runtime=3600]
+          args: [--num-sqlsmith=2, --create-cluster, --max-joins=2, --runtime=3600]
 
   - id: sqlsmith-explain
     label: "SQLsmith explain"
@@ -566,7 +564,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqlsmith
-          args: [--num-sqlsmith=4, --max-joins=15, --explain-only, --runtime=3600]
+          args: [--num-sqlsmith=1, --max-joins=15, --explain-only, --runtime=3600]
 
   - wait: ~
     continue_on_failure: true

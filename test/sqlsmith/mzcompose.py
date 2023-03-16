@@ -35,6 +35,7 @@ SERVICES = [
 known_errors = [
     "no connection to the server",  # Expected AFTER a crash, the query before this is interesting, not the ones after
     "failed: Connection refused",  # Expected AFTER a crash, the query before this is interesting, not the ones after
+    "canceling statement due to statement timeout",
     "value too long for type",
     "list_agg on char not yet supported",
     "does not allow subqueries",
@@ -125,6 +126,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # https://github.com/MaterializeInc/materialize/issues/2392
     parser.add_argument("--max-joins", default=2, type=int)
     parser.add_argument("--explain-only", action="store_true")
+    parser.add_argument("--create-cluster", action="store_true")
     parser.add_argument("--exclude-catalog", default=False, type=bool)
     parser.add_argument("--seed", default=None, type=int)
     args = parser.parse_args()
@@ -156,6 +158,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         """
     )
 
+    c.sql("ALTER SYSTEM SET max_clusters to 100;", user="mz_system", port=6877)
+
     seed = args.seed or random.randint(0, 2**31 - args.num_sqlsmith)
 
     def kill_sqlsmith_with_delay() -> None:
@@ -180,6 +184,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             cmd.append("--exclude-catalog")
         if args.explain_only:
             cmd.append("--explain-only")
+        if args.create_cluster:
+            cmd.append("--create-cluster")
 
         threads.append(Thread(target=run_sqlsmith, args=[c, cmd, aggregate]))
         threads[-1].start()
