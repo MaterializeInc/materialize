@@ -506,8 +506,13 @@ impl CatalogState {
     /// context.
     #[tracing::instrument(level = "info", skip_all)]
     pub fn parse_view_item(&self, create_sql: String) -> Result<CatalogItem, anyhow::Error> {
-        let mut session_catalog = ConnCatalog {
-            state: self.clone(),
+        let mut state = self.clone();
+        // Existing catalog items might have been created while a
+        // specific feature flag turned on, so we need to ensure that this is also the
+        // case during catalog rehydration in order to avoid panics.
+        state.system_configuration.set_enable_with_mutually_recursive(true);
+        let session_catalog = ConnCatalog {
+            state: &state,
             conn_id: SYSTEM_CONN_ID,
             cluster: "default".into(),
             database: self
@@ -518,7 +523,6 @@ impl CatalogState {
             role_id: self.resolve_builtin_role(&MZ_SYSTEM_ROLE),
             prepared_statements: None,
         };
-        enable_features_required_for_catalog_open(&mut session_catalog);
 
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
         let (stmt, depends_on) = mz_sql::names::resolve(&session_catalog, stmt)?;
@@ -1282,13 +1286,13 @@ impl CatalogState {
 
 #[derive(Debug)]
 pub struct ConnCatalog<'a> {
-    state: CatalogState,
-    conn_id: ConnectionId,
-    cluster: String,
-    database: Option<DatabaseId>,
-    search_path: Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
-    role_id: RoleId,
-    prepared_statements: Option<Cow<'a, BTreeMap<String, PreparedStatement>>>,
+    pub(crate) state: &'a CatalogState,
+    pub(crate) conn_id: ConnectionId,
+    pub(crate) cluster: String,
+    pub(crate) database: Option<DatabaseId>,
+    pub(crate) search_path: Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
+    pub(crate) role_id: RoleId,
+    pub(crate) prepared_statements: Option<Cow<'a, BTreeMap<String, PreparedStatement>>>,
 }
 
 impl ConnCatalog<'_> {
@@ -1298,18 +1302,6 @@ impl ConnCatalog<'_> {
 
     pub fn state(&self) -> &CatalogState {
         &self.state
-    }
-
-    pub fn into_owned(self) -> ConnCatalog<'static> {
-        ConnCatalog {
-            state: self.state.clone(),
-            conn_id: self.conn_id,
-            cluster: self.cluster,
-            database: self.database,
-            search_path: self.search_path,
-            role_id: self.role_id,
-            prepared_statements: self.prepared_statements.map(|s| Cow::Owned(s.into_owned())),
-        }
     }
 
     /// Returns the schemas:
@@ -3580,7 +3572,7 @@ impl Catalog {
             .map(|schema| (schema.name().database.clone(), schema.id().clone()))
             .collect();
         ConnCatalog {
-            state: state.clone(),
+            state: &state,
             conn_id: session.conn_id(),
             cluster: session.vars().cluster().into(),
             database,
@@ -3592,7 +3584,7 @@ impl Catalog {
 
     pub fn for_sessionless_user(&self, role_id: RoleId) -> ConnCatalog {
         ConnCatalog {
-            state: self.state.clone(),
+            state: &self.state,
             conn_id: SYSTEM_CONN_ID,
             cluster: "default".into(),
             database: self
@@ -5548,7 +5540,12 @@ impl Catalog {
         pcx: Option<&PlanContext>,
     ) -> Result<CatalogItem, AdapterError> {
         let mut session_catalog = self.for_system_session();
-        enable_features_required_for_catalog_open(&mut session_catalog);
+        let mut state = session_catalog.state.clone();
+        // Existing catalog items might have been created while a
+        // specific feature flag turned on, so we need to ensure that this is also the
+        // case during catalog rehydration in order to avoid panics.
+        state.system_configuration.set_enable_with_mutually_recursive(true);
+        session_catalog.state = &state;
 
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
         let (stmt, depends_on) = mz_sql::names::resolve(&session_catalog, stmt)?;
@@ -5880,21 +5877,6 @@ pub fn is_reserved_name(name: &str) -> bool {
     BUILTIN_PREFIXES
         .iter()
         .any(|prefix| name.starts_with(prefix))
-}
-
-/// Enable catalog features that might be required during planning in
-/// [Catalog::open]. Existing catalog items might have been created while a
-/// specific feature flag turned on, so we need to ensure that this is also the
-/// case during catalog rehydration in order to avoid panics.
-fn enable_features_required_for_catalog_open(session_catalog: &mut ConnCatalog) {
-    if !session_catalog
-        .system_vars()
-        .enable_with_mutually_recursive()
-    {
-        session_catalog
-            .system_vars_mut()
-            .set_enable_with_mutually_recursive(true);
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -6435,10 +6417,6 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn system_vars(&self) -> &SystemVars {
         &self.state.system_configuration
-    }
-
-    fn system_vars_mut(&mut self) -> &mut SystemVars {
-        &mut self.state.system_configuration
     }
 }
 

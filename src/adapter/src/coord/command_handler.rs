@@ -10,6 +10,7 @@
 //! Logic for  processing client [`Command`]s. Each [`Command`] is initiated by a
 //! client via some external Materialize API (ex: HTTP and psql).
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -27,6 +28,7 @@ use mz_sql::catalog::{RoleAttributes, SessionCatalog};
 use mz_sql::plan::{CreateRolePlan, Params};
 use mz_sql::session::vars::OwnedVarInput;
 
+use crate::catalog::ConnCatalog;
 use crate::client::ConnectionId;
 use crate::command::{
     Canceled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
@@ -473,11 +475,19 @@ impl Coordinator {
                 let connection_context = self.connection_context.clone();
                 let otel_ctx = OpenTelemetryContext::obtain();
 
-                let catalog = Box::new(catalog.into_owned());
-                task::spawn(|| format!("purify:{conn_id}"), async move {
-                    //let catalog = catalog;
+                task::spawn(|| format!("purify:{conn_id}"), {
+                    let state = catalog.state().clone();
+                    let catalog_conn_id = catalog.conn_id;
+                    let cluster = catalog.cluster;
+                    let database = catalog.database;
+                    let search_path = catalog.search_path;
+                    let role_id = catalog.role_id;
+                    let prepared_statements = catalog.prepared_statements.clone().map(|s| Cow::Owned(s.into_owned()));
+    
+                     async move {
+                    let catalog = ConnCatalog{state: &state, conn_id: catalog_conn_id, cluster, database, search_path, role_id, prepared_statements};
                     let purify_fut = mz_sql::pure::purify_create_source(
-                        &*catalog,
+                        &catalog,
                         now,
                         stmt,
                         connection_context,
@@ -498,7 +508,7 @@ impl Coordinator {
                     if let Err(e) = result {
                         tracing::warn!("internal_cmd_rx dropped before we could send: {:?}", e);
                     }
-                });
+                }});
             }
 
             // `CREATE SUBSOURCE` statements are disallowed for users and are only generated
