@@ -10,6 +10,7 @@
 //! A source that reads from a persist shard.
 
 use std::any::Any;
+use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::rc::Rc;
@@ -27,15 +28,17 @@ use mz_ore::vec::VecExt;
 use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
+use timely::dataflow::operators::{Capability, CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::sync::mpsc;
-use tracing::trace;
+use tokio::task::JoinHandle;
+use tracing::{trace, warn};
 
 use crate::cache::PersistClientCache;
+use crate::cfg::PersistConfig;
 use crate::fetch::{FetchedPart, SerdeLeasedBatchPart};
 use crate::read::ListenEvent;
 use crate::{PersistLocation, ShardId};
@@ -517,8 +520,9 @@ where
         descs,
         Exchange::new(|&(i, _): &(usize, _)| u64::cast_from(i)),
     );
-    let (mut fetched_output, fetched_stream) = builder.new_output();
-    let (mut completed_fetches_output, completed_fetches_stream) = builder.new_output();
+    let (mut fetched_output, fetched_parts_stream) = builder.new_output();
+    let (mut completed_fetches_feedback_output, completed_fetches_feedback_stream) =
+        builder.new_output();
 
     // NB: we intentionally do _not_ pass along the shutdown button here so that
     // we can be assured we always emit the full contents of a batch. If we used
@@ -546,30 +550,144 @@ where
                 .await
         };
 
-        while let Some(event) = descs_input.next_mut().await {
-            if let Event::Data(cap, data) = event {
-                // `LeasedBatchPart`es cannot be dropped at this point w/o
-                // panicking, so swap them to an owned version.
-                for (_idx, part) in data.drain(..) {
-                    let (leased_part, fetched) = fetcher
-                        .fetch_leased_part(fetcher.leased_part_from_exchangeable(part))
-                        .await;
-                    let fetched = fetched.expect("shard_id should match across all workers");
+        // We use two buffers to queue up and pipeline reads to Blob, to ensure we can adhere
+        // to a strict memory bound while taking advantage of concurrent network calls.
+        //
+        // The first is `queue`, used to store all parts we know to fetch but have not yet made
+        // network requests for. Each time we read in a Batch desc from our input, we atomically
+        // add all of its parts to this queue. We soft limit the size of this queue to MAX_QUEUE_SIZE,
+        // allowing us to overshoot the max size by the 1 batch's worth of parts.
+        //
+        // The second is `pipelined_fetches`, a channel that contains the parts we actively have
+        // network calls out for. The channel itself does not have a bounded size, but we do the
+        // necessary bookkeeping to ensure it adheres to a soft cap of MAX_INFLIGHT_BYTES worth
+        // of fetched parts at a time, and that no more than MAX_FETCH_CONCURRENCY fetches are
+        // active at a time, to bound the amount of memory and network a single worker can consume.
+        //
+        // Each iteration, when possible, we read from `queue`, pull off parts to fetch into new
+        // tokio tasks, and transfer those inflight requests to `pipelined_fetches`. We then await
+        // between the completion of the head of `pipelined_fetches` and receiving any new Batch
+        // desc input (provided `queue` space is available) ad infinitum, or until our input signals
+        // its completion, in which case we drain any pending work and return.
+        //
+        // While not strictly necessary, we avoid awaiting between receiving new input and attempting
+        // to fire off new tasks from our queue to ensure fetches execute promptly.
+        const MAX_QUEUE_SIZE: usize = 25;
+        const MAX_INFLIGHT_BYTES: usize = 3 * PersistConfig::DEFAULT_BLOB_TARGET_SIZE;
+        const MAX_FETCH_CONCURRENCY: usize = 5;
+        let mut queue = VecDeque::<(_, SerdeLeasedBatchPart)>::new();
+        let (pipelined_fetches_tx, mut pipelined_fetches_rx) = mpsc::unbounded_channel::<((Capability<T>, Capability<T>), JoinHandle<_>)>();
+        let fetched_parts = async_stream::stream! {
+            while let Some((capabilities, fetch_handle)) = pipelined_fetches_rx.recv().await {
+                match fetch_handle.await {
+                    Ok(fetched_part) => yield (capabilities, fetched_part),
+                    // don't panic if the process is shutting down and the task is cancelled
+                    Err(err) if err.is_cancelled() => break,
+                    Err(err) => panic!("fetch part task failed: {}", err),
+                }
+            }
+        };
+        tokio::pin!(fetched_parts);
+
+        let mut descs_input_done = false;
+        let mut inflight_bytes = 0;
+        let concurrency_semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_FETCH_CONCURRENCY));
+
+        while !descs_input_done || !queue.is_empty() {
+            // For as long as we have memory available and queued up parts, drain the queued
+            // parts into our fetch pipeline. We may overshoot our MAX_INFLIGHT_BYTES by the
+            // size of 1 part to ensure we always make progress.
+            while inflight_bytes < MAX_INFLIGHT_BYTES {
+                match queue.pop_front() {
+                    Some((capabilities, part)) => {
+                        let part_size = part.encoded_size_bytes;
+                        let part_name = part.name();
+
+                        let fetcher = fetcher.clone();
+                        let semaphore = Arc::clone(&concurrency_semaphore);
+                        // we want our part fetches to occur in separate tasks to avoid any risk of them
+                        // not being polled if the timely thread were to yield for a long period of time
+                        let fetch = mz_ore::task::spawn(|| part_name, async move {
+                            let _permit = semaphore.acquire_owned().await.expect("semaphore not closed");
+                            fetcher.fetch_leased_part(fetcher.leased_part_from_exchangeable(part)).await
+                        });
+
+                        if let Err(_) = pipelined_fetches_tx.send((capabilities, fetch)) {
+                            // should only be possible on process shutdown
+                            warn!("pipelined fetches channel closed unexpectedly");
+                            return;
+                        }
+                        inflight_bytes += part_size;
+                    }
+                    None => break
+                }
+            }
+
+            tokio::select! {
+                // We use a biased select to emit any fetched parts before looking for new
+                // input, and use a precondition to ensure we drain the pipeline if we've hit
+                // our max queue size.
+                biased;
+
+                // First, check to see if we've finished fetching any parts from blob storage.
+                // If we have filled our queue up to capacity, which guarantees we have at least
+                // one pipelined read in flight, we will wait indefinitely on this stream.
+                //
+                // StreamExt::next is cancel safe.
+                Some(((fetched_cap, feedback_cap), (leased_part, fetched))) = fetched_parts.next() => {
+                    inflight_bytes -= leased_part.encoded_size_bytes;
+                    let fetched: FetchedPart<K, V, T, D> = fetched.expect("shard_id should match across all workers");
                     {
                         // Do very fine-grained output activation/session
                         // creation to ensure that we don't hold activated
                         // outputs or sessions across await points, which
                         // would prevent messages from being flushed from
                         // the shared timely output buffer.
-                        fetched_output.give(&cap, fetched).await;
-                        completed_fetches_output
-                            .give(&cap, leased_part.into_exchangeable_part())
-                            .await;
+                        fetched_output.give(&fetched_cap, fetched).await;
+                        completed_fetches_feedback_output.give(&feedback_cap, leased_part.into_exchangeable_part()).await;
                     }
                 }
+                // If we have not already completed our input, and we have space in our queue,
+                // find the next parts to add to our queue. There should be no await between
+                // this branch and attempting to transfer the work from the queue to our pipelined
+                // read channel to ensure the fetches start promptly.
+                //
+                // AsyncInputHandle::next_mut is cancel safe.
+                event = descs_input.next_mut(), if !descs_input_done && queue.len() < MAX_QUEUE_SIZE => {
+                    match event {
+                        Some(Event::Data(cap, data)) => {
+                            // we need to retain a capability for each output. the `delayed_for_output`
+                            // is a bit of a workaround to create two owned capabilities, as `retain`
+                            // and `retain_for_output` consume the input capability.
+                            let fetched_cap = cap.delayed_for_output(cap.time(), 0);
+                            let feedback_cap = cap.retain_for_output(1);
+                            for (_idx, part) in data.drain(..) {
+                                queue.push_back(((fetched_cap.clone(), feedback_cap.clone()), part));
+                            }
+                        }
+                        Some(Event::Progress(_)) => {}
+                        None => {
+                            descs_input_done = true;
+                        }
+                    }
+                }
+            };
+        }
+        assert!(queue.is_empty());
+
+        // we've fully drained our queue. now drain any lingering pipelined fetches.
+        drop(pipelined_fetches_tx);
+        while let Some(((fetched_cap, feedback_cap), (leased_part, fetched))) = fetched_parts.next().await {
+            inflight_bytes -= leased_part.encoded_size_bytes;
+            let fetched: FetchedPart<K, V, T, D> = fetched.expect("shard_id should match across all workers");
+            {
+                fetched_output.give(&fetched_cap, fetched).await;
+                completed_fetches_feedback_output.give(&feedback_cap, leased_part.into_exchangeable_part()).await;
             }
         }
+
+        assert_eq!(inflight_bytes, 0);
     });
 
-    (fetched_stream, completed_fetches_stream)
+    (fetched_parts_stream, completed_fetches_feedback_stream)
 }

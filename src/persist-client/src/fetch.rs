@@ -72,6 +72,15 @@ where
         b
     }
 
+    pub(crate) fn clone(&self) -> Self {
+        Self {
+            blob: Arc::clone(&self.blob),
+            metrics: Arc::clone(&self.metrics),
+            shard_id: self.shard_id,
+            _phantom: PhantomData,
+        }
+    }
+
     /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
     pub fn leased_part_from_exchangeable(&self, x: SerdeLeasedBatchPart) -> LeasedBatchPart<T> {
         LeasedBatchPart::from(x, Arc::clone(&self.metrics))
@@ -584,9 +593,15 @@ pub struct SerdeLeasedBatchPart {
     upper: Vec<[u8; 8]>,
     since: Vec<[u8; 8]>,
     key: PartialBatchKey,
-    encoded_size_bytes: usize,
+    pub(crate) encoded_size_bytes: usize,
     leased_seqno: Option<SeqNo>,
     reader_id: LeasedReaderId,
+}
+
+impl SerdeLeasedBatchPart {
+    pub(crate) fn name(&self) -> String {
+        self.key.complete(&self.shard_id).to_string()
+    }
 }
 
 impl<T: Timestamp + Codec64> LeasedBatchPart<T> {
