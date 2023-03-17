@@ -32,16 +32,16 @@ ALTER PUBLICATION mz_source ADD TABLE t2;
 
 INSERT INTO t2 SELECT a1.f1 + a6.f1 , E'abc\nxyz' FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4, ten AS a5, ten AS a6;
 
-DROP TABLE IF EXISTS to_be_altered_fail;
-CREATE TABLE to_be_altered_fail (f1 INTEGER);
-ALTER TABLE to_be_altered_fail REPLICA IDENTITY FULL;
+DROP TABLE IF EXISTS alter_fail_add_col;
+CREATE TABLE alter_fail_add_col (f1 INTEGER);
+ALTER TABLE alter_fail_add_col REPLICA IDENTITY FULL;
 
-INSERT INTO to_be_altered_fail VALUES (1);
-ALTER PUBLICATION mz_source_alter ADD TABLE to_be_altered_fail;
+INSERT INTO alter_fail_add_col VALUES (1);
+ALTER PUBLICATION mz_source_alter_add_col ADD TABLE alter_fail_add_col;
 
-DROP TABLE IF EXISTS to_be_altered_ok;
-CREATE TABLE to_be_altered_ok (f1 INTEGER NOT NULL);
-ALTER TABLE to_be_altered_ok REPLICA IDENTITY FULL;
+DROP TABLE IF EXISTS alter_fail_drop_constraint;
+CREATE TABLE alter_fail_drop_constraint (f1 INTEGER NOT NULL);
+ALTER TABLE alter_fail_drop_constraint REPLICA IDENTITY FULL;
 
-INSERT INTO to_be_altered_ok VALUES (1);
-ALTER PUBLICATION mz_source ADD TABLE to_be_altered_ok;
+INSERT INTO alter_fail_drop_constraint VALUES (1);
+ALTER PUBLICATION mz_source_alter_drop_constraint ADD TABLE alter_fail_drop_constraint;
