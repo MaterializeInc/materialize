@@ -430,12 +430,20 @@ pub async fn purify_create_source(
                     };
 
                     let data_type = scx.resolve_type(ty)?;
+                    let mut options = vec![];
+
+                    if !c.nullable {
+                        options.push(mz_sql_parser::ast::ColumnOptionDef {
+                            name: None,
+                            option: mz_sql_parser::ast::ColumnOption::NotNull,
+                        });
+                    }
 
                     columns.push(ColumnDef {
                         name,
                         data_type,
                         collation: None,
-                        options: vec![],
+                        options,
                     });
                 }
 
