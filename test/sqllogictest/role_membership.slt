@@ -24,9 +24,9 @@ CREATE VIEW role_members AS
     member.name AS member,
     grantor.name AS grantor
   FROM mz_role_members membership
-  JOIN mz_roles role ON membership.role_id = role.id
-  JOIN mz_roles member ON membership.member = member.id
-  JOIN mz_roles grantor ON membership.grantor = grantor.id
+  LEFT JOIN mz_roles role ON membership.role_id = role.id
+  LEFT JOIN mz_roles member ON membership.member = member.id
+  LEFT JOIN mz_roles grantor ON membership.grantor = grantor.id
 
 statement ok
 CREATE ROLE joe
@@ -120,13 +120,53 @@ query TTT
 SELECT * FROM mz_role_members
 ----
 
-# Cannot grant system role
+statement ok
+GRANT group1 TO joe
+
+query TTT
+SELECT * FROM role_members
+----
+group1  joe  materialize
+
+# Dropped roles have their membership revoked
+
+statement ok
+DROP ROLE joe
+
+query TTT
+SELECT * FROM role_members
+----
+
+statement ok
+CREATE ROLE joe
+
+# Cannot grant or revoke system role
 
 statement error role name "mz_system" is reserved
 GRANT mz_system TO joe
 
 statement error role name "mz_system" is reserved
 GRANT joe TO mz_system
+
+statement error role name "mz_system" is reserved
+REVOKE mz_system FROM joe
+
+statement error role name "mz_system" is reserved
+REVOKE joe FROM mz_system
+
+# Prevent granting and revoking to/from PUBLIC role
+
+statement error role name "public" is reserved
+GRANT group1 TO public
+
+statement error role name "public" is reserved
+GRANT public TO group1
+
+statement error role name "public" is reserved
+REVOKE group1 FROM public
+
+statement error role name "public" is reserved
+REVOKE public FROM group1
 
 # Disable RBAC checks
 

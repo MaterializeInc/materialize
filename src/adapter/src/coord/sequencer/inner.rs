@@ -23,7 +23,7 @@ use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::types::dataflows::{BuildDesc, DataflowDesc, IndexDesc};
 use mz_compute_client::types::sinks::{
-    ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, SubscribeSinkConnection,
+    ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection,
 };
 use mz_controller::clusters::{
     ClusterConfig, ClusterId, ReplicaAllocation, ReplicaConfig, ReplicaId, ReplicaLogging,
@@ -1265,12 +1265,12 @@ impl Coordinator {
                 // it to storage.
                 let df = txn
                     .dataflow_builder(cluster_id)
-                    .build_materialized_view_dataflow(id, as_of.clone(), internal_view_id)?;
+                    .build_materialized_view_dataflow(id, internal_view_id)?;
                 Ok(df)
             })
             .await
         {
-            Ok(df) => {
+            Ok(mut df) => {
                 // Announce the creation of the materialized view source.
                 self.controller
                     .storage
@@ -1279,7 +1279,7 @@ impl Coordinator {
                         CollectionDescription {
                             desc,
                             data_source: DataSource::Other,
-                            since: Some(as_of),
+                            since: Some(as_of.clone()),
                             status_collection_id: None,
                         },
                     )])
@@ -1292,6 +1292,7 @@ impl Coordinator {
                 )
                 .await;
 
+                df.set_as_of(as_of);
                 self.must_ship_dataflow(df, cluster_id).await;
 
                 Ok(ExecuteResponse::CreatedMaterializedView)
@@ -1458,6 +1459,16 @@ impl Coordinator {
                     role_id: **dropped_role_id,
                     member_id: role.id(),
                 })
+            }
+        }
+        // We must also revoke all role memberships that the dropped roles belongs to.
+        for dropped_id in dropped_ids {
+            let role = self.catalog.get_role(dropped_id);
+            for group_id in role.membership.map.keys() {
+                ops.push(catalog::Op::RevokeRole {
+                    role_id: *group_id,
+                    member_id: *dropped_id,
+                });
             }
         }
 
@@ -2227,49 +2238,41 @@ impl Coordinator {
             session.add_transaction_ops(TransactionOps::Subscribe)?;
         }
 
-        let make_sink_desc = |coord: &mut Coordinator,
-                              session: &mut Session,
-                              from,
-                              from_desc,
-                              uses| {
-            // Determine the frontier of updates to subscribe *from*.
-            // Updates greater or equal to this frontier will be produced.
-            let id_bundle = coord.index_oracle(cluster_id).sufficient_collections(uses);
-            let timeline = coord.validate_timeline_context(id_bundle.iter())?;
-            // If a timestamp was explicitly requested, use that.
-            let frontier = coord
-                .determine_timestamp(session, &id_bundle, &when, cluster_id, timeline, None)?
-                .timestamp_context;
-            let frontier_ts = frontier.timestamp_or_default();
+        // Determine the frontier of updates to subscribe *from*.
+        // Updates greater or equal to this frontier will be produced.
+        let uses = match from {
+            SubscribeFrom::Id(id) => vec![id],
+            SubscribeFrom::Query { .. } => depends_on,
+        };
+        let id_bundle = self.index_oracle(cluster_id).sufficient_collections(&uses);
+        let timeline = self.validate_timeline_context(id_bundle.iter())?;
+        let as_of = self
+            .determine_timestamp(session, &id_bundle, &when, cluster_id, timeline, None)?
+            .timestamp_context
+            .timestamp_or_default();
 
+        let make_sink_desc = |coord: &mut Coordinator, session: &mut Session, from, from_desc| {
             let up_to = up_to
                 .map(|expr| coord.evaluate_when(expr, session))
                 .transpose()?;
             if let Some(up_to) = up_to {
-                if frontier_ts == up_to {
+                if as_of == up_to {
                     session.add_notice(AdapterNotice::EqualSubscribeBounds { bound: up_to });
-                } else if frontier_ts > up_to {
-                    return Err(AdapterError::AbsurdSubscribeBounds {
-                        as_of: frontier_ts,
-                        up_to,
-                    });
+                } else if as_of > up_to {
+                    return Err(AdapterError::AbsurdSubscribeBounds { as_of, up_to });
                 }
             }
-            let frontier = frontier.antichain();
             let up_to = up_to.map(Antichain::from_elem).unwrap_or_default();
             Ok::<_, AdapterError>(ComputeSinkDesc {
                 from,
                 from_desc,
                 connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection::default()),
-                as_of: SinkAsOf {
-                    frontier,
-                    strict: !with_snapshot,
-                },
+                with_snapshot,
                 up_to,
             })
         };
 
-        let dataflow = match from {
+        let mut dataflow = match from {
             SubscribeFrom::Id(from_id) => {
                 check_no_invalid_log_reads(
                     &self.catalog,
@@ -2287,7 +2290,7 @@ impl Coordinator {
                     .expect("subscribes can only be run on items with descs")
                     .into_owned();
                 let sink_id = self.allocate_transient_id()?;
-                let sink_desc = make_sink_desc(self, session, from_id, from_desc, &[from_id][..])?;
+                let sink_desc = make_sink_desc(self, session, from_id, from_desc)?;
                 let sink_name = format!("subscribe-{}", sink_id);
                 self.dataflow_builder(cluster_id)
                     .build_sink_dataflow(sink_name, sink_id, sink_desc)?
@@ -2302,7 +2305,7 @@ impl Coordinator {
                 let id = self.allocate_transient_id()?;
                 let expr = self.view_optimizer.optimize(expr)?;
                 let desc = RelationDesc::new(expr.typ(), desc.iter_names());
-                let sink_desc = make_sink_desc(self, session, id, desc, &depends_on)?;
+                let sink_desc = make_sink_desc(self, session, id, desc)?;
                 let mut dataflow = DataflowDesc::new(format!("subscribe-{}", id));
                 let mut dataflow_builder = self.dataflow_builder(cluster_id);
                 dataflow_builder.import_view_into_dataflow(&id, &expr, &mut dataflow)?;
@@ -2310,6 +2313,8 @@ impl Coordinator {
                 dataflow
             }
         };
+
+        dataflow.set_as_of(Antichain::from_elem(as_of));
 
         let (&sink_id, sink_desc) = dataflow
             .sink_exports
@@ -2324,7 +2329,7 @@ impl Coordinator {
             emit_progress,
             arity: sink_desc.from_desc.arity(),
             cluster_id,
-            depends_on: depends_on.into_iter().collect(),
+            depends_on: uses.into_iter().collect(),
             start_time: SYSTEM_TIME(),
             dropping: false,
         };
@@ -3547,6 +3552,9 @@ impl Coordinator {
                 role_name,
                 member_name,
             });
+            // We need this check so we don't accidentally return a success on a reserved role.
+            self.catalog.ensure_not_reserved_role(&member_id)?;
+            self.catalog.ensure_not_reserved_role(&role_id)?;
             return Ok(ExecuteResponse::GrantedRole);
         }
 
@@ -3573,6 +3581,9 @@ impl Coordinator {
                 role_name,
                 member_name,
             });
+            // We need this check so we don't accidentally return a success on a reserved role.
+            self.catalog.ensure_not_reserved_role(&member_id)?;
+            self.catalog.ensure_not_reserved_role(&role_id)?;
             return Ok(ExecuteResponse::RevokedRole);
         }
 

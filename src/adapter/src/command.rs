@@ -72,12 +72,6 @@ pub enum Command {
         span: tracing::Span,
     },
 
-    StartTransaction {
-        implicit: Option<usize>,
-        session: Session,
-        tx: oneshot::Sender<Response<()>>,
-    },
-
     Commit {
         action: EndTransactionAction,
         session: Session,
@@ -127,7 +121,6 @@ impl Command {
             | Command::Describe { session, .. }
             | Command::VerifyPreparedStatement { session, .. }
             | Command::Execute { session, .. }
-            | Command::StartTransaction { session, .. }
             | Command::Commit { session, .. }
             | Command::DumpCatalog { session, .. }
             | Command::CopyRows { session, .. }
@@ -151,7 +144,6 @@ impl Command {
             Command::Describe { tx, session, .. } => send(tx, session, e),
             Command::VerifyPreparedStatement { tx, session, .. } => send(tx, session, e),
             Command::Execute { tx, session, .. } => send(tx, session, e),
-            Command::StartTransaction { tx, session, .. } => send(tx, session, e),
             Command::Commit { tx, session, .. } => send(tx, session, e),
             Command::CancelRequest { .. } => {}
             Command::DumpCatalog { tx, session, .. } => send(tx, session, e),

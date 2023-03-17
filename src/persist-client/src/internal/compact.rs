@@ -29,8 +29,7 @@ use timely::PartialOrder;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{mpsc, oneshot, TryAcquireError};
 use tokio::task::JoinHandle;
-use tracing::log::warn;
-use tracing::{debug, debug_span, trace, Instrument, Span};
+use tracing::{debug, debug_span, trace, warn, Instrument, Span};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::batch::{BatchBuilderConfig, BatchBuilderInternal};

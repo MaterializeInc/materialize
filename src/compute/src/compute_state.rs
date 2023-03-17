@@ -743,10 +743,17 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
                 match reported_frontier {
                     ReportedFrontier::Reported(old_frontier) => {
-                        assert!(PartialOrder::less_than(old_frontier, &new_frontier))
+                        assert!(
+                            PartialOrder::less_than(old_frontier, &new_frontier),
+                            "new frontier {new_frontier:?} is not beyond \
+                             old frontier {old_frontier:?}"
+                        );
                     }
                     ReportedFrontier::NotReported { lower } => {
-                        assert!(PartialOrder::less_equal(lower, &new_frontier))
+                        assert!(
+                            PartialOrder::less_equal(lower, &new_frontier),
+                            "new frontier {new_frontier:?} is before lower bound {lower:?}"
+                        );
                     }
                 }
 
