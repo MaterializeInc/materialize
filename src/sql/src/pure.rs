@@ -72,9 +72,9 @@ fn subsource_gen<'a, T>(
                         Some(_) => name.clone(),
                         // In cases when a prefix is not provided for the deferred name
                         // fallback to using the schema of the source with the given name
-                        None => subsource_name_gen(source_name, &partial.item)
+                        None => subsource_name_gen(source_name, &partial.item),
                     }
-                },
+                }
                 DeferredObjectName::Named(..) => {
                     unreachable!("already errored on this condition")
                 }
