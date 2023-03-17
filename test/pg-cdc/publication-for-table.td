@@ -49,3 +49,19 @@ CREATE PUBLICATION mz_source FOR TABLE t1;
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (t2);
 contains:table t2 not found
+
+> CREATE SCHEMA a;
+> CREATE SOURCE a.mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES (t1);
+
+> SELECT * FROM a.t1;
+1
+
+> CREATE SCHEMA another;
+> CREATE SOURCE another.mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR ALL TABLES;
+
+> SELECT * FROM another.t1;
+1
