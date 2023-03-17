@@ -533,9 +533,102 @@ DROP DATABASE foo;
 statement ok
 DROP CLUSTER foo;
 
+# Check if INHERIT works
+
+statement ok
+ALTER ROLE joe CREATEROLE CREATEDB CREATECLUSTER INHERIT;
+
+statement ok
+CREATE ROLE joeson INHERIT
+
+statement ok
+GRANT joe to joeson
+
+statement ok
+ALTER ROLE joe CREATEROLE CREATEDB CREATECLUSTER
+
+simple conn=joe,user=joe
+CREATE ROLE bar;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER ROLE foo CREATECLUSTER;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+DROP ROLE foo;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE DATABASE foo;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE CLUSTER foo REPLICAS (r1 (size '1'));
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE bar;
+
+statement ok
+CREATE ROLE foo;
+
+statement ok
+DROP DATABASE foo;
+
+statement ok
+DROP CLUSTER foo;
+
 # Disable RBAC checks
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;
 ----
 COMPLETE 0
+
+# Test that disabled RBAC checks allow anything
+
+statement ok
+ALTER ROLE joe NOCREATEROLE NOCREATEDB NOCREATECLUSTER;
+
+simple conn=joe,user=joe
+CREATE ROLE bar;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER ROLE foo CREATECLUSTER;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+DROP ROLE foo;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE DATABASE foo;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE CLUSTER foo REPLICAS (r1 (size '1'));
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE bar;
+
+statement ok
+CREATE ROLE foo;
+
+statement ok
+DROP DATABASE foo;
+
+statement ok
+DROP CLUSTER foo;

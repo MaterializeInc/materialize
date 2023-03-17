@@ -46,6 +46,44 @@ SELECT * FROM role_members
 ----
 group1  joe  materialize
 
+# Dropping a role also removes it from role_members
+simple conn=mz_system,user=mz_system
+DROP ROLE group1
+----
+COMPLETE 0
+
+query TTT
+SELECT * FROM mz_role_members
+----
+
+statement ok
+CREATE ROLE group1
+
+statement ok
+GRANT group1 TO joe
+
+query TTT
+SELECT * FROM role_members
+----
+group1  joe  materialize
+
+# Dropped roles have their membership revoked
+
+simple conn=mz_system,user=mz_system
+DROP ROLE joe
+----
+COMPLETE 0
+
+query TTT
+SELECT * FROM mz_role_members
+----
+
+statement ok
+CREATE ROLE joe
+
+statement ok
+GRANT group1 TO joe
+
 statement ok
 CREATE ROLE group2
 
@@ -120,13 +158,9 @@ query TTT
 SELECT * FROM mz_role_members
 ----
 
-statement ok
-GRANT group1 TO joe
-
 query TTT
 SELECT * FROM role_members
 ----
-group1  joe  materialize
 
 # Dropped roles have their membership revoked
 
@@ -167,6 +201,13 @@ REVOKE group1 FROM public
 
 statement error role name "public" is reserved
 REVOKE public FROM group1
+
+# SHOW ROLES/USERS is not yet implemented
+statement error SHOW ROLES not yet supported
+show roles
+
+statement error SHOW ROLES not yet supported
+show users
 
 # Disable RBAC checks
 

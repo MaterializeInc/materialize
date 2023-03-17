@@ -168,3 +168,39 @@ DROP ROLE PUBLIC
 
 statement error role name "public" is reserved
 ALTER ROLE public CREATEDB
+
+statement ok
+BEGIN
+
+statement error cannot be run inside a transaction block
+CREATE ROLE bad
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement error cannot be run inside a transaction block
+GRANT foo TO foo
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement error cannot be run inside a transaction block
+REVOKE foo FROM foo
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement error cannot be run inside a transaction block
+DROP ROLE bad
+
+statement ok
+ROLLBACK
