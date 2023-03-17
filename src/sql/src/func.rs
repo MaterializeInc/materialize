@@ -677,8 +677,12 @@ pub enum ParamType {
     /// An pseudotype permitting any range type, requiring other "Any"-type
     /// parameters to be of the same type.
     RangeAny,
-    /// A pseudotype permitting any range type, permitting other "Compatibility"-type
-    /// parameters to find the best common type.
+    /// A pseudotype permitting any range type, permitting other
+    /// "Compatibility"-type parameters to find the best common type.
+    ///
+    /// Prefer using [`ParamType::RangeAny`] over this type; it is easy to fool
+    /// this type into generating non-existent range types (e.g. ranges of
+    /// floats) that will panic.
     RangeAnyCompatible,
 }
 
