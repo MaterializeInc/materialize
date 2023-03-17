@@ -239,6 +239,34 @@ SELECT DATE '1995-08-06' + -5
 ----
 1995-08-01
 
+query T
+SELECT 3 + DATE '1995-08-06'
+----
+1995-08-09
+
+query T
+SELECT -5 + DATE '1995-08-06'
+----
+1995-08-01
+
+query error date out of range
+SELECT DATE '1995-08-06' - 2147483647
+
+query error date out of range
+SELECT DATE '1995-08-06' - -2147483648
+
+query error date out of range
+SELECT DATE '1995-08-06' + 2147483647
+
+query error date out of range
+SELECT DATE '1995-08-06' + -2147483648
+
+query error date out of range
+SELECT 2147483647 + DATE '1995-08-06'
+
+query error date out of range
+SELECT -2147483648 + DATE '1995-08-06'
+
 # Time arithmetic with intervals.
 
 query T
