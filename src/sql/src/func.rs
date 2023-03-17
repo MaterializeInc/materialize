@@ -720,15 +720,6 @@ impl ParamType {
         }
     }
 
-    /// Is `self` the preferred parameter type for its `TypeCategory`?
-    fn prefers_self(&self) -> bool {
-        if let Some(pt) = TypeCategory::from_param(self).preferred_type() {
-            *self == pt
-        } else {
-            false
-        }
-    }
-
     fn is_polymorphic(&self) -> bool {
         use ParamType::*;
         match self {
@@ -1024,22 +1015,15 @@ fn find_match<'a, R: std::fmt::Debug>(
         for (i, arg_type) in types.iter().enumerate() {
             let param_type = &fimpl.params[i];
 
-            match arg_type {
-                Some(arg_type) => {
-                    if param_type == arg_type {
-                        exact_matches += 1;
-                    }
-                    if param_type.is_preferred_by(arg_type) {
-                        preferred_types += 1;
-                    }
-                    if param_type.is_near_match(arg_type) {
-                        near_matches += 1;
-                    }
+            if let Some(arg_type) = arg_type {
+                if param_type == arg_type {
+                    exact_matches += 1;
                 }
-                None => {
-                    if param_type.prefers_self() {
-                        preferred_types += 1;
-                    }
+                if param_type.is_preferred_by(arg_type) {
+                    preferred_types += 1;
+                }
+                if param_type.is_near_match(arg_type) {
+                    near_matches += 1;
                 }
             }
         }
