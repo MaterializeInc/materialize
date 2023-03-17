@@ -24,18 +24,10 @@ SELECT 1;
 > DROP ROLE "space role";
 
 > SELECT name FROM mz_roles WHERE name = 'joe' OR name = 'group';
-----
 joe
 group
 
-> SELECT
-    role.name AS role,
-    member.name AS member,
-    grantor.name AS grantor
-  FROM mz_role_members membership
-  JOIN mz_roles role ON membership.role_id = role.id
-  JOIN mz_roles member ON membership.member = member.id
-  JOIN mz_roles grantor ON membership.grantor = grantor.id;
+> SELECT role.name AS role, member.name AS member, grantor.name AS grantor FROM mz_role_members membership LEFT JOIN mz_roles role ON membership.role_id = role.id LEFT JOIN mz_roles member ON membership.member = member.id LEFT JOIN mz_roles grantor ON membership.grantor = grantor.id;
 group  joe  materialize
 
 > DROP ROLE superuser_login;
