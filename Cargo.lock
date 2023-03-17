@@ -5049,6 +5049,7 @@ dependencies = [
  "differential-dataflow",
  "futures-util",
  "mz-ore",
+ "num-traits",
  "polonius-the-crab",
  "proptest",
  "serde",

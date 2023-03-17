@@ -24,11 +24,15 @@ use differential_dataflow::Collection;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::Scope;
+use tracing::{error, warn};
 
 use mz_compute_client::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
 };
+use mz_expr::EvalError;
 use mz_repr::{DatumVec, Diff, Row};
+use mz_storage_client::types::errors::DataflowError;
+use mz_timely_util::operator::CollectionExt;
 
 use crate::render::context::CollectionBundle;
 use crate::render::context::Context;
@@ -48,13 +52,20 @@ where
         let (ok_input, err_input) = input.as_specific_collection(None);
 
         // We create a new region to compartmentalize the topk logic.
-        let ok_result = ok_input.scope().region_named("TopK", |inner| {
+        let (ok_result, err_collection) = ok_input.scope().region_named("TopK", |inner| {
             let ok_input = ok_input.enter_region(inner);
+            let mut err_collection = err_input.enter_region(inner);
+
             let ok_result = match top_k_plan {
                 TopKPlan::MonotonicTop1(MonotonicTop1Plan {
                     group_key,
                     order_key,
-                }) => render_top1_monotonic(ok_input, group_key, order_key),
+                }) => {
+                    let (oks, errs) =
+                        render_top1_monotonic(ok_input, group_key, order_key, &self.debug_name);
+                    err_collection = err_collection.concat(&errs);
+                    oks
+                }
                 TopKPlan::MonotonicTopK(MonotonicTopKPlan {
                     order_key,
                     group_key,
@@ -125,10 +136,10 @@ where
                 }) => build_topk(ok_input, group_key, order_key, offset, limit, arity),
             };
             // Extract the results from the region.
-            ok_result.leave_region()
+            (ok_result.leave_region(), err_collection.leave_region())
         });
 
-        return CollectionBundle::from_collections(ok_result, err_input);
+        return CollectionBundle::from_collections(ok_result, err_collection);
 
         /// Constructs a TopK dataflow subgraph.
         fn build_topk<G>(
@@ -297,7 +308,8 @@ where
             collection: Collection<G, Row, Diff>,
             group_key: Vec<usize>,
             order_key: Vec<mz_expr::ColumnOrder>,
-        ) -> Collection<G, Row, Diff>
+            debug_name: &str,
+        ) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
         where
             G: Scope,
             G::Timestamp: Lattice,
@@ -305,8 +317,6 @@ where
             // We can place our rows directly into the diff field, and only keep the relevant one
             // corresponding to evaluating our aggregate, instead of having to do a hierarchical
             // reduction.
-            use timely::dataflow::operators::Map;
-
             let collection = collection.map({
                 let mut datum_vec = mz_repr::DatumVec::new();
                 move |row| {
@@ -324,26 +334,27 @@ where
 
             // We arrange the inputs ourself to force it into a leaner structure because we know we
             // won't care about values.
-            //
-            // TODO: Could we use explode here? We'd lose the diff>0 assert and we'd have to impl Mul
-            // for the monoid, unclear if it's worth it.
-            let partial: Collection<G, Row, monoids::Top1Monoid> = collection
-                .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated MonotonicTop1 input")
-                .inner
-                .map(move |((group_key, row), time, diff)| {
-                    assert!(diff > 0);
-                    // NB: Top1 can throw out the diff since we've asserted that it's > 0. A more
-                    // general TopK monoid would have to account for diff.
-                    (
-                        group_key,
-                        time,
-                        monoids::Top1Monoid {
-                            row,
-                            order_key: order_key.clone(),
-                        },
-                    )
-                })
-                .as_collection();
+            let consolidated = collection
+                .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated MonotonicTop1 input");
+            let debug_name = debug_name.to_string();
+            let (partial, errs) = consolidated.ensure_monotonic(move |data, diff| {
+                warn!(
+                    "[customer-data] MonotonicTop1 expected monotonic input but \
+                    received {data:?} with diff {diff:?} in dataflow {debug_name}"
+                );
+                error!("Non-monotonic input to MonotonicTop1");
+                let m = "tried to build monotonic top-1 on non-monotonic input".to_string();
+                (DataflowError::from(EvalError::Internal(m)), 1)
+            });
+            let partial = partial.explode_one(move |(group_key, row)| {
+                (
+                    group_key,
+                    monoids::Top1Monoid {
+                        row,
+                        order_key: order_key.clone(),
+                    },
+                )
+            });
             let result = partial
                 .map(|k| (k, ()))
                 .arrange_named::<RowSpine<Row, _, _, _>>("Arranged MonotonicTop1 partial")
@@ -354,7 +365,7 @@ where
                     }
                 });
             // TODO(#7331): Here we discard the arranged output.
-            result.as_collection(|_k, v| v.clone())
+            (result.as_collection(|_k, v| v.clone()), errs)
         }
 
         fn render_intra_ts_thinning<G>(
@@ -523,17 +534,30 @@ pub mod monoids {
     use std::hash::{Hash, Hasher};
     use std::rc::Rc;
 
-    use differential_dataflow::difference::Semigroup;
+    use differential_dataflow::difference::{Multiply, Semigroup};
     use serde::{Deserialize, Serialize};
 
     use mz_expr::ColumnOrder;
-    use mz_repr::{DatumVec, Row};
+    use mz_repr::{DatumVec, Diff, Row};
 
     /// A monoid containing a row and an ordering.
     #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
     pub struct Top1Monoid {
         pub row: Row,
         pub order_key: Vec<ColumnOrder>,
+    }
+
+    impl Multiply<Diff> for Top1Monoid {
+        type Output = Self;
+
+        fn multiply(self, factor: &Diff) -> Self {
+            // Multiplication in Top1Monoid is idempotent, and its
+            // users must ascertain its monotonicity beforehand
+            // (typically with ensure_monotonic) since it has no zero
+            // value for us to use here.
+            assert!(factor.is_positive());
+            self
+        }
     }
 
     impl Ord for Top1Monoid {
