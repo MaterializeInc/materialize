@@ -42,6 +42,7 @@ disallowed-methods = [
 
 disallowed-macros = [
     { path = "proptest::prop_oneof", reason = "use `proptest::strategy::Union::new` instead" },
+    { path = "log::log", reason = "use the macros provided by `tracing` instead (#9992)" },
 ]
 
 disallowed-types = [
