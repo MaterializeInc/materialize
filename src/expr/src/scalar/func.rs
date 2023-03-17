@@ -2469,7 +2469,7 @@ impl BinaryFunc {
 
             GetByte => ScalarType::Int32.nullable(in_nullable),
 
-            UuidGenerateV5 => ScalarType::Uuid.nullable(true),
+            UuidGenerateV5 => ScalarType::Uuid.nullable(in_nullable),
 
             RangeContainsElem { .. }
             | RangeContainsRange { .. }
@@ -2679,7 +2679,8 @@ impl BinaryFunc {
             | RangeAdjacent
             | RangeUnion
             | RangeIntersection
-            | RangeDifference => false,
+            | RangeDifference
+            | UuidGenerateV5 => false,
             // can produce nulls inside the resulting array for missing keys, but always produces an outer array
             MapGetValues => false,
 
