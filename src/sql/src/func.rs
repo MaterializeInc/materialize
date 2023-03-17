@@ -1166,7 +1166,18 @@ fn find_match<'a, R: std::fmt::Debug>(
             })
             .collect();
 
-        candidates.retain(|c| c.fimpl.params.matches_argtypes(ecx, &common_typed));
+        // Partition into matches, failures for the sake of the error message;
+        // if there are no matches we want to express that the operator is not
+        // unique, not that it doesn't exist.
+        let (matches, failures): (Vec<Candidate<R>>, Vec<Candidate<R>>) = candidates
+            .into_iter()
+            .partition(|c| c.fimpl.params.matches_argtypes(ecx, &common_typed));
+
+        if matches.is_empty() {
+            candidates = failures;
+        } else {
+            candidates = matches
+        };
 
         maybe_get_last_candidate!();
     }
