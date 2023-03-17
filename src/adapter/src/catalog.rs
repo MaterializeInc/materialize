@@ -6021,6 +6021,8 @@ impl Catalog {
                 multiplier: config.persist_next_listen_batch_retryer_multiplier(),
                 clamp: config.persist_next_listen_batch_retryer_clamp(),
             }),
+            stats_collection_enabled: Some(config.persist_stats_collection_enabled()),
+            stats_filter_enabled: Some(config.persist_stats_filter_enabled()),
         }
     }
 }
