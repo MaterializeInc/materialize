@@ -76,8 +76,8 @@ fn subsource_gen<'a, T>(
                 // the item as the subsource name to ensure it's created in the
                 // current schema or the source's schema if provided, not mirroring
                 // the schema of the reference.
-                let (_, prefix) = name.0.split_last().unwrap();
-                let mut suggested_name = prefix.to_vec();
+                let (_, source_prefix) = name.0.split_last().unwrap();
+                let mut suggested_name = source_prefix.to_vec();
                 suggested_name.push(Ident::from(
                     normalize::unresolved_object_name(subsource.reference.clone())?.item,
                 ));
@@ -91,6 +91,16 @@ fn subsource_gen<'a, T>(
     }
 
     Ok(validated_requested_subsources)
+}
+
+fn subsource_name_gen(
+    source_name: &mut UnresolvedObjectName,
+    subsource_name: &String,
+) -> UnresolvedObjectName {
+    let (_, source_prefix) = source_name.0.split_last().unwrap();
+    let mut suggested_name = source_prefix.to_vec();
+    suggested_name.push(Ident::new(subsource_name));
+    UnresolvedObjectName(suggested_name)
 }
 
 /// Purifies a statement, removing any dependencies on external state.
@@ -110,7 +120,7 @@ pub async fn purify_create_source(
     PlanError,
 > {
     let CreateSourceStatement {
-        name,
+        name: source_name,
         connection,
         format,
         envelope,
@@ -348,7 +358,7 @@ pub async fn purify_create_source(
                             &table.namespace,
                             &table.name,
                         ]);
-                        let subsource_name = UnresolvedObjectName::unqualified(&table.name);
+                        let subsource_name = subsource_name_gen(source_name, &table.name);
                         validated_requested_subsources.push((upstream_name, subsource_name, table));
                     }
                 }
@@ -374,7 +384,7 @@ pub async fn purify_create_source(
                     validated_requested_subsources.extend(subsource_gen(
                         subsources,
                         &publication_catalog,
-                        name,
+                        source_name,
                     )?);
                 }
                 None => {
@@ -563,7 +573,7 @@ pub async fn purify_create_source(
                     };
                     for (name, (_, desc)) in available_subsources {
                         let upstream_name = UnresolvedObjectName::from(name.clone());
-                        let subsource_name = UnresolvedObjectName::unqualified(&name.item);
+                        let subsource_name = subsource_name_gen(source_name, &name.item);
                         validated_requested_subsources.push((upstream_name, subsource_name, desc));
                     }
                 }
@@ -596,7 +606,7 @@ pub async fn purify_create_source(
                     validated_requested_subsources.extend(subsource_gen(
                         selected_subsources,
                         &ErsatzCatalog(tables_by_name),
-                        name,
+                        source_name,
                     )?);
                 }
                 None => {
@@ -662,7 +672,7 @@ pub async fn purify_create_source(
             DeferredObjectName::Named(_) => unreachable!("already checked for this value"),
         },
         None => {
-            let (item, prefix) = name.0.split_last().unwrap();
+            let (item, prefix) = source_name.0.split_last().unwrap();
             let mut suggested_name = prefix.to_vec();
             suggested_name.push(format!("{}_progress", item).into());
 
