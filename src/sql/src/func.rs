@@ -1657,7 +1657,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "array_in" => Scalar {
             params!(String, Oid, Int32) =>
-                Operation::unary(|_ecx, _e| bail_unsupported!("array_in")) => ArrayAnyCompatible, 750;
+                Operation::variadic(|_ecx, _exprs| bail_unsupported!("array_in")) => ArrayAnyCompatible, 750;
         },
         "array_length" => Scalar {
             params![ArrayAny, Int64] => BinaryFunc::ArrayLength => Int32, 2176;

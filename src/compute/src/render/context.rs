@@ -78,10 +78,10 @@ where
     pub debug_name: String,
     /// The Timely ID of the dataflow associated with this context.
     pub dataflow_id: usize,
-    /// Indicates a frontier that can be used to compact input timestamps
-    /// without affecting the results. We *should* apply it, to sources and
-    /// imported traces, both because it improves performance, and because
-    /// potentially incorrect results are visible in sinks.
+    /// Frontier before which updates should not be emitted.
+    ///
+    /// We *must* apply it to sinks, to ensure correct outputs.
+    /// We *should* apply it to sources and imported traces, because it improves performance.
     pub as_of_frontier: Antichain<T>,
     /// Frontier after which updates should not be emitted.
     /// Used to limit the amount of work done when appropriate.

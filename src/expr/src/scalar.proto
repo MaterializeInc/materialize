@@ -411,6 +411,9 @@ message ProtoUnaryFunc {
         google.protobuf.Empty range_upper_inc = 287;
         google.protobuf.Empty range_lower_inf = 288;
         google.protobuf.Empty range_upper_inf = 289;
+        google.protobuf.Empty cast_pg_legacy_char_to_char = 290;
+        google.protobuf.Empty cast_pg_legacy_char_to_var_char = 291;
+
     }
 }
 

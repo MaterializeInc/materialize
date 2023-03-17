@@ -163,19 +163,6 @@ impl Coordinator {
                 }
             }
 
-            Command::StartTransaction {
-                implicit,
-                session,
-                tx,
-            } => {
-                let now = self.now_datetime();
-                let (session, result) = match implicit {
-                    None => session.start_transaction(now, None, None),
-                    Some(stmts) => (session.start_transaction_implicit(now, stmts), Ok(())),
-                };
-                let _ = tx.send(Response { result, session });
-            }
-
             Command::Commit {
                 action,
                 session,

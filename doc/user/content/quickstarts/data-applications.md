@@ -220,9 +220,9 @@ import java.sql.Statement;
 
 class App {
 
-    private final String url = "jdbc:postgresql://4eylxydzhfj2ef3sblalf5h32.us-east-1.aws.materialize.cloud:6875/materialize?sslmode=require";
-    private final String user = "joaquin@materialize.com";
-    private final String password = "mzp_80ed506798cd45b0b6637681dd9d90df97539a9c374a4245a4221b8796e88e2a";
+    private final String url = "jdbc:postgresql://MATERIALIZE_HOST:6875/materialize?sslmode=require";
+    private final String user = "MATERIALIZE_USERNAME";
+    private final String password = "MATERIALIZE_PASSWORD";
 
     /**
      * Connect to Materialize

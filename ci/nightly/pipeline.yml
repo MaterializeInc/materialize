@@ -59,6 +59,7 @@ steps:
           - { value: cloud-canary }
           - { value: sqlsmith-2-joins }
           - { value: sqlsmith-explain }
+          - { value: crdb-restarts }
         multiple: true
         required: false
     if: build.source == "ui"
@@ -549,9 +550,7 @@ steps:
     artifact_paths: junit_*.xml
     timeout_in_minutes: 70
     agents:
-      # A larger instance is needed since SQLsmith likes creating
-      # large queries and going out of memory
-      queue: builder-linux-x86_64
+      queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqlsmith
@@ -567,6 +566,15 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: sqlsmith
           args: [--max-joins=15, --explain-only, --runtime=3600]
+
+  - id: crdb-restarts
+    label: "CRDB rolling restarts"
+    artifact_paths: junit_*.xml
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: crdb-restarts
 
   - wait: ~
     continue_on_failure: true

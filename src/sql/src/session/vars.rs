@@ -537,6 +537,26 @@ const PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
     safe: true,
 };
 
+/// Controls [`mz_persist_client::cfg::DynamicConfig::stats_collection_enabled`].
+const PERSIST_STATS_COLLECTION_ENABLED: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("persist_stats_collection_enabled"),
+    value: &PersistConfig::DEFAULT_STATS_COLLECTION_ENABLED,
+    description: "Whether to calculate and record statistics about the data stored in persist \
+                  to be used at read time, see persist_stats_filter_enabled (Materialize).",
+    internal: true,
+    safe: true,
+};
+
+/// Controls [`mz_persist_client::cfg::DynamicConfig::stats_filter_enabled`].
+const PERSIST_STATS_FILTER_ENABLED: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("persist_stats_filter_enabled"),
+    value: &PersistConfig::DEFAULT_STATS_FILTER_ENABLED,
+    description: "Whether to use recorded statistics about the data stored in persist \
+                  to filter at read time, see persist_stats_collection_enabled (Materialize).",
+    internal: true,
+    safe: true,
+};
+
 /// Boolean flag indicating that the remote configuration was synchronized at
 /// least once with the persistent [SessionVars].
 pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
@@ -1280,6 +1300,8 @@ pub struct SystemVars {
     persist_blob_target_size: SystemVar<usize>,
     persist_compaction_minimum_timeout: SystemVar<Duration>,
     persist_sink_minimum_batch_updates: SystemVar<usize>,
+    persist_stats_collection_enabled: SystemVar<bool>,
+    persist_stats_filter_enabled: SystemVar<bool>,
 
     persist_next_listen_batch_retryer_initial_backoff: SystemVar<Duration>,
     persist_next_listen_batch_retryer_multiplier: SystemVar<u32>,
@@ -1333,6 +1355,8 @@ impl Default for SystemVars {
             persist_next_listen_batch_retryer_clamp: SystemVar::new(
                 &PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP,
             ),
+            persist_stats_collection_enabled: SystemVar::new(&PERSIST_STATS_COLLECTION_ENABLED),
+            persist_stats_filter_enabled: SystemVar::new(&PERSIST_STATS_FILTER_ENABLED),
             metrics_retention: SystemVar::new(&METRICS_RETENTION),
             mock_audit_event_timestamp: SystemVar::new(&MOCK_AUDIT_EVENT_TIMESTAMP),
             enable_with_mutually_recursive: SystemVar::new(&ENABLE_WITH_MUTUALLY_RECURSIVE),
@@ -1372,6 +1396,8 @@ impl SystemVars {
             &self.crdb_connect_timeout,
             &self.dataflow_max_inflight_bytes,
             &self.persist_sink_minimum_batch_updates,
+            &self.persist_stats_collection_enabled,
+            &self.persist_stats_filter_enabled,
             &self.metrics_retention,
             &self.mock_audit_event_timestamp,
             &self.enable_with_mutually_recursive,
@@ -1452,6 +1478,10 @@ impl SystemVars {
             Ok(&self.dataflow_max_inflight_bytes)
         } else if name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name {
             Ok(&self.persist_sink_minimum_batch_updates)
+        } else if name == PERSIST_STATS_COLLECTION_ENABLED.name {
+            Ok(&self.persist_stats_collection_enabled)
+        } else if name == PERSIST_STATS_FILTER_ENABLED.name {
+            Ok(&self.persist_stats_filter_enabled)
         } else if name == METRICS_RETENTION.name {
             Ok(&self.metrics_retention)
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
@@ -1527,6 +1557,10 @@ impl SystemVars {
             self.dataflow_max_inflight_bytes.is_default(input)
         } else if name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name {
             self.persist_sink_minimum_batch_updates.is_default(input)
+        } else if name == PERSIST_STATS_COLLECTION_ENABLED.name {
+            self.persist_stats_collection_enabled.is_default(input)
+        } else if name == PERSIST_STATS_FILTER_ENABLED.name {
+            self.persist_stats_filter_enabled.is_default(input)
         } else if name == METRICS_RETENTION.name {
             self.metrics_retention.is_default(input)
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
@@ -1608,6 +1642,10 @@ impl SystemVars {
             self.dataflow_max_inflight_bytes.set(input)
         } else if name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name {
             self.persist_sink_minimum_batch_updates.set(input)
+        } else if name == PERSIST_STATS_COLLECTION_ENABLED.name {
+            self.persist_stats_collection_enabled.set(input)
+        } else if name == PERSIST_STATS_FILTER_ENABLED.name {
+            self.persist_stats_filter_enabled.set(input)
         } else if name == METRICS_RETENTION.name {
             self.metrics_retention.set(input)
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
@@ -1685,6 +1723,10 @@ impl SystemVars {
             Ok(self.dataflow_max_inflight_bytes.reset())
         } else if name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name {
             Ok(self.persist_sink_minimum_batch_updates.reset())
+        } else if name == PERSIST_STATS_COLLECTION_ENABLED.name {
+            Ok(self.persist_stats_collection_enabled.reset())
+        } else if name == PERSIST_STATS_FILTER_ENABLED.name {
+            Ok(self.persist_stats_filter_enabled.reset())
         } else if name == METRICS_RETENTION.name {
             Ok(self.metrics_retention.reset())
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
@@ -1822,6 +1864,16 @@ impl SystemVars {
     /// Returns the `persist_sink_minimum_batch_updates` configuration parameter.
     pub fn persist_sink_minimum_batch_updates(&self) -> usize {
         *self.persist_sink_minimum_batch_updates.value()
+    }
+
+    /// Returns the `persist_stats_collection_enabled` configuration parameter.
+    pub fn persist_stats_collection_enabled(&self) -> bool {
+        *self.persist_stats_collection_enabled.value()
+    }
+
+    /// Returns the `persist_stats_filter_enabled` configuration parameter.
+    pub fn persist_stats_filter_enabled(&self) -> bool {
+        *self.persist_stats_filter_enabled.value()
     }
 
     /// Returns the `metrics_retention` configuration parameter.
@@ -2751,4 +2803,6 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name()
+        || name == PERSIST_STATS_COLLECTION_ENABLED.name()
+        || name == PERSIST_STATS_FILTER_ENABLED.name()
 }

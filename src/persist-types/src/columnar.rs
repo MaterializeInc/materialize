@@ -203,7 +203,7 @@ pub trait PartDecoder<'a, T> {
 }
 
 /// A description of the structure of a [crate::Codec] implementor.
-pub trait Schema<T>: Debug {
+pub trait Schema<T>: Debug + Send + Sync {
     /// The associated [PartEncoder] implementor.
     type Encoder<'a>: PartEncoder<'a, T>;
     /// The associated [PartDecoder] implementor.
@@ -232,8 +232,12 @@ pub fn validate_roundtrip<T: Codec + Default + PartialEq + Debug>(
     val: &T,
 ) -> Result<(), String> {
     let mut part = PartBuilder::new(schema, &UnitSchema);
-    schema.encoder(part.key_mut())?.encode(val);
-    part.push_ts_diff(1, 1);
+    {
+        let part_mut = part.get_mut();
+        schema.encoder(part_mut.key)?.encode(val);
+        part_mut.ts.push(1);
+        part_mut.diff.push(1);
+    }
     let part = part.finish()?;
 
     let mut actual = T::default();

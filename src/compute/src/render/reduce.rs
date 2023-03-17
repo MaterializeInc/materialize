@@ -65,7 +65,11 @@ where
     // Convenience wrapper to render the right kind of hierarchical plan.
     let mut build_hierarchical =
         |collection: Collection<G, (Row, Row), Diff>, expr: HierarchicalPlan| match expr {
-            HierarchicalPlan::Monotonic(expr) => build_monotonic(debug_name, collection, expr),
+            HierarchicalPlan::Monotonic(expr) => {
+                let (output, errs) = build_monotonic(debug_name, collection, expr);
+                err_collection = err_collection.concat(&errs);
+                output
+            }
             HierarchicalPlan::Bucketed(expr) => {
                 let (bucketed_output, bucketed_errs) = build_bucketed(debug_name, collection, expr);
                 if let Some(errs) = bucketed_errs {
@@ -819,10 +823,10 @@ where
 /// Build the dataflow to compute and arrange multiple hierarchical aggregations
 /// on monotonic inputs.
 fn build_monotonic<G>(
-    _debug_name: &str,
+    debug_name: &str,
     collection: Collection<G, (Row, Row), Diff>,
     MonotonicPlan { aggr_funcs, skips }: MonotonicPlan,
-) -> Arrangement<G, Row>
+) -> (Arrangement<G, Row>, Collection<G, DataflowError, Diff>)
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -840,29 +844,34 @@ where
         (key, values)
     });
 
-    // We can place our rows directly into the diff field, and only keep the
-    // relevant one corresponding to evaluating our aggregate, instead of having
-    // to do a hierarchical reduction.
-    use timely::dataflow::operators::Map;
-
     // We arrange the inputs ourself to force it into a leaner structure because we know we
     // won't care about values.
-    let partial = collection
-        .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated ReduceMonotonic input")
-        .inner
-        .map(move |((key, values), time, diff)| {
-            assert!(diff > 0);
+    let consolidated =
+        collection.consolidate_named::<RowKeySpine<_, _, _>>("Consolidated ReduceMonotonic input");
+    let debug_name = debug_name.to_string();
+    let (partial, errs) = consolidated.ensure_monotonic(move |data, diff| {
+        warn!(
+            "[customer-data] ReduceMonotonic expected monotonic input but \
+             received {data:?} with diff {diff:?} in dataflow {debug_name}"
+        );
+        error!("Non-monotonic input to ReduceMonotonic");
+        let m = "tried to build a monotonic reduction on non-monotonic input".to_string();
+        (DataflowError::from(EvalError::Internal(m)), 1)
+    });
+    // We can place our rows directly into the diff field, and
+    // only keep the relevant one corresponding to evaluating our
+    // aggregate, instead of having to do a hierarchical reduction.
+    let partial =
+        partial.explode_one(move |(key, values)| {
             let mut output = Vec::new();
             for (row, func) in values.into_iter().zip(aggr_funcs.iter()) {
                 output.push(monoids::get_monoid(row, func).expect(
                     "hierarchical aggregations are expected to have monoid implementations",
                 ));
             }
-
-            ((key, ()), time, output)
-        })
-        .as_collection();
-    partial
+            (key, output)
+        });
+    let output = partial
         .arrange_named::<RowKeySpine<_, _, Vec<ReductionMonoid>>>("ArrangeMonotonic")
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMonotonic", {
             let mut row_buf = Row::default();
@@ -877,7 +886,8 @@ where
                 }
                 output.push((row_buf.clone(), 1));
             }
-        })
+        });
+    (output, errs)
 }
 
 /// Accumulates values for the various types of accumulable aggregations.
@@ -1659,18 +1669,31 @@ pub mod monoids {
     // will not have such elements in this case (they would correspond to positive and
     // negative infinity, which we do not represent).
 
-    use differential_dataflow::difference::Semigroup;
+    use differential_dataflow::difference::{Multiply, Semigroup};
     use serde::{Deserialize, Serialize};
 
     use mz_expr::AggregateFunc;
     use mz_ore::soft_panic_or_log;
-    use mz_repr::{Datum, Row};
+    use mz_repr::{Datum, Diff, Row};
 
     /// A monoid containing a single-datum row.
     #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
     pub enum ReductionMonoid {
         Min(Row),
         Max(Row),
+    }
+
+    impl Multiply<Diff> for ReductionMonoid {
+        type Output = Self;
+
+        fn multiply(self, factor: &Diff) -> Self {
+            // Multiplication in ReductionMonoid is idempotent, and
+            // its users must ascertain its monotonicity beforehand
+            // (typically with ensure_monotonic) since it has no zero
+            // value for us to use here.
+            assert!(factor.is_positive());
+            self
+        }
     }
 
     impl Semigroup for ReductionMonoid {

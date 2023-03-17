@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
+use chrono::{DateTime, Utc};
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::error;
 use uuid::Uuid;
@@ -21,6 +22,7 @@ use uuid::Uuid;
 use mz_build_info::BuildInfo;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdAllocator;
+use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_ore::thread::JoinOnDropHandle;
 use mz_repr::{GlobalId, Row, ScalarType};
@@ -75,6 +77,7 @@ pub struct Client {
     build_info: &'static BuildInfo,
     inner_cmd_tx: mpsc::UnboundedSender<Command>,
     id_alloc: Arc<IdAllocator<ConnectionId>>,
+    now: NowFn,
     metrics: Metrics,
 }
 
@@ -83,11 +86,13 @@ impl Client {
         build_info: &'static BuildInfo,
         cmd_tx: mpsc::UnboundedSender<Command>,
         metrics: Metrics,
+        now: NowFn,
     ) -> Client {
         Client {
             build_info,
             inner_cmd_tx: cmd_tx,
             id_alloc: Arc::new(IdAllocator::new(1, 1 << 16)),
+            now,
             metrics,
         }
     }
@@ -120,7 +125,7 @@ impl Client {
         let stmt = stmts.into_element();
 
         const EMPTY_PORTAL: &str = "";
-        session_client.start_transaction(Some(1)).await?;
+        session_client.start_transaction(Some(1))?;
         session_client
             .declare(EMPTY_PORTAL.into(), stmt, vec![])
             .await?;
@@ -349,23 +354,33 @@ impl SessionClient {
         .await
     }
 
+    fn now(&self) -> EpochMillis {
+        (self.inner().inner.now)()
+    }
+
+    fn now_datetime(&self) -> DateTime<Utc> {
+        to_datetime(self.now())
+    }
+
     /// Starts a transaction based on implicit:
     /// - `None`: InTransaction
     /// - `Some(1)`: Started
     /// - `Some(n > 1)`: InTransactionImplicit
     /// - `Some(0)`: no change
-    pub async fn start_transaction(&mut self, implicit: Option<usize>) -> Result<(), AdapterError> {
-        self.send(|tx, session| Command::StartTransaction {
-            implicit,
-            session,
-            tx,
-        })
-        .await
+    pub fn start_transaction(&mut self, implicit: Option<usize>) -> Result<(), AdapterError> {
+        let session = self.session.take().expect("session invariant violated");
+        let now = self.now_datetime();
+        let (session, result) = match implicit {
+            None => session.start_transaction(now, None, None),
+            Some(stmts) => (session.start_transaction_implicit(now, stmts), Ok(())),
+        };
+        self.session = Some(session);
+        result
     }
 
     /// Cancels the query currently running on another connection.
     pub fn cancel_request(&mut self, conn_id: ConnectionId, secret_key: u32) {
-        self.inner().cancel_request(conn_id, secret_key)
+        self.inner_mut().cancel_request(conn_id, secret_key)
     }
 
     /// Ends a transaction.
@@ -451,8 +466,13 @@ impl SessionClient {
         self.session.as_mut().expect("session invariant violated")
     }
 
+    /// Returns a reference to the inner client.
+    pub fn inner(&self) -> &ConnClient {
+        self.inner.as_ref().expect("inner invariant violated")
+    }
+
     /// Returns a mutable reference to the inner client.
-    pub fn inner(&mut self) -> &mut ConnClient {
+    pub fn inner_mut(&mut self) -> &mut ConnClient {
         self.inner.as_mut().expect("inner invariant violated")
     }
 
@@ -463,7 +483,7 @@ impl SessionClient {
         let session = self.session.take().expect("session invariant violated");
         let mut typ = None;
         let res = self
-            .inner()
+            .inner_mut()
             .send(|tx| {
                 let cmd = f(tx, session);
                 // Measure the success and error rate of certain commands:
@@ -475,7 +495,6 @@ impl SessionClient {
                     Command::Startup { .. }
                     | Command::Describe { .. }
                     | Command::VerifyPreparedStatement { .. }
-                    | Command::StartTransaction { .. }
                     | Command::Commit { .. }
                     | Command::CancelRequest { .. }
                     | Command::DumpCatalog { .. }

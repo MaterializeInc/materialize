@@ -481,7 +481,7 @@ async fn execute_stmt_group<S: ResultSender>(
 
         // Mirror the behavior of the PostgreSQL simple query protocol.
         // See the pgwire::protocol::StateMachine::query method for details.
-        if let Err(e) = client.start_transaction(Some(num_stmts)).await {
+        if let Err(e) = client.start_transaction(Some(num_stmts)) {
             let _ = sender.add_result(SqlResult::err(client, e).into()).await?;
             return Ok(Err(()));
         }

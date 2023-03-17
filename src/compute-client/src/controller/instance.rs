@@ -657,7 +657,7 @@ where
                     from: se.from,
                     from_desc: se.from_desc,
                     connection,
-                    as_of: se.as_of,
+                    with_snapshot: se.with_snapshot,
                     up_to: se.up_to,
                 };
                 sink_exports.insert(id, desc);

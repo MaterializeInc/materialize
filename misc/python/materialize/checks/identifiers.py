@@ -53,6 +53,10 @@ def schemas() -> str:
     )
 
 
+def cluster() -> str:
+    return "> CREATE CLUSTER identifiers REPLICAS (identifiers_r1 (SIZE '4'))\n"
+
+
 class Identifiers(Check):
     # Some identifiers taken from https://github.com/minimaxir/big-list-of-naughty-strings
     # Under MIT license, Copyright (c) 2015-2020 Max Woolf
@@ -197,13 +201,15 @@ class Identifiers(Check):
         cmds = "\n".join(
             [
                 f"""
+            > SET cluster=identifiers;
             > CREATE DATABASE {dq(ident["db"])};
             > SET DATABASE={dq(ident["db"])};
             > CREATE SCHEMA {dq(ident["schema"])};
             > CREATE TYPE {dq(ident["type"])} AS LIST (ELEMENT TYPE = text);
             > CREATE TABLE {dq(ident["schema"])}.{dq(ident["table"])} ({dq(ident["column"])} TEXT, c2 {dq(ident["type"])});
             > INSERT INTO {dq(ident["schema"])}.{dq(ident["table"])} VALUES ({sq(ident["value1"])}, LIST[{sq(ident["value2"])}]::{dq(ident["type"])});
-            > CREATE MATERIALIZED VIEW {dq(ident["schema"])}.{dq(ident["mv0"])} AS SELECT COUNT({dq(ident["column"])}) FROM {dq(ident["schema"])}.{dq(ident["table"])};
+            > CREATE MATERIALIZED VIEW {dq(ident["schema"])}.{dq(ident["mv0"])} IN CLUSTER default AS
+              SELECT COUNT({dq(ident["column"])}) FROM {dq(ident["schema"])}.{dq(ident["table"])};
 
             $ kafka-create-topic topic=sink-source-ident{i}
 
@@ -213,10 +219,12 @@ class Identifiers(Check):
             > CREATE CONNECTION IF NOT EXISTS {dq(ident["kafka_conn"])} FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
             > CREATE CONNECTION IF NOT EXISTS {dq(ident["csr_conn"])} FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
             > CREATE SOURCE {dq(ident["source"])}
+              IN CLUSTER identifiers
               FROM KAFKA CONNECTION {dq(ident["kafka_conn"])} (TOPIC 'testdrive-sink-source-ident{i}-${{testdrive.seed}}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {dq(ident["csr_conn"])}
               ENVELOPE UPSERT;
-            > CREATE MATERIALIZED VIEW {dq(ident["source_view"])} AS SELECT LEFT(key1, 2) as l_k, LEFT(f1, 1) AS l_v, COUNT(*) AS c FROM {dq(ident["source"])} GROUP BY LEFT(key1, 2), LEFT(f1, 1);
+            > CREATE MATERIALIZED VIEW {dq(ident["source_view"])} IN CLUSTER default AS
+              SELECT LEFT(key1, 2) as l_k, LEFT(f1, 1) AS l_v, COUNT(*) AS c FROM {dq(ident["source"])} GROUP BY LEFT(key1, 2), LEFT(f1, 1);
             > CREATE SINK {dq(ident["schema"])}.{dq(ident["sink0"])} FROM {dq(ident["source_view"])}
               INTO KAFKA CONNECTION {dq(ident["kafka_conn"])} (TOPIC 'sink-sink-ident0')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {dq(ident["csr_conn"])}
@@ -232,15 +240,17 @@ class Identifiers(Check):
                 for i, ident in enumerate(self.IDENTS)
             ]
         )
-        return Testdrive(schemas() + dedent(cmds))
+        return Testdrive(schemas() + cluster() + dedent(cmds))
 
     def manipulate(self) -> List[Testdrive]:
         cmds = [
             "\n".join(
                 [
                     f"""
+            > SET CLUSTER=identifiers;
             > SET DATABASE={dq(ident["db"])};
-            > CREATE MATERIALIZED VIEW {dq(ident["schema"])}.{dq(ident["mv" + i])} AS SELECT {dq(ident["column"])}, c2 as {dq(ident["alias"])} FROM {dq(ident["schema"])}.{dq(ident["table"])};
+            > CREATE MATERIALIZED VIEW {dq(ident["schema"])}.{dq(ident["mv" + i])} IN CLUSTER default AS
+              SELECT {dq(ident["column"])}, c2 as {dq(ident["alias"])} FROM {dq(ident["schema"])}.{dq(ident["table"])};
             > INSERT INTO {dq(ident["schema"])}.{dq(ident["table"])} VALUES ({sq(ident["value1"])}, LIST[{sq(ident["value2"])}]::{dq(ident["type"])});
             > CREATE SINK {dq(ident["schema"])}.{dq(ident["sink" + i])} FROM {dq(ident["source_view"])}
               INTO KAFKA CONNECTION {dq(ident["kafka_conn"])} (TOPIC 'sink-sink-ident{i}')

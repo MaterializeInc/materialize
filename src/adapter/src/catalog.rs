@@ -2836,6 +2836,13 @@ impl Catalog {
             if let Some(builtin_update) = catalog.state.pack_role_update(role.id, 1) {
                 builtin_table_updates.push(builtin_update);
             }
+            for group_id in role.membership.map.keys() {
+                builtin_table_updates.push(
+                    catalog
+                        .state
+                        .pack_role_members_update(*group_id, role.id, 1),
+                )
+            }
         }
         for (id, cluster) in &catalog.state.clusters_by_id {
             builtin_table_updates.push(catalog.state.pack_cluster_update(&cluster.name, 1));
@@ -6016,6 +6023,8 @@ impl Catalog {
                 multiplier: config.persist_next_listen_batch_retryer_multiplier(),
                 clamp: config.persist_next_listen_batch_retryer_clamp(),
             }),
+            stats_collection_enabled: Some(config.persist_stats_collection_enabled()),
+            stats_filter_enabled: Some(config.persist_stats_filter_enabled()),
         }
     }
 

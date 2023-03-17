@@ -600,10 +600,10 @@ where
         result
     }
 
-    async fn start_transaction(&mut self, stmts: Option<usize>) {
+    fn start_transaction(&mut self, stmts: Option<usize>) {
         // start_transaction can't error (but assert that just in case it changes in
         // the future.
-        let res = self.adapter_client.start_transaction(stmts).await;
+        let res = self.adapter_client.start_transaction(stmts);
         assert!(res.is_ok());
     }
 
@@ -637,7 +637,7 @@ where
             // This needs to be done in the loop instead of once at the top because
             // a COMMIT/ROLLBACK statement needs to start a new transaction on next
             // statement.
-            self.start_transaction(Some(num_stmts)).await;
+            self.start_transaction(Some(num_stmts));
 
             match self.one_query(stmt).await? {
                 State::Ready => (),
@@ -667,7 +667,7 @@ where
         param_oids: Vec<u32>,
     ) -> Result<State, io::Error> {
         // Start a transaction if we aren't in one.
-        self.start_transaction(Some(1)).await;
+        self.start_transaction(Some(1));
 
         let mut param_types = vec![];
         for oid in param_oids {
@@ -760,7 +760,7 @@ where
         result_formats: Vec<mz_pgrepr::Format>,
     ) -> Result<State, io::Error> {
         // Start a transaction if we aren't in one.
-        self.start_transaction(Some(1)).await;
+        self.start_transaction(Some(1));
 
         let aborted_txn = self.is_aborted_txn();
         let stmt = match self
@@ -921,7 +921,7 @@ where
                     // in bind. We don't do it in bind because I'm not sure what purpose it would
                     // serve us (i.e., I'm not aware of a pgtest that would differ between us and
                     // Postgres).
-                    self.start_transaction(Some(1)).await;
+                    self.start_transaction(Some(1));
 
                     match self.adapter_client.execute(portal_name.clone()).await {
                         Ok(response) => {
@@ -985,7 +985,7 @@ where
 
     async fn describe_statement(&mut self, name: &str) -> Result<State, io::Error> {
         // Start a transaction if we aren't in one.
-        self.start_transaction(Some(1)).await;
+        self.start_transaction(Some(1));
 
         let stmt = match self.adapter_client.get_prepared_statement(name).await {
             Ok(stmt) => stmt,
@@ -1014,7 +1014,7 @@ where
 
     async fn describe_portal(&mut self, name: &str) -> Result<State, io::Error> {
         // Start a transaction if we aren't in one.
-        self.start_transaction(Some(1)).await;
+        self.start_transaction(Some(1));
 
         let session = self.adapter_client.session();
         let row_desc = session

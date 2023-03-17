@@ -197,6 +197,16 @@ where
         <R2 as Multiply<R>>::Output: Data + Semigroup,
         L: FnMut(D1) -> (D2, R2) + 'static,
         G::Timestamp: Lattice;
+
+    /// Partitions the input into a monotonic collection and
+    /// non-monotone exceptions, with respect to differences.
+    ///
+    /// The exceptions are transformed by `into_err`.
+    fn ensure_monotonic<E, IE>(&self, into_err: IE) -> (Collection<G, D1, R>, Collection<G, E, R>)
+    where
+        E: Data,
+        IE: Fn(D1, R) -> (E, R) + 'static,
+        R: num_traits::sign::Signed;
 }
 
 impl<G, D1> StreamExt<G, D1> for Stream<G, D1>
@@ -439,6 +449,35 @@ where
                 }
             })
             .as_collection()
+    }
+
+    fn ensure_monotonic<E, IE>(&self, into_err: IE) -> (Collection<G, D1, R>, Collection<G, E, R>)
+    where
+        E: Data,
+        IE: Fn(D1, R) -> (E, R) + 'static,
+        R: num_traits::sign::Signed,
+    {
+        let mut buffer = Vec::new();
+        let (oks, errs) = self
+            .inner
+            .unary_fallible(Pipeline, "EnsureMonotonic", move |_, _| {
+                Box::new(move |input, ok_output, err_output| {
+                    input.for_each(|time, data| {
+                        let mut ok_session = ok_output.session(&time);
+                        let mut err_session = err_output.session(&time);
+                        data.swap(&mut buffer);
+                        for (x, t, d) in buffer.drain(..) {
+                            if d.is_positive() {
+                                ok_session.give((x, t, d))
+                            } else {
+                                let (e, d2) = into_err(x, d);
+                                err_session.give((e, t, d2))
+                            }
+                        }
+                    })
+                })
+            });
+        (oks.as_collection(), errs.as_collection())
     }
 }
 
