@@ -45,7 +45,7 @@ ERROR_RE = re.compile(
     # Emitted by tests employing explicit mz_panic()
     (?!.*forced\ panic)
     # Expected once compute cluster has panicked, brings no new information
-    (?!.*timely\ communication\ error:\ reading\ data:)
+    (?!.*timely\ communication\ error:)
     # Expected once compute cluster has panicked, only happens in CI
     (?!.*aborting\ because\ propagate_crashes\ is\ enabled)
     """,
