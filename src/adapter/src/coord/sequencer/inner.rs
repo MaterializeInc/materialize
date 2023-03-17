@@ -1462,7 +1462,7 @@ impl Coordinator {
         }
         // We must also revoke all role memberships that the dropped roles belongs to.
         for dropped_id in dropped_ids {
-            let role = self.catalog.get_role(&dropped_id);
+            let role = self.catalog.get_role(dropped_id);
             for group_id in role.membership.map.keys() {
                 ops.push(catalog::Op::RevokeRole {
                     role_id: *group_id,
