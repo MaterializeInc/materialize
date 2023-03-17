@@ -43,8 +43,8 @@ users                   subsource      <null>
 # Subsources should be created in source schema if no schema is provided
 > CREATE SCHEMA foo;
 > CREATE SCHEMA bar;
-> CREATE SOURCE foo.auction_subset 
-  FROM LOAD GENERATOR AUCTION 
+> CREATE SOURCE foo.auction_subset
+  FROM LOAD GENERATOR AUCTION
   FOR TABLES (bids as foo_bids, users as bar.bar_users);
 
 > SHOW SOURCES FROM foo;

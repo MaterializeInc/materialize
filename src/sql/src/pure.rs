@@ -100,7 +100,7 @@ fn subsource_gen<'a, T>(
 }
 
 /// Generates a subsource name by prepending source schema name if present
-/// 
+///
 /// For eg. if source is `a.b`, then `a` will be prepended to the subsource name
 /// so that it's generated in the same schema as source
 fn subsource_name_gen(
