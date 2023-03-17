@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> DROP SOURCE IF EXISTS mz_source CASCADE;
 > DROP SECRET IF EXISTS pgpass CASCADE;
 > DROP CONNECTION IF EXISTS pg CASCADE;
 
@@ -19,6 +18,9 @@
     PASSWORD SECRET pgpass
   );
 
+> DROP SOURCE IF EXISTS mz_source CASCADE;
+> DROP SOURCE IF EXISTS mz_source_alter_add_col CASCADE;
+> DROP SOURCE IF EXISTS mz_source_alter_drop_constraint CASCADE;
 
 > CREATE SOURCE mz_source
   FROM POSTGRES
@@ -26,10 +28,14 @@
   (PUBLICATION 'mz_source')
   FOR ALL TABLES;
 
-> DROP SOURCE IF EXISTS mz_source_alter CASCADE;
-
-> CREATE SOURCE mz_source_alter
+> CREATE SOURCE mz_source_alter_add_col
   FROM POSTGRES
   CONNECTION pg
-  (PUBLICATION 'mz_source_alter')
+  (PUBLICATION 'mz_source_alter_add_col')
+  FOR ALL TABLES;
+
+> CREATE SOURCE mz_source_alter_drop_constraint
+  FROM POSTGRES
+  CONNECTION pg
+  (PUBLICATION 'mz_source_alter_drop_constraint')
   FOR ALL TABLES;

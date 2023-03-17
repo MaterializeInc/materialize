@@ -13,7 +13,8 @@ GRANT ALL PRIVILEGES ON DATABASE "postgres" TO debezium;
 GRANT ALL PRIVILEGES ON SCHEMA "public" TO debezium;
 
 CREATE PUBLICATION mz_source;
-CREATE PUBLICATION mz_source_alter;
+CREATE PUBLICATION mz_source_alter_add_col;
+CREATE PUBLICATION mz_source_alter_drop_constraint;
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP TABLE IF EXISTS ten;
