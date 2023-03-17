@@ -340,13 +340,18 @@ where
                 self.since.join_assign(&Antichain::from_elem(x.clone()));
             }
         }
-        self.handle.maybe_downgrade_since(&self.since).await;
 
+        // IMPORTANT! Make sure this `lease_batch_parts` stays before the
+        // `maybe_downgrade_since` call. Otherwise, we might give up our
+        // capability on the batch's SeqNo before we lease it, which could lead
+        // to blobs that it references being GC'd.
         let metadata = SerdeLeasedBatchPartMetadata::Listen {
             as_of: self.as_of.iter().map(T::encode).collect(),
             lower: self.frontier.iter().map(T::encode).collect(),
         };
         let parts = self.handle.lease_batch_parts(batch, metadata).collect();
+
+        self.handle.maybe_downgrade_since(&self.since).await;
 
         // NB: Keep this after we use self.frontier to join_assign self.since
         // and also after we construct metadata.
