@@ -2456,8 +2456,7 @@ impl Catalog {
                     name: role.name,
                     id,
                     oid,
-                    attributes: role
-                        .attributes,
+                    attributes: role.attributes,
                     membership: role
                         .membership
                         .expect("serialized role was not properly migrated"),
@@ -6283,7 +6282,7 @@ impl From<ReplicaLocation> for SerializedReplicaLocation {
 pub struct SerializedRole {
     pub name: String,
     pub attributes: RoleAttributes,
-    // TODO(jkosh44): Remove Option in v0.47.0
+    // TODO(jkosh44): Remove Option in v0.49.0
     pub membership: Option<RoleMembership>,
 }
 

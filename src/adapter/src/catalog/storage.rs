@@ -16,13 +16,15 @@ use std::time::Duration;
 use itertools::{max, Itertools};
 use serde::{Deserialize, Serialize};
 
-use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
+use mz_audit_log::{
+    EventDetails, EventType, EventV1, ObjectType, VersionedEvent, VersionedStorageUsage,
+};
 use mz_controller::clusters::{ClusterId, ReplicaConfig, ReplicaId};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::GlobalId;
-use mz_sql::catalog::{CatalogError as SqlCatalogError, CatalogItemType};
+use mz_sql::catalog::{CatalogError as SqlCatalogError, CatalogItemType, RoleAttributes};
 use mz_sql::names::{
     DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, RoleId, SchemaId,
     SchemaSpecifier, PUBLIC_ROLE_NAME,
@@ -376,7 +378,7 @@ async fn migrate(
                 RoleValue {
                     role: SerializedRole {
                         name: PUBLIC_ROLE_NAME.as_str().to_lowercase(),
-                        attributes: Some(RoleAttributes::new()),
+                        attributes: RoleAttributes::new(),
                         membership: Some(RoleMembership::new()),
                     },
                 },
