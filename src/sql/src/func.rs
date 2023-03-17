@@ -3446,7 +3446,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
                       .call_binary(rhs, JsonbContainsJsonb))
             }) => Bool, oid::OP_CONTAINS_STRING_JSONB_OID;
             params!(MapAnyCompatible, MapAnyCompatible) => MapContainsMap => Bool, oid::OP_CONTAINS_MAP_MAP_OID;
-            params!(RangeAnyCompatible, AnyCompatible) => Operation::binary(|ecx, lhs, rhs| {
+            params!(RangeAny, AnyElement) => Operation::binary(|ecx, lhs, rhs| {
                 let elem_type = ecx.scalar_type(&lhs).unwrap_range_element_type().clone();
                 Ok(lhs.call_binary(rhs, BinaryFunc::RangeContainsElem { elem_type, rev: false }))
             }) => Bool, 3889;
@@ -3474,7 +3474,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(MapAnyCompatible, MapAnyCompatible) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(rhs.call_binary(lhs, MapContainsMap))
             }) => Bool, oid::OP_CONTAINED_MAP_MAP_OID;
-            params!(AnyCompatible, RangeAnyCompatible) => Operation::binary(|ecx, lhs, rhs| {
+            params!(AnyElement, RangeAny) => Operation::binary(|ecx, lhs, rhs| {
                 let elem_type = ecx.scalar_type(&rhs).unwrap_range_element_type().clone();
                 Ok(rhs.call_binary(lhs, BinaryFunc::RangeContainsElem { elem_type, rev: true }))
             }) => Bool, 3891;
