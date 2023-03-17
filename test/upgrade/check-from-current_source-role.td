@@ -19,10 +19,6 @@ superuser_login
 $ postgres-execute connection=postgres://superuser_login:some_bogus_password@${testdrive.materialize-sql-addr}
 SELECT 1;
 
-> DROP ROLE superuser_login;
-
-> DROP ROLE "space role";
-
 > SELECT name FROM mz_roles WHERE name = 'joe' OR name = 'group';
 joe
 group
