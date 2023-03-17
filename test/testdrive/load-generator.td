@@ -40,6 +40,21 @@ bids                    subsource      <null>
 organizations           subsource      <null>
 users                   subsource      <null>
 
+# Subsources should be created in source schema if no schema is provided
+> CREATE SCHEMA foo;
+> CREATE SCHEMA bar;
+> CREATE SOURCE foo.auction_subset 
+  FROM LOAD GENERATOR AUCTION 
+  FOR TABLES (bids as foo_bids, users as bar.bar_users);
+
+> SHOW SOURCES FROM foo;
+auction_subset            load-generator ${arg.default-storage-size}
+auction_subset_progress   subsource      <null>
+foo_bids                  subsource      <null>
+
+> SHOW SOURCES FROM bar;
+bar_users                 subsource      <null>
+
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 # Validate that the ID column of the load generator data is usable as a key.
