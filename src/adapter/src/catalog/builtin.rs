@@ -2134,9 +2134,11 @@ pub const PG_INDEX: BuiltinView = BuiltinView {
     sql: "CREATE VIEW pg_catalog.pg_index AS SELECT
     mz_indexes.oid AS indexrelid,
     mz_relations.oid AS indrelid,
-    false::pg_catalog.bool AS indisprimary,
     -- MZ doesn't support creating unique indexes so indisunique is filled with false
     false::pg_catalog.bool AS indisunique,
+    false::pg_catalog.bool AS indisprimary,
+    -- MZ doesn't support unique indexes so indimmediate is filled with false
+    false::pg_catalog.bool AS indimmediate,
     -- MZ doesn't support CLUSTER so indisclustered is filled with false
     false::pg_catalog.bool AS indisclustered,
     -- MZ never creates invalid indexes so indisvalid is filled with true
