@@ -2823,6 +2823,13 @@ impl Catalog {
         }
         for (_id, role) in &catalog.state.roles_by_id {
             builtin_table_updates.push(catalog.state.pack_role_update(role.id, 1));
+            for group_id in role.membership.map.keys() {
+                builtin_table_updates.push(
+                    catalog
+                        .state
+                        .pack_role_members_update(*group_id, role.id, 1),
+                )
+            }
         }
         for (id, cluster) in &catalog.state.clusters_by_id {
             builtin_table_updates.push(catalog.state.pack_cluster_update(&cluster.name, 1));

@@ -120,6 +120,26 @@ query TTT
 SELECT * FROM mz_role_members
 ----
 
+statement ok
+GRANT group1 TO joe
+
+query TTT
+SELECT * FROM role_members
+----
+group1  joe  materialize
+
+# Dropped roles have their membership revoked
+
+statement ok
+DROP ROLE joe
+
+query TTT
+SELECT * FROM role_members
+---
+
+statement ok
+CREATE ROLE joe
+
 # Cannot grant system role
 
 statement error role name "mz_system" is reserved
