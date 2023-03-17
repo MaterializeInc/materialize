@@ -553,7 +553,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqlsmith
-          args: [--num-sqlsmith=2, --create-cluster, --max-joins=2, --runtime=3600]
+          args: [--max-joins=2, --runtime=3600]
 
   - id: sqlsmith-explain
     label: "SQLsmith explain"
@@ -564,7 +564,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqlsmith
-          args: [--num-sqlsmith=1, --max-joins=15, --explain-only, --runtime=3600]
+          args: [--max-joins=15, --explain-only, --runtime=3600]
 
   - wait: ~
     continue_on_failure: true

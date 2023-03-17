@@ -12,14 +12,52 @@ import random
 import time
 from datetime import datetime
 from threading import Thread
-from typing import Any, Dict, FrozenSet, List, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
-from materialize.mzcompose import Composition, Service, WorkflowArgumentParser
-from materialize.mzcompose.services import Materialized
+from materialize.mzcompose import (
+    Composition,
+    Service,
+    ServiceConfig,
+    WorkflowArgumentParser,
+)
+
+
+class StandaloneMaterialized(Service):
+    def __init__(
+        self,
+        name: str,
+        ports: List[str] = [],
+        propagate_crashes: bool = True,
+        restart: Optional[str] = None,
+    ) -> None:
+        command = []
+        if propagate_crashes:
+            command += ["--orchestrator-process-propagate-crashes"]
+
+        config: ServiceConfig = {
+            "mzbuild": "materialized",
+            "command": command,
+            "ports": [6875, 6876, 6877, 6878, 26257],
+            "healthcheck": {
+                "test": ["CMD", "curl", "-f", "localhost:6878/api/readyz"],
+                "interval": "1s",
+                "start_period": "60s",
+            },
+        }
+
+        if restart:
+            config["restart"] = restart
+
+        super().__init__(name=name, config=config)
+
+
+MZ_SERVERS = [f"mz_{i + 1}" for i in range(4)]
 
 SERVICES = [
     # Auto-restart so we can keep testing even after we ran into a panic
-    Materialized(restart="on-failure"),
+    StandaloneMaterialized(name=mz_server, restart="on-failure")
+    for mz_server in MZ_SERVERS
+] + [
     Service(
         "sqlsmith",
         {
@@ -110,7 +148,7 @@ def run_sqlsmith(c: Composition, cmd: str, aggregate: Dict[str, Any]) -> None:
 
     if result.returncode not in (0, 1):
         raise Exception(
-            f"[SQLsmith] Unexpected return code in SQLsmith\n{result.stdout}"
+            f"[SQLsmith] Unexpected return code in SQLsmith: {result.returncode}\n{result.stdout}"
         )
 
     data = json.loads(result.stdout)
@@ -120,45 +158,44 @@ def run_sqlsmith(c: Composition, cmd: str, aggregate: Dict[str, Any]) -> None:
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    parser.add_argument("--num-sqlsmith", default=2, type=int)
+    parser.add_argument("--num-sqlsmith", default=4, type=int)
     # parser.add_argument("--queries", default=10000, type=int)
     parser.add_argument("--runtime", default=600, type=int)
     # https://github.com/MaterializeInc/materialize/issues/2392
     parser.add_argument("--max-joins", default=2, type=int)
     parser.add_argument("--explain-only", action="store_true")
-    parser.add_argument("--create-cluster", action="store_true")
     parser.add_argument("--exclude-catalog", default=False, type=bool)
     parser.add_argument("--seed", default=None, type=int)
     args = parser.parse_args()
 
-    c.up("materialized")
+    c.up(*MZ_SERVERS)
 
-    # Very simple data for our workload
-    c.sql(
-        """
-        CREATE SOURCE tpch
-          FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.00001)
-          FOR ALL TABLES
-          WITH (SIZE = '1');
+    for mz_server in MZ_SERVERS:
+        # Very simple data for our workload
+        c.sql(
+            """
+            CREATE SOURCE tpch
+              FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.00001)
+              FOR ALL TABLES
+              WITH (SIZE = '1');
 
-        CREATE SOURCE auction
-          FROM LOAD GENERATOR AUCTION (SCALE FACTOR 0.01)
-          FOR ALL TABLES
-          WITH (SIZE = '1');
+            CREATE SOURCE auction
+              FROM LOAD GENERATOR AUCTION (SCALE FACTOR 0.01)
+              FOR ALL TABLES
+              WITH (SIZE = '1');
 
-        CREATE SOURCE counter
-          FROM LOAD GENERATOR COUNTER (SCALE FACTOR 0.0001)
-          WITH (SIZE = '1');
+            CREATE SOURCE counter
+              FROM LOAD GENERATOR COUNTER (SCALE FACTOR 0.0001)
+              WITH (SIZE = '1');
 
-        CREATE TABLE t (a int, b int);
-        INSERT INTO t VALUES (1, 2), (3, 4), (5, 6), (7, 8), (9, 10), (11, 12), (13, 14), (15, 16);
-        CREATE MATERIALIZED VIEW mv AS SELECT a + b FROM t;
-        CREATE MATERIALIZED VIEW mv2 AS SELECT count(*) FROM mv;
-        CREATE DEFAULT INDEX ON mv;
-        """
-    )
-
-    c.sql("ALTER SYSTEM SET max_clusters to 100;", user="mz_system", port=6877)
+            CREATE TABLE t (a int, b int);
+            INSERT INTO t VALUES (1, 2), (3, 4), (5, 6), (7, 8), (9, 10), (11, 12), (13, 14), (15, 16);
+            CREATE MATERIALIZED VIEW mv AS SELECT a + b FROM t;
+            CREATE MATERIALIZED VIEW mv2 AS SELECT count(*) FROM mv;
+            CREATE DEFAULT INDEX ON mv;
+            """,
+            service=mz_server,
+        )
 
     seed = args.seed or random.randint(0, 2**31 - args.num_sqlsmith)
 
@@ -178,17 +215,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             f"--max-joins={args.max_joins}",
             f"--seed={seed + i}",
             "--log-json",
-            f"--target=host=materialized port=6875 dbname=materialize user=materialize",
+            f"--target=host={MZ_SERVERS[i % len(MZ_SERVERS)]} port=6875 dbname=materialize user=materialize",
         ]
         if args.exclude_catalog:
             cmd.append("--exclude-catalog")
         if args.explain_only:
             cmd.append("--explain-only")
-        if args.create_cluster:
-            cmd.append("--create-cluster")
 
-        threads.append(Thread(target=run_sqlsmith, args=[c, cmd, aggregate]))
-        threads[-1].start()
+        thread = Thread(target=run_sqlsmith, args=[c, cmd, aggregate])
+        thread.start()
+        threads.append(thread)
 
     for thread in threads:
         thread.join()
