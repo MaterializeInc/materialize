@@ -8,8 +8,8 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-ALTER TABLE to_be_altered_fail ADD COLUMN f2 INTEGER;
-INSERT INTO to_be_altered_fail VALUES (1, 2);
+ALTER TABLE alter_fail_add_col ADD COLUMN f2 INTEGER;
+INSERT INTO alter_fail_add_col VALUES (1, 2);
 
-ALTER TABLE to_be_altered_ok ALTER COLUMN f1 DROP NOT NULL;
-INSERT INTO to_be_altered_ok VALUES (NULL);
+ALTER TABLE alter_fail_drop_constraint ALTER COLUMN f1 DROP NOT NULL;
+INSERT INTO alter_fail_drop_constraint VALUES (NULL);
