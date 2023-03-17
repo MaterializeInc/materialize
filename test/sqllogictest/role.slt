@@ -157,3 +157,14 @@ query TBBBB
 SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles WHERE name = 'foo'
 ----
 foo true true false true
+
+# Prevent creating, dropping, and altering PUBLIC role
+
+statement error role name "public" is reserved
+CREATE ROLE puBLic
+
+statement error role name "public" is reserved
+DROP ROLE PUBLIC
+
+statement error role name "public" is reserved
+ALTER ROLE public CREATEDB

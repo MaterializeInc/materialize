@@ -14,7 +14,9 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::anyhow;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use uncased::UncasedStr;
 
 use mz_controller::clusters::ClusterId;
 use mz_expr::LocalId;
@@ -668,11 +670,14 @@ impl FromStr for DatabaseId {
     }
 }
 
+pub static PUBLIC_ROLE_NAME: Lazy<&UncasedStr> = Lazy::new(|| UncasedStr::new("PUBLIC"));
+
 /// The identifier for a role.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum RoleId {
     System(u64),
     User(u64),
+    Public,
 }
 
 impl RoleId {
@@ -683,6 +688,10 @@ impl RoleId {
     pub fn is_user(&self) -> bool {
         matches!(self, Self::User(_))
     }
+
+    pub fn is_public(&self) -> bool {
+        matches!(self, Self::Public)
+    }
 }
 
 impl FromStr for RoleId {
@@ -692,10 +701,16 @@ impl FromStr for RoleId {
         if s.len() < 2 {
             return Err(anyhow!("couldn't parse role id {}", s));
         }
-        let val: u64 = s[1..].parse()?;
         match s.chars().next().unwrap() {
-            's' => Ok(Self::System(val)),
-            'u' => Ok(Self::User(val)),
+            's' => {
+                let val: u64 = s[1..].parse()?;
+                Ok(Self::System(val))
+            }
+            'u' => {
+                let val: u64 = s[1..].parse()?;
+                Ok(Self::User(val))
+            }
+            'p' => Ok(Self::Public),
             _ => Err(anyhow!("couldn't parse role id {}", s)),
         }
     }
@@ -706,6 +721,7 @@ impl fmt::Display for RoleId {
         match self {
             Self::System(id) => write!(f, "s{}", id),
             Self::User(id) => write!(f, "u{}", id),
+            Self::Public => write!(f, "p"),
         }
     }
 }

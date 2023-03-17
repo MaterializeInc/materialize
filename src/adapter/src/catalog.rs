@@ -62,7 +62,7 @@ use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
     Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
     QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier, RoleId, SchemaId,
-    SchemaSpecifier,
+    SchemaSpecifier, PUBLIC_ROLE_NAME,
 };
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
@@ -1253,6 +1253,17 @@ impl CatalogState {
                     .expect("should have at least one valid cluster replica size");
                 size.clone()
             }
+        }
+    }
+
+    pub fn ensure_not_reserved_role(&self, role_id: &RoleId) -> Result<(), Error> {
+        if role_id.is_system() || role_id.is_public() {
+            let role = self.get_role(role_id);
+            Err(Error::new(ErrorKind::ReservedRoleName(
+                role.name().to_string(),
+            )))
+        } else {
+            Ok(())
         }
     }
 
@@ -2822,7 +2833,9 @@ impl Catalog {
             }
         }
         for (_id, role) in &catalog.state.roles_by_id {
-            builtin_table_updates.push(catalog.state.pack_role_update(role.id, 1));
+            if let Some(builtin_update) = catalog.state.pack_role_update(role.id, 1) {
+                builtin_table_updates.push(builtin_update);
+            }
             for group_id in role.membership.map.keys() {
                 builtin_table_updates.push(
                     catalog
@@ -4448,16 +4461,16 @@ impl Catalog {
                     name,
                     attributes,
                 } => {
-                    if is_reserved_name(&name) {
-                        return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReservedRoleName(name),
-                        )));
+                    state.ensure_not_reserved_role(&id)?;
+                    if let Some(builtin_update) = state.pack_role_update(id, -1) {
+                        builtin_table_updates.push(builtin_update);
                     }
-                    builtin_table_updates.push(state.pack_role_update(id, -1));
                     let existing_role = state.get_role_mut(&id);
                     existing_role.attributes = attributes;
                     tx.update_role(id, existing_role.clone().into())?;
-                    builtin_table_updates.push(state.pack_role_update(id, 1));
+                    if let Some(builtin_update) = state.pack_role_update(id, 1) {
+                        builtin_table_updates.push(builtin_update);
+                    }
 
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -4764,7 +4777,7 @@ impl Catalog {
                     oid,
                     attributes,
                 } => {
-                    if is_reserved_name(&name) {
+                    if is_reserved_name(&name) || is_public_role(name.as_str()) {
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReservedRoleName(name),
                         )));
@@ -4801,7 +4814,9 @@ impl Catalog {
                             membership,
                         },
                     );
-                    builtin_table_updates.push(state.pack_role_update(id, 1));
+                    if let Some(builtin_update) = state.pack_role_update(id, 1) {
+                        builtin_table_updates.push(builtin_update);
+                    }
                 }
                 Op::CreateCluster {
                     id,
@@ -5080,13 +5095,11 @@ impl Catalog {
                     db.schemas_by_id.remove(&schema_id);
                 }
                 Op::DropRole { id, name } => {
-                    if is_reserved_name(&name) {
-                        return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReservedRoleName(name),
-                        )));
-                    }
+                    state.ensure_not_reserved_role(&id)?;
                     tx.remove_role(&name)?;
-                    builtin_table_updates.push(state.pack_role_update(id, -1));
+                    if let Some(builtin_update) = state.pack_role_update(id, -1) {
+                        builtin_table_updates.push(builtin_update);
+                    }
                     let role = state.roles_by_id.remove(&id).expect("catalog out of sync");
                     state.roles_by_name.remove(role.name());
                     state.add_to_audit_log(
@@ -5270,19 +5283,11 @@ impl Catalog {
                     member_id,
                     grantor_id,
                 } => {
-                    let member_role = state.get_role(&member_id);
-                    if is_reserved_name(member_role.name()) {
-                        return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReservedRoleName(member_role.name().to_string()),
-                        )));
-                    }
-                    let group_role = state.get_role(&role_id);
-                    if is_reserved_name(group_role.name()) {
-                        return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReservedRoleName(group_role.name().to_string()),
-                        )));
-                    }
+                    state.ensure_not_reserved_role(&member_id)?;
+                    state.ensure_not_reserved_role(&role_id)?;
                     if state.collect_role_membership(&role_id).contains(&member_id) {
+                        let group_role = state.get_role(&role_id);
+                        let member_role = state.get_role(&member_id);
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::CircularRoleMembership {
                                 role_name: group_role.name().to_string(),
@@ -5312,18 +5317,8 @@ impl Catalog {
                     )?;
                 }
                 Op::RevokeRole { role_id, member_id } => {
-                    let member_role = state.get_role(&member_id);
-                    if is_reserved_name(&member_role.name) {
-                        return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReservedRoleName(member_role.name.clone()),
-                        )));
-                    }
-                    let group_role = state.get_role(&role_id);
-                    if is_reserved_name(group_role.name()) {
-                        return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReservedRoleName(group_role.name().to_string()),
-                        )));
-                    }
+                    state.ensure_not_reserved_role(&member_id)?;
+                    state.ensure_not_reserved_role(&role_id)?;
                     builtin_table_updates
                         .push(state.pack_role_members_update(role_id, member_id, -1));
                     let member_role = state.get_role_mut(&member_id);
@@ -6032,12 +6027,20 @@ impl Catalog {
             stats_filter_enabled: Some(config.persist_stats_filter_enabled()),
         }
     }
+
+    pub fn ensure_not_reserved_role(&self, role_id: &RoleId) -> Result<(), Error> {
+        self.state.ensure_not_reserved_role(role_id)
+    }
 }
 
 pub fn is_reserved_name(name: &str) -> bool {
     BUILTIN_PREFIXES
         .iter()
         .any(|prefix| name.starts_with(prefix))
+}
+
+pub fn is_public_role(name: &str) -> bool {
+    name == &*PUBLIC_ROLE_NAME
 }
 
 /// Enable catalog features that might be required during planning in

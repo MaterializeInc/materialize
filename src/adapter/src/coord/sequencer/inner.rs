@@ -3552,6 +3552,9 @@ impl Coordinator {
                 role_name,
                 member_name,
             });
+            // We need this check so we don't accidentally return a success on a reserved role.
+            self.catalog.ensure_not_reserved_role(&member_id)?;
+            self.catalog.ensure_not_reserved_role(&role_id)?;
             return Ok(ExecuteResponse::GrantedRole);
         }
 
@@ -3578,6 +3581,9 @@ impl Coordinator {
                 role_name,
                 member_name,
             });
+            // We need this check so we don't accidentally return a success on a reserved role.
+            self.catalog.ensure_not_reserved_role(&member_id)?;
+            self.catalog.ensure_not_reserved_role(&role_id)?;
             return Ok(ExecuteResponse::RevokedRole);
         }
 
