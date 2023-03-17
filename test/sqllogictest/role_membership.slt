@@ -24,9 +24,9 @@ CREATE VIEW role_members AS
     member.name AS member,
     grantor.name AS grantor
   FROM mz_role_members membership
-  JOIN mz_roles role ON membership.role_id = role.id
-  JOIN mz_roles member ON membership.member = member.id
-  JOIN mz_roles grantor ON membership.grantor = grantor.id
+  LEFT JOIN mz_roles role ON membership.role_id = role.id
+  LEFT JOIN mz_roles member ON membership.member = member.id
+  LEFT JOIN mz_roles grantor ON membership.grantor = grantor.id
 
 statement ok
 CREATE ROLE joe
@@ -135,7 +135,7 @@ DROP ROLE joe
 
 query TTT
 SELECT * FROM role_members
----
+----
 
 statement ok
 CREATE ROLE joe

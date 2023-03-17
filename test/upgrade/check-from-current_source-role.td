@@ -7,6 +7,22 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+> SELECT name FROM mz_roles;
+group
+joe
+mz_system
+mz_introspection
+materialize
+superuser_login
+"space role"
+
+$ postgres-execute connection=postgres://superuser_login:some_bogus_password@${testdrive.materialize-sql-addr}
+SELECT 1;
+
+> DROP ROLE superuser_login;
+
+> DROP ROLE "space role";
+
 > SELECT name FROM mz_roles WHERE name = 'joe' OR name = 'group';
 ----
 joe
@@ -21,3 +37,11 @@ group
   JOIN mz_roles member ON membership.member = member.id
   JOIN mz_roles grantor ON membership.grantor = grantor.id;
 group  joe  materialize
+
+> DROP ROLE superuser_login;
+
+> DROP ROLE "space role";
+
+> DROP ROLE joe;
+
+> DROP ROLE group;
