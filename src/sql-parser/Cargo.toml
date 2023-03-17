@@ -16,7 +16,7 @@ phf = { version = "0.11.1", features = ["uncased"] }
 serde = { version = "1.0.152", features = ["derive"] }
 tracing = "0.1.37"
 uncased = "0.9.7"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 datadriven = "0.6.0"
@@ -29,6 +29,9 @@ mz-walkabout = { path = "../walkabout" }
 phf = { version = "0.11.1", features = ["uncased"] }
 phf_codegen = "0.11.1"
 uncased = "0.9.7"
+
+[features]
+default = ["workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
