@@ -536,6 +536,12 @@ SELECT a AS t FROM int4range_values EXCEPT SELECT column1 FROM (VALUES
 ----
 NULL
 
+query error operator does not exist: int4range @> numeric
+SELECT int4range(-1,1) @> 0.1;
+
+query error operator does not exist: int4range @> double precision
+SELECT int4range(-1,1) @> 0.1::float;
+
 query error range constructor flags argument must not be null
 SELECT int4range(1,2,null);
 
@@ -1708,6 +1714,12 @@ SELECT a AS t FROM int8range_values EXCEPT SELECT column1 FROM (VALUES
 ) t;
 ----
 NULL
+
+query error operator does not exist: int8range @> numeric
+SELECT int8range(-1,1) @> 0.1;
+
+query error operator does not exist: int8range @> double precision
+SELECT int8range(-1,1) @> 0.1::float;
 
 query error range constructor flags argument must not be null
 SELECT int8range(1,2,null);
@@ -3937,6 +3949,9 @@ SELECT a AS t FROM numrange_values EXCEPT SELECT column1 FROM (VALUES
 ) t;
 ----
 NULL
+
+query error operator does not exist: numrange @> double precision
+SELECT numrange(-1.0,1.0) @> 0.1::float;
 
 query error range constructor flags argument must not be null
 SELECT numrange(1,2,null);
