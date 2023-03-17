@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 #
-# Test that a publication that does not cover all tables is handled correctly
+# Test that subsources are created in the source schema if provided
 #
 
 > CREATE SECRET pgpass AS 'postgres'
@@ -34,18 +34,43 @@ CREATE TABLE t2 (f1 INTEGER);
 ALTER TABLE t2 REPLICA IDENTITY FULL;
 INSERT INTO t2 VALUES (5);
 
-CREATE PUBLICATION mz_source FOR TABLE t1;
+CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> CREATE SOURCE mz_source
+> CREATE SCHEMA a;
+> CREATE SOURCE a.mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (t1);
 
-> SELECT * FROM t1;
+> SELECT * FROM a.t1;
 1
 
-> DROP SOURCE mz_source;
-
-! CREATE SOURCE mz_source
+> CREATE SCHEMA another;
+> CREATE SOURCE another.mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR TABLES (t2);
-contains:table t2 not found
+  FOR ALL TABLES;
+
+> SELECT * FROM another.t1;
+1
+
+> SELECT * FROM another.t2;
+5
+
+> CREATE SCHEMA foo;
+> CREATE SCHEMA bar;
+> CREATE SOURCE foo.mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES (t1 as table1, t2 as bar.table2);
+
+! SELECT * FROM table1;
+contains: unknown
+
+# table1 gets created in source schema foo because it doesn't have any prefix
+> SELECT * FROM foo.table1;
+1
+
+! SELECT * FROM foo.table2;
+contains: unknown
+
+# table2 gets created in mentioned bar because it does have a prefix
+> SELECT * FROM bar.table2;
+5

@@ -66,7 +66,15 @@ fn subsource_gen<'a, T>(
     for subsource in selected_subsources {
         let subsource_name = match &subsource.subsource {
             Some(name) => match name {
-                DeferredObjectName::Deferred(name) => name.clone(),
+                DeferredObjectName::Deferred(name) => {
+                    let partial = normalize::unresolved_object_name(name.clone())?;
+                    match partial.schema {
+                        Some(_) => name.clone(),
+                        // In cases when a prefix is not provided for the deferred name
+                        // fallback to using the schema of the source with the given name
+                        None => subsource_name_gen(source_name, &partial.item)
+                    }
+                },
                 DeferredObjectName::Named(..) => {
                     unreachable!("already errored on this condition")
                 }
@@ -91,6 +99,10 @@ fn subsource_gen<'a, T>(
     Ok(validated_requested_subsources)
 }
 
+/// Generates a subsource name by prepending source schema name if present
+/// 
+/// For eg. if source is `a.b`, then `a` will be prepended to the subsource name
+/// so that it's generated in the same schema as source
 fn subsource_name_gen(
     source_name: &mut UnresolvedObjectName,
     subsource_name: &String,
