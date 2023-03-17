@@ -59,6 +59,7 @@ use crate::plan::StatementContext;
 fn subsource_gen<'a, T>(
     selected_subsources: &mut Vec<CreateSourceSubsource<Aug>>,
     catalog: &ErsatzCatalog<'a, T>,
+    name: &mut UnresolvedObjectName,
 ) -> Result<Vec<(UnresolvedObjectName, UnresolvedObjectName, &'a T)>, PlanError> {
     let mut validated_requested_subsources = vec![];
 
@@ -73,10 +74,14 @@ fn subsource_gen<'a, T>(
             None => {
                 // Use the entered name as the upstream reference, and then use
                 // the item as the subsource name to ensure it's created in the
-                // current schema, not mirroring the schema of the reference.
-                UnresolvedObjectName::unqualified(
-                    &normalize::unresolved_object_name(subsource.reference.clone())?.item,
-                )
+                // current schema or the source's schema if provided, not mirroring
+                // the schema of the reference.
+                let (_, prefix) = name.0.split_last().unwrap();
+                let mut suggested_name = prefix.to_vec();
+                suggested_name.push(Ident::from(
+                    normalize::unresolved_object_name(subsource.reference.clone())?.item,
+                ));
+                UnresolvedObjectName(suggested_name)
             }
         };
 
@@ -366,8 +371,11 @@ pub async fn purify_create_source(
                             .or_insert(table);
                     }
 
-                    validated_requested_subsources
-                        .extend(subsource_gen(subsources, &publication_catalog)?);
+                    validated_requested_subsources.extend(subsource_gen(
+                        subsources,
+                        &publication_catalog,
+                        name,
+                    )?);
                 }
                 None => {
                     sql_bail!("multi-output sources require a FOR TABLES (..) or FOR ALL TABLES statement");
@@ -588,6 +596,7 @@ pub async fn purify_create_source(
                     validated_requested_subsources.extend(subsource_gen(
                         selected_subsources,
                         &ErsatzCatalog(tables_by_name),
+                        name,
                     )?);
                 }
                 None => {
