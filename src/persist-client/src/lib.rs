@@ -135,6 +135,7 @@ pub mod metrics {
     pub use crate::internal::metrics::Metrics;
 }
 pub mod internals_bench;
+pub mod pipeline;
 pub mod read;
 pub mod usage;
 pub mod write;
