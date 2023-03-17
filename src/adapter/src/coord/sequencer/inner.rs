@@ -67,8 +67,8 @@ use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
 
 use crate::catalog::{
-    self, is_reserved_name, Catalog, CatalogItem, Cluster, Connection, DataSourceDesc,
-    SerializedReplicaLocation, StorageSinkConnectionState, LINKED_CLUSTER_REPLICA_NAME,
+    self, Catalog, CatalogItem, Cluster, Connection, DataSourceDesc, SerializedReplicaLocation,
+    StorageSinkConnectionState, LINKED_CLUSTER_REPLICA_NAME,
 };
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
@@ -3548,18 +3548,8 @@ impl Coordinator {
                 member_name,
             });
             // We need this check so we don't accidentally return a success on a reserved role.
-            let member_role = self.catalog.get_role(&member_id);
-            if is_reserved_name(member_role.name()) || member_id.is_public() {
-                return Err(AdapterError::Catalog(catalog::Error {
-                    kind: catalog::ErrorKind::ReservedRoleName(member_role.name().to_string()),
-                }));
-            }
-            let group_role = self.catalog.get_role(&role_id);
-            if is_reserved_name(group_role.name()) || role_id.is_public() {
-                return Err(AdapterError::Catalog(catalog::Error {
-                    kind: catalog::ErrorKind::ReservedRoleName(group_role.name().to_string()),
-                }));
-            }
+            self.catalog.ensure_not_reserved_role(&member_id)?;
+            self.catalog.ensure_not_reserved_role(&role_id)?;
             return Ok(ExecuteResponse::GrantedRole);
         }
 
@@ -3587,18 +3577,8 @@ impl Coordinator {
                 member_name,
             });
             // We need this check so we don't accidentally return a success on a reserved role.
-            let member_role = self.catalog.get_role(&member_id);
-            if is_reserved_name(member_role.name()) || member_id.is_public() {
-                return Err(AdapterError::Catalog(catalog::Error {
-                    kind: catalog::ErrorKind::ReservedRoleName(member_role.name().to_string()),
-                }));
-            }
-            let group_role = self.catalog.get_role(&role_id);
-            if is_reserved_name(group_role.name()) || role_id.is_public() {
-                return Err(AdapterError::Catalog(catalog::Error {
-                    kind: catalog::ErrorKind::ReservedRoleName(group_role.name().to_string()),
-                }));
-            }
+            self.catalog.ensure_not_reserved_role(&member_id)?;
+            self.catalog.ensure_not_reserved_role(&role_id)?;
             return Ok(ExecuteResponse::RevokedRole);
         }
 

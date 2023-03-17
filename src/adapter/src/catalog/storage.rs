@@ -38,7 +38,9 @@ use crate::catalog::builtin::{
     BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES, BUILTIN_ROLES,
 };
 use crate::catalog::error::{Error, ErrorKind};
-use crate::catalog::{is_reserved_name, RoleMembership, SerializedRole, SystemObjectMapping};
+use crate::catalog::{
+    is_public_role, is_reserved_name, RoleMembership, SerializedRole, SystemObjectMapping,
+};
 use crate::catalog::{SerializedReplicaConfig, DEFAULT_CLUSTER_REPLICA_NAME};
 use crate::coord::timeline;
 
@@ -407,9 +409,9 @@ async fn migrate(
         // TODO(jkosh44) Can be coalesced into the first migration in v0.50.0
         |txn: &mut Transaction<'_>, now, _bootstrap_args| {
             // Delete any existing PUBLIC role.
-            let roles = txn.roles.delete(|_role_key, role_value| {
-                role_value.role.name.as_str() == &*PUBLIC_ROLE_NAME
-            });
+            let roles = txn
+                .roles
+                .delete(|_role_key, role_value| is_public_role(role_value.role.name.as_str()));
             assert!(roles.len() <= 1, "duplicate roles are not allowed");
             for (role_key, role_value) in roles {
                 let id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
