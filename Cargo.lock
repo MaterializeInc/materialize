@@ -3950,6 +3950,7 @@ dependencies = [
  "serde_regex",
  "sha1",
  "sha2",
+ "tracing",
  "uncased",
  "uuid",
  "workspace-hack",

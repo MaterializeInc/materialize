@@ -16,9 +16,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use mz_compute_client::types::dataflows::DataflowDesc;
+use mz_compute_client::types::dataflows::{BuildDesc, DataflowDesc};
 use mz_expr::visit::Visit;
 use mz_expr::{CollectionPlan, Id, LocalId, MapFilterProject, MirRelationExpr};
+use tracing::warn;
 
 use crate::{monotonic::MonotonicFlag, IndexOracle, Optimizer, TransformError};
 
@@ -37,6 +38,20 @@ pub fn optimize_dataflow(
     dataflow: &mut DataflowDesc,
     indexes: &dyn IndexOracle,
 ) -> Result<(), TransformError> {
+    let queries = &dataflow.objects_to_build;
+    let mut ctx = BTreeMap::new();
+    for BuildDesc { id, plan } in queries {
+        let typ = plan.typecheck(&mut ctx);
+        //            .map_err(|err| TransformError::Internal(format!("type error: {:?}", err)));
+
+        match typ {
+            Ok(typ) => {
+                ctx.insert(Id::Global(id.clone()), typ);
+            }
+            Err(err) => warn!("TYPE ERROR: {}", err),
+        }
+    }
+
     // Inline views that are used in only one other view.
     inline_views(dataflow)?;
 

@@ -183,7 +183,7 @@ pub enum TransformError {
     /// An ideally temporary error indicating transforms that do not support the `MirRelationExpr::LetRec` variant.
     LetRecUnsupported,
     /// A reference to an apparently unbound identifier.
-    IdentifierMissing(mz_expr::LocalId),
+    IdentifierMissing(mz_expr::LocalId)
 }
 
 impl fmt::Display for TransformError {
