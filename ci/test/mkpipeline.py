@@ -53,6 +53,13 @@ def main() -> int:
     os.environ["GIT_PAGER"] = ""
     spawn.runv(["git", "diff", "--stat", "origin/main..."])
 
+    # Merge base branch in for pull request.
+    if os.environ["BUILDKITE_PULL_REQUEST"]:
+        spawn.runv(["git", "config", "--global", "user.email", "buildkite@buildkite.com"])
+        spawn.runv(["git", "config", "--global", "user.name", "Buildkite"])
+        base_branch = os.environ["BUILDKITE_PULL_REQUEST_BASE_BRANCH"]
+        spawn.runv(["git", "merge", f"origin/{base_branch}"])
+
     with open(Path(__file__).parent / "pipeline.template.yml") as f:
         raw = f.read()
     raw = raw.replace("$RUST_VERSION", rust_version())
