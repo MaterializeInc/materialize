@@ -309,9 +309,20 @@ fn convert_claims_to_external_metadata(claims: Claims, admin_role: &str) -> Exte
 fn parse_options(value: &str) -> Result<Vec<(String, String)>, ()> {
     let opts = split_options(value);
     let mut pairs = Vec::with_capacity(opts.len());
+    let mut seen_prefix = false;
     for opt in opts {
-        let (key, val) = parse_option(&opt)?;
-        pairs.push((key.to_owned(), val.to_owned()));
+        if !seen_prefix {
+            if opt == "-c" {
+                seen_prefix = true;
+            } else {
+                let (key, val) = parse_option(&opt)?;
+                pairs.push((key.to_owned(), val.to_owned()));
+            }
+        } else {
+            let (key, val) = opt.split_once('=').ok_or(())?;
+            pairs.push((key.to_owned(), val.to_owned()));
+            seen_prefix = false;
+        }
     }
     Ok(pairs)
 }
@@ -321,7 +332,7 @@ fn parse_options(value: &str) -> Result<Vec<(String, String)>, ()> {
 /// there was some other prefix.
 fn parse_option(option: &str) -> Result<(&str, &str), ()> {
     let (key, value) = option.split_once('=').ok_or(())?;
-    for prefix in &["-c ", "-c", "--"] {
+    for prefix in &["-c", "--"] {
         if let Some(key) = key.strip_prefix(prefix) {
             return Ok((key, value));
         }
@@ -1985,8 +1996,18 @@ mod test {
                 expect: Ok(vec![("key", "val")]),
             },
             TestCase {
-                input: r#"--key=val -ckey2=val2 -c\ key3=val3"#,
-                expect: Ok(vec![("key", "val"), ("key2", "val2"), ("key3", "val3")]),
+                input: r#"--key=val -ckey2=val2 -c key3=val3 -c key4=val4 -ckey5=val5"#,
+                expect: Ok(vec![
+                    ("key", "val"),
+                    ("key2", "val2"),
+                    ("key3", "val3"),
+                    ("key4", "val4"),
+                    ("key5", "val5"),
+                ]),
+            },
+            TestCase {
+                input: r#"-c\ key=val"#,
+                expect: Ok(vec![(" key", "val")]),
             },
             TestCase {
                 input: "--key=val -ckey2 val2",
@@ -2043,14 +2064,6 @@ mod test {
             TestCase {
                 input: "-ca=b",
                 expect: Ok(("a", "b")),
-            },
-            TestCase {
-                input: "-c a=b",
-                expect: Ok(("a", "b")),
-            },
-            TestCase {
-                input: "-c a=b -c d=e",
-                expect: Ok(("a", "b -c d=e")),
             },
             // Unclear what this should error, but at least test it.
             TestCase {
