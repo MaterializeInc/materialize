@@ -3540,30 +3540,37 @@ impl Coordinator {
         session: &mut Session,
         GrantRolePlan {
             role_id,
-            member_id,
+            member_ids,
             grantor_id,
         }: GrantRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let member_membership: BTreeSet<_> = self.catalog.get_role(&member_id).membership();
-        if member_membership.contains(&role_id) {
-            let role_name = self.catalog.get_role(&role_id).name().to_string();
-            let member_name = self.catalog.get_role(&member_id).name().to_string();
-            session.add_notice(AdapterNotice::RoleMembershipAlreadyExists {
-                role_name,
-                member_name,
-            });
-            // We need this check so we don't accidentally return a success on a reserved role.
-            self.catalog.ensure_not_reserved_role(&member_id)?;
-            self.catalog.ensure_not_reserved_role(&role_id)?;
+        let mut ops = Vec::new();
+        for member_id in member_ids {
+            let member_membership: BTreeSet<_> = self.catalog.get_role(&member_id).membership();
+            if member_membership.contains(&role_id) {
+                let role_name = self.catalog.get_role(&role_id).name().to_string();
+                let member_name = self.catalog.get_role(&member_id).name().to_string();
+                // We need this check so we don't accidentally return a success on a reserved role.
+                self.catalog.ensure_not_reserved_role(&member_id)?;
+                self.catalog.ensure_not_reserved_role(&role_id)?;
+                session.add_notice(AdapterNotice::RoleMembershipAlreadyExists {
+                    role_name,
+                    member_name,
+                });
+            } else {
+                ops.push(catalog::Op::GrantRole {
+                    role_id,
+                    member_id,
+                    grantor_id,
+                });
+            }
+        }
+
+        if ops.is_empty() {
             return Ok(ExecuteResponse::GrantedRole);
         }
 
-        let op = catalog::Op::GrantRole {
-            role_id,
-            member_id,
-            grantor_id,
-        };
-        self.catalog_transact(Some(session), vec![op])
+        self.catalog_transact(Some(session), ops)
             .await
             .map(|_| ExecuteResponse::GrantedRole)
     }
@@ -3571,24 +3578,34 @@ impl Coordinator {
     pub(super) async fn sequence_revoke_role(
         &mut self,
         session: &mut Session,
-        RevokeRolePlan { role_id, member_id }: RevokeRolePlan,
+        RevokeRolePlan {
+            role_id,
+            member_ids,
+        }: RevokeRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let member_membership: BTreeSet<_> = self.catalog.get_role(&member_id).membership();
-        if !member_membership.contains(&role_id) {
-            let role_name = self.catalog.get_role(&role_id).name().to_string();
-            let member_name = self.catalog.get_role(&member_id).name().to_string();
-            session.add_notice(AdapterNotice::RoleMembershipDoesNotExists {
-                role_name,
-                member_name,
-            });
-            // We need this check so we don't accidentally return a success on a reserved role.
-            self.catalog.ensure_not_reserved_role(&member_id)?;
-            self.catalog.ensure_not_reserved_role(&role_id)?;
+        let mut ops = Vec::new();
+        for member_id in member_ids {
+            let member_membership: BTreeSet<_> = self.catalog.get_role(&member_id).membership();
+            if !member_membership.contains(&role_id) {
+                let role_name = self.catalog.get_role(&role_id).name().to_string();
+                let member_name = self.catalog.get_role(&member_id).name().to_string();
+                // We need this check so we don't accidentally return a success on a reserved role.
+                self.catalog.ensure_not_reserved_role(&member_id)?;
+                self.catalog.ensure_not_reserved_role(&role_id)?;
+                session.add_notice(AdapterNotice::RoleMembershipDoesNotExists {
+                    role_name,
+                    member_name,
+                });
+            } else {
+                ops.push(catalog::Op::RevokeRole { role_id, member_id });
+            }
+        }
+
+        if ops.is_empty() {
             return Ok(ExecuteResponse::RevokedRole);
         }
 
-        let op = catalog::Op::RevokeRole { role_id, member_id };
-        self.catalog_transact(Some(session), vec![op])
+        self.catalog_transact(Some(session), ops)
             .await
             .map(|_| ExecuteResponse::RevokedRole)
     }

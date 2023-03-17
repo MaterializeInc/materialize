@@ -35,6 +35,10 @@ _member_name_ | The role name to add to _role_name_ as a member.
 GRANT data_scientist TO joe;
 ```
 
+```sql
+GRANT data_scientist TO joe, mike;
+```
+
 ## Related pages
 
 - [CREATE ROLE](../create-role)

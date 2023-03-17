@@ -202,12 +202,109 @@ REVOKE group1 FROM public
 statement error role name "public" is reserved
 REVOKE public FROM group1
 
+statement ok
+DROP ROLE group1
+
+statement ok
+DROP ROLE joe
+
 # SHOW ROLES/USERS is not yet implemented
 statement error SHOW ROLES not yet supported
 show roles
 
 statement error SHOW ROLES not yet supported
 show users
+
+# Test grant/revoke multiple roles
+
+statement ok
+CREATE ROLE joe
+
+statement ok
+CREATE ROLE group1
+
+statement ok
+CREATE ROLE group2
+
+statement ok
+CREATE ROLE group3
+
+statement error unknown role 'bob'
+GRANT group3 TO joe, group1, bob
+
+query TTT
+SELECT * FROM role_members
+----
+
+statement error role name "mz_system" is reserved
+GRANT group3 TO joe, group1, mz_system
+
+query TTT
+SELECT * FROM role_members
+----
+
+statement ok
+GRANT group3 TO joe, group1
+
+query TTT
+SELECT * FROM role_members
+----
+group3  joe     materialize
+group3  group1  materialize
+
+statement error role "joe" is a member of role "group3"
+GRANT joe TO group1, group3
+
+query TTT
+SELECT * FROM role_members
+----
+group3  joe     materialize
+group3  group1  materialize
+
+statement ok
+GRANT group3 TO group1, group2
+
+query TTT
+SELECT * FROM role_members
+----
+group3  joe     materialize
+group3  group1  materialize
+group3  group2  materialize
+
+statement error unknown role 'bob'
+REVOKE group3 FROM joe, group1, bob
+
+query TTT
+SELECT * FROM role_members
+----
+group3  joe     materialize
+group3  group1  materialize
+group3  group2  materialize
+
+statement error role name "mz_system" is reserved
+REVOKE group3 FROM joe, group1, mz_system
+
+query TTT
+SELECT * FROM role_members
+----
+group3  joe     materialize
+group3  group1  materialize
+group3  group2  materialize
+
+statement ok
+REVOKE group3 FROM joe, group1
+
+query TTT
+SELECT * FROM role_members
+----
+group3  group2  materialize
+
+statement ok
+REVOKE group3 FROM joe, group2
+
+query TTT
+SELECT * FROM role_members
+----
 
 # Disable RBAC checks
 

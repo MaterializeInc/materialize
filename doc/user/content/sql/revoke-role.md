@@ -39,6 +39,10 @@ You may not set up circular membership loops.
 REVOKE data_scientist FROM joe;
 ```
 
+```sql
+REVOKE data_scientist FROM joe, mike;
+```
+
 ## Related pages
 
 - [CREATE ROLE](../create-role)

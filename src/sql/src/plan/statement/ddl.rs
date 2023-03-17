@@ -4137,13 +4137,16 @@ pub fn plan_grant_role(
     scx: &StatementContext,
     GrantRoleStatement {
         role_name,
-        member_name,
+        member_names,
     }: GrantRoleStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let grantor_id = scx.catalog.active_role_id().clone();
     Ok(Plan::GrantRole(GrantRolePlan {
         role_id: role_name.id,
-        member_id: member_name.id,
+        member_ids: member_names
+            .into_iter()
+            .map(|member_name| member_name.id)
+            .collect(),
         grantor_id,
     }))
 }
@@ -4159,11 +4162,14 @@ pub fn plan_revoke_role(
     _: &StatementContext,
     RevokeRoleStatement {
         role_name,
-        member_name,
+        member_names,
     }: RevokeRoleStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     Ok(Plan::RevokeRole(RevokeRolePlan {
         role_id: role_name.id,
-        member_id: member_name.id,
+        member_ids: member_names
+            .into_iter()
+            .map(|member_name| member_name.id)
+            .collect(),
     }))
 }
