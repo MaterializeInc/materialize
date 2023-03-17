@@ -135,7 +135,7 @@ The following metadata is available for each source as a progress subsource:
 
 Field          | Type                                     | Meaning
 ---------------|------------------------------------------|--------
-`lsn`          | [`uint8`](/sql/types/uint/#uint8-info)   | The last Log Sequence Number (LSN) consumed from the upstream PostgreSQL replication stream.
+`lsn`          | [`uint8`](/sql/types/uint/#uint8-info)   | The next Log Sequence Number (LSN) that can be consumed from the upstream PostgreSQL replication stream.
 
 And can be queried using:
 
@@ -146,7 +146,19 @@ FROM <src_name>_progress;
 
 The reported LSN should increase as Materialize consumes **new** WAL records
 from the upstream PostgreSQL database. For more details on monitoring source
-ingestion progress and debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
+ingestion progress and debugging related issues, see
+[Troubleshooting](/ops/troubleshooting/).
+
+#### Progress details
+
+The progress collection describes which PostgreSQL messages are available in the
+source itself at a given time. Namely, all records from the WAL with LSN's up to
+but not including (i.e. `<`) the reported LSN will be considered.
+
+This means that any queries that assess the source's progress collection will
+include all data from the source whose LSNs are described. You could, for
+instance, join a query of the source and a query of the progress collection to
+understand which LSNs have been included.
 
 ## Known limitations
 
