@@ -29,7 +29,6 @@ use mz_sql::names::{
     DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, RoleId, SchemaId,
     SchemaSpecifier, PUBLIC_ROLE_NAME,
 };
-use mz_sql::session::user::SYSTEM_USER;
 use mz_stash::{AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
 use mz_storage_client::types::sources::Timeline;
 
@@ -318,75 +317,15 @@ async fn migrate(
                 .insert(USER_VERSION.to_string(), ConfigValue { value: 0 })?;
             Ok(())
         },
-        // These three migrations were removed, but we need to keep empty migrations because the
+        // These migrations were removed, but we need to keep empty migrations because the
         // user version depends on the length of this array. New migrations should still go after
         // these empty migrations.
         |_, _, _| Ok(()),
         |_, _, _| Ok(()),
         |_, _, _| Ok(()),
-        // An optional field, `idle_arrangement_merge_effort`, was added to replica configs, which
-        // should default to `None` for existing configs. The deserialization is able deserialize
-        // the missing values as `None`. This migration updates the on-disk version to explicitly
-        // have a `None` value instead of a missing value.
-        //
-        // Introduced in v0.39.0
-        |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
-            txn.cluster_replicas.update(|_k, v| Some(v.clone()))?;
-            Ok(())
-        },
-        // Remove the materialize role from existing deployments
-        //
-        // Introduced in v0.45.0
-        //
-        // TODO(jkosh44) Can be cleared (patched to be empty) in v0.46.0
-        |txn: &mut Transaction<'_>, now, _bootstrap_args| {
-            let roles = txn
-                .roles
-                .delete(|_role_key, role_value| &role_value.role.name == "materialize");
-            assert!(roles.len() <= 1, "duplicate roles are not allowed");
-            if roles.len() == 1 {
-                let (role_key, role_value) = roles.into_element();
-                let id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
-                txn.audit_log_updates.push((
-                    AuditLogKey {
-                        event: VersionedEvent::V1(EventV1 {
-                            id,
-                            event_type: EventType::Drop,
-                            object_type: ObjectType::Role,
-                            details: EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
-                                id: role_key.id.to_string(),
-                                name: role_value.role.name,
-                            }),
-                            user: None,
-                            occurred_at: now,
-                        }),
-                    },
-                    (),
-                    1,
-                ));
-            }
-            Ok(())
-        },
-        // Attributes were added to role definitions.
-        //
-        // Introduced in v0.45.0
-        //
-        // TODO(jkosh44) Can be cleared (patched to be empty) in v0.48.0
-        |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
-            txn.roles.update(|_role_key, role_value| {
-                let mut role_value = role_value.clone();
-                if role_value.role.attributes.is_none() {
-                    let is_mz_system_role = role_value.role.name == SYSTEM_USER.name;
-                    let mut attributes = RoleAttributes::new();
-                    if is_mz_system_role {
-                        attributes = attributes.with_all();
-                    }
-                    role_value.role.attributes = Some(attributes);
-                }
-                Some(role_value)
-            })?;
-            Ok(())
-        },
+        |_, _, _| Ok(()),
+        |_, _, _| Ok(()),
+        |_, _, _| Ok(()),
         // Role memberships were added to role definitions.
         //
         // Introduced in v0.46.0
@@ -439,7 +378,7 @@ async fn migrate(
                 RoleValue {
                     role: SerializedRole {
                         name: PUBLIC_ROLE_NAME.as_str().to_lowercase(),
-                        attributes: Some(RoleAttributes::new()),
+                        attributes: RoleAttributes::new(),
                         membership: Some(RoleMembership::new()),
                     },
                 },
