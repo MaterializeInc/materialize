@@ -55,8 +55,9 @@ name         nullable  type
 --------------------------
 indexrelid      false       oid
 indrelid        false       oid
-indisprimary    false       boolean
 indisunique     false       boolean
+indisprimary    false       boolean
+indimmediate    false       boolean
 indisclustered  false       boolean
 indisvalid      false       boolean
 indisreplident  false       boolean
