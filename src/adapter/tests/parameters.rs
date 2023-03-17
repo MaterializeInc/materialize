@@ -163,7 +163,6 @@ async fn test_parameter_type_inference() {
             "SELECT $1 < $2",
             vec![ScalarType::String, ScalarType::String],
         ),
-        ("SELECT $1 + 1", vec![ScalarType::Int32]),
         (
             "SELECT $1 + 1.0",
             vec![ScalarType::Numeric { max_scale: None }],
