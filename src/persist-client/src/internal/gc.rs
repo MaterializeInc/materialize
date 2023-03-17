@@ -26,7 +26,7 @@ use prometheus::Counter;
 use timely::progress::Timestamp;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot, Semaphore};
-use tracing::{debug, debug_span, warn, Instrument, Span};
+use tracing::{debug, debug_span, info, warn, Instrument, Span};
 
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::maintenance::RoutineMaintenance;
@@ -325,6 +325,12 @@ where
                     });
                 }
                 Ordering::Equal => {
+                    if req.new_seqno_since != state.state.seqno {
+                        info!(
+                            "{}: Running GC from SeqNos since of {} to {}.",
+                            req.shard_id, req.new_seqno_since, state.state.seqno
+                        );
+                    }
                     live_diffs += 1;
                     state.collections.trace.map_batches(|b| {
                         for part in b.parts.iter() {

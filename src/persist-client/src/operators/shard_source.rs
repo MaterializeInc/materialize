@@ -282,6 +282,7 @@ where
                 name_owned, shard_id, as_of, e
             )
         });
+        info!("{}: creating Subscription with reader id: {}", shard_id, subscription.reader_id());
 
         let mut batch_parts = vec![];
         let mut lease_returner = subscription.lease_returner().clone();
@@ -320,7 +321,9 @@ where
             // intentionally keep this stream from dropping until the operator
             // is dropped. this ensures our Subscribe handle stays alive for as
             // long as is needed to finish fetching all of its parts.
+            info!("{}: waiting for subscribe alive channel to drop", shard_id);
             let _ = keep_subscribe_alive_rx.await;
+            info!("{}: subscribe alive channel dropped", shard_id);
         };
         tokio::pin!(subscription_stream);
 
@@ -355,9 +358,12 @@ where
                 Some(completed_fetch) = completed_fetches.next_mut() => {
                     match completed_fetch {
                         Event::Data(_cap, data) => {
+                            let mut i = 0;
                             for part in data.drain(..) {
+                                i += 1;
                                 lease_returner.return_leased_part(lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part));
                             }
+                            info!("{}: returning {} leases in main select! loop. {:?} remaining", shard_id, i, lease_returner.clone_leases());
                         }
                         Event::Progress(frontier) => {
                             if frontier.is_empty() {
@@ -490,15 +496,20 @@ where
         // been fetched to avoid racing with GC and panicking on a missing blob.
         // We can drop our handle when the feedback edge from `shard_source_fetches`
         // advances to the empty frontier, indicating that all parts have been read.
+        info!("{}: done emitting parts. waiting for completion", shard_id);
         while let Some(completed_fetch) = completed_fetches.next_mut().await {
             match completed_fetch {
                 Event::Data(_cap, data) => {
+                    let mut i = 0;
                     for part in data.drain(..) {
+                        i += 1;
                         lease_returner.return_leased_part(lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part));
                     }
+                    info!("{}: returning {} leases in drain loop. {:?} remaining", shard_id, i, lease_returner.clone_leases());
                 }
                 Event::Progress(frontier) => {
                     if frontier.is_empty() {
+                        info!("{}: received empty frontier from feedback edge. lease count: {:?}", shard_id, lease_returner.clone_leases());
                         return;
                     }
                 }

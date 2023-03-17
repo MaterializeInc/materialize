@@ -706,6 +706,7 @@ where
             return Break(NoOpStateTransition(false));
         }
 
+        info!("Expiring reader id: {}", reader_id);
         let existed = self.leased_readers.remove(reader_id).is_some();
         if existed {
             // TODO: Re-enable this once we have #15511.

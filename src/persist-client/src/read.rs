@@ -28,7 +28,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
-use tracing::{debug, debug_span, instrument, trace_span, warn, Instrument};
+use tracing::{debug, debug_span, info, instrument, trace_span, warn, Instrument};
 use uuid::Uuid;
 
 use crate::fetch::{
@@ -39,7 +39,7 @@ use crate::internal::encoding::Schemas;
 use crate::internal::machine::Machine;
 use crate::internal::metrics::{Metrics, MetricsRetryStream};
 use crate::internal::state::{HollowBatch, Since};
-use crate::{parse_id, GarbageCollector, PersistConfig};
+use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -115,6 +115,10 @@ where
             snapshot: Some(snapshot_parts),
             listen,
         }
+    }
+
+    pub(crate) fn reader_id(&self) -> LeasedReaderId {
+        self.listen.handle.reader_id.clone()
     }
 
     /// Returns a `LeasedBatchPart` enriched with the proper metadata.
@@ -197,13 +201,12 @@ where
     D: Semigroup + Codec64 + Send + Sync,
 {
     fn drop(&mut self) {
-        // Return all leased parts from the snapshot to ensure they don't panic
-        // if dropped.
-        if let Some(parts) = self.snapshot.take() {
-            for part in parts {
-                self.return_leased_part(part)
-            }
-        }
+        let outstanding_leases = self.lease_returner().clone_leases();
+        info!(
+            "{}: Subscribe dropped. Leases: {:?}",
+            self.listen.handle.machine.shard_id(),
+            outstanding_leases
+        );
     }
 }
 
@@ -444,6 +447,7 @@ where
 pub(crate) struct SubscriptionLeaseReturner {
     leased_seqnos: Arc<Mutex<BTreeMap<SeqNo, usize>>>,
     reader_id: LeasedReaderId,
+    shard_id: ShardId,
     metrics: Arc<Metrics>,
 }
 
@@ -454,6 +458,11 @@ impl SubscriptionLeaseReturner {
         x: SerdeLeasedBatchPart,
     ) -> LeasedBatchPart<T> {
         LeasedBatchPart::from(x, Arc::clone(&self.metrics))
+    }
+
+    pub(crate) fn clone_leases(&self) -> BTreeMap<SeqNo, usize> {
+        let x = self.leased_seqnos.lock().expect("abc");
+        x.clone()
     }
 
     pub(crate) fn return_leased_part<T: Timestamp + Codec64>(
@@ -475,6 +484,13 @@ impl SubscriptionLeaseReturner {
             if remaining_leases == &0 {
                 leased_seqnos.remove(&lease);
             }
+        } else {
+            panic!(
+                "{}: returning lease for reader {}, but no parts are leased. active leases: {:?}",
+                self.shard_id,
+                self.reader_id,
+                self.clone_leases()
+            );
         }
     }
 }
@@ -556,6 +572,7 @@ where
             lease_returner: SubscriptionLeaseReturner {
                 leased_seqnos: Arc::new(Mutex::new(BTreeMap::new())),
                 reader_id: reader_id.clone(),
+                shard_id: machine.shard_id(),
                 metrics,
             },
             heartbeat_task: Some(machine.start_reader_heartbeat_task(reader_id, gc).await),
@@ -727,13 +744,23 @@ where
     fn lease_seqno(&mut self) -> SeqNo {
         let seqno = self.machine.seqno();
 
-        *self
-            .lease_returner
-            .leased_seqnos
-            .lock()
-            .expect("lock poisoned")
-            .entry(seqno)
-            .or_insert(0) += 1;
+        let leases = {
+            let mut seqnos = self
+                .lease_returner
+                .leased_seqnos
+                .lock()
+                .expect("lock poisoned");
+            let entry = seqnos.entry(seqno).or_insert(0);
+            *entry += 1;
+            *entry
+        };
+
+        info!(
+            "{}: seqno ({}) has {} leases",
+            self.machine.shard_id(),
+            seqno,
+            leases
+        );
 
         seqno
     }
