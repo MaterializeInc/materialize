@@ -9,15 +9,10 @@ menu:
 `ALTER ROLE` alters the attributes of an existing role.
 
 {{< warning >}}
-Roles in Materialize are currently limited in functionality. In the future they
-will be used for role-based access control. See GitHub issue {{% gh 677 %}}
-for details.
-{{< /warning >}}
-
-{{< warning >}}
-RBAC is under development: currently no role attributes or privileges will be
-considered when executing statements, although these attributes are saved and
-will be considered in a later release.
+Role-based access control (RBAC) is under development {{% gh 11579 %}}.
+Currently, no role attributes or privileges are considered when executing
+`CREATE ROLE` statements, but these attributes are saved and will be considered
+in a future release.
 {{< /warning >}}
 
 ## Syntax
@@ -26,6 +21,7 @@ will be considered in a later release.
 
 Field               | Use
 --------------------|-------------------------------------------------------------------------
+_role_name_         | A name for the role.
 **INHERIT**         | Grants the role the ability to inheritance of privileges of other roles.
 **CREATEROLE**      | Grants the role the ability to create, alter, and delete roles.
 **NOCREATEROLE**    | Denies the role the ability to create, alter, and delete roles.
@@ -33,7 +29,6 @@ Field               | Use
 **NOCREATEDB**      | Denies the role the ability to create databases.
 **CREATECLUSTER**   | Grants the role the ability to create clusters.
 **NOCREATECLUSTER** | Denies the role the ability to create clusters.
-_role_name_         | A name for the role.
 
 ## Details
 
@@ -66,3 +61,5 @@ rj  true  false
 - [CREATE ROLE](../create-role)
 - [DROP ROLE](../drop-role)
 - [DROP USER](../drop-user)
+- [GRANT ROLE](../grant-role)
+- [REVOKE ROLE](../revoke-role)

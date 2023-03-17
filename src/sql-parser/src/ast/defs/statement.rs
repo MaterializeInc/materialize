@@ -93,6 +93,8 @@ pub enum Statement<T: AstInfo> {
     Execute(ExecuteStatement<T>),
     Deallocate(DeallocateStatement),
     Raise(RaiseStatement),
+    GrantRole(GrantRoleStatement<T>),
+    RevokeRole(RevokeRoleStatement<T>),
 }
 
 impl<T: AstInfo> AstDisplay for Statement<T> {
@@ -151,6 +153,8 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::Execute(stmt) => f.write_node(stmt),
             Statement::Deallocate(stmt) => f.write_node(stmt),
             Statement::Raise(stmt) => f.write_node(stmt),
+            Statement::GrantRole(stmt) => f.write_node(stmt),
+            Statement::RevokeRole(stmt) => f.write_node(stmt),
         }
     }
 }
@@ -1590,8 +1594,7 @@ pub struct AlterRoleStatement<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for AlterRoleStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("ALTER ");
-        f.write_str("ROLE ");
+        f.write_str("ALTER ROLE ");
         f.write_node(&self.name);
         for option in &self.options {
             f.write_str(" ");
@@ -2897,3 +2900,42 @@ impl<T: AstInfo> AstDisplay for ShowStatement<T> {
     }
 }
 impl_display_t!(ShowStatement);
+
+/// `GRANT ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GrantRoleStatement<T: AstInfo> {
+    /// The role that is gaining a member.
+    pub role_name: T::RoleName,
+    /// The role that will be added to `role_name`.
+    pub member_name: T::RoleName,
+}
+
+impl<T: AstInfo> AstDisplay for GrantRoleStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("GRANT ");
+        f.write_node(&self.role_name);
+        f.write_str(" TO ");
+        f.write_node(&self.member_name);
+    }
+}
+impl_display_t!(GrantRoleStatement);
+
+/// `REVOKE ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RevokeRoleStatement<T: AstInfo> {
+    /// The role that is losing a member.
+    pub role_name: T::RoleName,
+    /// The role that will be removed from `role_name`.
+    pub member_name: T::RoleName,
+    // TODO(jkosh44) Add cascade/restrict.
+}
+
+impl<T: AstInfo> AstDisplay for RevokeRoleStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("REVOKE ");
+        f.write_node(&self.role_name);
+        f.write_str(" FROM ");
+        f.write_node(&self.member_name);
+    }
+}
+impl_display_t!(RevokeRoleStatement);

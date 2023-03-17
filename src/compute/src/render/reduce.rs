@@ -22,27 +22,27 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::Collection;
-use mz_expr::MirScalarExpr;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
-use tracing::warn;
+use tracing::{error, warn};
 
 use mz_compute_client::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
     ReducePlan, ReductionType,
 };
-use mz_expr::{AggregateExpr, AggregateFunc};
+use mz_expr::{AggregateExpr, AggregateFunc, EvalError, MirScalarExpr};
 use mz_ore::soft_assert_or_log;
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena};
 use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::reduce::ReduceExt;
 
 use crate::render::context::{Arrangement, CollectionBundle, Context};
 use crate::render::reduce::monoids::ReductionMonoid;
 use crate::render::ArrangementFlavor;
-use crate::typedefs::{RowKeySpine, RowSpine};
+use crate::typedefs::{ErrValSpine, RowKeySpine, RowSpine};
 
 /// Render a dataflow based on the provided plan.
 ///
@@ -61,11 +61,15 @@ where
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
 {
-    // Convenience wrapper to render the right kind of hierarchical plan.
     let mut err_collection = err_input;
+    // Convenience wrapper to render the right kind of hierarchical plan.
     let mut build_hierarchical =
         |collection: Collection<G, (Row, Row), Diff>, expr: HierarchicalPlan| match expr {
-            HierarchicalPlan::Monotonic(expr) => build_monotonic(debug_name, collection, expr),
+            HierarchicalPlan::Monotonic(expr) => {
+                let (output, errs) = build_monotonic(debug_name, collection, expr);
+                err_collection = err_collection.concat(&errs);
+                output
+            }
             HierarchicalPlan::Bucketed(expr) => {
                 let (bucketed_output, bucketed_errs) = build_bucketed(debug_name, collection, expr);
                 if let Some(errs) = bucketed_errs {
@@ -88,7 +92,11 @@ where
         // can go ahead and render them directly.
         ReducePlan::Distinct => build_distinct(debug_name, collection).into(),
         ReducePlan::DistinctNegated => build_distinct_retractions(debug_name, collection).into(),
-        ReducePlan::Accumulable(expr) => build_accumulable(debug_name, collection, expr).into(),
+        ReducePlan::Accumulable(expr) => {
+            let (arranged_output, errs) = build_accumulable(debug_name, collection, expr);
+            err_collection = err_collection.concat(&errs);
+            arranged_output.into()
+        }
         ReducePlan::Hierarchical(expr) => build_hierarchical(collection, expr).into(),
         ReducePlan::Basic(expr) => build_basic(collection, expr).into(),
         // Otherwise, we need to render something different for each type of
@@ -97,17 +105,17 @@ where
             // First, we need to render our constituent aggregations.
             let mut to_collate = vec![];
 
-            if let Some(accumulable) = expr.accumulable {
-                to_collate.push((
-                    ReductionType::Accumulable,
-                    build_accumulable(debug_name, collection.clone(), accumulable),
-                ));
-            }
             if let Some(hierarchical) = expr.hierarchical {
                 to_collate.push((
                     ReductionType::Hierarchical,
                     build_hierarchical(collection.clone(), hierarchical),
                 ));
+            }
+            if let Some(accumulable) = expr.accumulable {
+                let (arranged_output, errs) =
+                    build_accumulable(debug_name, collection.clone(), accumulable);
+                err_collection = err_collection.concat(&errs);
+                to_collate.push((ReductionType::Accumulable, arranged_output));
             }
             if let Some(basic) = expr.basic {
                 to_collate.push((ReductionType::Basic, build_basic(collection.clone(), basic)));
@@ -788,7 +796,6 @@ where
         })
         .as_collection(|k,v| (k.clone(), v.clone()))
         .map_fallible("Checked Invalid Accumulations", |(key, result)| {
-            use mz_expr::EvalError;
             match result {
                 Err(message) => Err(EvalError::Internal(message).into()),
                 Ok(values) => Ok((key, values)),
@@ -816,10 +823,10 @@ where
 /// Build the dataflow to compute and arrange multiple hierarchical aggregations
 /// on monotonic inputs.
 fn build_monotonic<G>(
-    _debug_name: &str,
+    debug_name: &str,
     collection: Collection<G, (Row, Row), Diff>,
     MonotonicPlan { aggr_funcs, skips }: MonotonicPlan,
-) -> Arrangement<G, Row>
+) -> (Arrangement<G, Row>, Collection<G, DataflowError, Diff>)
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -837,29 +844,34 @@ where
         (key, values)
     });
 
-    // We can place our rows directly into the diff field, and only keep the
-    // relevant one corresponding to evaluating our aggregate, instead of having
-    // to do a hierarchical reduction.
-    use timely::dataflow::operators::Map;
-
     // We arrange the inputs ourself to force it into a leaner structure because we know we
     // won't care about values.
-    let partial = collection
-        .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated ReduceMonotonic input")
-        .inner
-        .map(move |((key, values), time, diff)| {
-            assert!(diff > 0);
+    let consolidated =
+        collection.consolidate_named::<RowKeySpine<_, _, _>>("Consolidated ReduceMonotonic input");
+    let debug_name = debug_name.to_string();
+    let (partial, errs) = consolidated.ensure_monotonic(move |data, diff| {
+        warn!(
+            "[customer-data] ReduceMonotonic expected monotonic input but \
+             received {data:?} with diff {diff:?} in dataflow {debug_name}"
+        );
+        error!("Non-monotonic input to ReduceMonotonic");
+        let m = "tried to build a monotonic reduction on non-monotonic input".to_string();
+        (DataflowError::from(EvalError::Internal(m)), 1)
+    });
+    // We can place our rows directly into the diff field, and
+    // only keep the relevant one corresponding to evaluating our
+    // aggregate, instead of having to do a hierarchical reduction.
+    let partial =
+        partial.explode_one(move |(key, values)| {
             let mut output = Vec::new();
             for (row, func) in values.into_iter().zip(aggr_funcs.iter()) {
                 output.push(monoids::get_monoid(row, func).expect(
                     "hierarchical aggregations are expected to have monoid implementations",
                 ));
             }
-
-            ((key, ()), time, output)
-        })
-        .as_collection();
-    partial
+            (key, output)
+        });
+    let output = partial
         .arrange_named::<RowKeySpine<_, _, Vec<ReductionMonoid>>>("ArrangeMonotonic")
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMonotonic", {
             let mut row_buf = Row::default();
@@ -874,7 +886,8 @@ where
                 }
                 output.push((row_buf.clone(), 1));
             }
-        })
+        });
+    (output, errs)
 }
 
 /// Accumulates values for the various types of accumulable aggregations.
@@ -1143,7 +1156,7 @@ fn build_accumulable<G>(
         simple_aggrs,
         distinct_aggrs,
     }: AccumulablePlan,
-) -> Arrangement<G, Row>
+) -> (Arrangement<G, Row>, Collection<G, DataflowError, Diff>)
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -1406,25 +1419,16 @@ where
     };
 
     let debug_name = debug_name.to_string();
-    collection
+    let err_full_aggrs = full_aggrs.clone();
+    let (arranged_output, arranged_errs) = collection
         .arrange_named::<RowKeySpine<_, _, (Vec<Accum>, Diff)>>("ArrangeAccumulable")
-        .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceAccumulable", {
+        .reduce_pair::<_, RowSpine<_, _, _, _>, _, ErrValSpine<_, _, _>>("ReduceAccumulable", "AccumulableErrorCheck", {
             let mut row_buf = Row::default();
             move |_key, input, output| {
-                let (ref accum, total) = input[0].1;
+                let (ref accums, total) = input[0].1;
                 let mut row_packer = row_buf.packer();
 
-                for (aggr, accum) in full_aggrs.iter().zip(accum) {
-                    // This should perhaps be un-recoverable, as we risk panicking in the ReduceCollation
-                    // operator, when this key is presented but matching aggregates are not found. We will
-                    // suppress the output for inputs without net-positive records, which *should* avoid
-                    // that panic.
-                    if total == 0 && !accum.is_zero() {
-                        warn!("[customer-data] ReduceAccumulable observed net-zero records \
-                            with non-zero accumulation: {aggr:?}: {accum:?} in dataflow {debug_name}");
-                        soft_assert_or_log!(false, "Net-zero records with non-zero accumulation in ReduceAccumulable");
-                    }
-
+                for (aggr, accum) in full_aggrs.iter().zip(accums) {
                     // The finished value depends on the aggregation function in a variety of ways.
                     // For all aggregates but count, if only null values were
                     // accumulated, then the output is null.
@@ -1479,17 +1483,33 @@ where
                             | (
                                 AggregateFunc::SumUInt32,
                                 Accum::SimpleNumber { accum, .. },
-                            )
+                            ) => {
+                                if !accum.is_negative() {
+                                    // Our semantics of overflow are not clearly articulated wrt.
+                                    // unsigned vs. signed types (#17758). We adopt an unsigned
+                                    // wrapping behavior to match what we do above for signed types.
+                                    // TODO(vmarcos): remove potentially dangerous usage of `as`.
+                                    #[allow(clippy::as_conversions)]
+                                    Datum::UInt64(*accum as u64)
+                                } else {
+                                    // Note that we return a value here, but an error in the other
+                                    // operator of the reduce_pair. Therefore, we expect that this
+                                    // value will never be exposed as an output.
+                                    Datum::Null
+                                }
+                            }
                             | (
                                 AggregateFunc::SumUInt64,
                                 Accum::SimpleNumber { accum, .. },
                             ) => {
-                                if accum.is_negative() {
-                                    warn!("[customer-data] ReduceAccumulable observed a negative sum \
-                                        accumulation over an unsigned type: {aggr:?}: {accum:?} in dataflow {debug_name}");
-                                    soft_assert_or_log!(false, "Invalid negative unsigned aggregation in ReduceAccumulable");
+                                if !accum.is_negative() {
+                                    Datum::from(*accum)
+                                } else {
+                                    // Note that we return a value here, but an error in the other
+                                    // operator of the reduce_pair. Therefore, we expect that this
+                                    // value will never be exposed as an output.
+                                    Datum::Null
                                 }
-                                Datum::from(*accum)
                             }
                             (
                                 AggregateFunc::SumFloat32,
@@ -1580,7 +1600,7 @@ where
                                 }
                             }
                             _ => panic!(
-                                "Unexpected accumulation (aggr={:?}, accum={accum:?}) in dataflow {debug_name}",
+                                "Unexpected accumulation (aggr={:?}, accum={accum:?})",
                                 aggr.func
                             ),
                         }
@@ -1590,7 +1610,50 @@ where
                 }
                 output.push((row_buf.clone(), 1));
             }
-        })
+        },
+        move |key, input, output| {
+            let (ref accums, total) = input[0].1;
+            for (aggr, accum) in err_full_aggrs.iter().zip(accums) {
+                // We first test here if inputs without net-positive records are present,
+                // producing an error to the logs and to the query output if that is the case.
+                if total == 0 && !accum.is_zero() {
+                    warn!("[customer-data] ReduceAccumulable observed net-zero records \
+                        with non-zero accumulation: {aggr:?}: {accum:?} in dataflow {debug_name}");
+                    error!("Net-zero records with non-zero accumulation in ReduceAccumulable");
+                    let message = format!("Invalid data in source, saw net-zero records for key {key} \
+                        with non-zero accumulation in accumulable aggregate");
+                    output.push((EvalError::Internal(message).into(), 1));
+                }
+                match (&aggr.func, &accum) {
+                    (
+                        AggregateFunc::SumUInt16,
+                        Accum::SimpleNumber { accum, .. },
+                    )
+                    | (
+                        AggregateFunc::SumUInt32,
+                        Accum::SimpleNumber { accum, .. },
+                    )
+                    | (
+                        AggregateFunc::SumUInt64,
+                        Accum::SimpleNumber { accum, .. },
+                    ) => {
+                        if accum.is_negative() {
+                            warn!("[customer-data] ReduceAccumulable observed a negative sum \
+                                accumulation over an unsigned type: {aggr:?}: {accum:?} in dataflow {debug_name}");
+                            error!("Invalid negative unsigned aggregation in ReduceAccumulable");
+                            let message = format!("Invalid data in source, saw negative accumulation with \
+                            unsigned type for key {key}");
+                            output.push((EvalError::Internal(message).into(), 1));
+                        }
+                    }
+                    _ => (), // no more errors to check for at this point!
+                }
+            }
+        });
+    (
+        arranged_output,
+        arranged_errs.as_collection(|_key, error| error.clone()),
+    )
 }
 
 /// Monoids for in-place compaction of monotonic streams.
@@ -1606,18 +1669,31 @@ pub mod monoids {
     // will not have such elements in this case (they would correspond to positive and
     // negative infinity, which we do not represent).
 
-    use differential_dataflow::difference::Semigroup;
+    use differential_dataflow::difference::{Multiply, Semigroup};
     use serde::{Deserialize, Serialize};
 
     use mz_expr::AggregateFunc;
     use mz_ore::soft_panic_or_log;
-    use mz_repr::{Datum, Row};
+    use mz_repr::{Datum, Diff, Row};
 
     /// A monoid containing a single-datum row.
     #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
     pub enum ReductionMonoid {
         Min(Row),
         Max(Row),
+    }
+
+    impl Multiply<Diff> for ReductionMonoid {
+        type Output = Self;
+
+        fn multiply(self, factor: &Diff) -> Self {
+            // Multiplication in ReductionMonoid is idempotent, and
+            // its users must ascertain its monotonicity beforehand
+            // (typically with ensure_monotonic) since it has no zero
+            // value for us to use here.
+            assert!(factor.is_positive());
+            self
+        }
     }
 
     impl Semigroup for ReductionMonoid {

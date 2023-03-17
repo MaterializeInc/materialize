@@ -24,8 +24,11 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::ScalarType;
 use mz_sql::ast::{InsertSource, Query, Raw, SetExpr, Statement};
 use mz_sql::catalog::{RoleAttributes, SessionCatalog};
-use mz_sql::plan::{CreateRolePlan, Params};
-use mz_sql::session::vars::OwnedVarInput;
+use mz_sql::plan::{
+    AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, Params, Plan,
+    TransactionType,
+};
+use mz_sql::session::vars::{EndTransactionAction, OwnedVarInput};
 
 use crate::client::ConnectionId;
 use crate::command::{
@@ -38,12 +41,16 @@ use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{PreparedStatement, Session, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
-use crate::{catalog, metrics};
+use crate::{catalog, metrics, rbac};
 
 impl Coordinator {
     pub(crate) async fn handle_command(&mut self, mut cmd: Command) {
         if let Some(session) = cmd.session() {
             session.apply_external_metadata_updates();
+        }
+        if let Err(e) = rbac::check_command(&self.catalog, &cmd) {
+            cmd.send_error(e.into());
+            return;
         }
         match cmd {
             Command::Startup {
@@ -111,11 +118,16 @@ impl Coordinator {
                 id,
                 columns,
                 rows,
-                mut session,
+                session,
                 tx,
             } => {
-                let result = self.sequence_copy_rows(&mut session, id, columns, rows);
-                let _ = tx.send(Response { result, session });
+                self.sequence_plan(
+                    ClientTransmitter::new(tx, self.internal_cmd_tx.clone()),
+                    session,
+                    Plan::CopyRows(CopyRowsPlan { id, columns, rows }),
+                    Vec::new(),
+                )
+                .await;
             }
 
             Command::GetSystemVars { session, tx } => {
@@ -151,26 +163,25 @@ impl Coordinator {
                 }
             }
 
-            Command::StartTransaction {
-                implicit,
-                session,
-                tx,
-            } => {
-                let now = self.now_datetime();
-                let (session, result) = match implicit {
-                    None => session.start_transaction(now, None, None),
-                    Some(stmts) => (session.start_transaction_implicit(now, stmts), Ok(())),
-                };
-                let _ = tx.send(Response { result, session });
-            }
-
             Command::Commit {
                 action,
                 session,
                 tx,
             } => {
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                self.sequence_end_transaction(tx, session, action);
+                let plan = match action {
+                    EndTransactionAction::Commit => {
+                        Plan::CommitTransaction(CommitTransactionPlan {
+                            transaction_type: TransactionType::Implicit,
+                        })
+                    }
+                    EndTransactionAction::Rollback => {
+                        Plan::AbortTransaction(AbortTransactionPlan {
+                            transaction_type: TransactionType::Implicit,
+                        })
+                    }
+                };
+                self.sequence_plan(tx, session, plan, Vec::new()).await;
             }
 
             Command::VerifyPreparedStatement {
@@ -206,7 +217,7 @@ impl Coordinator {
                 name: session.user().name.to_string(),
                 attributes,
             };
-            if let Err(err) = self.sequence_create_role(&session, plan).await {
+            if let Err(err) = self.sequence_create_role_for_startup(&session, plan).await {
                 let _ = tx.send(Response {
                     result: Err(err),
                     session,
@@ -433,7 +444,9 @@ impl Coordinator {
                     | Statement::DropRoles(_)
                     | Statement::DropClusters(_)
                     | Statement::DropClusterReplicas(_)
+                    | Statement::GrantRole(_)
                     | Statement::Insert(_)
+                    | Statement::RevokeRole(_)
                     | Statement::Update(_) => {
                         return tx.send(
                             Err(AdapterError::OperationProhibitsTransaction(

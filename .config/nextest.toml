@@ -1,6 +1,9 @@
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 2 }
 
+[profile.default-miri]
+slow-timeout = { period = "600s", terminate-after = 2 }
+
 # For a given configuration parameter, the first override to match wins. Keep
 # these sorted in order from most specific to least specific.
 

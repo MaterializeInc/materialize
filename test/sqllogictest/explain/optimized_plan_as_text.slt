@@ -307,19 +307,21 @@ Explained Query:
     cte l4 =
       TopK group_by=[#0] limit=1 monotonic=false
         Project (#0, #1)
-          Join on=(#0 = #2) type=differential
-            Get l2
-            ArrangeBy keys=[[#1]]
-              Filter (#1) IS NOT NULL
-                Get materialize.public.mv
+          Filter (#0) IS NOT NULL
+            Join on=(#0 = #2) type=differential
+              Get l2
+              ArrangeBy keys=[[#1]]
+                Filter (#1) IS NOT NULL
+                  Get materialize.public.mv
     cte l3 =
       TopK group_by=[#0] limit=1 monotonic=false
         Project (#0, #1)
-          Join on=(#0 = #2) type=differential
-            Get l2
-            ArrangeBy keys=[[#1]]
-              Filter (#1) IS NOT NULL
-                Get materialize.public.iv
+          Filter (#0) IS NOT NULL
+            Join on=(#0 = #2) type=differential
+              Get l2
+              ArrangeBy keys=[[#1]]
+                Filter (#1) IS NOT NULL
+                  Get materialize.public.iv
     cte l2 =
       ArrangeBy keys=[[#0]]
         Get l1
@@ -548,7 +550,7 @@ WHERE a = c and d = e and b = f
 ----
 Explained Query:
   Project (#0, #1, #0, #3, #3, #1)
-    Filter (#0) IS NOT NULL
+    Filter (#0) IS NOT NULL AND (#1) IS NOT NULL AND (#3) IS NOT NULL
       Join on=(#0 = #2 AND #1 = #5 AND #3 = #4) type=differential
         ArrangeBy keys=[[#0]]
           Get materialize.public.t
@@ -574,7 +576,7 @@ WHERE a = c and d = e and b = f
 ----
 Explained Query:
   Project (#0, #1, #0, #3, #3, #1)
-    Filter (#0) IS NOT NULL
+    Filter (#0) IS NOT NULL AND (#1) IS NOT NULL AND (#3) IS NOT NULL
       Join on=(#0 = #2 AND #1 = #5 AND #3 = #4) type=differential
         implementation
           %0:t[#0]KA » %1:u[#0]KA » %2:v[#0, #1]KK

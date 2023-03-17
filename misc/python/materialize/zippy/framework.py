@@ -154,7 +154,7 @@ class Test:
         for action_or_factory in self._scenario.bootstrap():
             self.append_actions(action_or_factory)
 
-        for i in range(0, actions):
+        while len(self._actions) < actions:
             action_or_factory = self._pick_action_or_factory()
             self.append_actions(action_or_factory)
 

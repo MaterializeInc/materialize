@@ -45,7 +45,8 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
-use mz_persist_client::cfg::PersistParameters;
+use mz_ore::soft_assert;
+use mz_persist_client::cfg::{PersistParameters, RetryParameters};
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_repr::{explain::ExprHumanizer, Diff, GlobalId, RelationDesc, ScalarType};
 use mz_secrets::InMemorySecretsController;
@@ -61,7 +62,7 @@ use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
     Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
     QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier, RoleId, SchemaId,
-    SchemaSpecifier,
+    SchemaSpecifier, PUBLIC_ROLE_NAME,
 };
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
@@ -425,7 +426,28 @@ impl CatalogState {
     }
 
     fn get_role(&self, id: &RoleId) -> &Role {
-        &self.roles_by_id[id]
+        self.roles_by_id.get(id).expect("catalog out of sync")
+    }
+
+    fn get_role_mut(&mut self, id: &RoleId) -> &mut Role {
+        self.roles_by_id.get_mut(id).expect("catalog out of sync")
+    }
+
+    fn collect_role_membership(&self, id: &RoleId) -> BTreeSet<RoleId> {
+        let mut membership = BTreeSet::new();
+        let mut queue = VecDeque::from(vec![id]);
+        while let Some(cur_id) = queue.pop_front() {
+            if !membership.contains(cur_id) {
+                membership.insert(cur_id.clone());
+                let role = self.get_role(cur_id);
+                soft_assert!(
+                    !role.membership().contains(id),
+                    "circular membership exists in the catalog"
+                );
+                queue.extend(role.membership().into_iter());
+            }
+        }
+        membership
     }
 
     /// Create and insert the per replica log sources and log views.
@@ -1234,6 +1256,17 @@ impl CatalogState {
         }
     }
 
+    pub fn ensure_not_reserved_role(&self, role_id: &RoleId) -> Result<(), Error> {
+        if role_id.is_system() || role_id.is_public() {
+            let role = self.get_role(role_id);
+            Err(Error::new(ErrorKind::ReservedRoleName(
+                role.name().to_string(),
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
     // TODO(mjibson): Is there a way to make this a closure to avoid explicitly
     // passing tx, session, and builtin_table_updates?
     fn add_to_audit_log(
@@ -1385,11 +1418,53 @@ pub struct Role {
     #[serde(skip)]
     pub oid: u32,
     pub attributes: RoleAttributes,
+    pub membership: RoleMembership,
 }
 
 impl Role {
     pub fn is_user(&self) -> bool {
         self.id.is_user()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+// These attributes are needed because the key of a map must be a string. We also
+// get the added benefit of flattening this struct in it's serialized form.
+#[serde(into = "BTreeMap<String, RoleId>")]
+#[serde(try_from = "BTreeMap<String, RoleId>")]
+pub struct RoleMembership {
+    /// Key is the role that some role is a member of, value is the grantor role ID.
+    pub map: BTreeMap<RoleId, RoleId>,
+}
+
+impl RoleMembership {
+    fn new() -> RoleMembership {
+        RoleMembership {
+            map: BTreeMap::new(),
+        }
+    }
+}
+
+impl From<RoleMembership> for BTreeMap<String, RoleId> {
+    fn from(value: RoleMembership) -> Self {
+        value
+            .map
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
+    }
+}
+
+impl TryFrom<BTreeMap<String, RoleId>> for RoleMembership {
+    type Error = anyhow::Error;
+
+    fn try_from(value: BTreeMap<String, RoleId>) -> Result<Self, Self::Error> {
+        Ok(RoleMembership {
+            map: value
+                .into_iter()
+                .map(|(k, v)| Ok((RoleId::from_str(&k)?, v)))
+                .collect::<Result<_, anyhow::Error>>()?,
+        })
     }
 }
 
@@ -2381,7 +2456,11 @@ impl Catalog {
                     name: role.name,
                     id,
                     oid,
-                    attributes: role.attributes,
+                    attributes: role
+                        .attributes,
+                    membership: role
+                        .membership
+                        .expect("serialized role was not properly migrated"),
                 },
             );
         }
@@ -2753,7 +2832,16 @@ impl Catalog {
             }
         }
         for (_id, role) in &catalog.state.roles_by_id {
-            builtin_table_updates.push(catalog.state.pack_role_update(role.id, 1));
+            if let Some(builtin_update) = catalog.state.pack_role_update(role.id, 1) {
+                builtin_table_updates.push(builtin_update);
+            }
+            for group_id in role.membership.map.keys() {
+                builtin_table_updates.push(
+                    catalog
+                        .state
+                        .pack_role_members_update(*group_id, role.id, 1),
+                )
+            }
         }
         for (id, cluster) in &catalog.state.clusters_by_id {
             builtin_table_updates.push(catalog.state.pack_cluster_update(&cluster.name, 1));
@@ -3886,6 +3974,10 @@ impl Catalog {
         self.state.get_database(id)
     }
 
+    pub fn get_role(&self, id: &RoleId) -> &Role {
+        self.state.get_role(id)
+    }
+
     /// Creates a new schema in the `Catalog` for temporary items
     /// indicated by the TEMPORARY or TEMP keywords.
     pub fn create_temporary_schema(&mut self, conn_id: ConnectionId) -> Result<(), Error> {
@@ -4243,6 +4335,11 @@ impl Catalog {
         F: FnOnce(&CatalogState) -> Result<R, AdapterError>,
     {
         trace!("transact: {:?}", ops);
+        fail::fail_point!("catalog_transact", |arg| {
+            Err(AdapterError::Unstructured(anyhow::anyhow!(
+                "failpoint: {arg:?}"
+            )))
+        });
 
         let drop_ids: BTreeSet<_> = ops
             .iter()
@@ -4363,18 +4460,16 @@ impl Catalog {
                     name,
                     attributes,
                 } => {
-                    if is_reserved_name(&name) {
-                        return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReservedRoleName(name),
-                        )));
+                    state.ensure_not_reserved_role(&id)?;
+                    if let Some(builtin_update) = state.pack_role_update(id, -1) {
+                        builtin_table_updates.push(builtin_update);
                     }
-                    let serialized_role = SerializedRole {
-                        name: name.clone(),
-                        attributes: attributes.clone(),
-                    };
-                    tx.update_role(id, serialized_role)?;
-
-                    builtin_table_updates.push(state.pack_role_update(id, -1));
+                    let existing_role = state.get_role_mut(&id);
+                    existing_role.attributes = attributes;
+                    tx.update_role(id, existing_role.clone().into())?;
+                    if let Some(builtin_update) = state.pack_role_update(id, 1) {
+                        builtin_table_updates.push(builtin_update);
+                    }
 
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -4390,18 +4485,7 @@ impl Catalog {
                         }),
                     )?;
 
-                    let old_role = state.roles_by_id.remove(&id).expect("catalog out of sync");
                     info!("update role {name} ({id})");
-                    state.roles_by_id.insert(
-                        id,
-                        Role {
-                            id,
-                            oid: old_role.oid,
-                            name,
-                            attributes,
-                        },
-                    );
-                    builtin_table_updates.push(state.pack_role_update(id, 1));
                 }
                 Op::AlterSink { id, cluster_config } => {
                     use mz_sql::ast::Value;
@@ -4692,14 +4776,16 @@ impl Catalog {
                     oid,
                     attributes,
                 } => {
-                    if is_reserved_name(&name) {
+                    if is_reserved_name(&name) || is_public_role(name.as_str()) {
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReservedRoleName(name),
                         )));
                     }
+                    let membership = RoleMembership::new();
                     let serialized_role = SerializedRole {
                         name: name.clone(),
                         attributes: attributes.clone(),
+                        membership: Some(membership.clone()),
                     };
                     let id = tx.insert_user_role(serialized_role)?;
                     state.add_to_audit_log(
@@ -4724,9 +4810,12 @@ impl Catalog {
                             id,
                             oid,
                             attributes,
+                            membership,
                         },
                     );
-                    builtin_table_updates.push(state.pack_role_update(id, 1));
+                    if let Some(builtin_update) = state.pack_role_update(id, 1) {
+                        builtin_table_updates.push(builtin_update);
+                    }
                 }
                 Op::CreateCluster {
                     id,
@@ -5005,14 +5094,13 @@ impl Catalog {
                     db.schemas_by_id.remove(&schema_id);
                 }
                 Op::DropRole { id, name } => {
-                    if is_reserved_name(&name) {
-                        return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReservedRoleName(name),
-                        )));
-                    }
+                    state.ensure_not_reserved_role(&id)?;
                     tx.remove_role(&name)?;
-                    let role = &state.roles_by_id[&id];
-                    builtin_table_updates.push(state.pack_role_update(role.id, -1));
+                    if let Some(builtin_update) = state.pack_role_update(id, -1) {
+                        builtin_table_updates.push(builtin_update);
+                    }
+                    let role = state.roles_by_id.remove(&id).expect("catalog out of sync");
+                    state.roles_by_name.remove(role.name());
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -5026,7 +5114,6 @@ impl Catalog {
                             name: name.clone(),
                         }),
                     )?;
-                    state.roles_by_name.remove(role.name());
                     info!("drop role {}", role.name());
                 }
                 Op::DropCluster { id } => {
@@ -5189,6 +5276,67 @@ impl Catalog {
                 }
                 Op::DropTimeline(timeline) => {
                     tx.remove_timestamp(timeline);
+                }
+                Op::GrantRole {
+                    role_id,
+                    member_id,
+                    grantor_id,
+                } => {
+                    state.ensure_not_reserved_role(&member_id)?;
+                    state.ensure_not_reserved_role(&role_id)?;
+                    if state.collect_role_membership(&role_id).contains(&member_id) {
+                        let group_role = state.get_role(&role_id);
+                        let member_role = state.get_role(&member_id);
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::CircularRoleMembership {
+                                role_name: group_role.name().to_string(),
+                                member_name: member_role.name().to_string(),
+                            },
+                        )));
+                    }
+                    let member_role = state.get_role_mut(&member_id);
+                    member_role.membership.map.insert(role_id, grantor_id);
+                    tx.update_role(member_id, member_role.clone().into())?;
+                    builtin_table_updates
+                        .push(state.pack_role_members_update(role_id, member_id, 1));
+
+                    state.add_to_audit_log(
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        builtin_table_updates,
+                        audit_events,
+                        EventType::Grant,
+                        ObjectType::Role,
+                        EventDetails::GrantRoleV1(mz_audit_log::GrantRoleV1 {
+                            role_id: role_id.to_string(),
+                            member_id: member_id.to_string(),
+                            grantor_id: grantor_id.to_string(),
+                        }),
+                    )?;
+                }
+                Op::RevokeRole { role_id, member_id } => {
+                    state.ensure_not_reserved_role(&member_id)?;
+                    state.ensure_not_reserved_role(&role_id)?;
+                    builtin_table_updates
+                        .push(state.pack_role_members_update(role_id, member_id, -1));
+                    let member_role = state.get_role_mut(&member_id);
+                    member_role.membership.map.remove(&role_id);
+                    tx.update_role(member_id, member_role.clone().into())?;
+
+                    state.add_to_audit_log(
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        builtin_table_updates,
+                        audit_events,
+                        EventType::Revoke,
+                        ObjectType::Role,
+                        EventDetails::RevokeRoleV1(mz_audit_log::RevokeRoleV1 {
+                            role_id: role_id.to_string(),
+                            member_id: member_id.to_string(),
+                        }),
+                    )?;
                 }
                 Op::RenameItem {
                     id,
@@ -5474,7 +5622,6 @@ impl Catalog {
             ));
             Ok(())
         }
-
         Ok(())
     }
 
@@ -5870,7 +6017,18 @@ impl Catalog {
             compaction_minimum_timeout: Some(config.persist_compaction_minimum_timeout()),
             consensus_connect_timeout: Some(config.crdb_connect_timeout()),
             sink_minimum_batch_updates: Some(config.persist_sink_minimum_batch_updates()),
+            next_listen_batch_retryer: Some(RetryParameters {
+                initial_backoff: config.persist_next_listen_batch_retryer_initial_backoff(),
+                multiplier: config.persist_next_listen_batch_retryer_multiplier(),
+                clamp: config.persist_next_listen_batch_retryer_clamp(),
+            }),
+            stats_collection_enabled: Some(config.persist_stats_collection_enabled()),
+            stats_filter_enabled: Some(config.persist_stats_filter_enabled()),
         }
+    }
+
+    pub fn ensure_not_reserved_role(&self, role_id: &RoleId) -> Result<(), Error> {
+        self.state.ensure_not_reserved_role(role_id)
     }
 }
 
@@ -5878,6 +6036,10 @@ pub fn is_reserved_name(name: &str) -> bool {
     BUILTIN_PREFIXES
         .iter()
         .any(|prefix| name.starts_with(prefix))
+}
+
+pub fn is_public_role(name: &str) -> bool {
+    name == &*PUBLIC_ROLE_NAME
 }
 
 /// Enable catalog features that might be required during planning in
@@ -5966,10 +6128,19 @@ pub enum Op {
     /// may be violated.
     DropItem(GlobalId),
     DropTimeline(Timeline),
+    GrantRole {
+        role_id: RoleId,
+        member_id: RoleId,
+        grantor_id: RoleId,
+    },
     RenameItem {
         id: GlobalId,
         current_full_name: FullObjectName,
         to_name: String,
+    },
+    RevokeRole {
+        role_id: RoleId,
+        member_id: RoleId,
     },
     UpdateClusterReplicaStatus {
         event: ClusterEvent,
@@ -6112,6 +6283,8 @@ impl From<ReplicaLocation> for SerializedReplicaLocation {
 pub struct SerializedRole {
     pub name: String,
     pub attributes: RoleAttributes,
+    // TODO(jkosh44): Remove Option in v0.47.0
+    pub membership: Option<RoleMembership>,
 }
 
 impl From<Role> for SerializedRole {
@@ -6119,6 +6292,7 @@ impl From<Role> for SerializedRole {
         SerializedRole {
             name: role.name,
             attributes: role.attributes,
+            membership: Some(role.membership),
         }
     }
 }
@@ -6128,9 +6302,11 @@ impl From<&BuiltinRole> for SerializedRole {
         SerializedRole {
             name: role.name.to_string(),
             attributes: role.attributes.clone(),
+            membership: Some(RoleMembership::new()),
         }
     }
 }
+
 impl ConnCatalog<'_> {
     fn resolve_item_name(
         &self,
@@ -6358,7 +6534,11 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn get_role(&self, id: &RoleId) -> &dyn mz_sql::catalog::CatalogRole {
-        &self.state.roles_by_id[id]
+        self.state.get_role(id)
+    }
+
+    fn collect_role_membership(&self, id: &RoleId) -> BTreeSet<RoleId> {
+        self.state.collect_role_membership(id)
     }
 
     fn resolve_cluster(
@@ -6494,6 +6674,14 @@ impl mz_sql::catalog::CatalogRole for Role {
 
     fn create_cluster(&self) -> bool {
         self.attributes.create_cluster
+    }
+
+    fn membership(&self) -> BTreeSet<&RoleId> {
+        self.membership
+            .map
+            .iter()
+            .map(|(role_id, _grantor_id)| role_id)
+            .collect()
     }
 }
 
@@ -7555,6 +7743,7 @@ mod tests {
 
     // Test that if a large catalog item is somehow committed, then we can still load the catalog.
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // slow
     async fn test_large_catalog_item() {
         let view_def = "CREATE VIEW \"materialize\".\"public\".\"v\" AS SELECT 1 FROM (SELECT 1";
         let column = ", 1";

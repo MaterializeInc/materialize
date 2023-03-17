@@ -454,6 +454,7 @@ mod tests {
     use mz_repr::{Datum, ScalarType};
 
     #[test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn try_map_to_input_with_bound_expr_test() {
         let input_mapper = JoinInputMapper {
             arities: vec![2, 3, 3],

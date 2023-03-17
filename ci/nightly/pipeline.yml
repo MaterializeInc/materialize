@@ -23,7 +23,6 @@ steps:
           - { value: redpanda-testdrive }
 #         - { value: redpanda-testdrive-aarch64 }
           - { value: limits }
-          - { value: cluster-limits }
           - { value: limits-instance-size }
           - { value: testdrive-partitions-5 }
           - { value: testdrive-replicas-4}
@@ -60,6 +59,7 @@ steps:
           - { value: cloud-canary }
           - { value: sqlsmith-2-joins }
           - { value: sqlsmith-explain }
+          - { value: crdb-restarts }
         multiple: true
         required: false
     if: build.source == "ui"
@@ -152,17 +152,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: limits
-    timeout_in_minutes: 50
-
-  - id: cluster-limits
-    label: "Cluster Product limits"
-    agents:
-      queue: linux-x86_64
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: limits
-          run: cluster
     timeout_in_minutes: 50
 
   - id: limits-instance-size
@@ -341,7 +330,6 @@ steps:
 
   - id: checks-restart-cockroach
     label: "Checks + restart Cockroach"
-    depends_on: build-x86_64
     timeout_in_minutes: 60
     artifact_paths: junit_*.xml
     agents:
@@ -562,9 +550,7 @@ steps:
     artifact_paths: junit_*.xml
     timeout_in_minutes: 70
     agents:
-      # A larger instance is needed since SQLsmith likes creating
-      # large queries and going out of memory
-      queue: builder-linux-x86_64
+      queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqlsmith
@@ -580,6 +566,15 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: sqlsmith
           args: [--max-joins=15, --explain-only, --runtime=3600]
+
+  - id: crdb-restarts
+    label: "CRDB rolling restarts"
+    artifact_paths: junit_*.xml
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: crdb-restarts
 
   - wait: ~
     continue_on_failure: true

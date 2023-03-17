@@ -22,19 +22,20 @@ use futures_util::TryFutureExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::task::spawn;
 use mz_persist::location::Blob;
+use mz_persist_types::codec_impls::VecU8Schema;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
 use timely::PartialOrder;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{mpsc, oneshot, TryAcquireError};
 use tokio::task::JoinHandle;
-use tracing::log::warn;
-use tracing::{debug, debug_span, trace, Instrument, Span};
+use tracing::{debug, debug_span, trace, warn, Instrument, Span};
 
 use crate::async_runtime::CpuHeavyRuntime;
-use crate::batch::{BatchBuilder, BatchBuilderConfig};
+use crate::batch::{BatchBuilderConfig, BatchBuilderInternal};
 use crate::cfg::MB;
 use crate::fetch::{fetch_batch_part, EncodedPart};
+use crate::internal::encoding::Schemas;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::state::{HollowBatch, HollowBatchPart};
@@ -122,6 +123,7 @@ where
         metrics: Arc<Metrics>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         writer_id: WriterId,
+        schemas: Schemas<K, V>,
         gc: GarbageCollector<K, V, T, D>,
     ) -> Self {
         let (compact_req_sender, mut compact_req_receiver) = mpsc::channel::<(
@@ -173,6 +175,7 @@ where
                 let blob = Arc::clone(&machine.applier.state_versions.blob);
                 let cpu_heavy_runtime = Arc::clone(&cpu_heavy_runtime);
                 let writer_id = writer_id.clone();
+                let schemas = schemas.clone();
 
                 let compact_span =
                     debug_span!(parent: None, "compact::apply", shard_id=%machine.shard_id());
@@ -186,6 +189,7 @@ where
                         cpu_heavy_runtime,
                         req,
                         writer_id,
+                        schemas,
                         &mut machine,
                         &gc,
                     )
@@ -264,6 +268,7 @@ where
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         req: CompactReq<T>,
         writer_id: WriterId,
+        schemas: Schemas<K, V>,
         machine: &mut Machine<K, V, T, D>,
         gc: &GarbageCollector<K, V, T, D>,
     ) -> Result<ApplyMergeResult, anyhow::Error> {
@@ -306,6 +311,7 @@ where
                         Arc::clone(&cpu_heavy_runtime),
                         req,
                         writer_id,
+                        schemas.clone(),
                     )
                     .instrument(compact_span),
                 )
@@ -401,6 +407,7 @@ where
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         req: CompactReq<T>,
         writer_id: WriterId,
+        schemas: Schemas<K, V>,
     ) -> Result<CompactRes<T>, anyhow::Error> {
         let () = Self::validate_req(&req)?;
         // compaction needs memory enough for at least 2 runs and 2 in-progress parts
@@ -441,6 +448,7 @@ where
                 Arc::clone(&metrics),
                 Arc::clone(&cpu_heavy_runtime),
                 writer_id.clone(),
+                schemas.clone(),
             )
             .await?;
             let (parts, runs, updates) = (batch.parts, batch.runs, batch.len);
@@ -603,6 +611,7 @@ where
         metrics: Arc<Metrics>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         writer_id: WriterId,
+        real_schemas: Schemas<K, V>,
     ) -> Result<HollowBatch<T>, anyhow::Error> {
         // TODO: Figure out a more principled way to allocate our memory budget.
         // Currently, we give any excess budget to write parallelism. If we had
@@ -631,9 +640,18 @@ where
 
         let mut timings = Timings::default();
 
-        let mut batch = BatchBuilder::new(
+        // Old style compaction operates on the encoded bytes and doesn't need
+        // the real schema, so we synthesize one. We use the real schema for
+        // stats though (see below).
+        let fake_compaction_schema = Schemas {
+            key: Arc::new(VecU8Schema),
+            val: Arc::new(VecU8Schema),
+        };
+
+        let mut batch = BatchBuilderInternal::<Vec<u8>, Vec<u8>, T, D>::new(
             cfg.batch.clone(),
             Arc::clone(&metrics),
+            fake_compaction_schema,
             metrics.compaction.batch.clone(),
             desc.lower().clone(),
             Arc::clone(&blob),
@@ -716,10 +734,10 @@ where
                 }
             }
 
-            batch.add(&k, &v, &t, &d).await?;
+            batch.add(&real_schemas, &k, &v, &t, &d).await?;
         }
 
-        let batch = batch.finish(desc.upper().clone()).await?;
+        let batch = batch.finish(&real_schemas, desc.upper().clone()).await?;
         let hollow_batch = batch.into_hollow_batch();
 
         timings.record(&metrics);
@@ -903,6 +921,7 @@ fn start_prefetches<T: Timestamp + Lattice + Codec64>(
 mod tests {
     use crate::internal::paths::PartialBatchKey;
     use crate::PersistLocation;
+    use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
     use timely::progress::Antichain;
 
     use crate::tests::{all_ok, expect_fetch_part, new_test_client, new_test_client_cache};
@@ -913,6 +932,7 @@ mod tests {
     // made it to main) where batches written by compaction would always have a
     // since of the minimum timestamp.
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn regression_minimum_since() {
         mz_ore::test::init_logging();
 
@@ -951,6 +971,10 @@ mod tests {
             ),
             inputs: vec![b0, b1],
         };
+        let schemas = Schemas {
+            key: Arc::new(StringSchema),
+            val: Arc::new(UnitSchema),
+        };
         let res = Compactor::<String, (), u64, i64>::compact(
             CompactConfig::from(&write.cfg),
             Arc::clone(&write.blob),
@@ -958,6 +982,7 @@ mod tests {
             Arc::new(CpuHeavyRuntime::new()),
             req.clone(),
             write.writer_id.clone(),
+            schemas,
         )
         .await
         .expect("compaction failed");
@@ -976,6 +1001,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn prefetches() {
         let desc = Description::new(
             Antichain::from_elem(0u64),
@@ -986,6 +1012,7 @@ mod tests {
             .map(|encoded_size_bytes| HollowBatchPart {
                 key: PartialBatchKey("".into()),
                 encoded_size_bytes,
+                stats: None,
             })
             .collect::<Vec<_>>();
         let parse = |x: &str| {

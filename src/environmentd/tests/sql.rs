@@ -2488,3 +2488,83 @@ fn test_dont_drop_sinks_twice() {
     let msg = msgs.pop().unwrap();
     assert!(msg.message().starts_with("subscribe has been terminated"));
 }
+
+#[test]
+fn test_concurrent_role_drop() {
+    const ROLE_NAME: &str = "foo";
+    let config = util::Config::default().with_now(NOW_ZERO.clone());
+    let server = util::start_server(config).unwrap();
+    let mut foo_client = server
+        .pg_config()
+        .user(ROLE_NAME)
+        .connect(postgres::NoTls)
+        .unwrap();
+    let mut sys_client = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+    sys_client
+        .execute("ALTER SYSTEM SET enable_rbac_checks TO true", &[])
+        .unwrap();
+    assert_eq!(
+        1,
+        foo_client
+            .query_one("SELECT 1;", &[])
+            .unwrap()
+            .get::<_, i32>(0)
+    );
+
+    sys_client
+        .execute(&format!("DROP ROLE {ROLE_NAME}"), &[])
+        .unwrap();
+    let err = foo_client
+        .query_one("SELECT 1;", &[])
+        .unwrap_err()
+        .unwrap_db_error();
+
+    assert_eq!(&SqlState::UNDEFINED_OBJECT, err.code());
+    assert!(
+        err.message().contains("was concurrently dropped"),
+        "unexpected error: {err:?}",
+    );
+}
+
+#[test]
+fn test_timelines_persist_after_failed_transaction() {
+    let config = util::Config::default().unsafe_mode();
+    let server = util::start_server(config).unwrap();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client.batch_execute(
+        "CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (TICK INTERVAL '10ms') WITH (TIMELINE 'my_timline')"
+    )
+    .unwrap();
+
+    // Should be able to query the source.
+    client
+        .query("SELECT * FROM counter", &[])
+        .expect("failed to select from LOAD GENERATOR");
+
+    fail::cfg("catalog_transact", "return(1)").expect("failed to set the fail_point");
+
+    // Should fail to drop the source, because of the fail_point.
+    let result = client.batch_execute("DROP SOURCE counter");
+
+    // Assert the error we get back is from our fail_point
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("failpoint: Some(\"1\")"));
+
+    fail::remove("catalog_transact");
+
+    // Should still be able to query the source, since we shouldn't have cleaned up the
+    // timeline or source because of the failed transaction.
+    client
+        .query("SELECT * FROM counter", &[])
+        .expect("failed to select from LOAD GENERATOR");
+
+    // Dropping the source should also work now.
+    client.batch_execute("DROP SOURCE counter").unwrap();
+}

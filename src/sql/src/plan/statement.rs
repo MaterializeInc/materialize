@@ -143,6 +143,8 @@ pub fn describe(
         Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
         Statement::DropRoles(stmt) => ddl::describe_drop_role(&scx, stmt)?,
         Statement::DropSchema(stmt) => ddl::describe_drop_schema(&scx, stmt)?,
+        Statement::GrantRole(stmt) => ddl::describe_grant_role(&scx, stmt)?,
+        Statement::RevokeRole(stmt) => ddl::describe_revoke_role(&scx, stmt)?,
 
         // `SHOW` statements.
         Statement::Show(ShowStatement::ShowColumns(stmt)) => {
@@ -284,6 +286,8 @@ pub fn plan(
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
         Statement::DropRoles(stmt) => ddl::plan_drop_role(scx, stmt),
         Statement::DropSchema(stmt) => ddl::plan_drop_schema(scx, stmt),
+        Statement::GrantRole(stmt) => ddl::plan_grant_role(scx, stmt),
+        Statement::RevokeRole(stmt) => ddl::plan_revoke_role(scx, stmt),
 
         // DML statements.
         Statement::Copy(stmt) => dml::plan_copy(scx, stmt),

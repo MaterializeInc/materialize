@@ -24,7 +24,9 @@ use uuid::Uuid;
 
 use mz_ore::task::RuntimeExt;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::{Atomicity, Blob, Consensus, ExternalError, SeqNo, VersionedData};
+use mz_persist::location::{
+    Atomicity, Blob, CaSResult, Consensus, ExternalError, SeqNo, VersionedData,
+};
 use mz_persist::workload::{self, DataGenerator};
 use mz_persist_client::ShardId;
 
@@ -110,9 +112,7 @@ fn bench_consensus_compare_and_set_all_iters(
                         let results = futs.collect::<Vec<_>>().await;
 
                         for result in results {
-                            result
-                                .expect("gave invalid inputs")
-                                .expect("failed to compare_and_set");
+                            assert_eq!(result.expect("gave invalid inputs"), CaSResult::Committed);
                         }
                     }
                 },

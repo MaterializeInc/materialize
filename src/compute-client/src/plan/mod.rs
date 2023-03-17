@@ -1951,6 +1951,7 @@ mod tests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(10))]
         #[test]
+        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn available_collections_protobuf_roundtrip(expect in any::<AvailableCollections>() ) {
             let actual = protobuf_roundtrip::<_, ProtoAvailableCollections>(&expect);
             assert!(actual.is_ok());

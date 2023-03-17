@@ -1844,6 +1844,15 @@ impl<'a, E> DatumType<'a, E> for RegType {
     }
 }
 
+impl<S> AsColumnType for Char<S>
+where
+    S: AsRef<str>,
+{
+    fn as_column_type() -> ColumnType {
+        ScalarType::Char { length: None }.nullable(false)
+    }
+}
+
 impl<'a, E> DatumType<'a, E> for Char<&'a str> {
     fn nullable() -> bool {
         false
@@ -1875,6 +1884,15 @@ impl<'a, E> DatumType<'a, E> for Char<String> {
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::String(temp_storage.push_string(self.0)))
+    }
+}
+
+impl<S> AsColumnType for VarChar<S>
+where
+    S: AsRef<str>,
+{
+    fn as_column_type() -> ColumnType {
+        ScalarType::Char { length: None }.nullable(false)
     }
 }
 
@@ -3177,6 +3195,7 @@ mod tests {
 
     proptest! {
        #[test]
+       #[cfg_attr(miri, ignore)] // too slow
         fn scalar_type_protobuf_roundtrip(expect in any::<ScalarType>() ) {
             let actual = protobuf_roundtrip::<_, ProtoScalarType>(&expect);
             assert!(actual.is_ok());
@@ -3186,6 +3205,7 @@ mod tests {
 
     proptest! {
         #[test]
+        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn array_packing_unpacks_correctly(array in arb_array(arb_datum())) {
             let PropArray(row, elts) = array;
             let datums: Vec<Datum<'_>> = elts.iter().map(|e| e.into()).collect();
@@ -3194,6 +3214,7 @@ mod tests {
         }
 
         #[test]
+        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn list_packing_unpacks_correctly(array in arb_list(arb_datum())) {
             let PropList(row, elts) = array;
             let datums: Vec<Datum<'_>> = elts.iter().map(|e| e.into()).collect();
@@ -3202,6 +3223,7 @@ mod tests {
         }
 
         #[test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn dict_packing_unpacks_correctly(array in arb_dict(arb_datum())) {
             let PropDict(row, elts) = array;
             let datums: Vec<(&str, Datum<'_>)> = elts.iter().map(|(k, e)| (k.as_str(), e.into())).collect();
@@ -3210,6 +3232,7 @@ mod tests {
         }
 
         #[test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn row_packing_roundtrips_single_valued(prop_datums in prop::collection::vec(arb_datum(), 1..100)) {
             let datums: Vec<Datum<'_>> = prop_datums.iter().map(|pd| pd.into()).collect();
             let row = Row::pack(&datums);
@@ -3218,6 +3241,7 @@ mod tests {
         }
 
         #[test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn range_packing_unpacks_correctly(range in arb_range()) {
             let PropRange(row, prop_range) = range;
             let row = row.unpack_first();

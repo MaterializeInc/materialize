@@ -3880,6 +3880,7 @@ mod tests {
 
     proptest! {
         #[test]
+        #[cfg_attr(miri, ignore)] // slow, large amount of memory
         fn datetimeunits_serialization_roundtrip(expect in any::<DateTimeUnits>() ) {
             let actual = protobuf_roundtrip::<_, ProtoDateTimeUnits>(&expect);
             assert!(actual.is_ok());

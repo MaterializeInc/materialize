@@ -12,26 +12,27 @@ from materialize.mzcompose.services import (
     Kafka,
     Localstack,
     Materialized,
+    Redpanda,
     SchemaRegistry,
     Testdrive,
     Zookeeper,
 )
 
+REDPANDA_VERSIONS = ["v23.1.2", "v22.2.11", "v22.1.11"]
+
 CONFLUENT_PLATFORM_VERSIONS = [
-    "5.5.11",
-    "6.0.11",
-    "6.1.9",
     "6.2.8",
     "7.0.7",
     "7.1.5",
     "7.2.3",
-    "7.3.1",
+    "7.3.2",
     "latest",
 ]
 
 SERVICES = [
     Materialized(),
     Testdrive(volumes_extra=["../testdrive:/workdir/testdrive"], default_timeout="60s"),
+    Redpanda(),
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
@@ -39,31 +40,29 @@ SERVICES = [
 ]
 
 
+TD_CMD = [
+    f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}",
+    *[f"testdrive/{td}" for td in ["kafka-sinks.td", "kafka-upsert-sources.td"]],
+]
+
+
 def workflow_default(c: Composition) -> None:
     c.up("localstack")
 
-    for version in CONFLUENT_PLATFORM_VERSIONS:
-        print(f"==> Testing Confluent Platform {version}")
-        confluent_platform_services = [
-            Zookeeper(tag=version),
-            Kafka(tag=version),
-            SchemaRegistry(tag=version),
-        ]
-        with c.override(*confluent_platform_services):
+    for redpanda_version in REDPANDA_VERSIONS:
+        print(f"--- Testing Redpanda {redpanda_version}")
+        with c.override(Redpanda(version=redpanda_version)):
+            c.down(destroy_volumes=True)
+            c.up("redpanda", "materialized")
+            c.run("testdrive", *TD_CMD)
+
+    for confluent_version in CONFLUENT_PLATFORM_VERSIONS:
+        print(f"--- Testing Confluent Platform {confluent_version}")
+        with c.override(
+            Zookeeper(tag=confluent_version),
+            Kafka(tag=confluent_version),
+            SchemaRegistry(tag=confluent_version),
+        ):
+            c.down(destroy_volumes=True)
             c.up("zookeeper", "kafka", "schema-registry", "materialized")
-            c.run("testdrive", "testdrive/kafka-*.td")
-            c.kill(
-                "zookeeper",
-                "kafka",
-                "schema-registry",
-                "materialized",
-            )
-            c.rm(
-                "zookeeper",
-                "kafka",
-                "schema-registry",
-                "materialized",
-                "testdrive",
-                destroy_volumes=True,
-            )
-            c.rm_volumes("mzdata", force=True)
+            c.run("testdrive", *TD_CMD)

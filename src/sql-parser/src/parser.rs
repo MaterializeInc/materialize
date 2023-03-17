@@ -119,13 +119,19 @@ pub fn parse_data_type(sql: &str) -> Result<RawDataType, ParserError> {
 ///
 /// This is analogous to the `SplitIdentifierString` function in PostgreSQL.
 pub fn split_identifier_string(s: &str) -> Result<Vec<String>, ParserError> {
-    let tokens = lexer::lex(s)?;
-    let mut parser = Parser::new(s, tokens);
-    let values = parser.parse_comma_separated(Parser::parse_set_variable_value)?;
-    Ok(values
-        .into_iter()
-        .map(|v| v.into_unquoted_value())
-        .collect())
+    // SplitIdentifierString ignores leading and trailing whitespace, and
+    // accepts empty input as a 0-length result.
+    if s.trim().is_empty() {
+        Ok(vec![])
+    } else {
+        let tokens = lexer::lex(s)?;
+        let mut parser = Parser::new(s, tokens);
+        let values = parser.parse_comma_separated(Parser::parse_set_variable_value)?;
+        Ok(values
+            .into_iter()
+            .map(|v| v.into_unquoted_value())
+            .collect())
+    }
 }
 
 macro_rules! maybe {
@@ -301,6 +307,8 @@ impl<'a> Parser<'a> {
                 Token::Keyword(EXECUTE) => Ok(self.parse_execute()?),
                 Token::Keyword(DEALLOCATE) => Ok(self.parse_deallocate()?),
                 Token::Keyword(RAISE) => Ok(self.parse_raise()?),
+                Token::Keyword(GRANT) => Ok(self.parse_grant()?),
+                Token::Keyword(REVOKE) => Ok(self.parse_revoke()?),
                 Token::Keyword(kw) => parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -5821,6 +5829,32 @@ impl<'a> Parser<'a> {
         };
 
         Ok(Statement::Raise(RaiseStatement { severity }))
+    }
+
+    /// Parse a `GRANT` statement, assuming that the `GRANT` token
+    /// has already been consumed.
+    fn parse_grant(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let role_name = self.parse_identifier()?;
+        self.expect_keyword(TO)?;
+        let _ = self.parse_keyword(GROUP);
+        let member_name = self.parse_identifier()?;
+        Ok(Statement::GrantRole(GrantRoleStatement {
+            role_name,
+            member_name,
+        }))
+    }
+
+    /// Parse a `REVOKE` statement, assuming that the `REVOKE` token
+    /// has already been consumed.
+    fn parse_revoke(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let role_name = self.parse_identifier()?;
+        self.expect_keyword(FROM)?;
+        let _ = self.parse_keyword(GROUP);
+        let member_name = self.parse_identifier()?;
+        Ok(Statement::RevokeRole(RevokeRoleStatement {
+            role_name,
+            member_name,
+        }))
     }
 }
 

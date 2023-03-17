@@ -72,12 +72,6 @@ pub enum Command {
         span: tracing::Span,
     },
 
-    StartTransaction {
-        implicit: Option<usize>,
-        session: Session,
-        tx: oneshot::Sender<Response<()>>,
-    },
-
     Commit {
         action: EndTransactionAction,
         session: Session,
@@ -127,7 +121,6 @@ impl Command {
             | Command::Describe { session, .. }
             | Command::VerifyPreparedStatement { session, .. }
             | Command::Execute { session, .. }
-            | Command::StartTransaction { session, .. }
             | Command::Commit { session, .. }
             | Command::DumpCatalog { session, .. }
             | Command::CopyRows { session, .. }
@@ -135,6 +128,33 @@ impl Command {
             | Command::SetSystemVars { session, .. }
             | Command::Terminate { session, .. } => Some(session),
             Command::CancelRequest { .. } => None,
+        }
+    }
+
+    pub fn send_error(self, e: AdapterError) {
+        fn send<T>(tx: oneshot::Sender<Response<T>>, session: Session, e: AdapterError) {
+            let _ = tx.send(Response::<T> {
+                result: Err(e),
+                session,
+            });
+        }
+        match self {
+            Command::Startup { tx, session, .. } => send(tx, session, e),
+            Command::Declare { tx, session, .. } => send(tx, session, e),
+            Command::Describe { tx, session, .. } => send(tx, session, e),
+            Command::VerifyPreparedStatement { tx, session, .. } => send(tx, session, e),
+            Command::Execute { tx, session, .. } => send(tx, session, e),
+            Command::Commit { tx, session, .. } => send(tx, session, e),
+            Command::CancelRequest { .. } => {}
+            Command::DumpCatalog { tx, session, .. } => send(tx, session, e),
+            Command::CopyRows { tx, session, .. } => send(tx, session, e),
+            Command::GetSystemVars { tx, session, .. } => send(tx, session, e),
+            Command::SetSystemVars { tx, session, .. } => send(tx, session, e),
+            Command::Terminate { tx, session, .. } => {
+                if let Some(tx) = tx {
+                    send(tx, session, e)
+                }
+            }
         }
     }
 }
@@ -306,12 +326,16 @@ pub enum ExecuteResponse {
         /// How long to wait for results to arrive.
         timeout: ExecuteTimeout,
     },
+    /// The requested role was granted.
+    GrantedRole,
     /// The specified number of rows were inserted into the requested table.
     Inserted(usize),
     /// The specified prepared statement was created.
     Prepare,
     /// A user-requested warning was raised.
     Raised,
+    /// The requested role was revoked.
+    RevokedRole,
     /// Rows will be delivered via the specified future.
     SendingRows {
         #[derivative(Debug = "ignore")]
@@ -387,6 +411,7 @@ impl ExecuteResponse {
             DroppedSecret => Some("DROP SECRET".into()),
             EmptyQuery => None,
             Fetch { .. } => None,
+            GrantedRole => Some("GRANT ROLE".into()),
             Inserted(n) => {
                 // "On successful completion, an INSERT command returns a
                 // command tag of the form `INSERT <oid> <count>`."
@@ -399,6 +424,7 @@ impl ExecuteResponse {
             }
             Prepare => Some("PREPARE".into()),
             Raised => Some("RAISE".into()),
+            RevokedRole => Some("REVOKE ROLE".into()),
             SendingRows { .. } => None,
             SetVariable { reset: true, .. } => Some("RESET".into()),
             SetVariable { reset: false, .. } => Some("SET".into()),
@@ -437,7 +463,7 @@ impl ExecuteResponse {
             CreateRole => vec![CreatedRole],
             CreateCluster => vec![CreatedCluster],
             CreateClusterReplica => vec![CreatedClusterReplica],
-            CreateSource => vec![CreatedSource, CreatedSources],
+            CreateSource | CreateSources => vec![CreatedSource, CreatedSources],
             CreateSecret => vec![CreatedSecret],
             CreateSink => vec![CreatedSink],
             CreateTable => vec![CreatedTable],
@@ -469,11 +495,14 @@ impl ExecuteResponse {
             Explain | Peek | SendRows | ShowAllVariables | ShowVariable => {
                 vec![CopyTo, SendingRows]
             }
-            Execute | ReadThenWrite | SendDiffs => vec![Deleted, Inserted, SendingRows, Updated],
+            Execute | ReadThenWrite => vec![Deleted, Inserted, SendingRows, Updated],
             PlanKind::Fetch => vec![ExecuteResponseKind::Fetch],
+            GrantRole => vec![GrantedRole],
+            CopyRows => vec![Inserted],
             Insert => vec![Inserted, SendingRows],
             PlanKind::Prepare => vec![ExecuteResponseKind::Prepare],
             PlanKind::Raise => vec![ExecuteResponseKind::Raised],
+            RevokeRole => vec![RevokedRole],
             PlanKind::SetVariable | ResetVariable => vec![ExecuteResponseKind::SetVariable],
             PlanKind::Subscribe => vec![Subscribing, CopyTo],
             StartTransaction => vec![StartedTransaction],

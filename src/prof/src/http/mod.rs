@@ -23,7 +23,7 @@ use once_cell::sync::Lazy;
 use crate::{ProfStartTime, StackProfile};
 
 cfg_if! {
-    if #[cfg(any(target_os = "macos", not(feature = "jemalloc")))] {
+    if #[cfg(any(target_os = "macos", not(feature = "jemalloc"), miri))] {
         use disabled::{handle_get, handle_post};
     } else {
         use enabled::{handle_get, handle_post};
@@ -95,7 +95,7 @@ async fn time_prof<'a>(
 ) -> impl IntoResponse {
     let ctl_lock;
     cfg_if! {
-        if #[cfg(any(target_os = "macos", not(feature = "jemalloc")))] {
+        if #[cfg(any(target_os = "macos", not(feature = "jemalloc"), miri))] {
             ctl_lock = ();
         } else {
             ctl_lock = if let Some(ctl) = crate::jemalloc::PROF_CTL.as_ref() {
@@ -151,7 +151,7 @@ fn flamegraph(
     })
 }
 
-#[cfg(any(target_os = "macos", not(feature = "jemalloc")))]
+#[cfg(any(target_os = "macos", not(feature = "jemalloc"), miri))]
 mod disabled {
     use axum::extract::{Form, Query};
     use axum::response::IntoResponse;
@@ -226,7 +226,7 @@ mod disabled {
     }
 }
 
-#[cfg(all(not(target_os = "macos"), feature = "jemalloc"))]
+#[cfg(all(not(target_os = "macos"), feature = "jemalloc", not(miri)))]
 mod enabled {
     use std::io::{BufReader, Read};
     use std::sync::Arc;

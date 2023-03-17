@@ -235,7 +235,7 @@ where
 pub enum HealthStatus {
     Starting,
     Running,
-    StalledWithError(String),
+    StalledWithError { error: String, hint: Option<String> },
 }
 
 impl HealthStatus {
@@ -243,14 +243,21 @@ impl HealthStatus {
         match self {
             HealthStatus::Starting => "starting",
             HealthStatus::Running => "running",
-            HealthStatus::StalledWithError(_) => "stalled",
+            HealthStatus::StalledWithError { .. } => "stalled",
         }
     }
 
     fn error(&self) -> Option<&str> {
         match self {
             HealthStatus::Starting | HealthStatus::Running => None,
-            HealthStatus::StalledWithError(e) => Some(e),
+            HealthStatus::StalledWithError { error, .. } => Some(error),
+        }
+    }
+
+    fn hint(&self) -> Option<&str> {
+        match self {
+            HealthStatus::Starting | HealthStatus::Running => None,
+            HealthStatus::StalledWithError { error: _, hint } => hint.as_deref(),
         }
     }
 }
@@ -315,6 +322,7 @@ where
         let data_cap = capabilities.pop().unwrap();
 
         let mut source_metrics = SourceReaderMetrics::new(&base_metrics, id);
+        let offset_commit_metrics = source_metrics.offset_commit_metrics();
 
         let source_upper = Antichain::from_iter(source_resume_upper.iter().map(R::Time::decode_row));
         info!(
@@ -376,8 +384,8 @@ where
                     frontier.pretty()
                 );
                 if let Err(e) = offset_committer.commit_offsets(frontier.clone()).await {
-                    // TODO(guswynn): stats for this error
-                    tracing::error!(
+                    offset_commit_metrics.offset_commit_failures.inc();
+                    tracing::warn!(
                         %e,
                         "timely-{worker_id} source({id}) failed to commit offsets: resume_upper={}",
                         frontier.pretty()
@@ -409,7 +417,7 @@ where
                                 let new_status = match message {
                                     Ok(_) => HealthStatus::Running,
                                     Err(ref error) => {
-                                        HealthStatus::StalledWithError(error.inner.to_string())
+                                        HealthStatus::StalledWithError {error: error.inner.to_string(), hint: None }
                                     }
                                 };
 
@@ -574,6 +582,7 @@ fn health_operator<G: Scope>(
                                 &persist_client,
                                 status_shard,
                                 &*MZ_SOURCE_STATUS_HISTORY_DESC,
+                                new_status.hint(),
                             )
                             .await;
                         }

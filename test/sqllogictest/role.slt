@@ -21,6 +21,12 @@ SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles WHERE
 ----
 materialize true false false false
 
+# Give materialize the CREATEROLE attribute.
+simple conn=mz_system,user=mz_system
+ALTER ROLE materialize CREATEROLE;
+----
+COMPLETE 0
+
 statement error non inherit roles not yet supported
 CREATE ROLE foo NOINHERIT
 
@@ -48,7 +54,7 @@ SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles
 ----
 rj true false false false
 mz_system true true true true
-materialize true false false false
+materialize true true false false
 mz_introspection true false false false
 
 # Dropping multiple roles should not have any effect if one of the role names
@@ -151,3 +157,14 @@ query TBBBB
 SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles WHERE name = 'foo'
 ----
 foo true true false true
+
+# Prevent creating, dropping, and altering PUBLIC role
+
+statement error role name "public" is reserved
+CREATE ROLE puBLic
+
+statement error role name "public" is reserved
+DROP ROLE PUBLIC
+
+statement error role name "public" is reserved
+ALTER ROLE public CREATEDB

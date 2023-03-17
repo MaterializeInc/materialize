@@ -71,7 +71,7 @@ use mz_expr::permutation_for_arrangement;
 use mz_expr::AggregateExpr;
 use mz_expr::AggregateFunc;
 use mz_expr::MirScalarExpr;
-use mz_ore::soft_assert_or_log;
+use mz_ore::{cast::CastFrom, soft_assert_or_log};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 
 use super::AvailableCollections;
@@ -678,10 +678,8 @@ impl ReducePlan {
                     // a balance between how many inputs each layer gets from
                     // the preceding layer, while also limiting the number of
                     // layers.
-                    while current < limit {
-                        // TODO(benesch): fix this dangerous use of `as`.
-                        #[allow(clippy::as_conversions)]
-                        buckets.push(current as u64);
+                    while current < u64::cast_from(limit) {
+                        buckets.push(current);
                         current = current.saturating_mul(16);
                     }
                     // We need to store the bucket numbers in decreasing order.
@@ -800,7 +798,13 @@ impl KeyValPlan {
 ///
 /// This function requires that all of the elements in `indexes` are strictly
 /// increasing.
-/// E.g. [3, 6, 10, 15] turns into [3, 3, 4, 5]
+///
+/// # Examples
+///
+/// ```
+/// use mz_compute_client::plan::reduce::convert_indexes_to_skips;
+/// assert_eq!(convert_indexes_to_skips(vec![3, 6, 10, 15]), [3, 2, 3, 4])
+/// ```
 pub fn convert_indexes_to_skips(mut indexes: Vec<usize>) -> Vec<usize> {
     for i in 1..indexes.len() {
         soft_assert_or_log!(
@@ -901,6 +905,7 @@ mod tests {
     // ignore by default.
     proptest! {
         #[test]
+        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn reduce_plan_protobuf_roundtrip(expect in any::<ReducePlan>() ) {
             let actual = protobuf_roundtrip::<_, ProtoReducePlan>(&expect);
             assert!(actual.is_ok());

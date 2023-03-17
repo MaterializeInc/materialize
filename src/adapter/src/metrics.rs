@@ -134,5 +134,7 @@ where
         StatementKind::Execute => "execute",
         StatementKind::Deallocate => "deallocate",
         StatementKind::Raise => "raise",
+        StatementKind::GrantRole => "grant_role",
+        StatementKind::RevokeRole => "revoke_role",
     }
 }

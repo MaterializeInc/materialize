@@ -24,7 +24,7 @@ use mz_controller::ControllerResponse;
 use mz_ore::now::EpochMillis;
 use mz_ore::task;
 use mz_sql::ast::Statement;
-use mz_sql::plan::{Plan, SendDiffsPlan};
+use mz_sql::plan::{CreateSourcePlans, Plan};
 use mz_storage_client::controller::CollectionMetadata;
 
 use crate::client::ConnectionId;
@@ -33,7 +33,7 @@ use crate::coord::appends::{BuiltinTableUpdateSource, Deferred};
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
     Coordinator, CreateSourceStatementReady, Message, PendingReadTxn, RealTimeRecencyContext,
-    SendDiffs, SinkConnectionReady,
+    SinkConnectionReady,
 };
 use crate::util::ResultExt;
 use crate::{catalog, AdapterError, AdapterNotice};
@@ -59,7 +59,6 @@ impl Coordinator {
             Message::WriteLockGrant(write_lock_guard) => {
                 self.message_write_lock_grant(write_lock_guard).await;
             }
-            Message::SendDiffs(diffs) => self.message_send_diffs(diffs),
             Message::GroupCommitInitiate => {
                 self.try_group_commit().await;
             }
@@ -409,7 +408,7 @@ impl Coordinator {
             Err(e) => return tx.send(Err(e), session),
         };
 
-        let mut plans = vec![];
+        let mut plans: Vec<CreateSourcePlans> = vec![];
         let mut id_allocation = BTreeMap::new();
 
         // First we'll allocate global ids for each subsource and plan them
@@ -431,7 +430,7 @@ impl Coordinator {
                 Err(e) => return tx.send(Err(e), session),
             };
             id_allocation.insert(transient_id, source_id);
-            plans.push((source_id, plan, depends_on));
+            plans.push((source_id, plan, depends_on).into());
         }
 
         // Then, we'll rewrite the source statement to point to the newly minted global ids and
@@ -452,11 +451,11 @@ impl Coordinator {
             }
             Err(e) => return tx.send(Err(e), session),
         };
-        plans.push((source_id, plan, depends_on));
+        plans.push((source_id, plan, depends_on).into());
 
         // Finally, sequence all plans in one go
-        let result = self.sequence_create_source(&mut session, plans).await;
-        tx.send(result, session);
+        self.sequence_plan(tx, session, Plan::CreateSources(plans), Vec::new())
+            .await;
     }
 
     #[tracing::instrument(level = "debug", skip(self, session_and_tx))]
@@ -552,40 +551,6 @@ impl Coordinator {
         }
         // N.B. if no deferred plans, write lock is released by drop
         // here.
-    }
-
-    #[tracing::instrument(level = "debug", skip_all, fields(id, kind))]
-    fn message_send_diffs(
-        &mut self,
-        SendDiffs {
-            mut session,
-            tx,
-            id,
-            diffs,
-            kind,
-            returning,
-        }: SendDiffs,
-    ) {
-        event!(Level::TRACE, diffs = format!("{:?}", diffs));
-        match diffs {
-            Ok(diffs) => {
-                tx.send(
-                    self.sequence_send_diffs(
-                        &mut session,
-                        SendDiffsPlan {
-                            id,
-                            updates: diffs,
-                            kind,
-                            returning,
-                        },
-                    ),
-                    session,
-                );
-            }
-            Err(e) => {
-                tx.send(Err(e), session);
-            }
-        }
     }
 
     #[tracing::instrument(level = "debug", skip_all)]

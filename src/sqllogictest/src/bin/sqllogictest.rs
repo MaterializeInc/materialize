@@ -125,6 +125,10 @@ struct Args {
     /// Inject `CREATE INDEX` after all `CREATE TABLE` statements.
     #[clap(long)]
     auto_index_tables: bool,
+    /// Inject `BEGIN` and `COMMIT` to create longer running transactions for faster testing of the
+    /// ported SQLite SLT files. Does not work generally, so don't use it for other tests.
+    #[clap(long)]
+    auto_transactions: bool,
     /// Run Materialize with persisted introspection sources enabled.
     #[clap(long)]
     persisted_introspection: bool,
@@ -145,6 +149,7 @@ async fn main() -> ExitCode {
         no_fail: args.no_fail,
         fail_fast: args.fail_fast,
         auto_index_tables: args.auto_index_tables,
+        auto_transactions: args.auto_transactions,
         persisted_introspection: args.persisted_introspection,
     };
 
@@ -316,11 +321,12 @@ where
             // We need to prefix every line in `s` with the current timestamp.
 
             let timestamp = Utc::now();
+            let timestamp_str = timestamp.format("%Y-%m-%d %H:%M:%S.%f %Z");
 
             // If the last character we outputted was a newline, then output a
             // timestamp prefix at the start of this line.
             if self.need_timestamp.replace(false) {
-                self.emit_str(&format!("[{}] ", timestamp));
+                self.emit_str(&format!("[{}] ", timestamp_str));
             }
 
             // Emit `s`, installing a timestamp at the start of every line
@@ -329,7 +335,7 @@ where
                 None => (&*s, false),
                 Some(s) => (s, true),
             };
-            self.emit_str(&s.replace('\n', &format!("\n[{}] ", timestamp)));
+            self.emit_str(&s.replace('\n', &format!("\n[{}] ", timestamp_str)));
 
             // If the line ended with a newline, output the newline but *not*
             // the timestamp prefix. We want the timestamp to reflect the moment

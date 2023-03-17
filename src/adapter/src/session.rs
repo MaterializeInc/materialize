@@ -627,6 +627,11 @@ impl<T: TimestampManipulation> Session<T> {
         }
     }
 
+    /// Returns whether the current session is a superuser.
+    pub fn is_superuser(&self) -> bool {
+        self.vars.is_superuser()
+    }
+
     /// Returns a channel on which to send external metadata to the session.
     pub fn retain_external_metadata_transmitter(
         &mut self,

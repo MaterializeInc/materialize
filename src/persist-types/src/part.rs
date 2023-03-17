@@ -336,6 +336,30 @@ impl PartBuilder {
         self.diff.push(diff);
     }
 
+    /// Returns a [PartMut] for this in-progress part.
+    pub fn get_mut<'a>(&'a mut self) -> PartMut<'a> {
+        let key = ColumnsMut {
+            cols: self
+                .key
+                .iter_mut()
+                .map(|(name, col)| (name.as_str(), col))
+                .collect(),
+        };
+        let val = ColumnsMut {
+            cols: self
+                .val
+                .iter_mut()
+                .map(|(name, col)| (name.as_str(), col))
+                .collect(),
+        };
+        PartMut {
+            key,
+            val,
+            ts: &mut self.ts,
+            diff: &mut self.diff,
+        }
+    }
+
     /// Completes construction of the [Part].
     pub fn finish(self) -> Result<Part, String> {
         let key = self
@@ -362,6 +386,27 @@ impl PartBuilder {
         let () = part.validate()?;
         Ok(part)
     }
+}
+
+/// Mutable access to the columns in a [PartBuilder].
+///
+/// TODO(mfp): In debug_assertions, verify that the lengths match when this is
+/// created and when it is dropped.
+pub struct PartMut<'a> {
+    /// The key column.
+    pub key: ColumnsMut<'a>,
+    /// The val column.
+    pub val: ColumnsMut<'a>,
+    /// The ts column.
+    ///
+    /// TODO(mfp): This breaks the abstraction. Better would be something that
+    /// talks in terms of Codec64.
+    pub ts: &'a mut Vec<i64>,
+    /// The diff column.
+    ///
+    /// TODO(mfp): This breaks the abstraction. Better would be something that
+    /// talks in terms of Codec64.
+    pub diff: &'a mut Vec<i64>,
 }
 
 /// Hack to make things work with `Arc<dyn Any>::downcast_ref`.

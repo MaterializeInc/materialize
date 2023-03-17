@@ -11,10 +11,23 @@ steps:
   - id: sqllogictest
     label: ":bulb: SQL logic tests"
     timeout_in_minutes: 600
-    artifact_paths: target/slt-summary.json
+    artifact_paths: junit_*.xml
     agents:
       queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
           run: sqllogictest
+
+  - wait: ~
+    continue_on_failure: true
+
+  - id: analyze
+    label: Analyze tests
+    plugins:
+      - junit-annotate#v2.0.2:
+          artifacts: "*junit_*.xml"
+          job-uuid-file-pattern: _([^_]*).xml
+    priority: 1
+    agents:
+      queue: linux-x86_64

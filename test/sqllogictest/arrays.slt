@@ -847,3 +847,8 @@ SELECT ARRAY[ARRAY[customer.first_name], ARRAY[customer.zip], ARRAY[customer.id:
 ----
 {{alice},{10003},{1}}
 {{charlie},{11217},{3}}
+
+# Regression for #18144
+query error db error: ERROR: array_in not yet supported
+SELECT array_in('', 0, 0)
+----

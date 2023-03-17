@@ -18,4 +18,13 @@ message ProtoPersistParameters {
     mz_proto.ProtoDuration compaction_minimum_timeout = 2;
     mz_proto.ProtoDuration consensus_connect_timeout = 3;
     optional uint64 sink_minimum_batch_updates = 4;
+    optional ProtoRetryParameters next_listen_batch_retryer = 5;
+    optional bool stats_collection_enabled = 6;
+    optional bool stats_filter_enabled = 7;
+}
+
+message ProtoRetryParameters {
+    mz_proto.ProtoDuration initial_backoff = 1;
+    uint32 multiplier = 2;
+    mz_proto.ProtoDuration clamp = 3;
 }

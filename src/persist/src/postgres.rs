@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 use tracing::debug;
 
 use crate::error::Error;
-use crate::location::{Consensus, ExternalError, SeqNo, VersionedData, SCAN_ALL};
+use crate::location::{CaSResult, Consensus, ExternalError, SeqNo, VersionedData};
 use crate::metrics::PostgresConsensusMetrics;
 
 const SCHEMA: &str = "
@@ -371,7 +371,7 @@ impl Consensus for PostgresConsensus {
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
-    ) -> Result<Result<(), Vec<VersionedData>>, ExternalError> {
+    ) -> Result<CaSResult, ExternalError> {
         if let Some(expected) = expected {
             if new.seqno <= expected {
                 return Err(Error::from(
@@ -417,17 +417,9 @@ impl Consensus for PostgresConsensus {
         };
 
         if result == 1 {
-            Ok(Ok(()))
+            Ok(CaSResult::Committed)
         } else {
-            // It's safe to call scan in a subsequent transaction rather than doing
-            // so directly in the same transaction because, once a given (seqno, data)
-            // pair exists for our shard, we enforce the invariants that
-            // 1. Our shard will always have _some_ data mapped to it.
-            // 2. All operations that modify the (seqno, data) can only increase
-            //    the sequence number.
-            let from = expected.map_or_else(SeqNo::minimum, |x| x.next());
-            let current = self.scan(key, from, SCAN_ALL).await?;
-            Ok(Err(current))
+            Ok(CaSResult::ExpectationMismatch)
         }
     }
 
@@ -509,6 +501,7 @@ mod tests {
     use super::*;
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn postgres_consensus() -> Result<(), ExternalError> {
         let config = match PostgresConsensusConfig::new_for_test()? {
             Some(config) => config,
@@ -533,7 +526,7 @@ mod tests {
 
         assert_eq!(
             consensus.compare_and_set(&key, None, state.clone()).await,
-            Ok(Ok(()))
+            Ok(CaSResult::Committed),
         );
 
         assert_eq!(consensus.head(&key).await, Ok(Some(state.clone())));

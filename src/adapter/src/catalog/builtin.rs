@@ -1206,14 +1206,14 @@ pub const MZ_SCHEDULING_ELAPSED_INTERNAL: BuiltinLog = BuiltinLog {
     variant: LogVariant::Timely(TimelyLog::Elapsed),
 };
 
-pub const MZ_RAW_COMPUTE_OPERATOR_DURATIONS_INTERNAL: BuiltinLog = BuiltinLog {
-    name: "mz_raw_compute_operator_durations_internal",
+pub const MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_INTERNAL: BuiltinLog = BuiltinLog {
+    name: "mz_compute_operator_durations_histogram_internal",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Histogram),
 };
 
-pub const MZ_SCHEDULING_PARKS_INTERNAL: BuiltinLog = BuiltinLog {
-    name: "mz_scheduling_parks_internal",
+pub const MZ_SCHEDULING_PARKS_HISTOGRAM_INTERNAL: BuiltinLog = BuiltinLog {
+    name: "mz_scheduling_parks_histogram_internal",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Parks),
 };
@@ -1254,8 +1254,8 @@ pub const MZ_WORKER_COMPUTE_IMPORT_FRONTIERS: BuiltinLog = BuiltinLog {
     variant: LogVariant::Compute(ComputeLog::ImportFrontierCurrent),
 };
 
-pub const MZ_RAW_WORKER_COMPUTE_DELAYS: BuiltinLog = BuiltinLog {
-    name: "mz_raw_worker_compute_delays",
+pub const MZ_WORKER_COMPUTE_DELAYS_HISTOGRAM_INTERNAL: BuiltinLog = BuiltinLog {
+    name: "mz_worker_compute_delays_histogram_internal",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::FrontierDelay),
 };
@@ -1266,8 +1266,8 @@ pub const MZ_ACTIVE_PEEKS: BuiltinLog = BuiltinLog {
     variant: LogVariant::Compute(ComputeLog::PeekCurrent),
 };
 
-pub const MZ_RAW_PEEK_DURATIONS: BuiltinLog = BuiltinLog {
-    name: "mz_raw_peek_durations",
+pub const MZ_PEEK_DURATIONS_HISTOGRAM_INTERNAL: BuiltinLog = BuiltinLog {
+    name: "mz_peek_durations_histogram_internal",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::PeekDuration),
 };
@@ -1546,6 +1546,15 @@ pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("create_role", ScalarType::Bool.nullable(false))
         .with_column("create_db", ScalarType::Bool.nullable(false))
         .with_column("create_cluster", ScalarType::Bool.nullable(false)),
+    is_retained_metrics_relation: false,
+});
+pub static MZ_ROLE_MEMBERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_role_members",
+    schema: MZ_CATALOG_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("role_id", ScalarType::String.nullable(false))
+        .with_column("member", ScalarType::String.nullable(false))
+        .with_column("grantor", ScalarType::String.nullable(false)),
     is_retained_metrics_relation: false,
 });
 pub static MZ_PSEUDO_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2125,9 +2134,11 @@ pub const PG_INDEX: BuiltinView = BuiltinView {
     sql: "CREATE VIEW pg_catalog.pg_index AS SELECT
     mz_indexes.oid AS indexrelid,
     mz_relations.oid AS indrelid,
-    false::pg_catalog.bool AS indisprimary,
     -- MZ doesn't support creating unique indexes so indisunique is filled with false
     false::pg_catalog.bool AS indisunique,
+    false::pg_catalog.bool AS indisprimary,
+    -- MZ doesn't support unique indexes so indimmediate is filled with false
+    false::pg_catalog.bool AS indimmediate,
     -- MZ doesn't support CLUSTER so indisclustered is filled with false
     false::pg_catalog.bool AS indisclustered,
     -- MZ never creates invalid indexes so indisvalid is filled with true
@@ -2375,6 +2386,17 @@ pub const PG_AUTH_MEMBERS: BuiltinView = BuiltinView {
 WHERE false",
 };
 
+pub const MZ_PEEK_DURATIONS_HISTOGRAM: BuiltinView = BuiltinView {
+    name: "mz_peek_durations_histogram",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_peek_durations_histogram AS SELECT
+    worker_id, duration_ns, pg_catalog.count(*) AS count
+FROM
+    mz_internal.mz_peek_durations_histogram_internal
+GROUP BY
+    worker_id, duration_ns",
+};
+
 pub const MZ_SCHEDULING_ELAPSED: BuiltinView = BuiltinView {
     name: "mz_scheduling_elapsed",
     schema: MZ_INTERNAL_SCHEMA,
@@ -2386,59 +2408,37 @@ GROUP BY
     id, worker_id",
 };
 
-pub const MZ_RAW_COMPUTE_OPERATOR_DURATIONS: BuiltinView = BuiltinView {
-    name: "mz_raw_compute_operator_durations",
+pub const MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM: BuiltinView = BuiltinView {
+    name: "mz_compute_operator_durations_histogram",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_raw_compute_operator_durations AS SELECT
+    sql: "CREATE VIEW mz_internal.mz_compute_operator_durations_histogram AS SELECT
     id, worker_id, duration_ns, pg_catalog.count(*) AS count
 FROM
-    mz_internal.mz_raw_compute_operator_durations_internal
+    mz_internal.mz_compute_operator_durations_histogram_internal
 GROUP BY
     id, worker_id, duration_ns",
 };
 
-pub const MZ_COMPUTE_OPERATOR_DURATIONS: BuiltinView = BuiltinView {
-    name: "mz_compute_operator_durations",
+pub const MZ_SCHEDULING_PARKS_HISTOGRAM: BuiltinView = BuiltinView {
+    name: "mz_scheduling_parks_histogram",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_compute_operator_durations AS SELECT
-    id,
-    worker_id,
-    duration_ns/1000 * '1 microsecond'::interval AS duration,
-    count
-FROM mz_internal.mz_raw_compute_operator_durations",
-};
-
-pub const MZ_WORKER_COMPUTE_DELAYS: BuiltinView = BuiltinView {
-    name: "mz_worker_compute_delays",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_worker_compute_delays AS SELECT
-    export_id,
-    import_id,
-    worker_id,
-    delay_ns/1000 * '1 microsecond'::interval AS delay,
-    count
-FROM mz_internal.mz_raw_worker_compute_delays",
-};
-
-pub const MZ_PEEK_DURATIONS: BuiltinView = BuiltinView {
-    name: "mz_peek_durations",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_peek_durations AS SELECT
-    worker_id,
-    duration_ns/1000 * '1 microsecond'::interval AS duration,
-    count
-FROM mz_internal.mz_raw_peek_durations",
-};
-
-pub const MZ_SCHEDULING_PARKS: BuiltinView = BuiltinView {
-    name: "mz_scheduling_parks",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_scheduling_parks AS SELECT
-    worker_id, slept_for, requested, pg_catalog.count(*) AS count
+    sql: "CREATE VIEW mz_internal.mz_scheduling_parks_histogram AS SELECT
+    worker_id, slept_for_ns, requested_ns, pg_catalog.count(*) AS count
 FROM
-    mz_internal.mz_scheduling_parks_internal
+    mz_internal.mz_scheduling_parks_histogram_internal
 GROUP BY
-    worker_id, slept_for, requested",
+    worker_id, slept_for_ns, requested_ns",
+};
+
+pub const MZ_WORKER_COMPUTE_DELAYS_HISTOGRAM: BuiltinView = BuiltinView {
+    name: "mz_worker_compute_delays_histogram",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_worker_compute_delays_histogram AS SELECT
+    export_id, import_id, worker_id, delay_ns, pg_catalog.count(*) AS count
+FROM
+    mz_internal.mz_worker_compute_delays_histogram_internal
+GROUP BY
+    export_id, import_id, worker_id, delay_ns",
 };
 
 pub const MZ_MESSAGE_COUNTS: BuiltinView = BuiltinView {
@@ -2998,22 +2998,6 @@ IN CLUSTER mz_introspection
 ON mz_catalog.mz_clusters (id)",
 };
 
-pub const MZ_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
-    name: "mz_cluster_replicas_ind",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_cluster_replicas_ind
-IN CLUSTER mz_introspection
-ON mz_catalog.mz_cluster_replicas (id)",
-};
-
-pub const MZ_CLUSTER_REPLICA_UTILIZATION_IND: BuiltinIndex = BuiltinIndex {
-    name: "mz_cluster_replica_utilization_ind",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_cluster_replica_utilization_ind
-IN CLUSTER mz_introspection
-ON mz_internal.mz_cluster_replica_utilization (replica_id)",
-};
-
 pub const MZ_SOURCE_STATUSES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_source_statuses_ind",
     schema: MZ_INTERNAL_SCHEMA,
@@ -3177,13 +3161,13 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL),
         Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_INTERNAL),
         Builtin::Log(&MZ_ACTIVE_PEEKS),
-        Builtin::Log(&MZ_RAW_PEEK_DURATIONS),
+        Builtin::Log(&MZ_PEEK_DURATIONS_HISTOGRAM_INTERNAL),
         Builtin::Log(&MZ_SCHEDULING_ELAPSED_INTERNAL),
-        Builtin::Log(&MZ_RAW_COMPUTE_OPERATOR_DURATIONS_INTERNAL),
-        Builtin::Log(&MZ_SCHEDULING_PARKS_INTERNAL),
+        Builtin::Log(&MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_INTERNAL),
+        Builtin::Log(&MZ_SCHEDULING_PARKS_HISTOGRAM_INTERNAL),
         Builtin::Log(&MZ_WORKER_COMPUTE_FRONTIERS),
         Builtin::Log(&MZ_WORKER_COMPUTE_IMPORT_FRONTIERS),
-        Builtin::Log(&MZ_RAW_WORKER_COMPUTE_DELAYS),
+        Builtin::Log(&MZ_WORKER_COMPUTE_DELAYS_HISTOGRAM_INTERNAL),
         Builtin::Table(&MZ_VIEW_KEYS),
         Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
         Builtin::Table(&MZ_KAFKA_SINKS),
@@ -3206,6 +3190,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_LIST_TYPES),
         Builtin::Table(&MZ_MAP_TYPES),
         Builtin::Table(&MZ_ROLES),
+        Builtin::Table(&MZ_ROLE_MEMBERS),
         Builtin::Table(&MZ_PSEUDO_TYPES),
         Builtin::Table(&MZ_FUNCTIONS),
         Builtin::Table(&MZ_OPERATORS),
@@ -3238,15 +3223,14 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_DATAFLOW_CHANNEL_OPERATORS),
         Builtin::View(&MZ_COMPUTE_IMPORT_FRONTIERS),
         Builtin::View(&MZ_MESSAGE_COUNTS),
-        Builtin::View(&MZ_RAW_COMPUTE_OPERATOR_DURATIONS),
-        Builtin::View(&MZ_COMPUTE_OPERATOR_DURATIONS),
-        Builtin::View(&MZ_WORKER_COMPUTE_DELAYS),
-        Builtin::View(&MZ_PEEK_DURATIONS),
+        Builtin::View(&MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM),
         Builtin::View(&MZ_RECORDS_PER_DATAFLOW_OPERATOR),
         Builtin::View(&MZ_RECORDS_PER_DATAFLOW),
         Builtin::View(&MZ_RECORDS_PER_DATAFLOW_GLOBAL),
+        Builtin::View(&MZ_PEEK_DURATIONS_HISTOGRAM),
         Builtin::View(&MZ_SCHEDULING_ELAPSED),
-        Builtin::View(&MZ_SCHEDULING_PARKS),
+        Builtin::View(&MZ_SCHEDULING_PARKS_HISTOGRAM),
+        Builtin::View(&MZ_WORKER_COMPUTE_DELAYS_HISTOGRAM),
         Builtin::View(&MZ_SHOW_MATERIALIZED_VIEWS),
         Builtin::View(&MZ_SHOW_INDEXES),
         Builtin::View(&MZ_SHOW_CLUSTER_REPLICAS),
@@ -3300,8 +3284,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_SHOW_CLUSTER_REPLICAS_IND),
         Builtin::Index(&MZ_SHOW_SECRETS_IND),
         Builtin::Index(&MZ_CLUSTERS_IND),
-        Builtin::Index(&MZ_CLUSTER_REPLICAS_IND),
-        Builtin::Index(&MZ_CLUSTER_REPLICA_UTILIZATION_IND),
         Builtin::Index(&MZ_SOURCE_STATUSES_IND),
         Builtin::Index(&MZ_SOURCE_STATUS_HISTORY_IND),
     ]);

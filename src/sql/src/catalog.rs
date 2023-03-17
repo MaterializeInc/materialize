@@ -151,6 +151,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Panics if `id` does not specify a valid role.
     fn get_role(&self, id: &RoleId) -> &dyn CatalogRole;
 
+    /// Collects all role IDs that `id` is transitively a member of.
+    fn collect_role_membership(&self, id: &RoleId) -> BTreeSet<RoleId>;
+
     /// Resolves the named cluster.
     ///
     /// If the provided name is `None`, resolves the currently active cluster.
@@ -293,6 +296,8 @@ pub trait CatalogSchema {
     fn has_items(&self) -> bool;
 }
 
+// TODO(jkosh44) When https://github.com/MaterializeInc/materialize/issues/17824 is implemented
+//  then switch this to a bitflag (https://docs.rs/bitflags/latest/bitflags/)
 /// Attributes belonging to a [`CatalogRole`].
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct RoleAttributes {
@@ -409,6 +414,9 @@ pub trait CatalogRole {
 
     /// Indicates whether the role has the cluster creation attribute.
     fn create_cluster(&self) -> bool;
+
+    /// Returns all role IDs that this role is an immediate a member of.
+    fn membership(&self) -> BTreeSet<&RoleId>;
 }
 
 /// A cluster in a [`SessionCatalog`].

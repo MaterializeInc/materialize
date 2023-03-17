@@ -332,22 +332,22 @@ pub static DEFAULT_LOG_VARIANTS: Lazy<Vec<LogVariant>> = Lazy::new(|| {
 pub enum LogView {
     MzArrangementSharing,
     MzArrangementSizes,
-    MzComputeOperatorDurations,
-    MzDataflowNames,
+    MzComputeFrontiers,
+    MzComputeImportFrontiers,
+    MzComputeOperatorDurationsHistogram,
+    MzDataflows,
+    MzDataflowChannelOperators,
     MzDataflowOperatorDataflows,
     MzDataflowOperatorParents,
     MzDataflowOperatorReachability,
-    MzComputeFrontiers,
-    MzComputeImportFrontiers,
     MzMessageCounts,
-    MzPeekDurations,
-    MzRawComputeOperatorDurations,
-    MzRecordsPerDataflowOperator,
+    MzPeekDurationsHistogram,
     MzRecordsPerDataflow,
     MzRecordsPerDataflowGlobal,
+    MzRecordsPerDataflowOperator,
     MzSchedulingElapsed,
-    MzSchedulingParks,
-    MzWorkerComputeDelays,
+    MzSchedulingParksHistogram,
+    MzWorkerComputeDelaysHistogram,
 }
 
 pub static DEFAULT_LOG_VIEWS: Lazy<Vec<LogView>> = Lazy::new(|| {
@@ -355,22 +355,22 @@ pub static DEFAULT_LOG_VIEWS: Lazy<Vec<LogView>> = Lazy::new(|| {
     vec![
         LogView::MzArrangementSharing,
         LogView::MzArrangementSizes,
-        LogView::MzDataflowNames,
+        LogView::MzComputeFrontiers,
+        LogView::MzComputeImportFrontiers,
+        LogView::MzComputeOperatorDurationsHistogram,
+        LogView::MzDataflows,
+        LogView::MzDataflowChannelOperators,
         LogView::MzDataflowOperatorDataflows,
         LogView::MzDataflowOperatorParents,
         LogView::MzDataflowOperatorReachability,
-        LogView::MzComputeFrontiers,
-        LogView::MzComputeImportFrontiers,
         LogView::MzMessageCounts,
-        LogView::MzPeekDurations,
+        LogView::MzPeekDurationsHistogram,
         LogView::MzRecordsPerDataflowOperator,
         LogView::MzRecordsPerDataflow,
         LogView::MzRecordsPerDataflowGlobal,
         LogView::MzSchedulingElapsed,
-        LogView::MzRawComputeOperatorDurations,
-        LogView::MzComputeOperatorDurations,
-        LogView::MzSchedulingParks,
-        LogView::MzWorkerComputeDelays,
+        LogView::MzSchedulingParksHistogram,
+        LogView::MzWorkerComputeDelaysHistogram,
     ]
 });
 
@@ -417,7 +417,7 @@ impl LogView {
                 "mz_arrangement_sizes_{}",
             ),
 
-            LogView::MzDataflowNames => (
+            LogView::MzDataflows => (
                 "SELECT mz_dataflow_addresses_{}.id,
                         mz_dataflow_addresses_{}.worker_id,
                         mz_dataflow_addresses_{}.address[1] AS local_id,
@@ -430,6 +430,40 @@ impl LogView {
                         mz_dataflow_addresses_{}.worker_id = mz_dataflow_operators_{}.worker_id AND
                         mz_catalog.list_length(mz_dataflow_addresses_{}.address) = 1",
                 "mz_dataflows_{}",
+            ),
+
+            LogView::MzDataflowChannelOperators => (
+                "WITH
+                 channel_addresses(id, worker_id, address, from_index, to_index) AS (
+                     SELECT id, worker_id, address, from_index, to_index
+                     FROM mz_internal.mz_dataflow_channels_{} mdc
+                     INNER JOIN mz_internal.mz_dataflow_addresses_{} mda
+                     USING (id, worker_id)
+                 ),
+                 operator_addresses(channel_id, worker_id, from_address, to_address) AS (
+                     SELECT id AS channel_id, worker_id,
+                            address || from_index AS from_address,
+                            address || to_index AS to_address
+                     FROM channel_addresses
+                 )
+                 SELECT channel_id AS id,
+                        oa.worker_id,
+                        from_ops.id AS from_operator_id,
+                        to_ops.id AS to_operator_id
+                 FROM operator_addresses oa
+                      INNER JOIN mz_internal.mz_dataflow_addresses_{} mda_from
+                          ON oa.from_address = mda_from.address
+                          AND oa.worker_id = mda_from.worker_id
+                      INNER JOIN mz_internal.mz_dataflow_operators_{} from_ops
+                          ON mda_from.id = from_ops.id
+                          AND oa.worker_id = from_ops.worker_id
+                      INNER JOIN mz_internal.mz_dataflow_addresses_{} mda_to
+                          ON oa.to_address = mda_to.address
+                          AND oa.worker_id = mda_to.worker_id
+                      INNER JOIN mz_internal.mz_dataflow_operators_{} to_ops
+                          ON mda_to.id = to_ops.id
+                          AND oa.worker_id = to_ops.worker_id",
+                "mz_dataflow_channel_operators_{}",
             ),
 
             LogView::MzDataflowOperatorParents => (
@@ -537,16 +571,6 @@ impl LogView {
                 "mz_message_counts_{}",
             ),
 
-            LogView::MzPeekDurations => (
-                "SELECT
-                    worker_id,
-                    duration_ns/1000 * '1 microsecond'::interval AS duration,
-                    count
-                FROM
-                    mz_internal.mz_raw_peek_durations_{}",
-                "mz_peek_durations_{}",
-            ),
-
             LogView::MzRecordsPerDataflowOperator => (
                 "WITH records_cte AS (
                     SELECT
@@ -605,6 +629,16 @@ impl LogView {
                 "mz_records_per_dataflow_global_{}",
             ),
 
+            LogView::MzPeekDurationsHistogram => (
+                "SELECT
+                    worker_id, duration_ns, pg_catalog.count(*) AS count
+                FROM
+                    mz_internal.mz_peek_durations_histogram_internal_{}
+                GROUP BY
+                    worker_id, duration_ns",
+                "mz_peek_durations_histogram_{}",
+            ),
+
             LogView::MzSchedulingElapsed => (
                 "SELECT
                     id, worker_id, pg_catalog.count(*) AS elapsed_ns
@@ -615,47 +649,34 @@ impl LogView {
                 "mz_scheduling_elapsed_{}",
             ),
 
-            LogView::MzRawComputeOperatorDurations => (
+            LogView::MzComputeOperatorDurationsHistogram => (
                 "SELECT
                     id, worker_id, duration_ns, pg_catalog.count(*) AS count
                 FROM
-                    mz_internal.mz_raw_compute_operator_durations_internal_{}
+                    mz_internal.mz_compute_operator_durations_histogram_internal_{}
                 GROUP BY
                     id, worker_id, duration_ns",
-                "mz_raw_compute_operator_durations_{}",
+                "mz_compute_operator_durations_histogram_{}",
             ),
 
-            LogView::MzComputeOperatorDurations => (
+            LogView::MzSchedulingParksHistogram => (
                 "SELECT
-                    id,
-                    worker_id,
-                    duration_ns/1000 * '1 microsecond'::interval AS duration,
-                    count
+                    worker_id, slept_for_ns, requested_ns, pg_catalog.count(*) AS count
                 FROM
-                    mz_internal.mz_raw_compute_operator_durations_{}",
-                "mz_compute_operator_durations_{}",
-            ),
-
-            LogView::MzSchedulingParks => (
-                "SELECT
-                    worker_id, slept_for, requested, pg_catalog.count(*) AS count
-                FROM
-                    mz_internal.mz_scheduling_parks_internal_{}
+                    mz_internal.mz_scheduling_parks_histogram_internal_{}
                 GROUP BY
-                    worker_id, slept_for, requested",
-                "mz_scheduling_parks_{}",
+                    worker_id, slept_for_ns, requested_ns",
+                "mz_scheduling_parks_histogram_{}",
             ),
 
-            LogView::MzWorkerComputeDelays => (
+            LogView::MzWorkerComputeDelaysHistogram => (
                 "SELECT
-                    export_id,
-                    import_id,
-                    worker_id,
-                    delay_ns/1000 * '1 microsecond'::interval AS delay,
-                    count
+                    export_id, import_id, worker_id, delay_ns, pg_catalog.count(*) AS count
                 FROM
-                    mz_internal.mz_raw_worker_compute_delays_{}",
-                "mz_worker_compute_delays_{}",
+                    mz_internal.mz_worker_compute_delays_histogram_internal_{}
+                GROUP BY
+                    export_id, import_id, worker_id, delay_ns",
+                "mz_worker_compute_delays_histogram_{}",
             ),
         }
     }
@@ -718,8 +739,8 @@ impl LogVariant {
 
             LogVariant::Timely(TimelyLog::Parks) => RelationDesc::empty()
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("slept_for", ScalarType::UInt64.nullable(false))
-                .with_column("requested", ScalarType::UInt64.nullable(false)),
+                .with_column("slept_for_ns", ScalarType::UInt64.nullable(false))
+                .with_column("requested_ns", ScalarType::UInt64.nullable(false)),
 
             LogVariant::Timely(TimelyLog::MessagesReceived) => RelationDesc::empty()
                 .with_column("channel_id", ScalarType::UInt64.nullable(false))
@@ -777,10 +798,7 @@ impl LogVariant {
                 .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("import_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("delay_ns", ScalarType::UInt64.nullable(false))
-                .with_column("count", ScalarType::Int64.nullable(false))
-                .with_column("sum", ScalarType::UInt64.nullable(true))
-                .with_key(vec![0, 1, 2, 3]),
+                .with_column("delay_ns", ScalarType::UInt64.nullable(false)),
 
             LogVariant::Compute(ComputeLog::PeekCurrent) => RelationDesc::empty()
                 .with_column("id", ScalarType::Uuid.nullable(false))
@@ -791,10 +809,7 @@ impl LogVariant {
 
             LogVariant::Compute(ComputeLog::PeekDuration) => RelationDesc::empty()
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("duration_ns", ScalarType::UInt64.nullable(false))
-                .with_column("count", ScalarType::UInt64.nullable(false))
-                .with_column("sum", ScalarType::UInt64.nullable(true))
-                .with_key(vec![0, 1]),
+                .with_column("duration_ns", ScalarType::UInt64.nullable(false)),
         }
     }
 

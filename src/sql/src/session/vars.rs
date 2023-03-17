@@ -239,7 +239,8 @@ const STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("statement_timeout"),
     value: &Duration::from_secs(10),
     description:
-        "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations.",
+        "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations. \
+        If this value is specified without units, it is taken as milliseconds.",
     internal: false,
     safe: true,
 };
@@ -249,7 +250,8 @@ const IDLE_IN_TRANSACTION_SESSION_TIMEOUT: ServerVar<Duration> = ServerVar {
     value: &Duration::from_secs(60 * 2),
     description:
         "Sets the maximum allowed duration that a session can sit idle in a transaction before \
-         being terminated. A value of zero disables the timeout (PostgreSQL).",
+         being terminated. If this value is specified without units, it is taken as milliseconds. \
+         A value of zero disables the timeout (PostgreSQL).",
     internal: false,
     safe: true,
 };
@@ -263,7 +265,7 @@ const SERVER_VERSION: ServerVar<str> = ServerVar {
         ".",
         SERVER_PATCH_VERSION
     ),
-    description: "Shows the server version (PostgreSQL).",
+    description: "Shows the PostgreSQL compatible server version (PostgreSQL).",
     internal: false,
     safe: true,
 };
@@ -273,7 +275,7 @@ const SERVER_VERSION_NUM: ServerVar<i32> = ServerVar {
     value: &((cast::u8_to_i32(SERVER_MAJOR_VERSION) * 10_000)
         + (cast::u8_to_i32(SERVER_MINOR_VERSION) * 100)
         + cast::u8_to_i32(SERVER_PATCH_VERSION)),
-    description: "Shows the server version as an integer (PostgreSQL).",
+    description: "Shows the PostgreSQL compatible server version as an integer (PostgreSQL).",
     internal: false,
     safe: true,
 };
@@ -463,6 +465,34 @@ const PERSIST_COMPACTION_MINIMUM_TIMEOUT: ServerVar<Duration> = ServerVar {
     safe: true,
 };
 
+/// Controls initial backoff of [`mz_persist_client::cfg::DynamicConfig::next_listen_batch_retry_params`].
+const PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("persist_next_listen_batch_retryer_initial_backoff"),
+    value: &PersistConfig::DEFAULT_NEXT_LISTEN_BATCH_RETRYER.initial_backoff,
+    description: "The initial backoff when polling for new batches from a Listen or Subscribe.",
+    internal: true,
+    safe: true,
+};
+
+/// Controls backoff multiplier of [`mz_persist_client::cfg::DynamicConfig::next_listen_batch_retry_params`].
+const PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("persist_next_listen_batch_retryer_multiplier"),
+    value: &PersistConfig::DEFAULT_NEXT_LISTEN_BATCH_RETRYER.multiplier,
+    description: "The backoff multiplier when polling for new batches from a Listen or Subscribe.",
+    internal: true,
+    safe: true,
+};
+
+/// Controls backoff clamp of [`mz_persist_client::cfg::DynamicConfig::next_listen_batch_retry_params`].
+const PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("persist_next_listen_batch_retryer_clamp"),
+    value: &PersistConfig::DEFAULT_NEXT_LISTEN_BATCH_RETRYER.clamp,
+    description:
+        "The backoff clamp duration when polling for new batches from a Listen or Subscribe.",
+    internal: true,
+    safe: true,
+};
+
 /// Controls whether or not to use the new storage `persist_sink` implementation in storage
 /// ingestions.
 const ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK: ServerVar<bool> = ServerVar {
@@ -503,6 +533,26 @@ const PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
     description: "In the compute persist sink, workers with less than the minimum number of updates \
                   will flush their records to single downstream worker to be batched up there... in \
                   the hopes of grouping our updates into fewer, larger batches.",
+    internal: true,
+    safe: true,
+};
+
+/// Controls [`mz_persist_client::cfg::DynamicConfig::stats_collection_enabled`].
+const PERSIST_STATS_COLLECTION_ENABLED: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("persist_stats_collection_enabled"),
+    value: &PersistConfig::DEFAULT_STATS_COLLECTION_ENABLED,
+    description: "Whether to calculate and record statistics about the data stored in persist \
+                  to be used at read time, see persist_stats_filter_enabled (Materialize).",
+    internal: true,
+    safe: true,
+};
+
+/// Controls [`mz_persist_client::cfg::DynamicConfig::stats_filter_enabled`].
+const PERSIST_STATS_FILTER_ENABLED: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("persist_stats_filter_enabled"),
+    value: &PersistConfig::DEFAULT_STATS_FILTER_ENABLED,
+    description: "Whether to use recorded statistics about the data stored in persist \
+                  to filter at read time, see persist_stats_collection_enabled (Materialize).",
     internal: true,
     safe: true,
 };
@@ -559,6 +609,16 @@ static MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<mz_repr::Timestamp>> = Serve
     description: "Mocked timestamp to use for audit events for testing purposes",
     internal: true,
     safe: false,
+};
+
+pub const ENABLE_RBAC_CHECKS: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_rbac_checks"),
+    // TODO(jkosh44) Once RBAC is complete, change this to `true` and write a migration to update
+    //  it to false for existing users.
+    value: &false,
+    description: "Boolean flag indicating whether to apply RBAC checks before executing statements (Materialize).",
+    internal: true,
+    safe: true,
 };
 
 /// Represents the input to a variable.
@@ -1185,6 +1245,11 @@ impl SessionVars {
         *self.emit_trace_id_notice.value()
     }
 
+    /// Returns the value of `is_superuser` configuration parameter.
+    pub fn is_superuser(&self) -> bool {
+        self.user.is_superuser()
+    }
+
     /// Returns the user associated with this `SessionVars` instance.
     pub fn user(&self) -> &User {
         &self.user
@@ -1226,6 +1291,7 @@ pub struct SystemVars {
 
     // features
     enable_with_mutually_recursive: SystemVar<bool>,
+    enable_rbac_checks: SystemVar<bool>,
 
     // storage configuration
     enable_multi_worker_storage_persist_sink: SystemVar<bool>,
@@ -1234,6 +1300,12 @@ pub struct SystemVars {
     persist_blob_target_size: SystemVar<usize>,
     persist_compaction_minimum_timeout: SystemVar<Duration>,
     persist_sink_minimum_batch_updates: SystemVar<usize>,
+    persist_stats_collection_enabled: SystemVar<bool>,
+    persist_stats_filter_enabled: SystemVar<bool>,
+
+    persist_next_listen_batch_retryer_initial_backoff: SystemVar<Duration>,
+    persist_next_listen_batch_retryer_multiplier: SystemVar<u32>,
+    persist_next_listen_batch_retryer_clamp: SystemVar<Duration>,
 
     // crdb configuration
     crdb_connect_timeout: SystemVar<Duration>,
@@ -1274,9 +1346,21 @@ impl Default for SystemVars {
             crdb_connect_timeout: SystemVar::new(&CRDB_CONNECT_TIMEOUT),
             dataflow_max_inflight_bytes: SystemVar::new(&DATAFLOW_MAX_INFLIGHT_BYTES),
             persist_sink_minimum_batch_updates: SystemVar::new(&PERSIST_SINK_MINIMUM_BATCH_UPDATES),
+            persist_next_listen_batch_retryer_initial_backoff: SystemVar::new(
+                &PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF,
+            ),
+            persist_next_listen_batch_retryer_multiplier: SystemVar::new(
+                &PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER,
+            ),
+            persist_next_listen_batch_retryer_clamp: SystemVar::new(
+                &PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP,
+            ),
+            persist_stats_collection_enabled: SystemVar::new(&PERSIST_STATS_COLLECTION_ENABLED),
+            persist_stats_filter_enabled: SystemVar::new(&PERSIST_STATS_FILTER_ENABLED),
             metrics_retention: SystemVar::new(&METRICS_RETENTION),
             mock_audit_event_timestamp: SystemVar::new(&MOCK_AUDIT_EVENT_TIMESTAMP),
             enable_with_mutually_recursive: SystemVar::new(&ENABLE_WITH_MUTUALLY_RECURSIVE),
+            enable_rbac_checks: SystemVar::new(&ENABLE_RBAC_CHECKS),
         }
     }
 }
@@ -1306,12 +1390,18 @@ impl SystemVars {
             &self.enable_multi_worker_storage_persist_sink,
             &self.persist_blob_target_size,
             &self.persist_compaction_minimum_timeout,
+            &self.persist_next_listen_batch_retryer_initial_backoff,
+            &self.persist_next_listen_batch_retryer_multiplier,
+            &self.persist_next_listen_batch_retryer_clamp,
             &self.crdb_connect_timeout,
             &self.dataflow_max_inflight_bytes,
             &self.persist_sink_minimum_batch_updates,
+            &self.persist_stats_collection_enabled,
+            &self.persist_stats_filter_enabled,
             &self.metrics_retention,
             &self.mock_audit_event_timestamp,
             &self.enable_with_mutually_recursive,
+            &self.enable_rbac_checks,
         ];
         vars.into_iter()
     }
@@ -1378,16 +1468,28 @@ impl SystemVars {
             Ok(&self.persist_compaction_minimum_timeout)
         } else if name == CRDB_CONNECT_TIMEOUT.name {
             Ok(&self.crdb_connect_timeout)
+        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name {
+            Ok(&self.persist_next_listen_batch_retryer_multiplier)
+        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name {
+            Ok(&self.persist_next_listen_batch_retryer_clamp)
+        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name {
+            Ok(&self.persist_next_listen_batch_retryer_initial_backoff)
         } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
             Ok(&self.dataflow_max_inflight_bytes)
         } else if name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name {
             Ok(&self.persist_sink_minimum_batch_updates)
+        } else if name == PERSIST_STATS_COLLECTION_ENABLED.name {
+            Ok(&self.persist_stats_collection_enabled)
+        } else if name == PERSIST_STATS_FILTER_ENABLED.name {
+            Ok(&self.persist_stats_filter_enabled)
         } else if name == METRICS_RETENTION.name {
             Ok(&self.metrics_retention)
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
             Ok(&self.mock_audit_event_timestamp)
         } else if name == ENABLE_WITH_MUTUALLY_RECURSIVE.name {
             Ok(&self.enable_with_mutually_recursive)
+        } else if name == ENABLE_RBAC_CHECKS.name {
+            Ok(&self.enable_rbac_checks)
         } else {
             Err(VarError::UnknownParameter(name.into()))
         }
@@ -1438,6 +1540,15 @@ impl SystemVars {
                 .is_default(input)
         } else if name == PERSIST_BLOB_TARGET_SIZE.name {
             self.persist_blob_target_size.is_default(input)
+        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name {
+            self.persist_next_listen_batch_retryer_initial_backoff
+                .is_default(input)
+        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name {
+            self.persist_next_listen_batch_retryer_multiplier
+                .is_default(input)
+        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name {
+            self.persist_next_listen_batch_retryer_clamp
+                .is_default(input)
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
             self.persist_compaction_minimum_timeout.is_default(input)
         } else if name == CRDB_CONNECT_TIMEOUT.name {
@@ -1446,12 +1557,18 @@ impl SystemVars {
             self.dataflow_max_inflight_bytes.is_default(input)
         } else if name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name {
             self.persist_sink_minimum_batch_updates.is_default(input)
+        } else if name == PERSIST_STATS_COLLECTION_ENABLED.name {
+            self.persist_stats_collection_enabled.is_default(input)
+        } else if name == PERSIST_STATS_FILTER_ENABLED.name {
+            self.persist_stats_filter_enabled.is_default(input)
         } else if name == METRICS_RETENTION.name {
             self.metrics_retention.is_default(input)
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
             self.mock_audit_event_timestamp.is_default(input)
         } else if name == ENABLE_WITH_MUTUALLY_RECURSIVE.name {
             self.enable_with_mutually_recursive.is_default(input)
+        } else if name == ENABLE_RBAC_CHECKS.name {
+            self.enable_rbac_checks.is_default(input)
         } else {
             Err(VarError::UnknownParameter(name.into()))
         }
@@ -1508,6 +1625,13 @@ impl SystemVars {
             self.allowed_cluster_replica_sizes.set(input)
         } else if name == PERSIST_BLOB_TARGET_SIZE.name {
             self.persist_blob_target_size.set(input)
+        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name {
+            self.persist_next_listen_batch_retryer_initial_backoff
+                .set(input)
+        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name {
+            self.persist_next_listen_batch_retryer_multiplier.set(input)
+        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name {
+            self.persist_next_listen_batch_retryer_clamp.set(input)
         } else if name == ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK.name {
             self.enable_multi_worker_storage_persist_sink.set(input)
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
@@ -1518,12 +1642,18 @@ impl SystemVars {
             self.dataflow_max_inflight_bytes.set(input)
         } else if name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name {
             self.persist_sink_minimum_batch_updates.set(input)
+        } else if name == PERSIST_STATS_COLLECTION_ENABLED.name {
+            self.persist_stats_collection_enabled.set(input)
+        } else if name == PERSIST_STATS_FILTER_ENABLED.name {
+            self.persist_stats_filter_enabled.set(input)
         } else if name == METRICS_RETENTION.name {
             self.metrics_retention.set(input)
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
             self.mock_audit_event_timestamp.set(input)
         } else if name == ENABLE_WITH_MUTUALLY_RECURSIVE.name {
             self.enable_with_mutually_recursive.set(input)
+        } else if name == ENABLE_RBAC_CHECKS.name {
+            self.enable_rbac_checks.set(input)
         } else {
             Err(VarError::UnknownParameter(name.into()))
         }
@@ -1575,6 +1705,14 @@ impl SystemVars {
             Ok(self.allowed_cluster_replica_sizes.reset())
         } else if name == PERSIST_BLOB_TARGET_SIZE.name {
             Ok(self.persist_blob_target_size.reset())
+        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name {
+            Ok(self
+                .persist_next_listen_batch_retryer_initial_backoff
+                .reset())
+        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name {
+            Ok(self.persist_next_listen_batch_retryer_multiplier.reset())
+        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name {
+            Ok(self.persist_next_listen_batch_retryer_clamp.reset())
         } else if name == ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK.name {
             Ok(self.enable_multi_worker_storage_persist_sink.reset())
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
@@ -1585,12 +1723,18 @@ impl SystemVars {
             Ok(self.dataflow_max_inflight_bytes.reset())
         } else if name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name {
             Ok(self.persist_sink_minimum_batch_updates.reset())
+        } else if name == PERSIST_STATS_COLLECTION_ENABLED.name {
+            Ok(self.persist_stats_collection_enabled.reset())
+        } else if name == PERSIST_STATS_FILTER_ENABLED.name {
+            Ok(self.persist_stats_filter_enabled.reset())
         } else if name == METRICS_RETENTION.name {
             Ok(self.metrics_retention.reset())
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
             Ok(self.mock_audit_event_timestamp.reset())
         } else if name == ENABLE_WITH_MUTUALLY_RECURSIVE.name {
             Ok(self.enable_with_mutually_recursive.reset())
+        } else if name == ENABLE_RBAC_CHECKS.name {
+            Ok(self.enable_rbac_checks.reset())
         } else {
             Err(VarError::UnknownParameter(name.into()))
         }
@@ -1685,6 +1829,23 @@ impl SystemVars {
         *self.persist_blob_target_size.value()
     }
 
+    /// Returns the `persist_next_listen_batch_retryer_initial_backoff` configuration parameter.
+    pub fn persist_next_listen_batch_retryer_initial_backoff(&self) -> Duration {
+        *self
+            .persist_next_listen_batch_retryer_initial_backoff
+            .value()
+    }
+
+    /// Returns the `persist_next_listen_batch_retryer_multiplier` configuration parameter.
+    pub fn persist_next_listen_batch_retryer_multiplier(&self) -> u32 {
+        *self.persist_next_listen_batch_retryer_multiplier.value()
+    }
+
+    /// Returns the `persist_next_listen_batch_retryer_clamp` configuration parameter.
+    pub fn persist_next_listen_batch_retryer_clamp(&self) -> Duration {
+        *self.persist_next_listen_batch_retryer_clamp.value()
+    }
+
     /// Returns the `persist_compaction_minimum_timeout` configuration parameter.
     pub fn persist_compaction_minimum_timeout(&self) -> Duration {
         *self.persist_compaction_minimum_timeout.value()
@@ -1703,6 +1864,16 @@ impl SystemVars {
     /// Returns the `persist_sink_minimum_batch_updates` configuration parameter.
     pub fn persist_sink_minimum_batch_updates(&self) -> usize {
         *self.persist_sink_minimum_batch_updates.value()
+    }
+
+    /// Returns the `persist_stats_collection_enabled` configuration parameter.
+    pub fn persist_stats_collection_enabled(&self) -> bool {
+        *self.persist_stats_collection_enabled.value()
+    }
+
+    /// Returns the `persist_stats_filter_enabled` configuration parameter.
+    pub fn persist_stats_filter_enabled(&self) -> bool {
+        *self.persist_stats_filter_enabled.value()
     }
 
     /// Returns the `metrics_retention` configuration parameter.
@@ -1725,6 +1896,11 @@ impl SystemVars {
         self.enable_with_mutually_recursive
             .set(VarInput::Flat(value.format().as_str()))
             .expect("valid parameter value")
+    }
+
+    /// Returns the `enable_rbac_checks` configuration parameter.
+    pub fn enable_rbac_checks(&self) -> bool {
+        *self.enable_rbac_checks.value()
     }
 }
 
@@ -2040,7 +2216,7 @@ impl Var for User {
     }
 
     fn description(&self) -> &'static str {
-        "Indicates whether the current session is a super user (PostgreSQL)."
+        "Reports whether the current session is a superuser (PostgreSQL)."
     }
 
     fn type_name(&self) -> &'static str {
@@ -2624,4 +2800,9 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
         || name == CRDB_CONNECT_TIMEOUT.name()
         || name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
+        || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name()
+        || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name()
+        || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name()
+        || name == PERSIST_STATS_COLLECTION_ENABLED.name()
+        || name == PERSIST_STATS_FILTER_ENABLED.name()
 }

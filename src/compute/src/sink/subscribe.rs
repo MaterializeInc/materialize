@@ -23,7 +23,7 @@ use timely::progress::Antichain;
 use timely::PartialOrder;
 
 use mz_compute_client::protocol::response::{SubscribeBatch, SubscribeResponse};
-use mz_compute_client::types::sinks::{ComputeSinkDesc, SinkAsOf, SubscribeSinkConnection};
+use mz_compute_client::types::sinks::{ComputeSinkDesc, SubscribeSinkConnection};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::errors::DataflowError;
@@ -40,6 +40,7 @@ where
         compute_state: &mut crate::compute_state::ComputeState,
         sink: &ComputeSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
+        as_of: Antichain<Timestamp>,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
         probes: Vec<probe::Handle<Timestamp>>,
@@ -52,7 +53,7 @@ where
         // and alert if the dataflow was dropped before completing.
         let subscribe_protocol_handle = Rc::new(RefCell::new(Some(SubscribeProtocol {
             sink_id,
-            sink_as_of: sink.as_of.frontier.clone(),
+            sink_as_of: as_of.clone(),
             subscribe_response_buffer: Some(Rc::clone(&compute_state.subscribe_response_buffer)),
             prev_upper: Antichain::from_elem(Timestamp::minimum()),
             poison: None,
@@ -63,7 +64,8 @@ where
             sinked_collection,
             err_collection,
             sink_id,
-            sink.as_of.clone(),
+            sink.with_snapshot,
+            as_of,
             sink.up_to.clone(),
             subscribe_protocol_handle,
             probes,
@@ -84,7 +86,8 @@ fn subscribe<G>(
     sinked_collection: Collection<G, Row, Diff>,
     err_collection: Collection<G, DataflowError, Diff>,
     sink_id: GlobalId,
-    as_of: SinkAsOf,
+    with_snapshot: bool,
+    as_of: Antichain<G::Timestamp>,
     up_to: Antichain<G::Timestamp>,
     subscribe_protocol_handle: Rc<RefCell<Option<SubscribeProtocol>>>,
     probes: Vec<probe::Handle<Timestamp>>,
@@ -119,10 +122,10 @@ fn subscribe<G>(
                 frontier.extend(err_input.frontier().frontier().iter().copied());
 
                 let should_emit = |time: &Timestamp| {
-                    let beyond_as_of = if as_of.strict {
-                        as_of.frontier.less_than(time)
+                    let beyond_as_of = if with_snapshot {
+                        as_of.less_equal(time)
                     } else {
-                        as_of.frontier.less_equal(time)
+                        as_of.less_than(time)
                     };
                     let before_up_to = !up_to.less_equal(time);
                     beyond_as_of && before_up_to

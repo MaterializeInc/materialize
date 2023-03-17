@@ -718,7 +718,7 @@ fn install_lifted_mfp(
     mfp: MapFilterProject,
 ) -> Result<(), TransformError> {
     if !mfp.is_identity() {
-        let (map, filter, project) = mfp.as_map_filter_project();
+        let (mut map, mut filter, project) = mfp.as_map_filter_project();
         if let MirRelationExpr::Join { equivalences, .. } = new_join {
             for equivalence in equivalences.iter_mut() {
                 for expr in equivalence.iter_mut() {
@@ -739,6 +739,24 @@ fn install_lifted_mfp(
                         &mut |_| {},
                     )?;
                 }
+            }
+            // Canonicalize scalar expressions in maps and filters with respect to the join
+            // equivalences. This often makes some filters identical, which are then removed.
+            // The identical filters come from either
+            //  - lifting several predicates that originally were pushed down by localizing to more
+            //    than one inputs;
+            //  - individual IS NOT NULL filters on each of the inputs, which become identical
+            //    when rewritten using the join equivalences.
+            //  (This allows for almost the same optimizations as when `Demand`
+            //  used to insert Projections that were marking some columns to be
+            //  identical, when Demand used to run after `JoinImplementation`.)
+            let canonicalizer_map = mz_expr::canonicalize::get_canonicalizer_map(equivalences);
+            for expr in map.iter_mut().chain(filter.iter_mut()) {
+                expr.visit_mut_post(&mut |e| {
+                    if let Some(canonical_expr) = canonicalizer_map.get(e) {
+                        *e = canonical_expr.clone();
+                    }
+                })?
             }
         }
         *new_join = new_join.clone().map(map).filter(filter).project(project);

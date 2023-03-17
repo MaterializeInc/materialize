@@ -21,7 +21,7 @@ use tracing::{event, warn};
 
 use mz_audit_log::VersionedEvent;
 use mz_compute_client::protocol::response::PeekResponse;
-use mz_controller::clusters::ClusterId;
+use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
@@ -37,11 +37,13 @@ use crate::catalog::{
 };
 use crate::client::ConnectionId;
 use crate::coord::appends::BuiltinTableUpdateSource;
-use crate::coord::Coordinator;
+use crate::coord::{Coordinator, ReplicaMetadata};
 use crate::session::Session;
 use crate::telemetry::SegmentClientExt;
 use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterError, AdapterNotice};
+
+use super::timeline::{TimelineContext, TimelineState};
 
 /// State provided to a catalog transaction closure.
 pub struct CatalogTxn<'a, T> {
@@ -175,9 +177,6 @@ impl Coordinator {
 
                     // Drop the cluster itself.
                     clusters_to_drop.push(*id);
-
-                    // Drop timelines
-                    timelines_to_drop.extend(self.remove_compute_instance_from_timeline(*id));
                 }
                 catalog::Op::DropClusterReplica {
                     cluster_id,
@@ -258,25 +257,56 @@ impl Coordinator {
             }
         }
 
-        timelines_to_drop = self.remove_storage_ids_from_timeline(
-            sources_to_drop
+        let storage_ids_to_drop = sources_to_drop
+            .iter()
+            .chain(storage_sinks_to_drop.iter())
+            .chain(tables_to_drop.iter())
+            .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
+            .chain(log_sources_to_drop.iter().map(|(_, id)| id))
+            .cloned();
+        let compute_ids_to_drop = indexes_to_drop
+            .iter()
+            .chain(materialized_views_to_drop.iter())
+            .chain(log_sources_to_drop.iter())
+            .cloned();
+
+        // Check if any Timelines would become empty, if we dropped the specified storage or
+        // compute resources.
+        //
+        // Note: only after a Transaction succeeds do we actually drop the timeline
+        let collection_id_bundle = self.build_collection_id_bundle(
+            storage_ids_to_drop,
+            compute_ids_to_drop,
+            clusters_to_drop.clone(),
+        );
+        let timeline_associations: BTreeMap<_, _> = self
+            .partition_ids_by_timeline_context(&collection_id_bundle)
+            .filter_map(|(context, bundle)| {
+                let TimelineContext::TimelineDependent(timeline) = context else {
+                    return None;
+                };
+                let TimelineState { read_holds, .. } = self
+                    .global_timelines
+                    .get(&timeline)
+                    .expect("all timeslines have a timestamp oracle");
+
+                let empty = read_holds.id_bundle().difference(&bundle).is_empty();
+
+                Some((timeline, (empty, bundle)))
+            })
+            .collect();
+        timelines_to_drop.extend(
+            timeline_associations
                 .iter()
-                .chain(storage_sinks_to_drop.iter())
-                .chain(tables_to_drop.iter())
-                .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
-                .chain(log_sources_to_drop.iter().map(|(_, id)| id))
+                .filter_map(|(timeline, (is_empty, _))| is_empty.then_some(timeline))
                 .cloned(),
         );
-        timelines_to_drop.extend(
-            self.remove_compute_ids_from_timeline(
-                indexes_to_drop
-                    .iter()
-                    .chain(materialized_views_to_drop.iter())
-                    .chain(log_sources_to_drop.iter())
-                    .cloned(),
-            ),
+        ops.extend(
+            timelines_to_drop
+                .iter()
+                .cloned()
+                .map(catalog::Op::DropTimeline),
         );
-        ops.extend(timelines_to_drop.into_iter().map(catalog::Op::DropTimeline));
 
         self.validate_resource_limits(
             &ops,
@@ -315,6 +345,13 @@ impl Coordinator {
             self.send_builtin_table_updates(builtin_table_updates, BuiltinTableUpdateSource::DDL)
                 .await;
 
+            if !timeline_associations.is_empty() {
+                for (timeline, (should_be_empty, id_bundle)) in timeline_associations {
+                    let became_empty =
+                        self.remove_resources_associated_with_timeline(timeline, id_bundle);
+                    assert_eq!(should_be_empty, became_empty, "emptiness did not match!");
+                }
+            }
             if !sources_to_drop.is_empty() {
                 self.drop_sources(sources_to_drop);
             }
@@ -437,6 +474,44 @@ impl Coordinator {
         }
 
         Ok(result)
+    }
+
+    async fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
+        if let Some(Some(ReplicaMetadata {
+            last_heartbeat,
+            metrics,
+            write_frontiers,
+        })) = self.transient_replica_metadata.insert(replica_id, None)
+        {
+            let mut updates = vec![];
+            if let Some(last_heartbeat) = last_heartbeat {
+                let retraction = self.catalog.state().pack_replica_heartbeat_update(
+                    replica_id,
+                    last_heartbeat,
+                    -1,
+                );
+                updates.push(retraction);
+            }
+            if let Some(metrics) = metrics {
+                let retraction = self
+                    .catalog
+                    .state()
+                    .pack_replica_metric_updates(replica_id, &metrics, -1);
+                updates.extend(retraction.into_iter());
+            }
+            let retraction = self.catalog.state().pack_replica_write_frontiers_updates(
+                replica_id,
+                &write_frontiers,
+                -1,
+            );
+            updates.extend(retraction.into_iter());
+            self.send_builtin_table_updates(updates, BuiltinTableUpdateSource::Background)
+                .await;
+        }
+        self.controller
+            .drop_replica(cluster_id, replica_id)
+            .await
+            .expect("dropping replica must not fail");
     }
 
     fn drop_sources(&mut self, sources: Vec<GlobalId>) {
@@ -876,7 +951,9 @@ impl Coordinator {
                 | Op::AlterSink { .. }
                 | Op::AlterSource { .. }
                 | Op::DropTimeline(_)
+                | Op::GrantRole { .. }
                 | Op::RenameItem { .. }
+                | Op::RevokeRole { .. }
                 | Op::UpdateClusterReplicaStatus { .. }
                 | Op::UpdateStorageUsage { .. }
                 | Op::UpdateSystemConfiguration { .. }

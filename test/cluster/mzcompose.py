@@ -60,6 +60,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-github-15799",
         "test-github-15930",
         "test-github-15496",
+        "test-github-17177",
         "test-github-17510",
         "test-github-17509",
         "test-remote-storage",
@@ -586,39 +587,101 @@ def workflow_test_github_15496(c: Composition) -> None:
         assert "Mismatched aggregates for key in ReduceCollation" in c1.stdout
 
 
-def workflow_test_github_17510(c: Composition) -> None:
+def workflow_test_github_17177(c: Composition) -> None:
     """
-    Test that sum aggregations over uint2 and uint4 types do not produce a panic, but
-    rather a SQL-level error when faced with invalid accumulations due to too many
-    retractions in a source. Additionally, we verify that in these cases, an adequate
-    error message is written to the logs.
+    Test that an accumulable reduction over a source with an invalid accumulation not only
+    emits errors to the logs when soft assertions are turned off, but also produces a clean
+    query-level error.
 
-    Regression test for https://github.com/MaterializeInc/materialize/issues/17510.
+    Regression test for https://github.com/MaterializeInc/materialize/issues/17177.
     """
 
     c.down(destroy_volumes=True)
     with c.override(
-        Clusterd(
-            name="clusterd_nopanic",
-            environment_extra=[
-                "MZ_SOFT_ASSERTIONS=0",
-            ],
-        ),
         Testdrive(no_reset=True),
     ):
         c.up("testdrive", persistent=True)
         c.up("materialized")
-        c.up("clusterd_nopanic")
+        c.up("clusterd1")
 
         # set up a test cluster and run a testdrive regression script
         c.sql(
             """
             CREATE CLUSTER cluster1 REPLICAS (
                 r1 (
-                    STORAGECTL ADDRESSES ['clusterd_nopanic:2100'],
-                    STORAGE ADDRESSES ['clusterd_nopanic:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_nopanic:2101'],
-                    COMPUTE ADDRESSES ['clusterd_nopanic:2102'],
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
+                    WORKERS 2
+                )
+            );
+            """
+        )
+        c.testdrive(
+            dedent(
+                f"""
+            # Set data for test up
+            > SET cluster = cluster1;
+
+            > CREATE TABLE base (data float, diff bigint);
+
+            > CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
+
+            > INSERT INTO base VALUES (1.00, 1);
+
+            > INSERT INTO base VALUES (1.01, -1);
+
+            # The query below would not fail previously, but now should produce
+            # a SQL-level error that is observable by users.
+            ! SELECT SUM(data) FROM data;
+            contains:Invalid data in source, saw net-zero records for key
+
+            # It should be possible to fix the data in the source and make the error
+            # go away.
+            > INSERT INTO base VALUES (1.01, 1);
+
+            > SELECT SUM(data) FROM data;
+            1
+            """
+            )
+        )
+
+        # ensure that an error was put into the logs
+        c1 = c.invoke("logs", "clusterd1", capture=True)
+        assert (
+            "Net-zero records with non-zero accumulation in ReduceAccumulable"
+            in c1.stdout
+        )
+
+
+def workflow_test_github_17510(c: Composition) -> None:
+    """
+    Test that sum aggregations over uint2 and uint4 types do not produce a panic
+    when soft assertions are turned off, but rather a SQL-level error when faced
+    with invalid accumulations due to too many retractions in a source. Additionally,
+    we verify that in these cases, an adequate error message is written to the logs.
+
+    Regression test for https://github.com/MaterializeInc/materialize/issues/17510.
+    """
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Testdrive(no_reset=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.up("clusterd1")
+
+        # set up a test cluster and run a testdrive regression script
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (
+                r1 (
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
                     WORKERS 2
                 )
             );
@@ -643,6 +706,17 @@ def workflow_test_github_17510(c: Composition) -> None:
                   ) AS base (data2, data4, data8, diff),
                   repeat_row(diff)
               );
+              CREATE MATERIALIZED VIEW constant_wrapped_sums AS
+              SELECT SUM(data2) AS sum2, SUM(data4) AS sum4, SUM(data8) AS sum8
+              FROM (
+                  SELECT * FROM (
+                      VALUES (2::uint2, 2::uint4, 2::uint8, 9223372036854775807),
+                        (1::uint2, 1::uint4, 1::uint8, 1),
+                        (1::uint2, 1::uint4, 1::uint8, 1),
+                        (1::uint2, 1::uint4, 1::uint8, 1)
+                  ) AS base (data2, data4, data8, diff),
+                  repeat_row(diff)
+              );
             """
         )
         c.testdrive(
@@ -652,18 +726,19 @@ def workflow_test_github_17510(c: Composition) -> None:
 
             # Run a queries that would generate panics before the fix.
             ! SELECT SUM(data2) FROM data;
-            contains:uint8 out of range
+            contains:Invalid data in source, saw negative accumulation with unsigned type for key
 
             ! SELECT SUM(data4) FROM data;
-            contains:uint8 out of range
+            contains:Invalid data in source, saw negative accumulation with unsigned type for key
 
             ! SELECT * FROM constant_sums;
             contains:constant folding encountered reduce on collection with non-positive multiplicities
 
-            # The following statement succeeds with a negative accumulation,
-            # which is the behavior introduced in https://github.com/MaterializeInc/materialize/pull/16852
-            > SELECT SUM(data8) FROM data;
-            -1
+            # The following statement verifies that the behavior introduced in PR #16852
+            # is now rectified, i.e., instead of wrapping to a negative number, we produce
+            # an error upon seeing invalid multiplicities.
+            ! SELECT SUM(data8) FROM data;
+            contains:Invalid data in source, saw negative accumulation with unsigned type for key
 
             # Test repairs
             > INSERT INTO base VALUES (1, 1, 1, 1), (1, 1, 1, 1);
@@ -695,12 +770,42 @@ def workflow_test_github_17510(c: Composition) -> None:
             sum8 numeric
             sum2 uint8
             sum4 uint8
+
+            # Test wraparound behaviors
+            > INSERT INTO base VALUES (1, 1, 1, -1);
+
+            > INSERT INTO base VALUES (2, 2, 2, 9223372036854775807);
+
+            > SELECT sum(data2) FROM data;
+            18446744073709551614
+
+            > SELECT sum(data4) FROM data;
+            18446744073709551614
+
+            > SELECT sum(data8) FROM data;
+            18446744073709551614
+
+            > INSERT INTO base VALUES (1, 1, 1, 1), (1, 1, 1, 1), (1, 1, 1, 1);
+
+            # Constant-folding behavior matches for now the rendered behavior
+            # wrt. wraparound; this can be revisited as part of #17758.
+            > SELECT * FROM constant_wrapped_sums;
+            1 1 18446744073709551617
+
+            > SELECT SUM(data2) FROM data;
+            1
+
+            > SELECT SUM(data4) FROM data;
+            1
+
+            > SELECT SUM(data8) FROM data;
+            18446744073709551617
             """
             )
         )
 
         # ensure that an error was put into the logs
-        c1 = c.invoke("logs", "clusterd_nopanic", capture=True)
+        c1 = c.invoke("logs", "clusterd1", capture=True)
         assert "Invalid negative unsigned aggregation in ReduceAccumulable" in c1.stdout
 
 

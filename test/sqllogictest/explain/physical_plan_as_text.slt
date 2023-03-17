@@ -658,7 +658,7 @@ Explained Query:
     linear_stage[0]
       closure
         project=(#2..=#4)
-        filter=((#3 > 42))
+        filter=((#0) IS NOT NULL AND (#3 > 42))
         map=((#1 + #2), (#0 + #2))
       lookup={ relation=1, key=[#0] }
       stream={ key=[#0], thinning=(#1) }
@@ -713,6 +713,7 @@ Explained Query:
     linear_stage[1]
       closure
         project=(#0, #2, #1)
+        filter=((#0) IS NOT NULL)
       lookup={ relation=0, key=[#0] }
       stream={ key=[#0], thinning=(#1) }
     linear_stage[0]

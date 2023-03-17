@@ -750,6 +750,7 @@ pub enum InvalidRangeError {
     InvalidRangeBoundFlags,
     DiscontiguousUnion,
     DiscontiguousDifference,
+    NullRangeBoundFlags,
 }
 
 impl Display for InvalidRangeError {
@@ -767,6 +768,9 @@ impl Display for InvalidRangeError {
             }
             InvalidRangeError::DiscontiguousDifference => {
                 f.write_str("result of range difference would not be contiguous")
+            }
+            InvalidRangeError::NullRangeBoundFlags => {
+                f.write_str("range constructor flags argument must not be null")
             }
         }
     }
@@ -795,6 +799,7 @@ impl RustType<ProtoInvalidRangeError> for InvalidRangeError {
             InvalidRangeError::InvalidRangeBoundFlags => InvalidRangeBoundFlags(()),
             InvalidRangeError::DiscontiguousUnion => DiscontiguousUnion(()),
             InvalidRangeError::DiscontiguousDifference => DiscontiguousDifference(()),
+            InvalidRangeError::NullRangeBoundFlags => NullRangeBoundFlags(()),
         };
         ProtoInvalidRangeError { kind: Some(kind) }
     }
@@ -808,6 +813,7 @@ impl RustType<ProtoInvalidRangeError> for InvalidRangeError {
                 InvalidRangeBoundFlags(()) => InvalidRangeError::InvalidRangeBoundFlags,
                 DiscontiguousUnion(()) => InvalidRangeError::DiscontiguousUnion,
                 DiscontiguousDifference(()) => InvalidRangeError::DiscontiguousDifference,
+                NullRangeBoundFlags(()) => InvalidRangeError::NullRangeBoundFlags,
             }),
             None => Err(TryFromProtoError::missing_field(
                 "`ProtoInvalidRangeError::kind`",

@@ -20,7 +20,7 @@ use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
-use mz_persist::location::{Indeterminate, SeqNo};
+use mz_persist::location::{CaSResult, Indeterminate, SeqNo};
 
 use crate::error::CodecMismatch;
 use crate::internal::maintenance::RoutineMaintenance;
@@ -245,7 +245,7 @@ where
                     )
                     .await?;
                 match cas_res {
-                    Ok(()) => {
+                    CaSResult::Committed => {
                         assert!(
                             state.seqno <= new_state.seqno,
                             "state seqno regressed: {} vs {}",
@@ -270,52 +270,12 @@ where
 
                         return Ok((state.seqno(), Ok(work_ret), maintenance));
                     }
-                    Err(diffs_to_current) => {
+                    CaSResult::ExpectationMismatch => {
                         cas_mismatch_metric.0.inc();
-
-                        let seqno_before = state.seqno;
-                        let diffs_apply = diffs_to_current
-                            .first()
-                            .map_or(true, |x| x.seqno == seqno_before.next());
-                        if diffs_apply {
-                            metrics.state.update_state_fast_path.inc();
-                            state.apply_encoded_diffs(cfg, metrics, &diffs_to_current)
-                        } else {
-                            // Otherwise, we've gc'd the diffs we'd need to
-                            // advance self.state to where diffs_to_current
-                            // starts so we need a new rollup.
-                            metrics.state.update_state_slow_path.inc();
-                            debug!(
-                                "update_state didn't hit update_state fast path {} {:?}",
-                                state.seqno,
-                                diffs_to_current.first().map(|x| x.seqno),
-                            );
-
-                            // SUBTLE: Consensus::compare_and_set guarantees
-                            // that we get back everything in
-                            // `[max(expected.next(),earliest),current]` on
-                            // expectation mismatch. If `diffs_apply` is false
-                            // (this branch), then we know `earliest >
-                            // expected.next()` and so `diffs_to_current` is
-                            // already the full set of all live diffs. Sanity
-                            // check this deduction with an assert and then use
-                            // it to `fetch_current_state`.
-                            assert!(
-                                diffs_to_current
-                                    .first()
-                                    .map_or(false, |x| x.seqno > expected.next()),
-                                "{:?} vs {}",
-                                diffs_to_current.first(),
-                                expected.next()
-                            );
-                            let all_live_diffs = diffs_to_current;
-                            *state = state_versions
-                                .fetch_current_state(&state.shard_id, all_live_diffs)
-                                .await
-                                .check_codecs(&state.shard_id)
-                                .expect("shard codecs should not change");
-                        }
-
+                        state_versions
+                            .fetch_and_update_to_current(state)
+                            .await
+                            .expect("shard codecs should not change");
                         // Intentionally don't backoff here. It would only make
                         // starvation issues even worse.
                         continue;

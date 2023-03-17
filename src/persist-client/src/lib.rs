@@ -105,7 +105,7 @@ use crate::critical::{CriticalReaderId, SinceHandle};
 use crate::error::InvalidUsage;
 use crate::fetch::BatchFetcher;
 use crate::internal::compact::Compactor;
-use crate::internal::encoding::parse_id;
+use crate::internal::encoding::{parse_id, Schemas};
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::state_versions::StateVersions;
@@ -125,17 +125,18 @@ pub mod cli {
 pub mod critical;
 pub mod error;
 pub mod fetch;
-pub mod operators {
-    //! [timely] operators for reading and writing persist Shards.
-    pub mod shard_source;
-}
+pub mod internals_bench;
 pub mod metrics {
     //! Utilities related to metrics.
     pub use crate::internal::metrics::encode_ts_metric;
     pub use crate::internal::metrics::Metrics;
 }
-pub mod internals_bench;
+pub mod operators {
+    //! [timely] operators for reading and writing persist Shards.
+    pub mod shard_source;
+}
 pub mod read;
+pub mod stats;
 pub mod usage;
 pub mod write;
 
@@ -334,8 +335,8 @@ impl PersistClient {
         &self,
         shard_id: ShardId,
         purpose: &str,
-        _key_schema: Arc<K::Schema>,
-        _val_schema: Arc<V::Schema>,
+        key_schema: Arc<K::Schema>,
+        val_schema: Arc<V::Schema>,
     ) -> Result<ReadHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -369,6 +370,10 @@ impl PersistClient {
             )
             .await;
         maintenance.start_performing(&machine, &gc);
+        let schemas = Schemas {
+            key: key_schema,
+            val: val_schema,
+        };
         let reader = ReadHandle::new(
             self.cfg.clone(),
             Arc::clone(&self.metrics),
@@ -376,6 +381,7 @@ impl PersistClient {
             gc,
             Arc::clone(&self.blob),
             reader_id,
+            schemas,
             reader_state.since,
             heartbeat_ts,
         )
@@ -393,8 +399,8 @@ impl PersistClient {
     pub async fn create_batch_fetcher<K, V, T, D>(
         &self,
         shard_id: ShardId,
-        _key_schema: Arc<K::Schema>,
-        _val_schema: Arc<V::Schema>,
+        key_schema: Arc<K::Schema>,
+        val_schema: Arc<V::Schema>,
     ) -> BatchFetcher<K, V, T, D>
     where
         K: Debug + Codec,
@@ -418,11 +424,15 @@ impl PersistClient {
         let _ = state_versions
             .maybe_init_shard::<K, V, T, D>(&shard_metrics)
             .await;
-
+        let schemas = Schemas {
+            key: key_schema,
+            val: val_schema,
+        };
         let fetcher = BatchFetcher {
             blob: Arc::clone(&self.blob),
             metrics: Arc::clone(&self.metrics),
             shard_id,
+            schemas,
             _phantom: PhantomData,
         };
 
@@ -529,8 +539,8 @@ impl PersistClient {
         &self,
         shard_id: ShardId,
         purpose: &str,
-        _key_schema: Arc<K::Schema>,
-        _val_schema: Arc<V::Schema>,
+        key_schema: Arc<K::Schema>,
+        val_schema: Arc<V::Schema>,
     ) -> Result<WriteHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -553,12 +563,17 @@ impl PersistClient {
         .await?;
         let gc = GarbageCollector::new(machine.clone());
         let writer_id = WriterId::new();
+        let schemas = Schemas {
+            key: key_schema,
+            val: val_schema,
+        };
         let compact = self.cfg.compaction_enabled.then(|| {
             Compactor::new(
                 self.cfg.clone(),
                 Arc::clone(&self.metrics),
                 Arc::clone(&self.cpu_heavy_runtime),
                 writer_id.clone(),
+                schemas.clone(),
                 gc.clone(),
             )
         });
@@ -581,6 +596,7 @@ impl PersistClient {
             Arc::clone(&self.blob),
             Arc::clone(&self.cpu_heavy_runtime),
             writer_id,
+            schemas,
             shard_upper.0,
             heartbeat_ts,
         )
@@ -728,6 +744,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn sanity_check() {
         mz_ore::test::init_logging();
 
@@ -1288,6 +1305,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn overlapping_append() {
         mz_ore::test::init_logging_default("info");
 
@@ -1682,6 +1700,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn concurrency() {
         mz_ore::test::init_logging();
 
@@ -1781,6 +1800,7 @@ mod tests {
     // immediately return the data currently available instead of waiting for
     // upper to advance past as_of.
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn regression_blocking_reads() {
         mz_ore::test::init_logging();
         let waker = noop_waker();
@@ -1853,6 +1873,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn heartbeat_task_shutdown() {
         // Verify that the ReadHandle and WriteHandle background heartbeat tasks
         // shut down cleanly after the handle is expired.

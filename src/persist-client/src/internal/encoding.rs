@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
@@ -34,16 +35,32 @@ use crate::internal::state::{
     IdempotencyToken, LeasedReaderState, OpaqueState, ProtoCriticalReaderState,
     ProtoHandleDebugState, ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowRollup,
     ProtoLeasedReaderState, ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType,
-    ProtoStateFieldDiffs, ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description,
-    ProtoWriterState, State, StateCollections, TypedState, WriterState,
+    ProtoStateFieldDiffs, ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64ColStats,
+    ProtoU64Description, ProtoWriterState, State, StateCollections, TypedState, WriterState,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, StateDiff, StateFieldDiff, StateFieldValDiff,
 };
 use crate::internal::trace::Trace;
 use crate::read::LeasedReaderId;
+use crate::stats::PartStats;
 use crate::write::WriterEnrichedHollowBatch;
 use crate::{PersistConfig, ShardId, WriterId};
+
+#[derive(Debug)]
+pub struct Schemas<K: Codec, V: Codec> {
+    pub key: Arc<K::Schema>,
+    pub val: Arc<V::Schema>,
+}
+
+impl<K: Codec, V: Codec> Clone for Schemas<K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            key: Arc::clone(&self.key),
+            val: Arc::clone(&self.val),
+        }
+    }
+}
 
 pub(crate) fn parse_id(id_prefix: char, id_type: &str, encoded: &str) -> Result<[u8; 16], String> {
     let uuid_encoded = match encoded.strip_prefix(id_prefix) {
@@ -880,6 +897,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
                 .map(|key| HollowBatchPart {
                     key: PartialBatchKey(key),
                     encoded_size_bytes: 0,
+                    stats: None,
                 }),
         );
         Ok(HollowBatch {
@@ -893,16 +911,46 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
 
 impl RustType<ProtoHollowBatchPart> for HollowBatchPart {
     fn into_proto(&self) -> ProtoHollowBatchPart {
+        let key_col_stats = match self.stats.as_ref() {
+            Some(x) => x
+                .key_col_min_max_nulls
+                .iter()
+                .map(|(name, (min, max, nulls))| ProtoU64ColStats {
+                    name: name.into_proto(),
+                    min: min.into_proto(),
+                    max: max.into_proto(),
+                    nulls: nulls.into_proto(),
+                })
+                .collect(),
+            None => Vec::new(),
+        };
         ProtoHollowBatchPart {
             key: self.key.into_proto(),
             encoded_size_bytes: self.encoded_size_bytes.into_proto(),
+            key_col_stats,
         }
     }
 
     fn from_proto(proto: ProtoHollowBatchPart) -> Result<Self, TryFromProtoError> {
+        let stats = if proto.key_col_stats.is_empty() {
+            None
+        } else {
+            let mut key_col_min_max_nulls = BTreeMap::new();
+            for x in proto.key_col_stats {
+                key_col_min_max_nulls.insert(
+                    x.name.into_rust()?,
+                    (x.min.into_rust()?, x.max.into_rust()?, x.nulls.into_rust()?),
+                );
+            }
+            let stats = Arc::new(PartStats {
+                key_col_min_max_nulls,
+            });
+            Some(stats)
+        };
         Ok(HollowBatchPart {
             key: proto.key.into_rust()?,
             encoded_size_bytes: proto.encoded_size_bytes.into_rust()?,
+            stats,
         })
     }
 }
@@ -1081,6 +1129,7 @@ mod tests {
             parts: vec![HollowBatchPart {
                 key: PartialBatchKey("a".into()),
                 encoded_size_bytes: 5,
+                stats: None,
             }],
             runs: vec![],
         };
@@ -1098,6 +1147,7 @@ mod tests {
         expected.parts.push(HollowBatchPart {
             key: PartialBatchKey("b".into()),
             encoded_size_bytes: 0,
+            stats: None,
         });
         assert_eq!(<HollowBatch<u64>>::from_proto(old).unwrap(), expected);
     }
@@ -1189,6 +1239,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     fn state_diff_migration_rollups() {
         let r1_rollup = HollowRollup {
             key: PartialRollupKey("foo".to_owned()),

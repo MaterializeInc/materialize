@@ -313,8 +313,7 @@ impl State {
             .await
             .context("resetting materialize state: ALTER SYSTEM RESET ALL")?;
 
-        for row in self
-            .pgclient
+        for row in inner_client
             .query("SHOW DATABASES", &[])
             .await
             .context("resetting materialize state: SHOW DATABASES")?
@@ -322,12 +321,12 @@ impl State {
             let db_name: String = row.get(0);
             let query = format!("DROP DATABASE {}", db_name);
             sql::print_query(&query, None);
-            self.pgclient.batch_execute(&query).await.context(format!(
+            inner_client.batch_execute(&query).await.context(format!(
                 "resetting materialize state: DROP DATABASE {}",
                 db_name,
             ))?;
         }
-        self.pgclient
+        inner_client
             .batch_execute("CREATE DATABASE materialize")
             .await
             .context("resetting materialize state: CREATE DATABASE materialize")?;
@@ -335,7 +334,7 @@ impl State {
         // Attempt to remove all users but the current user. Old versions of
         // Materialize did not support roles, so this degrades gracefully if
         // mz_roles does not exist.
-        if let Ok(rows) = self.pgclient.query("SELECT name FROM mz_roles", &[]).await {
+        if let Ok(rows) = inner_client.query("SELECT name FROM mz_roles", &[]).await {
             for row in rows {
                 let role_name: String = row.get(0);
                 if role_name == self.materialize_user || role_name.starts_with("mz_") {
@@ -343,7 +342,7 @@ impl State {
                 }
                 let query = format!("DROP ROLE {}", role_name);
                 sql::print_query(&query, None);
-                self.pgclient.batch_execute(&query).await.context(format!(
+                inner_client.batch_execute(&query).await.context(format!(
                     "resetting materialize state: DROP ROLE {}",
                     role_name,
                 ))?;

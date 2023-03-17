@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="591" height="69">
+   <polygon points="9 17 1 13 1 21"/>
+   <polygon points="17 17 9 13 9 21"/>
+   <rect x="31" y="3" width="78" height="32" rx="10"/>
+   <rect x="29"
+         y="1"
+         width="78"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="39" y="21">REVOKE</text>
+   <rect x="129" y="3" width="88" height="32"/>
+   <rect x="127" y="1" width="88" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="137" y="21">role_name</text>
+   <rect x="237" y="3" width="60" height="32" rx="10"/>
+   <rect x="235"
+         y="1"
+         width="60"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="245" y="21">FROM</text>
+   <rect x="337" y="35" width="70" height="32" rx="10"/>
+   <rect x="335"
+         y="33"
+         width="70"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="345" y="53">GROUP</text>
+   <rect x="447" y="3" width="116" height="32"/>
+   <rect x="445" y="1" width="116" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="455" y="21">member_name</text>
+   <path class="line"
+         d="m17 17 h2 m0 0 h10 m78 0 h10 m0 0 h10 m88 0 h10 m0 0 h10 m60 0 h10 m20 0 h10 m0 0 h80 m-110 0 h20 m90 0 h20 m-130 0 q10 0 10 10 m110 0 q0 -10 10 -10 m-120 10 v12 m110 0 v-12 m-110 12 q0 10 10 10 m90 0 q10 0 10 -10 m-100 10 h10 m70 0 h10 m20 -32 h10 m116 0 h10 m3 0 h-3"/>
+   <polygon points="581 17 589 13 589 21"/>
+   <polygon points="581 17 573 13 573 21"/>
+</svg>

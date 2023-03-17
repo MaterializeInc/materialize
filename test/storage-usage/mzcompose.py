@@ -244,11 +244,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.testdrive(
             dedent(
                 f"""
-                > SELECT size_bytes BETWEEN {database_object.expected_size} AND {database_object.expected_size*2}
+                $ set-regex match=\d+ replacement=<SIZE>
+
+                # Select the raw size as well, so if this errors in testdrive, its easier to debug.
+                > SELECT size_bytes, size_bytes BETWEEN {database_object.expected_size} AND {database_object.expected_size*2}
                   FROM mz_storage_usage
                   WHERE collection_timestamp = ( SELECT MAX(collection_timestamp) FROM mz_storage_usage )
                   AND object_id = ( SELECT id FROM mz_objects WHERE name = 'obj' );
-                true
+                <SIZE> true
                 """
             )
         )

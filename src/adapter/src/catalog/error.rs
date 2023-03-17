@@ -86,6 +86,11 @@ pub enum ErrorKind {
     UnexpectedStashState,
     #[error(transparent)]
     Uuid(#[from] uuid::Error),
+    #[error("role \"{role_name}\" is a member of role \"{member_name}\"")]
+    CircularRoleMembership {
+        role_name: String,
+        member_name: String,
+    },
 }
 
 impl Error {
@@ -100,7 +105,7 @@ impl Error {
                 Some("The prefixes \"mz_\" and \"pg_\" are reserved for system schemas.".into())
             }
             ErrorKind::ReservedRoleName(_) => {
-                Some("The prefixes \"mz_\" and \"pg_\" are reserved for system roles.".into())
+                Some("The role \"public\" and the prefixes \"mz_\" and \"pg_\" are reserved for system roles.".into())
             }
             ErrorKind::ReservedClusterName(_) => {
                 Some("The prefixes \"mz_\" and \"pg_\" are reserved for system clusters.".into())

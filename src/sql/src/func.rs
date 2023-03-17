@@ -1657,7 +1657,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "array_in" => Scalar {
             params!(String, Oid, Int32) =>
-                Operation::unary(|_ecx, _e| bail_unsupported!("array_in")) => ArrayAnyCompatible, 750;
+                Operation::variadic(|_ecx, _exprs| bail_unsupported!("array_in")) => ArrayAnyCompatible, 750;
         },
         "array_length" => Scalar {
             params![ArrayAny, Int64] => BinaryFunc::ArrayLength => Int32, 2176;
@@ -2489,7 +2489,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "min" => Aggregate {
             params!(Bool) => AggregateFunc::MinBool => Bool, oid::FUNC_MIN_BOOL_OID;
-            params!(Int16) => AggregateFunc::MinInt32 => Int16, 2133;
+            params!(Int16) => AggregateFunc::MinInt16 => Int16, 2133;
             params!(Int32) => AggregateFunc::MinInt32 => Int32, 2132;
             params!(Int64) => AggregateFunc::MinInt64 => Int64, 2131;
             params!(UInt16) => AggregateFunc::MinUInt16 => UInt16, oid::FUNC_MIN_UINT16_OID;

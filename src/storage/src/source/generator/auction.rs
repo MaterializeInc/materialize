@@ -66,6 +66,9 @@ const ACCOUNTS_OUTPUT: usize = 3;
 const AUCTIONS_OUTPUT: usize = 4;
 const BIDS_OUTPUT: usize = 5;
 
+// Note that this generator never issues retractions; if you change this,
+// `mz_storage_client::types::sources::LoadGenerator::is_monotonic`
+// must be updated.
 impl Generator for Auction {
     fn by_seed(
         &self,
