@@ -366,6 +366,16 @@ fn add_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalEr
     Ok(dt.try_into()?)
 }
 
+fn add_date_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let date = a.unwrap_date();
+    let days = b.unwrap_int32();
+
+    Ok(date
+        .checked_add(days)
+        .map_err(|_| EvalError::DateOutOfRange)?
+        .into())
+}
+
 fn add_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let time = a.unwrap_time();
     let interval = b.unwrap_interval();
@@ -846,6 +856,19 @@ fn sub_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalEr
         .checked_sub_signed(interval.duration_as_chrono())
         .ok_or(EvalError::TimestampOutOfRange)?;
     Ok(dt.try_into()?)
+}
+
+fn sub_date_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let date = a.unwrap_date();
+    let days = b
+        .unwrap_int32()
+        .checked_neg()
+        .ok_or(EvalError::DateOutOfRange)?;
+
+    Ok(date
+        .checked_add(days)
+        .map_err(|_| EvalError::DateOutOfRange)?
+        .into())
 }
 
 fn sub_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -1824,6 +1847,7 @@ pub enum BinaryFunc {
     AddTimestampTzInterval,
     AddDateInterval,
     AddDateTime,
+    AddDateInt32,
     AddTimeInterval,
     AddNumeric,
     BitAndInt16,
@@ -1871,6 +1895,7 @@ pub enum BinaryFunc {
     SubTimestampTzInterval,
     SubDate,
     SubDateInterval,
+    SubDateInt32,
     SubTime,
     SubTimeInterval,
     SubNumeric,
@@ -2035,6 +2060,7 @@ impl BinaryFunc {
             }
             BinaryFunc::AddDateTime => eager!(add_date_time),
             BinaryFunc::AddDateInterval => eager!(add_date_interval),
+            BinaryFunc::AddDateInt32 => eager!(add_date_int32),
             BinaryFunc::AddTimeInterval => Ok(eager!(add_time_interval)),
             BinaryFunc::AddNumeric => eager!(add_numeric),
             BinaryFunc::AddInterval => eager!(add_interval),
@@ -2087,6 +2113,7 @@ impl BinaryFunc {
             BinaryFunc::SubInterval => eager!(sub_interval),
             BinaryFunc::SubDate => Ok(eager!(sub_date)),
             BinaryFunc::SubDateInterval => eager!(sub_date_interval),
+            BinaryFunc::SubDateInt32 => eager!(sub_date_int32),
             BinaryFunc::SubTime => Ok(eager!(sub_time)),
             BinaryFunc::SubTimeInterval => Ok(eager!(sub_time_interval)),
             BinaryFunc::SubNumeric => eager!(sub_numeric),
@@ -2392,6 +2419,8 @@ impl BinaryFunc {
             AddDateInterval | SubDateInterval | AddDateTime | DateBinTimestamp
             | DateTruncTimestamp => ScalarType::Timestamp.nullable(true),
 
+            AddDateInt32 | SubDateInt32 => ScalarType::Date.nullable(true),
+
             DateTruncInterval => ScalarType::Interval.nullable(true),
 
             TimezoneTimestampTz | TimezoneIntervalTimestampTz => {
@@ -2529,6 +2558,7 @@ impl BinaryFunc {
                 | AddTimestampTzInterval
                 | AddDateTime
                 | AddDateInterval
+                | AddDateInt32
                 | AddTimeInterval
                 | AddInterval
                 | BitAndInt16
@@ -2579,6 +2609,7 @@ impl BinaryFunc {
                 | SubTimestampTzInterval
                 | SubDate
                 | SubDateInterval
+                | SubDateInt32
                 | SubTime
                 | SubTimeInterval
                 | SubNumeric
@@ -2637,6 +2668,7 @@ impl BinaryFunc {
             | AddTimestampTzInterval
             | AddDateTime
             | AddDateInterval
+            | AddDateInt32
             | AddTimeInterval
             | AddInterval
             | BitAndInt16
@@ -2687,6 +2719,7 @@ impl BinaryFunc {
             | SubTimestampTzInterval
             | SubDate
             | SubDateInterval
+            | SubDateInt32
             | SubTime
             | SubTimeInterval
             | SubNumeric
@@ -2852,6 +2885,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::AddTimestampTzInterval => f.write_str("+"),
             BinaryFunc::AddDateTime => f.write_str("+"),
             BinaryFunc::AddDateInterval => f.write_str("+"),
+            BinaryFunc::AddDateInt32 => f.write_str("+"),
             BinaryFunc::AddTimeInterval => f.write_str("+"),
             BinaryFunc::BitAndInt16 => f.write_str("&"),
             BinaryFunc::BitAndInt32 => f.write_str("&"),
@@ -2899,6 +2933,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::SubTimestampTzInterval => f.write_str("-"),
             BinaryFunc::SubDate => f.write_str("-"),
             BinaryFunc::SubDateInterval => f.write_str("-"),
+            BinaryFunc::SubDateInt32 => f.write_str("-"),
             BinaryFunc::SubTime => f.write_str("-"),
             BinaryFunc::SubTimeInterval => f.write_str("-"),
             BinaryFunc::MulInt16 => f.write_str("*"),
@@ -3061,6 +3096,7 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::AddTimestampTzInterval).boxed(),
             Just(BinaryFunc::AddDateInterval).boxed(),
             Just(BinaryFunc::AddDateTime).boxed(),
+            Just(BinaryFunc::AddDateInt32).boxed(),
             Just(BinaryFunc::AddTimeInterval).boxed(),
             Just(BinaryFunc::AddNumeric).boxed(),
             Just(BinaryFunc::BitAndInt16).boxed(),
@@ -3108,6 +3144,7 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::SubTimestampTzInterval).boxed(),
             Just(BinaryFunc::SubDate).boxed(),
             Just(BinaryFunc::SubDateInterval).boxed(),
+            Just(BinaryFunc::SubDateInt32).boxed(),
             Just(BinaryFunc::SubTime).boxed(),
             Just(BinaryFunc::SubTimeInterval).boxed(),
             Just(BinaryFunc::SubNumeric).boxed(),
@@ -3265,6 +3302,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::AddTimestampTzInterval => AddTimestampTzInterval(()),
             BinaryFunc::AddDateInterval => AddDateInterval(()),
             BinaryFunc::AddDateTime => AddDateTime(()),
+            BinaryFunc::AddDateInt32 => AddDateInt32(()),
             BinaryFunc::AddTimeInterval => AddTimeInterval(()),
             BinaryFunc::AddNumeric => AddNumeric(()),
             BinaryFunc::BitAndInt16 => BitAndInt16(()),
@@ -3312,6 +3350,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::SubTimestampTzInterval => SubTimestampTzInterval(()),
             BinaryFunc::SubDate => SubDate(()),
             BinaryFunc::SubDateInterval => SubDateInterval(()),
+            BinaryFunc::SubDateInt32 => SubDateInt32(()),
             BinaryFunc::SubTime => SubTime(()),
             BinaryFunc::SubTimeInterval => SubTimeInterval(()),
             BinaryFunc::SubNumeric => SubNumeric(()),
@@ -3458,6 +3497,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 AddTimestampTzInterval(()) => Ok(BinaryFunc::AddTimestampTzInterval),
                 AddDateInterval(()) => Ok(BinaryFunc::AddDateInterval),
                 AddDateTime(()) => Ok(BinaryFunc::AddDateTime),
+                AddDateInt32(()) => Ok(BinaryFunc::AddDateInt32),
                 AddTimeInterval(()) => Ok(BinaryFunc::AddTimeInterval),
                 AddNumeric(()) => Ok(BinaryFunc::AddNumeric),
                 BitAndInt16(()) => Ok(BinaryFunc::BitAndInt16),
@@ -3505,6 +3545,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 SubTimestampTzInterval(()) => Ok(BinaryFunc::SubTimestampTzInterval),
                 SubDate(()) => Ok(BinaryFunc::SubDate),
                 SubDateInterval(()) => Ok(BinaryFunc::SubDateInterval),
+                SubDateInt32(()) => Ok(BinaryFunc::SubDateInt32),
                 SubTime(()) => Ok(BinaryFunc::SubTime),
                 SubTimeInterval(()) => Ok(BinaryFunc::SubTimeInterval),
                 SubNumeric(()) => Ok(BinaryFunc::SubNumeric),

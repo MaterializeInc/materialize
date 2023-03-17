@@ -604,6 +604,8 @@ message ProtoBinaryFunc {
         google.protobuf.Empty range_intersection = 181;
         google.protobuf.Empty range_difference = 182;
         google.protobuf.Empty uuid_generate_v5 = 183;
+        google.protobuf.Empty sub_date_int32 = 184;
+        google.protobuf.Empty add_date_int32 = 185;
     }
 }
 
