@@ -1094,76 +1094,60 @@ fn find_match<'a, R: std::fmt::Debug>(
         return Err(candidates.len());
     }
 
-    let mut found_known = false;
-    let mut types_match = true;
-    let mut common_type: Option<ScalarType> = None;
-
     for (i, arg_type) in types.iter().enumerate() {
         let mut selected_category: Option<TypeCategory> = None;
         let mut categories_match = true;
 
-        match arg_type {
+        if arg_type.is_none() {
             // 4.e. If any input arguments are unknown, check the type
             // categories accepted at those argument positions by the remaining
             // candidates.
-            None => {
-                for c in candidates.iter() {
-                    let this_category = TypeCategory::from_param(&c.fimpl.params[i]);
-                    // 4.e. cont: Select the string category if any candidate
-                    // accepts that category. (This bias towards string is
-                    // appropriate since an unknown-type literal looks like a
-                    // string.)
-                    if this_category == TypeCategory::String {
-                        selected_category = Some(TypeCategory::String);
-                        break;
-                    }
-                    match selected_category {
-                        Some(ref mut selected_category) => {
-                            // 4.e. cont: [...otherwise,] if all the remaining candidates
-                            // accept the same type category, select that category.
-                            categories_match =
-                                selected_category == &this_category && categories_match;
-                        }
-                        None => selected_category = Some(this_category.clone()),
-                    }
-                }
-
-                // 4.e. cont: Otherwise fail because the correct choice cannot
-                // be deduced without more clues.
-                // (ed: this doesn't mean fail entirely, simply moving onto 4.f)
-                if selected_category != Some(TypeCategory::String) && !categories_match {
+            for c in candidates.iter() {
+                let this_category = TypeCategory::from_param(&c.fimpl.params[i]);
+                // 4.e. cont: Select the string category if any candidate
+                // accepts that category. (This bias towards string is
+                // appropriate since an unknown-type literal looks like a
+                // string.)
+                if this_category == TypeCategory::String {
+                    selected_category = Some(TypeCategory::String);
                     break;
                 }
-
-                // 4.e. cont: Now discard candidates that do not accept the
-                // selected type category. Furthermore, if any candidate accepts
-                // a preferred type in that category, discard candidates that
-                // accept non-preferred types for that argument.
-                let selected_category = selected_category.unwrap();
-
-                let preferred_type = selected_category.preferred_type();
-                let mut found_preferred_type_candidate = false;
-                candidates.retain(|c| {
-                    if let Some(typ) = &preferred_type {
-                        found_preferred_type_candidate = c.fimpl.params[i].accepts_type(ecx, typ)
-                            || found_preferred_type_candidate;
+                match selected_category {
+                    Some(ref mut selected_category) => {
+                        // 4.e. cont: [...otherwise,] if all the remaining candidates
+                        // accept the same type category, select that category.
+                        categories_match = selected_category == &this_category && categories_match;
                     }
-                    selected_category == TypeCategory::from_param(&c.fimpl.params[i])
-                });
-
-                if found_preferred_type_candidate {
-                    let preferred_type = preferred_type.unwrap();
-                    candidates.retain(|c| c.fimpl.params[i].accepts_type(ecx, &preferred_type));
+                    None => selected_category = Some(this_category.clone()),
                 }
             }
-            Some(typ) => {
-                found_known = true;
-                // Track if all known types are of the same type; use this info
-                // in 4.f.
-                match common_type {
-                    Some(ref common_type) => types_match = common_type == typ && types_match,
-                    None => common_type = Some(typ.clone()),
+
+            // 4.e. cont: Otherwise fail because the correct choice cannot
+            // be deduced without more clues.
+            // (ed: this doesn't mean fail entirely, simply moving onto 4.f)
+            if selected_category != Some(TypeCategory::String) && !categories_match {
+                break;
+            }
+
+            // 4.e. cont: Now discard candidates that do not accept the
+            // selected type category. Furthermore, if any candidate accepts
+            // a preferred type in that category, discard candidates that
+            // accept non-preferred types for that argument.
+            let selected_category = selected_category.unwrap();
+
+            let preferred_type = selected_category.preferred_type();
+            let mut found_preferred_type_candidate = false;
+            candidates.retain(|c| {
+                if let Some(typ) = &preferred_type {
+                    found_preferred_type_candidate =
+                        c.fimpl.params[i].accepts_type(ecx, typ) || found_preferred_type_candidate;
                 }
+                selected_category == TypeCategory::from_param(&c.fimpl.params[i])
+            });
+
+            if found_preferred_type_candidate {
+                let preferred_type = preferred_type.unwrap();
+                candidates.retain(|c| c.fimpl.params[i].accepts_type(ecx, &preferred_type));
             }
         }
     }
@@ -1175,6 +1159,19 @@ fn find_match<'a, R: std::fmt::Debug>(
     // arguments are also of that type, and check which candidates can accept
     // that type at the unknown-argument positions.
     // (ed: We know unknown argument exists if we're in this part of the code.)
+    let mut found_known = false;
+    let mut types_match = true;
+    let mut common_type: Option<ScalarType> = None;
+    for arg_type in types {
+        if let Some(typ) = arg_type {
+            found_known = true;
+            // Track if all known types are of the same type.
+            match common_type {
+                Some(ref common_type) => types_match = common_type == typ && types_match,
+                None => common_type = Some(typ.clone()),
+            }
+        }
+    }
     if found_known && types_match {
         let common_type = common_type.unwrap();
         let common_typed: Vec<_> = types
