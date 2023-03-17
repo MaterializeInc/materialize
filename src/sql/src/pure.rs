@@ -147,7 +147,7 @@ pub async fn purify_create_source(
 
     // Disallow manually targetting subsources, this syntax is reserved for purification only
     named_subsource_err(progress_subsource)?;
-    if let Some(ReferencedSubsources::Subset(subsources)) = referenced_subsources {
+    if let Some(ReferencedSubsources::SubsetTables(subsources)) = referenced_subsources {
         for CreateSourceSubsource {
             subsource,
             reference: _,
@@ -180,14 +180,11 @@ pub async fn purify_create_source(
 
     match &connection {
         CreateSourceConnection::Kafka(_) | CreateSourceConnection::TestScript { .. } => {
-            match &referenced_subsources {
-                Some(ReferencedSubsources::All) => {
-                    sql_bail!("FOR ALL TABLES is only valid for multi-output sources");
-                }
-                Some(ReferencedSubsources::Subset(_)) => {
-                    sql_bail!("FOR TABLES (..) is only valid for multi-output sources");
-                }
-                None => {}
+            if let Some(referenced_subsources) = &referenced_subsources {
+                sql_bail!(
+                    "{} is only valid for multi-output sources",
+                    referenced_subsources.to_ast_string()
+                );
             }
         }
         CreateSourceConnection::Postgres { .. } | CreateSourceConnection::LoadGenerator { .. } => {}
@@ -332,7 +329,24 @@ pub async fn purify_create_source(
                         validated_requested_subsources.push((upstream_name, subsource_name, table));
                     }
                 }
-                Some(ReferencedSubsources::Subset(subsources)) => {
+                Some(ReferencedSubsources::SubsetSchemas(schemas)) => {
+                    let schemas: BTreeSet<_> = schemas.iter().map(|s| s.as_str()).collect();
+                    for table in &publication_tables {
+                        if !schemas.contains(table.namespace.as_str()) {
+                            continue;
+                        }
+
+                        let upstream_name = UnresolvedObjectName::qualified(&[
+                            &connection.database,
+                            &table.namespace,
+                            &table.name,
+                        ]);
+                        let subsource_name = UnresolvedObjectName::unqualified(&table.name);
+                        validated_requested_subsources.push((upstream_name, subsource_name, table));
+                    }
+                }
+                Some(ReferencedSubsources::SubsetTables(subsources)) => {
+                    // TODO: can subsources be empty?
                     if publication_tables.is_empty() {
                         sql_bail!("FOR TABLES (..) is only valid for non-empty publications");
                     }
@@ -346,9 +360,16 @@ pub async fn purify_create_source(
                     )?);
                 }
                 None => {
-                    sql_bail!("multi-output sources require a FOR TABLES (..) or FOR ALL TABLES statement");
+                    sql_bail!("multi-output sources require a FOR TABLES (..), FOR SCHEMAS (..), or FOR ALL TABLES clause");
                 }
             };
+
+            if validated_requested_subsources.is_empty() {
+                sql_bail!(
+                    "Postgres source must ingest at least one table, but {} matched none",
+                    referenced_subsources.as_ref().unwrap().to_ast_string()
+                );
+            }
 
             let mut text_cols_dict: BTreeMap<u32, BTreeSet<String>> = BTreeMap::new();
 
@@ -533,7 +554,7 @@ pub async fn purify_create_source(
                 });
             }
 
-            *referenced_subsources = Some(ReferencedSubsources::Subset(targeted_subsources));
+            *referenced_subsources = Some(ReferencedSubsources::SubsetTables(targeted_subsources));
 
             // Remove any old detail references
             options.retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
@@ -574,7 +595,10 @@ pub async fn purify_create_source(
                         validated_requested_subsources.push((upstream_name, subsource_name, desc));
                     }
                 }
-                Some(ReferencedSubsources::Subset(selected_subsources)) => {
+                Some(ReferencedSubsources::SubsetSchemas(..)) => {
+                    sql_bail!("FOR SCHEMAS (..) invalid for LOAD GENERATOR sources");
+                }
+                Some(ReferencedSubsources::SubsetTables(selected_subsources)) => {
                     let available_subsources = match &available_subsources {
                         Some(available_subsources) => available_subsources,
                         None => {
@@ -647,7 +671,8 @@ pub async fn purify_create_source(
                 subsources.push((transient_id, subsource));
             }
             if available_subsources.is_some() {
-                *referenced_subsources = Some(ReferencedSubsources::Subset(targeted_subsources));
+                *referenced_subsources =
+                    Some(ReferencedSubsources::SubsetTables(targeted_subsources));
             }
         }
     }

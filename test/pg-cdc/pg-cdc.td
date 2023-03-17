@@ -115,6 +115,16 @@ DROP PUBLICATION IF EXISTS mz_source_narrow;
 
 CREATE PUBLICATION mz_source_narrow FOR TABLE enum_table, public.another_enum_table, pk_table;
 
+DROP SCHEMA IF EXISTS another_schema CASCADE;
+CREATE SCHEMA another_schema;
+CREATE TABLE another_schema.another_table (f1 TEXT);
+ALTER TABLE another_schema.another_table REPLICA IDENTITY FULL;
+INSERT INTO another_schema.another_table VALUES ('123');
+
+DROP PUBLICATION IF EXISTS another_publication;
+
+CREATE PUBLICATION another_publication FOR TABLE another_schema.another_table;
+
 #
 # Test that slots created for replication sources are deleted on DROP
 #
@@ -210,6 +220,11 @@ regex: the following columns contain unsupported types:\npostgres.public.enum_ta
     public.another_enum_table
   );
 regex: the following columns contain unsupported types:\npostgres\.public\.another_enum_table\."колона" \(OID \d+\)\npostgres\.public\.enum_table\.a \(OID \d+\)
+
+! CREATE SOURCE "mz_source"
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR SCHEMAS (dne);
+regex: Postgres source must ingest at least one table, but FOR SCHEMAS \(dne\) matched none
 
 #
 # Establish direct replication
@@ -642,6 +657,29 @@ INSERT INTO pk_table VALUES (99999);
 # should be "materialize.public.pk_table"
 ! SELECT COUNT(*) = 0 FROM pk_table;
 regex:Source error: .*: db error: ERROR: publication "mz_source" does not exist
+
+> DROP SOURCE enum_source CASCADE;
+> DROP SOURCE "mz_source" CASCADE;
+
+#
+# Check schema scoped tables
+
+> CREATE SOURCE another_source
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'another_publication'
+  )
+  FOR SCHEMAS (
+    another_schema
+  );
+
+$ set-regex match=\d+ replacement=<NUMBER>
+
+> SHOW SOURCES
+another_source          postgres  <NUMBER>
+another_source_progress subsource <null>
+another_table           subsource <null>
+
+> DROP SOURCE another_source
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP SCHEMA conflict_schema CASCADE;

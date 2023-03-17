@@ -810,7 +810,7 @@ pub fn plan_create_source(
         available_subsources,
         referenced_subsources,
     ) {
-        (Some(available_subsources), Some(ReferencedSubsources::Subset(subsources))) => {
+        (Some(available_subsources), Some(ReferencedSubsources::SubsetTables(subsources))) => {
             let mut requested_subsources = vec![];
             for subsource in subsources {
                 let name = subsource.reference.clone();
@@ -830,7 +830,8 @@ pub fn plan_create_source(
             // Multi-output sources must have a table selection clause
             sql_bail!("This is a multi-output source. Use `FOR TABLE (..)` or `FOR ALL TABLES` to select which ones to ingest");
         }
-        (None, Some(_)) | (Some(_), Some(ReferencedSubsources::All)) => {
+        (None, Some(_))
+        | (Some(_), Some(ReferencedSubsources::All | ReferencedSubsources::SubsetSchemas(_))) => {
             sql_bail!("[internal error] subsources should be resolved during purification")
         }
         (None, None) => (BTreeMap::new(), vec![]),
