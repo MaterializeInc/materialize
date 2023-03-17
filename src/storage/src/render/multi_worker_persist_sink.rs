@@ -90,11 +90,14 @@
 use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 use std::ops::AddAssign;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use differential_dataflow::difference::Semigroup;
 use differential_dataflow::{lattice::Lattice, Collection, Hashable};
+use either::Either;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, Inspect};
@@ -119,6 +122,7 @@ use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuild
 use crate::source::types::SourcePersistSinkMetrics;
 use crate::storage_state::StorageState;
 
+/// Metrics about batches.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct BatchMetrics {
     inserts: u64,
@@ -164,36 +168,117 @@ impl BatchMetrics {
     }
 }
 
+/// Manages batches and metrics, including the small-batch optimization
+/// in `write_batches`.
 struct BatchBuilderAndMetadata<K, V, T, D>
 where
     K: Codec,
     V: Codec,
     T: Timestamp + Lattice + Codec64,
 {
-    builder: mz_persist_client::batch::BatchBuilder<K, V, T, D>,
+    builder: Either<mz_persist_client::batch::BatchBuilder<K, V, T, D>, Vec<(K, V, T, D)>>,
     metrics: BatchMetrics,
 }
 
 impl<K, V, T, D> BatchBuilderAndMetadata<K, V, T, D>
 where
-    K: Codec,
-    V: Codec,
+    K: Codec + Debug,
+    V: Codec + Debug,
     T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64,
 {
-    fn new(bb: mz_persist_client::batch::BatchBuilder<K, V, T, D>) -> Self {
+    fn new() -> Self {
         BatchBuilderAndMetadata {
-            builder: bb,
+            builder: Either::Right(Vec::new()),
             metrics: Default::default(),
+        }
+    }
+
+    async fn add<F>(&mut self, spill_to_batch_size: usize, f: F, k: &K, v: &V, t: &T, d: &D)
+    where
+        F: FnOnce() -> mz_persist_client::batch::BatchBuilder<K, V, T, D>,
+        K: Clone,
+        V: Copy,
+        T: Copy,
+        D: Copy,
+    {
+        let to_write_to_batch = match &self.builder {
+            Either::Right(vec) if vec.len() >= spill_to_batch_size => {
+                let vals = std::mem::replace(&mut self.builder, Either::Left(f()));
+
+                match vals {
+                    Either::Right(vals) => vals,
+                    _ => unreachable!(),
+                }
+            }
+            _ => vec![],
+        };
+
+        match &mut self.builder {
+            Either::Right(vec) => {
+                vec.push((k.clone(), *v, *t, *d));
+            }
+            Either::Left(batch_builder) => {
+                for (k, v, t, d) in to_write_to_batch {
+                    batch_builder
+                        .add(&k, &v, &t, &d)
+                        .await
+                        .expect("invalid usage");
+                }
+                batch_builder.add(k, v, t, d).await.expect("invalid usage");
+            }
+        }
+    }
+
+    async fn finish(
+        self,
+        lower: Antichain<T>,
+        upper: Antichain<T>,
+    ) -> HollowBatchAndMetadata<K, V, T, D> {
+        match self.builder {
+            Either::Right(vec) => HollowBatchAndMetadata {
+                lower,
+                upper,
+                batch: Either::Right(vec),
+                metrics: self.metrics,
+            },
+            Either::Left(batch_builder) => {
+                let batch = batch_builder
+                    .finish(upper.clone())
+                    .await
+                    .expect("invalid usage");
+                HollowBatchAndMetadata {
+                    lower,
+                    upper,
+                    batch: Either::Left(batch.into_writer_hollow_batch()),
+                    metrics: self.metrics,
+                }
+            }
         }
     }
 }
 
+/// A batch or data + metrics moved from `write_batches` to `append_batches`.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-struct HollowBatchAndMetadata {
-    lower: Antichain<mz_repr::Timestamp>,
-    upper: Antichain<mz_repr::Timestamp>,
-    batch: WriterEnrichedHollowBatch<mz_repr::Timestamp>,
+#[serde(bound(
+    serialize = "K: Serialize, V: Serialize, T: Timestamp + Codec64, D: Serialize",
+    deserialize = "K: Deserialize<'de>, V: Deserialize<'de>, T: Timestamp + Codec64, D: Deserialize<'de>"
+))]
+struct HollowBatchAndMetadata<K, V, T, D> {
+    lower: Antichain<T>,
+    upper: Antichain<T>,
+    batch: Either<WriterEnrichedHollowBatch<T>, Vec<(K, V, T, D)>>,
     metrics: BatchMetrics,
+}
+
+/// Holds finished batches and the data for the small-batch optimization
+/// for `append_batches`.
+#[derive(Debug, Default)]
+struct BatchSet {
+    finished: Vec<Batch<SourceData, (), mz_repr::Timestamp, Diff>>,
+    incomplete:
+        Option<mz_persist_client::batch::BatchBuilder<SourceData, (), mz_repr::Timestamp, Diff>>,
+    batch_metrics: BatchMetrics,
 }
 
 /// Continuously writes the `desired_stream` into persist
@@ -443,7 +528,10 @@ fn write_batches<G>(
     desired_collection: &Collection<G, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
     storage_state: &mut StorageState,
-) -> (Stream<G, HollowBatchAndMetadata>, Rc<dyn Any>)
+) -> (
+    Stream<G, HollowBatchAndMetadata<SourceData, (), mz_repr::Timestamp, Diff>>,
+    Rc<dyn Any>,
+)
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
 {
@@ -582,20 +670,20 @@ where
                                 );
                             }
 
-                            for (row, ts, diff) in data.drain(..) {
-                                if write.upper().less_equal(&ts){
-                                    let builder = stashed_batches.entry(ts).or_insert_with(|| {
-                                        BatchBuilderAndMetadata::new(
-                                            write.builder(operator_batch_lower.clone()),
-                                        )
+                            let minimum_batch_updates = persist_clients.cfg().storage_sink_minimum_batch_updates();
+                            for (row, ts, diff) in data.into_iter() {
+                                if write.upper().less_equal(ts){
+                                    let builder = stashed_batches.entry(*ts).or_insert_with(|| {
+                                        BatchBuilderAndMetadata::new()
                                     });
 
                                     let is_value = row.is_ok();
                                     builder
-                                        .builder
-                                        .add(&SourceData(row), &(), &ts, &diff)
-                                        .await
-                                        .expect("invalid usage");
+                                        .add(
+                                            minimum_batch_updates,
+                                            || write.builder(operator_batch_lower.clone()),
+                                            &SourceData(row.clone()), &(), ts, diff
+                                        ).await;
 
                                     source_statistics.inc_updates_staged_by(1);
 
@@ -707,11 +795,6 @@ where
                     let mut batch_tokens = vec![];
                     for ts in finalized_timestamps {
                         let batch_builder = stashed_batches.remove(&ts).unwrap();
-                        let batch = batch_builder
-                            .builder
-                            .finish(batch_upper.clone())
-                            .await
-                            .expect("invalid usage");
 
                         if collection_id.is_user() {
                             trace!(
@@ -725,6 +808,10 @@ where
                             );
                         }
 
+                        let batch = batch_builder
+                            .finish(batch_lower.clone(), batch_upper.clone())
+                            .await;
+
                         // The next "safe" lower for batches is the meet (max) of all the emitted
                         // batches. These uppers all are not beyond the `desired_frontier`, which
                         // means all updates received by this operator will be beyond this lower.
@@ -736,12 +823,7 @@ where
                         // beyond a not-yet emitted description in `in_flight_batches`, as
                         // a that description would also have been chosen as ready above.
                         operator_batch_lower = operator_batch_lower.join(&batch_upper);
-                        batch_tokens.push(HollowBatchAndMetadata {
-                            lower: batch_lower.clone(),
-                            upper: batch_upper.clone(),
-                            batch: batch.into_writer_hollow_batch(),
-                            metrics: batch_builder.metrics,
-                        })
+                        batch_tokens.push(batch);
                     }
 
                     output.give_container(&cap, &mut batch_tokens).await;
@@ -786,7 +868,7 @@ fn append_batches<G>(
     operator_name: String,
     target: &CollectionMetadata,
     batch_descriptions: &Stream<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
-    batches: &Stream<G, HollowBatchAndMetadata>,
+    batches: &Stream<G, HollowBatchAndMetadata<SourceData, (), mz_repr::Timestamp, Diff>>,
     persist_clients: Arc<PersistClientCache>,
     storage_state: &mut StorageState,
     output_index: usize,
@@ -859,7 +941,7 @@ where
         // the batch.
         let mut in_flight_batches = HashMap::<
             (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>),
-            Vec<(Batch<_, _, _, _>, BatchMetrics)>,
+            BatchSet,
         >::new();
 
         if !active_worker {
@@ -954,23 +1036,34 @@ where
                 Some(event) = batches_input.next_mut() => {
                     match event {
                         Event::Data(_cap, data) => {
-                            // Ingest new written batches
-                            for batch_and_metadata in data.drain(..) {
-                                let batch = write.batch_from_hollow_batch(
-                                    batch_and_metadata.batch
-                                );
-                                let batch_description = (
-                                    batch_and_metadata.lower,
-                                    batch_and_metadata.upper
-                                );
+                            for batch in data.drain(..) {
+                                match batch.batch {
+                                    Either::Left(hollow_batch) => {
+                                        let finished_batch = write.batch_from_hollow_batch(hollow_batch);
+                                        let batch_description = (batch.lower.clone(), batch.upper.clone());
 
-                                let batches = in_flight_batches
-                                    .entry(batch_description)
-                                    .or_insert_with(Vec::new);
+                                        let batches = in_flight_batches
+                                            .entry(batch_description)
+                                            .or_default();
 
-                                batches.push((batch, batch_and_metadata.metrics));
+                                        batches.finished.push(finished_batch);
+                                        batches.batch_metrics += &batch.metrics;
+                                    }
+                                    Either::Right(contents) => {
+                                        let batches = in_flight_batches
+                                            .entry((batch.lower.clone(), batch.upper.clone()))
+                                            .or_default();
+                                        let builder = batches.incomplete.get_or_insert_with(|| {
+                                            write.builder(batch.lower)
+                                        });
+                                        for (data, val, time, diff) in contents {
+                                            persist_client.metrics().sink.forwarded_updates.inc();
+                                            builder.add(&data, &val, &time, &diff).await.expect("invalid usage");
+                                        }
+                                        batches.batch_metrics += &batch.metrics;
+                                    }
+                                }
                             }
-
                             continue;
                         }
                         Event::Progress(frontier) => {
@@ -1026,9 +1119,11 @@ where
             for done_batch_metadata in done_batches {
                 in_flight_descriptions.remove(&done_batch_metadata);
 
-                let mut batches = in_flight_batches
+                let batch_set = in_flight_batches
                     .remove(&done_batch_metadata)
-                    .unwrap_or_else(Vec::new);
+                    .unwrap_or_default();
+
+                let mut batches = batch_set.finished;
 
                 trace!(
                     "persist_sink {collection_id}/{shard_id}: \
@@ -1039,14 +1134,14 @@ where
 
                 let (batch_lower, batch_upper) = done_batch_metadata;
 
-                let mut batch_metrics = BatchMetrics::default();
-                let mut to_append = batches
-                    .iter_mut()
-                    .map(|(batch, metrics)| {
-                        batch_metrics += metrics;
-                        batch
-                    })
-                    .collect::<Vec<_>>();
+                let batch_metrics = batch_set.batch_metrics;
+
+                if let Some(builder) = batch_set.incomplete {
+                    let batch = builder.finish(batch_upper.clone()).await.expect("invalid usage");
+                    batches.push(batch);
+                    persist_client.metrics().sink.forwarded_batches.inc();
+                }
+                let mut to_append = batches.iter_mut().collect::<Vec<_>>();
 
                 // We evaluate this above to avoid checking an environment variable
                 // in a hot loop. Note that we only pause before we emit
@@ -1101,7 +1196,7 @@ where
                     Err(mismatch) => {
                         // _Best effort_ Clean up in case we didn't manage to append the
                         // batches to persist.
-                        for (batch, _) in batches {
+                        for batch in batches {
                             batch.delete().await;
                         }
                         panic!(

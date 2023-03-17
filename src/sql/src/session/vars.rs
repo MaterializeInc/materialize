@@ -540,6 +540,17 @@ const PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
     safe: true,
 };
 
+/// Controls [`mz_persist_client::cfg::PersistConfig::storage_sink_minimum_batch_updates`].
+const STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("storage_persist_sink_minimum_batch_updates"),
+    value: &PersistConfig::DEFAULT_SINK_MINIMUM_BATCH_UPDATES,
+    description: "In the storage persist sink, workers with less than the minimum number of updates \
+                  will flush their records to single downstream worker to be batched up there... in \
+                  the hopes of grouping our updates into fewer, larger batches.",
+    internal: true,
+    safe: true,
+};
+
 /// Controls [`mz_persist_client::cfg::DynamicConfig::stats_collection_enabled`].
 const PERSIST_STATS_COLLECTION_ENABLED: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("persist_stats_collection_enabled"),
@@ -1350,6 +1361,7 @@ impl Default for SystemVars {
             .with_var(&CRDB_CONNECT_TIMEOUT)
             .with_var(&DATAFLOW_MAX_INFLIGHT_BYTES)
             .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
+            .with_var(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP)
@@ -1612,6 +1624,11 @@ impl SystemVars {
     /// Returns the `persist_sink_minimum_batch_updates` configuration parameter.
     pub fn persist_sink_minimum_batch_updates(&self) -> usize {
         *self.expect_value(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
+    }
+
+    /// Returns the `storage_persist_sink_minimum_batch_updates` configuration parameter.
+    pub fn storage_persist_sink_minimum_batch_updates(&self) -> usize {
+        *self.expect_value(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
     }
 
     /// Returns the `persist_stats_collection_enabled` configuration parameter.
@@ -2617,6 +2634,7 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
         || name == CRDB_CONNECT_TIMEOUT.name()
         || name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
+        || name == STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name()
