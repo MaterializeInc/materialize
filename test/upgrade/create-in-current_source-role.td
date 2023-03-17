@@ -10,3 +10,9 @@
 > CREATE ROLE superuser_login;
 
 > CREATE ROLE "space role";
+
+> CREATE ROLE joe;
+
+> CREATE ROLE group;
+
+> GRANT group TO joe
