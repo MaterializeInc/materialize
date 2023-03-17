@@ -150,14 +150,13 @@ privileges of that role via `SET ROLE`. We will add the following SQL commands:
           this as future work.
     - Circular memberships are NOT allowed.
     - `GROUP` is ignored.
-- `REVOKE <group_role> FROM [ GROUP ] <role> [ CASCADE | RESTRICT ]`
+- `REVOKE <group_role> FROM [ GROUP ] <role>`
     - Removes `<role>` as a member from `<group_role>`.
     - Any role with the `CREATEROLE` attribute OR superusers can revoke membership from any other member.
         - `CREATEROLE` roles cannot revoke roles with `SUPERUSER`.
         - Note: PostgreSQL allows other roles to grant membership with the `WITH ADMIN OPTION` option. We will leave
           this as future work.
     - `GROUP` is ignored.
-    - Default is `RESTRICT`.
 
 We will modify `DROP ROLE <role_name>` so that when `<role_name>` is dropped, all other roles have their membership
 revoked.
@@ -193,6 +192,7 @@ NOTE: Since we won't support `SET ROLE` yet, these functions will all behave ide
 
 #### Out of Scope for Project
 
+- `CASCADE` and `RESTRICT` options in `REVOKE`.
 - `CURRENT_ROLE`, `CURRENT_USER`, and `SESSION_USER` aliases for `<role>` in `GRANT` and `REVOKE`.
 - `GRANTED BY` option for `GRANT` and `REVOKE`.
 - `[ WITH ADMIN OPTION ]` option for `GRANT`.
