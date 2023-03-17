@@ -2471,7 +2471,12 @@ impl<'a> Parser<'a> {
             self.expect_token(&Token::LParen)?;
             let subsources = self.parse_comma_separated(Parser::parse_subsource_references)?;
             self.expect_token(&Token::RParen)?;
-            Some(ReferencedSubsources::Subset(subsources))
+            Some(ReferencedSubsources::SubsetTables(subsources))
+        } else if self.parse_keywords(&[FOR, SCHEMAS]) {
+            self.expect_token(&Token::LParen)?;
+            let schemas = self.parse_comma_separated(Parser::parse_identifier)?;
+            self.expect_token(&Token::RParen)?;
+            Some(ReferencedSubsources::SubsetSchemas(schemas))
         } else if self.parse_keywords(&[FOR, ALL, TABLES]) {
             Some(ReferencedSubsources::All)
         } else {

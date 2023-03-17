@@ -40,4 +40,4 @@ exact: FOR TABLES (..) is only valid for non-empty publications
 
 ! CREATE SOURCE "mz_source_empty"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_empty');
-exact: multi-output sources require a FOR TABLES (..) or FOR ALL TABLES statement
+exact: multi-output sources require a FOR TABLES (..), FOR SCHEMAS (..), or FOR ALL TABLES clause
