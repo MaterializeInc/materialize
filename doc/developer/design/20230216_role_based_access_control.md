@@ -204,8 +204,16 @@ NOTE: Since we won't support `SET ROLE` yet, these functions will all behave ide
 
 See [Grant](https://www.postgresql.org/docs/current/sql-grant.html) for PostgreSQL `PUBLIC` details (grep for PUBLIC).
 
-`PUBLIC` is a special keyword that is accepted anywhere a role name would be accepted. The key word PUBLIC indicates
-that the changes are to be applied to all roles, including those that might be created later.
+`PUBLIC` is a special keyword that is accepted in some locations where a role name would be accepted. The key word
+PUBLIC indicates that the changes are to be applied to all roles, including those that might be created later. `PUBLIC`
+is not allowed in `CREATE ROLE`, `ALTER ROLE`, `DROP ROLE`, `GRANT <group_role> TO <role>`,
+and `REVOKE <group_role> FROM <role>`.
+
+#### Implementation Details
+
+- A new variant to `RoleId` will be added called `Public`.
+- The `PUBLIC` role will be added to the catalog with an id of `RoleId::Public`.
+- The sequencer/catalog will reject the `RoleId::Public` variant in all disallowed operations.
 
 ### Phase 4 - Privileges
 
