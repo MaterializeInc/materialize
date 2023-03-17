@@ -59,7 +59,7 @@ use crate::plan::StatementContext;
 fn subsource_gen<'a, T>(
     selected_subsources: &mut Vec<CreateSourceSubsource<Aug>>,
     catalog: &ErsatzCatalog<'a, T>,
-    name: &mut UnresolvedObjectName,
+    source_name: &mut UnresolvedObjectName,
 ) -> Result<Vec<(UnresolvedObjectName, UnresolvedObjectName, &'a T)>, PlanError> {
     let mut validated_requested_subsources = vec![];
 
@@ -76,12 +76,10 @@ fn subsource_gen<'a, T>(
                 // the item as the subsource name to ensure it's created in the
                 // current schema or the source's schema if provided, not mirroring
                 // the schema of the reference.
-                let (_, source_prefix) = name.0.split_last().unwrap();
-                let mut suggested_name = source_prefix.to_vec();
-                suggested_name.push(Ident::from(
-                    normalize::unresolved_object_name(subsource.reference.clone())?.item,
-                ));
-                UnresolvedObjectName(suggested_name)
+                subsource_name_gen(
+                    source_name,
+                    &normalize::unresolved_object_name(subsource.reference.clone())?.item,
+                )
             }
         };
 
