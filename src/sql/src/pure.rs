@@ -50,7 +50,7 @@ use crate::ast::{
 use crate::catalog::{ErsatzCatalog, SessionCatalog};
 use crate::kafka_util;
 use crate::kafka_util::KafkaConfigOptionExtracted;
-use crate::names::{Aug, RawDatabaseSpecifier};
+use crate::names::{Aug, PartialObjectName, RawDatabaseSpecifier};
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
@@ -72,7 +72,7 @@ fn subsource_gen<'a, T>(
                         Some(_) => name.clone(),
                         // In cases when a prefix is not provided for the deferred name
                         // fallback to using the schema of the source with the given name
-                        None => subsource_name_gen(source_name, &partial.item),
+                        None => subsource_name_gen(source_name, &partial.item)?,
                     }
                 }
                 DeferredObjectName::Named(..) => {
@@ -87,7 +87,7 @@ fn subsource_gen<'a, T>(
                 subsource_name_gen(
                     source_name,
                     &normalize::unresolved_object_name(subsource.reference.clone())?.item,
-                )
+                )?
             }
         };
 
@@ -104,13 +104,26 @@ fn subsource_gen<'a, T>(
 /// For eg. if source is `a.b`, then `a` will be prepended to the subsource name
 /// so that it's generated in the same schema as source
 fn subsource_name_gen(
-    source_name: &mut UnresolvedObjectName,
+    source_name: &UnresolvedObjectName,
     subsource_name: &String,
-) -> UnresolvedObjectName {
-    let (_, source_prefix) = source_name.0.split_last().unwrap();
-    let mut suggested_name = source_prefix.to_vec();
+) -> Result<UnresolvedObjectName, PlanError> {
+    let PartialObjectName {
+        database,
+        schema,
+        item: _,
+    } = normalize::unresolved_object_name(source_name.clone())?;
+    let mut suggested_name = Vec::new();
+
+    if let Some(db_name) = database {
+        suggested_name.push(Ident::new(db_name));
+    }
+
+    if let Some(schema_name) = schema {
+        suggested_name.push(Ident::new(schema_name));
+    }
+
     suggested_name.push(Ident::new(subsource_name));
-    UnresolvedObjectName(suggested_name)
+    Ok(UnresolvedObjectName(suggested_name))
 }
 
 /// Purifies a statement, removing any dependencies on external state.
@@ -368,7 +381,7 @@ pub async fn purify_create_source(
                             &table.namespace,
                             &table.name,
                         ]);
-                        let subsource_name = subsource_name_gen(source_name, &table.name);
+                        let subsource_name = subsource_name_gen(source_name, &table.name)?;
                         validated_requested_subsources.push((upstream_name, subsource_name, table));
                     }
                 }
@@ -583,7 +596,7 @@ pub async fn purify_create_source(
                     };
                     for (name, (_, desc)) in available_subsources {
                         let upstream_name = UnresolvedObjectName::from(name.clone());
-                        let subsource_name = subsource_name_gen(source_name, &name.item);
+                        let subsource_name = subsource_name_gen(source_name, &name.item)?;
                         validated_requested_subsources.push((upstream_name, subsource_name, desc));
                     }
                 }
