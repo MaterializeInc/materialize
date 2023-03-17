@@ -700,18 +700,42 @@ pub fn plan_create_source(
                         column: i,
                     });
 
-                    let cast_expr = plan_cast(
-                        &cast_ecx,
-                        CastContext::Explicit,
-                        col_expr,
-                        &scalar_type,
-                    )?
-                    .lower_uncorrelated()
-                    .expect(
+                    let cast_expr =
+                        plan_cast(&cast_ecx, CastContext::Explicit, col_expr, &scalar_type)?;
+
+                    let cast = if column.nullable {
+                        cast_expr
+                    } else {
+                        // We must enforce nullability constraint on cast
+                        // because PG replication stream does not propagate
+                        // constraint changes and we want to error subsource if
+                        // e.g. the constraint is dropped and we don't notice
+                        // it.
+                        HirScalarExpr::CallVariadic {
+                            func: mz_expr::VariadicFunc::ErrorIfNull,
+                            exprs: vec![
+                                cast_expr,
+                                HirScalarExpr::literal(
+                                    mz_repr::Datum::from(
+                                        format!(
+                                            "PG column {}.{}.{} contained NULL data, despite having NOT NULL constraint",
+                                            table.namespace.clone(),
+                                            table.name.clone(),
+                                            column.name.clone())
+                                            .as_str(),
+                                    ),
+                                    ScalarType::String,
+                                ),
+                            ],
+                        }
+                    };
+
+                    let mir_cast = cast.lower_uncorrelated().expect(
                         "lower_uncorrelated should not fail given that there is no correlation \
                             in the input col_expr",
                     );
-                    column_casts.push(cast_expr);
+
+                    column_casts.push(mir_cast);
                 }
                 let r = table_casts.insert(i + 1, column_casts);
                 assert!(r.is_none(), "cannot have table defined multiple times");
