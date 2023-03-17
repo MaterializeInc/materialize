@@ -41,6 +41,7 @@ tokio-openssl = { version = "0.6.3", optional = true }
 # Note that this feature is distinct from `tracing`'s `log` feature, which has `tracing` macros emit `log` records if
 # there is no global `tracing` subscriber.
 tracing-subscriber = { version = "0.3.16", default-features = false, features = ["env-filter", "fmt", "json", "tracing-log"], optional = true }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 
 # For the `tracing` feature
@@ -58,7 +59,6 @@ opentelemetry-otlp = { git = "https://github.com/MaterializeInc/opentelemetry-ru
 console-subscriber = { git = "https://github.com/MaterializeInc/tokio-console.git", optional = true }
 sentry-tracing = { version = "0.29.1", optional = true }
 yansi = { version = "0.5.1", optional = true }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
 anyhow = { version = "1.0.66" }
@@ -66,6 +66,7 @@ scopeguard = "1.1.0"
 tokio = { version = "1.24.2", features = ["macros", "rt-multi-thread"] }
 
 [features]
+default = ["workspace-hack"]
 async = ["async-trait", "futures", "openssl", "tokio-openssl", "tokio"]
 network = ["async", "bytes", "hyper", "smallvec", "tonic"]
 tracing_ = [

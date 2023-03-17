@@ -25,7 +25,7 @@ use tracing::warn;
 use mz_controller::clusters::DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS;
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::AvroSchemaGenerator;
-use mz_ore::cast::{self, TryCastFrom};
+use mz_ore::cast::{self, CastFrom, TryCastFrom};
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
@@ -1579,7 +1579,7 @@ fn get_encoding_inner(
                         names: names.iter().cloned().map(|n| n.into_string()).collect(),
                     }
                 }
-                CsvColumns::Count(n) => ColumnSpec::Count(*n),
+                CsvColumns::Count(n) => ColumnSpec::Count(usize::cast_from(*n)),
             };
             DataEncodingInner::Csv(CsvEncoding {
                 columns,

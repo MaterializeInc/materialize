@@ -27,7 +27,6 @@ use bytesize::ByteSize;
 use itertools::Itertools;
 use tracing::warn;
 
-use mz_ore::cast::u64_to_usize;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::option::OptionExt;
@@ -44,8 +43,8 @@ use crate::lexer::{self, Token};
 // a healthy factor to be conservative.
 const RECURSION_LIMIT: usize = 128;
 
-/// Maximum allowed size for a batch of statements
-pub const MAX_STATEMENT_BATCH_SIZE: usize = u64_to_usize(bytesize::MB);
+/// Maximum allowed size for a batch of statements in bytes: 1MB.
+pub const MAX_STATEMENT_BATCH_SIZE: usize = 1_000_000;
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -1733,7 +1732,7 @@ impl<'a> Parser<'a> {
                     names: self.parse_parenthesized_column_list(Mandatory)?,
                 }
             } else {
-                let n_cols = usize::cast_from(self.parse_literal_uint()?);
+                let n_cols = self.parse_literal_uint()?;
                 self.expect_keyword(COLUMNS)?;
                 CsvColumns::Count(n_cols)
             };
