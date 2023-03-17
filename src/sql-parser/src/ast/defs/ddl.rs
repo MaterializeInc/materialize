@@ -345,7 +345,7 @@ pub enum Format<T: AstInfo> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CsvColumns {
     /// `WITH count COLUMNS`
-    Count(usize),
+    Count(u64),
     /// `WITH HEADER (ident, ...)?`: `names` is empty if there are no names specified
     Header { names: Vec<Ident> },
 }
