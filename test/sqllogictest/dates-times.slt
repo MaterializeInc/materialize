@@ -1340,10 +1340,10 @@ select ('0001-01-01'::date + '262142years 11months 30days'::interval)::date
 
 # Out of range for both dates and timestamps, but timestamp triggers first.
 query error timestamp out of range
-select ('0001-01-01'::date - '4713years 1months 8days')::date
+select ('0001-01-01'::date - '4713years 1months 8days'::interval)::date
 
 query error timestamp out of range
-select ('0001-01-01'::date + '262142years 11months 30days')::date + '1day'
+select ('0001-01-01'::date + '262142years 11months 30days'::interval)::date + '1day'::interval
 
 query II
 select ('0001-01-01'::date - '1721389days'::interval)::date - ('0001-01-01'::date + '262142years 11months 30days'::interval)::date, ('0001-01-01'::date + '262142years 11months 30days'::interval)::date - ('0001-01-01'::date - '1721389days'::interval)::date

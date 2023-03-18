@@ -37,7 +37,7 @@ WHERE
  lineitem RIGHT JOIN orders ON true
  WHERE
  l_receiptdate IN ('1997-07-06')
- OR l_commitdate = o_orderdate - ' 7 DAY '
+ OR l_commitdate = o_orderdate - ' 7 DAY '::interval
  );
 ----
 
@@ -56,7 +56,7 @@ WHERE
  lineitem RIGHT JOIN orders ON true
  WHERE
  l_receiptdate IN ('1997-07-06')
- OR l_commitdate = o_orderdate - ' 7 DAY '
+ OR l_commitdate = o_orderdate - ' 7 DAY '::interval
  );
 ----
 Explained Query:
@@ -144,8 +144,8 @@ SELECT
 		SELECT
 			l_orderkey
 		WHERE
-			l_shipdate = o_orderdate + ' 3 MONTH '
-			OR o_orderdate = l_shipdate - ' 9 DAY '
+			l_shipdate = o_orderdate + ' 3 MONTH '::interval
+			OR o_orderdate = l_shipdate - ' 9 DAY '::interval
 				AND EXISTS(
 						SELECT
 							1
@@ -158,7 +158,7 @@ SELECT
 										FROM
 											lineitem RIGHT JOIN orders ON true
 										WHERE
-											l_receiptdate IN ('1997-07-06') OR l_commitdate = o_orderdate - ' 7 DAY '
+											l_receiptdate IN ('1997-07-06') OR l_commitdate = o_orderdate - ' 7 DAY '::interval
 									)
 					)
 	)

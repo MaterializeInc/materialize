@@ -137,7 +137,7 @@ EXPLAIN WITH(arity, join_impls) SELECT  MIN( o_orderkey  )
   FROM lineitem  JOIN orders  ON ( l_extendedprice  = o_totalprice  )
   WHERE l_commitDATE  = '1997-01-25'
   AND o_orderkey  BETWEEN  38  AND  195
-  AND o_orderdate  = l_commitDATE  + ' 7 MONTHS '
+  AND o_orderdate  = l_commitDATE  + ' 7 MONTHS '::interval
   AND o_orderkey  = (  SELECT l_orderkey  FROM lineitem  WHERE l_orderkey  =  38  )
 ----
 Explained Query:

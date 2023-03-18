@@ -330,9 +330,8 @@ SELECT * FROM (values ('a')), repeat_row(-1)
 statement error constant folding encountered reduce on collection with non-positive multiplicities
 SELECT (SELECT 1 FROM repeat_row(-1))
 
-query T
+query error function generate_series\(unknown, unknown, unknown\) is not unique
 SELECT generate_series FROM generate_series(null, null, null)
-----
 
 query I
 SELECT generate_series FROM generate_series(1, 3, 1)
