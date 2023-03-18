@@ -1079,68 +1079,70 @@ fn find_match<'a, R: std::fmt::Debug>(
     }
 
     for (i, arg_type) in types.iter().enumerate() {
+        if arg_type.is_some() {
+            continue;
+        }
+
         let mut selected_category: Option<TypeCategory> = None;
         let mut categories_match = true;
 
-        if arg_type.is_none() {
-            // 4.e. If any input arguments are unknown, check the type
-            // categories accepted at those argument positions by the remaining
-            // candidates.
-            for c in candidates.iter() {
-                let this_category = TypeCategory::from_param(&c.fimpl.params[i]);
-                // 4.e. cont: Select the string category if any candidate
-                // accepts that category. (This bias towards string is
-                // appropriate since an unknown-type literal looks like a
-                // string.)
-                if this_category == TypeCategory::String {
-                    selected_category = Some(TypeCategory::String);
-                    break;
-                }
-                match selected_category {
-                    Some(ref mut selected_category) => {
-                        // 4.e. cont: [...otherwise,] if all the remaining candidates
-                        // accept the same type category, select that category.
-                        categories_match = selected_category == &this_category && categories_match;
-                    }
-                    None => selected_category = Some(this_category.clone()),
-                }
-            }
-
-            // 4.e. cont: Otherwise fail because the correct choice cannot
-            // be deduced without more clues.
-            // (ed: this doesn't mean fail entirely, simply moving onto 4.f)
-            if selected_category != Some(TypeCategory::String) && !categories_match {
+        // 4.e. If any input arguments are unknown, check the type
+        // categories accepted at those argument positions by the remaining
+        // candidates.
+        for c in candidates.iter() {
+            let this_category = TypeCategory::from_param(&c.fimpl.params[i]);
+            // 4.e. cont: Select the string category if any candidate
+            // accepts that category. (This bias towards string is
+            // appropriate since an unknown-type literal looks like a
+            // string.)
+            if this_category == TypeCategory::String {
+                selected_category = Some(TypeCategory::String);
                 break;
             }
-
-            // 4.e. cont: Now discard candidates that do not accept the
-            // selected type category. Furthermore, if any candidate accepts
-            // a preferred type in that category, discard candidates that
-            // accept non-preferred types for that argument.
-            let selected_category = selected_category.unwrap();
-
-            let preferred_type = selected_category.preferred_type();
-            let mut found_preferred_type_candidate = false;
-            candidates.retain(|c| {
-                if let Some(typ) = &preferred_type {
-                    found_preferred_type_candidate =
-                        c.fimpl.params[i].accepts_type(ecx, typ) || found_preferred_type_candidate;
+            match selected_category {
+                Some(ref mut selected_category) => {
+                    // 4.e. cont: [...otherwise,] if all the remaining candidates
+                    // accept the same type category, select that category.
+                    categories_match = selected_category == &this_category && categories_match;
                 }
-                selected_category == TypeCategory::from_param(&c.fimpl.params[i])
-            });
-
-            if found_preferred_type_candidate {
-                let preferred_type = ParamType::Plain(preferred_type.unwrap());
-                let (matches, failures): (Vec<Candidate<R>>, Vec<Candidate<R>>) = candidates
-                    .into_iter()
-                    .partition(|c| c.fimpl.params[i] == preferred_type);
-
-                if matches.is_empty() {
-                    candidates = failures;
-                } else {
-                    candidates = matches
-                };
+                None => selected_category = Some(this_category.clone()),
             }
+        }
+
+        // 4.e. cont: Otherwise fail because the correct choice cannot
+        // be deduced without more clues.
+        // (ed: this doesn't mean fail entirely, simply moving onto 4.f)
+        if selected_category != Some(TypeCategory::String) && !categories_match {
+            break;
+        }
+
+        // 4.e. cont: Now discard candidates that do not accept the
+        // selected type category. Furthermore, if any candidate accepts
+        // a preferred type in that category, discard candidates that
+        // accept non-preferred types for that argument.
+        let selected_category = selected_category.unwrap();
+
+        let preferred_type = selected_category.preferred_type();
+        let mut found_preferred_type_candidate = false;
+        candidates.retain(|c| {
+            if let Some(typ) = &preferred_type {
+                found_preferred_type_candidate =
+                    c.fimpl.params[i].accepts_type(ecx, typ) || found_preferred_type_candidate;
+            }
+            selected_category == TypeCategory::from_param(&c.fimpl.params[i])
+        });
+
+        if found_preferred_type_candidate {
+            let preferred_type = ParamType::Plain(preferred_type.unwrap());
+            let (matches, failures): (Vec<Candidate<R>>, Vec<Candidate<R>>) = candidates
+                .into_iter()
+                .partition(|c| c.fimpl.params[i] == preferred_type);
+
+            if matches.is_empty() {
+                candidates = failures;
+            } else {
+                candidates = matches
+            };
         }
     }
 
@@ -1164,6 +1166,7 @@ fn find_match<'a, R: std::fmt::Debug>(
             }
         }
     }
+
     if found_known && types_match {
         let common_type = common_type.unwrap();
         let common_typed: Vec<_> = types
