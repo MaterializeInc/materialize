@@ -492,10 +492,26 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
             })))
         }),
         (String, Int2Vector) => Explicit: CastStringToInt2Vector(func::CastStringToInt2Vector),
+        // Warning: this cast almost certainly needs to be implicit. You might
+        // be tempted to change it to an assignment cast, but it will not fix
+        // your issue because this test will fail:
+        //
+        // ```sql
+        // SELECT pg_typeof(coalesce('a'::text, 'a'::char)), pg_typeof(coalesce('a'::char, 'a'::text));
+        // text character
+        // ```
         (String, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
             let length = to_type.unwrap_char_length();
             Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx != CastContext::Explicit})))
         }),
+        // Warning: this cast almost certainly needs to be implicit. You might
+        // be tempted to change it to an assignment cast, but it will not fix
+        // your issue because this test will fail:
+        //
+        // ```sql
+        // SELECT pg_typeof(coalesce('a'::text, 'a'::varchar)), pg_typeof(coalesce('a'::varchar, 'a'::text));
+        // text "character varying"
+        // ```
         (String, VarChar) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
             let length = to_type.unwrap_varchar_max_length();
             Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx != CastContext::Explicit})))
