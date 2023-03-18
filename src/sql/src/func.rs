@@ -1130,8 +1130,16 @@ fn find_match<'a, R: std::fmt::Debug>(
             });
 
             if found_preferred_type_candidate {
-                let preferred_type = preferred_type.unwrap();
-                candidates.retain(|c| c.fimpl.params[i].accepts_type(ecx, &preferred_type));
+                let preferred_type = ParamType::Plain(preferred_type.unwrap());
+                let (matches, failures): (Vec<Candidate<R>>, Vec<Candidate<R>>) = candidates
+                    .into_iter()
+                    .partition(|c| c.fimpl.params[i] == preferred_type);
+
+                if matches.is_empty() {
+                    candidates = failures;
+                } else {
+                    candidates = matches
+                };
             }
         }
     }
