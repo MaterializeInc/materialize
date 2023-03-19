@@ -70,6 +70,12 @@
 /src/segment                        @benesch
 /src/service                        @MaterializeInc/storage @MaterializeInc/compute
 /src/sql                            @MaterializeInc/surfaces
+# HirRelationExpr is the boundary between the `sql` crate and the compute
+# layer, and is jointly owned by the two teams.
+/src/sql/src/plan/expr.rs           @MaterializeInc/surfaces @MaterializeInc/compute
+# The lowering of HirRelationExpr to MirRelationExpr is part of the compute
+# layer, despite being located in the `sql` crate.
+/src/sql/src/plan/lowering.rs       @MaterializeInc/compute
 /src/sql-parser                     @MaterializeInc/surfaces
 /src/sqllogictest                   @MaterializeInc/surfaces
 /src/ssh-util                       @MaterializeInc/storage
