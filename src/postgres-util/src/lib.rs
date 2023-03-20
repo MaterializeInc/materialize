@@ -262,14 +262,12 @@ pub async fn publication_info(
                 );
                 let type_mod: i32 = row.get("typmod");
                 let not_null: bool = row.get("not_null");
-                let primary_key = row.get("primary_key");
                 Ok(PostgresColumnDesc {
                     name,
                     col_num,
                     type_oid,
                     type_mod,
                     nullable: !not_null,
-                    primary_key,
                 })
             })
             .collect::<Result<Vec<_>, PostgresError>>()?;
