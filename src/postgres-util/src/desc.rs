@@ -9,6 +9,8 @@
 
 //! Descriptions of PostgreSQL objects.
 
+use std::collections::BTreeSet;
+
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
@@ -28,6 +30,9 @@ pub struct PostgresTableDesc {
     pub name: String,
     /// The description of each column, in order of their position in the table.
     pub columns: Vec<PostgresColumnDesc>,
+    /// Applicable keys for this table (i.e. primary key and unique
+    /// constraints.
+    pub keys: BTreeSet<PostgresKeyDesc>,
 }
 
 impl RustType<ProtoPostgresTableDesc> for PostgresTableDesc {
@@ -37,6 +42,7 @@ impl RustType<ProtoPostgresTableDesc> for PostgresTableDesc {
             namespace: self.namespace.clone(),
             name: self.name.clone(),
             columns: self.columns.iter().map(|c| c.into_proto()).collect(),
+            keys: self.keys.iter().map(PostgresKeyDesc::into_proto).collect(),
         }
     }
 
@@ -49,6 +55,11 @@ impl RustType<ProtoPostgresTableDesc> for PostgresTableDesc {
                 .columns
                 .into_iter()
                 .map(PostgresColumnDesc::from_proto)
+                .collect::<Result<_, _>>()?,
+            keys: proto
+                .keys
+                .into_iter()
+                .map(PostgresKeyDesc::from_proto)
                 .collect::<Result<_, _>>()?,
         })
     }
@@ -64,12 +75,14 @@ impl Arbitrary for PostgresTableDesc {
             any::<String>(),
             any::<u32>(),
             any::<Vec<PostgresColumnDesc>>(),
+            any::<BTreeSet<PostgresKeyDesc>>(),
         )
-            .prop_map(|(name, namespace, oid, columns)| PostgresTableDesc {
+            .prop_map(|(name, namespace, oid, columns, keys)| PostgresTableDesc {
                 name,
                 namespace,
                 oid,
                 columns,
+                keys,
             })
             .boxed()
     }
@@ -146,6 +159,64 @@ impl Arbitrary for PostgresColumnDesc {
                     primary_key,
                 },
             )
+            .boxed()
+    }
+}
+
+/// Describes a kye in a [`PostgresTableDesc`].
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, PartialOrd, Ord)]
+pub struct PostgresKeyDesc {
+    /// This key is derived from the `pg_constraint` with this OID.
+    pub oid: u32,
+    /// The name of the column.
+    pub name: String,
+    /// The `attnum` of the columns comprising the key.
+    pub cols: Vec<u16>,
+    /// Whether or not this key is the primary key.
+    pub is_primary: bool,
+}
+
+impl RustType<ProtoPostgresKeyDesc> for PostgresKeyDesc {
+    fn into_proto(&self) -> ProtoPostgresKeyDesc {
+        ProtoPostgresKeyDesc {
+            oid: self.oid,
+            name: self.name.clone(),
+            cols: self.cols.clone().into_iter().map(u32::from).collect(),
+            is_primary: self.is_primary,
+        }
+    }
+
+    fn from_proto(proto: ProtoPostgresKeyDesc) -> Result<Self, TryFromProtoError> {
+        Ok(PostgresKeyDesc {
+            oid: proto.oid,
+            name: proto.name,
+            cols: proto
+                .cols
+                .into_iter()
+                .map(|c| c.try_into().expect("values roundtrip"))
+                .collect(),
+            is_primary: proto.is_primary,
+        })
+    }
+}
+
+impl Arbitrary for PostgresKeyDesc {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<u32>(),
+            any::<String>(),
+            any::<Vec<u16>>(),
+            any::<bool>(),
+        )
+            .prop_map(|(oid, name, cols, is_primary)| PostgresKeyDesc {
+                oid,
+                name,
+                cols,
+                is_primary,
+            })
             .boxed()
     }
 }

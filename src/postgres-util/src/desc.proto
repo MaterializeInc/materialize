@@ -11,11 +11,19 @@ syntax = "proto3";
 
 package mz_postgres_util.desc;
 
+message ProtoPostgresKeyDesc {
+    uint32 oid = 1;
+    string name = 2;
+    repeated uint32 cols = 3;
+    bool is_primary = 4;
+}
+
 message ProtoPostgresTableDesc {
     string name = 1;
     string namespace = 2;
     uint32 oid = 3;
     repeated ProtoPostgresColumnDesc columns = 4;
+    repeated ProtoPostgresKeyDesc keys = 5;
 }
 
 message ProtoPostgresColumnDesc {
