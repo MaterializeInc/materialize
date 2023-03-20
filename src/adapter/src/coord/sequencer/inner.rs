@@ -41,7 +41,7 @@ use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
 use mz_sql::catalog::{CatalogCluster, CatalogError, CatalogItemType, CatalogTypeDetails};
 use mz_sql::catalog::{CatalogItem as SqlCatalogItem, CatalogRole};
-use mz_sql::names::QualifiedObjectName;
+use mz_sql::names::{QualifiedObjectName, RoleId};
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
     AlterOptionParameter, AlterRolePlan, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan,
@@ -137,6 +137,7 @@ impl Coordinator {
                                 &plan.name,
                                 &plan.cluster_config,
                                 &mut ops,
+                                session,
                             )
                             .await?;
                         DataSourceDesc::Ingestion(catalog::Ingestion {
@@ -179,6 +180,7 @@ impl Coordinator {
                 oid: source_oid,
                 name: plan.name.clone(),
                 item: CatalogItem::Source(source.clone()),
+                owner_id: *session.role_id(),
             });
             sources.push((source_id, source));
         }
@@ -305,6 +307,7 @@ impl Coordinator {
                 connection: connection.clone(),
                 depends_on,
             }),
+            owner_id: *session.role_id(),
         }];
 
         match self.catalog_transact(Some(session), ops).await {
@@ -371,6 +374,7 @@ impl Coordinator {
             name: plan.name.clone(),
             oid: db_oid,
             public_schema_oid: schema_oid,
+            owner_id: *session.role_id(),
         }];
         match self.catalog_transact(Some(session), ops).await {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase),
@@ -396,6 +400,7 @@ impl Coordinator {
             database_id: plan.database_spec,
             schema_name: plan.schema_name.clone(),
             oid,
+            owner_id: *session.role_id(),
         };
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema),
@@ -469,6 +474,7 @@ impl Coordinator {
             name: name.clone(),
             linked_object_id: None,
             arranged_introspection_sources,
+            owner_id: *session.role_id(),
         }];
 
         let azs = self.catalog.state().availability_zones();
@@ -567,6 +573,7 @@ impl Coordinator {
                 id: self.catalog.allocate_replica_id().await?,
                 name: replica_name.clone(),
                 config,
+                owner_id: *session.role_id(),
             });
         }
 
@@ -719,6 +726,7 @@ impl Coordinator {
             id,
             name: name.clone(),
             config,
+            owner_id: *session.role_id(),
         };
 
         self.catalog_transact(Some(session), vec![op]).await?;
@@ -819,6 +827,7 @@ impl Coordinator {
             oid: table_oid,
             name: name.clone(),
             item: CatalogItem::Table(table.clone()),
+            owner_id: *session.role_id(),
         }];
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => {
@@ -897,6 +906,7 @@ impl Coordinator {
             oid,
             name: name.clone(),
             item: CatalogItem::Secret(secret.clone()),
+            owner_id: *session.role_id(),
         }];
 
         match self.catalog_transact(Some(session), ops).await {
@@ -945,7 +955,7 @@ impl Coordinator {
 
         let mut ops = vec![];
         let cluster_id = return_if_err!(
-            self.create_linked_cluster_ops(id, &name, &plan_cluster_config, &mut ops)
+            self.create_linked_cluster_ops(id, &name, &plan_cluster_config, &mut ops, &session)
                 .await,
             tx,
             session
@@ -979,6 +989,7 @@ impl Coordinator {
             oid,
             name: name.clone(),
             item: CatalogItem::Sink(catalog_sink.clone()),
+            owner_id: *session.role_id(),
         });
 
         let from = self.catalog.get_entry(&catalog_sink.from);
@@ -1166,6 +1177,7 @@ impl Coordinator {
             oid: view_oid,
             name: name.clone(),
             item: CatalogItem::View(view),
+            owner_id: *session.role_id(),
         });
 
         Ok(ops)
@@ -1257,6 +1269,7 @@ impl Coordinator {
                 depends_on,
                 cluster_id,
             }),
+            owner_id: *session.role_id(),
         });
 
         match self
@@ -1355,6 +1368,7 @@ impl Coordinator {
             oid,
             name: name.clone(),
             item: CatalogItem::Index(index),
+            owner_id: *session.role_id(),
         };
         match self
             .catalog_transact_with(Some(session), vec![op], |txn| {
@@ -1405,6 +1419,7 @@ impl Coordinator {
             oid,
             name: plan.name,
             item: CatalogItem::Type(typ),
+            owner_id: *session.role_id(),
         };
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(()) => Ok(ExecuteResponse::CreatedType),
@@ -3604,6 +3619,7 @@ impl Coordinator {
         name: &QualifiedObjectName,
         config: &SourceSinkClusterConfig,
         ops: &mut Vec<catalog::Op>,
+        session: &Session,
     ) -> Result<ClusterId, AdapterError> {
         let size = match config {
             SourceSinkClusterConfig::Linked { size } => size.clone(),
@@ -3621,8 +3637,10 @@ impl Coordinator {
             name: name.clone(),
             linked_object_id: Some(linked_object_id),
             arranged_introspection_sources,
+            owner_id: *session.role_id(),
         });
-        self.create_linked_cluster_replica_op(id, size, ops).await?;
+        self.create_linked_cluster_replica_op(id, size, ops, *session.role_id())
+            .await?;
         Ok(id)
     }
 
@@ -3633,6 +3651,7 @@ impl Coordinator {
         cluster_id: ClusterId,
         size: String,
         ops: &mut Vec<catalog::Op>,
+        owner_id: RoleId,
     ) -> Result<(), AdapterError> {
         let availability_zone = {
             let azs = self.catalog.state().availability_zones();
@@ -3672,6 +3691,7 @@ impl Coordinator {
                     idle_arrangement_merge_effort: None,
                 },
             },
+            owner_id,
         });
         Ok(())
     }
@@ -3703,8 +3723,13 @@ impl Coordinator {
                         coord_bail!("cannot change the cluster of a source or sink")
                     }
                 };
-                self.create_linked_cluster_replica_op(linked_cluster.id, size, &mut ops)
-                    .await?;
+                self.create_linked_cluster_replica_op(
+                    linked_cluster.id,
+                    size,
+                    &mut ops,
+                    linked_cluster.owner_id,
+                )
+                .await?;
             }
         }
         Ok(ops)

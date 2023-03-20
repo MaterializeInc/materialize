@@ -1,0 +1,530 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+reset-server
+
+# All objects on a fresh installation should be owned by mz_system (s1)
+
+# No builtin sinks
+query T
+SELECT owner_id FROM mz_sinks GROUP BY owner_id
+----
+
+query T
+SELECT owner_id FROM mz_indexes GROUP BY owner_id
+----
+s1
+
+# No builtin connections
+query T
+SELECT owner_id FROM mz_connections GROUP BY owner_id
+----
+
+query T
+SELECT owner_id FROM mz_types GROUP BY owner_id
+----
+s1
+
+query T
+SELECT owner_id FROM mz_functions GROUP BY owner_id
+----
+s1
+
+# No builtin secrets
+query T
+SELECT owner_id FROM mz_secrets GROUP BY owner_id
+----
+
+query T
+SELECT owner_id FROM mz_relations GROUP BY owner_id
+----
+s1
+
+query T
+SELECT owner_id FROM mz_tables GROUP BY owner_id
+----
+s1
+
+query T
+SELECT owner_id FROM mz_sources GROUP BY owner_id
+----
+s1
+
+query T
+SELECT owner_id FROM mz_views GROUP BY owner_id
+----
+s1
+
+# No builtin materialized views
+query T
+SELECT owner_id FROM mz_materialized_views GROUP BY owner_id
+----
+
+query T
+SELECT owner_id FROM mz_databases GROUP BY owner_id
+----
+s1
+
+query T
+SELECT owner_id FROM mz_clusters GROUP BY owner_id
+----
+s1
+
+query T
+SELECT owner_id FROM mz_cluster_replicas GROUP BY owner_id
+----
+s1
+
+query T
+SELECT owner_id FROM mz_schemas GROUP BY owner_id
+----
+s1
+
+# Test user made objects
+
+simple conn=mz_system,user=mz_system
+ALTER ROLE materialize CREATEDB CREATECLUSTER;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE joe CREATEDB CREATECLUSTER;
+----
+COMPLETE 0
+
+# Tables
+
+statement ok
+CREATE TABLE mt (a INT);
+
+query T
+SELECT mz_roles.name
+  FROM mz_tables
+  LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
+  WHERE mz_tables.name = 'mt'
+----
+materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_relations
+  LEFT JOIN mz_roles ON mz_relations.owner_id = mz_roles.id
+  WHERE mz_relations.name = 'mt'
+----
+materialize
+
+simple conn=joe,user=joe
+CREATE TABLE jt (a INT);
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_tables
+  LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
+  WHERE mz_tables.name = 'jt'
+----
+joe
+
+query T
+SELECT mz_roles.name
+  FROM mz_relations
+  LEFT JOIN mz_roles ON mz_relations.owner_id = mz_roles.id
+  WHERE mz_relations.name = 'jt'
+----
+joe
+
+# Indexes
+
+statement ok
+CREATE INDEX mt_ind ON mt(a);
+
+query T
+SELECT mz_roles.name
+  FROM mz_indexes
+  LEFT JOIN mz_roles ON mz_indexes.owner_id = mz_roles.id
+  WHERE mz_indexes.name = 'mt_ind'
+----
+materialize
+
+simple conn=joe,user=joe
+CREATE INDEX jt_ind ON jt(a);
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_indexes
+  LEFT JOIN mz_roles ON mz_indexes.owner_id = mz_roles.id
+  WHERE mz_indexes.name = 'jt_ind'
+----
+joe
+
+# Sources
+
+statement ok
+CREATE SOURCE ms FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+
+query T
+SELECT mz_roles.name
+  FROM mz_sources
+  LEFT JOIN mz_roles ON mz_sources.owner_id = mz_roles.id
+  WHERE mz_sources.name = 'ms'
+----
+materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_relations
+  LEFT JOIN mz_roles ON mz_relations.owner_id = mz_roles.id
+  WHERE mz_relations.name = 'ms'
+----
+materialize
+
+simple conn=joe,user=joe
+CREATE SOURCE js FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_sources
+  LEFT JOIN mz_roles ON mz_sources.owner_id = mz_roles.id
+  WHERE mz_sources.name = 'js'
+----
+joe
+
+query T
+SELECT mz_roles.name
+  FROM mz_relations
+  LEFT JOIN mz_roles ON mz_relations.owner_id = mz_roles.id
+  WHERE mz_relations.name = 'js'
+----
+joe
+
+# Views
+
+statement ok
+CREATE VIEW mv AS SELECT 1;
+
+query T
+SELECT mz_roles.name
+  FROM mz_views
+  LEFT JOIN mz_roles ON mz_views.owner_id = mz_roles.id
+  WHERE mz_views.name = 'mv'
+----
+materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_relations
+  LEFT JOIN mz_roles ON mz_relations.owner_id = mz_roles.id
+  WHERE mz_relations.name = 'mv'
+----
+materialize
+
+simple conn=joe,user=joe
+CREATE VIEW jv AS SELECT 1;
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_views
+  LEFT JOIN mz_roles ON mz_views.owner_id = mz_roles.id
+  WHERE mz_views.name = 'jv'
+----
+joe
+
+query T
+SELECT mz_roles.name
+  FROM mz_relations
+  LEFT JOIN mz_roles ON mz_relations.owner_id = mz_roles.id
+  WHERE mz_relations.name = 'jv'
+----
+joe
+
+# Materialized Views
+
+statement ok
+CREATE MATERIALIZED VIEW mmv AS SELECT 1;
+
+query T
+SELECT mz_roles.name
+  FROM mz_materialized_views
+  LEFT JOIN mz_roles ON mz_materialized_views.owner_id = mz_roles.id
+  WHERE mz_materialized_views.name = 'mmv'
+----
+materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_relations
+  LEFT JOIN mz_roles ON mz_relations.owner_id = mz_roles.id
+  WHERE mz_relations.name = 'mmv'
+----
+materialize
+
+simple conn=joe,user=joe
+CREATE MATERIALIZED VIEW jmv AS SELECT 1;
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_materialized_views
+  LEFT JOIN mz_roles ON mz_materialized_views.owner_id = mz_roles.id
+  WHERE mz_materialized_views.name = 'jmv'
+----
+joe
+
+query T
+SELECT mz_roles.name
+  FROM mz_relations
+  LEFT JOIN mz_roles ON mz_relations.owner_id = mz_roles.id
+  WHERE mz_relations.name = 'jmv'
+----
+joe
+
+# Connections
+
+statement ok
+CREATE CONNECTION mc TO KAFKA (BROKER 'localhost:9092');
+
+query T
+SELECT mz_roles.name
+  FROM mz_connections
+  LEFT JOIN mz_roles ON mz_connections.owner_id = mz_roles.id
+  WHERE mz_connections.name = 'mc'
+----
+materialize
+
+simple conn=joe,user=joe
+CREATE CONNECTION jc TO KAFKA (BROKER 'localhost:9092');
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_connections
+  LEFT JOIN mz_roles ON mz_connections.owner_id = mz_roles.id
+  WHERE mz_connections.name = 'jc'
+----
+joe
+
+# Types
+
+statement ok
+CREATE TYPE mty AS LIST (ELEMENT TYPE=bool);
+
+query T
+SELECT mz_roles.name
+  FROM mz_types
+  LEFT JOIN mz_roles ON mz_types.owner_id = mz_roles.id
+  WHERE mz_types.name = 'mty'
+----
+materialize
+
+simple conn=joe,user=joe
+CREATE TYPE jty AS LIST (ELEMENT TYPE=bool);
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_types
+  LEFT JOIN mz_roles ON mz_types.owner_id = mz_roles.id
+  WHERE mz_types.name = 'jty'
+----
+joe
+
+# Secrets
+
+statement ok
+CREATE SECRET mse AS decode('c2VjcmV0Cg==', 'base64');
+
+query T
+SELECT mz_roles.name
+  FROM mz_secrets
+  LEFT JOIN mz_roles ON mz_secrets.owner_id = mz_roles.id
+  WHERE mz_secrets.name = 'mse'
+----
+materialize
+
+simple conn=joe,user=joe
+CREATE SECRET jse AS decode('c2VjcmV0Cg==', 'base64');
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_secrets
+  LEFT JOIN mz_roles ON mz_secrets.owner_id = mz_roles.id
+  WHERE mz_secrets.name = 'jse'
+----
+joe
+
+# Databases
+
+statement ok
+CREATE DATABASE mdb;
+
+query T
+SELECT mz_roles.name
+  FROM mz_databases
+  LEFT JOIN mz_roles ON mz_databases.owner_id = mz_roles.id
+  WHERE mz_databases.name = 'mdb'
+----
+materialize
+
+simple conn=joe,user=joe
+CREATE DATABASE jdb;
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_databases
+  LEFT JOIN mz_roles ON mz_databases.owner_id = mz_roles.id
+  WHERE mz_databases.name = 'jdb'
+----
+joe
+
+# Schemas
+
+statement ok
+CREATE SCHEMA msc;
+
+query T
+SELECT mz_roles.name
+  FROM mz_schemas
+  LEFT JOIN mz_roles ON mz_schemas.owner_id = mz_roles.id
+  WHERE mz_schemas.name = 'msc'
+----
+materialize
+
+simple conn=joe,user=joe
+CREATE SCHEMA jsc;
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_schemas
+  LEFT JOIN mz_roles ON mz_schemas.owner_id = mz_roles.id
+  WHERE mz_schemas.name = 'jsc'
+----
+joe
+
+statement ok
+CREATE SCHEMA jdb.msc_cross;
+
+query T
+SELECT mz_roles.name
+  FROM mz_schemas
+  LEFT JOIN mz_roles ON mz_schemas.owner_id = mz_roles.id
+  WHERE mz_schemas.name = 'msc_cross'
+----
+materialize
+
+# Clusters
+
+statement ok
+CREATE CLUSTER mclus REPLICAS (mr1 (SIZE '1'));
+
+query T
+SELECT mz_roles.name
+  FROM mz_clusters
+  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  WHERE mz_clusters.name = 'mclus'
+----
+materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
+  WHERE mz_cluster_replicas.name = 'mr1'
+----
+materialize
+
+simple conn=joe,user=joe
+CREATE CLUSTER jclus REPLICAS (jr1 (SIZE '1'));
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_clusters
+  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  WHERE mz_clusters.name = 'jclus'
+----
+joe
+
+query T
+SELECT mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
+  WHERE mz_cluster_replicas.name = 'jr1'
+----
+joe
+
+# Cluster Replicas
+
+statement ok
+CREATE CLUSTER REPLICA default.mr2 SIZE '1';
+
+query T
+SELECT mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
+  WHERE mz_cluster_replicas.name = 'mr1'
+----
+materialize
+
+simple conn=joe,user=joe
+CREATE CLUSTER REPLICA default.jr2 SIZE '1';
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
+  WHERE mz_cluster_replicas.name = 'jr2'
+----
+joe
+
+statement ok
+CREATE CLUSTER REPLICA jclus.mr_cross SIZE '1';
+
+query T
+SELECT mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
+  WHERE mz_cluster_replicas.name = 'mr_cross'
+----
+materialize
+
+# Altering does not change owner
+
+simple conn=mz_system,user=mz_system
+ALTER TABLE mt RENAME TO new_table;
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_tables
+  LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
+  WHERE mz_tables.name = 'new_table'
+----
+materialize

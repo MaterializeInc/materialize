@@ -235,7 +235,10 @@ impl Coordinator {
             .id();
         session.set_role_id(role_id);
 
-        if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
+        if let Err(e) = self
+            .catalog
+            .create_temporary_schema(session.conn_id(), role_id)
+        {
             let _ = tx.send(Response {
                 result: Err(e.into()),
                 session,

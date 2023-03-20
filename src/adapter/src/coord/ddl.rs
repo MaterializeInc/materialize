@@ -758,6 +758,7 @@ impl Coordinator {
         // Update catalog entry with sink connection.
         let entry = self.catalog.get_entry(&id);
         let name = entry.name().clone();
+        let owner_id = entry.owner_id().clone();
         let sink = match entry.item() {
             CatalogItem::Sink(sink) => sink,
             _ => unreachable!(),
@@ -786,6 +787,7 @@ impl Coordinator {
                     oid,
                     name,
                     item: CatalogItem::Sink(sink.clone()),
+                    owner_id,
                 });
                 match self.catalog_transact(session, ops).await {
                     Ok(()) => (),

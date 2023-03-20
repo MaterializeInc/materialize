@@ -1362,7 +1362,8 @@ pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::UInt64.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false)),
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false)),
     is_retained_metrics_relation: false,
 });
 pub static MZ_SCHEMAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1372,7 +1373,8 @@ pub static MZ_SCHEMAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("id", ScalarType::UInt64.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("database_id", ScalarType::UInt64.nullable(true))
-        .with_column("name", ScalarType::String.nullable(false)),
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false)),
     is_retained_metrics_relation: false,
 });
 pub static MZ_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1396,7 +1398,8 @@ pub static MZ_INDEXES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("on_id", ScalarType::String.nullable(false))
-        .with_column("cluster_id", ScalarType::String.nullable(false)),
+        .with_column("cluster_id", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false)),
     is_retained_metrics_relation: false,
 });
 pub static MZ_INDEX_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1417,7 +1420,8 @@ pub static MZ_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::UInt64.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false)),
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false)),
     is_retained_metrics_relation: false,
 });
 pub static MZ_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1428,7 +1432,8 @@ pub static MZ_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("type", ScalarType::String.nullable(false)),
+        .with_column("type", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false)),
     is_retained_metrics_relation: false,
 });
 pub static MZ_SSH_TUNNEL_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1452,7 +1457,8 @@ pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("connection_id", ScalarType::String.nullable(true))
         .with_column("size", ScalarType::String.nullable(true))
         .with_column("envelope_type", ScalarType::String.nullable(true))
-        .with_column("cluster_id", ScalarType::String.nullable(true)),
+        .with_column("cluster_id", ScalarType::String.nullable(true))
+        .with_column("owner_id", ScalarType::String.nullable(false)),
     is_retained_metrics_relation: true,
 });
 pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1467,7 +1473,8 @@ pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("connection_id", ScalarType::String.nullable(true))
         .with_column("size", ScalarType::String.nullable(true))
         .with_column("envelope_type", ScalarType::String.nullable(true))
-        .with_column("cluster_id", ScalarType::String.nullable(false)),
+        .with_column("cluster_id", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false)),
     is_retained_metrics_relation: true,
 });
 pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1478,7 +1485,8 @@ pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("definition", ScalarType::String.nullable(false)),
+        .with_column("definition", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false)),
     is_retained_metrics_relation: false,
 });
 pub static MZ_MATERIALIZED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1490,7 +1498,8 @@ pub static MZ_MATERIALIZED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable
         .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("cluster_id", ScalarType::String.nullable(false))
-        .with_column("definition", ScalarType::String.nullable(false)),
+        .with_column("definition", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false)),
     is_retained_metrics_relation: false,
 });
 pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1501,7 +1510,8 @@ pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("category", ScalarType::String.nullable(false)),
+        .with_column("category", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false)),
     is_retained_metrics_relation: false,
 });
 pub static MZ_ARRAY_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1580,7 +1590,8 @@ pub static MZ_FUNCTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::String.nullable(true),
         )
         .with_column("return_type_id", ScalarType::String.nullable(true))
-        .with_column("returns_set", ScalarType::Bool.nullable(false)),
+        .with_column("returns_set", ScalarType::Bool.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false)),
     is_retained_metrics_relation: false,
 });
 pub static MZ_OPERATORS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1602,7 +1613,8 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false)),
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false)),
     is_retained_metrics_relation: false,
 });
 
@@ -1621,7 +1633,8 @@ pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("schema_id", ScalarType::UInt64.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false)),
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false)),
     is_retained_metrics_relation: false,
 });
 pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1632,7 +1645,8 @@ pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("size", ScalarType::String.nullable(true))
-        .with_column("availability_zone", ScalarType::String.nullable(true)),
+        .with_column("availability_zone", ScalarType::String.nullable(true))
+        .with_column("owner_id", ScalarType::String.nullable(false)),
     is_retained_metrics_relation: true,
 });
 
@@ -1874,32 +1888,33 @@ GROUP BY object_id, collection_timestamp",
 pub const MZ_RELATIONS: BuiltinView = BuiltinView {
     name: "mz_relations",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_relations (id, oid, schema_id, name, type) AS
-      SELECT id, oid, schema_id, name, 'table' FROM mz_catalog.mz_tables
-UNION ALL SELECT id, oid, schema_id, name, 'source' FROM mz_catalog.mz_sources
-UNION ALL SELECT id, oid, schema_id, name, 'view' FROM mz_catalog.mz_views
-UNION ALL SELECT id, oid, schema_id, name, 'materialized-view' FROM mz_catalog.mz_materialized_views",
+    sql: "CREATE VIEW mz_catalog.mz_relations (id, oid, schema_id, name, type, owner_id) AS
+      SELECT id, oid, schema_id, name, 'table', owner_id FROM mz_catalog.mz_tables
+UNION ALL SELECT id, oid, schema_id, name, 'source', owner_id FROM mz_catalog.mz_sources
+UNION ALL SELECT id, oid, schema_id, name, 'view', owner_id FROM mz_catalog.mz_views
+UNION ALL SELECT id, oid, schema_id, name, 'materialized-view', owner_id FROM mz_catalog.mz_materialized_views",
 };
 
 pub const MZ_OBJECTS: BuiltinView = BuiltinView {
     name: "mz_objects",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_objects (id, oid, schema_id, name, type) AS
-    SELECT id, oid, schema_id, name, type FROM mz_catalog.mz_relations
+    sql:
+        "CREATE VIEW mz_catalog.mz_objects (id, oid, schema_id, name, type, owner_id) AS
+    SELECT id, oid, schema_id, name, type, owner_id FROM mz_catalog.mz_relations
 UNION ALL
-    SELECT id, oid, schema_id, name, 'sink' FROM mz_catalog.mz_sinks
+    SELECT id, oid, schema_id, name, 'sink', owner_id FROM mz_catalog.mz_sinks
 UNION ALL
-    SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index'
+    SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index', mz_indexes.owner_id
     FROM mz_catalog.mz_indexes
     JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id
 UNION ALL
-    SELECT id, oid, schema_id, name, 'connection' FROM mz_catalog.mz_connections
+    SELECT id, oid, schema_id, name, 'connection', owner_id FROM mz_catalog.mz_connections
 UNION ALL
-    SELECT id, oid, schema_id, name, 'type' FROM mz_catalog.mz_types
+    SELECT id, oid, schema_id, name, 'type', owner_id FROM mz_catalog.mz_types
 UNION ALL
-    SELECT id, oid, schema_id, name, 'function' FROM mz_catalog.mz_functions
+    SELECT id, oid, schema_id, name, 'function', owner_id FROM mz_catalog.mz_functions
 UNION ALL
-    SELECT id, NULL::pg_catalog.oid, schema_id, name, 'secret' FROM mz_catalog.mz_secrets",
+    SELECT id, NULL::pg_catalog.oid, schema_id, name, 'secret', owner_id FROM mz_catalog.mz_secrets",
 };
 
 pub const MZ_DATAFLOWS: BuiltinView = BuiltinView {
@@ -2066,7 +2081,7 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     mz_schemas.oid AS relnamespace,
     -- MZ doesn't support typed tables so reloftype is filled with 0
     0::pg_catalog.oid AS reloftype,
-    NULL::pg_catalog.oid AS relowner,
+    role_owner.oid AS relowner,
     0::pg_catalog.oid AS relam,
     -- MZ doesn't have tablespaces so reltablespace is filled in with 0 implying the default tablespace
     0::pg_catalog.oid AS reltablespace,
@@ -2103,14 +2118,15 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     NULL::pg_catalog.text[] as reloptions
 FROM (
     -- pg_class catalogs relations and indexes
-    SELECT id, oid, schema_id, name, type FROM mz_catalog.mz_relations
+    SELECT id, oid, schema_id, name, type, owner_id FROM mz_catalog.mz_relations
     UNION ALL
-        SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index' AS type
+        SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index' AS type, mz_indexes.owner_id
         FROM mz_catalog.mz_indexes
         JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id
 ) AS class_objects
 JOIN mz_catalog.mz_schemas ON mz_schemas.id = class_objects.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
+JOIN mz_catalog.mz_roles role_owner ON  role_owner.id = class_objects.owner_id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
 };
 
