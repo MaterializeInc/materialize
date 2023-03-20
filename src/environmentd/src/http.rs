@@ -496,7 +496,7 @@ async fn auth(
         }
     };
 
-    if mz_adapter::catalog::is_reserved_name(user.name.as_str()) {
+    if mz_adapter::catalog::is_reserved_role_name(user.name.as_str()) {
         return Err(AuthError::InvalidLogin(user.name));
     }
     Ok(AuthedUser(user))

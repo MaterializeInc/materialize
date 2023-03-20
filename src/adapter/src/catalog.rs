@@ -4775,7 +4775,7 @@ impl Catalog {
                     oid,
                     attributes,
                 } => {
-                    if is_reserved_name(&name) || is_public_role(name.as_str()) {
+                    if is_reserved_role_name(&name) {
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReservedRoleName(name),
                         )));
@@ -6035,6 +6035,10 @@ pub fn is_reserved_name(name: &str) -> bool {
     BUILTIN_PREFIXES
         .iter()
         .any(|prefix| name.starts_with(prefix))
+}
+
+pub fn is_reserved_role_name(name: &str) -> bool {
+    is_reserved_name(name) || is_public_role(name)
 }
 
 pub fn is_public_role(name: &str) -> bool {

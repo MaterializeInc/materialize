@@ -130,7 +130,7 @@ where
         }
     } else {
         // The external server cannot be used to connect to any system users.
-        if mz_adapter::catalog::is_reserved_name(user.as_str()) {
+        if mz_adapter::catalog::is_reserved_role_name(user.as_str()) {
             let msg = format!("unauthorized login to user '{user}'");
             return conn
                 .send(ErrorResponse::fatal(SqlState::INSUFFICIENT_PRIVILEGE, msg))
