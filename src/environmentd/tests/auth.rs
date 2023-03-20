@@ -129,6 +129,7 @@ use mz_ore::now::NowFn;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
 use mz_ore::task::RuntimeExt;
+use mz_sql::names::PUBLIC_ROLE_NAME;
 use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
 
 pub mod util;
@@ -1245,6 +1246,37 @@ fn test_auth_base() {
             TestCase::Ws {
                 auth: &WebSocketAuth::Basic {
                     user: (&*SYSTEM_USER.name).into(),
+                    password: frontegg_system_password.to_string(),
+                },
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, CloseCode::Protocol);
+                    assert_eq!(message, "unauthorized");
+                })),
+            },
+            // Public role cannot login.
+            TestCase::Pgwire {
+                user: PUBLIC_ROLE_NAME.as_str(),
+                password: Some(frontegg_system_password),
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|err| {
+                    assert_contains!(err.to_string(), "unauthorized login to user 'PUBLIC'");
+                })),
+            },
+            TestCase::Http {
+                user: PUBLIC_ROLE_NAME.as_str(),
+                scheme: Scheme::HTTPS,
+                headers: &frontegg_system_header_basic,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                    assert_contains!(message, "unauthorized");
+                })),
+            },
+            TestCase::Ws {
+                auth: &WebSocketAuth::Basic {
+                    user: (PUBLIC_ROLE_NAME.as_str()).into(),
                     password: frontegg_system_password.to_string(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
