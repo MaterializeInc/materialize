@@ -552,11 +552,10 @@ where
         let (mut pipeline, pipeline_output) = PipelineFetcher::<K, V, T, D, (Capability<T>, Capability<T>)>::new(PipelineParameters {
             max_fetch_concurrency: 5,
             max_inflight_bytes: 3 * PersistConfig::DEFAULT_BLOB_TARGET_SIZE,
-            max_queue_size: 25,
         }, fetcher.clone());
         tokio::pin!(pipeline_output);
 
-        while pipeline.has_work() {
+        while pipeline.more_work() {
             tokio::select! {
                 // We use a biased select to emit any fetched parts before looking for new input.
                 biased;
@@ -588,7 +587,9 @@ where
                             }
                         }
                         Some(Event::Progress(_)) => {}
-                        None => pipeline.push(None),
+                        None => {
+                            pipeline.push(None);
+                        }
                     }
                 }
             };
