@@ -28,12 +28,15 @@ class StandaloneMaterialized(Service):
         name: str,
         ports: List[str] = [],
         propagate_crashes: bool = True,
-        restart: Optional[str] = None,
         memory: Optional[str] = None,
+        unsafe_mode: bool = True,
+        restart: Optional[str] = None,
     ) -> None:
         command = []
         if propagate_crashes:
             command += ["--orchestrator-process-propagate-crashes"]
+        if unsafe_mode:
+            command += ["--unsafe-mode"]
 
         config: ServiceConfig = {
             "mzbuild": "materialized",
