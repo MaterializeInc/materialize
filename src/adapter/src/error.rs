@@ -444,7 +444,12 @@ impl fmt::Display for AdapterError {
                 cluster,
             } => {
                 let items = depends_on.into_iter().map(|item| item.quoted()).join(", ");
-                write!(f, "referencing the following items {items} is not allowed from the {} cluster", cluster.quoted())
+                write!(
+                    f, 
+                    "querying the following items {items} is not allowed from the {} cluster. \
+                    Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query.",
+                    cluster.quoted()
+                )
             }
             AdapterError::Unauthorized(unauthorized) => {
                 write!(f, "{unauthorized}")

@@ -50,11 +50,17 @@ static ALLOWED_SCHEMAS: Lazy<HashSet<&str>> = Lazy::new(|| {
 /// we depend on any objects that we're not allowed to query from the cluster.
 pub fn check_cluster_restrictions(
     catalog: &impl SessionCatalog,
+    plan: &Plan,
     depends_on: &Vec<GlobalId>,
 ) -> Result<(), AdapterError> {
     // We only impose restrictions if the current cluster is the introspection cluster.
     let cluster = catalog.active_cluster();
     if cluster != MZ_INTROSPECTION_CLUSTER.name {
+        return Ok(());
+    }
+
+    // Allows explain queries.
+    if let Plan::Explain(_) = plan {
         return Ok(());
     }
 
