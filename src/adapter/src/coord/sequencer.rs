@@ -67,7 +67,7 @@ impl Coordinator {
         let responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
         tx.set_allowed(responses);
 
-        if let Err(e) = rbac::check_plan(&self.catalog.for_session(&session), &session, &plan) {
+        if let Err(e) = rbac::check_plan(&self.catalog().for_session(&session), &session, &plan) {
             return tx.send(Err(e), session);
         }
 
@@ -80,7 +80,8 @@ impl Coordinator {
 
         match plan {
             Plan::CreateSource(plan) => {
-                let source_id = return_if_err!(self.catalog.allocate_user_id().await, tx, session);
+                let source_id =
+                    return_if_err!(self.catalog_mut().allocate_user_id().await, tx, session);
                 tx.send(
                     self.sequence_create_source(&mut session, vec![(source_id, plan, depends_on)])
                         .await,
@@ -119,7 +120,7 @@ impl Coordinator {
             }
             Plan::CreateRole(plan) => {
                 let res = self.sequence_create_role(&session, plan).await;
-                if res.is_ok() && !self.catalog.system_config().enable_rbac_checks() {
+                if res.is_ok() && !self.catalog().system_config().enable_rbac_checks() {
                     // Notice is intentionally sent here and not in sequence_create_role so that
                     // no notice is sent during startup.
                     session.add_notice(AdapterNotice::RbacDisabled);
@@ -311,7 +312,7 @@ impl Coordinator {
             }
             Plan::AlterRole(plan) => {
                 let res = self.sequence_alter_role(&session, plan).await;
-                if res.is_ok() && !self.catalog.system_config().enable_rbac_checks() {
+                if res.is_ok() && !self.catalog().system_config().enable_rbac_checks() {
                     session.add_notice(AdapterNotice::RbacDisabled);
                 }
                 tx.send(res, session);
@@ -408,7 +409,7 @@ impl Coordinator {
                         PreparedStatement::new(
                             Some(plan.stmt),
                             plan.desc,
-                            self.catalog.transient_revision(),
+                            self.catalog().transient_revision(),
                         ),
                     );
                     tx.send(Ok(ExecuteResponse::Prepare), session);
@@ -617,9 +618,9 @@ impl Coordinator {
         }
 
         for id in depends_on {
-            let entry = self.catalog.get_entry(id);
+            let entry = self.catalog().get_entry(id);
             let full_name = self
-                .catalog
+                .catalog()
                 .resolve_full_name(entry.name(), Some(session.conn_id()));
             let schema = &full_name.schema;
             if schema != MZ_CATALOG_SCHEMA

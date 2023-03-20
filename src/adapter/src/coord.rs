@@ -409,7 +409,14 @@ pub struct Coordinator {
     controller: mz_controller::Controller,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
-    catalog: Catalog,
+    /// The catalog in an Arc suitable for readonly references. The Arc allows
+    /// us to hand out cheap copies of the catalog to functions that can use it
+    /// off of the main coordinator thread. If the coordinator needs to mutate
+    /// the catalog, call catalog_mut(), which will clone this struct member,
+    /// allowing it to be mutated here while the other off-thread references can
+    /// read their catalog as long as needed. In the future we would like this
+    /// to be a pTVC, but for now this is sufficient.
+    catalog: Arc<Catalog>,
 
     /// Channel to manage internal commands from the coordinator to itself.
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
@@ -515,9 +522,9 @@ impl Coordinator {
         info!("coordinator init: beginning bootstrap");
 
         // Inform the controllers about their initial configuration.
-        let compute_config = self.catalog.compute_config();
+        let compute_config = self.catalog().compute_config();
         self.controller.compute.update_configuration(compute_config);
-        let storage_config = self.catalog.storage_config();
+        let storage_config = self.catalog().storage_config();
         self.controller.storage.update_configuration(storage_config);
 
         // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
@@ -624,7 +631,7 @@ impl Coordinator {
         let mut awaited_dependent_seen = BTreeSet::new();
 
         let mut unsorted_entries: VecDeque<_> = self
-            .catalog
+            .catalog()
             .entries()
             .cloned()
             .map(|entry| {
@@ -713,13 +720,13 @@ impl Coordinator {
         );
 
         let logs: BTreeSet<_> = BUILTINS::logs()
-            .map(|log| self.catalog.resolve_builtin_log(log))
+            .map(|log| self.catalog().resolve_builtin_log(log))
             .collect();
 
         // This is disabled for the moment because it has unusual upper
         // advancement behavior.
         // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
-        let source_status_collection_id = Some(self.catalog.resolve_builtin_storage_collection(
+        let source_status_collection_id = Some(self.catalog().resolve_builtin_storage_collection(
             &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
         ));
 
@@ -1046,9 +1053,9 @@ impl Coordinator {
 
         // Announce primary and foreign key relationships.
         info!("coordinator init: announcing primary and foreign key relationships");
-        let mz_view_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_KEYS);
+        let mz_view_keys = self.catalog().resolve_builtin_table(&MZ_VIEW_KEYS);
         for log in BUILTINS::logs() {
-            let log_id = &self.catalog.resolve_builtin_log(log).to_string();
+            let log_id = &self.catalog().resolve_builtin_log(log).to_string();
             builtin_table_updates.extend(
                 log.variant
                     .desc()
@@ -1072,14 +1079,14 @@ impl Coordinator {
                     }),
             );
 
-            let mz_foreign_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_FOREIGN_KEYS);
+            let mz_foreign_keys = self.catalog().resolve_builtin_table(&MZ_VIEW_FOREIGN_KEYS);
             builtin_table_updates.extend(
                 log.variant.foreign_keys().into_iter().enumerate().flat_map(
                     |(index, (parent, pairs))| {
                         let parent_log = BUILTINS::logs()
                             .find(|src| src.variant == parent)
                             .expect("log foreign key variant is invalid");
-                        let parent_id = self.catalog.resolve_builtin_log(parent_log).to_string();
+                        let parent_id = self.catalog().resolve_builtin_log(parent_log).to_string();
                         pairs.into_iter().map(move |(c, p)| {
                             let row = Row::pack_slice(&[
                                 Datum::String(log_id),
@@ -1100,7 +1107,7 @@ impl Coordinator {
         }
 
         // Expose mapping from T-shirt sizes to actual sizes
-        builtin_table_updates.extend(self.catalog.state().pack_all_replica_size_updates());
+        builtin_table_updates.extend(self.catalog().state().pack_all_replica_size_updates());
 
         // Advance all tables to the current timestamp
         info!("coordinator init: advancing all tables to current timestamp");
@@ -1130,7 +1137,7 @@ impl Coordinator {
         {
             info!(
                 "coordinator init: resetting system table {} ({})",
-                self.catalog.resolve_full_name(system_table.name(), None),
+                self.catalog().resolve_full_name(system_table.name(), None),
                 system_table.id()
             );
             let current_contents = self
@@ -1167,7 +1174,7 @@ impl Coordinator {
             // secrets_controller.ensure, but more things could in the future
             // that would be easy to miss adding here.
             let catalog_ids: BTreeSet<GlobalId> =
-                self.catalog.entries().map(|entry| entry.id()).collect();
+                self.catalog().entries().map(|entry| entry.id()).collect();
             let controller_secrets: BTreeSet<GlobalId> = controller_secrets.into_iter().collect();
             let orphaned = controller_secrets.difference(&catalog_ids);
             for id in orphaned {
@@ -1203,7 +1210,7 @@ impl Coordinator {
         // For non-realtime timelines, nothing pushes the timestamps forward, so we must do
         // it manually.
         let mut advance_timelines_interval =
-            tokio::time::interval(self.catalog.config().timestamp_interval);
+            tokio::time::interval(self.catalog().config().timestamp_interval);
         // // Watcher that listens for and reports cluster service status changes.
         let mut cluster_events = self.controller.events_stream();
         let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
@@ -1279,6 +1286,38 @@ impl Coordinator {
 
             self.handle_message(msg).await;
         }
+    }
+
+    /// Obtain a read-only Catalog reference.
+    fn catalog(&self) -> &Catalog {
+        &self.catalog
+    }
+
+    /*
+    /// Obtain a read-only Catalog snapshot, suitable for giving out to
+    /// non-Coordinator thread tasks.
+    fn owned_catalog(&self) -> Arc<Catalog> {
+        Arc::clone(&self.catalog)
+    }
+    */
+
+    /// Obtain a writeable Catalog reference.
+    fn catalog_mut(&mut self) -> &mut Catalog {
+        // make_mut will cause any other Arc references (from owned_catalog) to
+        // continue to be valid by cloning the catalog, putting it in a new Arc,
+        // which lives at self._catalog. If there are no other Arc references,
+        // then no clone is made, and it returns a reference to the existing
+        // object. This makes this method and owned_catalog both very cheap: at
+        // most one clone per catalog mutation, but only if there's a read-only
+        // reference to it.
+        Arc::make_mut(&mut self.catalog)
+    }
+
+    /// Obtain writeable Catalog and Controller references. This function is
+    /// needed to allow rust to have multiple mutable references on self at the
+    /// same time.
+    fn catalog_and_controller_mut(&mut self) -> (&mut Catalog, &mut mz_controller::Controller) {
+        (Arc::make_mut(&mut self.catalog), &mut self.controller)
     }
 }
 
@@ -1358,7 +1397,7 @@ pub async fn serve(
         .map(|azs_vec| BTreeSet::from_iter(azs_vec.iter().cloned()));
 
     info!("coordinator init: opening catalog");
-    let (mut catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
+    let (catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
         Catalog::open(catalog::Config {
             storage,
             unsafe_mode,
@@ -1415,7 +1454,7 @@ pub async fn serve(
             let mut coord = Coordinator {
                 controller: dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(),
-                catalog,
+                catalog: Arc::new(catalog),
                 internal_cmd_tx,
                 strict_serializable_reads_tx,
                 global_timelines: timestamp_oracles,
@@ -1447,7 +1486,7 @@ pub async fn serve(
                     .await?;
                 coord
                     .controller
-                    .remove_orphaned_replicas(coord.catalog.get_next_replica_id().await?)
+                    .remove_orphaned_replicas(coord.catalog().get_next_replica_id().await?)
                     .await
                     .map_err(AdapterError::Orchestrator)?;
                 Ok(())

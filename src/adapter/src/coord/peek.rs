@@ -338,7 +338,8 @@ impl crate::coord::Coordinator {
                     ));
                 }
             }
-            let results = finishing.finish(results, self.catalog.system_config().max_result_size());
+            let results =
+                finishing.finish(results, self.catalog().system_config().max_result_size());
             return match results {
                 Ok(rows) => Ok(send_immediate_rows(rows)),
                 Err(e) => Err(AdapterError::ResultSize(e)),
@@ -458,7 +459,7 @@ impl crate::coord::Coordinator {
             .unwrap_or_terminate("cannot fail to peek");
 
         // Prepare the receiver to return as a response.
-        let max_result_size = self.catalog.system_config().max_result_size();
+        let max_result_size = self.catalog().system_config().max_result_size();
         let rows_rx = rows_rx.map_ok_or_else(
             |e| PeekResponseUnary::Error(e.to_string()),
             move |resp| match resp {

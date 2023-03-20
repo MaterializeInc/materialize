@@ -30,7 +30,12 @@ impl Coordinator {
         params: &mz_sql::plan::Params,
     ) -> Result<mz_sql::plan::Plan, AdapterError> {
         let pcx = session.pcx();
-        let plan = mz_sql::plan::plan(Some(pcx), &self.catalog.for_session(session), stmt, params)?;
+        let plan = mz_sql::plan::plan(
+            Some(pcx),
+            &self.catalog().for_session(session),
+            stmt,
+            params,
+        )?;
         Ok(plan)
     }
 
@@ -41,7 +46,7 @@ impl Coordinator {
         stmt: Statement<Raw>,
         param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), AdapterError> {
-        let desc = describe(&self.catalog, stmt.clone(), &param_types, session)?;
+        let desc = describe(self.catalog(), stmt.clone(), &param_types, session)?;
         let params = vec![];
         let result_formats = vec![mz_pgrepr::Format::Text; desc.arity()];
         session.set_portal(
@@ -50,7 +55,7 @@ impl Coordinator {
             Some(stmt),
             params,
             result_formats,
-            self.catalog.transient_revision(),
+            self.catalog().transient_revision(),
         )?;
         Ok(())
     }
@@ -62,7 +67,7 @@ impl Coordinator {
         param_types: Vec<Option<ScalarType>>,
     ) -> Result<StatementDesc, AdapterError> {
         if let Some(stmt) = stmt {
-            describe(&self.catalog, stmt, &param_types, session)
+            describe(self.catalog(), stmt, &param_types, session)
         } else {
             Ok(StatementDesc::new(None))
         }
@@ -121,7 +126,7 @@ impl Coordinator {
         desc: &StatementDesc,
         catalog_revision: u64,
     ) -> Result<Option<u64>, AdapterError> {
-        let current_revision = self.catalog.transient_revision();
+        let current_revision = self.catalog().transient_revision();
         if catalog_revision != current_revision {
             let current_desc = self.describe(
                 session,
@@ -166,7 +171,7 @@ impl Coordinator {
         active_subscribe: ActiveSubscribe,
     ) {
         let update = self
-            .catalog
+            .catalog()
             .state()
             .pack_subscribe_update(id, &active_subscribe, 1);
         self.send_builtin_table_updates(vec![update], BuiltinTableUpdateSource::DDL)
@@ -185,7 +190,7 @@ impl Coordinator {
     pub(crate) async fn remove_active_subscribe(&mut self, id: GlobalId) {
         if let Some(active_subscribe) = self.active_subscribes.remove(&id) {
             let update = self
-                .catalog
+                .catalog()
                 .state()
                 .pack_subscribe_update(id, &active_subscribe, -1);
             self.send_builtin_table_updates(vec![update], BuiltinTableUpdateSource::DDL)

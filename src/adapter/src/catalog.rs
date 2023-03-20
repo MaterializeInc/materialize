@@ -3225,7 +3225,7 @@ impl Catalog {
     /// Objects need to be dropped starting from the leafs of the DAG going up towards the roots,
     /// and they need to be recreated starting at the roots of the DAG and going towards the leafs.
     pub async fn generate_builtin_migration_metadata(
-        &mut self,
+        &self,
         migrated_ids: Vec<GlobalId>,
         id_fingerprint_map: BTreeMap<GlobalId, String>,
     ) -> Result<BuiltinMigrationMetadata, Error> {
@@ -3416,7 +3416,7 @@ impl Catalog {
 
     #[tracing::instrument(level = "info", skip_all)]
     pub async fn apply_persisted_builtin_migration(
-        &mut self,
+        &self,
         migration_metadata: &mut BuiltinMigrationMetadata,
     ) -> Result<(), Error> {
         let mut storage = self.storage().await;
@@ -3710,7 +3710,7 @@ impl Catalog {
     /// Allocate new system ids for any new builtin objects and looks up existing system ids for
     /// existing builtin objects
     async fn allocate_system_ids<T, F>(
-        &mut self,
+        &self,
         builtins: Vec<T>,
         builtin_lookup: F,
     ) -> Result<AllocatedBuiltinSystemIds<T>, Error>
@@ -3761,12 +3761,12 @@ impl Catalog {
         })
     }
 
-    pub async fn allocate_user_id(&mut self) -> Result<GlobalId, Error> {
+    pub async fn allocate_user_id(&self) -> Result<GlobalId, Error> {
         self.storage().await.allocate_user_id().await
     }
 
     #[cfg(test)]
-    pub async fn allocate_system_id(&mut self) -> Result<GlobalId, Error> {
+    pub async fn allocate_system_id(&self) -> Result<GlobalId, Error> {
         self.storage()
             .await
             .allocate_system_ids(1)
@@ -3774,11 +3774,11 @@ impl Catalog {
             .map(|ids| ids.into_element())
     }
 
-    pub async fn allocate_user_cluster_id(&mut self) -> Result<ClusterId, Error> {
+    pub async fn allocate_user_cluster_id(&self) -> Result<ClusterId, Error> {
         self.storage().await.allocate_user_cluster_id().await
     }
 
-    pub async fn allocate_replica_id(&mut self) -> Result<ReplicaId, Error> {
+    pub async fn allocate_replica_id(&self) -> Result<ReplicaId, Error> {
         self.storage().await.allocate_replica_id().await
     }
 
@@ -3788,24 +3788,24 @@ impl Catalog {
 
     /// Get all global timestamps that has been persisted to disk.
     pub async fn get_all_persisted_timestamps(
-        &mut self,
+        &self,
     ) -> Result<BTreeMap<Timeline, mz_repr::Timestamp>, Error> {
         self.storage().await.get_all_persisted_timestamps().await
     }
 
     /// Get the next user ID without allocating it.
-    pub async fn get_next_user_global_id(&mut self) -> Result<GlobalId, Error> {
+    pub async fn get_next_user_global_id(&self) -> Result<GlobalId, Error> {
         self.storage().await.get_next_user_global_id().await
     }
 
     /// Get the next replica id without allocating it.
-    pub async fn get_next_replica_id(&mut self) -> Result<ReplicaId, Error> {
+    pub async fn get_next_replica_id(&self) -> Result<ReplicaId, Error> {
         self.storage().await.get_next_replica_id().await
     }
 
     /// Persist new global timestamp for a timeline to disk.
     pub async fn persist_timestamp(
-        &mut self,
+        &self,
         timeline: &Timeline,
         timestamp: mz_repr::Timestamp,
     ) -> Result<(), Error> {
@@ -4030,7 +4030,7 @@ impl Catalog {
         Ok(())
     }
 
-    pub fn drop_database_ops(&mut self, id: Option<DatabaseId>) -> Vec<Op> {
+    pub fn drop_database_ops(&self, id: Option<DatabaseId>) -> Vec<Op> {
         let mut ops = vec![];
         let mut seen = BTreeSet::new();
         if let Some(id) = id {
@@ -4047,7 +4047,7 @@ impl Catalog {
         ops
     }
 
-    pub fn drop_schema_ops(&mut self, id: Option<(DatabaseId, SchemaId)>) -> Vec<Op> {
+    pub fn drop_schema_ops(&self, id: Option<(DatabaseId, SchemaId)>) -> Vec<Op> {
         let mut ops = vec![];
         let mut seen = BTreeSet::new();
         if let Some((database_id, schema_id)) = id {
@@ -4190,7 +4190,7 @@ impl Catalog {
     /// Gets GlobalIds of temporary items to be created, checks for name collisions
     /// within a connection id.
     fn temporary_ids(
-        &mut self,
+        &self,
         ops: &[Op],
         temporary_drops: BTreeSet<(ConnectionId, String)>,
     ) -> Result<Vec<GlobalId>, Error> {
@@ -5634,11 +5634,11 @@ impl Catalog {
         Ok(())
     }
 
-    pub async fn consolidate(&mut self, collections: &[mz_stash::Id]) -> Result<(), AdapterError> {
+    pub async fn consolidate(&self, collections: &[mz_stash::Id]) -> Result<(), AdapterError> {
         Ok(self.storage().await.consolidate(collections).await?)
     }
 
-    pub async fn confirm_leadership(&mut self) -> Result<(), AdapterError> {
+    pub async fn confirm_leadership(&self) -> Result<(), AdapterError> {
         Ok(self.storage().await.confirm_leadership().await?)
     }
 
@@ -5916,7 +5916,7 @@ impl Catalog {
 
     /// Allocate ids for legacy, active logs. Called once per cluster creation.
     pub async fn allocate_arranged_introspection_sources(
-        &mut self,
+        &self,
     ) -> Vec<(&'static BuiltinLog, GlobalId)> {
         let log_amount = BUILTINS::logs().count();
         let system_ids = self
@@ -5933,7 +5933,7 @@ impl Catalog {
     }
 
     /// Allocate ids for persisted introspection views. Called once per cluster replica creation
-    pub async fn allocate_persisted_introspection_views(&mut self) -> Vec<(LogView, GlobalId)> {
+    pub async fn allocate_persisted_introspection_views(&self) -> Vec<(LogView, GlobalId)> {
         if !self.state.config.persisted_introspection {
             return Vec::new();
         }
@@ -5958,9 +5958,7 @@ impl Catalog {
 
     /// Allocate ids for persisted introspection sources.
     /// Called once per cluster replica creation.
-    pub async fn allocate_persisted_introspection_sources(
-        &mut self,
-    ) -> Vec<(LogVariant, GlobalId)> {
+    pub async fn allocate_persisted_introspection_sources(&self) -> Vec<(LogVariant, GlobalId)> {
         if !self.state.config.persisted_introspection {
             return Vec::new();
         }
