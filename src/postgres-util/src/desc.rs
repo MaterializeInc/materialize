@@ -105,11 +105,6 @@ pub struct PostgresColumnDesc {
     pub type_mod: i32,
     /// True if the column lacks a `NOT NULL` constraint.
     pub nullable: bool,
-    /// Whether the column is part of the table's primary key.
-    ///
-    /// TODO(benesch): this doesn't look descriptive enough. The order of the
-    /// columns in the primary key matters too.
-    pub primary_key: bool,
 }
 
 impl RustType<ProtoPostgresColumnDesc> for PostgresColumnDesc {
@@ -120,7 +115,6 @@ impl RustType<ProtoPostgresColumnDesc> for PostgresColumnDesc {
             type_oid: self.type_oid,
             type_mod: self.type_mod,
             nullable: self.nullable,
-            primary_key: self.primary_key,
         }
     }
 
@@ -133,7 +127,6 @@ impl RustType<ProtoPostgresColumnDesc> for PostgresColumnDesc {
             type_oid: proto.type_oid,
             type_mod: proto.type_mod,
             nullable: proto.nullable,
-            primary_key: proto.primary_key,
         })
     }
 }
@@ -149,16 +142,14 @@ impl Arbitrary for PostgresColumnDesc {
             any::<u32>(),
             any::<i32>(),
             any::<bool>(),
-            any::<bool>(),
         )
             .prop_map(
-                |(name, col_num, type_oid, type_mod, nullable, primary_key)| PostgresColumnDesc {
+                |(name, col_num, type_oid, type_mod, nullable)| PostgresColumnDesc {
                     name,
                     col_num: Some(col_num),
                     type_oid,
                     type_mod,
                     nullable,
-                    primary_key,
                 },
             )
             .boxed()
