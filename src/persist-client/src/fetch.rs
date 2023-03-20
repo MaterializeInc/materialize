@@ -51,7 +51,7 @@ where
 
     // Ensures that `BatchFetcher` is of the same type as the `ReadHandle` it's
     // derived from.
-    pub(crate) _phantom: PhantomData<(K, V, T, D)>,
+    pub(crate) _phantom: PhantomData<fn() -> (K, V, T, D)>,
 }
 
 impl<K, V, T, D> BatchFetcher<K, V, T, D>
