@@ -13,7 +13,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! API clients for Materialize.
+//! Implementation of the `mz user` command.
+//!
+//! Consult the user-facing documentation for details.
 
-pub mod admin;
-pub mod cloud;
+use anyhow::bail;
+
+use crate::context::ProfileContext;
+
+pub struct CreateArgs<'a> {
+    pub email: &'a str,
+    pub name: &'a str,
+}
+
+pub async fn create(
+    cx: &mut ProfileContext,
+    CreateArgs { email, name }: CreateArgs<'_>,
+) -> Result<(), anyhow::Error> {
+    bail!("TODO")
+}
+
+pub async fn list(cx: &mut ProfileContext) -> Result<(), anyhow::Error> {
+    bail!("TODO")
+}
+
+pub struct RemoveArgs<'a> {
+    pub email: &'a str,
+}
+
+pub async fn remove(
+    cx: &mut ProfileContext,
+    RemoveArgs { email }: RemoveArgs<'_>,
+) -> Result<(), anyhow::Error> {
+    bail!("TODO")
+}

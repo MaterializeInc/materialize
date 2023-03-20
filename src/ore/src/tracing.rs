@@ -48,6 +48,7 @@ use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{reload, Registry};
 
+use crate::env;
 #[cfg(feature = "tokio-console")]
 use crate::netio::SocketAddr;
 
@@ -243,19 +244,15 @@ where
     F: Fn(&tracing::Metadata<'_>) -> sentry_tracing::EventFilter + Send + Sync + 'static,
 {
     let stderr_log_layer: Box<dyn Layer<Registry> + Send + Sync> = match config.stderr_log.format {
-        StderrLogFormat::Text { prefix } => {
-            // See: https://no-color.org/
-            let no_color = std::env::var_os("NO_COLOR").unwrap_or_else(|| "".into()) != "";
-            Box::new(
-                fmt::layer()
-                    .with_writer(io::stderr)
-                    .event_format(PrefixFormat {
-                        inner: format(),
-                        prefix,
-                    })
-                    .with_ansi(!no_color && atty::is(atty::Stream::Stderr)),
-            )
-        }
+        StderrLogFormat::Text { prefix } => Box::new(
+            fmt::layer()
+                .with_writer(io::stderr)
+                .event_format(PrefixFormat {
+                    inner: format(),
+                    prefix,
+                })
+                .with_ansi(!env::no_color() && atty::is(atty::Stream::Stderr)),
+        ),
         StderrLogFormat::Json => Box::new(
             fmt::layer()
                 .with_writer(io::stderr)

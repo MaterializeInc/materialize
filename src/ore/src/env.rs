@@ -32,3 +32,16 @@ where
         Some(val) => val != "0" && val != "",
     }
 }
+
+/// Whether the environment requests no color.
+///
+/// See: <https://no-color.org>
+pub fn no_color() -> bool {
+    match env::var_os("NO_COLOR") {
+        // We don't use `is_var_truthy` here in order to comply with the
+        // `NO_COLOR` specification, which requires that `NO_COLOR=0` disable
+        // color.
+        Some(val) => !val.is_empty(),
+        None => false,
+    }
+}

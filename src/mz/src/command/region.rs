@@ -13,7 +13,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! API clients for Materialize.
+//! Implementation of the `mz region` command.
+//!
+//! Consult the user-facing documentation for details.
 
-pub mod admin;
-pub mod cloud;
+use anyhow::bail;
+
+use crate::context::RegionContext;
+
+pub async fn enable(cx: &mut RegionContext) -> Result<(), anyhow::Error> {
+    bail!("TODO")
+}
+
+pub async fn list(cx: &mut RegionContext) -> Result<(), anyhow::Error> {
+    bail!("TODO")
+}
+
+pub async fn show(cx: &mut RegionContext) -> Result<(), anyhow::Error> {
+    bail!("TODO")
+}

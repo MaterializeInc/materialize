@@ -13,7 +13,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! API clients for Materialize.
+//! Implementation of the `mz sql` command.
+//!
+//! Consult the user-facing documentation for details.
 
-pub mod admin;
-pub mod cloud;
+use anyhow::bail;
+
+use crate::context::RegionContext;
+
+pub struct RunArgs {
+    pub psql_args: Vec<String>,
+}
+
+pub async fn run(
+    cx: &mut RegionContext,
+    RunArgs { psql_args }: RunArgs,
+) -> Result<(), anyhow::Error> {
+    bail!("TODO");
+}

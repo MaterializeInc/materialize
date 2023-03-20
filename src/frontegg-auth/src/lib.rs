@@ -188,33 +188,9 @@ impl FronteggAuthentication {
         &self,
         password: &str,
     ) -> Result<ApiTokenResponse, FronteggError> {
-        let password = password
-            .strip_prefix(&self.password_prefix)
-            .ok_or(FronteggError::InvalidPasswordFormat)?;
-        let (client_id, secret) = if password.len() == 43 || password.len() == 44 {
-            // If it's exactly 43 or 44 bytes, assume we have base64-encoded
-            // UUID bytes without or with padding, respectively.
-            let buf = base64::decode_config(password, base64::URL_SAFE)
-                .map_err(|_| FronteggError::InvalidPasswordFormat)?;
-            let client_id =
-                Uuid::from_slice(&buf[..16]).map_err(|_| FronteggError::InvalidPasswordFormat)?;
-            let secret =
-                Uuid::from_slice(&buf[16..]).map_err(|_| FronteggError::InvalidPasswordFormat)?;
-            (client_id, secret)
-        } else if password.len() >= 64 {
-            // If it's more than 64 bytes, assume we have concatenated
-            // hex-encoded UUIDs, possibly with some special characters mixed
-            // in.
-            let mut chars = password.chars().filter(|c| c.is_alphanumeric());
-            let client_id = Uuid::parse_str(&chars.by_ref().take(32).collect::<String>())
-                .map_err(|_| FronteggError::InvalidPasswordFormat)?;
-            let secret = Uuid::parse_str(&chars.take(32).collect::<String>())
-                .map_err(|_| FronteggError::InvalidPasswordFormat)?;
-            (client_id, secret)
-        } else {
-            // Otherwise it's definitely not a password format we understand.
-            return Err(FronteggError::InvalidPasswordFormat);
-        };
+        let (client_id, secret) =
+            mz::api::admin::parse_app_password(&self.password_prefix, password)
+                .ok_or_else(|| FronteggError::InvalidPasswordFormat)?;
         self.exchange_client_secret_for_token(client_id, secret)
             .await
     }

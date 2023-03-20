@@ -13,7 +13,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! API clients for Materialize.
+//! Reusable arguments that can be mixed in to commands.
 
-pub mod admin;
-pub mod cloud;
+#[derive(Debug, clap::Args)]
+pub struct ProfileArg {
+    /// Use the specified authentication profile.
+    #[clap(long, env = "PROFILE")]
+    pub profile: Option<String>,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct RegionArg {
+    /// Use the specified region.
+    #[clap(long, env = "REGION")]
+    pub region: Option<String>,
+}

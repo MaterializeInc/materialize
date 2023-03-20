@@ -11,6 +11,7 @@ anyhow = "1.0.66"
 base64 = "0.13.1"
 derivative = "2.2.0"
 jsonwebtoken = "8.2.0"
+mz = { path = "../mz" }
 mz-ore = { path = "../ore", features = ["network"] }
 reqwest = { version = "0.11.13", features = ["json"] }
 serde = { version = "1.0.152", features = ["derive"] }

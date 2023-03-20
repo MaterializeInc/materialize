@@ -13,7 +13,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! API clients for Materialize.
+//! Implementation of the `mz secret` command.
+//!
+//! Consult the user-facing documentation for details.
 
-pub mod admin;
-pub mod cloud;
+use anyhow::bail;
+
+use crate::context::RegionContext;
+
+pub struct CreateArgs<'a> {
+    pub database: Option<&'a str>,
+    pub schema: Option<&'a str>,
+    pub name: &'a str,
+    pub force: bool,
+}
+
+pub async fn create(
+    cx: &mut RegionContext,
+    CreateArgs {
+        database,
+        schema,
+        name,
+        force,
+    }: CreateArgs<'_>,
+) -> Result<(), anyhow::Error> {
+    bail!("TODO")
+}

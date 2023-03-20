@@ -81,7 +81,10 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
+//! `mz` is the Materialize command-line interface (CLI).
+
 pub mod api;
-pub mod configuration;
-pub mod utils;
-pub mod vault;
+pub mod command;
+pub mod config_file;
+pub mod context;
+pub mod ui;
