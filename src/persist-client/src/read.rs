@@ -1121,10 +1121,6 @@ mod tests {
     #[tokio::test]
     async fn seqno_leases_with_maybe_downgrade_since() {
         mz_ore::test::init_logging();
-        let data = vec![
-            (("0".to_string(), "0".to_string()), 0, 1),
-            (("1".to_string(), "1".to_string()), 1, 1),
-        ];
 
         let now = Arc::new(AtomicU64::new(0));
         let now_clone = Arc::clone(&now);
@@ -1140,7 +1136,9 @@ mod tests {
             .expect_open::<String, String, u64, i64>(ShardId::new())
             .await;
         let lease_duration_ms = u64::try_from(read.cfg.reader_lease_duration.as_millis()).unwrap();
-        write.expect_compare_and_append(&data, 0, 2).await;
+        write
+            .expect_compare_and_append(&[(("0".to_string(), "0".to_string()), 0, 1)], 0, 1)
+            .await;
 
         let mut listen = read.listen(Antichain::from_elem(0)).await.expect("listen");
         let original_seqno_since = listen.handle.machine.seqno_since();
