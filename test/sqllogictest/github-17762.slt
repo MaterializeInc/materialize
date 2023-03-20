@@ -20,7 +20,7 @@ FROM
 			SELECT
 				worker_id AS a, CAST(NULLIF(records, CAST(NULL AS DECIMAL)) AS DECIMAL)
 			FROM
-				mz_internal.mz_records_per_dataflow
+				mz_internal.mz_records_per_dataflow_per_worker
 		) ON (SELECT a IS NULL)
 WHERE
 	(SELECT a) IS NULL;

@@ -275,7 +275,7 @@ sys_ind mz_array_types  <VARIABLE_OUTPUT>   {id}
 contains:cannot create index with unstable dependencies
 
 > SHOW INDEXES IN CLUSTER mz_introspection
-mz_active_peeks_s2_primary_idx                              mz_active_peeks                              mz_introspection    {id,worker_id}
+mz_active_peeks_per_worker_s2_primary_idx                   mz_active_peeks_per_worker                   mz_introspection    {id,worker_id}
 mz_arrangement_batches_raw_s2_primary_idx                   mz_arrangement_batches_raw                   mz_introspection    {operator_id,worker_id}
 mz_arrangement_records_raw_s2_primary_idx                   mz_arrangement_records_raw                   mz_introspection    {operator_id,worker_id}
 mz_arrangement_sharing_raw_s2_primary_idx                   mz_arrangement_sharing_raw                   mz_introspection    {operator_id,worker_id}
@@ -289,10 +289,10 @@ mz_compute_exports_per_worker_s2_primary_idx                mz_compute_exports_p
 mz_compute_frontiers_per_worker_s2_primary_idx              mz_compute_frontiers_per_worker              mz_introspection    {export_id,worker_id,time}
 mz_compute_import_frontiers_per_worker_s2_primary_idx       mz_compute_import_frontiers_per_worker       mz_introspection    {export_id,import_id,worker_id,time}
 mz_compute_operator_durations_histogram_raw_s2_primary_idx  mz_compute_operator_durations_histogram_raw  mz_introspection    {id,worker_id,duration_ns}
-mz_dataflow_addresses_s2_primary_idx                        mz_dataflow_addresses                        mz_introspection    {id,worker_id}
-mz_dataflow_channels_s2_primary_idx                         mz_dataflow_channels                         mz_introspection    {id,worker_id}
+mz_dataflow_addresses_per_worker_s2_primary_idx             mz_dataflow_addresses_per_worker             mz_introspection    {id,worker_id}
+mz_dataflow_channels_per_worker_s2_primary_idx              mz_dataflow_channels_per_worker              mz_introspection    {id,worker_id}
 mz_dataflow_operator_reachability_raw_s2_primary_idx        mz_dataflow_operator_reachability_raw        mz_introspection    {address,port,worker_id,update_type,time}
-mz_dataflow_operators_s2_primary_idx                        mz_dataflow_operators                        mz_introspection    {id,worker_id}
+mz_dataflow_operators_per_worker_s2_primary_idx             mz_dataflow_operators_per_worker             mz_introspection    {id,worker_id}
 mz_message_counts_received_raw_s2_primary_idx               mz_message_counts_received_raw               mz_introspection    {channel_id,from_worker_id,to_worker_id}
 mz_message_counts_sent_raw_s2_primary_idx                   mz_message_counts_sent_raw                   mz_introspection    {channel_id,from_worker_id,to_worker_id}
 mz_peek_durations_histogram_raw_s2_primary_idx              mz_peek_durations_histogram_raw              mz_introspection    {worker_id,duration_ns}
@@ -315,7 +315,3 @@ mz_show_types_ind                                           mz_types            
 mz_show_views_ind                                           mz_views                                     mz_introspection    {schema_id}
 mz_source_status_history_ind                                mz_source_status_history                     mz_introspection    {source_id}
 mz_source_statuses_ind                                      mz_source_statuses                           mz_introspection    {id}
-mz_worker_compute_delays_histogram_raw_s2_primary_idx       mz_worker_compute_delays_histogram_raw       mz_introspection    {export_id,import_id,worker_id,delay_ns}
-mz_worker_compute_dependencies_s2_primary_idx               mz_worker_compute_dependencies               mz_introspection    {export_id,import_id,worker_id}
-mz_worker_compute_frontiers_s2_primary_idx                  mz_worker_compute_frontiers                  mz_introspection    {export_id,worker_id,time}
-mz_worker_compute_import_frontiers_s2_primary_idx           mz_worker_compute_import_frontiers           mz_introspection    {export_id,import_id,worker_id,time}

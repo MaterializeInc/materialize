@@ -429,8 +429,8 @@ def workflow_test_github_15799(c: Composition) -> None:
 
 def workflow_test_github_15930(c: Composition) -> None:
     """
-    Test that triggering reconciliation does not wedge the mz_worker_compute_frontiers
-    introspection source.
+    Test that triggering reconciliation does not wedge the
+    mz_compute_frontiers_per_worker introspection source.
 
     Regression test for https://github.com/MaterializeInc/materialize/issues/15930.
     """
@@ -462,7 +462,7 @@ def workflow_test_github_15930(c: Composition) -> None:
             input=dedent(
                 """
             > SET cluster = cluster1;
-            > SELECT 1 FROM mz_internal.mz_worker_compute_frontiers LIMIT 1;
+            > SELECT 1 FROM mz_internal.mz_compute_frontiers_per_worker LIMIT 1;
             1
                 """
             )
@@ -477,7 +477,7 @@ def workflow_test_github_15930(c: Composition) -> None:
             input=dedent(
                 """
             > SET cluster = cluster1;
-            > SELECT 1 FROM mz_internal.mz_worker_compute_frontiers LIMIT 1;
+            > SELECT 1 FROM mz_internal.mz_compute_frontiers_per_worker LIMIT 1;
             1
                 """
             )
@@ -510,7 +510,7 @@ def workflow_test_github_15930(c: Composition) -> None:
             input=dedent(
                 """
             > SET cluster = cluster1;
-            > SELECT 1 FROM mz_internal.mz_worker_compute_frontiers LIMIT 1;
+            > SELECT 1 FROM mz_internal.mz_compute_frontiers_per_worker LIMIT 1;
             1
             > SELECT * FROM t;
             42
