@@ -7,7 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List
+from random import Random
+from typing import List, Optional
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.executors import Executor
@@ -15,8 +16,9 @@ from materialize.util import MzVersion
 
 
 class Check:
-    def __init__(self, base_version: MzVersion) -> None:
+    def __init__(self, base_version: MzVersion, rng: Optional[Random]) -> None:
         self.base_version = base_version
+        self.rng = rng
         self._initialize = self.initialize()
         self._manipulate = self.manipulate()
         self._validate = self.validate()
