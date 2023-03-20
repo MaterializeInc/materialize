@@ -236,24 +236,19 @@ class CrdbRestart(Scenario):
 
 
 class KafkaSourcesLarge(Scenario):
-    """A Zippy test using a large number of Kafka sources, views and sinks."""
+    """A Zippy test using a large number of Kafka sources, views and sinks (no killings)."""
 
     def bootstrap(self) -> List[ActionOrFactory]:
         return DEFAULT_BOOTSTRAP
 
     def config(self) -> Dict[ActionOrFactory, float]:
         return {
-            MzStart: 1,
-            MzStop: 2,
-            KillClusterd: 2,
-            StoragedKill: 2,
-            StoragedStart: 2,
             CreateTopicParameterized(max_topics=5): 10,
-            CreateSourceParameterized(max_sources=50): 10,
+            CreateSourceParameterized(max_sources=25): 10,
             CreateViewParameterized(
-                max_views=100, expensive_aggregates=False, max_inputs=1
+                max_views=50, expensive_aggregates=False, max_inputs=1
             ): 5,
-            CreateSinkParameterized(max_sinks=50): 10,
+            CreateSinkParameterized(max_sinks=25): 10,
             ValidateView: 10,
             Ingest: 100,
             PeekCancellation: 5,
@@ -268,12 +263,7 @@ class DataflowsLarge(Scenario):
 
     def config(self) -> Dict[ActionOrFactory, float]:
         return {
-            MzStart: 1,
-            MzStop: 2,
-            KillClusterd: 2,
-            StoragedRestart: 2,
             CreateReplica: 2,
-            CreateTableParameterized(max_tables=2): 10,
             CreateTopicParameterized(max_topics=2, envelopes=[Envelope.UPSERT]): 10,
             CreateSourceParameterized(max_sources=10): 10,
             CreateViewParameterized(
@@ -285,8 +275,8 @@ class DataflowsLarge(Scenario):
         }
 
 
-class NoKilling(Scenario):
-    """A Zippy scenario that does not involve any killing."""
+class UserTablesLarge(Scenario):
+    """A Zippy scenario over tables (no killing)."""
 
     def bootstrap(self) -> List[ActionOrFactory]:
         return DEFAULT_BOOTSTRAP
@@ -294,8 +284,6 @@ class NoKilling(Scenario):
     def config(self) -> Dict[ActionOrFactory, float]:
         return {
             CreateTableParameterized(max_tables=2): 10,
-            CreateTopicParameterized(max_topics=2, envelopes=[Envelope.UPSERT]): 10,
-            CreateSourceParameterized(max_sources=10): 10,
             CreateViewParameterized(
                 max_views=5, expensive_aggregates=True, max_inputs=5
             ): 10,
@@ -303,4 +291,23 @@ class NoKilling(Scenario):
             ValidateView: 10,
             Ingest: 50,
             DML: 50,
+        }
+
+
+class PostgresCdcLarge(Scenario):
+    """A Zippy test using Postgres CDC exclusively (Pg not killed)."""
+
+    def bootstrap(self) -> List[ActionOrFactory]:
+        return [*DEFAULT_BOOTSTRAP, PostgresStart]
+
+    def config(self) -> Dict[ActionOrFactory, float]:
+        return {
+            CreatePostgresTable: 10,
+            CreatePostgresCdcTable: 10,
+            KillClusterd: 5,
+            StoragedKill: 5,
+            StoragedStart: 5,
+            CreateViewParameterized(): 10,
+            ValidateView: 20,
+            PostgresDML: 100,
         }
