@@ -340,6 +340,7 @@ impl SessionClient {
             tx,
         })
         .await
+        .map(|_| ())
     }
 
     /// Executes a previously-bound portal.

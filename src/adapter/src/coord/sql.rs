@@ -15,12 +15,13 @@ use mz_sql::names::Aug;
 use mz_sql::plan::StatementDesc;
 use mz_sql_parser::ast::{Raw, Statement};
 
+use crate::catalog::Catalog;
 use crate::coord::appends::BuiltinTableUpdateSource;
 use crate::coord::Coordinator;
 use crate::session::{Session, TransactionStatus};
 use crate::subscribe::ActiveSubscribe;
-use crate::util::describe;
-use crate::{metrics, AdapterError};
+use crate::util::{describe, ClientTransmitter};
+use crate::{metrics, AdapterError, ExecuteResponse};
 
 impl Coordinator {
     pub(crate) fn plan_statement(
@@ -41,12 +42,28 @@ impl Coordinator {
 
     pub(crate) fn declare(
         &self,
+        tx: ClientTransmitter<ExecuteResponse>,
+        mut session: Session,
+        name: String,
+        stmt: Statement<Raw>,
+        param_types: Vec<Option<ScalarType>>,
+    ) {
+        let catalog = self.owned_catalog();
+        mz_ore::task::spawn(|| "coord::declare", async move {
+            let res = Self::declare_inner(&mut session, &catalog, name, stmt, param_types)
+                .map(|()| ExecuteResponse::DeclaredCursor);
+            tx.send(res, session);
+        });
+    }
+
+    fn declare_inner(
         session: &mut Session,
+        catalog: &Catalog,
         name: String,
         stmt: Statement<Raw>,
         param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), AdapterError> {
-        let desc = describe(self.catalog(), stmt.clone(), &param_types, session)?;
+        let desc = describe(catalog, stmt.clone(), &param_types, session)?;
         let params = vec![];
         let result_formats = vec![mz_pgrepr::Format::Text; desc.arity()];
         session.set_portal(
@@ -55,7 +72,7 @@ impl Coordinator {
             Some(stmt),
             params,
             result_formats,
-            self.catalog().transient_revision(),
+            catalog.transient_revision(),
         )?;
         Ok(())
     }

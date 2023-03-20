@@ -1293,13 +1293,11 @@ impl Coordinator {
         &self.catalog
     }
 
-    /*
     /// Obtain a read-only Catalog snapshot, suitable for giving out to
     /// non-Coordinator thread tasks.
     fn owned_catalog(&self) -> Arc<Catalog> {
         Arc::clone(&self.catalog)
     }
-    */
 
     /// Obtain a writeable Catalog reference.
     fn catalog_mut(&mut self) -> &mut Catalog {

@@ -79,11 +79,11 @@ impl Coordinator {
                 name,
                 stmt,
                 param_types,
-                mut session,
+                session,
                 tx,
             } => {
-                let result = self.declare(&mut session, name, stmt, param_types);
-                let _ = tx.send(Response { result, session });
+                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                self.declare(tx, session, name, stmt, param_types);
             }
 
             Command::Describe {

@@ -368,10 +368,7 @@ impl Coordinator {
             }
             Plan::Declare(plan) => {
                 let param_types = vec![];
-                let res = self
-                    .declare(&mut session, plan.name, plan.stmt, param_types)
-                    .map(|()| ExecuteResponse::DeclaredCursor);
-                tx.send(res, session);
+                self.declare(tx, session, plan.name, plan.stmt, param_types);
             }
             Plan::Fetch(FetchPlan {
                 name,
