@@ -26,10 +26,6 @@ use mz_sql::plan::{
     FetchPlan, Plan, PlanKind, QueryWhen, RaisePlan, RotateKeysPlan,
 };
 
-use crate::catalog::builtin::{
-    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_INTROSPECTION_ROLE,
-    PG_CATALOG_SCHEMA,
-};
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::TimelineContext;
@@ -74,15 +70,13 @@ impl Coordinator {
             return tx.send(Err(e), session);
         }
 
-        if let Err(e) = introspection::check_cluster_restrictions(&session_catalog, &depends_on) {
+        if let Err(e) =
+            introspection::user_privilege_hack(&session_catalog, &session, &plan, &depends_on)
+        {
             return tx.send(Err(e), session);
         }
-
-        if session.user().name == MZ_INTROSPECTION_ROLE.name {
-            if let Err(e) = self.mz_introspection_user_privilege_hack(&session, &plan, &depends_on)
-            {
-                return tx.send(Err(e), session);
-            }
+        if let Err(e) = introspection::check_cluster_restrictions(&session_catalog, &depends_on) {
+            return tx.send(Err(e), session);
         }
 
         match plan {
@@ -539,110 +533,5 @@ impl Coordinator {
         }
         self.transient_id_counter += 1;
         Ok(GlobalId::Transient(id))
-    }
-
-    /// TODO(jkosh44) This function will verify the privileges for the mz_introspection user.
-    ///  All of the privileges are hard coded into this function. In the future if we ever add
-    ///  a more robust privileges framework, then this function should be replaced with that
-    ///  framework.
-    fn mz_introspection_user_privilege_hack(
-        &self,
-        session: &Session,
-        plan: &Plan,
-        depends_on: &Vec<GlobalId>,
-    ) -> Result<(), AdapterError> {
-        if session.user().name != MZ_INTROSPECTION_ROLE.name {
-            return Ok(());
-        }
-
-        match plan {
-            Plan::Subscribe(_)
-            | Plan::Peek(_)
-            | Plan::CopyFrom(_)
-            | Plan::SendRows(_)
-            | Plan::Explain(_)
-            | Plan::ShowAllVariables
-            | Plan::ShowVariable(_)
-            | Plan::SetVariable(_)
-            | Plan::ResetVariable(_)
-            | Plan::StartTransaction(_)
-            | Plan::CommitTransaction(_)
-            | Plan::AbortTransaction(_)
-            | Plan::EmptyQuery
-            | Plan::Declare(_)
-            | Plan::Fetch(_)
-            | Plan::Close(_)
-            | Plan::Prepare(_)
-            | Plan::Execute(_)
-            | Plan::Deallocate(_) => {}
-
-            Plan::CreateConnection(_)
-            | Plan::CreateDatabase(_)
-            | Plan::CreateSchema(_)
-            | Plan::CreateRole(_)
-            | Plan::CreateCluster(_)
-            | Plan::CreateClusterReplica(_)
-            | Plan::CreateSource(_)
-            | Plan::CreateSources(_)
-            | Plan::CreateSecret(_)
-            | Plan::CreateSink(_)
-            | Plan::CreateTable(_)
-            | Plan::CreateView(_)
-            | Plan::CreateMaterializedView(_)
-            | Plan::CreateIndex(_)
-            | Plan::CreateType(_)
-            | Plan::DiscardTemp
-            | Plan::DiscardAll
-            | Plan::DropDatabase(_)
-            | Plan::DropSchema(_)
-            | Plan::DropRoles(_)
-            | Plan::DropClusters(_)
-            | Plan::DropClusterReplicas(_)
-            | Plan::DropItems(_)
-            | Plan::Insert(_)
-            | Plan::AlterNoop(_)
-            | Plan::AlterIndexSetOptions(_)
-            | Plan::AlterIndexResetOptions(_)
-            | Plan::AlterRole(_)
-            | Plan::AlterSink(_)
-            | Plan::AlterSource(_)
-            | Plan::AlterItemRename(_)
-            | Plan::AlterSecret(_)
-            | Plan::AlterSystemSet(_)
-            | Plan::AlterSystemReset(_)
-            | Plan::AlterSystemResetAll(_)
-            | Plan::ReadThenWrite(_)
-            | Plan::Raise(_)
-            | Plan::RotateKeys(_)
-            | Plan::GrantRole(_)
-            | Plan::RevokeRole(_)
-            | Plan::CopyRows(_) => {
-                return Err(AdapterError::Unauthorized(
-                    rbac::UnauthorizedError::privilege(plan.name().to_string(), None),
-                ))
-            }
-        }
-
-        for id in depends_on {
-            let entry = self.catalog.get_entry(id);
-            let full_name = self
-                .catalog
-                .resolve_full_name(entry.name(), Some(session.conn_id()));
-            let schema = &full_name.schema;
-            if schema != MZ_CATALOG_SCHEMA
-                && schema != PG_CATALOG_SCHEMA
-                && schema != MZ_INTERNAL_SCHEMA
-                && schema != INFORMATION_SCHEMA
-            {
-                return Err(AdapterError::Unauthorized(
-                    rbac::UnauthorizedError::privilege(
-                        format!("interact with object {full_name}"),
-                        None,
-                    ),
-                ));
-            }
-        }
-
-        Ok(())
     }
 }

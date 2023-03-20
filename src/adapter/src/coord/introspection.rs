@@ -12,13 +12,17 @@
 use mz_ore::collections::HashSet;
 use mz_repr::GlobalId;
 use mz_sql::catalog::SessionCatalog;
+use mz_sql::plan::Plan;
 use once_cell::sync::Lazy;
 use smallvec::SmallVec;
+
+use crate::rbac;
+use crate::session::Session;
 
 use crate::{
     catalog::builtin::{
         INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_INTROSPECTION_CLUSTER,
-        PG_CATALOG_SCHEMA,
+        MZ_INTROSPECTION_ROLE, PG_CATALOG_SCHEMA,
     },
     AdapterError,
 };
@@ -69,4 +73,102 @@ pub fn check_cluster_restrictions(
     } else {
         Ok(())
     }
+}
+
+/// TODO(jkosh44) This function will verify the privileges for the mz_introspection user.
+///  All of the privileges are hard coded into this function. In the future if we ever add
+///  a more robust privileges framework, then this function should be replaced with that
+///  framework.
+pub fn user_privilege_hack(
+    catalog: &impl SessionCatalog,
+    session: &Session,
+    plan: &Plan,
+    depends_on: &Vec<GlobalId>,
+) -> Result<(), AdapterError> {
+    if session.user().name != MZ_INTROSPECTION_ROLE.name {
+        return Ok(());
+    }
+
+    match plan {
+        Plan::Subscribe(_)
+        | Plan::Peek(_)
+        | Plan::CopyFrom(_)
+        | Plan::SendRows(_)
+        | Plan::Explain(_)
+        | Plan::ShowAllVariables
+        | Plan::ShowVariable(_)
+        | Plan::SetVariable(_)
+        | Plan::ResetVariable(_)
+        | Plan::StartTransaction(_)
+        | Plan::CommitTransaction(_)
+        | Plan::AbortTransaction(_)
+        | Plan::EmptyQuery
+        | Plan::Declare(_)
+        | Plan::Fetch(_)
+        | Plan::Close(_)
+        | Plan::Prepare(_)
+        | Plan::Execute(_)
+        | Plan::Deallocate(_) => {}
+
+        Plan::CreateConnection(_)
+        | Plan::CreateDatabase(_)
+        | Plan::CreateSchema(_)
+        | Plan::CreateRole(_)
+        | Plan::CreateCluster(_)
+        | Plan::CreateClusterReplica(_)
+        | Plan::CreateSource(_)
+        | Plan::CreateSources(_)
+        | Plan::CreateSecret(_)
+        | Plan::CreateSink(_)
+        | Plan::CreateTable(_)
+        | Plan::CreateView(_)
+        | Plan::CreateMaterializedView(_)
+        | Plan::CreateIndex(_)
+        | Plan::CreateType(_)
+        | Plan::DiscardTemp
+        | Plan::DiscardAll
+        | Plan::DropDatabase(_)
+        | Plan::DropSchema(_)
+        | Plan::DropRoles(_)
+        | Plan::DropClusters(_)
+        | Plan::DropClusterReplicas(_)
+        | Plan::DropItems(_)
+        | Plan::Insert(_)
+        | Plan::AlterNoop(_)
+        | Plan::AlterIndexSetOptions(_)
+        | Plan::AlterIndexResetOptions(_)
+        | Plan::AlterRole(_)
+        | Plan::AlterSink(_)
+        | Plan::AlterSource(_)
+        | Plan::AlterItemRename(_)
+        | Plan::AlterSecret(_)
+        | Plan::AlterSystemSet(_)
+        | Plan::AlterSystemReset(_)
+        | Plan::AlterSystemResetAll(_)
+        | Plan::ReadThenWrite(_)
+        | Plan::Raise(_)
+        | Plan::RotateKeys(_)
+        | Plan::GrantRole(_)
+        | Plan::RevokeRole(_)
+        | Plan::CopyRows(_) => {
+            return Err(AdapterError::Unauthorized(
+                rbac::UnauthorizedError::privilege(plan.name().to_string(), None),
+            ))
+        }
+    }
+
+    for id in depends_on {
+        let item = catalog.get_item(id);
+        let full_name = catalog.resolve_full_name(item.name());
+        if !ALLOWED_SCHEMAS.contains(full_name.schema.as_str()) {
+            return Err(AdapterError::Unauthorized(
+                rbac::UnauthorizedError::privilege(
+                    format!("interact with object {full_name}"),
+                    None,
+                ),
+            ));
+        }
+    }
+
+    Ok(())
 }
