@@ -220,7 +220,7 @@ fn extract_decode_results<G: Scope>(
     ),
     Diff,
 > {
-    input.flat_map(|decode_result| {
+    input.map(|decode_result| {
         let DecodeResult {
             key,
             value,
@@ -254,16 +254,10 @@ fn extract_decode_results<G: Scope>(
                 }),
             ),
             None => {
-                // NOTE: We need to make sure that when we see a "retraction" for this, that is, a
-                // message with _both_ a NULL key and NULL value, we can match this to the original
-                // `DecodeError`. Therefore, we cannot put more information in here than the
-                // partition. It would seem desirable to have more information, for example the
-                // offset, but with that the future "retraction" message will not match this
-                // message and the original error will not go away.
                 let key_error =
                     UpsertError::NullKey(mz_storage_client::types::errors::UpsertNullKeyError {});
                 (
-                    Some(Err(key_error.clone())),
+                    None,
                     // Match what we do in `extract_kv_from_previous`, though
                     // the value is not really important when we have a key
                     // error. Plus, we can't map any value error to an
@@ -278,7 +272,7 @@ fn extract_decode_results<G: Scope>(
             }
         };
 
-        Some(((key, value), position, metadata))
+        ((key, value), position, metadata)
     })
 }
 
@@ -291,7 +285,7 @@ fn extract_kv_from_previous<G: Scope>(
     records: Collection<G, Result<Row, UpsertError>, Diff>,
     key_indices_sorted: Vec<usize>,
     key_indices: &[usize],
-) -> Collection<G, (Result<Row, UpsertError>, Result<Row, UpsertError>), Diff> {
+) -> Collection<G, (Option<Result<Row, UpsertError>>, Result<Row, UpsertError>), Diff> {
     debug_assert!({
         let mut verified_sorted = key_indices.to_vec();
         verified_sorted.sort_unstable();
@@ -336,18 +330,17 @@ fn extract_kv_from_previous<G: Scope>(
                         key_row_packer.push(key_dv[i])
                     }
                 }
-                (Ok(key_row_buf.clone()), Ok(row_buf.clone()))
+                (Some(Ok(key_row_buf.clone())), Ok(row_buf.clone()))
             }
             Err(UpsertError::KeyDecode(err)) => (
-                Err(UpsertError::KeyDecode(err.clone())),
+                Some(Err(UpsertError::KeyDecode(err.clone()))),
                 Err(UpsertError::KeyDecode(err)),
             ),
-            Err(UpsertError::NullKey(null_key_err)) => (
-                Err(UpsertError::NullKey(null_key_err.clone())),
-                Err(UpsertError::NullKey(null_key_err)),
-            ),
+            Err(UpsertError::NullKey(null_key_err)) => {
+                (None, Err(UpsertError::NullKey(null_key_err)))
+            }
             Err(UpsertError::Value(UpsertValueError { inner, for_key })) => (
-                Ok(for_key.clone()),
+                Some(Ok(for_key.clone())),
                 Err(UpsertError::Value(UpsertValueError { inner, for_key })),
             ),
         }
@@ -406,8 +399,8 @@ where
         Exchange::new(|((key, _v), _t, _r)| {
             // N.B.  We make the expected type explicit here to make sure it
             // cannot change by accident.
-            let key: &Result<Row, UpsertError> = key;
-            Some(key).hashed()
+            let key: &Option<Result<Row, UpsertError>> = key;
+            key.as_ref().hashed()
         }),
         "Upsert",
         move |_cap, _info| {
@@ -643,7 +636,7 @@ fn process_pending_values_batch(
     cap: &mut Capability<Timestamp>,
     map: &mut BTreeMap<Option<Result<Row, UpsertError>>, UpsertSourceData>,
     // The current map of values we use to perform the upsert comparision
-    current_values: &mut BTreeMap<Result<Row, UpsertError>, Result<Row, DataflowError>>,
+    current_values: &mut BTreeMap<Option<Result<Row, UpsertError>>, Result<Row, DataflowError>>,
     // A shared row used to pack new rows for evaluation and output
     row_packer: &mut Row,
     // A shared row used to build a Vec<Datum<'_>> for evaluation
@@ -724,7 +717,7 @@ fn process_pending_values_batch(
                     .map(|full_row| thin(key_indices_sorted, full_row, row_packer))
                     .map_err(|e| e.clone());
                 current_values
-                    .insert(decoded_key.clone(), thinned_value)
+                    .insert(Some(decoded_key.clone()), thinned_value)
                     .map(|res| {
                         res.map(|v| {
                             rehydrate(
@@ -739,19 +732,22 @@ fn process_pending_values_batch(
                         })
                     })
             } else {
-                current_values.remove(&decoded_key).map(|res| {
-                    res.map(|v| {
-                        rehydrate(
-                            key_indices_map,
-                            // The value is never `Ok`
-                            // unless the key is also
-                            decoded_key.as_ref().unwrap(),
-                            &v,
-                            row_packer,
-                            kdv,
-                        )
+                current_values
+                    // WIP: What to do about this?
+                    .remove(&Some(decoded_key.clone()))
+                    .map(|res| {
+                        res.map(|v| {
+                            rehydrate(
+                                key_indices_map,
+                                // The value is never `Ok`
+                                // unless the key is also
+                                decoded_key.as_ref().unwrap(),
+                                &v,
+                                row_packer,
+                                kdv,
+                            )
+                        })
                     })
-                })
             };
 
             if let Some(old_value) = old_value {
@@ -761,6 +757,49 @@ fn process_pending_values_batch(
             if let Some(new_value) = new_value {
                 // give new value
                 session.give((new_value, cap.time().clone(), 1));
+            }
+        } else {
+            // Special-case handling for NULL keys, which are encoded as `None`
+            // here. We expect to either have an error for the value, or `None`,
+            // which would retract a previous error.
+            //
+            // We don't encode a NULL-key error as an `Err` in the `key`, like
+            // we do for other errors, so that we can change the error when
+            // there are updates.
+            //
+            // When a newer NULL message comes in, say with a higher offset, it
+            // will replace the previous one. This way, we can also make
+            // NULL-key errors retractable without having to match the NULL-key
+            // error exactly, by making sure to emit a retraction for the last
+            // error we saw, when we see a NULL-value message (encoded as the
+            // value being `None`).
+            //
+            // NOTE: We could think about how we can fold this into the if
+            // branch.
+
+            let current_value = current_values.get(&None);
+
+            match data.value {
+                Some(Ok(_value)) => {
+                    panic!("got NULL key but some value that is not an error or NULL as well");
+                }
+                Some(Err(err)) => {
+                    if let Some(old_value) = current_value {
+                        // retract old value
+                        session.give((old_value.clone(), cap.time().clone(), -1));
+                    }
+                    let err = Err(EnvelopeError::Upsert(err).into());
+                    current_values.insert(None, err.clone());
+                    session.give((err, cap.time().clone(), 1));
+                }
+                None => {
+                    if let Some(old_value) = current_value {
+                        // retract old value
+                        session.give((old_value.clone(), cap.time().clone(), -1));
+
+                        current_values.remove(&None);
+                    }
+                }
             }
         }
     }
