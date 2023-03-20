@@ -1121,7 +1121,7 @@ mod tests {
     #[tokio::test]
     async fn seqno_leases_with_maybe_downgrade_since() {
         mz_ore::test::init_logging();
-        let mut data = vec![
+        let data = vec![
             (("0".to_string(), "0".to_string()), 0, 1),
             (("1".to_string(), "1".to_string()), 1, 1),
         ];
@@ -1140,50 +1140,28 @@ mod tests {
             .expect_open::<String, String, u64, i64>(ShardId::new())
             .await;
         let lease_duration_ms = u64::try_from(read.cfg.reader_lease_duration.as_millis()).unwrap();
+        write.expect_compare_and_append(&data, 0, 2).await;
 
-        // write two batches and start a Subscribe that reads the first as part of its snapshot,
-        // and the second as part of its Listen.
-        write.expect_compare_and_append(&data[0..1], 0, 1).await;
-        write.expect_compare_and_append(&data[1..2], 1, 2).await;
-        let mut subscribe = read
-            .subscribe(Antichain::from_elem(0))
-            .await
-            .expect("cannot serve requested as_of");
-        let original_seqno_since = subscribe.listen.handle.machine.seqno_since();
+        let mut listen = read.listen(Antichain::from_elem(0)).await.expect("listen");
+        let original_seqno_since = listen.handle.machine.seqno_since();
 
         // advance time to force any calls to `maybe_downgrade_since` to fire
         now.fetch_add(lease_duration_ms / 4 + 1, Ordering::SeqCst);
-        'subscribe: loop {
-            for event in subscribe.next().await {
-                match event {
-                    ListenEvent::Progress(_) => break 'subscribe,
-                    ListenEvent::Updates(_) => {}
-                }
-            }
-        }
+        let _ = listen.next().await;
 
         // verify that `maybe_downgrade_since` ran
-        assert_eq!(
-            subscribe.listen.handle.last_heartbeat,
-            now.load(Ordering::SeqCst)
-        );
-
-        let leased_seqnos = subscribe
-            .listen
+        assert_eq!(listen.handle.last_heartbeat, now.load(Ordering::SeqCst));
+        // and that our lease and `seqno_since` has not advanced past the original seqno
+        let leased_seqnos = listen
             .handle
             .lease_returner
             .leased_seqnos
             .lock()
             .expect("lock poisoned");
-
-        let greatest_seqno_lease = (*leased_seqnos.last_key_value().unwrap().0).clone();
-
-        // confirm that the current seqno is greater than the greatest seqno lease,
-        // otherwise we would have advanced the seqno too soon.
-        assert_eq!(
-            subscribe.listen.handle.machine.seqno(),
-            greatest_seqno_lease.next()
-        );
+        assert_eq!(*leased_seqnos, BTreeMap::from([(original_seqno_since, 1)]));
+        assert_eq!(original_seqno_since, listen.handle.machine.seqno_since());
+        // but our machine seqno has advanced
+        assert_eq!(listen.handle.machine.seqno(), original_seqno_since.next());
     }
 
     // Verifies the semantics of `SeqNo` leases + checks dropping `LeasedBatchPart` semantics.
