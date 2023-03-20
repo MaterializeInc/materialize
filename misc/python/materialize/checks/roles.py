@@ -18,6 +18,11 @@ class CreateRole(Check):
     def _can_run(self) -> bool:
         return self.base_version >= MzVersion.parse("0.45.0-dev")
 
+    def _if_can_grant_revoke(self, text: str) -> str:
+        if self.base_version >= MzVersion.parse("0.47.0-dev"):
+            return text
+        return ""
+
     def initialize(self) -> Testdrive:
         return Testdrive("")
 
@@ -27,12 +32,20 @@ class CreateRole(Check):
             for s in [
                 """
                 > CREATE ROLE create_role1;
+                """
+                + self._if_can_grant_revoke(
+                    """
                 > GRANT create_role1 TO materialize;
-                """,
+                """
+                ),
                 """
                 > CREATE ROLE create_role2;
+                """
+                + self._if_can_grant_revoke(
+                    """
                 > GRANT create_role2 TO materialize;
-                """,
+                """
+                ),
             ]
         ]
 
@@ -43,25 +56,30 @@ class CreateRole(Check):
                 > SELECT name FROM mz_roles WHERE name LIKE 'create_role%';
                 create_role1
                 create_role2
+                """
+                + self._if_can_grant_revoke(
+                    """
                 > SELECT role.name, member.name, grantor.name from mz_role_members JOIN mz_roles role ON mz_role_members.role_id = role.id JOIN mz_roles member ON mz_role_members.member = member.id JOIN mz_roles grantor ON mz_role_members.grantor = grantor.id WHERE role.name LIKE 'create_role%';
                 create_role1 materialize materialize
                 create_role2 materialize materialize
-            """
+                """
+                )
             )
         )
 
 
-class DropRole(Check):
-    def _can_run(self) -> bool:
-        return self.base_version >= MzVersion.parse("0.45.0-dev")
-
+class DropRole(CreateRole):
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(
                 """
                 > CREATE ROLE drop_role1;
+                """
+                + self._if_can_grant_revoke(
+                    """
                 > GRANT drop_role1 TO materialize;
-            """
+                """
+                )
             )
         )
 
@@ -69,14 +87,26 @@ class DropRole(Check):
         return [
             Testdrive(dedent(s))
             for s in [
-                """
+                self._if_can_grant_revoke(
+                    """
                 > REVOKE drop_role1 FROM materialize;
+                """
+                )
+                + """
                 > DROP ROLE drop_role1;
                 > CREATE ROLE drop_role2;
-                > GRANT drop_role2 TO materialize;
-                """,
                 """
+                + self._if_can_grant_revoke(
+                    """
+                > GRANT drop_role2 TO materialize;
+                """
+                ),
+                self._if_can_grant_revoke(
+                    """
                 > REVOKE drop_role2 FROM materialize;
+                """
+                )
+                + """
                 > DROP ROLE drop_role2;
                 """,
             ]
@@ -88,8 +118,12 @@ class DropRole(Check):
                 """
                 > SELECT COUNT(*) FROM mz_roles WHERE name LIKE 'drop_role%';
                 0
+                """
+                + self._if_can_grant_revoke(
+                    """
                 > SELECT COUNT(*) FROM mz_role_members JOIN mz_roles ON mz_role_members.role_id = mz_roles.id WHERE name LIKE 'drop_role%';
                 0
-            """
+                """
+                )
             )
         )
