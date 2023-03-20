@@ -1116,10 +1116,10 @@ mod tests {
         drop(subscribe);
     }
 
-    // Regression test for #17338 where we could erroneously advance our seqno
-    // hold past the batch we were about to emit
+    // Regression test for #17338: we could erroneously advance
+    // our seqno since past the batch we were about to emit
     #[tokio::test]
-    async fn seqno_leases_with_maybe_downgrade_since() {
+    async fn regression_seqno_since_with_maybe_downgrade_since() {
         mz_ore::test::init_logging();
 
         let now = Arc::new(AtomicU64::new(0));
