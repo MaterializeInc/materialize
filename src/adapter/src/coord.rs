@@ -145,6 +145,7 @@ mod command_handler;
 mod dataflows;
 mod ddl;
 mod indexes;
+mod introspection;
 mod message_handler;
 mod read_policy;
 mod sequencer;

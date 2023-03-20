@@ -40,6 +40,8 @@ use crate::rbac;
 use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionStatus};
 use crate::util::{send_immediate_rows, ClientTransmitter};
 
+use super::introspection;
+
 // DO NOT make this visible in anyway, i.e. do not add any version of
 // `pub` to this mod. The inner `sequence_X` methods are hidden in this
 // private module to prevent anyone from calling them directly. All
@@ -67,7 +69,12 @@ impl Coordinator {
         let responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
         tx.set_allowed(responses);
 
-        if let Err(e) = rbac::check_plan(&self.catalog.for_session(&session), &session, &plan) {
+        let session_catalog = self.catalog.for_session(&session);
+        if let Err(e) = rbac::check_plan(&session_catalog, &session, &plan) {
+            return tx.send(Err(e), session);
+        }
+
+        if let Err(e) = introspection::check_cluster_restrictions(&session_catalog, &depends_on) {
             return tx.send(Err(e), session);
         }
 
