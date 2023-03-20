@@ -87,6 +87,10 @@ use uuid::Uuid;
 
 use mz_ore::{now::NowFn, retry::Retry};
 
+use crate::app_password::PREFIX;
+
+pub mod app_password;
+
 pub struct FronteggConfig {
     /// URL for the token endpoint, including full path.
     pub admin_api_token_url: String,
@@ -98,8 +102,6 @@ pub struct FronteggConfig {
     pub now: NowFn,
     /// Number of seconds before which to attempt to renew an expiring token.
     pub refresh_before_secs: i64,
-    /// Prefix that is expected to be present on all passwords.
-    pub password_prefix: String,
     /// Name of admin role.
     pub admin_role: String,
 }
@@ -114,7 +116,6 @@ pub struct FronteggAuthentication {
     now: NowFn,
     validation: Validation,
     refresh_before_secs: i64,
-    password_prefix: String,
     admin_role: String,
 
     // Reqwest HTTP client pool.
@@ -137,7 +138,6 @@ impl FronteggAuthentication {
             now: config.now,
             validation,
             refresh_before_secs: config.refresh_before_secs,
-            password_prefix: config.password_prefix,
             admin_role: config.admin_role,
             client: Client::builder()
                 .timeout(Duration::from_secs(5))
@@ -189,7 +189,7 @@ impl FronteggAuthentication {
         password: &str,
     ) -> Result<ApiTokenResponse, FronteggError> {
         let password = password
-            .strip_prefix(&self.password_prefix)
+            .strip_prefix(PREFIX)
             .ok_or(FronteggError::InvalidPasswordFormat)?;
         let (client_id, secret) = if password.len() == 43 || password.len() == 44 {
             // If it's exactly 43 or 44 bytes, assume we have base64-encoded

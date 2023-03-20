@@ -287,10 +287,6 @@ pub struct Args {
     /// The name of the admin role in Frontegg.
     #[clap(long, env = "FRONTEGG_ADMIN_ROLE", requires = "frontegg-tenant")]
     frontegg_admin_role: Option<String>,
-    /// A common string prefix that is expected to be present at the beginning
-    /// of all Frontegg passwords.
-    #[clap(long, env = "FRONTEGG_PASSWORD_PREFIX", requires = "frontegg-tenant")]
-    frontegg_password_prefix: Option<String>,
 
     // === Orchestrator options. ===
     /// The service orchestrator implementation to use.
@@ -625,7 +621,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 tenant_id,
                 now: mz_ore::now::SYSTEM_TIME.clone(),
                 refresh_before_secs: 60,
-                password_prefix: args.frontegg_password_prefix.unwrap_or_default(),
                 admin_role,
             }))
         }
