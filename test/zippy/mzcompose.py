@@ -8,6 +8,8 @@
 # by the Apache License, Version 2.0.
 
 import random
+import re
+from datetime import timedelta
 from enum import Enum
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
@@ -49,6 +51,22 @@ class TransactionIsolation(Enum):
         return self.value
 
 
+def parse_timedelta(arg: str) -> timedelta:
+    p = re.compile(
+        (r"((?P<days>-?\d+)d)?" r"((?P<hours>-?\d+)h)?" r"((?P<minutes>-?\d+)m)?"),
+        re.IGNORECASE,
+    )
+
+    m = p.match(arg)
+    assert m is not None
+
+    parts = {k: int(v) for k, v in m.groupdict().items() if v}
+    td = timedelta(**parts)
+
+    assert td > timedelta(0), f"timedelta '{td}' from arg '{arg}' is not positive"
+    return td
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """A general framework for longevity and stress testing"""
 
@@ -70,6 +88,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         type=int,
         help="Number of actions to run",
         default=1000,
+    )
+
+    parser.add_argument(
+        "--max-execution-time", metavar="XhYmZs", type=parse_timedelta, default="1d"
     )
 
     parser.add_argument(
@@ -136,6 +158,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.up("testdrive", persistent=True)
 
         print("Generating test...")
-        test = Test(scenario=scenario_class(), actions=args.actions)
+        test = Test(
+            scenario=scenario_class(),
+            actions=args.actions,
+            max_execution_time=args.max_execution_time,
+        )
         print("Running test...")
         test.run(c)

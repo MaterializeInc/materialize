@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import random
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Set, Type, TypeVar, Union
 
 from materialize.mzcompose import Composition
@@ -139,7 +140,9 @@ class Scenario:
 class Test:
     """A Zippy test, consisting of a sequence of actions."""
 
-    def __init__(self, scenario: Scenario, actions: int) -> None:
+    def __init__(
+        self, scenario: Scenario, actions: int, max_execution_time: timedelta
+    ) -> None:
         """Generate a new Zippy test.
 
         Args:
@@ -150,6 +153,7 @@ class Test:
         self._actions: List[Action] = []
         self._capabilities = Capabilities()
         self._config = self._scenario.config()
+        self._max_execution_time = max_execution_time
 
         for action_or_factory in self._scenario.bootstrap():
             self.append_actions(action_or_factory)
@@ -173,9 +177,15 @@ class Test:
 
     def run(self, c: Composition) -> None:
         """Run the Zippy test."""
+        max_time = datetime.now() + self._max_execution_time
         for action in self._actions:
             print(action)
             action.run(c)
+            if datetime.now() > max_time:
+                print(
+                    f"Desired execution time of {self._max_execution_time} has been reached."
+                )
+                break
 
     def _pick_action_or_factory(self) -> ActionOrFactory:
         """Select the next Action to run in the Test"""
