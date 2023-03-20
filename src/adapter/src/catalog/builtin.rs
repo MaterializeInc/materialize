@@ -1201,32 +1201,32 @@ pub const MZ_DATAFLOW_CHANNELS: BuiltinLog = BuiltinLog {
     variant: LogVariant::Timely(TimelyLog::Channels),
 };
 
-pub const MZ_SCHEDULING_ELAPSED_INTERNAL: BuiltinLog = BuiltinLog {
-    name: "mz_scheduling_elapsed_internal",
+pub const MZ_SCHEDULING_ELAPSED_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_scheduling_elapsed_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Elapsed),
 };
 
-pub const MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_INTERNAL: BuiltinLog = BuiltinLog {
-    name: "mz_compute_operator_durations_histogram_internal",
+pub const MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_compute_operator_durations_histogram_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Histogram),
 };
 
-pub const MZ_SCHEDULING_PARKS_HISTOGRAM_INTERNAL: BuiltinLog = BuiltinLog {
-    name: "mz_scheduling_parks_histogram_internal",
+pub const MZ_SCHEDULING_PARKS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_scheduling_parks_histogram_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Parks),
 };
 
-pub const MZ_ARRANGEMENT_BATCHES_INTERNAL: BuiltinLog = BuiltinLog {
-    name: "mz_arrangement_batches_internal",
+pub const MZ_ARRANGEMENT_BATCHES_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_arrangement_batches_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Differential(DifferentialLog::ArrangementBatches),
 };
 
-pub const MZ_ARRANGEMENT_SHARING_INTERNAL: BuiltinLog = BuiltinLog {
-    name: "mz_arrangement_sharing_internal",
+pub const MZ_ARRANGEMENT_SHARING_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_arrangement_sharing_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Differential(DifferentialLog::Sharing),
 };
@@ -1255,8 +1255,8 @@ pub const MZ_WORKER_COMPUTE_IMPORT_FRONTIERS: BuiltinLog = BuiltinLog {
     variant: LogVariant::Compute(ComputeLog::ImportFrontierCurrent),
 };
 
-pub const MZ_WORKER_COMPUTE_DELAYS_HISTOGRAM_INTERNAL: BuiltinLog = BuiltinLog {
-    name: "mz_worker_compute_delays_histogram_internal",
+pub const MZ_WORKER_COMPUTE_DELAYS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_worker_compute_delays_histogram_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::FrontierDelay),
 };
@@ -1267,32 +1267,32 @@ pub const MZ_ACTIVE_PEEKS: BuiltinLog = BuiltinLog {
     variant: LogVariant::Compute(ComputeLog::PeekCurrent),
 };
 
-pub const MZ_PEEK_DURATIONS_HISTOGRAM_INTERNAL: BuiltinLog = BuiltinLog {
-    name: "mz_peek_durations_histogram_internal",
+pub const MZ_PEEK_DURATIONS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_peek_durations_histogram_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::PeekDuration),
 };
 
-pub const MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL: BuiltinLog = BuiltinLog {
-    name: "mz_message_counts_received_internal",
+pub const MZ_MESSAGE_COUNTS_RECEIVED_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_message_counts_received_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::MessagesReceived),
 };
 
-pub const MZ_MESSAGE_COUNTS_SENT_INTERNAL: BuiltinLog = BuiltinLog {
-    name: "mz_message_counts_sent_internal",
+pub const MZ_MESSAGE_COUNTS_SENT_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_message_counts_sent_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::MessagesSent),
 };
 
-pub const MZ_DATAFLOW_OPERATOR_REACHABILITY_INTERNAL: BuiltinLog = BuiltinLog {
-    name: "mz_dataflow_operator_reachability_internal",
+pub const MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_dataflow_operator_reachability_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Reachability),
 };
 
-pub const MZ_ARRANGEMENT_RECORDS_INTERNAL: BuiltinLog = BuiltinLog {
-    name: "mz_arrangement_records_internal",
+pub const MZ_ARRANGEMENT_RECORDS_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_arrangement_records_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Differential(DifferentialLog::ArrangementRecords),
 };
@@ -2018,7 +2018,7 @@ WITH records_cte AS (
         worker_id,
         pg_catalog.count(*) AS records
     FROM
-        mz_internal.mz_arrangement_records_internal
+        mz_internal.mz_arrangement_records_raw
     GROUP BY
         operator_id, worker_id
 )
@@ -2435,7 +2435,7 @@ pub const MZ_SCHEDULING_ELAPSED: BuiltinView = BuiltinView {
     sql: "CREATE VIEW mz_internal.mz_scheduling_elapsed AS SELECT
     id, worker_id, pg_catalog.count(*) AS elapsed_ns
 FROM
-    mz_internal.mz_scheduling_elapsed_internal
+    mz_internal.mz_scheduling_elapsed_raw
 GROUP BY
     id, worker_id",
 };
@@ -2446,7 +2446,7 @@ pub const MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM: BuiltinView = BuiltinView {
     sql: "CREATE VIEW mz_internal.mz_compute_operator_durations_histogram AS SELECT
     id, worker_id, duration_ns, pg_catalog.count(*) AS count
 FROM
-    mz_internal.mz_compute_operator_durations_histogram_internal
+    mz_internal.mz_compute_operator_durations_histogram_raw
 GROUP BY
     id, worker_id, duration_ns",
 };
@@ -2484,7 +2484,7 @@ WITH sent_cte AS (
         to_worker_id,
         pg_catalog.count(*) AS sent
     FROM
-        mz_internal.mz_message_counts_sent_internal
+        mz_internal.mz_message_counts_sent_raw
     GROUP BY
         channel_id, from_worker_id, to_worker_id
 ),
@@ -2495,7 +2495,7 @@ received_cte AS (
         to_worker_id,
         pg_catalog.count(*) AS received
     FROM
-        mz_internal.mz_message_counts_received_internal
+        mz_internal.mz_message_counts_received_raw
     GROUP BY
         channel_id, from_worker_id, to_worker_id
 )
@@ -2519,7 +2519,7 @@ pub const MZ_DATAFLOW_OPERATOR_REACHABILITY: BuiltinView = BuiltinView {
     time,
     pg_catalog.count(*) as count
 FROM
-    mz_internal.mz_dataflow_operator_reachability_internal
+    mz_internal.mz_dataflow_operator_reachability_raw
 GROUP BY address, port, worker_id, update_type, time",
 };
 
@@ -2533,7 +2533,7 @@ WITH batches_cte AS (
         worker_id,
         pg_catalog.count(*) AS batches
     FROM
-        mz_internal.mz_arrangement_batches_internal
+        mz_internal.mz_arrangement_batches_raw
     GROUP BY
         operator_id, worker_id
 ),
@@ -2543,7 +2543,7 @@ records_cte AS (
         worker_id,
         pg_catalog.count(*) AS records
     FROM
-        mz_internal.mz_arrangement_records_internal
+        mz_internal.mz_arrangement_records_raw
     GROUP BY
         operator_id, worker_id
 )
@@ -2563,7 +2563,7 @@ SELECT
     operator_id,
     worker_id,
     pg_catalog.count(*) AS count
-FROM mz_internal.mz_arrangement_sharing_internal
+FROM mz_internal.mz_arrangement_sharing_raw
 GROUP BY operator_id, worker_id",
 };
 
@@ -3228,25 +3228,25 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         }
     }
     builtins.append(&mut vec![
-        Builtin::Log(&MZ_ARRANGEMENT_SHARING_INTERNAL),
-        Builtin::Log(&MZ_ARRANGEMENT_BATCHES_INTERNAL),
-        Builtin::Log(&MZ_ARRANGEMENT_RECORDS_INTERNAL),
+        Builtin::Log(&MZ_ARRANGEMENT_SHARING_RAW),
+        Builtin::Log(&MZ_ARRANGEMENT_BATCHES_RAW),
+        Builtin::Log(&MZ_ARRANGEMENT_RECORDS_RAW),
         Builtin::Log(&MZ_DATAFLOW_CHANNELS),
         Builtin::Log(&MZ_DATAFLOW_OPERATORS),
         Builtin::Log(&MZ_DATAFLOW_OPERATORS_ADDRESSES),
-        Builtin::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY_INTERNAL),
+        Builtin::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW),
         Builtin::Log(&MZ_COMPUTE_EXPORTS),
         Builtin::Log(&MZ_WORKER_COMPUTE_DEPENDENCIES),
-        Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL),
-        Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_INTERNAL),
+        Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_RAW),
+        Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_RAW),
         Builtin::Log(&MZ_ACTIVE_PEEKS),
-        Builtin::Log(&MZ_PEEK_DURATIONS_HISTOGRAM_INTERNAL),
-        Builtin::Log(&MZ_SCHEDULING_ELAPSED_INTERNAL),
-        Builtin::Log(&MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_INTERNAL),
-        Builtin::Log(&MZ_SCHEDULING_PARKS_HISTOGRAM_INTERNAL),
+        Builtin::Log(&MZ_PEEK_DURATIONS_HISTOGRAM_RAW),
+        Builtin::Log(&MZ_SCHEDULING_ELAPSED_RAW),
+        Builtin::Log(&MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_RAW),
+        Builtin::Log(&MZ_SCHEDULING_PARKS_HISTOGRAM_RAW),
         Builtin::Log(&MZ_WORKER_COMPUTE_FRONTIERS),
         Builtin::Log(&MZ_WORKER_COMPUTE_IMPORT_FRONTIERS),
-        Builtin::Log(&MZ_WORKER_COMPUTE_DELAYS_HISTOGRAM_INTERNAL),
+        Builtin::Log(&MZ_WORKER_COMPUTE_DELAYS_HISTOGRAM_RAW),
         Builtin::Table(&MZ_VIEW_KEYS),
         Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
         Builtin::Table(&MZ_KAFKA_SINKS),

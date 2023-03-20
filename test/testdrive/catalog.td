@@ -506,30 +506,30 @@ SELECT ${arg.replicas} > 1;
 > SHOW SOURCES FROM mz_internal
 name                                           type   size
 ------------------------------------------------------------
-mz_active_peeks                                   log   <null>
-mz_arrangement_batches_internal                   log   <null>
-mz_arrangement_records_internal                   log   <null>
-mz_arrangement_sharing_internal                   log   <null>
-mz_compute_exports                                log   <null>
-mz_compute_operator_durations_histogram_internal  log   <null>
-mz_dataflow_addresses                             log   <null>
-mz_dataflow_channels                              log   <null>
-mz_dataflow_operator_reachability_internal        log   <null>
-mz_dataflow_operators                             log   <null>
-mz_message_counts_received_internal               log   <null>
-mz_message_counts_sent_internal                   log   <null>
-mz_peek_durations_histogram_internal              log   <null>
-mz_scheduling_elapsed_internal                    log   <null>
-mz_scheduling_parks_histogram_internal            log   <null>
-mz_sink_statistics                                source <null>
-mz_sink_status_history                            source <null>
-mz_source_statistics                              source <null>
-mz_source_status_history                          source <null>
-mz_storage_shards                                 source <null>
-mz_worker_compute_delays_histogram_internal       log   <null>
-mz_worker_compute_dependencies                    log   <null>
-mz_worker_compute_frontiers                       log   <null>
-mz_worker_compute_import_frontiers                log   <null>
+mz_active_peeks                              log   <null>
+mz_arrangement_batches_raw                   log   <null>
+mz_arrangement_records_raw                   log   <null>
+mz_arrangement_sharing_raw                   log   <null>
+mz_compute_exports                           log   <null>
+mz_compute_operator_durations_histogram_raw  log   <null>
+mz_dataflow_addresses                        log   <null>
+mz_dataflow_channels                         log   <null>
+mz_dataflow_operator_reachability_raw        log   <null>
+mz_dataflow_operators                        log   <null>
+mz_message_counts_received_raw               log   <null>
+mz_message_counts_sent_raw                   log   <null>
+mz_peek_durations_histogram_raw              log   <null>
+mz_scheduling_elapsed_raw                    log   <null>
+mz_scheduling_parks_histogram_raw            log   <null>
+mz_sink_statistics                           source <null>
+mz_sink_status_history                       source <null>
+mz_source_statistics                         source <null>
+mz_source_status_history                     source <null>
+mz_storage_shards                            source <null>
+mz_worker_compute_delays_histogram_raw       log   <null>
+mz_worker_compute_dependencies               log   <null>
+mz_worker_compute_frontiers                  log   <null>
+mz_worker_compute_import_frontiers           log   <null>
 
 > SHOW TABLES FROM mz_internal
 name
