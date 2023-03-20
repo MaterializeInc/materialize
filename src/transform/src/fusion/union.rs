@@ -8,22 +8,19 @@
 // by the Apache License, Version 2.0.
 
 //! Fuses multiple `Union` operators into one.
-//!
-//! Nested negated unions are merged into the parent one by pushing
-//! the Negate to all their branches.
 
-use std::iter;
-
-use crate::TransformArgs;
 use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
-use mz_repr::RelationType;
 
 /// Fuses multiple `Union` operators into one.
 #[derive(Debug)]
 pub struct Union;
 
 impl crate::Transform for Union {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
@@ -33,7 +30,7 @@ impl crate::Transform for Union {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: crate::TransformArgs,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut_post(&mut Self::action)?;
         mz_repr::explain::trace_plan(&*relation);
@@ -67,77 +64,6 @@ impl Union {
                 stack.push(*base);
             } else {
                 list.push(expr);
-            }
-        }
-    }
-}
-
-/// Fuses `Union` and `Negate` operators into one `Union` and multiple `Negate` operators.
-#[derive(Debug)]
-pub struct UnionNegate;
-
-impl crate::Transform for UnionNegate {
-    #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
-        skip_all,
-        fields(path.segment = "union_negate")
-    )]
-    fn transform(
-        &self,
-        relation: &mut MirRelationExpr,
-        _: TransformArgs,
-    ) -> Result<(), crate::TransformError> {
-        let result = relation.try_visit_mut_post(&mut |e| Ok(self.action(e)));
-        mz_repr::explain::trace_plan(&*relation);
-        result
-    }
-}
-impl UnionNegate {
-    /// Fuses multiple `Union` operators into one.
-    /// Nested negated unions are merged into the parent one by pushing
-    /// the Negate to all their branches.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
-        if let MirRelationExpr::Union { base, inputs } = relation {
-            let can_fuse = iter::once(&**base).chain(&*inputs).any(|input| -> bool {
-                match input {
-                    MirRelationExpr::Union { .. } => true,
-                    MirRelationExpr::Negate { input: inner_input } => {
-                        if let MirRelationExpr::Union { .. } = **inner_input {
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                    _ => false,
-                }
-            });
-            if can_fuse {
-                let mut new_inputs: Vec<MirRelationExpr> = vec![];
-                for input in iter::once(&mut **base).chain(inputs) {
-                    let outer_input = input.take_dangerous();
-                    match outer_input {
-                        MirRelationExpr::Union { base, inputs } => {
-                            new_inputs.push(*base);
-                            new_inputs.extend(inputs);
-                        }
-                        MirRelationExpr::Negate {
-                            input: ref inner_input,
-                        } => {
-                            if let MirRelationExpr::Union { base, inputs } = &**inner_input {
-                                new_inputs.push(base.to_owned().negate());
-                                new_inputs.extend(inputs.into_iter().map(|x| x.clone().negate()));
-                            } else {
-                                new_inputs.push(outer_input);
-                            }
-                        }
-                        _ => new_inputs.push(outer_input),
-                    }
-                }
-                // A valid relation type is only needed for empty unions, but an existing union
-                // is guaranteed to be non-empty given that it always has at least a base branch.
-                assert!(!new_inputs.is_empty());
-                *relation = MirRelationExpr::union_many(new_inputs, RelationType::empty());
             }
         }
     }

@@ -25,6 +25,10 @@ use mz_repr::{Datum, RelationType, ScalarType};
 pub struct NonNullable;
 
 impl crate::Transform for NonNullable {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
