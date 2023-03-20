@@ -266,9 +266,7 @@ where
 
                 let source_resumption_frontier = match &desc.connection {
                     GenericSourceConnection::Kafka(c) => minimum_frontier(c),
-                    GenericSourceConnection::S3(c) => minimum_frontier(c),
                     GenericSourceConnection::Postgres(c) => minimum_frontier(c),
-                    GenericSourceConnection::Kinesis(c) => minimum_frontier(c),
                     GenericSourceConnection::TestScript(c) => minimum_frontier(c),
                     GenericSourceConnection::LoadGenerator(c) => minimum_frontier(c),
                 };

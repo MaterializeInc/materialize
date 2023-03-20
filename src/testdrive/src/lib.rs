@@ -85,7 +85,6 @@ use std::path::Path;
 
 use action::Run;
 use anyhow::{anyhow, Context};
-use itertools::Itertools;
 
 use mz_ore::display::DisplayExt;
 
@@ -197,43 +196,9 @@ pub(crate) async fn run_line_reader(
     }
 
     if config.reset {
-        // Clean up AWS state at the end of the run. Unlike Materialize and
-        // Kafka state, leaving around AWS resources costs real money. We
-        // intentionally don't stop at the first error because we don't want
-        // to e.g. skip cleaning up SQS resources because we failed to clean up
-        // S3 resources.
-
-        let mut reset_errors = vec![];
-
-        if let Err(e) = state.reset_s3().await {
-            reset_errors.push(e);
-        }
-
-        if let Err(e) = state.reset_sqs().await {
-            reset_errors.push(e);
-        }
-
-        if let Err(e) = state.reset_kinesis().await {
-            reset_errors.push(e);
-        }
-
         drop(state);
         if let Err(e) = state_cleanup.await {
-            reset_errors.push(e);
-        }
-
-        if !reset_errors.is_empty() {
-            errors.push(
-                anyhow!(
-                    "cleanup failed: {} errors: {}",
-                    reset_errors.len(),
-                    reset_errors
-                        .into_iter()
-                        .map(|e| e.to_string_alt())
-                        .join("\n"),
-                )
-                .into(),
-            );
+            errors.push(anyhow!("cleanup failed: error: {}", e.to_string_alt()).into());
         }
     }
 

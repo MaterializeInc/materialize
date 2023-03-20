@@ -21,7 +21,6 @@ use async_trait::async_trait;
 use bytes::BufMut;
 use dec::OrderedDecimal;
 use differential_dataflow::lattice::Lattice;
-use globset::{Glob, GlobBuilder};
 use itertools::Itertools;
 use once_cell::sync::Lazy;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
@@ -51,7 +50,6 @@ use mz_repr::{
 use mz_timely_util::order::{Interval, Partitioned, RangeBound};
 
 use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
-use crate::types::connections::aws::AwsConfig;
 use crate::types::connections::{KafkaConnection, PostgresConnection};
 use crate::types::errors::DataflowError;
 use crate::types::instances::StorageInstanceId;
@@ -1390,7 +1388,7 @@ impl UnplannedSourceEnvelope {
 
 /// A connection to an external system
 pub trait SourceConnection: Clone {
-    /// The name of the external system (e.g kafka, postgres, s3, etc).
+    /// The name of the external system (e.g kafka, postgres, etc).
     fn name(&self) -> &'static str;
 
     /// The name of the resource in the external system (e.g kafka topic) if any
@@ -1753,10 +1751,7 @@ impl SourceDesc<GenericSourceConnection> {
                 envelope:
                     SourceEnvelope::Debezium(_) | SourceEnvelope::Upsert(_) | SourceEnvelope::CdcV2,
                 connection:
-                    GenericSourceConnection::S3(_)
-                    | GenericSourceConnection::Kafka(_)
-                    | GenericSourceConnection::Kinesis(_)
-                    | GenericSourceConnection::TestScript(_),
+                    GenericSourceConnection::Kafka(_) | GenericSourceConnection::TestScript(_),
                 ..
             } => false,
         }
@@ -1770,8 +1765,6 @@ impl SourceDesc<GenericSourceConnection> {
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum GenericSourceConnection {
     Kafka(KafkaSourceConnection),
-    Kinesis(KinesisSourceConnection),
-    S3(S3SourceConnection),
     Postgres(PostgresSourceConnection),
     LoadGenerator(LoadGeneratorSourceConnection),
     TestScript(TestScriptSourceConnection),
@@ -1780,18 +1773,6 @@ pub enum GenericSourceConnection {
 impl From<KafkaSourceConnection> for GenericSourceConnection {
     fn from(conn: KafkaSourceConnection) -> Self {
         Self::Kafka(conn)
-    }
-}
-
-impl From<KinesisSourceConnection> for GenericSourceConnection {
-    fn from(conn: KinesisSourceConnection) -> Self {
-        Self::Kinesis(conn)
-    }
-}
-
-impl From<S3SourceConnection> for GenericSourceConnection {
-    fn from(conn: S3SourceConnection) -> Self {
-        Self::S3(conn)
     }
 }
 
@@ -1817,8 +1798,6 @@ impl SourceConnection for GenericSourceConnection {
     fn name(&self) -> &'static str {
         match self {
             Self::Kafka(conn) => conn.name(),
-            Self::Kinesis(conn) => conn.name(),
-            Self::S3(conn) => conn.name(),
             Self::Postgres(conn) => conn.name(),
             Self::LoadGenerator(conn) => conn.name(),
             Self::TestScript(conn) => conn.name(),
@@ -1828,8 +1807,6 @@ impl SourceConnection for GenericSourceConnection {
     fn upstream_name(&self) -> Option<&str> {
         match self {
             Self::Kafka(conn) => conn.upstream_name(),
-            Self::Kinesis(conn) => conn.upstream_name(),
-            Self::S3(conn) => conn.upstream_name(),
             Self::Postgres(conn) => conn.upstream_name(),
             Self::LoadGenerator(conn) => conn.upstream_name(),
             Self::TestScript(conn) => conn.upstream_name(),
@@ -1839,8 +1816,6 @@ impl SourceConnection for GenericSourceConnection {
     fn timestamp_desc(&self) -> RelationDesc {
         match self {
             Self::Kafka(conn) => conn.timestamp_desc(),
-            Self::Kinesis(conn) => conn.timestamp_desc(),
-            Self::S3(conn) => conn.timestamp_desc(),
             Self::Postgres(conn) => conn.timestamp_desc(),
             Self::LoadGenerator(conn) => conn.timestamp_desc(),
             Self::TestScript(conn) => conn.timestamp_desc(),
@@ -1850,8 +1825,6 @@ impl SourceConnection for GenericSourceConnection {
     fn num_outputs(&self) -> usize {
         match self {
             Self::Kafka(conn) => conn.num_outputs(),
-            Self::Kinesis(conn) => conn.num_outputs(),
-            Self::S3(conn) => conn.num_outputs(),
             Self::Postgres(conn) => conn.num_outputs(),
             Self::LoadGenerator(conn) => conn.num_outputs(),
             Self::TestScript(conn) => conn.num_outputs(),
@@ -1861,8 +1834,6 @@ impl SourceConnection for GenericSourceConnection {
     fn connection_id(&self) -> Option<GlobalId> {
         match self {
             Self::Kafka(conn) => conn.connection_id(),
-            Self::Kinesis(conn) => conn.connection_id(),
-            Self::S3(conn) => conn.connection_id(),
             Self::Postgres(conn) => conn.connection_id(),
             Self::LoadGenerator(conn) => conn.connection_id(),
             Self::TestScript(conn) => conn.connection_id(),
@@ -1872,8 +1843,6 @@ impl SourceConnection for GenericSourceConnection {
     fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
         match self {
             Self::Kafka(conn) => conn.metadata_columns(),
-            Self::Kinesis(conn) => conn.metadata_columns(),
-            Self::S3(conn) => conn.metadata_columns(),
             Self::Postgres(conn) => conn.metadata_columns(),
             Self::LoadGenerator(conn) => conn.metadata_columns(),
             Self::TestScript(conn) => conn.metadata_columns(),
@@ -1883,8 +1852,6 @@ impl SourceConnection for GenericSourceConnection {
     fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
         match self {
             Self::Kafka(conn) => conn.metadata_column_types(),
-            Self::Kinesis(conn) => conn.metadata_column_types(),
-            Self::S3(conn) => conn.metadata_column_types(),
             Self::Postgres(conn) => conn.metadata_column_types(),
             Self::LoadGenerator(conn) => conn.metadata_column_types(),
             Self::TestScript(conn) => conn.metadata_column_types(),
@@ -1898,8 +1865,6 @@ impl RustType<ProtoSourceConnection> for GenericSourceConnection {
         ProtoSourceConnection {
             kind: Some(match self {
                 GenericSourceConnection::Kafka(kafka) => Kind::Kafka(kafka.into_proto()),
-                GenericSourceConnection::Kinesis(kinesis) => Kind::Kinesis(kinesis.into_proto()),
-                GenericSourceConnection::S3(s3) => Kind::S3(s3.into_proto()),
                 GenericSourceConnection::Postgres(postgres) => {
                     Kind::Postgres(postgres.into_proto())
                 }
@@ -1920,80 +1885,11 @@ impl RustType<ProtoSourceConnection> for GenericSourceConnection {
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoSourceConnection::kind"))?;
         Ok(match kind {
             Kind::Kafka(kafka) => GenericSourceConnection::Kafka(kafka.into_rust()?),
-            Kind::Kinesis(kinesis) => GenericSourceConnection::Kinesis(kinesis.into_rust()?),
-            Kind::S3(s3) => GenericSourceConnection::S3(s3.into_rust()?),
             Kind::Postgres(postgres) => GenericSourceConnection::Postgres(postgres.into_rust()?),
             Kind::Loadgen(loadgen) => GenericSourceConnection::LoadGenerator(loadgen.into_rust()?),
             Kind::Testscript(testscript) => {
                 GenericSourceConnection::TestScript(testscript.into_rust()?)
             }
-        })
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct KinesisSourceConnection {
-    pub connection_id: GlobalId,
-    pub stream_name: String,
-    pub aws: AwsConfig,
-}
-
-pub static KINESIS_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
-    //  In the future, kinesis will have a more complex ts
-    // RelationDesc::empty()
-    //     .with_column("shard_id", ScalarType::Int32.nullable(false))
-    //     .with_column("sequence_number", ScalarType::UInt64.nullable(true))
-    RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true))
-});
-
-impl SourceConnection for KinesisSourceConnection {
-    fn name(&self) -> &'static str {
-        "kinesis"
-    }
-
-    fn upstream_name(&self) -> Option<&str> {
-        Some(self.stream_name.as_str())
-    }
-
-    fn timestamp_desc(&self) -> RelationDesc {
-        KINESIS_PROGRESS_DESC.clone()
-    }
-
-    fn num_outputs(&self) -> usize {
-        1
-    }
-
-    fn connection_id(&self) -> Option<GlobalId> {
-        Some(self.connection_id)
-    }
-
-    fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
-        vec![]
-    }
-
-    fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
-        vec![]
-    }
-}
-
-impl RustType<ProtoKinesisSourceConnection> for KinesisSourceConnection {
-    fn into_proto(&self) -> ProtoKinesisSourceConnection {
-        ProtoKinesisSourceConnection {
-            stream_name: self.stream_name.clone(),
-            aws: Some(self.aws.into_proto()),
-            connection_id: Some(self.connection_id.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoKinesisSourceConnection) -> Result<Self, TryFromProtoError> {
-        Ok(KinesisSourceConnection {
-            stream_name: proto.stream_name,
-            aws: proto
-                .aws
-                .into_rust_if_some("ProtoKinesisSourceConnection::aws")?,
-            connection_id: proto
-                .connection_id
-                .into_rust_if_some("ProtoKinesisSourceConnection::connection_id")?,
         })
     }
 }
@@ -2560,157 +2456,6 @@ impl RustType<ProtoTestScriptSourceConnection> for TestScriptSourceConnection {
     fn from_proto(proto: ProtoTestScriptSourceConnection) -> Result<Self, TryFromProtoError> {
         Ok(TestScriptSourceConnection {
             desc_json: proto.desc_json,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct S3SourceConnection {
-    pub connection_id: GlobalId,
-    pub key_sources: Vec<S3KeySource>,
-    pub pattern: Option<Glob>,
-    pub aws: AwsConfig,
-    pub compression: Compression,
-}
-
-pub static S3_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
-    RelationDesc::empty().with_column("byte_offset", ScalarType::UInt64.nullable(true))
-});
-
-impl SourceConnection for S3SourceConnection {
-    fn name(&self) -> &'static str {
-        "s3"
-    }
-
-    fn upstream_name(&self) -> Option<&str> {
-        None
-    }
-
-    fn timestamp_desc(&self) -> RelationDesc {
-        S3_PROGRESS_DESC.clone()
-    }
-
-    fn num_outputs(&self) -> usize {
-        1
-    }
-
-    fn connection_id(&self) -> Option<GlobalId> {
-        Some(self.connection_id)
-    }
-
-    fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
-        vec![]
-    }
-
-    fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
-        vec![]
-    }
-}
-
-fn any_glob() -> impl Strategy<Value = Glob> {
-    r"[a-z][a-z0-9]{0,10}/?([a-z0-9]{0,5}/?){0,3}".prop_map(|s| {
-        GlobBuilder::new(&s)
-            .literal_separator(true)
-            .backslash_escape(true)
-            .build()
-            .unwrap()
-    })
-}
-
-impl Arbitrary for S3SourceConnection {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<GlobalId>(),
-            any::<Vec<S3KeySource>>(),
-            proptest::option::of(any_glob()),
-            any::<AwsConfig>(),
-            any::<Compression>(),
-        )
-            .prop_map(|(connection_id, key_sources, pattern, aws, compression)| {
-                S3SourceConnection {
-                    connection_id,
-                    key_sources,
-                    pattern,
-                    aws,
-                    compression,
-                }
-            })
-            .boxed()
-    }
-}
-
-impl RustType<ProtoS3SourceConnection> for S3SourceConnection {
-    fn into_proto(&self) -> ProtoS3SourceConnection {
-        ProtoS3SourceConnection {
-            connection_id: Some(self.connection_id.into_proto()),
-            key_sources: self.key_sources.into_proto(),
-            pattern: self.pattern.as_ref().map(|g| g.glob().into()),
-            aws: Some(self.aws.into_proto()),
-            compression: Some(self.compression.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoS3SourceConnection) -> Result<Self, TryFromProtoError> {
-        Ok(S3SourceConnection {
-            connection_id: proto
-                .connection_id
-                .into_rust_if_some("ProtoS3SourceConnection::connection_id")?,
-            key_sources: proto.key_sources.into_rust()?,
-            pattern: proto
-                .pattern
-                .map(|p| {
-                    GlobBuilder::new(&p)
-                        .literal_separator(true)
-                        .backslash_escape(true)
-                        .build()
-                })
-                .transpose()?,
-            aws: proto
-                .aws
-                .into_rust_if_some("ProtoS3SourceConnection::aws")?,
-            compression: proto
-                .compression
-                .into_rust_if_some("ProtoS3SourceConnection::compression")?,
-        })
-    }
-}
-
-/// A Source of Object Key names, the argument of the `DISCOVER OBJECTS` clause
-#[derive(Arbitrary, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum S3KeySource {
-    /// Scan the S3 Bucket to discover keys to download
-    Scan { bucket: String },
-    /// Load object keys based on the contents of an S3 Notifications channel
-    ///
-    /// S3 notifications channels can be configured to go to SQS, which is the
-    /// only target we currently support.
-    SqsNotifications { queue: String },
-}
-
-impl RustType<ProtoS3KeySource> for S3KeySource {
-    fn into_proto(&self) -> ProtoS3KeySource {
-        use proto_s3_key_source::Kind;
-        ProtoS3KeySource {
-            kind: Some(match self {
-                S3KeySource::Scan { bucket } => Kind::Scan(bucket.clone()),
-                S3KeySource::SqsNotifications { queue } => Kind::SqsNotifications(queue.clone()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoS3KeySource) -> Result<Self, TryFromProtoError> {
-        use proto_s3_key_source::Kind;
-        Ok(match proto.kind {
-            Some(Kind::Scan(s)) => S3KeySource::Scan { bucket: s },
-            Some(Kind::SqsNotifications(s)) => S3KeySource::SqsNotifications { queue: s },
-            None => {
-                return Err(TryFromProtoError::MissingField(
-                    "ProtoS3KeySource::kind".into(),
-                ))
-            }
         })
     }
 }

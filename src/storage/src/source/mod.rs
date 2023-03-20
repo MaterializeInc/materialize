@@ -35,27 +35,21 @@ use crate::source::types::SourceReaderError;
 use crate::source::types::{NextMessage, SourceMessage, SourceReader};
 
 mod commit;
-mod delimited_value_reader;
 pub mod generator;
 mod kafka;
-mod kinesis;
 pub mod metrics;
 mod postgres;
 pub(crate) mod reclock;
 mod resumption;
-mod s3;
 mod source_reader_pipeline;
 // Public for integration testing.
 #[doc(hidden)]
 pub mod testscript;
 pub mod types;
 
-pub use delimited_value_reader::DelimitedValueSourceConnection;
 pub use generator::LoadGeneratorSourceReader;
 pub use kafka::KafkaSourceReader;
-pub use kinesis::KinesisSourceReader;
 pub use postgres::PostgresSourceReader;
-pub use s3::S3SourceReader;
 pub use source_reader_pipeline::create_raw_source;
 pub use source_reader_pipeline::RawSourceCreationConfig;
 pub use testscript::TestScriptSourceReader;

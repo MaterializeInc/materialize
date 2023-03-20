@@ -16,7 +16,7 @@ use std::iter;
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context};
+use anyhow::anyhow;
 use mz_repr::adt::system::Oid;
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
@@ -26,11 +26,9 @@ use uuid::Uuid;
 
 use mz_ccsr::Schema as CcsrSchema;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError};
-use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
 use mz_repr::{strconv, GlobalId};
-use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CsrConnection, CsrSeedAvro,
@@ -38,14 +36,13 @@ use mz_sql_parser::ast::{
     KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection,
     PgConfigOption, PgConfigOptionName, ReaderSchemaSelectionStrategy, UnresolvedObjectName,
 };
-use mz_storage_client::types::connections::aws::AwsConfig;
 use mz_storage_client::types::connections::{Connection, ConnectionContext};
 use mz_storage_client::types::sources::PostgresSourcePublicationDetails;
 
 use crate::ast::{
     AvroSchema, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,
     CreateSourceSubsource, CreateSubsourceStatement, CsrConnectionAvro, CsrConnectionProtobuf,
-    CsvColumns, Format, ProtobufSchema, ReferencedSubsources, Value, WithOptionValue,
+    Format, ProtobufSchema, ReferencedSubsources, Value, WithOptionValue,
 };
 use crate::catalog::{ErsatzCatalog, SessionCatalog};
 use crate::kafka_util;
@@ -146,10 +143,6 @@ pub async fn purify_create_source(
 
     let progress_desc = match &connection {
         CreateSourceConnection::Kafka(_) => &mz_storage_client::types::sources::KAFKA_PROGRESS_DESC,
-        CreateSourceConnection::Kinesis { .. } => {
-            &mz_storage_client::types::sources::KINESIS_PROGRESS_DESC
-        }
-        CreateSourceConnection::S3 { .. } => &mz_storage_client::types::sources::S3_PROGRESS_DESC,
         CreateSourceConnection::Postgres { .. } => {
             &mz_storage_client::types::sources::PG_PROGRESS_DESC
         }
@@ -162,18 +155,17 @@ pub async fn purify_create_source(
     };
 
     match &connection {
-        CreateSourceConnection::Kafka(_)
-        | CreateSourceConnection::Kinesis { .. }
-        | CreateSourceConnection::S3 { .. }
-        | CreateSourceConnection::TestScript { .. } => match &referenced_subsources {
-            Some(ReferencedSubsources::All) => {
-                sql_bail!("FOR ALL TABLES is only valid for multi-output sources");
+        CreateSourceConnection::Kafka(_) | CreateSourceConnection::TestScript { .. } => {
+            match &referenced_subsources {
+                Some(ReferencedSubsources::All) => {
+                    sql_bail!("FOR ALL TABLES is only valid for multi-output sources");
+                }
+                Some(ReferencedSubsources::Subset(_)) => {
+                    sql_bail!("FOR TABLES (..) is only valid for multi-output sources");
+                }
+                None => {}
             }
-            Some(ReferencedSubsources::Subset(_)) => {
-                sql_bail!("FOR TABLES (..) is only valid for multi-output sources");
-            }
-            None => {}
-        },
+        }
         CreateSourceConnection::Postgres { .. } | CreateSourceConnection::LoadGenerator { .. } => {}
     }
 
@@ -252,38 +244,6 @@ pub async fn purify_create_source(
         }
         CreateSourceConnection::TestScript { desc_json: _ } => {
             // TODO: verify valid json and valid schema
-        }
-        CreateSourceConnection::S3 { connection, .. } => {
-            let scx = StatementContext::new(None, &*catalog);
-            let aws = {
-                let item = scx.get_item_by_resolved_name(connection)?;
-                match item.connection()? {
-                    Connection::Aws(aws) => aws.clone(),
-                    _ => sql_bail!("{} is not an AWS connection", item.name()),
-                }
-            };
-            validate_aws_credentials(
-                &aws,
-                connection_context.aws_external_id_prefix.as_ref(),
-                &*connection_context.secrets_reader,
-            )
-            .await?;
-        }
-        CreateSourceConnection::Kinesis { connection, .. } => {
-            let scx = StatementContext::new(None, &*catalog);
-            let aws = {
-                let item = scx.get_item_by_resolved_name(connection)?;
-                match item.connection()? {
-                    Connection::Aws(aws) => aws.clone(),
-                    _ => sql_bail!("{} is not an AWS connection", item.name()),
-                }
-            };
-            validate_aws_credentials(
-                &aws,
-                connection_context.aws_external_id_prefix.as_ref(),
-                &*connection_context.secrets_reader,
-            )
-            .await?;
         }
         CreateSourceConnection::Postgres {
             connection,
@@ -764,22 +724,7 @@ async fn purify_source_format_single(
             }
             ProtobufSchema::InlineSchema { .. } => {}
         },
-        Format::Csv {
-            delimiter: _,
-            ref mut columns,
-        } => {
-            if let CsvColumns::Header { names } = columns {
-                match connection {
-                    CreateSourceConnection::S3 { .. } => {
-                        if names.is_empty() {
-                            sql_bail!("CSV WITH HEADER for S3 sources requires specifying the header columns");
-                        }
-                    }
-                    _ => sql_bail!("CSV WITH HEADER is only supported for S3 sources"),
-                }
-            }
-        }
-        Format::Bytes | Format::Regex(_) | Format::Json | Format::Text => (),
+        Format::Bytes | Format::Regex(_) | Format::Json | Format::Text | Format::Csv { .. } => (),
     }
     Ok(())
 }
@@ -1000,21 +945,4 @@ async fn compile_proto(
         schema,
         message_name,
     })
-}
-
-/// Makes an always-valid AWS API call to perform a basic sanity check of
-/// whether the specified AWS configuration is valid.
-async fn validate_aws_credentials(
-    config: &AwsConfig,
-    external_id_prefix: Option<&AwsExternalIdPrefix>,
-    secrets_reader: &dyn SecretsReader,
-) -> Result<(), PlanError> {
-    let config = config.load(external_id_prefix, None, secrets_reader).await;
-    let sts_client = aws_sdk_sts::Client::new(&config);
-    let _ = sts_client
-        .get_caller_identity()
-        .send()
-        .await
-        .context("Unable to validate AWS credentials")?;
-    Ok(())
 }

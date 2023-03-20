@@ -55,8 +55,7 @@ Unlike the `sqllogictest` driver, `testdrive` will fail the test at the first di
 The easiest way to run testdrive tests is via [mzcompose](mzcompose.md).
 
 The mzcompose configuration will automatically set up all of testdrive's
-dependencies, including Zookeeper, Kafka, the Confluent Schema Registry, and
-mock versions of AWS S3 and Kinesis.
+dependencies, including Zookeeper, Kafka, and the Confluent Schema Registry.
 
 **WARNING:** On ARM-based machines (like M1 Macs), running the Confluent
 Platform in Docker is nearly unusably slow because it runs under QEMU emulation.
@@ -92,13 +91,6 @@ Run testdrive against a single file:
 ./mzcompose --dev run default FILE.td
 ```
 
-Run S3 tests against a real AWS region. This expects actual AWS credentials to
-be available (q.v. [our documentation][aws-creds]).
-
-```
-./mzcompose --dev run default --aws-region=us-east-2 s3.td
-```
-
 ## Running tests locally without mzcompose
 
 Most testdrive scripts live in [test/testdrive](/test/testdrive). To run a
@@ -123,7 +115,7 @@ running [LocalStack][]. To install and run LocalStack:
 
 ```shell
 $ pip install localstack
-$ START_WEB=false SERVICES=iam,sts,kinesis,s3 localstack start
+$ START_WEB=false SERVICES=iam,sts localstack start
 ```
 
 If you've previously installed LocalStack, be sure it is v0.11 or later.
@@ -139,16 +131,6 @@ cargo run --bin testdrive -- --help
 
 [LocalStack]: https://github.com/localstack/localstack
 
-## Running against  AWS S3
-
-To run a test against the actual S3/SQS service at AWS:
-
-```
-export AWS_ACCESS_KEY_ID=XXX
-export AWS_SECRET_ACCESS_KEY=YYY
-target/release/testdrive --aws-region=eu-central-1 --default-timeout=600s test/testdrive/disabled/s3-sqs-notifications.td
-```
-
 # Creating tests
 
 ## Test format
@@ -158,8 +140,6 @@ A `testdrive` `.td` test starts with a copyright header and must not contain tra
 ## Test naming
 
 Tests related to Kafka are named `kafka-*.td`. This allows various CI jobs that deal with Kafka to pick them up, e.g. to run them against different Kafka versions, against Redpanda, etc.
-
-Tests related to S3/SQS are named `s3*.td`. This allows those tests to be skipped in certain specialized CI jobs and environments where AWS or localstack is not available.
 
 ## Test location
 
@@ -191,16 +171,6 @@ Specifies the backoff factor that will be applied to increase the backoff interv
 
 materialized connection string [default: postgres://materialize@localhost:6875]
 
-#### `--aws-endpoint <aws-endpoint>`
-
-Custom AWS endpoint. Default: "http://localhost:4566"
-
-#### `--aws-region <aws-region>`
-
-Named AWS region to target for AWS API requests [default: localstack]
-
-If an actual AWS region is specified, such as `eu-central-1`, all S3/SQS requests will be sent to it.
-
 #### `--cert <PATH>`
 
 Path to TLS certificate keystore. The keystore must be in the PKCS#12 format.
@@ -231,7 +201,7 @@ By default, `testdrive` will clean up the environment and Mz prior to running ea
 
 #### `--no-reset`
 
-By default, `testdrive` will clean up its environment as much as it can before the start of the test, which includes Mz databases, S3 buckets, etc. If two consequtive invocations of `testdrive` need to be able to operate on the same objects, e.g. database tables, the second invocation needs to run with `--no-reset`
+By default, `testdrive` will clean up its environment as much as it can before the start of the test, which includes Mz databases, etc. If two consequtive invocations of `testdrive` need to be able to operate on the same objects, e.g. database tables, the second invocation needs to run with `--no-reset`
 
 #### `--seed <seed>`
 
@@ -813,43 +783,6 @@ for the specified consumer group, topic, and partition.
 
 `headers` is a parameter that takes a json map (or list of maps) with string key-value pairs
 sent as headers for every message for the given action.
-
-## Actions on Kinesis
-
-#### `$ kinesis-create-stream`
-
-#### `$ kinesis-update-shards`
-
-#### `$ kinesis-ingest`
-
-#### `$ kinesis-verify`
-
-## Actions on S3/SQS
-
-#### `$ s3-create-bucket bucket=...`
-
-Creates the specified S3 bucket
-
-#### `$ s3-put-object bucket=... key=...`
-
-Uploads the data provided under the key specified in the bucket specified.
-
-#### `$ s3-delete-objects`
-
-Delete the S3 keys provided below the action from the bucket.
-
-```
-$ s3-delete-objects bucket=foo
-1.csv
-2.csv
-3.csv
-```
-
-#### `$ s3-add-notifications bucket=... queue=... sqs-validation-timeout=Nm`
-
-Add an SQS notification to the specified bucket and then validates that SQS works by uploading a key and listening for the SQS notification.
-
-> :warning: `$ s3-add-notifications` uploads a single key in your bucket that remains there , so it will show up in your S3 sources unless you use a `DISCOVER OBJECTS MATCHING` clause to filter it out.
 
 ## Actions on Confluent Schema Registry
 
