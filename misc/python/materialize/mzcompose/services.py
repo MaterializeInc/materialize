@@ -63,6 +63,8 @@ class Materialized(Service):
         external_minio: bool = False,
         unsafe_mode: bool = True,
         restart: Optional[str] = None,
+        use_default_volumes: bool = True,
+        ports: Optional[List[str]] = None,
     ) -> None:
         depends_on: Dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
@@ -142,13 +144,18 @@ class Materialized(Service):
         if memory:
             config["deploy"] = {"resources": {"limits": {"memory": memory}}}
 
+        volumes = []
+        if use_default_volumes:
+            volumes += DEFAULT_MZ_VOLUMES
+        volumes += volumes_extra
+
         config.update(
             {
                 "depends_on": depends_on,
                 "command": command,
                 "ports": [6875, 6876, 6877, 6878, 26257],
                 "environment": environment,
-                "volumes": [*DEFAULT_MZ_VOLUMES, *volumes_extra],
+                "volumes": volumes,
                 "tmpfs": ["/tmp"],
                 "healthcheck": {
                     "test": ["CMD", "curl", "-f", "localhost:6878/api/readyz"],
@@ -158,6 +165,14 @@ class Materialized(Service):
                 },
             }
         )
+
+        if ports:
+            config.update(
+                {
+                    "allow_host_ports": True,
+                    "ports": ports,
+                }
+            )
 
         super().__init__(name=name, config=config)
 
