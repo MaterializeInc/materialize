@@ -116,6 +116,9 @@ class Materialized(Service):
             # f"--bootstrap-builtin-cluster-replica-size={self.default_replica_size}",
             f"--bootstrap-default-cluster-replica-size={self.default_replica_size}",
             f"--default-storage-host-size={self.default_storage_size}",
+            # We wish to test the new implementation as its the canonical one, but
+            # want to control the rollout to production.
+            "--bootstrap-system-parameter=enable_multi_worker_storage_persist_sink=true",
         ]
 
         if external_cockroach:

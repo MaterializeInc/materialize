@@ -42,8 +42,8 @@ impl SourceSpecificMetrics {
                 help: "Whether or not the new multi-worker persist_sink is actively being used",
                 var_labels: ["source_id", "worker_id", "parent_source_id", "output"],
             )),
-            // TODO(guswynn): some of these metrics are broken when there are more than 1
-            // worker-id, and need to be fixed
+            // TODO(guswynn): some of these metrics are not clear when subsources are involved, and
+            // should be fixed
             capability: registry.register(metric!(
                 name: "mz_capability",
                 help: "The current capability for this dataflow. This corresponds to min(mz_partition_closed_ts)",
@@ -58,33 +58,33 @@ impl SourceSpecificMetrics {
             progress: registry.register(metric!(
                 name: "mz_source_progress",
                 help: "A timestamp gauge representing forward progess in the data shard",
-                var_labels: ["source_id", "output", "shard"],
+                var_labels: ["source_id", "output", "shard", "worker_id"],
             )),
             row_inserts: registry.register(metric!(
                 name: "mz_source_row_inserts",
                 help: "A counter representing the actual number of rows being inserted to the data shard",
-                var_labels: ["source_id", "output", "shard"],
+                var_labels: ["source_id", "output", "shard", "worker_id"],
             )),
             row_retractions: registry.register(metric!(
                 name: "mz_source_row_retractions",
                 help: "A counter representing the actual number of rows being retracted from the data shard",
-                var_labels: ["source_id", "output", "shard"],
+                var_labels: ["source_id", "output", "shard", "worker_id"],
             )),
             error_inserts: registry.register(metric!(
                 name: "mz_source_error_inserts",
                 help: "A counter representing the actual number of errors being inserted to the data shard",
-                var_labels: ["source_id", "output", "shard"],
+                var_labels: ["source_id", "output", "shard", "worker_id"],
             )),
             error_retractions: registry.register(metric!(
                 name: "mz_source_error_retractions",
                 help: "A counter representing the actual number of errors being retracted from the data shard",
-                var_labels: ["source_id", "output", "shard"],
+                var_labels: ["source_id", "output", "shard", "worker_id"],
             )),
             persist_sink_processed_batches: registry.register(metric!(
                 name: "mz_source_processed_batches",
                 help: "A counter representing the number of persist sink batches with actual data \
                 we have successfully processed.",
-                var_labels: ["source_id", "output", "shard"],
+                var_labels: ["source_id", "output", "shard", "worker_id"],
             )),
             offset_commit_failures: registry.register(metric!(
                 name: "mz_source_offset_commit_failures",
