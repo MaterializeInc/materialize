@@ -46,6 +46,9 @@ class Scenario:
         self.executor = executor
         self.rng = None if seed is None else Random(seed)
         self._base_version = MzVersion.parse_cargo()
+        self.check_objects = [
+            check_class(self._base_version, self.rng) for check_class in self.checks()
+        ]
 
     def checks(self) -> List[Type[Check]]:
         if self.rng:

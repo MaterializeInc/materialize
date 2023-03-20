@@ -51,9 +51,7 @@ class Sleep(Action):
 
 class Initialize(Action):
     def __init__(self, scenario: "Scenario") -> None:
-        self.checks = [
-            check_class(scenario.base_version()) for check_class in scenario.checks()
-        ]
+        self.checks = scenario.check_objects
 
     def execute(self, e: Executor) -> None:
         for check in self.checks:
@@ -73,9 +71,7 @@ class Manipulate(Action):
         assert phase is not None
         self.phase = phase - 1
 
-        self.checks = [
-            check_class(scenario.base_version()) for check_class in scenario.checks()
-        ]
+        self.checks = scenario.check_objects
         assert len(self.checks) >= self.phase
 
     def execute(self, e: Executor) -> None:
@@ -90,9 +86,7 @@ class Manipulate(Action):
 
 class Validate(Action):
     def __init__(self, scenario: "Scenario") -> None:
-        self.checks = [
-            check_class(scenario.base_version()) for check_class in scenario.checks()
-        ]
+        self.checks = scenario.check_objects
 
     def execute(self, e: Executor) -> None:
         for check in self.checks:
