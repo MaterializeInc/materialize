@@ -12,6 +12,7 @@ use std::fmt;
 use std::num::TryFromIntError;
 
 use dec::TryFromDecimalError;
+use itertools::Itertools;
 use mz_repr::adt::timestamp::TimestampError;
 use smallvec::SmallVec;
 use tokio::sync::oneshot;
@@ -442,8 +443,8 @@ impl fmt::Display for AdapterError {
                 depends_on,
                 cluster,
             } => {
-                let items = depends_on.join(", ");
-                write!(f, "referencing the following items [{items}] is not allowed from the {cluster} cluster")
+                let items = depends_on.into_iter().map(|item| item.quoted()).join(", ");
+                write!(f, "referencing the following items {items} is not allowed from the {} cluster", cluster.quoted())
             }
             AdapterError::Unauthorized(unauthorized) => {
                 write!(f, "{unauthorized}")
