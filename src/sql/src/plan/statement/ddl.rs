@@ -281,7 +281,12 @@ pub fn plan_create_table(
                         }
                     }
                 }
-                keys.push(key);
+
+                if *is_primary {
+                    keys.insert(0, key);
+                } else {
+                    keys.push(key);
+                }
             }
             TableConstraint::ForeignKey { .. } => {
                 // Foreign key constraints are not presently enforced. We allow
@@ -1179,7 +1184,12 @@ pub fn plan_create_subsource(
                         }
                     }
                 }
-                keys.push(key);
+
+                if *is_primary {
+                    keys.insert(0, key);
+                } else {
+                    keys.push(key);
+                }
             }
             TableConstraint::ForeignKey { .. } => {
                 bail_unsupported!("CREATE SUBSOURCE with a foreign key")
