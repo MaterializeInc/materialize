@@ -346,6 +346,24 @@ We will update `DROP <object>` so that it revokes all privileges on `<object>`.
 
 #### Implementation Details
 
+- The following catalog tables/views will have an additional column called "owner_id" of type string. It will be the
+  role ID of the owner of the object. Additionally, the corresponding stash collections will have an "owner_id"
+  field.
+    - mz_sinks
+    - mz_indexes
+    - mz_connections
+    - mz_types
+    - mz_functions
+    - mz_secrets
+    - mz_relations
+    - mz_tables
+    - mz_sources
+    - mz_views
+    - mz_materialized_views
+    - mz_databases
+    - mz_clusters
+    - mz_cluster_replica
+    - mz_schemas
 - Privileges will be stored in the catalog.
 - Privileges will be checked before operations in the sequencer.
 
