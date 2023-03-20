@@ -273,8 +273,8 @@ The following metadata is available for each source as a progress subsource:
 
 Field          | Type                                     | Meaning
 ---------------|------------------------------------------|--------
-`partition`    | `numrange`                               | The upstream Kafka partition.
-`offset`       | [`uint8`](/sql/types/uint/#uint8-info)   | The greatest offset consumed from each upstream Kafka partition.
+`partition`    | `numrange`                               | The upstream Kafka partitions.
+`offset`       | [`uint8`](/sql/types/uint/#uint8-info)   | The next possible offset to consume from the identified partitions, e.g. `offset - 1` shows the greatest offset we've consumed.
 
 And can be queried using:
 
@@ -298,6 +298,18 @@ WHERE
 As long as any offset continues increasing, Materialize is consuming data from
 the upstream Kafka broker. For more details on monitoring source ingestion
 progress and debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
+
+#### Progress details
+
+The progress collection describes which Kafka messages are available in the
+source itself at a given time. Namely, all records in each reported partition
+with offsets up to but not including (i.e. `<`) the reported offset will be
+considered.
+
+This means that any queries that assess the source's progress collection will
+include all messages from the source whose offsets are described. You could, for
+instance, join a query of the source and a query of the progress collection to
+understand which `(partition, offset)` pairs have been included.
 
 ## Examples
 

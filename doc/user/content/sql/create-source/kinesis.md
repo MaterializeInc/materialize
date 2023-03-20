@@ -78,7 +78,7 @@ The following metadata is available for each source as a progress subsource:
 
 Field          | Type                                     | Meaning
 ---------------|------------------------------------------|--------
-`offset`       | [`uint8`](/sql/types/uint/#uint8-info)   | The greatest offset consumed from the upstream Kinesis broker.
+`offset`       | [`uint8`](/sql/types/uint/#uint8-info)   | The next possible offset offset consumed from the upstream Kinesis broker, e.g. `offset - 1` shows the greatest record we've consumed.
 
 And can be queried using:
 
@@ -90,6 +90,17 @@ FROM <src_name>_progress;
 As long as any offset continues increasing, Materialize is consuming data from
 the upstream Kinesis broker. For more details on monitoring source ingestion
 progress and debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
+
+#### Progress details
+
+The progress collection describes which Kinsesis messages are available in the
+source itself at a given time. Namely, all records with offsets up to but not
+including (i.e. `<`) the reported offset will be considered.
+
+This means that any queries that assess the source's progress collection will
+include all messages from the source whose offsets are described. You could, for
+instance, join a query of the source and a query of the progress collection to
+understand which offset's messages have been included.
 
 ## Authentication
 
