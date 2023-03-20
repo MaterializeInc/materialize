@@ -550,7 +550,9 @@ steps:
     artifact_paths: junit_*.xml
     timeout_in_minutes: 70
     agents:
-      queue: linux-x86_64
+      # A larger instance is needed since SQLsmith likes creating
+      # large queries and going out of memory
+      queue: builder-linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqlsmith

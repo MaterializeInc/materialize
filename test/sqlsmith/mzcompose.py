@@ -29,6 +29,7 @@ class StandaloneMaterialized(Service):
         ports: List[str] = [],
         propagate_crashes: bool = True,
         restart: Optional[str] = None,
+        memory: Optional[str] = None,
     ) -> None:
         command = []
         if propagate_crashes:
@@ -48,6 +49,9 @@ class StandaloneMaterialized(Service):
         if restart:
             config["restart"] = restart
 
+        if memory:
+            config["deploy"] = {"resources": {"limits": {"memory": memory}}}
+
         super().__init__(name=name, config=config)
 
 
@@ -55,7 +59,10 @@ MZ_SERVERS = [f"mz_{i + 1}" for i in range(4)]
 
 SERVICES = [
     # Auto-restart so we can keep testing even after we ran into a panic
-    StandaloneMaterialized(name=mz_server, restart="on-failure")
+    # Limit memory to prevent long hangs on out of memory
+    StandaloneMaterialized(
+        name=mz_server, restart="on-failure", memory=f"{48 / len(MZ_SERVERS)}GB"
+    )
     for mz_server in MZ_SERVERS
 ] + [
     Service(
