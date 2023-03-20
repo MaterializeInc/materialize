@@ -447,6 +447,29 @@ pub async fn purify_create_source(
                     });
                 }
 
+                let mut constraints = vec![];
+                for key in table.keys.clone() {
+                    let mut key_columns = vec![];
+
+                    for col_num in key.cols {
+                        key_columns.push(Ident::new(
+                            table
+                                .columns
+                                .iter()
+                                .find(|col| col.col_num == Some(col_num))
+                                .expect("key exists as column")
+                                .name
+                                .clone(),
+                        ))
+                    }
+
+                    constraints.push(mz_sql_parser::ast::TableConstraint::Unique {
+                        name: Some(Ident::new(key.name)),
+                        columns: key_columns,
+                        is_primary: key.is_primary,
+                    })
+                }
+
                 // Create the targeted AST node for the original CREATE SOURCE statement
                 let transient_id = GlobalId::Transient(get_transient_subsource_id());
 
@@ -470,7 +493,7 @@ pub async fn purify_create_source(
                     // replication stream*, if our assumptions change. Failure to do that could
                     // mean that an upstream table that started with an index was then altered to
                     // one without and now we're producing garbage data.
-                    constraints: vec![],
+                    constraints,
                     if_not_exists: false,
                     with_options: vec![CreateSubsourceOption {
                         name: CreateSubsourceOptionName::References,
