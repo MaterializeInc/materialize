@@ -50,7 +50,7 @@ use crate::ast::{
 use crate::catalog::{ErsatzCatalog, SessionCatalog};
 use crate::kafka_util;
 use crate::kafka_util::KafkaConfigOptionExtracted;
-use crate::names::{Aug, PartialObjectName, RawDatabaseSpecifier};
+use crate::names::{Aug, RawDatabaseSpecifier};
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
@@ -107,23 +107,9 @@ fn subsource_name_gen(
     source_name: &UnresolvedObjectName,
     subsource_name: &String,
 ) -> Result<UnresolvedObjectName, PlanError> {
-    let PartialObjectName {
-        database,
-        schema,
-        item: _,
-    } = normalize::unresolved_object_name(source_name.clone())?;
-    let mut suggested_name = Vec::new();
-
-    if let Some(db_name) = database {
-        suggested_name.push(Ident::new(db_name));
-    }
-
-    if let Some(schema_name) = schema {
-        suggested_name.push(Ident::new(schema_name));
-    }
-
-    suggested_name.push(Ident::new(subsource_name));
-    Ok(UnresolvedObjectName(suggested_name))
+    let mut partial = normalize::unresolved_object_name(source_name.clone())?;
+    partial.item = subsource_name.to_string();
+    Ok(UnresolvedObjectName::from(partial))
 }
 
 /// Purifies a statement, removing any dependencies on external state.
