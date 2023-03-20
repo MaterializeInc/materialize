@@ -12,59 +12,22 @@ import random
 import time
 from datetime import datetime
 from threading import Thread
-from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, List, Tuple
 
-from materialize.mzcompose import (
-    Composition,
-    Service,
-    ServiceConfig,
-    WorkflowArgumentParser,
-)
-
-
-class StandaloneMaterialized(Service):
-    def __init__(
-        self,
-        name: str,
-        ports: List[str] = [],
-        propagate_crashes: bool = True,
-        memory: Optional[str] = None,
-        unsafe_mode: bool = True,
-        restart: Optional[str] = None,
-    ) -> None:
-        command = []
-        if propagate_crashes:
-            command += ["--orchestrator-process-propagate-crashes"]
-        if unsafe_mode:
-            command += ["--unsafe-mode"]
-
-        config: ServiceConfig = {
-            "mzbuild": "materialized",
-            "command": command,
-            "ports": [6875, 6876, 6877, 6878, 26257],
-            "healthcheck": {
-                "test": ["CMD", "curl", "-f", "localhost:6878/api/readyz"],
-                "interval": "1s",
-                "start_period": "60s",
-            },
-        }
-
-        if restart:
-            config["restart"] = restart
-
-        if memory:
-            config["deploy"] = {"resources": {"limits": {"memory": memory}}}
-
-        super().__init__(name=name, config=config)
-
+from materialize.mzcompose import Composition, Service, WorkflowArgumentParser
+from materialize.mzcompose.services import Materialized
 
 MZ_SERVERS = [f"mz_{i + 1}" for i in range(4)]
 
 SERVICES = [
     # Auto-restart so we can keep testing even after we ran into a panic
     # Limit memory to prevent long hangs on out of memory
-    StandaloneMaterialized(
-        name=mz_server, restart="on-failure", memory=f"{48 / len(MZ_SERVERS)}GB"
+    # Don't use default volumes so we can run multiple instances at once
+    Materialized(
+        name=mz_server,
+        restart="on-failure",
+        memory=f"{48 / len(MZ_SERVERS)}GB",
+        use_default_volumes=False,
     )
     for mz_server in MZ_SERVERS
 ] + [
