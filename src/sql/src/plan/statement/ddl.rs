@@ -15,8 +15,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
-use aws_arn::ResourceName as AmazonResourceName;
-use globset::GlobBuilder;
 use itertools::Itertools;
 use prost::Message;
 use regex::Regex;
@@ -55,11 +53,10 @@ use mz_storage_client::types::sources::encoding::{
     ProtobufEncoding, RegexEncoding, SourceDataEncoding, SourceDataEncodingInner,
 };
 use mz_storage_client::types::sources::{
-    GenericSourceConnection, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope,
-    KinesisSourceConnection, LoadGenerator, LoadGeneratorSourceConnection,
-    PostgresSourceConnection, PostgresSourcePublicationDetails,
-    ProtoPostgresSourcePublicationDetails, S3SourceConnection, SourceConnection, SourceDesc,
-    SourceEnvelope, TestScriptSourceConnection, Timeline, UnplannedSourceEnvelope, UpsertStyle,
+    GenericSourceConnection, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope, LoadGenerator,
+    LoadGeneratorSourceConnection, PostgresSourceConnection, PostgresSourcePublicationDetails,
+    ProtoPostgresSourcePublicationDetails, SourceConnection, SourceDesc, SourceEnvelope,
+    TestScriptSourceConnection, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 
 use crate::ast::display::AstDisplay;
@@ -67,7 +64,7 @@ use crate::ast::{
     AlterConnectionStatement, AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement,
     AlterSecretStatement, AvroSchema, AvroSchemaOption, AvroSchemaOptionName, AwsConnectionOption,
     AwsConnectionOptionName, AwsPrivatelinkConnectionOption, AwsPrivatelinkConnectionOptionName,
-    ClusterOption, ClusterOptionName, ColumnOption, Compression, CreateClusterReplicaStatement,
+    ClusterOption, ClusterOptionName, ColumnOption, CreateClusterReplicaStatement,
     CreateClusterStatement, CreateConnection, CreateConnectionStatement, CreateDatabaseStatement,
     CreateIndexStatement, CreateMaterializedViewStatement, CreateRoleStatement,
     CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
@@ -518,91 +515,6 @@ pub fn plan_create_source(
 
             let connection = GenericSourceConnection::from(connection);
 
-            (connection, encoding, None)
-        }
-        CreateSourceConnection::Kinesis {
-            connection: aws_connection,
-            arn,
-        } => {
-            scx.require_unsafe_mode("CREATE SOURCE ... FROM KINESIS")?;
-            let arn: AmazonResourceName = arn
-                .parse()
-                .map_err(|e| sql_err!("Unable to parse provided ARN: {:#?}", e))?;
-            let stream_name = match arn.resource.strip_prefix("stream/") {
-                Some(path) => path.to_owned(),
-                _ => sql_bail!(
-                    "Unable to parse stream name from resource path: {}",
-                    arn.resource
-                ),
-            };
-
-            let connection_item = scx.get_item_by_resolved_name(aws_connection)?;
-            let aws = match connection_item.connection()? {
-                Connection::Aws(aws) => aws.clone(),
-                _ => sql_bail!("{} is not an AWS connection", connection_item.name()),
-            };
-
-            let encoding = get_encoding(scx, format, &envelope, Some(connection))?;
-            let connection = GenericSourceConnection::from(KinesisSourceConnection {
-                connection_id: connection_item.id(),
-                stream_name,
-                aws,
-            });
-            (connection, encoding, None)
-        }
-        CreateSourceConnection::S3 {
-            connection: aws_connection,
-            key_sources,
-            pattern,
-            compression,
-        } => {
-            scx.require_unsafe_mode("CREATE SOURCE ... FROM S3")?;
-
-            let connection_item = scx.get_item_by_resolved_name(aws_connection)?;
-            let aws = match connection_item.connection()? {
-                Connection::Aws(aws) => aws.clone(),
-                _ => sql_bail!("{} is not an AWS connection", connection_item.name()),
-            };
-
-            let mut converted_sources = Vec::new();
-            for ks in key_sources {
-                let dtks = match ks {
-                    mz_sql_parser::ast::S3KeySource::Scan { bucket } => {
-                        mz_storage_client::types::sources::S3KeySource::Scan {
-                            bucket: bucket.clone(),
-                        }
-                    }
-                    mz_sql_parser::ast::S3KeySource::SqsNotifications { queue } => {
-                        mz_storage_client::types::sources::S3KeySource::SqsNotifications {
-                            queue: queue.clone(),
-                        }
-                    }
-                };
-                converted_sources.push(dtks);
-            }
-            let encoding = get_encoding(scx, format, &envelope, Some(connection))?;
-            if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
-                sql_bail!("S3 sources do not support key decoding");
-            }
-            let connection = GenericSourceConnection::from(S3SourceConnection {
-                connection_id: connection_item.id(),
-                key_sources: converted_sources,
-                pattern: pattern
-                    .as_ref()
-                    .map(|p| {
-                        GlobBuilder::new(p)
-                            .literal_separator(true)
-                            .backslash_escape(true)
-                            .build()
-                    })
-                    .transpose()
-                    .map_err(|e| sql_err!("parsing glob: {e}"))?,
-                aws,
-                compression: match compression {
-                    Compression::Gzip => mz_storage_client::types::sources::Compression::Gzip,
-                    Compression::None => mz_storage_client::types::sources::Compression::None,
-                },
-            });
             (connection, encoding, None)
         }
         CreateSourceConnection::Postgres {

@@ -21,7 +21,6 @@ use differential_dataflow::difference::Semigroup;
 use futures::stream::LocalBoxStream;
 use prometheus::core::{AtomicI64, AtomicU64};
 use serde::{Deserialize, Serialize};
-use std::rc::Rc;
 use timely::dataflow::operators::Capability;
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::activate::SyncActivator;
@@ -176,39 +175,6 @@ impl<Key, Value, Time: Timestamp, Diff> SourceMessageType<Key, Value, Time, Diff
             update,
             should_halt: false,
         })
-    }
-}
-
-#[derive(Clone)]
-pub struct ByteStream {
-    /// The underlying asynchronous stream
-    pub stream: Rc<LocalBoxStream<'static, Vec<u8>>>,
-    /// The expected size of this stream in bytes. This is only an estimation and no assumption
-    /// should be based on the accuracy of this value.
-    pub size_hint: Option<usize>,
-}
-
-impl ByteStream {
-    pub fn new<S>(stream: S, size_hint: Option<usize>) -> Self
-    where
-        S: futures::Stream<Item = Vec<u8>> + 'static,
-    {
-        Self {
-            stream: Rc::new(Box::pin(stream)),
-            size_hint,
-        }
-    }
-    pub fn from_vec(data: Vec<u8>) -> Self {
-        Self {
-            size_hint: Some(data.len()),
-            stream: Rc::new(Box::pin(futures::stream::iter([data]))),
-        }
-    }
-}
-
-impl MaybeLength for ByteStream {
-    fn len(&self) -> Option<usize> {
-        self.size_hint
     }
 }
 

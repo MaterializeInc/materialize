@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::future::Future;
@@ -18,9 +18,6 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context};
 use async_trait::async_trait;
 use aws_credential_types::provider::ProvideCredentials;
-use aws_sdk_kinesis::Client as KinesisClient;
-use aws_sdk_s3::Client as S3Client;
-use aws_sdk_sqs::Client as SqsClient;
 use aws_types::SdkConfig;
 use futures::future::FutureExt;
 use itertools::Itertools;
@@ -50,12 +47,10 @@ use crate::util::postgres::postgres_client;
 mod file;
 mod http;
 mod kafka;
-mod kinesis;
 mod mysql;
 mod postgres;
 mod protobuf;
 mod psql;
-mod s3;
 mod schema_registry;
 mod set;
 mod skip_if;
@@ -182,12 +177,6 @@ pub struct State {
     // === AWS state. ===
     aws_account: String,
     aws_config: SdkConfig,
-    kinesis_client: KinesisClient,
-    kinesis_stream_names: Vec<String>,
-    s3_client: S3Client,
-    s3_buckets_created: BTreeSet<String>,
-    sqs_client: SqsClient,
-    sqs_queues_created: BTreeSet<String>,
 
     // === Database driver state. ===
     mysql_clients: BTreeMap<String, mysql_async::Conn>,
@@ -439,120 +428,6 @@ impl State {
             );
         }
     }
-
-    /// Delete the Kinesis streams created for this run of testdrive.
-    pub async fn reset_kinesis(&mut self) -> Result<(), anyhow::Error> {
-        if self.kinesis_stream_names.is_empty() {
-            return Ok(());
-        }
-
-        let mut errors: Vec<anyhow::Error> = Vec::new();
-
-        for stream_name in &self.kinesis_stream_names {
-            if let Err(e) = self
-                .kinesis_client
-                .delete_stream()
-                .enforce_consumer_deletion(true)
-                .stream_name(stream_name)
-                .send()
-                .await
-                .context(format!("deleting Kinesis stream: {}", stream_name))
-            {
-                errors.push(e);
-            }
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            bail!(
-                "deleting Kinesis streams: {} errors: {}",
-                errors.len(),
-                errors.into_iter().map(|e| e.to_string_alt()).join("\n")
-            );
-        }
-    }
-
-    /// Delete S3 buckets that were created in this run
-    pub async fn reset_s3(&mut self) -> Result<(), anyhow::Error> {
-        let mut errors: Vec<anyhow::Error> = Vec::new();
-        for bucket in &self.s3_buckets_created {
-            if let Err(e) = self.delete_bucket_objects(bucket.clone()).await {
-                errors.push(e);
-            }
-
-            if let Err(e) = self.s3_client.delete_bucket().bucket(bucket).send().await {
-                errors.push(e.into());
-            }
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            bail!(
-                "deleting S3 buckets: {} errors: {}",
-                errors.len(),
-                errors.into_iter().map(|e| e.to_string_alt()).join("\n")
-            );
-        }
-    }
-
-    async fn delete_bucket_objects(&self, bucket: String) -> Result<(), anyhow::Error> {
-        Retry::default()
-            .max_duration(self.default_timeout)
-            .retry_async_canceling(|_| async {
-                // loop until error or response has no continuation token
-                let mut continuation_token = None;
-                loop {
-                    let response = self
-                        .s3_client
-                        .list_objects_v2()
-                        .bucket(&bucket)
-                        .set_continuation_token(continuation_token)
-                        .send()
-                        .await
-                        .with_context(|| format!("listing objects for bucket {}", bucket))?;
-
-                    if let Some(objects) = response.contents {
-                        for obj in objects {
-                            self.s3_client
-                                .delete_object()
-                                .bucket(&bucket)
-                                .key(obj.key.as_ref().unwrap())
-                                .send()
-                                .await
-                                .with_context(|| {
-                                    format!("deleting object {}/{}", bucket, obj.key.unwrap())
-                                })?;
-                        }
-                    }
-
-                    if response.next_continuation_token.is_none() {
-                        return Ok(());
-                    }
-                    continuation_token = response.next_continuation_token;
-                }
-            })
-            .await
-    }
-
-    pub async fn reset_sqs(&self) -> Result<(), anyhow::Error> {
-        Retry::default()
-            .max_duration(self.default_timeout)
-            .retry_async_canceling(|_| async {
-                for queue_url in &self.sqs_queues_created {
-                    self.sqs_client
-                        .delete_queue()
-                        .queue_url(queue_url)
-                        .send()
-                        .await
-                        .with_context(|| format!("Deleting sqs queue: {}", queue_url))?;
-                }
-
-                Ok(())
-            })
-            .await
-    }
 }
 
 pub enum ControlFlow {
@@ -599,10 +474,6 @@ impl Run for PosCommand {
                     "kafka-ingest" => kafka::run_ingest(builtin, state).await,
                     "kafka-verify-data" => kafka::run_verify_data(builtin, state).await,
                     "kafka-verify-commit" => kafka::run_verify_commit(builtin, state).await,
-                    "kinesis-create-stream" => kinesis::run_create_stream(builtin, state).await,
-                    "kinesis-update-shards" => kinesis::run_update_shards(builtin, state).await,
-                    "kinesis-ingest" => kinesis::run_ingest(builtin, state).await,
-                    "kinesis-verify" => kinesis::run_verify(builtin, state).await,
                     "mysql-connect" => mysql::run_connect(builtin, state).await,
                     "mysql-execute" => mysql::run_execute(builtin, state).await,
                     "postgres-connect" => postgres::run_connect(builtin, state).await,
@@ -619,10 +490,6 @@ impl Run for PosCommand {
                     "sql-server-connect" => sql_server::run_connect(builtin, state).await,
                     "sql-server-execute" => sql_server::run_execute(builtin, state).await,
                     "random-sleep" => sleep::run_random_sleep(builtin),
-                    "s3-create-bucket" => s3::run_create_bucket(builtin, state).await,
-                    "s3-put-object" => s3::run_put_object(builtin, state).await,
-                    "s3-delete-objects" => s3::run_delete_object(builtin, state).await,
-                    "s3-add-notifications" => s3::run_add_notifications(builtin, state).await,
                     "set-regex" => set::run_regex_set(builtin, state),
                     "unset-regex" => set::run_regex_unset(builtin, state),
                     "set-sql-timeout" => set::run_sql_timeout(builtin, state),
@@ -869,10 +736,6 @@ pub async fn create_state(
         )
     };
 
-    let kinesis_client = aws_sdk_kinesis::Client::new(&config.aws_config);
-    let s3_client = mz_aws_s3_util::new_client(&config.aws_config);
-    let sqs_client = aws_sdk_sqs::Client::new(&config.aws_config);
-
     let mut state = State {
         // === Testdrive state. ===
         arg_vars: config.arg_vars.clone(),
@@ -911,12 +774,6 @@ pub async fn create_state(
         // === AWS state. ===
         aws_account: config.aws_account.clone(),
         aws_config: config.aws_config.clone(),
-        kinesis_client,
-        kinesis_stream_names: Vec::new(),
-        s3_client,
-        s3_buckets_created: BTreeSet::new(),
-        sqs_client,
-        sqs_queues_created: BTreeSet::new(),
 
         // === Database driver state. ===
         mysql_clients: BTreeMap::new(),

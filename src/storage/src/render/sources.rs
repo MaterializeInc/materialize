@@ -29,9 +29,9 @@ use mz_storage_client::types::errors::{DataflowError, DecodeError, EnvelopeError
 use mz_storage_client::types::sources::{encoding::*, *};
 use mz_timely_util::operator::CollectionExt;
 
-use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
-use crate::source::types::{ByteStream, DecodeResult, SourceOutput};
-use crate::source::{self, DelimitedValueSourceConnection, RawSourceCreationConfig};
+use crate::decode::{render_decode_cdcv2, render_decode_delimited};
+use crate::source::types::{DecodeResult, SourceOutput};
+use crate::source::{self, RawSourceCreationConfig};
 
 /// A type-level enum that holds one of two types of sources depending on their message type
 ///
@@ -40,8 +40,6 @@ use crate::source::{self, DelimitedValueSourceConnection, RawSourceCreationConfi
 enum SourceType<G: Scope> {
     /// A delimited source
     Delimited(Collection<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, u32>),
-    /// A bytestream source
-    ByteStream(Collection<G, SourceOutput<(), ByteStream>, u32>),
     /// A source that produces Row's natively, and skips any `render_decode` stream adapters, and
     /// can produce retractions
     Row(Collection<G, SourceOutput<(), Row>, Diff>),
@@ -131,32 +129,6 @@ where
                 internal_cmd_tx,
             );
             let oks: Vec<_> = oks.into_iter().map(SourceType::Delimited).collect();
-            ((oks, err), cap)
-        }
-        GenericSourceConnection::Kinesis(connection) => {
-            let ((oks, err), cap) = source::create_raw_source(
-                root_scope,
-                scope,
-                base_source_config,
-                DelimitedValueSourceConnection(connection),
-                storage_state.connection_context.clone(),
-                resumption_calculator,
-                internal_cmd_tx,
-            );
-            let oks = oks.into_iter().map(SourceType::Delimited).collect();
-            ((oks, err), cap)
-        }
-        GenericSourceConnection::S3(connection) => {
-            let ((oks, err), cap) = source::create_raw_source(
-                root_scope,
-                scope,
-                base_source_config,
-                connection,
-                storage_state.connection_context.clone(),
-                resumption_calculator,
-                internal_cmd_tx,
-            );
-            let oks = oks.into_iter().map(SourceType::ByteStream).collect();
             ((oks, err), cap)
         }
         GenericSourceConnection::Postgres(connection) => {
@@ -302,14 +274,6 @@ where
                 SourceType::Delimited(source) => render_decode_delimited(
                     &source,
                     key_encoding,
-                    value_encoding,
-                    dataflow_debug_name,
-                    metadata_columns,
-                    storage_state.decode_metrics.clone(),
-                    &storage_state.connection_context,
-                ),
-                SourceType::ByteStream(source) => render_decode(
-                    &source,
                     value_encoding,
                     dataflow_debug_name,
                     metadata_columns,

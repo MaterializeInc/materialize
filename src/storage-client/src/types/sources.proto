@@ -168,11 +168,9 @@ message ProtoSourceDesc {
 }
 
 message ProtoSourceConnection {
-    reserved 5;
+    reserved 2, 3, 5;
     oneof kind {
         ProtoKafkaSourceConnection kafka = 1;
-        ProtoKinesisSourceConnection kinesis = 2;
-        ProtoS3SourceConnection s3 = 3;
         ProtoPostgresSourceConnection postgres = 4;
         ProtoLoadGeneratorSourceConnection loadgen = 6;
         ProtoTestScriptSourceConnection testscript = 7;
@@ -184,12 +182,6 @@ message ProtoSourceData {
         mz_repr.row.ProtoRow ok = 1;
         errors.ProtoDataflowError err = 2;
     }
-}
-
-message ProtoKinesisSourceConnection {
-    mz_repr.global_id.ProtoGlobalId connection_id = 3;
-    string stream_name = 1;
-    mz_storage_client.types.connections.aws.ProtoAwsConfig aws = 2;
 }
 
 message ProtoPostgresSourceConnection {
@@ -239,21 +231,6 @@ message ProtoTpchLoadGenerator {
     int64 count_customer = 3;
     int64 count_orders = 4;
     int64 count_clerk = 5;
-}
-
-message ProtoS3SourceConnection {
-    mz_repr.global_id.ProtoGlobalId connection_id = 5;
-    repeated ProtoS3KeySource key_sources = 1;
-    optional string pattern = 2;
-    mz_storage_client.types.connections.aws.ProtoAwsConfig aws = 3;
-    ProtoCompression compression = 4;
-}
-
-message ProtoS3KeySource {
-    oneof kind {
-        string scan = 1;
-        string sqs_notifications = 2;
-    }
 }
 
 message ProtoCompression {

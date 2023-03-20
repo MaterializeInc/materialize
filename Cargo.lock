@@ -4022,14 +4022,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-kinesis-util"
-version = "0.0.0"
-dependencies = [
- "aws-sdk-kinesis",
- "workspace-hack",
-]
-
-[[package]]
 name = "mz-lowertest"
 version = "0.0.0"
 dependencies = [
@@ -4223,29 +4215,6 @@ dependencies = [
  "tracing-subscriber",
  "workspace-hack",
  "yansi",
-]
-
-[[package]]
-name = "mz-perf-kinesis"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "aws-config",
- "aws-credential-types",
- "aws-sdk-kinesis",
- "aws-types",
- "bytes",
- "clap",
- "futures",
- "mz-kinesis-util",
- "mz-ore",
- "mz-test-util",
- "rand",
- "tokio",
- "tokio-postgres",
- "tracing",
- "tracing-subscriber",
- "workspace-hack",
 ]
 
 [[package]]
@@ -4855,7 +4824,6 @@ dependencies = [
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
- "mz-kinesis-util",
  "mz-ore",
  "mz-persist-client",
  "mz-persist-types",
@@ -4907,7 +4875,6 @@ dependencies = [
  "derivative",
  "differential-dataflow",
  "futures",
- "globset",
  "http",
  "itertools",
  "mz-build-info",
@@ -5006,7 +4973,6 @@ dependencies = [
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
- "mz-kinesis-util",
  "mz-ore",
  "mz-pgrepr",
  "mz-postgres-util",

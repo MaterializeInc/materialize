@@ -105,14 +105,6 @@ create_source_kafka ::=
   ('ENVELOPE' ('NONE' | 'DEBEZIUM' | 'UPSERT'))?
   ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
-create_source_kinesis ::=
-  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  ('IN CLUSTER' cluster_name)?
-  'FROM' 'KINESIS ARN' arn with_options?
-  'FORMAT' format_spec
-  ('ENVELOPE NONE')?
-  ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
 create_source_load_generator ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('IN CLUSTER' cluster_name)?
@@ -133,25 +125,6 @@ create_source_postgres ::=
   ('FOR ALL TABLES' | 'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')')
   ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
-create_source_s3 ::=
-  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  ('IN CLUSTER' cluster_name)?
-  'FROM' 'S3' 'DISCOVER OBJECTS'
-  ('MATCHING' pattern)?
-  'USING' (
-      'BUCKET SCAN' bucket_name |
-      'SQS NOTIFICATIONS' queue_name
-  ) ( ',' (
-      'BUCKET SCAN' bucket_name |
-      'SQS NOTIFICATIONS' queue_name
-    )
-  )*
-  ('COMPRESSION' ('NONE' | 'GZIP'))?
-  with_options?
-  'FORMAT' format_spec
-  ('ENVELOPE NONE')?
-  ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
 create_type ::=
     'CREATE' 'TYPE' type_name 'AS' '(' ((field_name field_type) (',' field_name field_type)*) ')' |
     'CREATE' 'TYPE' type_name 'AS' ( 'LIST' | 'MAP' ) '(' ( property '=' val ) ( ( ',' property '=' val ) )* ')'
@@ -243,16 +216,6 @@ strat ::=
   'INLINE' avro_reader_schema |
   'ID' schema_registry_id |
   'LATEST'
-kinesis_format_spec ::=
-  'REGEX' regex |
-  'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' ) | n 'COLUMNS') ('DELIMITED BY' char)? |
-  'TEXT' |
-  'BYTES'
-s3_format_spec ::=
-  'REGEX' regex |
-  'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' ) | n 'COLUMNS') ('DELIMITED BY' char)? |
-  'TEXT' |
-  'BYTES'
 sink_format_spec ::=
   'AVRO USING' csr_connection |
   'JSON'
