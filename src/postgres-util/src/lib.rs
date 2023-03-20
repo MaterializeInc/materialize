@@ -94,7 +94,7 @@ use mz_ore::task;
 use mz_repr::GlobalId;
 use mz_ssh_util::tunnel::SshTunnelConfig;
 
-use crate::desc::{PostgresColumnDesc, PostgresTableDesc};
+use crate::desc::{PostgresColumnDesc, PostgresKeyDesc, PostgresTableDesc};
 
 pub mod desc;
 
@@ -279,11 +279,80 @@ pub async fn publication_info(
             })
             .collect::<Result<Vec<_>, PostgresError>>()?;
 
+        // PG 15 adds UNIQUE NULLS NOT DISTINCT, which would let us use `UNIQUE` constraints over
+        // nullable columns as keys; i.e. aligns a PG index's NULL handling with an arrangement's
+        // keys. For more info, see https://www.postgresql.org/about/featurematrix/detail/392/
+        let pg_15_plus_keys = "
+        SELECT
+            pg_constraint.oid,
+            pg_constraint.conkey,
+            pg_constraint.conname,
+            pg_constraint.contype = 'p' AS is_primary,
+            pg_index.indnullsnotdistinct AS nulls_not_distinct
+        FROM
+            pg_constraint
+                JOIN
+                    pg_index
+                    ON pg_index.indexrelid = pg_constraint.conindid
+        WHERE
+            pg_constraint.conrelid = $1
+                AND
+            pg_constraint.contype =ANY (ARRAY['p', 'u']);";
+
+        // As above but for versions of PG without indnullsnotdistinct.
+        let pg_14_minus_keys = "
+        SELECT
+            pg_constraint.oid,
+            pg_constraint.conkey,
+            pg_constraint.conname,
+            pg_constraint.contype = 'p' AS is_primary,
+            false AS nulls_not_distinct
+        FROM pg_constraint
+        WHERE
+            pg_constraint.conrelid = $1
+                AND
+            pg_constraint.contype =ANY (ARRAY['p', 'u']);";
+
+        let keys = match client.query(pg_15_plus_keys, &[&oid]).await {
+            Ok(keys) => keys,
+            Err(e)
+                // PG versions prior to 15 do not contain this column.
+                if e.to_string()
+                    == "db error: ERROR: column pg_index.indnullsnotdistinct does not exist" =>
+            {
+                client.query(pg_14_minus_keys, &[&oid]).await?
+            }
+            e => e?,
+        };
+
+        let keys = keys
+            .into_iter()
+            .map(|row| {
+                let oid: u32 = row.get("oid");
+                let cols: Vec<i16> = row.get("conkey");
+                let name: String = row.get("conname");
+                let is_primary: bool = row.get("is_primary");
+                let nulls_not_distinct: bool = row.get("nulls_not_distinct");
+                let cols = cols
+                    .into_iter()
+                    .map(|col| u16::try_from(col).expect("non-negative colnums"))
+                    .collect();
+                PostgresKeyDesc {
+                    oid,
+                    name,
+                    cols,
+                    is_primary,
+                    nulls_not_distinct,
+                }
+            })
+            .collect();
+
         table_infos.push(PostgresTableDesc {
             oid,
             namespace: row.get("schemaname"),
             name: row.get("tablename"),
             columns,
+            keys,
         });
     }
 
