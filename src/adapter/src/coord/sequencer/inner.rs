@@ -1779,7 +1779,11 @@ impl Coordinator {
             target_replica,
             timeline_context,
             in_immediate_multi_stmt_txn,
-        ) = return_if_err!(self.sequence_peek_begin_inner(&mut session, plan), tx, session);
+        ) = return_if_err!(
+            self.sequence_peek_begin_inner(&mut session, plan),
+            tx,
+            session
+        );
 
         match self.recent_timestamp(&session, source_ids.iter().cloned()) {
             Some(fut) => {
