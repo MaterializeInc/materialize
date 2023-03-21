@@ -27,6 +27,11 @@ the v0.26.x series through at least October 31, 2022, issuing **patch releases**
 as necessary to address severe bugs and security vulnerabilities.
 {{</ note >}}
 
+{{% version-header v0.26.6 %}}
+
+- Correctly decode negative timestamps in Avro-formatted sources=
+  {{% gh 16609 %}}.
+
 {{% version-header v0.26.5 %}}
 
 - In Avro-formatted sinks, avoid emitting schemas with types that reference the
