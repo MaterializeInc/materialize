@@ -62,7 +62,6 @@ pub const MZ_INTROSPECTION_ROLE_ID: RoleId = RoleId::System(2);
 const DATABASE_ID_ALLOC_KEY: &str = "database";
 const SCHEMA_ID_ALLOC_KEY: &str = "schema";
 const USER_ROLE_ID_ALLOC_KEY: &str = "user_role";
-const SYSTEM_ROLE_ID_ALLOC_KEY: &str = "system_role";
 const USER_CLUSTER_ID_ALLOC_KEY: &str = "user_compute";
 const SYSTEM_CLUSTER_ID_ALLOC_KEY: &str = "system_compute";
 const REPLICA_ID_ALLOC_KEY: &str = "replica";
@@ -123,12 +122,6 @@ async fn migrate(
                     name: USER_ROLE_ID_ALLOC_KEY.into(),
                 },
                 IdAllocValue { next_id: 1 },
-            )?;
-            txn.id_allocator.insert(
-                IdAllocKey {
-                    name: SYSTEM_ROLE_ID_ALLOC_KEY.into(),
-                },
-                IdAllocValue { next_id: 3 },
             )?;
             txn.id_allocator.insert(
                 IdAllocKey {
@@ -418,6 +411,11 @@ async fn migrate(
         //
         // TODO(jkosh44) Can be cleared (patched to be empty) in v0.50.0
         |txn: &mut Transaction<'_>, now, _bootstrap_args| {
+            // Delete the system role id allocator. All system role ids will need
+            // to be hard-coded going forward.
+            txn.id_allocator
+                .delete(|id_alloc_key, _| id_alloc_key.name == "system_role");
+
             // Delete all system roles so we can re-insert them with known IDs.
             let sys_roles = txn.roles.delete(|role_key, _| role_key.id.is_system());
             assert_eq!(2, sys_roles.len(), "unexpected number of system roles");
