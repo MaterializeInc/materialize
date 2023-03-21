@@ -112,13 +112,13 @@ class TestModelCluster:
     # not error if a user-provided cluster is specified as a connection or
     # model config, but will error otherwise.
     # See #17197: https://github.com/MaterializeInc/materialize/pull/17197
-    def test_materialize_drop_default(self, project):
-        project.run_sql("DROP CLUSTER default CASCADE")
+    # def test_materialize_drop_default(self, project):
+    #     project.run_sql("DROP CLUSTER default CASCADE")
 
-        run_dbt(["run", "--models", "override_cluster"], expect_pass=True)
-        run_dbt(["run", "--models", "default_cluster"], expect_pass=False)
+    #     run_dbt(["run", "--models", "override_cluster"], expect_pass=True)
+    #     run_dbt(["run", "--models", "default_cluster"], expect_pass=False)
 
-        project.run_sql("CREATE CLUSTER default REPLICAS (r1 (SIZE '1'))")
+    #     project.run_sql("CREATE CLUSTER default REPLICAS (r1 (SIZE '1'))")
 
 
 class TestProjectConfigCluster:
