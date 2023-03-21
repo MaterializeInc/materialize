@@ -78,13 +78,13 @@ impl Coordinator {
     }
 
     pub(crate) fn describe(
-        &self,
+        catalog: &Catalog,
         session: &Session,
         stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<ScalarType>>,
     ) -> Result<StatementDesc, AdapterError> {
         if let Some(stmt) = stmt {
-            describe(self.catalog(), stmt, &param_types, session)
+            describe(catalog, stmt, &param_types, session)
         } else {
             Ok(StatementDesc::new(None))
         }
@@ -143,9 +143,11 @@ impl Coordinator {
         desc: &StatementDesc,
         catalog_revision: u64,
     ) -> Result<Option<u64>, AdapterError> {
-        let current_revision = self.catalog().transient_revision();
+        let catalog = self.catalog();
+        let current_revision = catalog.transient_revision();
         if catalog_revision != current_revision {
-            let current_desc = self.describe(
+            let current_desc = Self::describe(
+                catalog,
                 session,
                 stmt.cloned(),
                 desc.param_types.iter().map(|ty| Some(ty.clone())).collect(),

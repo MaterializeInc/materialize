@@ -90,11 +90,11 @@ impl Coordinator {
                 name,
                 stmt,
                 param_types,
-                mut session,
+                session,
                 tx,
             } => {
-                let result = self.handle_describe(&mut session, name, stmt, param_types);
-                let _ = tx.send(Response { result, session });
+                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                self.handle_describe(tx, session, name, stmt, param_types);
             }
 
             Command::CancelRequest {
@@ -523,17 +523,26 @@ impl Coordinator {
 
     fn handle_describe(
         &self,
-        session: &mut Session,
+        tx: ClientTransmitter<()>,
+        mut session: Session,
         name: String,
         stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<ScalarType>>,
-    ) -> Result<(), AdapterError> {
-        let desc = self.describe(session, stmt.clone(), param_types)?;
-        session.set_prepared_statement(
-            name,
-            PreparedStatement::new(stmt, desc, self.catalog().transient_revision()),
-        );
-        Ok(())
+    ) {
+        let catalog = self.owned_catalog();
+        mz_ore::task::spawn(|| "coord::handle_describe", async move {
+            let res = match Self::describe(&catalog, &session, stmt.clone(), param_types) {
+                Ok(desc) => {
+                    session.set_prepared_statement(
+                        name,
+                        PreparedStatement::new(stmt, desc, catalog.transient_revision()),
+                    );
+                    Ok(())
+                }
+                Err(err) => Err(err),
+            };
+            tx.send(res, session);
+        });
     }
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for

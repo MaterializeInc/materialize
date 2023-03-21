@@ -124,6 +124,14 @@ pub trait Transmittable {
     fn to_allowed(&self) -> Self::Allowed;
 }
 
+impl Transmittable for () {
+    type Allowed = bool;
+
+    fn to_allowed(&self) -> Self::Allowed {
+        true
+    }
+}
+
 /// `ClientTransmitter` with a response to send.
 #[derive(Debug)]
 pub struct CompletedClientTransmitter<T: Transmittable> {
