@@ -624,6 +624,15 @@ pub const ENABLE_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+pub const FORCE_INTROSPECTION_CLUSTER: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("force_introspection_cluster"),
+    value: &true,
+    description:
+        "Boolean flag indicating whether we should force queries that depend only on system tables, to run on the mz_introspection cluster (Materialize).",
+    internal: true,
+    safe: true,
+};
+
 /// Represents the input to a variable.
 ///
 /// Each variable has different rules for how it handles each style of input.
@@ -721,6 +730,7 @@ pub struct SessionVars {
     real_time_recency: SessionVar<bool>,
     emit_timestamp_notice: SessionVar<bool>,
     emit_trace_id_notice: SessionVar<bool>,
+    force_introspection_cluster: SessionVar<bool>,
     // Inputs to computed variables.
     build_info: &'static BuildInfo,
     user: User,
@@ -755,6 +765,7 @@ impl SessionVars {
             real_time_recency: SessionVar::new(&REAL_TIME_RECENCY),
             emit_timestamp_notice: SessionVar::new(&EMIT_TIMESTAMP_NOTICE),
             emit_trace_id_notice: SessionVar::new(&EMIT_TRACE_ID_NOTICE),
+            force_introspection_cluster: SessionVar::new(&FORCE_INTROSPECTION_CLUSTER),
             build_info,
             user,
         }
@@ -763,8 +774,10 @@ impl SessionVars {
     /// Returns an iterator over the configuration parameters and their current
     /// values for this session.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        let vars: [&dyn Var; 25] = [
-            &self.application_name,
+        // `as` is ok to use to cast to a trait object.
+        #[allow(clippy::as_conversions)]
+        let vars = [
+            &self.application_name as &dyn Var,
             &self.client_encoding,
             &self.client_min_messages,
             &self.cluster,
@@ -787,6 +800,7 @@ impl SessionVars {
             &self.real_time_recency,
             &self.emit_timestamp_notice,
             &self.emit_trace_id_notice,
+            &self.force_introspection_cluster,
             self.build_info,
             &self.user,
         ];
@@ -876,6 +890,8 @@ impl SessionVars {
             Ok(&self.emit_timestamp_notice)
         } else if name == EMIT_TRACE_ID_NOTICE.name {
             Ok(&self.emit_trace_id_notice)
+        } else if name == FORCE_INTROSPECTION_CLUSTER.name {
+            Ok(&self.force_introspection_cluster)
         } else if name == IS_SUPERUSER_NAME {
             Ok(&self.user)
         } else {
@@ -1012,6 +1028,8 @@ impl SessionVars {
             self.emit_timestamp_notice.set(input, local)
         } else if name == EMIT_TRACE_ID_NOTICE.name {
             self.emit_trace_id_notice.set(input, local)
+        } else if name == FORCE_INTROSPECTION_CLUSTER.name {
+            self.force_introspection_cluster.set(input, local)
         } else if name == IS_SUPERUSER_NAME {
             Err(VarError::ReadOnlyParameter(self.user.name()))
         } else {
@@ -1060,6 +1078,8 @@ impl SessionVars {
             self.emit_timestamp_notice.reset(local);
         } else if name == EMIT_TRACE_ID_NOTICE.name {
             self.emit_trace_id_notice.reset(local);
+        } else if name == FORCE_INTROSPECTION_CLUSTER.name {
+            self.force_introspection_cluster.reset(local);
         } else if name == CLIENT_ENCODING.name
             || name == DATE_STYLE.name
             || name == FAILPOINTS.name
@@ -1106,6 +1126,7 @@ impl SessionVars {
             real_time_recency,
             emit_timestamp_notice,
             emit_trace_id_notice,
+            force_introspection_cluster,
             build_info: _,
             user: _,
         } = self;
@@ -1124,6 +1145,7 @@ impl SessionVars {
         real_time_recency.end_transaction(action);
         emit_timestamp_notice.end_transaction(action);
         emit_trace_id_notice.end_transaction(action);
+        force_introspection_cluster.end_transaction(action);
     }
 
     /// Returns the value of the `application_name` configuration parameter.
@@ -1246,6 +1268,11 @@ impl SessionVars {
     /// Returns the value of `emit_trace_id_notice` configuration parameter.
     pub fn emit_trace_id_notice(&self) -> bool {
         *self.emit_trace_id_notice.value()
+    }
+
+    /// Returns the value of `force_introspection_cluster` configuration parameter.
+    pub fn force_introspection_cluster(&self) -> bool {
+        *self.force_introspection_cluster.value()
     }
 
     /// Returns the value of `is_superuser` configuration parameter.
