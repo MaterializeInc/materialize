@@ -120,6 +120,14 @@ capacity.
 
 [//]: # "TODO(morsapaes) Add best practices for sizing sinks."
 
+## Troubleshooting
+
+### Stalled kafka sink
+If you're running a single Kafka broker, ensure that the following configs are set to 1 on the broker
+- transaction.state.log.replication.factor
+- transaction.state.log.min.isr
+- offsets.topic.replication.factor
+
 ## Related pages
 
 - [Key Concepts](../../overview/key-concepts/)
