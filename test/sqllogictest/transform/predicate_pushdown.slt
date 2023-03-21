@@ -492,3 +492,333 @@ SELECT * FROM table_f2_f3  JOIN ( table_f3_f4_f5  JOIN table_f4_f5_f6  USING ( f
 1  0  0  NULL  0  1
 1  0  0  NULL  1  0
 1  0  0  NULL  NULL  1
+
+## -------------------- Tests for WITH MUTUALLY RECURSIVE --------------------
+
+statement ok
+CREATE TABLE init(n int, m int, s string);
+
+statement ok
+INSERT INTO init VALUES (1, 3, 'aaa'), (2, 4, 'bbb');
+
+# Across Let bindings, and within a Let binding.
+# The `WHERE n<5` should be pushed into l0.
+# Furthermore, within l0 it should be pushed down on top of the Gets. The Source should also have it.
+query T multiline
+EXPLAIN
+WITH MUTUALLY RECURSIVE
+  c0(n int) AS (
+    (SELECT n FROM init)
+    UNION ALL
+    (SELECT * FROM c2)
+  ),
+  c1(n int) AS (
+    SELECT n+n FROM c0 WHERE n<5
+  ),
+  c2(n int) AS (
+    (SELECT * FROM c0 WHERE n<5)
+    UNION ALL
+    (SELECT * FROM c1)
+    UNION ALL
+    (SELECT * FROM c1)
+  )
+SELECT * FROM c2;
+----
+Explained Query:
+  Return
+    Get l2
+  With Mutually Recursive
+    cte l2 =
+      Union
+        Get l0
+        Get l1
+        Get l1
+    cte l1 =
+      Project (#1)
+        Map ((#0 + #0))
+          Get l0
+    cte l0 =
+      Union
+        Project (#0)
+          Filter (#0 < 5)
+            Get materialize.public.init
+        Filter (#0 < 5)
+          Get l2
+
+Source materialize.public.init
+  filter=((#0 < 5))
+
+EOF
+
+# Here, a pushdown should NOT happen, because not every use of the Get has the predicate.
+# That is, the `< 5` predicate should stay inside the `cte l1 =`, and shouldn't appear anywhere else.
+query T multiline
+EXPLAIN
+WITH MUTUALLY RECURSIVE
+  c0(n int) AS (
+    (SELECT n FROM init)
+    UNION ALL
+    (SELECT * FROM c2)
+  ),
+  c1(n int) AS (
+    SELECT n+n FROM c0 WHERE n<5
+  ),
+  c2(n int) AS (
+    (SELECT * FROM c0)
+    UNION ALL
+    (SELECT * FROM c1)
+    UNION ALL
+    (SELECT * FROM c1)
+  )
+SELECT * FROM c2;
+----
+Explained Query:
+  Return
+    Get l2
+  With Mutually Recursive
+    cte l2 =
+      Union
+        Get l0
+        Get l1
+        Get l1
+    cte l1 =
+      Project (#1)
+        Filter (#0 < 5)
+          Map ((#0 + #0))
+            Get l0
+    cte l0 =
+      Union
+        Project (#0)
+          Get materialize.public.init
+        Get l2
+
+EOF
+
+# Same as the previous query, but the predicate should stay inside the `cte l2 =`
+query T multiline
+EXPLAIN
+WITH MUTUALLY RECURSIVE
+  c0(n int) AS (
+    (SELECT n FROM init)
+    UNION ALL
+    (SELECT * FROM c2)
+  ),
+  c1(n int) AS (
+    SELECT n+n FROM c0
+  ),
+  c2(n int) AS (
+    (SELECT * FROM c0 WHERE n<5)
+    UNION ALL
+    (SELECT * FROM c1)
+    UNION ALL
+    (SELECT * FROM c1)
+  )
+SELECT * FROM c2;
+----
+Explained Query:
+  Return
+    Get l2
+  With Mutually Recursive
+    cte l2 =
+      Union
+        Filter (#0 < 5)
+          Get l0
+        Get l1
+        Get l1
+    cte l1 =
+      Project (#1)
+        Map ((#0 + #0))
+          Get l0
+    cte l0 =
+      Union
+        Project (#0)
+          Get materialize.public.init
+        Get l2
+
+EOF
+
+# Similar to the previous two queries, but here one of the uses of `l0` is in the body, so this would catch the error
+# case of forgetting to call PredicatePushdown's `action` on the `body` of the `LetRec`, whose role here is to make the
+# intersection in `get_predicates` empty.
+# The predicate should NOT be pushed into the `cte l0 =`, and should stay in both the `cte l2 =` and the `cte l1 =`.
+query T multiline
+EXPLAIN
+WITH MUTUALLY RECURSIVE
+  c0(n int) AS (
+    (SELECT n FROM init)
+    UNION ALL
+    (SELECT * FROM c2)
+  ),
+  c1(n int) AS (
+    SELECT n+n FROM c0 WHERE n<5
+  ),
+  c2(n int) AS (
+    (SELECT * FROM c0 WHERE n<5)
+    UNION ALL
+    (SELECT * FROM c1)
+    UNION ALL
+    (SELECT * FROM c1)
+  )
+SELECT * FROM ((SELECT * FROM c2) UNION (SELECT * FROM c0));
+----
+Explained Query:
+  Return
+    Distinct group_by=[#0]
+      Union
+        Get l2
+        Get l0
+  With Mutually Recursive
+    cte l2 =
+      Union
+        Filter (#0 < 5)
+          Get l0
+        Get l1
+        Get l1
+    cte l1 =
+      Project (#1)
+        Filter (#0 < 5)
+          Map ((#0 + #0))
+            Get l0
+    cte l0 =
+      Union
+        Project (#0)
+          Get materialize.public.init
+        Get l2
+
+EOF
+
+# For now, we can’t push from the body into such a Let binding that is being referenced across
+# iterations (l2).
+# That is, the `> 7` predicate should stay inside the `cte l0 =` and the body.
+query T multiline
+EXPLAIN
+WITH MUTUALLY RECURSIVE
+  c0(n int) AS (
+    (SELECT n FROM init)
+    UNION ALL
+    (SELECT * FROM c2 WHERE n>7)
+  ),
+  c1(n int) AS (
+    SELECT n+n FROM c0
+  ),
+  c2(n int) AS (
+    (SELECT * FROM c0)
+    UNION ALL
+    (SELECT * FROM c1)
+    UNION ALL
+    (SELECT * FROM c1)
+  )
+SELECT * FROM c2 WHERE n>7;
+----
+Explained Query:
+  Return
+    Filter (#0 > 7)
+      Get l2
+  With Mutually Recursive
+    cte l2 =
+      Union
+        Get l0
+        Get l1
+        Get l1
+    cte l1 =
+      Project (#1)
+        Map ((#0 + #0))
+          Get l0
+    cte l0 =
+      Union
+        Project (#0)
+          Get materialize.public.init
+        Filter (#0 > 7)
+          Get l2
+
+EOF
+
+# We can push down from the body into such a Let binding that is NOT being referenced across
+# iterations (l1).
+# The `> 7` should end up inside the `cte l1 =`, and should disappear from everywhere else.
+query T multiline
+EXPLAIN
+WITH MUTUALLY RECURSIVE
+  c0(n int) AS (
+    (SELECT n FROM init)
+    UNION ALL
+    (SELECT * FROM c2)
+  ),
+  c1(n int) AS (
+    SELECT n+n FROM c0
+  ),
+  c2(n int) AS (
+    (SELECT * FROM c0)
+    UNION ALL
+    (SELECT * FROM c1 WHERE n>7)
+    UNION ALL
+    (SELECT * FROM c1 WHERE n>7)
+  )
+SELECT * FROM c1 WHERE n>7;
+----
+Explained Query:
+  Return
+    Get l1
+  With Mutually Recursive
+    cte l2 =
+      Union
+        Get l0
+        Get l1
+        Get l1
+    cte l1 =
+      Project (#1)
+        Filter (#1 > 7)
+          Map ((#0 + #0))
+            Get l0
+    cte l0 =
+      Union
+        Project (#0)
+          Get materialize.public.init
+        Get l2
+
+EOF
+
+# Even though the only usage of `l2` has a predicate, we don't push that predicate into `l2`,
+# because `l2` is being referenced across iterations.
+# That is, the `< 3` predicate should stay inside the `cte l0 =`.
+query T multiline
+EXPLAIN
+WITH MUTUALLY RECURSIVE
+  c0(n int) AS (
+    (SELECT n FROM init)
+    UNION ALL
+    (SELECT * FROM c2 WHERE n<3)
+  ),
+  c1(n int) AS (
+    SELECT n+n FROM c0
+  ),
+  c2(n int) AS (
+    (SELECT * FROM c0)
+    UNION ALL
+    (SELECT * FROM c1)
+    UNION ALL
+    (SELECT * FROM c1)
+  )
+SELECT * FROM c1;
+----
+Explained Query:
+  Return
+    Get l1
+  With Mutually Recursive
+    cte l2 =
+      Union
+        Get l0
+        Get l1
+        Get l1
+    cte l1 =
+      Project (#1)
+        Map ((#0 + #0))
+          Get l0
+    cte l0 =
+      Union
+        Project (#0)
+          Get materialize.public.init
+        Filter (#0 < 3)
+          Get l2
+
+EOF
