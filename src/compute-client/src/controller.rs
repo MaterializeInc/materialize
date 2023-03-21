@@ -52,7 +52,7 @@ use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 use mz_storage_client::types::instances::StorageInstanceId;
 
-use crate::logging::{LogVariant, LogView, LoggingConfig};
+use crate::logging::{LogVariant, LoggingConfig};
 use crate::metrics::ComputeControllerMetrics;
 use crate::protocol::command::ComputeParameters;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
@@ -117,31 +117,12 @@ pub struct ComputeReplicaLogging {
     ///
     /// A `None` value indicates that logging is disabled.
     pub interval: Option<Duration>,
-    /// Log sources of this replica.
-    pub sources: Vec<(LogVariant, GlobalId)>,
-    /// Log views of this replica.
-    pub views: Vec<(LogView, GlobalId)>,
 }
 
 impl ComputeReplicaLogging {
     /// Return whether logging is enabled.
     pub fn enabled(&self) -> bool {
         self.interval.is_some()
-    }
-
-    /// Return all ids of the persisted introspection views contained.
-    pub fn view_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.views.iter().map(|(_, id)| *id)
-    }
-
-    /// Return all ids of the persisted introspection sources contained.
-    pub fn source_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.sources.iter().map(|(_, id)| *id)
-    }
-
-    /// Return all ids of the persisted introspection sources and logs contained.
-    pub fn source_and_view_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.source_ids().chain(self.view_ids())
     }
 }
 
@@ -426,17 +407,6 @@ where
             None => (false, Duration::from_secs(1)),
         };
 
-        let mut sink_logs = BTreeMap::new();
-        for (variant, id) in config.logging.sources {
-            let storage_meta = self
-                .storage
-                .collection(id)
-                .map_err(|_| CollectionMissing(id))?
-                .collection_metadata
-                .clone();
-            sink_logs.insert(variant, (id, storage_meta));
-        }
-
         let idle_arrangement_merge_effort = config
             .idle_arrangement_merge_effort
             .unwrap_or(DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT);
@@ -448,7 +418,6 @@ where
                 enable_logging,
                 log_logging: config.logging.log_logging,
                 index_logs: Default::default(),
-                sink_logs,
             },
             idle_arrangement_merge_effort,
         };

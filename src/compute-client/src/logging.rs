@@ -19,7 +19,6 @@ use serde::{Deserialize, Serialize};
 
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
-use mz_storage_client::controller::CollectionMetadata;
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_client.logging.rs"));
 
@@ -27,10 +26,9 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_client.logging.rs"));
 ///
 /// Setting `enable_logging` to `false` specifies that logging is disabled.
 //
-// Ideally we'd want to instead signal disabled logging by leaving both `index_logs` and
-// `sink_logs` empty. Unfortunately, we have to always provide `index_logs`, because we must
+// Ideally we'd want to instead signal disabled logging by leaving `index_logs`
+// empty. Unfortunately, we have to always provide `index_logs`, because we must
 // install the logging dataflows even on replicas that have logging disabled. See #15799.
-// TODO(teskje): Clean this up once we remove the arranged introspection sources.
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoggingConfig {
     /// The logging interval
@@ -41,8 +39,6 @@ pub struct LoggingConfig {
     pub log_logging: bool,
     /// Logs to keep in an arrangement
     pub index_logs: BTreeMap<LogVariant, GlobalId>,
-    /// Logs to be written to persist
-    pub sink_logs: BTreeMap<LogVariant, (GlobalId, CollectionMetadata)>,
 }
 
 impl Arbitrary for LoggingConfig {
@@ -55,31 +51,16 @@ impl Arbitrary for LoggingConfig {
             any::<bool>(),
             any::<bool>(),
             prop::collection::btree_map(any::<LogVariant>(), any::<GlobalId>(), 0..2),
-            prop::collection::btree_map(
-                any::<LogVariant>(),
-                any::<(GlobalId, CollectionMetadata)>(),
-                0..2,
-            ),
         )
             .prop_map(
-                |(interval, enable_logging, log_logging, index_logs, sink_logs)| LoggingConfig {
+                |(interval, enable_logging, log_logging, index_logs)| LoggingConfig {
                     interval,
                     enable_logging,
                     log_logging,
                     index_logs,
-                    sink_logs,
                 },
             )
             .boxed()
-    }
-}
-
-impl LoggingConfig {
-    /// Announce the identifiers the logging config will populate.
-    pub fn log_identifiers<'a>(&'a self) -> impl Iterator<Item = GlobalId> + 'a {
-        let it1 = self.index_logs.values().cloned();
-        let it2 = self.sink_logs.values().map(|(id, _)| *id);
-        it1.chain(it2)
     }
 }
 
@@ -90,7 +71,6 @@ impl RustType<ProtoLoggingConfig> for LoggingConfig {
             enable_logging: self.enable_logging,
             log_logging: self.log_logging,
             index_logs: self.index_logs.into_proto(),
-            sink_logs: self.sink_logs.into_proto(),
         }
     }
 
@@ -102,33 +82,7 @@ impl RustType<ProtoLoggingConfig> for LoggingConfig {
             enable_logging: proto.enable_logging,
             log_logging: proto.log_logging,
             index_logs: proto.index_logs.into_rust()?,
-            sink_logs: proto.sink_logs.into_rust()?,
         })
-    }
-}
-
-impl ProtoMapEntry<LogVariant, (GlobalId, CollectionMetadata)> for ProtoSinkLog {
-    fn from_rust<'a>(
-        (variant, (id, meta)): (&'a LogVariant, &'a (GlobalId, CollectionMetadata)),
-    ) -> Self {
-        Self {
-            key: Some(variant.into_proto()),
-            value_id: Some(id.into_proto()),
-            value_meta: Some(meta.into_proto()),
-        }
-    }
-
-    fn into_rust(
-        self,
-    ) -> std::result::Result<(LogVariant, (GlobalId, CollectionMetadata)), TryFromProtoError> {
-        Ok((
-            self.key.into_rust_if_some("ProtoSinkLog::key")?,
-            (
-                self.value_id.into_rust_if_some("ProtoSinkLog::value_id")?,
-                self.value_meta
-                    .into_rust_if_some("ProtoSinkLog::value_meta")?,
-            ),
-        ))
     }
 }
 
@@ -325,362 +279,6 @@ pub static DEFAULT_LOG_VARIANTS: Lazy<Vec<LogVariant>> = Lazy::new(|| {
 
     default_logs
 });
-
-/// Create a VIEW over the postfixed introspection sources. These views are created and torn down
-/// with replicas.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Ord, PartialOrd)]
-pub enum LogView {
-    MzArrangementSharing,
-    MzArrangementSizes,
-    MzComputeFrontiers,
-    MzComputeImportFrontiers,
-    MzComputeOperatorDurationsHistogram,
-    MzDataflows,
-    MzDataflowChannelOperators,
-    MzDataflowOperatorDataflows,
-    MzDataflowOperatorParents,
-    MzDataflowOperatorReachability,
-    MzMessageCounts,
-    MzPeekDurationsHistogram,
-    MzRecordsPerDataflow,
-    MzRecordsPerDataflowGlobal,
-    MzRecordsPerDataflowOperator,
-    MzSchedulingElapsed,
-    MzSchedulingParksHistogram,
-    MzWorkerComputeDelaysHistogram,
-}
-
-pub static DEFAULT_LOG_VIEWS: Lazy<Vec<LogView>> = Lazy::new(|| {
-    // Order matters, if view A depends on view B, A must be listed before B
-    vec![
-        LogView::MzArrangementSharing,
-        LogView::MzArrangementSizes,
-        LogView::MzComputeFrontiers,
-        LogView::MzComputeImportFrontiers,
-        LogView::MzComputeOperatorDurationsHistogram,
-        LogView::MzDataflows,
-        LogView::MzDataflowChannelOperators,
-        LogView::MzDataflowOperatorDataflows,
-        LogView::MzDataflowOperatorParents,
-        LogView::MzDataflowOperatorReachability,
-        LogView::MzMessageCounts,
-        LogView::MzPeekDurationsHistogram,
-        LogView::MzRecordsPerDataflowOperator,
-        LogView::MzRecordsPerDataflow,
-        LogView::MzRecordsPerDataflowGlobal,
-        LogView::MzSchedulingElapsed,
-        LogView::MzSchedulingParksHistogram,
-        LogView::MzWorkerComputeDelaysHistogram,
-    ]
-});
-
-impl LogView {
-    pub fn get_template(&self) -> (&str, &str) {
-        match self {
-            LogView::MzArrangementSharing => (
-                "SELECT
-                    operator_id,
-                    worker_id,
-                    pg_catalog.count(*) AS count
-                FROM mz_internal.mz_arrangement_sharing_internal_{}
-                GROUP BY operator_id, worker_id",
-                "mz_arrangement_sharing_{}",
-            ),
-
-            LogView::MzArrangementSizes => (
-                "WITH batches_cte AS (
-                    SELECT
-                        operator_id,
-                        worker_id,
-                        pg_catalog.count(*) AS batches
-                    FROM
-                        mz_internal.mz_arrangement_batches_internal_{}
-                    GROUP BY
-                        operator_id, worker_id
-                ),
-                records_cte AS (
-                    SELECT
-                        operator_id,
-                        worker_id,
-                        pg_catalog.count(*) AS records
-                    FROM
-                        mz_internal.mz_arrangement_records_internal_{}
-                    GROUP BY
-                        operator_id, worker_id
-                )
-                SELECT
-                    batches_cte.operator_id,
-                    batches_cte.worker_id,
-                    records_cte.records,
-                    batches_cte.batches
-                FROM batches_cte JOIN records_cte USING (operator_id, worker_id)",
-                "mz_arrangement_sizes_{}",
-            ),
-
-            LogView::MzDataflows => (
-                "SELECT mz_dataflow_addresses_{}.id,
-                        mz_dataflow_addresses_{}.worker_id,
-                        mz_dataflow_addresses_{}.address[1] AS local_id,
-                        mz_dataflow_operators_{}.name
-                 FROM
-                        mz_internal.mz_dataflow_addresses_{},
-                        mz_internal.mz_dataflow_operators_{}
-                 WHERE
-                        mz_dataflow_addresses_{}.id = mz_dataflow_operators_{}.id AND
-                        mz_dataflow_addresses_{}.worker_id = mz_dataflow_operators_{}.worker_id AND
-                        mz_catalog.list_length(mz_dataflow_addresses_{}.address) = 1",
-                "mz_dataflows_{}",
-            ),
-
-            LogView::MzDataflowChannelOperators => (
-                "WITH
-                 channel_addresses(id, worker_id, address, from_index, to_index) AS (
-                     SELECT id, worker_id, address, from_index, to_index
-                     FROM mz_internal.mz_dataflow_channels_{} mdc
-                     INNER JOIN mz_internal.mz_dataflow_addresses_{} mda
-                     USING (id, worker_id)
-                 ),
-                 operator_addresses(channel_id, worker_id, from_address, to_address) AS (
-                     SELECT id AS channel_id, worker_id,
-                            address || from_index AS from_address,
-                            address || to_index AS to_address
-                     FROM channel_addresses
-                 )
-                 SELECT channel_id AS id,
-                        oa.worker_id,
-                        from_ops.id AS from_operator_id,
-                        to_ops.id AS to_operator_id
-                 FROM operator_addresses oa
-                      INNER JOIN mz_internal.mz_dataflow_addresses_{} mda_from
-                          ON oa.from_address = mda_from.address
-                          AND oa.worker_id = mda_from.worker_id
-                      INNER JOIN mz_internal.mz_dataflow_operators_{} from_ops
-                          ON mda_from.id = from_ops.id
-                          AND oa.worker_id = from_ops.worker_id
-                      INNER JOIN mz_internal.mz_dataflow_addresses_{} mda_to
-                          ON oa.to_address = mda_to.address
-                          AND oa.worker_id = mda_to.worker_id
-                      INNER JOIN mz_internal.mz_dataflow_operators_{} to_ops
-                          ON mda_to.id = to_ops.id
-                          AND oa.worker_id = to_ops.worker_id",
-                "mz_dataflow_channel_operators_{}",
-            ),
-
-            LogView::MzDataflowOperatorParents => (
-                "WITH operator_addrs AS (
-                    SELECT
-                        id, address, worker_id
-                    FROM mz_internal.mz_dataflow_addresses_{}
-                        INNER JOIN mz_internal.mz_dataflow_operators_{}
-                            USING (id, worker_id)
-                ),
-                parent_addrs AS (
-                    SELECT
-                        id,
-                        address[1:list_length(address) - 1] AS parent_address,
-                        worker_id
-                    FROM operator_addrs
-                )
-                SELECT pa.id, oa.id AS parent_id, pa.worker_id
-                FROM parent_addrs AS pa
-                    INNER JOIN operator_addrs AS oa
-                        ON pa.parent_address = oa.address
-                        AND pa.worker_id = oa.worker_id",
-                "mz_dataflow_operator_parents_{}",
-            ),
-
-            LogView::MzDataflowOperatorDataflows => (
-                "SELECT
-                    mz_dataflow_operators_{}.id,
-                    mz_dataflow_operators_{}.name,
-                    mz_dataflow_operators_{}.worker_id,
-                    mz_dataflows_{}.id as dataflow_id,
-                    mz_dataflows_{}.name as dataflow_name
-                FROM
-                    mz_internal.mz_dataflow_operators_{},
-                    mz_internal.mz_dataflow_addresses_{},
-                    mz_internal.mz_dataflows_{}
-                WHERE
-                    mz_dataflow_operators_{}.id = mz_dataflow_addresses_{}.id AND
-                    mz_dataflow_operators_{}.worker_id = mz_dataflow_addresses_{}.worker_id AND
-                    mz_dataflows_{}.local_id = mz_dataflow_addresses_{}.address[1] AND
-                    mz_dataflows_{}.worker_id = mz_dataflow_addresses_{}.worker_id",
-                "mz_dataflow_operator_dataflows_{}",
-            ),
-
-            LogView::MzDataflowOperatorReachability => (
-                "SELECT
-                    address,
-                    port,
-                    worker_id,
-                    update_type,
-                    time,
-                    pg_catalog.count(*) as count
-                 FROM
-                    mz_internal.mz_dataflow_operator_reachability_internal_{}
-                 GROUP BY address, port, worker_id, update_type, time",
-                "mz_dataflow_operator_reachability_{}",
-            ),
-
-            LogView::MzComputeFrontiers => (
-                "SELECT
-                    export_id, pg_catalog.min(time) AS time
-                FROM mz_internal.mz_worker_compute_frontiers_{}
-                GROUP BY export_id",
-                "mz_compute_frontiers_{}",
-            ),
-
-            LogView::MzComputeImportFrontiers => (
-                "SELECT
-                    export_id, import_id, pg_catalog.min(time) AS time
-                FROM mz_internal.mz_worker_compute_import_frontiers_{}
-                GROUP BY export_id, import_id",
-                "mz_compute_import_frontiers_{}",
-            ),
-
-            LogView::MzMessageCounts => (
-                "WITH sent_cte AS (
-                    SELECT
-                        channel_id,
-                        from_worker_id,
-                        to_worker_id,
-                        pg_catalog.count(*) AS sent
-                    FROM
-                        mz_internal.mz_message_counts_sent_internal_{}
-                    GROUP BY
-                        channel_id, from_worker_id, to_worker_id
-                ),
-                received_cte AS (
-                    SELECT
-                        channel_id,
-                        from_worker_id,
-                        to_worker_id,
-                        pg_catalog.count(*) AS received
-                    FROM
-                        mz_internal.mz_message_counts_received_internal_{}
-                    GROUP BY
-                        channel_id, from_worker_id, to_worker_id
-                )
-                SELECT
-                    sent_cte.channel_id,
-                    sent_cte.from_worker_id,
-                    sent_cte.to_worker_id,
-                    sent_cte.sent,
-                    received_cte.received
-                FROM sent_cte JOIN received_cte USING (channel_id, from_worker_id, to_worker_id)",
-                "mz_message_counts_{}",
-            ),
-
-            LogView::MzRecordsPerDataflowOperator => (
-                "WITH records_cte AS (
-                    SELECT
-                        operator_id,
-                        worker_id,
-                        pg_catalog.count(*) AS records
-                    FROM
-                        mz_internal.mz_arrangement_records_internal_{}
-                    GROUP BY
-                        operator_id, worker_id
-                )
-                SELECT
-                    mz_dataflow_operator_dataflows_{}.id,
-                    mz_dataflow_operator_dataflows_{}.name,
-                    mz_dataflow_operator_dataflows_{}.worker_id,
-                    mz_dataflow_operator_dataflows_{}.dataflow_id,
-                    records_cte.records
-                FROM
-                    records_cte,
-                    mz_internal.mz_dataflow_operator_dataflows_{}
-                WHERE
-                    mz_dataflow_operator_dataflows_{}.id = records_cte.operator_id AND
-                    mz_dataflow_operator_dataflows_{}.worker_id = records_cte.worker_id",
-                "mz_records_per_dataflow_operator_{}",
-            ),
-
-            LogView::MzRecordsPerDataflow => (
-                "SELECT
-                    mz_records_per_dataflow_operator_{}.dataflow_id as id,
-                    mz_dataflows_{}.name,
-                    mz_records_per_dataflow_operator_{}.worker_id,
-                    pg_catalog.SUM(mz_records_per_dataflow_operator_{}.records) as records
-                FROM
-                    mz_internal.mz_records_per_dataflow_operator_{},
-                    mz_internal.mz_dataflows_{}
-                WHERE
-                    mz_records_per_dataflow_operator_{}.dataflow_id = mz_dataflows_{}.id AND
-                    mz_records_per_dataflow_operator_{}.worker_id = mz_dataflows_{}.worker_id
-                GROUP BY
-                    mz_records_per_dataflow_operator_{}.dataflow_id,
-                    mz_dataflows_{}.name,
-                    mz_records_per_dataflow_operator_{}.worker_id",
-                "mz_records_per_dataflow_{}",
-            ),
-
-            LogView::MzRecordsPerDataflowGlobal => (
-                "SELECT
-                    mz_records_per_dataflow_{}.id,
-                    mz_records_per_dataflow_{}.name,
-                    pg_catalog.SUM(mz_records_per_dataflow_{}.records) as records
-                FROM
-                    mz_internal.mz_records_per_dataflow_{}
-                GROUP BY
-                    mz_records_per_dataflow_{}.id,
-                    mz_records_per_dataflow_{}.name",
-                "mz_records_per_dataflow_global_{}",
-            ),
-
-            LogView::MzPeekDurationsHistogram => (
-                "SELECT
-                    worker_id, duration_ns, pg_catalog.count(*) AS count
-                FROM
-                    mz_internal.mz_peek_durations_histogram_internal_{}
-                GROUP BY
-                    worker_id, duration_ns",
-                "mz_peek_durations_histogram_{}",
-            ),
-
-            LogView::MzSchedulingElapsed => (
-                "SELECT
-                    id, worker_id, pg_catalog.count(*) AS elapsed_ns
-                FROM
-                    mz_internal.mz_scheduling_elapsed_internal_{}
-                GROUP BY
-                    id, worker_id",
-                "mz_scheduling_elapsed_{}",
-            ),
-
-            LogView::MzComputeOperatorDurationsHistogram => (
-                "SELECT
-                    id, worker_id, duration_ns, pg_catalog.count(*) AS count
-                FROM
-                    mz_internal.mz_compute_operator_durations_histogram_internal_{}
-                GROUP BY
-                    id, worker_id, duration_ns",
-                "mz_compute_operator_durations_histogram_{}",
-            ),
-
-            LogView::MzSchedulingParksHistogram => (
-                "SELECT
-                    worker_id, slept_for_ns, requested_ns, pg_catalog.count(*) AS count
-                FROM
-                    mz_internal.mz_scheduling_parks_histogram_internal_{}
-                GROUP BY
-                    worker_id, slept_for_ns, requested_ns",
-                "mz_scheduling_parks_histogram_{}",
-            ),
-
-            LogView::MzWorkerComputeDelaysHistogram => (
-                "SELECT
-                    export_id, import_id, worker_id, delay_ns, pg_catalog.count(*) AS count
-                FROM
-                    mz_internal.mz_worker_compute_delays_histogram_internal_{}
-                GROUP BY
-                    export_id, import_id, worker_id, delay_ns",
-                "mz_worker_compute_delays_histogram_{}",
-            ),
-        }
-    }
-}
 
 impl LogVariant {
     /// By which columns should the logs be indexed.

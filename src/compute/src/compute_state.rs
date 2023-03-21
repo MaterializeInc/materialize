@@ -379,28 +379,24 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             t_traces.extend(logging::timely::construct(
                 self.timely_worker,
                 logging,
-                self.compute_state,
                 Rc::clone(&t_linked),
                 t_activator.clone(),
             ));
             r_traces.extend(logging::reachability::construct(
                 self.timely_worker,
                 logging,
-                self.compute_state,
                 Rc::clone(&r_linked),
                 r_activator.clone(),
             ));
             d_traces.extend(logging::differential::construct(
                 self.timely_worker,
                 logging,
-                self.compute_state,
                 Rc::clone(&d_linked),
                 d_activator.clone(),
             ));
             c_traces.extend(logging::compute::construct(
                 self.timely_worker,
                 logging,
-                self.compute_state,
                 Rc::clone(&c_linked),
                 c_activator.clone(),
             ));
@@ -522,28 +518,24 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             t_traces.extend(logging::timely::construct(
                 self.timely_worker,
                 logging,
-                self.compute_state,
                 t_linked,
                 t_activator,
             ));
             r_traces.extend(logging::reachability::construct(
                 self.timely_worker,
                 logging,
-                self.compute_state,
                 r_linked,
                 r_activator,
             ));
             d_traces.extend(logging::differential::construct(
                 self.timely_worker,
                 logging,
-                self.compute_state,
                 d_linked,
                 d_activator,
             ));
             c_traces.extend(logging::compute::construct(
                 self.timely_worker,
                 logging,
-                self.compute_state,
                 c_linked,
                 c_activator,
             ));
@@ -575,10 +567,9 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
         }
 
-        // Initialize frontier reporting for all logging indexes and sinks.
+        // Initialize frontier reporting for all logging indexes.
         let index_ids = logging.index_logs.values().copied();
-        let sink_ids = logging.sink_logs.values().map(|(id, _)| *id);
-        for id in index_ids.chain(sink_ids) {
+        for id in index_ids {
             if let Some(frontier) = self
                 .compute_state
                 .reported_frontiers

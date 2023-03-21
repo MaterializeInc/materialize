@@ -279,7 +279,6 @@ pub struct Config {
     pub dataflow_client: mz_controller::Controller,
     pub storage: storage::Connection,
     pub unsafe_mode: bool,
-    pub persisted_introspection: bool,
     pub build_info: &'static BuildInfo,
     pub environment_id: EnvironmentId,
     pub metrics_registry: MetricsRegistry,
@@ -548,46 +547,6 @@ impl Coordinator {
                 },
             )?;
             for (replica_id, replica) in instance.replicas_by_id.clone() {
-                let introspection_collections: Vec<_> = replica
-                    .config
-                    .compute
-                    .logging
-                    .sources
-                    .iter()
-                    .map(|(variant, id)| (*id, variant.desc().into()))
-                    .collect();
-
-                self.controller
-                    .storage
-                    .migrate_collections(introspection_collections.clone())
-                    .await?;
-
-                // Create collections does not recreate existing collections, so it is safe to
-                // always call it.
-                self.controller
-                    .storage
-                    .create_collections(introspection_collections)
-                    .await
-                    .unwrap_or_terminate("cannot fail to create collections");
-
-                // TODO - Should these windows be configurable?
-                policies_to_set
-                    .get_mut(&DEFAULT_LOGICAL_COMPACTION_WINDOW_TS)
-                    .expect(
-                        "Default policy map was inserted just after `policies_to_set` was created.",
-                    )
-                    .compute_ids
-                    .entry(instance.id)
-                    .or_insert_with(BTreeSet::new)
-                    .extend(replica.config.compute.logging.source_ids());
-                policies_to_set
-                    .get_mut(&DEFAULT_LOGICAL_COMPACTION_WINDOW_TS)
-                    .expect(
-                        "Default policy map was inserted just after `policies_to_set` was created.",
-                    )
-                    .storage_ids
-                    .extend(replica.config.compute.logging.source_ids());
-
                 let role = instance.role();
                 replicas_to_start.push((instance.id, replica_id, role, replica.config));
             }
@@ -1335,7 +1294,6 @@ pub async fn serve(
         dataflow_client,
         storage,
         unsafe_mode,
-        persisted_introspection,
         build_info,
         environment_id,
         metrics_registry,
@@ -1399,7 +1357,6 @@ pub async fn serve(
         Catalog::open(catalog::Config {
             storage,
             unsafe_mode,
-            persisted_introspection,
             build_info,
             environment_id,
             now: now.clone(),

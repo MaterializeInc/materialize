@@ -532,8 +532,6 @@ fn default_logging_config() -> SerializedReplicaLogging {
     SerializedReplicaLogging {
         log_logging: false,
         interval: Some(Duration::from_secs(1)),
-        sources: None,
-        views: None,
     }
 }
 

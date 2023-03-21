@@ -9,7 +9,6 @@
 
 import re
 import time
-from collections import defaultdict
 from textwrap import dedent
 from threading import Thread
 from typing import Tuple
@@ -75,7 +74,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-replica-targeted-subscribe-abort",
         "test-compute-reconciliation-reuse",
         "test-mz-subscriptions",
-        "test-logview-consistency",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -386,7 +384,7 @@ def workflow_test_github_15535(c: Composition) -> None:
 
 def workflow_test_github_15799(c: Composition) -> None:
     """
-    Test that querying arranged introspection sources on a replica does not
+    Test that querying introspection sources on a replica does not
     crash other replicas in the same cluster that have introspection disabled.
 
     Regression test for https://github.com/MaterializeInc/materialize/issues/15799.
@@ -418,7 +416,7 @@ def workflow_test_github_15799(c: Composition) -> None:
         );
         SET cluster = cluster1;
 
-        -- query the arranged introspection sources on the replica with logging enabled
+        -- query the introspection sources on the replica with logging enabled
         SET cluster_replica = logging_on;
         SELECT * FROM mz_internal.mz_active_peeks, mz_internal.mz_compute_exports;
 
@@ -1358,75 +1356,3 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
 
     stop_subscribe(subscribe2)
     check_mz_subscriptions(())
-
-
-def workflow_test_logview_consistency(c: Composition) -> None:
-    """
-    Test that views over persisted introspection sources have the same
-    definitions as views over arranged introspection sources (modulo
-    name suffixes and GlobalIds).
-
-    This is necessary because the former are not derived from the
-    latter but are instead manually redefined. We want to make sure
-    that changes to one are always also applied to the other.
-    """
-
-    def clean_name(s: str) -> str:
-        """Clean a log view name by stripping the per-replica suffix."""
-        return re.sub(r"(?P<name>mz_\w+)_\d+", r"\g<name>", s)
-
-    def clean_definition(s: str) -> str:
-        """
-        Clean a log view definition by stripping per-replica suffixes
-        and GlobalIds of referenced collections.
-        """
-        s = clean_name(s)
-        return re.sub(
-            r'\[s\d+ AS (?P<relation>[\w"\.]+)\]',
-            r"\g<relation>",
-            s,
-        )
-
-    with c.override(
-        Materialized(options=["--persisted-introspection"]),
-    ):
-        c.down(destroy_volumes=True)
-        c.up("materialized")
-
-        # Collect the number of replicas.
-        output = c.sql_query("SELECT count(*) FROM mz_cluster_replicas")
-        replica_count = int(output[0][0])
-
-        # Collect all log views and their definitions.
-        output = c.sql_query(
-            f"""
-            WITH MUTUALLY RECURSIVE
-                log_ids (id text) AS (
-                    SELECT id FROM mz_sources WHERE type = 'log'
-                    UNION DISTINCT
-                    (
-                        SELECT object_id AS id
-                        FROM mz_internal.mz_object_dependencies
-                        WHERE referenced_object_id IN (SELECT * FROM log_ids)
-                    )
-                )
-            SELECT name, definition
-            FROM mz_views
-            WHERE id IN (SELECT * FROM log_ids)
-            """
-        )
-        definitions = defaultdict(list)
-        for (name, definition) in output:
-            name = clean_name(name)
-            definitions[name].append(definition)
-
-        for (name, defs) in definitions.items():
-            # Ensure no log views are missing.
-            assert len(defs) == replica_count + 1, (
-                f"unexpected number instances of log view {name}:"
-                f" expected {replica_count + 1}, got {len(defs)}"
-            )
-
-            # Ensure log views with the same name have the same definition.
-            cleaned = {clean_definition(d) for d in defs}
-            assert len(cleaned) == 1, f"inconsistent definitions for log view {name}"

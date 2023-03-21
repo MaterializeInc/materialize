@@ -85,7 +85,6 @@ impl Coordinator {
         event!(Level::TRACE, ops = format!("{:?}", ops));
 
         let mut sources_to_drop = vec![];
-        let mut log_sources_to_drop = vec![];
         let mut tables_to_drop = vec![];
         let mut storage_sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
@@ -165,37 +164,14 @@ impl Coordinator {
                     }
                 }
                 catalog::Op::DropCluster { id } => {
-                    let cluster = self.catalog().get_cluster(*id);
-
-                    // Drop the introspection sources
-                    let replica_logs = cluster
-                        .replicas_by_id
-                        .values()
-                        .flat_map(|replica| replica.config.compute.logging.source_ids())
-                        .map(|log_id| (*id, log_id));
-                    log_sources_to_drop.extend(replica_logs);
-
-                    // Drop the cluster itself.
                     clusters_to_drop.push(*id);
                 }
                 catalog::Op::DropClusterReplica {
                     cluster_id,
                     replica_id,
                 } => {
-                    let cluster = self.catalog().get_cluster(*cluster_id);
-                    let replica = &cluster.replicas_by_id[replica_id];
-
-                    // Drop the introspection sources
-                    let replica_logs = replica
-                        .config
-                        .compute
-                        .logging
-                        .source_ids()
-                        .map(|log_id| (cluster.id, log_id));
-                    log_sources_to_drop.extend(replica_logs);
-
                     // Drop the cluster replica itself.
-                    cluster_replicas_to_drop.push((cluster.id, *replica_id));
+                    cluster_replicas_to_drop.push((*cluster_id, *replica_id));
                 }
                 catalog::Op::ResetSystemConfiguration { name }
                 | catalog::Op::UpdateSystemConfiguration { name, .. } => {
@@ -209,7 +185,6 @@ impl Coordinator {
 
         let relations_to_drop: BTreeSet<_> = sources_to_drop
             .iter()
-            .chain(log_sources_to_drop.iter().map(|(_, id)| id))
             .chain(tables_to_drop.iter())
             .chain(storage_sinks_to_drop.iter())
             .chain(indexes_to_drop.iter().map(|(_, id)| id))
@@ -264,12 +239,10 @@ impl Coordinator {
             .chain(storage_sinks_to_drop.iter())
             .chain(tables_to_drop.iter())
             .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
-            .chain(log_sources_to_drop.iter().map(|(_, id)| id))
             .cloned();
         let compute_ids_to_drop = indexes_to_drop
             .iter()
             .chain(materialized_views_to_drop.iter())
-            .chain(log_sources_to_drop.iter())
             .cloned();
 
         // Check if any Timelines would become empty, if we dropped the specified storage or
@@ -356,9 +329,6 @@ impl Coordinator {
             }
             if !sources_to_drop.is_empty() {
                 self.drop_sources(sources_to_drop);
-            }
-            if !log_sources_to_drop.is_empty() {
-                self.drop_sources(log_sources_to_drop.into_iter().map(|(_, id)| id).collect());
             }
             if !tables_to_drop.is_empty() {
                 self.drop_sources(tables_to_drop);

@@ -11,7 +11,6 @@
 
 pub mod compute;
 pub mod differential;
-pub mod persist;
 pub mod reachability;
 pub mod timely;
 
