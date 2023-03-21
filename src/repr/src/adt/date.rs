@@ -118,6 +118,16 @@ impl Date {
         };
         Self::from_pg_epoch(days)
     }
+
+    /// Returns this date with `days` subtracted from it.
+    pub fn checked_sub(self, days: i32) -> Result<Date, DateError> {
+        let days = if let Some(days) = self.days.checked_sub(days) {
+            days
+        } else {
+            return Err(DateError::OutOfRange);
+        };
+        Self::from_pg_epoch(days)
+    }
 }
 
 impl Sub for Date {

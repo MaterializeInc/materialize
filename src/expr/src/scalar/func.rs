@@ -860,13 +860,10 @@ fn sub_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalEr
 
 fn sub_date_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let date = a.unwrap_date();
-    let days = b
-        .unwrap_int32()
-        .checked_neg()
-        .ok_or(EvalError::DateOutOfRange)?;
+    let days = b.unwrap_int32();
 
     Ok(date
-        .checked_add(days)
+        .checked_sub(days)
         .map_err(|_| EvalError::DateOutOfRange)?
         .into())
 }
