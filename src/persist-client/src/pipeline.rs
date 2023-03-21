@@ -32,7 +32,21 @@ pub(crate) struct PipelineParameters {
 /// footprint of any fetched / in-progress fetches, and [self::PipelineParameters::max_fetch_concurrency]
 /// to control the maximum number of concurrent API calls to [mz_persist::location::Blob] allowed.
 ///
-/// WIP: add snippet showing `PipelineFetcher::more_work` in while loop over reads from output stream
+/// The pipeline is broken into two halves: an input handle and output stream. It is expected that
+/// [PipelineFetcher::more_work] on the input is called frequently, wrapping all reads from the
+/// output stream:
+///
+/// ```rust, norun
+/// let (mut pipeline, mut pipeline_output) = PipelineFetcher::<K, V, T, D, ()>::new(params, batch_fetcher);
+/// pipeline.push(part1);
+/// while pipeline.more_work() {
+///     let fetched_part = pipeline_output.next().await;
+///     // etc
+/// }
+/// ```
+///
+/// To help ensure correct usage and the risk of partial reads, the output stream must be fully
+/// consumed before dropping the input handle, otherwise it will panic.
 #[derive(Debug)]
 pub(crate) struct PipelineFetcher<K, V, T, D, M>
 where
@@ -127,8 +141,8 @@ where
     }
 
     /// Pushes another part and any additional metadata into the pipeline's queue.
-    /// Pushing `None` will close the input to more values, and trigger a panic if
-    /// the input receives any additional parts.
+    /// Pushing `None` will close the input to more values. Once the pipeline input
+    /// is closed, pushing any additional parts will panic.
     pub(crate) fn push(&mut self, part: Option<(M, SerdeLeasedBatchPart)>) -> bool {
         let mut pushed = false;
         match part {
@@ -149,8 +163,10 @@ where
     }
 
     /// Indicates whether the pipeline is complete: when all parts ever pushed have been
-    /// consumed by the output, or the output has been closed. This function is expected
-    /// to be called frequently to drive the internal state to completion.
+    /// consumed by the output, or the output has been closed.
+    ///
+    /// This function is expected to be called frequently, wrapping any reads from the
+    /// pipeline's output stream, to drive the internal state to completion.
     pub(crate) fn more_work(&mut self) -> bool {
         if self.output_closed() {
             return false;
