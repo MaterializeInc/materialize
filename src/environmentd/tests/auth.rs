@@ -822,7 +822,7 @@ fn test_auth_expiry() {
         admin_role: "mzadmin".to_string(),
     });
     let frontegg_user = "user@_.com";
-    let frontegg_password = &format!("mzauth_{client_id}{secret}");
+    let frontegg_password = &format!("mzp_{client_id}{secret}");
 
     let config = util::Config::default()
         .with_tls(TlsMode::Require, server_cert, server_key)
@@ -962,11 +962,11 @@ fn test_auth_base() {
         admin_role: "mzadmin".to_string(),
     });
     let frontegg_user = "user@_.com";
-    let frontegg_password = &format!("mzauth_{client_id}{secret}");
+    let frontegg_password = &format!("mzp_{client_id}{secret}");
     let frontegg_basic = Authorization::basic(frontegg_user, frontegg_password);
     let frontegg_header_basic = make_header(frontegg_basic);
 
-    let frontegg_system_password = &format!("mzauth_{system_client_id}{system_secret}");
+    let frontegg_system_password = &format!("mzp_{system_client_id}{system_secret}");
     let frontegg_system_basic = Authorization::basic(&SYSTEM_USER.name, frontegg_system_password);
     let frontegg_system_header_basic = make_header(frontegg_system_basic);
 
@@ -1031,7 +1031,7 @@ fn test_auth_base() {
                     buf.extend(client_id.as_bytes());
                     buf.extend(secret.as_bytes());
                     Some(&format!(
-                        "mzauth_{}",
+                        "mzp_{}",
                         base64::encode_config(buf, base64::URL_SAFE)
                     ))
                 },
@@ -1047,7 +1047,7 @@ fn test_auth_base() {
                     buf.extend(client_id.as_bytes());
                     buf.extend(secret.as_bytes());
                     Some(&format!(
-                        "mzauth_{}",
+                        "mzp_{}",
                         base64::encode_config(buf, base64::URL_SAFE_NO_PAD)
                     ))
                 },
@@ -1549,7 +1549,7 @@ fn test_auth_admin() {
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
     )
     .unwrap();
-    let password_prefix = "mzauth_";
+    let password_prefix = "mzp_";
     let frontegg_auth = FronteggAuthentication::new(FronteggConfig {
         admin_api_token_url: frontegg_server.url.clone(),
         decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
