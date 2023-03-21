@@ -47,7 +47,7 @@ message ProtoUpsertValueError {
 }
 
 message ProtoUpsertNullKeyError {
-    /* mz_expr.id.ProtoPartitionId partition_id = 1; */
+    mz_expr.id.ProtoPartitionId partition_id = 1;
 }
 
 message ProtoUpsertError {

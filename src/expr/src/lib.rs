@@ -98,7 +98,7 @@ pub mod visit;
 pub use relation::canonicalize;
 
 pub use id::{Id, LocalId, PartitionId, SourceInstanceId};
-pub use id::{ProtoId, ProtoLocalId};
+pub use id::{ProtoId, ProtoLocalId, ProtoPartitionId};
 pub use linear::{
     memoize_expr,
     plan::{MfpPlan, MfpPushdown, SafeMfpPlan},

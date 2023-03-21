@@ -226,7 +226,7 @@ fn extract_decode_results<G: Scope>(
             value,
             position,
             upstream_time_millis: _,
-            partition: _,
+            partition,
             metadata,
         } = decode_result;
 
@@ -254,8 +254,11 @@ fn extract_decode_results<G: Scope>(
                 }),
             ),
             None => {
-                let key_error =
-                    UpsertError::NullKey(mz_storage_client::types::errors::UpsertNullKeyError {});
+                let key_error = UpsertError::NullKey(
+                    mz_storage_client::types::errors::UpsertNullKeyError::with_partition_id(
+                        partition,
+                    ),
+                );
                 (
                     None,
                     // Match what we do in `extract_kv_from_previous`, though

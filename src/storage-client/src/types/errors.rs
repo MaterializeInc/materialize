@@ -15,7 +15,7 @@ use prost::Message;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use mz_expr::EvalError;
+use mz_expr::{EvalError, PartitionId};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
 
@@ -204,28 +204,41 @@ impl Display for UpsertValueError {
 }
 
 /// A source contained a record with a NULL key, which we don't support.
-///
-/// NOTE: This does not contain additional (supposedly helpful) information, such as a partition ID
-/// or offset. We start out with keeping this error as generic as possible and, for example, a
-/// partition ID is a Kafka concept.
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-pub struct UpsertNullKeyError {}
+pub struct UpsertNullKeyError {
+    partition_id: Option<PartitionId>,
+}
+
+impl UpsertNullKeyError {
+    pub fn with_partition_id(partition_id: PartitionId) -> Self {
+        Self {
+            partition_id: Some(partition_id),
+        }
+    }
+}
 
 impl RustType<ProtoUpsertNullKeyError> for UpsertNullKeyError {
     fn into_proto(&self) -> ProtoUpsertNullKeyError {
         ProtoUpsertNullKeyError {
-            // partition_id: Some(PartitionId::None),
+            partition_id: self.partition_id.map(|id| id.into_proto()),
         }
     }
 
-    fn from_proto(_proto: ProtoUpsertNullKeyError) -> Result<Self, TryFromProtoError> {
-        Ok(Self {})
+    fn from_proto(proto: ProtoUpsertNullKeyError) -> Result<Self, TryFromProtoError> {
+        let partition_id = RustType::from_proto(proto.partition_id)?;
+        Ok(Self { partition_id })
     }
 }
 
 impl Display for UpsertNullKeyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "record with NULL key in UPSERT source")
+        write!(f, "record with NULL key in UPSERT source")?;
+
+        if let Some(partition_id) = self.partition_id {
+            write!(f, " in partition {}", partition_id)?;
+        }
+
+        Ok(())
     }
 }
 
