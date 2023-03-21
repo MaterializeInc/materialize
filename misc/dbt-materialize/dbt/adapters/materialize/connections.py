@@ -68,9 +68,11 @@ class MaterializeConnectionManager(PostgresConnectionManager):
         # the mz_introspection cluster for optimal performance. Each materialization
         # should then handle falling back to the default connection cluster if no
         # cluster configuration is specified at the model level.
-        mz_introspection_cluster = "mz_introspection"
-        logger.debug("Switching to cluster '{}'".format(mz_introspection_cluster))
-        cursor.execute("SET cluster = %s" % mz_introspection_cluster)
+
+        # TODO(parkertimmerman): Delete this code instead of just commenting it out.
+        # mz_introspection_cluster = "mz_introspection"
+        # logger.debug("Switching to cluster '{}'".format(mz_introspection_cluster))
+        # cursor.execute("SET cluster = %s" % mz_introspection_cluster)
 
         cursor.execute("SELECT mz_version()")
         mz_version = cursor.fetchone()[0].split()[0].strip("v")
