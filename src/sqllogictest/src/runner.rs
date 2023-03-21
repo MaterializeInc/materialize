@@ -760,7 +760,7 @@ impl<'a> Runner<'a> {
                 (name, _) => {
                     inner
                         .client
-                        .batch_execute(&format!("DROP CLUSTER REPLICA {name}"))
+                        .batch_execute(&format!("DROP CLUSTER REPLICA default.{name}"))
                         .await?
                 }
             }
