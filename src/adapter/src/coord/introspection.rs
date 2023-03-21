@@ -25,6 +25,8 @@ use mz_sql::plan::Plan;
 use once_cell::sync::Lazy;
 use smallvec::SmallVec;
 
+use crate::catalog::builtin::BuiltinCluster;
+use crate::catalog::Catalog;
 use crate::rbac;
 use crate::session::Session;
 
@@ -45,6 +47,27 @@ static ALLOWED_SCHEMAS: Lazy<HashSet<&str>> = Lazy::new(|| {
         INFORMATION_SCHEMA,
     ])
 });
+
+/// Checks whether or not we should automatically run a query on the `mz_introspection`
+/// cluster, as opposed to whatever the current default cluster is.
+pub fn auto_run_on_introspection(
+    catalog: &Catalog,
+    session: &Session,
+    depends_on: impl IntoIterator<Item = GlobalId>,
+) -> Option<&'static BuiltinCluster> {
+    if !session.vars().force_introspection_cluster() {
+        return None;
+    }
+
+    depends_on
+        .into_iter()
+        .all(|id| {
+            let entry = catalog.get_entry(&id);
+            let full_name = catalog.resolve_full_name(entry.name(), Some(session.conn_id()));
+            ALLOWED_SCHEMAS.contains(full_name.schema.as_str())
+        })
+        .then_some(&MZ_INTROSPECTION_CLUSTER)
+}
 
 /// Checks if we're currently running on the [`MZ_INTROSPECTION_CLUSTER`], and if so, do
 /// we depend on any objects that we're not allowed to query from the cluster.

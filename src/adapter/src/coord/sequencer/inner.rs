@@ -78,7 +78,7 @@ use crate::coord::peek::{FastPathPlan, PlannedPeek};
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampSource};
 use crate::coord::{
-    peek, Coordinator, Message, PendingReadTxn, PendingTxn, RealTimeRecencyContext,
+    introspection, peek, Coordinator, Message, PendingReadTxn, PendingTxn, RealTimeRecencyContext,
     SinkConnectionReady, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
@@ -1878,7 +1878,19 @@ impl Coordinator {
         let view_id = self.allocate_transient_id()?;
         let index_id = self.allocate_transient_id()?;
 
-        let cluster = self.catalog.active_cluster(session)?;
+        // If our query only depends on system tables, then we optionally run it on the 
+        // introspection cluster.
+        let cluster = if let Some(cluster) = introspection::auto_run_on_introspection(
+            &self.catalog,
+            &session,
+            source.depends_on()
+        ) {
+            let cluster = self.catalog.resolve_cluster(cluster.name)?;
+            tracing::info!("Running Peek on the mz_introspection cluster");
+            cluster
+        } else {
+            self.catalog.active_cluster(session)?
+        };
         let target_replica_name = session.vars().cluster_replica();
         let mut target_replica = target_replica_name
             .map(|name| {
@@ -2215,7 +2227,19 @@ impl Coordinator {
             up_to,
         } = plan;
 
-        let cluster = self.catalog.active_cluster(session)?;
+        // If our query only depends on system tables, then we optionally run it on the 
+        // introspection cluster.
+        let cluster = if let Some(cluster) = introspection::auto_run_on_introspection(
+            &self.catalog,
+            &session,
+            depends_on.iter().copied(),
+        ) {
+            let cluster = self.catalog.resolve_cluster(cluster.name)?;
+            tracing::info!("Running Subscribe on the mz_introspection cluster");
+            cluster
+        } else {
+            self.catalog.active_cluster(session)?
+        };
         let cluster_id = cluster.id;
 
         let target_replica_name = session.vars().cluster_replica();
