@@ -13,9 +13,6 @@ async-trait = "0.1.59"
 atty = "0.2.0"
 aws-config = { version = "0.53.0", default-features = false, features = ["native-tls"] }
 aws-credential-types = { version = "0.53.0", features = ["hardcoded-credentials"] }
-aws-sdk-kinesis = { version = "0.23.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sdk-s3 = { version = "0.23.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sdk-sqs = { version = "0.23.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 aws-sdk-sts = { version = "0.23.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 aws-types = "0.53.0"
 byteorder = "1.4.3"
