@@ -210,9 +210,7 @@ SELECT pg_get_userbyid(SELECT oid FROM mz_roles WHERE name = 'materialize')
 ----
 materialize
 
-statement ok
-CREATE ROLE joe
-
-SELECT pg_get_userbyid(SELECT oid FROM mz_roles WHERE name = 'joe')
+query T
+SELECT pg_get_userbyid(SELECT oid FROM mz_roles WHERE name = 'foo')
 ----
-joe
+foo
