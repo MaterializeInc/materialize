@@ -83,6 +83,12 @@ If you need to, you can install and use the `mssh` command provided by the
 underlying [EC2 connect CLI] directly, but it's usually much easier to go
 through `bin/scratch ssh`.
 
+To make remote ports available locally:
+
+```
+bin/scratch forward INSTANCE_ID port1 port2 ...
+```
+
 #### Visual Studo Code Remote Development
 
 VS Code Remote development allows us to configure common settings and an environment in which materialize can be developed from inside a docker container.
