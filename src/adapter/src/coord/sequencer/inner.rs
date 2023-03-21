@@ -1884,15 +1884,24 @@ impl Coordinator {
 
         // If our query only depends on system tables, then we optionally run it on the
         // introspection cluster.
-        let cluster = if let Some(cluster) =
-            introspection::auto_run_on_introspection(&self.catalog, session, source.depends_on())
-        {
-            let cluster = self.catalog.resolve_cluster(cluster.name)?;
-            session.add_notice(AdapterNotice::AutoRunOnIntrospectionCluster);
-            cluster
-        } else {
-            self.catalog.active_cluster(session)?
+        let active_cluster = self.catalog.active_cluster(session)?;
+        let cluster = match introspection::auto_run_on_introspection(
+            &self.catalog,
+            session,
+            source.depends_on(),
+        ) {
+            Some(cluster) => {
+                let auto_cluster = self.catalog.resolve_cluster(cluster.name)?;
+                // Report if we're auto running on a different cluster.
+                if active_cluster.id != auto_cluster.id {
+                    tracing::info!("Running on mz_introspection cluster");
+                    session.add_notice(AdapterNotice::AutoRunOnIntrospectionCluster);
+                }
+                auto_cluster
+            }
+            None => active_cluster,
         };
+
         let target_replica_name = session.vars().cluster_replica();
         let mut target_replica = target_replica_name
             .map(|name| {
@@ -2231,16 +2240,22 @@ impl Coordinator {
 
         // If our query only depends on system tables, then we optionally run it on the
         // introspection cluster.
-        let cluster = if let Some(cluster) = introspection::auto_run_on_introspection(
+        let active_cluster = self.catalog.active_cluster(session)?;
+        let cluster = match introspection::auto_run_on_introspection(
             &self.catalog,
             session,
             depends_on.iter().copied(),
         ) {
-            let cluster = self.catalog.resolve_cluster(cluster.name)?;
-            session.add_notice(AdapterNotice::AutoRunOnIntrospectionCluster);
-            cluster
-        } else {
-            self.catalog.active_cluster(session)?
+            Some(cluster) => {
+                let auto_cluster = self.catalog.resolve_cluster(cluster.name)?;
+                // Report if we're auto running on a different cluster.
+                if active_cluster.id != auto_cluster.id {
+                    tracing::info!("Running on mz_introspection cluster");
+                    session.add_notice(AdapterNotice::AutoRunOnIntrospectionCluster);
+                }
+                auto_cluster
+            }
+            None => active_cluster,
         };
         let cluster_id = cluster.id;
 
