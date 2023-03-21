@@ -23,7 +23,6 @@ use mz_repr::GlobalId;
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::Plan;
 use once_cell::sync::Lazy;
-use smallvec::SmallVec;
 
 use crate::catalog::{Catalog, Cluster};
 use crate::notice::AdapterNotice;
