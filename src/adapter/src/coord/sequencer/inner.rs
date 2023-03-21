@@ -460,19 +460,16 @@ impl Coordinator {
         tracing::debug!("sequence_create_cluster");
 
         let id = self.catalog_mut().allocate_user_cluster_id().await?;
-        // The catalog items for the arranged introspection sources are shared between all replicas
+        // The catalog items for the introspection sources are shared between all replicas
         // of a compute instance, so we create them unconditionally during instance creation.
         // Whether a replica actually maintains introspection arrangements is determined by the
         // per-replica introspection configuration.
-        let arranged_introspection_sources = self
-            .catalog_mut()
-            .allocate_arranged_introspection_sources()
-            .await;
+        let introspection_sources = self.catalog_mut().allocate_introspection_sources().await;
         let mut ops = vec![catalog::Op::CreateCluster {
             id,
             name: name.clone(),
             linked_object_id: None,
-            arranged_introspection_sources,
+            introspection_sources,
         }];
 
         let azs = self.catalog().state().availability_zones();
@@ -540,19 +537,9 @@ impl Coordinator {
             };
 
             let logging = if let Some(config) = compute.introspection {
-                let sources = self
-                    .catalog_mut()
-                    .allocate_persisted_introspection_sources()
-                    .await;
-                let views = self
-                    .catalog_mut()
-                    .allocate_persisted_introspection_views()
-                    .await;
                 ReplicaLogging {
                     log_logging: config.debugging,
                     interval: Some(config.interval),
-                    sources,
-                    views,
                 }
             } else {
                 ReplicaLogging::default()
@@ -591,7 +578,7 @@ impl Coordinator {
         let (catalog, controller) = self.catalog_and_controller_mut();
         let cluster = catalog.get_cluster(cluster_id);
         let cluster_id = cluster.id;
-        let arranged_introspection_source_ids: Vec<_> =
+        let introspection_source_ids: Vec<_> =
             cluster.log_indexes.iter().map(|(_, id)| *id).collect();
 
         controller
@@ -611,9 +598,9 @@ impl Coordinator {
             .collect();
         self.create_cluster_replicas(&replicas).await;
 
-        if !arranged_introspection_source_ids.is_empty() {
+        if !introspection_source_ids.is_empty() {
             self.initialize_compute_read_policies(
-                arranged_introspection_source_ids,
+                introspection_source_ids,
                 cluster_id,
                 Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
             )
@@ -698,19 +685,9 @@ impl Coordinator {
         };
 
         let logging = if let Some(config) = compute.introspection {
-            let sources = self
-                .catalog_mut()
-                .allocate_persisted_introspection_sources()
-                .await;
-            let views = self
-                .catalog_mut()
-                .allocate_persisted_introspection_views()
-                .await;
             ReplicaLogging {
                 log_logging: config.debugging,
                 interval: Some(config.interval),
-                sources,
-                views,
             }
         } else {
             ReplicaLogging::default()
@@ -746,8 +723,6 @@ impl Coordinator {
     }
 
     async fn create_cluster_replicas(&mut self, replicas: &[(ClusterId, ReplicaId)]) {
-        let mut log_source_ids: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        let mut log_source_collections_to_create = Vec::new();
         let mut replicas_to_start = Vec::new();
 
         for (cluster_id, replica_id) in replicas.iter().copied() {
@@ -755,51 +730,13 @@ impl Coordinator {
             let role = cluster.role();
             let replica_config = cluster.replicas_by_id[&replica_id].config.clone();
 
-            log_source_ids.insert(
-                cluster.id,
-                replica_config.compute.logging.source_ids().collect(),
-            );
-            log_source_collections_to_create.extend(
-                replica_config
-                    .compute
-                    .logging
-                    .sources
-                    .iter()
-                    .map(|(variant, id)| (*id, variant.desc().into())),
-            );
             replicas_to_start.push((cluster_id, replica_id, role, replica_config));
         }
-
-        self.controller
-            .storage
-            .create_collections(log_source_collections_to_create)
-            .await
-            .expect("creating collections must not fail");
 
         self.controller
             .create_replicas(replicas_to_start)
             .await
             .expect("creating replicas must not fail");
-
-        // Both these `initialize_*` methods say that they should
-        // be called soon after the creation of the replicas/collections.
-        // While we wait for all replicas in the `replicas` list to start before
-        // doing so, we _are_ calling them right after, so we should be fine.
-        for (cluster_id, log_source_ids) in log_source_ids {
-            if !log_source_ids.is_empty() {
-                self.initialize_compute_read_policies(
-                    log_source_ids.clone(),
-                    cluster_id,
-                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-                )
-                .await;
-                self.initialize_storage_read_policies(
-                    log_source_ids,
-                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-                )
-                .await;
-            }
-        }
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -1231,7 +1168,7 @@ impl Coordinator {
         // are replaced with persist-based ones.
         let log_names = depends_on
             .iter()
-            .flat_map(|id| self.catalog().arranged_introspection_dependencies(*id))
+            .flat_map(|id| self.catalog().introspection_dependencies(*id))
             .map(|id| self.catalog().get_entry(&id).name().item.clone())
             .collect::<Vec<_>>();
         if !log_names.is_empty() {
@@ -3668,15 +3605,12 @@ impl Coordinator {
         let name = self.catalog().resolve_full_name(name, None);
         let name = format!("{}_{}_{}", name.database, name.schema, name.item);
         let name = self.catalog().find_available_cluster_name(&name);
-        let arranged_introspection_sources = self
-            .catalog()
-            .allocate_arranged_introspection_sources()
-            .await;
+        let introspection_sources = self.catalog().allocate_introspection_sources().await;
         ops.push(catalog::Op::CreateCluster {
             id,
             name: name.clone(),
             linked_object_id: Some(linked_object_id),
-            arranged_introspection_sources,
+            introspection_sources,
         });
         self.create_linked_cluster_replica_op(id, size, ops).await?;
         Ok(id)
@@ -3716,8 +3650,6 @@ impl Coordinator {
                 interval: Some(Duration::from_micros(
                     DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS.into(),
                 )),
-                sources: vec![],
-                views: vec![],
             }
         };
         ops.push(catalog::Op::CreateClusterReplica {
@@ -3858,7 +3790,7 @@ where
 {
     let log_names = source_ids
         .iter()
-        .flat_map(|id| catalog.arranged_introspection_dependencies(*id))
+        .flat_map(|id| catalog.introspection_dependencies(*id))
         .map(|id| catalog.get_entry(&id).name().item.clone())
         .collect::<Vec<_>>();
 

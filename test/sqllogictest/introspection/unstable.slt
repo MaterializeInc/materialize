@@ -9,39 +9,25 @@
 
 mode cockroach
 
-# Index-based introspection sources are unstable.
+# Introspection sources are unstable.
 
 statement error cannot create view with unstable dependencies
-CREATE VIEW v AS SELECT * FROM mz_internal.mz_active_peeks
+CREATE VIEW v AS SELECT count(*) FROM mz_internal.mz_active_peeks
 
 statement error cannot create index with unstable dependencies
 CREATE DEFAULT INDEX ON mz_internal.mz_active_peeks
 
-# Persisted introspection sources are unstable.
-
-statement error cannot create view with unstable dependencies
-CREATE VIEW v AS SELECT * FROM mz_internal.mz_active_peeks_1
-
-statement error cannot create index with unstable dependencies
-CREATE DEFAULT INDEX ON mz_internal.mz_active_peeks_1
-
 # Introspection views are unstable.
 
 statement error cannot create view with unstable dependencies
-CREATE VIEW v AS SELECT * FROM mz_internal.mz_scheduling_elapsed
+CREATE VIEW v AS SELECT count(*) FROM mz_internal.mz_scheduling_elapsed
 
 # Unstable temporary views are allowed
 
 statement ok
-CREATE TEMPORARY VIEW v AS SELECT * FROM mz_internal.mz_scheduling_elapsed
-
-statement error cannot create index with unstable dependencies
-CREATE DEFAULT INDEX ON mz_internal.mz_scheduling_elapsed_1
+CREATE TEMPORARY VIEW v AS SELECT count(*) FROM mz_internal.mz_scheduling_elapsed
 
 # SELECTs from unstable objects are allowed.
 
 statement ok
 SELECT * FROM mz_internal.mz_active_peeks
-
-statement ok
-SELECT * FROM mz_internal.mz_active_peeks_1

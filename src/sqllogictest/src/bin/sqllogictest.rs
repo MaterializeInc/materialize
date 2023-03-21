@@ -129,9 +129,6 @@ struct Args {
     /// ported SQLite SLT files. Does not work generally, so don't use it for other tests.
     #[clap(long)]
     auto_transactions: bool,
-    /// Run Materialize with persisted introspection sources enabled.
-    #[clap(long)]
-    persisted_introspection: bool,
 }
 
 #[tokio::main]
@@ -150,7 +147,6 @@ async fn main() -> ExitCode {
         fail_fast: args.fail_fast,
         auto_index_tables: args.auto_index_tables,
         auto_transactions: args.auto_transactions,
-        persisted_introspection: args.persisted_introspection,
     };
 
     if args.rewrite_results {

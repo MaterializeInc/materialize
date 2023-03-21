@@ -129,8 +129,6 @@ pub struct Config {
     // === Special modes. ===
     /// Whether to permit usage of unsafe features.
     pub unsafe_mode: bool,
-    /// Whether to enable persisted introspection sources.
-    pub persisted_introspection: bool,
 
     // === Connection options. ===
     /// The IP address and port to listen for pgwire connections on.
@@ -382,7 +380,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         dataflow_client: controller,
         storage: adapter_storage,
         unsafe_mode: config.unsafe_mode,
-        persisted_introspection: config.persisted_introspection,
         build_info: &BUILD_INFO,
         environment_id: config.environment_id.clone(),
         metrics_registry: config.metrics_registry.clone(),

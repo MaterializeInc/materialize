@@ -30,8 +30,6 @@ use mz_timely_util::activator::RcActivator;
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::replay::MzReplay;
 
-use crate::compute_state::ComputeState;
-use crate::logging::persist::persist_sink;
 use crate::logging::{LogVariant, TimelyLog};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
@@ -48,7 +46,6 @@ use crate::typedefs::{KeysValsHandle, RowSpine};
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
-    compute_state: &mut ComputeState,
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, TimelyEvent)>>,
     activator: RcActivator,
 ) -> BTreeMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
@@ -62,7 +59,6 @@ pub fn construct<A: Allocate>(
 
         // If logging is disabled, we still need to install the indexes, but we can leave them
         // empty. We do so by immediately filtering all logs events.
-        // TODO(teskje): Remove this once we remove the arranged introspection sources.
         if !config.enable_logging {
             logs = logs.filter(|_| false);
         }
@@ -491,11 +487,6 @@ pub fn construct<A: Allocate>(
                     .arrange_named::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
                     .trace;
                 result.insert(variant.clone(), (trace, Rc::clone(&token)));
-            }
-
-            if let Some((id, meta)) = config.sink_logs.get(&variant) {
-                tracing::debug!("Persisting {:?} to {:?}", &variant, meta);
-                persist_sink(*id, meta, compute_state, collection);
             }
         }
         result

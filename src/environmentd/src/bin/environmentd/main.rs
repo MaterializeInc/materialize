@@ -161,17 +161,6 @@ pub struct Args {
     ///     legitimate security risk if used in Materialize Cloud.
     #[clap(long, env = "UNSAFE_MODE")]
     unsafe_mode: bool,
-    /// Enable persisted introspection sources.
-    ///
-    /// These sources are temporarily disabled because they put significant
-    /// pressure on persist compaction, which is currently affected by some
-    /// known bugs. Once these are resolved, the plan is to enable persisted
-    /// introspection sources by default again.
-    ///
-    /// See <https://github.com/MaterializeInc/materialize/issues/15415>
-    /// for context.
-    #[clap(long, env = "PERSISTED_INTROSPECTION")]
-    persisted_introspection: bool,
 
     // === Connection options. ===
     /// The address on which to listen for untrusted SQL connections.
@@ -766,7 +755,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         secrets_controller,
         cloud_resource_controller,
         unsafe_mode: args.unsafe_mode,
-        persisted_introspection: args.persisted_introspection,
         metrics_registry,
         now,
         environment_id: args.environment_id,
