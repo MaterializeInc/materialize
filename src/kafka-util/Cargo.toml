@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.66"
 chrono = { version = "0.4.23", default-features = false, features = ["std"] }
-clap = { version = "3.2.20", features = ["derive"] }
+clap = { version = "4.1.11", features = ["derive"] }
 crossbeam = "0.8.2"
 mz-avro = { path = "../avro" }
 mz-ccsr = { path = "../ccsr" }
