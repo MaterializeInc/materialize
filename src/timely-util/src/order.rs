@@ -348,6 +348,30 @@ impl<P> Partition for P where
 {
 }
 
+/// A helper struct for reverse partial ordering.
+///
+/// This struct is a helper that can be used with `Antichain` when the maximum inclusive frontier
+/// needs to be maintained as opposed to the mininimum inclusive.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct Reverse<T>(pub T);
+
+impl<T: PartialOrder> PartialOrder for Reverse<T> {
+    fn less_equal(&self, other: &Self) -> bool {
+        PartialOrder::less_equal(&other.0, &self.0)
+    }
+}
+impl<T: PartialOrd> PartialOrd for Reverse<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        other.0.partial_cmp(&self.0)
+    }
+}
+
+impl<T: Ord> Ord for Reverse<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other.0.cmp(&self.0)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use timely::progress::Antichain;
