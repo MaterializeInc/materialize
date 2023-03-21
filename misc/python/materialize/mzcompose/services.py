@@ -129,6 +129,11 @@ class Materialized(Service):
                 "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus",
             ]
 
+        command += [
+            "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
+            f"--orchestrator-process-prometheus-service-discovery-directory=/mzdata/prometheus",
+        ]
+
         command += options
 
         config: ServiceConfig = {}
@@ -968,5 +973,40 @@ class Mz(Service):
             config={
                 "mzbuild": "mz",
                 "volumes": [f"{config.name}:/root/.config/mz/profiles.toml"],
+            },
+        )
+
+
+class Prometheus(Service):
+    def __init__(self, name: str = "prometheus") -> None:
+        super().__init__(
+            name=name,
+            config={
+                "image": "prom/prometheus:v2.41.0",
+                "ports": ["9090"],
+                "volumes": [
+                    str(ROOT / "misc" / "mzcompose" / "prometheus" / "prometheus.yml")
+                    + ":/etc/prometheus/prometheus.yml",
+                    "mzdata:/mnt/mzdata",
+                ],
+            },
+        )
+
+
+class Grafana(Service):
+    def __init__(self, name: str = "grafana") -> None:
+        super().__init__(
+            name=name,
+            config={
+                "image": "grafana/grafana:9.3.2",
+                "ports": ["3000"],
+                "environment": [
+                    "GF_AUTH_ANONYMOUS_ENABLED=true",
+                    "GF_AUTH_ANONYMOUS_ORG_ROLE=Admin",
+                ],
+                "volumes": [
+                    str(ROOT / "misc" / "mzcompose" / "grafana" / "datasources")
+                    + ":/etc/grafana/provisioning/datasources",
+                ],
             },
         )
