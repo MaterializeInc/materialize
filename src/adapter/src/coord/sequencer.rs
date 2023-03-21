@@ -278,10 +278,7 @@ impl Coordinator {
                 );
             }
             Plan::CopyRows(CopyRowsPlan { id, columns, rows }) => {
-                tx.send(
-                    self.sequence_copy_rows(&mut session, id, columns, rows),
-                    session,
-                );
+                self.sequence_copy_rows(tx, session, id, columns, rows);
             }
             Plan::Explain(plan) => {
                 self.sequence_explain(tx, session, plan);

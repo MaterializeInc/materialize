@@ -15,6 +15,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use futures::future::BoxFuture;
 use maplit::btreeset;
+use mz_transform::Optimizer;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
 use tracing::{event, warn, Level};
@@ -35,6 +36,7 @@ use mz_expr::{
 };
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::result::ResultExt as OreResultExt;
 use mz_ore::task;
 use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
@@ -2836,10 +2838,15 @@ impl Coordinator {
         };
 
         match optimized_mir.into_inner() {
-            selection if selection.as_const().is_some() && plan.returning.is_empty() => tx.send(
-                self.sequence_insert_constant(&mut session, plan.id, selection),
-                session,
-            ),
+            selection if selection.as_const().is_some() && plan.returning.is_empty() => {
+                let catalog = self.owned_catalog();
+                mz_ore::task::spawn(|| "coord::sequence_inner", async move {
+                    tx.send(
+                        Self::sequence_insert_constant(&catalog, &mut session, plan.id, selection),
+                        session,
+                    )
+                });
+            }
             // All non-constant values must be planned as read-then-writes.
             selection => {
                 let desc_arity = match self.catalog().try_get_entry(&plan.id) {
@@ -2895,18 +2902,16 @@ impl Coordinator {
     }
 
     fn sequence_insert_constant(
-        &mut self,
+        catalog: &Catalog,
         session: &mut Session,
         id: GlobalId,
         constants: MirRelationExpr,
     ) -> Result<ExecuteResponse, AdapterError> {
         // Insert can be queued, so we need to re-verify the id exists.
-        let desc = match self.catalog().try_get_entry(&id) {
-            Some(table) => table.desc(
-                &self
-                    .catalog()
-                    .resolve_full_name(table.name(), Some(session.conn_id())),
-            )?,
+        let desc = match catalog.try_get_entry(&id) {
+            Some(table) => {
+                table.desc(&catalog.resolve_full_name(table.name(), Some(session.conn_id())))?
+            }
             None => {
                 return Err(AdapterError::SqlCatalog(CatalogError::UnknownItem(
                     id.to_string(),
@@ -2927,7 +2932,7 @@ impl Coordinator {
                     updates: rows,
                     kind: MutationKind::Insert,
                     returning: Vec::new(),
-                    max_result_size: self.catalog().system_config().max_result_size(),
+                    max_result_size: catalog.system_config().max_result_size(),
                 };
                 Self::sequence_send_diffs(session, diffs_plan)
             }
@@ -2940,16 +2945,31 @@ impl Coordinator {
 
     pub(super) fn sequence_copy_rows(
         &mut self,
-        session: &mut Session,
+        tx: ClientTransmitter<ExecuteResponse>,
+        mut session: Session,
         id: GlobalId,
         columns: Vec<usize>,
         rows: Vec<Row>,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let catalog = self.catalog().for_session(session);
-        let values = mz_sql::plan::plan_copy_from(session.pcx(), &catalog, id, columns, rows)?;
-        let values = self.view_optimizer.optimize(values.lower()?)?;
-        // Copied rows must always be constants.
-        self.sequence_insert_constant(session, id, values.into_inner())
+    ) {
+        let catalog = self.owned_catalog();
+        mz_ore::task::spawn(|| "coord::sequence_copy_rows", async move {
+            let conn_catalog = catalog.for_session(&session);
+            let res: Result<_, AdapterError> =
+                mz_sql::plan::plan_copy_from(session.pcx(), &conn_catalog, id, columns, rows)
+                    .err_into()
+                    .and_then(|values| values.lower().err_into())
+                    .and_then(|values| Optimizer::logical_optimizer().optimize(values).err_into())
+                    .and_then(|values| {
+                        // Copied rows must always be constants.
+                        Self::sequence_insert_constant(
+                            &catalog,
+                            &mut session,
+                            id,
+                            values.into_inner(),
+                        )
+                    });
+            tx.send(res, session);
+        });
     }
 
     // ReadThenWrite is a plan whose writes depend on the results of a
