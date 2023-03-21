@@ -189,8 +189,12 @@ impl Coordinator {
                 mut session,
                 tx,
             } => {
-                let result = self.verify_prepared_statement(&mut session, &name);
-                let _ = tx.send(Response { result, session });
+                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                let catalog = self.owned_catalog();
+                mz_ore::task::spawn(|| "coord::VerifyPreparedStatement", async move {
+                    let result = Self::verify_prepared_statement(&catalog, &mut session, &name);
+                    tx.send(result, session);
+                });
             }
         }
     }

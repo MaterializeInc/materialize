@@ -90,9 +90,11 @@ impl Coordinator {
         }
     }
 
-    /// Verify a prepared statement is still valid.
+    /// Verify a prepared statement is still valid. This will return an error if
+    /// the catalog's revision has changed and the statement now produces a
+    /// different type than its original.
     pub(crate) fn verify_prepared_statement(
-        &self,
+        catalog: &Catalog,
         session: &mut Session,
         name: &str,
     ) -> Result<(), AdapterError> {
@@ -100,9 +102,13 @@ impl Coordinator {
             Some(ps) => ps,
             None => return Err(AdapterError::UnknownPreparedStatement(name.to_string())),
         };
-        if let Some(revision) =
-            self.verify_statement_revision(session, ps.sql(), ps.desc(), ps.catalog_revision)?
-        {
+        if let Some(revision) = Self::verify_statement_revision(
+            catalog,
+            session,
+            ps.sql(),
+            ps.desc(),
+            ps.catalog_revision,
+        )? {
             let ps = session
                 .get_prepared_statement_mut_unverified(name)
                 .expect("known to exist");
@@ -122,7 +128,8 @@ impl Coordinator {
             Some(portal) => portal,
             None => return Err(AdapterError::UnknownCursor(name.to_string())),
         };
-        if let Some(revision) = self.verify_statement_revision(
+        if let Some(revision) = Self::verify_statement_revision(
+            self.catalog(),
             session,
             portal.stmt.as_ref(),
             &portal.desc,
@@ -136,14 +143,17 @@ impl Coordinator {
         Ok(())
     }
 
+    /// If the catalog and portal revisions don't match, re-describe the statement
+    /// and ensure its result type has not changed. Return `Some(x)` with the new
+    /// (valid) revision if its plan has changed. Return `None` if the revisions
+    /// match. Return an error if the plan has changed.
     fn verify_statement_revision(
-        &self,
+        catalog: &Catalog,
         session: &Session,
         stmt: Option<&Statement<Raw>>,
         desc: &StatementDesc,
         catalog_revision: u64,
     ) -> Result<Option<u64>, AdapterError> {
-        let catalog = self.catalog();
         let current_revision = catalog.transient_revision();
         if catalog_revision != current_revision {
             let current_desc = Self::describe(

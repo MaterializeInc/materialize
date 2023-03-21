@@ -3540,7 +3540,7 @@ impl Coordinator {
         plan: ExecutePlan,
     ) -> Result<String, AdapterError> {
         // Verify the stmt is still valid.
-        self.verify_prepared_statement(session, &plan.name)?;
+        Self::verify_prepared_statement(self.catalog(), session, &plan.name)?;
         let ps = session
             .get_prepared_statement_unverified(&plan.name)
             .expect("known to exist");
