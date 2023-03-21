@@ -32,6 +32,7 @@ use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderi
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
 
 use crate::visit::{Visit, VisitChildren};
+use crate::Id::Local;
 use crate::{
     func as scalar_func, EvalError, FilterCharacteristics, Id, LocalId, MirScalarExpr, UnaryFunc,
     VariadicFunc,
@@ -1725,7 +1726,7 @@ impl MirRelationExpr {
     }
 }
 
-// Temporary implementation for working with `LetRec`.
+// `LetRec` helpers
 impl MirRelationExpr {
     /// True when `expr` contains a `LetRec` AST node.
     pub fn is_recursive(self: &MirRelationExpr) -> bool {
@@ -1739,11 +1740,56 @@ impl MirRelationExpr {
         false
     }
 
+    /// Given the ids and values of a LetRec, it computes the subset of ids that are used across
+    /// iterations. These are those ids that have a reference before they are defined, when reading
+    /// all the bindings in order.
+    ///
+    /// For example:
+    /// ```SQL
+    /// WITH MUTUALLY RECURSIVE
+    ///     x(...) AS f(z),
+    ///     y(...) AS g(x),
+    ///     z(...) AS h(y)
+    /// ...;
+    /// ```
+    /// Here, only `z` is returned, because `x` and `y` are referenced only within the same
+    /// iteration.
+    ///
+    /// Note that if a binding references itself, that is also returned.
+    pub fn recursive_ids(
+        ids: &[LocalId],
+        values: &[MirRelationExpr],
+    ) -> Result<BTreeSet<LocalId>, RecursionLimitError> {
+        let mut used_across_iterations = BTreeSet::new();
+        let mut defined = BTreeSet::new();
+        for (binding_id, value) in itertools::zip_eq(ids.iter(), values.iter()) {
+            value.visit_post(&mut |expr| {
+                if let MirRelationExpr::Get {
+                    id: Local(get_id), ..
+                } = expr
+                {
+                    // If we haven't seen a definition for it yet, then this will refer
+                    // to the previous iteration.
+                    // The `ids.contains` part of the condition is needed to exclude
+                    // those ids that are not really in this LetRec, but either an inner
+                    // or outer one.
+                    if !defined.contains(get_id) && ids.contains(get_id) {
+                        used_across_iterations.insert(*get_id);
+                    }
+                }
+            })?;
+            defined.insert(*binding_id);
+        }
+        Ok(used_across_iterations)
+    }
+
     /// Replaces `LetRec` nodes with a stack of `Let` nodes.
     ///
     /// In each `Let` binding, uses of `Get` in `value` that are not at strictly greater
     /// identifiers are rewritten to be the constant collection.
     /// This makes the computation perform exactly "one" iteration.
+    ///
+    /// This was used only temporarily while developing `LetRec`.
     pub fn make_nonrecursive(self: &mut MirRelationExpr) {
         let mut deadlist = BTreeSet::new();
         let mut worklist = vec![self];
