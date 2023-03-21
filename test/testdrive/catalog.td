@@ -597,23 +597,21 @@ test_table
 
 > CREATE TABLE tester2.test_table (a int)
 
-$ set-regex match=(\d+) replacement=<OID>
-
 $ psql-execute command="\dt tester.*"
-\          List of relations
- Schema |    Name    | Type  |        Owner
---------+------------+-------+---------------------
- tester | test_table | table | unknown (OID=<OID>)
+\             List of relations
+ Schema |    Name    | Type  |    Owner
+--------+------------+-------+-------------
+ tester | test_table | table | materialize
 
 $ psql-execute command="\dt tester.test_table"
-\          List of relations
- Schema |    Name    | Type  |        Owner
---------+------------+-------+---------------------
- tester | test_table | table | unknown (OID=<OID>)
+\             List of relations
+ Schema |    Name    | Type  |    Owner
+--------+------------+-------+-------------
+ tester | test_table | table | materialize
 
 $ psql-execute command="\dt *.test_table"
-\          List of relations
- Schema  |    Name    | Type  |        Owner
----------+------------+-------+---------------------
- tester  | test_table | table | unknown (OID=<OID>)
- tester2 | test_table | table | unknown (OID=<OID>)
+\             List of relations
+ Schema  |    Name    | Type  |    Owner
+---------+------------+-------+-------------
+ tester  | test_table | table | materialize
+ tester2 | test_table | table | materialize
