@@ -187,7 +187,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--scenario",
         metavar="SCENARIO",
         type=str,
-        default="Scenario",
+        default=os.getenv("MZCOMPOSE_SCENARIO", default="Scenario"),
         help="Scenario or scenario family to benchmark. See scenarios.py for available scenarios.",
     )
 

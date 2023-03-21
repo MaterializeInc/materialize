@@ -48,6 +48,17 @@ To use a specific SIZE for sources, sinks and dataflows:
 ./mzcompose run default --this-size 2 --other-size 4 ...
 ```
 
+## Running manually in Buildkite
+
+Go to the [Buildkite Nightly Job](https://buildkite.com/materialize/nightlies), click the down arrow button
+at the top right and select `New Build`. Put the **full SHA** of your commit in `Commit` and the name
+of your branch in `Branch` including the Github username you forked with, e.g. `username:branch`.
+Click `Create Build` and wait for the build start, at which point you will
+have the opportunity to select `feature-benchmark` from the list.
+
+If you want to run a specific senario only, click `Options` and put `MZCOMPOSE_SCENARIO=...` in the text box.
+For example, to run all scenarios that are subclasses of `Kafka`, use `MZCOMPOSE_SCENARIO=Kafka`.
+
 # Output
 
 The output of the benchmark is a table such as this:

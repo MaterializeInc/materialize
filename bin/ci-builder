@@ -156,7 +156,7 @@ case "$cmd" in
             --env NIGHTLY_CANARY_CONFLUENT_CLOUD_API_SECRET
             --env PYPI_TOKEN
         )
-        for env in $(printenv | grep '^BUILDKITE' | sed 's/=.*//'); do
+        for env in $(printenv | grep -E '^(BUILDKITE|MZCOMPOSE)' | sed 's/=.*//'); do
             args+=(--env "$env")
         done
         if [[ -t 1 ]]; then
