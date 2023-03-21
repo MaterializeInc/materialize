@@ -95,12 +95,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::{lattice::Lattice, Collection, Hashable};
-use ref_cast::RefCast;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::rc::SharedStream;
 use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, Inspect};
-use timely::dataflow::{Scope, Stream, StreamCore};
+use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::trace;
@@ -235,14 +233,12 @@ where
 
     let operator_name = format!("persist_sink({})", collection_id);
 
-    let desired_stream = desired_collection.inner.shared();
-
     let (batch_descriptions, mint_token) = mint_batch_descriptions(
         scope,
         collection_id,
         &operator_name,
         &target,
-        &desired_stream,
+        &desired_collection,
         Arc::clone(&persist_clients),
     );
 
@@ -252,7 +248,7 @@ where
         &operator_name,
         &target,
         &batch_descriptions,
-        &desired_stream,
+        &desired_collection,
         Arc::clone(&persist_clients),
         storage_state,
     );
@@ -286,7 +282,7 @@ fn mint_batch_descriptions<G>(
     collection_id: GlobalId,
     operator_name: &str,
     target: &CollectionMetadata,
-    desired_stream: &StreamCore<G, Rc<Vec<(Result<Row, DataflowError>, mz_repr::Timestamp, Diff)>>>,
+    desired_collection: &Collection<G, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
 ) -> (
     Stream<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
@@ -317,7 +313,7 @@ where
 
     let (mut output, output_stream) = mint_op.new_output();
 
-    let mut desired_input = mint_op.new_input(desired_stream, Pipeline);
+    let mut desired_input = mint_op.new_input(&desired_collection.inner, Pipeline);
 
     let shutdown_button = mint_op.build(move |capabilities| async move {
         let mut cap_set = CapabilitySet::from_elem(capabilities.into_element());
@@ -444,7 +440,7 @@ fn write_batches<G>(
     operator_name: &str,
     target: &CollectionMetadata,
     batch_descriptions: &Stream<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
-    desired_stream: &StreamCore<G, Rc<Vec<(Result<Row, DataflowError>, mz_repr::Timestamp, Diff)>>>,
+    desired_collection: &Collection<G, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
     storage_state: &mut StorageState,
 ) -> (Stream<G, HollowBatchAndMetadata>, Rc<dyn Any>)
@@ -469,7 +465,7 @@ where
     let (mut output, output_stream) = write_op.new_output();
 
     let mut descriptions_input = write_op.new_input(&batch_descriptions.broadcast(), Pipeline);
-    let mut desired_input = write_op.new_input(desired_stream, Pipeline);
+    let mut desired_input = write_op.new_input(&desired_collection.inner, Pipeline);
 
     // This operator accepts the current and desired update streams for a `persist` shard.
     // It attempts to write out updates, starting from the current's upper frontier, that
@@ -568,7 +564,7 @@ where
                         }
                     }
                 }
-                Some(event) = desired_input.next() => {
+                Some(event) = desired_input.next_mut() => {
                     match event {
                         Event::Data(_cap, data) => {
                             // Extract desired rows as positive contributions to `correction`.
@@ -586,9 +582,9 @@ where
                                 );
                             }
 
-                            for (row, ts, diff) in data.iter() {
-                                if write.upper().less_equal(ts){
-                                    let builder = stashed_batches.entry(*ts).or_insert_with(|| {
+                            for (row, ts, diff) in data.drain(..) {
+                                if write.upper().less_equal(&ts){
+                                    let builder = stashed_batches.entry(ts).or_insert_with(|| {
                                         BatchBuilderAndMetadata::new(
                                             write.builder(operator_batch_lower.clone()),
                                         )
@@ -597,7 +593,7 @@ where
                                     let is_value = row.is_ok();
                                     builder
                                         .builder
-                                        .add(SourceData::ref_cast(row), &(), ts, diff)
+                                        .add(&SourceData(row), &(), &ts, &diff)
                                         .await
                                         .expect("invalid usage");
 
