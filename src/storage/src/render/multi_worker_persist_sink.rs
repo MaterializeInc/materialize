@@ -96,6 +96,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
+use differential_dataflow::AsCollection;
 use differential_dataflow::{lattice::Lattice, Collection, Hashable};
 use either::Either;
 use serde::{Deserialize, Serialize};
@@ -107,7 +108,7 @@ use timely::PartialOrder;
 use tracing::trace;
 
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::{CollectionExt, HashMap};
+use mz_ore::collections::HashMap;
 use mz_persist_client::batch::Batch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriterEnrichedHollowBatch;
@@ -194,13 +195,9 @@ where
         }
     }
 
-    async fn add<F>(&mut self, spill_to_batch_size: usize, f: F, k: &K, v: &V, t: &T, d: &D)
+    async fn add<F>(&mut self, spill_to_batch_size: usize, f: F, k: K, v: V, t: T, d: D)
     where
         F: FnOnce() -> mz_persist_client::batch::BatchBuilder<K, V, T, D>,
-        K: Clone,
-        V: Copy,
-        T: Copy,
-        D: Copy,
     {
         let to_write_to_batch = match &self.builder {
             Either::Right(vec) if vec.len() >= spill_to_batch_size => {
@@ -216,7 +213,7 @@ where
 
         match &mut self.builder {
             Either::Right(vec) => {
-                vec.push((k.clone(), *v, *t, *d));
+                vec.push((k, v, t, d));
             }
             Either::Left(batch_builder) => {
                 for (k, v, t, d) in to_write_to_batch {
@@ -225,7 +222,10 @@ where
                         .await
                         .expect("invalid usage");
                 }
-                batch_builder.add(k, v, t, d).await.expect("invalid usage");
+                batch_builder
+                    .add(&k, &v, &t, &d)
+                    .await
+                    .expect("invalid usage");
             }
         }
     }
@@ -302,6 +302,11 @@ struct BatchSet {
 ///    persist shard.
 ///
 /// This operator assumes that the `desired_collection` comes pre-sharded.
+///
+/// Note that `mint_batch_descriptions` inspects the frontier of
+/// `desired_collection`, and passes the data through to `write_batches`.
+/// This is done to avoid a clone of the underlying data so that both
+/// operators can have the collection as input.
 pub(crate) fn render<G>(
     scope: &mut G,
     collection_id: GlobalId,
@@ -318,7 +323,7 @@ where
 
     let operator_name = format!("persist_sink({})", collection_id);
 
-    let (batch_descriptions, mint_token) = mint_batch_descriptions(
+    let (batch_descriptions, passthrough_desired_stream, mint_token) = mint_batch_descriptions(
         scope,
         collection_id,
         &operator_name,
@@ -333,7 +338,7 @@ where
         &operator_name,
         &target,
         &batch_descriptions,
-        &desired_collection,
+        &passthrough_desired_stream.as_collection(),
         Arc::clone(&persist_clients),
         storage_state,
     );
@@ -371,6 +376,7 @@ fn mint_batch_descriptions<G>(
     persist_clients: Arc<PersistClientCache>,
 ) -> (
     Stream<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
+    Stream<G, (Result<Row, DataflowError>, mz_repr::Timestamp, Diff)>,
     Rc<dyn Any>,
 )
 where
@@ -397,16 +403,33 @@ where
     );
 
     let (mut output, output_stream) = mint_op.new_output();
+    let (mut data_output, data_output_stream) = mint_op.new_output();
 
+    // The description and the data-passthrough outputs are both driven by this input, so
+    // they use a standard input connection.
     let mut desired_input = mint_op.new_input(&desired_collection.inner, Pipeline);
 
     let shutdown_button = mint_op.build(move |capabilities| async move {
-        let mut cap_set = CapabilitySet::from_elem(capabilities.into_element());
-
+        // Non-active workers should just pass the data through.
         if !active_worker {
-            // The non-active workers report that they are done snapshotting.
+            // The description output is entirely driven by the active worker, so we drop
+            // its capability here. The data-passthrough output just uses the data
+            // capabilities.
+            drop(capabilities);
+            while let Some(event) = desired_input.next_mut().await {
+                match event {
+                    Event::Data(cap, data) => {
+                        data_output.give_container(&cap, data).await;
+                    }
+                    Event::Progress(_) => {}
+                }
+            }
             return;
         }
+        // The data-passthrough output should will use the data capabilities, so we drop
+        // its capability here.
+        let [desc_cap, _]: [_; 2] = capabilities.try_into().expect("one capability per output");
+        let mut cap_set = CapabilitySet::from_elem(desc_cap);
 
         // Initialize this operators's `upper` to the `upper` of the persist shard we are writing
         // to. Data from the source not beyond this time will be dropped, as it has already
@@ -443,15 +466,11 @@ where
         let mut desired_frontier;
 
         loop {
-            if let Some(event) = desired_input.next().await {
+            if let Some(event) = desired_input.next_mut().await {
                 match event {
-                    Event::Data(_cap, _data) => {
-                        // Just read away data.
-                        // TODO(guswynn): this, and the same code in the compute version of this
-                        // code, is inefficient, and can be improved, likely by using 2 outputs.
-                        // See
-                        // <https://github.com/MaterializeInc/materialize/pull/17589#discussion_r1106016139>
-                        // for more info.
+                    Event::Data(cap, data) => {
+                        // Just passthrough the data.
+                        data_output.give_container(&cap, data).await;
                         continue;
                     }
                     Event::Progress(frontier) => {
@@ -508,7 +527,7 @@ where
     });
 
     let token = Rc::new(shutdown_button.press_on_drop());
-    (output_stream, token)
+    (output_stream, data_output_stream, token)
 }
 
 /// Writes `desired_collection` to persist, but only for updates
@@ -671,9 +690,9 @@ where
                             }
 
                             let minimum_batch_updates = persist_clients.cfg().storage_sink_minimum_batch_updates();
-                            for (row, ts, diff) in data.into_iter() {
-                                if write.upper().less_equal(ts){
-                                    let builder = stashed_batches.entry(*ts).or_insert_with(|| {
+                            for (row, ts, diff) in data.drain(..) {
+                                if write.upper().less_equal(&ts){
+                                    let builder = stashed_batches.entry(ts).or_insert_with(|| {
                                         BatchBuilderAndMetadata::new()
                                     });
 
@@ -682,7 +701,10 @@ where
                                         .add(
                                             minimum_batch_updates,
                                             || write.builder(operator_batch_lower.clone()),
-                                            &SourceData(row.clone()), &(), ts, diff
+                                            SourceData(row),
+                                            (),
+                                            ts,
+                                            diff
                                         ).await;
 
                                     source_statistics.inc_updates_staged_by(1);
