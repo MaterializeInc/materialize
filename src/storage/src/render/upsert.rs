@@ -24,14 +24,12 @@ use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, ChangeBatch};
 use tracing::{error, info};
 
-use mz_expr::{EvalError, MirScalarExpr};
 use mz_ore::permutations::inverse_argsort;
-use mz_repr::{Datum, DatumVec, DatumVecBorrow, Diff, Row, RowArena, Timestamp};
+use mz_repr::{Datum, DatumVec, DatumVecBorrow, Diff, Row, Timestamp};
 use mz_storage_client::types::errors::{
     DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertValueError,
 };
 use mz_storage_client::types::sources::{MzOffset, UpsertEnvelope, UpsertStyle};
-use mz_timely_util::operator::StreamExt;
 
 use crate::source::types::DecodeResult;
 
@@ -67,57 +65,12 @@ where
     if as_of_frontier != Antichain::from_elem(timely::progress::Timestamp::minimum()) {
         info!("upsert resuming from time {as_of_frontier:?}");
     }
-    // Currently, the upsert-specific transformations run in the
-    // following order:
+    // Currently, the upsert-specific transformations run in the following order:
     // 1. Applies `as_of` frontier compaction. The compaction is important as
     // downstream upsert preparation can compact away updates for the same keys
     // at the same times, and by advancing times we make more of them the same.
     // 2. compact away updates for the same keys at the same times
-    // 3. decoding records
-    // 4. prepending the key to the value so that the stream becomes
-    //        of the format (key, <entire record>)
-    // We may want to consider switching the order of the transformations to
-    // optimize performance trade-offs. In the current order, by running
-    // deduplicating before decoding/linear operators, we're reducing compute at the
-    // cost of requiring more memory.
-    //
-    // In the future, we may want to have optimization hints that enable people
-    // to specify that they believe that they have a large number of unique
-    // keys, at which point materialize may be more performant if it runs
-    // decoding/linear operators before deduplicating.
-    //
-    // The method also takes in `operators` which describes predicates that can
-    // be applied and columns of the data that can be blanked out. We can apply
-    // these operations but must be careful: for example, we can apply predicates
-    // before staging the records, but we need to present filtered results as a
-    // `None` value to ensure that it prompts dropping any held values with the
-    // same key. If the predicates produce errors, we should notice these as well
-    // and retract them if non-erroring records overwrite them.
-
-    // TODO: We could move the decoding before the staging grounds, which would
-    // allow us to stage potentially less data. The motivation for the current
-    // design is to support bulk deduplication without decoding, but we expect
-    // this is most likely to happen in the loading of data; consequently, we
-    // could use this implementation until `as_of_frontier` is reached, and then
-    // switch over to eager decoding. A work-in-progress idea that needs thought.
-
-    // Extract predicates, and "dummy column" information.
-    // Predicates are distinguished into temporal and non-temporal,
-    // as the non-temporal determine if a record is retained at all,
-    // and the temporal indicate how we should transform its timestamps
-    // when it is transmitted.
-    let temporal = Vec::new();
-    let predicates = Vec::new();
-    let position_or = (0..upsert_envelope.source_arity)
-        .map(Some)
-        .collect::<Vec<_>>();
-    let temporal_plan = if !temporal.is_empty() {
-        let temporal_mfp =
-            mz_expr::MapFilterProject::new(upsert_envelope.source_arity).filter(temporal);
-        Some(temporal_mfp.into_plan().unwrap_or_else(|e| panic!("{}", e)))
-    } else {
-        None
-    };
+    // 3. prepending the key to the value so that the stream becomes of the format (key, <record>)
 
     // Break `previous` into:
     // On the one hand, "Ok" and "Err(UpsertError)", which we know how to deal with, and,
@@ -133,73 +86,18 @@ where
 
     let upsert_output = upsert_core(
         input,
-        predicates,
-        position_or,
         as_of_frontier,
         upsert_envelope,
         previous.as_collection(),
         previous_token,
     );
-    let (mut oks, errs2) = upsert_output.ok_err(|(data, time, diff)| match data {
+    let (oks, errs2) = upsert_output.ok_err(|(data, time, diff)| match data {
         Ok(data) => Ok((data, time, diff)),
         Err(err) => Err((err, time, diff)),
     });
     errs = errs.concat(&errs2);
 
-    // If we have temporal predicates do the thing they have to do.
-    if let Some(plan) = temporal_plan {
-        let (oks2, errs2) = oks.flat_map_fallible("UpsertTemporalOperators", {
-            let mut datum_vec = mz_repr::DatumVec::new();
-            let mut row_builder = Row::default();
-            move |(row, time, diff)| {
-                let arena = mz_repr::RowArena::new();
-                let mut datums_local = datum_vec.borrow_with(&row);
-                plan.evaluate(
-                    &mut datums_local,
-                    &arena,
-                    time,
-                    diff,
-                    |_time| true,
-                    &mut row_builder,
-                )
-            }
-        });
-
-        oks = oks2;
-        errs = errs.concat(&errs2);
-    }
-
     (oks.as_collection(), errs.as_collection())
-}
-
-/// Evaluates predicates and dummy column information.
-///
-/// This method takes decoded datums and prepares as output
-/// a row which contains only those positions of `position_or`.
-/// If any predicate is failed, no row is produced, and if an
-/// error is encountered it is returned instead.
-fn evaluate(
-    datums: &[Datum],
-    predicates: &[MirScalarExpr],
-    position_or: &[Option<usize>],
-    row_buf: &mut Row,
-) -> Result<Option<Row>, EvalError> {
-    let arena = RowArena::new();
-    // Each predicate is tested in order.
-    for predicate in predicates.iter() {
-        if predicate.eval(datums, &arena)? != Datum::True {
-            return Ok(None);
-        }
-    }
-
-    // We pack dummy values in locations that do not reference
-    // specific columns.
-    let mut row_packer = row_buf.packer();
-    row_packer.extend(position_or.iter().map(|x| match x {
-        Some(column) => datums[*column],
-        None => Datum::Dummy,
-    }));
-    Ok(Some(row_buf.clone()))
 }
 
 /// Given a stream of rows and a description of the columns that form their key,
@@ -274,8 +172,6 @@ fn extract_kv<G: Scope>(
 /// Internal core upsert logic.
 fn upsert_core<G>(
     input: &Collection<G, DecodeResult, Diff>,
-    predicates: Vec<MirScalarExpr>,
-    position_or: Vec<Option<usize>>,
     as_of_frontier: Antichain<Timestamp>,
     upsert_envelope: UpsertEnvelope,
     previous: Collection<G, Result<Row, UpsertError>, Diff>,
@@ -452,8 +348,6 @@ where
                         &key_indices_sorted,
                         &key_indices_map,
                         &mut kdv,
-                        &predicates,
-                        &position_or,
                         &mut removed_times,
                         output,
                     )
@@ -559,10 +453,6 @@ fn process_pending_values_batch(
     key_indices_map: &BTreeMap<usize, usize>,
     // A shared row used to build a Vec<Datum<'_>> for key thinning
     kdv: &mut DatumVec,
-    // Additional information used to pre-evaluate predicates that reduces the output
-    // stream size
-    predicates: &[MirScalarExpr],
-    position_or: &[Option<usize>],
     // An out parameter of times that must be removed from the `to_send` map
     // as we are done processing them.
     removed_times: &mut Vec<Timestamp>,
@@ -580,7 +470,6 @@ fn process_pending_values_batch(
     let mut session = output.session(cap);
     removed_times.push(time.clone());
     for (key, data) in std::mem::take(map) {
-        // decode key and value, and apply predicates/projections to they combined key/value
         if let Some(decoded_key) = key {
             let (decoded_key, decoded_value): (_, Result<_, DataflowError>) =
                 match (decoded_key, data.value) {
@@ -603,8 +492,9 @@ fn process_pending_values_batch(
                                 )
                                 .map_or(Ok(None), |mut datums| {
                                     datums.extend(data.metadata.iter());
-                                    evaluate(&datums, predicates, position_or, row_packer)
-                                        .map_err(Into::into)
+                                    Ok(Some(Row::pack(
+                                        datums.iter().take(upsert_envelope.source_arity),
+                                    )))
                                 })
                             })
                             .map_err(|err| {
