@@ -2152,7 +2152,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(String, Oid, Bool) => Operation::variadic(move |_ecx, mut args| Ok(args.remove(0))) => String, 2509;
         },
         "pg_get_userbyid" => Scalar {
-            params!(Oid) => sql_impl_func("'unknown (OID=' || $1 || ')'") => String, 1642;
+            params!(Oid) => sql_impl_func("(SELECT name FROM mz_catalog.mz_roles WHERE oid = $1)") => String, 1642;
         },
         "pg_postmaster_start_time" => Scalar {
             params!() => UnmaterializableFunc::PgPostmasterStartTime => TimestampTz, 2560;
