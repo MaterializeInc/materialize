@@ -206,11 +206,21 @@ statement ok
 ROLLBACK
 
 query T
-SELECT pg_get_userbyid(SELECT oid FROM mz_roles WHERE name = 'materialize')
+SELECT pg_get_userbyid((SELECT oid FROM mz_roles WHERE name = 'materialize'))
 ----
 materialize
 
 query T
-SELECT pg_get_userbyid(SELECT oid FROM mz_roles WHERE name = 'foo')
+SELECT pg_get_userbyid((SELECT oid FROM mz_roles WHERE name = 'foo'))
 ----
 foo
+
+query T
+SELECT pg_get_userbyid(NULL)
+----
+NULL
+
+query T
+SELECT pg_get_userbyid(4294967295);
+----
+ unknown (OID=4294967295)
