@@ -315,18 +315,6 @@ pub async fn purify_create_source(
                     // The user manually selected a subset of upstream tables so we need to
                     // validate that the names actually exist and are not ambiguous
 
-                    // An index from table name -> schema name -> database name -> PostgresTableDesc
-                    let mut tables_by_name = BTreeMap::new();
-                    for table in &publication_tables {
-                        tables_by_name
-                            .entry(table.name.clone())
-                            .or_insert_with(BTreeMap::new)
-                            .entry(table.namespace.clone())
-                            .or_insert_with(BTreeMap::new)
-                            .entry(connection.database.clone())
-                            .or_insert(table);
-                    }
-
                     validated_requested_subsources
                         .extend(subsource_gen(subsources, &publication_catalog)?);
                 }
