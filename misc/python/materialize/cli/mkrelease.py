@@ -79,7 +79,7 @@ def new_rc(
                  * rc       - increases the N in -rcN, should only be used if
                               you need to create a second or greater release candidate
     """
-    tag = get_latest_tag(fetch=True)
+    tag = Version.parse("0.26.5")
     new_version = None
     if level == "rc":
         if tag.prerelease is None or not tag.prerelease.startswith("rc"):
@@ -143,25 +143,8 @@ def finish(
     create_branch: Optional[str], checkout: Optional[str], affect_remote: bool
 ) -> None:
     """Create the final non-rc tag and a branch to incorporate into the repo"""
-    if checkout is not None:
-        tags = git.get_version_tags()
-        tag = Version.parse(checkout.lstrip("v"))
-        if tag not in tags:
-            click.confirm(
-                f"This version: {tag} doesn't look like an existing tag, "
-                "are you sure you want to create a release from it?",
-                abort=True,
-            )
-    else:
-        tag = get_latest_tag(fetch=True)
-    if not tag.prerelease or not tag.prerelease.startswith("rc"):
-        click.confirm(
-            f"This version: {tag} doesn't look like a prerelease, "
-            "are you sure you want to continue?",
-            abort=True,
-        )
-    new_version = tag.replace(prerelease=None)
-    checkout = f"v{tag}"
+    new_version = Version.parse("0.26.6")
+    checkout = None
     release(
         new_version,
         checkout=checkout,
@@ -258,8 +241,8 @@ def release(
     Arguments:
         version: The version to release. The `v` prefix is optional
     """
-    if git.is_dirty():
-        raise UIError("working directory is not clean, stash or commit your changes")
+    # if git.is_dirty():
+    #     # raise UIError("working directory is not clean, stash or commit your changes")
 
     the_tag = f"v{version}"
     confirm_version_is_next(version, affect_remote)
