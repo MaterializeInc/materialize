@@ -87,7 +87,7 @@ use uuid::Uuid;
 
 use mz_ore::{now::NowFn, retry::Retry};
 
-use crate::app_password::{AppPasswordParseError, AppPassword};
+use crate::app_password::{AppPassword, AppPasswordParseError};
 
 pub mod app_password;
 

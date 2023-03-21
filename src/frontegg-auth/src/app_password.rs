@@ -55,18 +55,14 @@ impl FromStr for AppPassword {
     type Err = AppPasswordParseError;
 
     fn from_str(password: &str) -> Result<AppPassword, AppPasswordParseError> {
-        let password = password
-            .strip_prefix(PREFIX)
-            .ok_or(AppPasswordParseError)?;
+        let password = password.strip_prefix(PREFIX).ok_or(AppPasswordParseError)?;
         if password.len() == 43 || password.len() == 44 {
             // If it's exactly 43 or 44 bytes, assume we have base64-encoded
             // UUID bytes without or with padding, respectively.
             let buf = base64::decode_config(password, base64::URL_SAFE)
                 .map_err(|_| AppPasswordParseError)?;
-            let client_id =
-                Uuid::from_slice(&buf[..16]).map_err(|_| AppPasswordParseError)?;
-            let secret_key =
-                Uuid::from_slice(&buf[16..]).map_err(|_| AppPasswordParseError)?;
+            let client_id = Uuid::from_slice(&buf[..16]).map_err(|_| AppPasswordParseError)?;
+            let secret_key = Uuid::from_slice(&buf[16..]).map_err(|_| AppPasswordParseError)?;
             Ok(AppPassword {
                 client_id,
                 secret_key,
@@ -132,7 +128,8 @@ mod tests {
                 expected_secret_key: "1947fdce-f540-4adb-84a4-7347e5d30c9f".parse().unwrap(),
             },
             TestCase {
-                input: "mzp_0445db36-5826-41af-84f6-e09402fc6171:a0c11434-07ba-426a-b83d-cc4f192325a3",
+                input:
+                    "mzp_0445db36-5826-41af-84f6-e09402fc6171:a0c11434-07ba-426a-b83d-cc4f192325a3",
                 expected_output: "mzp_BEXbNlgmQa-E9uCUAvxhcaDBFDQHukJquD3MTxkjJaM",
                 expected_client_id: "0445db36-5826-41af-84f6-e09402fc6171".parse().unwrap(),
                 expected_secret_key: "a0c11434-07ba-426a-b83d-cc4f192325a3".parse().unwrap(),

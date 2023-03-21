@@ -819,7 +819,6 @@ fn test_auth_expiry() {
         tenant_id,
         now: SYSTEM_TIME.clone(),
         refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
-        password_prefix: "mzauth_".to_string(),
         admin_role: "mzadmin".to_string(),
     });
     let frontegg_user = "user@_.com";
@@ -960,7 +959,6 @@ fn test_auth_base() {
         tenant_id,
         now,
         refresh_before_secs: 0,
-        password_prefix: "mzauth_".to_string(),
         admin_role: "mzadmin".to_string(),
     });
     let frontegg_user = "user@_.com";
@@ -1558,7 +1556,6 @@ fn test_auth_admin() {
         tenant_id,
         now,
         refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
-        password_prefix: password_prefix.to_string(),
         admin_role: admin_role.to_string(),
     });
 
