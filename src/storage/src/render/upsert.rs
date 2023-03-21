@@ -206,7 +206,7 @@ fn evaluate(
 /// Extracts the data that we need for UPSERT from the given collection of
 /// `DecodeResult`. While doing this, also lifts any errors into the appropriate
 /// `UpsertError`.
-fn extract_decode_results<G: Scope>(
+fn extract_from_decode_results<G: Scope>(
     input: &Collection<G, DecodeResult, Diff>,
 ) -> Collection<
     G,
@@ -234,7 +234,7 @@ fn extract_decode_results<G: Scope>(
             Some(Err(decode_error)) => (
                 Some(Err(UpsertError::KeyDecode(decode_error.clone()))),
                 value.map(|decode_result| {
-                    // Match what we do in `extract_kv_from_previous`, though
+                    // Match what we do in `extract_from_previous`, though
                     // the value is not really important when we have a key
                     // error. Plus, we can't map any value error to an
                     // UpsertValueError because we don't have a real key that we
@@ -261,7 +261,7 @@ fn extract_decode_results<G: Scope>(
                 );
                 (
                     None,
-                    // Match what we do in `extract_kv_from_previous`, though
+                    // Match what we do in `extract_from_previous`, though
                     // the value is not really important when we have a key
                     // error. Plus, we can't map any value error to an
                     // UpsertValueError because we don't have a real key that we
@@ -283,8 +283,10 @@ fn extract_decode_results<G: Scope>(
 /// produce a stream of keys and thinned values.
 ///
 /// This is used to re-extract a key-value-style collection from the (persisted)
-/// output of an UPSERT source.
-fn extract_kv_from_previous<G: Scope>(
+/// output of an UPSERT source. It is the equivalent to
+/// [`extract_from_decode_results`], but for our already persisted data that we
+/// read on re-hydration.
+fn extract_from_previous<G: Scope>(
     records: Collection<G, Result<Row, UpsertError>, Diff>,
     key_indices_sorted: Vec<usize>,
     key_indices: &[usize],
@@ -369,13 +371,13 @@ where
     let mut key_indices_sorted = upsert_envelope.key_indices.clone();
     key_indices_sorted.sort_unstable();
 
-    let previous_ok = extract_kv_from_previous(
+    let previous_ok = extract_from_previous(
         previous,
         key_indices_sorted.clone(),
         &upsert_envelope.key_indices,
     );
 
-    let input = extract_decode_results(input);
+    let input = extract_from_decode_results(input);
 
     // It's very important to hash the right thing. We have nested `Option` and
     // `Result` here. And, for example, `Some(key).hashed()` is not the same as
