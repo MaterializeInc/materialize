@@ -437,8 +437,7 @@ async fn migrate(
             )?;
 
             // We need a default owner for all existing objects. So we just create a new role for
-            // this purpose named "default_owner". If one happens to exist with the same name, then
-            // just use that.
+            // this purpose named "default_owner".
             let default_owner_name = "default_owner";
             let default_owner_id = match txn
                 .roles
@@ -447,7 +446,13 @@ async fn migrate(
                 .filter(|(_, role_value)| role_value.role.name == default_owner_name)
                 .next()
             {
-                Some((role_key, _)) => role_key.id,
+                Some((_, _)) => {
+                    panic!(
+                        "Migration failed! Role named `default_owner` already exists. Please \
+                    contact @jkosh44 (joe@materialize.com) and let him know. In order to fix this \
+                    we'll need to ask the client to delete the `default_owner` role."
+                    );
+                }
                 None => {
                     let role_id = txn.insert_user_role(SerializedRole {
                         name: default_owner_name.to_string(),
