@@ -205,7 +205,12 @@ async fn main() -> ExitCode {
                             outcomes += o;
                         }
                         Err(err) => {
-                            writeln!(config.stderr, "error: parsing file: {}", err);
+                            writeln!(
+                                config.stderr,
+                                "error: running file {}: {}",
+                                entry.file_name().to_string_lossy(),
+                                err
+                            );
                             bad_file = true;
                         }
                     }
