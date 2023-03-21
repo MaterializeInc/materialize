@@ -1779,7 +1779,7 @@ impl Coordinator {
             target_replica,
             timeline_context,
             in_immediate_multi_stmt_txn,
-        ) = return_if_err!(self.sequence_peek_begin_inner(&session, plan), tx, session);
+        ) = return_if_err!(self.sequence_peek_begin_inner(&mut session, plan), tx, session);
 
         match self.recent_timestamp(&session, source_ids.iter().cloned()) {
             Some(fut) => {
@@ -1845,7 +1845,7 @@ impl Coordinator {
 
     fn sequence_peek_begin_inner(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         plan: PeekPlan,
     ) -> Result<
         (
@@ -1884,7 +1884,7 @@ impl Coordinator {
             introspection::auto_run_on_introspection(&self.catalog, session, source.depends_on())
         {
             let cluster = self.catalog.resolve_cluster(cluster.name)?;
-            tracing::info!("Running Peek on the mz_introspection cluster");
+            session.add_notice(AdapterNotice::AutoRunOnIntrospectionCluster);
             cluster
         } else {
             self.catalog.active_cluster(session)?
@@ -2233,7 +2233,7 @@ impl Coordinator {
             depends_on.iter().copied(),
         ) {
             let cluster = self.catalog.resolve_cluster(cluster.name)?;
-            tracing::info!("Running Subscribe on the mz_introspection cluster");
+            session.add_notice(AdapterNotice::AutoRunOnIntrospectionCluster);
             cluster
         } else {
             self.catalog.active_cluster(session)?
