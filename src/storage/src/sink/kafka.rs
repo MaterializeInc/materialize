@@ -11,11 +11,11 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
+use std::future;
 use std::future::Future;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{cmp, future};
 
 use anyhow::{anyhow, bail, Context};
 use differential_dataflow::{Collection, Hashable};
@@ -32,10 +32,7 @@ use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedPro
 use rdkafka::{Offset, TopicPartitionList};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::generic::{InputHandle, OutputHandle};
-use timely::dataflow::operators::Capability;
+use timely::dataflow::operators::{Enter, Leave, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
@@ -1014,8 +1011,7 @@ where
                 as_of.clone(),
                 Rc::clone(&shared_gate_ts),
                 encoder,
-                connection.fuel,
-                name.clone(),
+                &name,
             )
         }
         None => {
@@ -1029,8 +1025,7 @@ where
                 as_of.clone(),
                 Rc::clone(&shared_gate_ts),
                 encoder,
-                connection.fuel,
-                name.clone(),
+                &name,
             )
         }
     };
@@ -1350,46 +1345,16 @@ fn encode_stream<G>(
     as_of: SinkAsOf,
     shared_gate_ts: Rc<Cell<Option<Timestamp>>>,
     encoder: impl Encode + 'static,
-    fuel: usize,
-    name_prefix: String,
+    name_prefix: &str,
 ) -> Stream<G, ((Option<Vec<u8>>, Option<Vec<u8>>), Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
 {
     let name = format!("{}-{}_encode", name_prefix, encoder.get_format_name());
-
-    let mut builder = OperatorBuilder::new(name, input_stream.scope());
-    let mut input = builder.new_input(input_stream, Pipeline);
-    let (mut output, output_stream) = builder.new_output();
-    builder.set_notify(false);
-
-    let activator = input_stream
-        .scope()
-        .activator_for(&builder.operator_info().address[..]);
-
-    // `Capability` does not implement `Ord`, so we cannot use a `BTreeMap`. We need to iterate
-    // through the map, so we cannot use the `mz_ore` wrapper either.
-    #[allow(clippy::disallowed_types)]
-    let mut stash = std::collections::HashMap::<Capability<Timestamp>, Vec<_>>::new();
-    let mut vector = Vec::new();
-    let mut encode_logic = move |input: &mut InputHandle<
-        Timestamp,
-        ((Option<Row>, Option<Row>), Timestamp, Diff),
-        _,
-    >,
-                                 output: &mut OutputHandle<
-        _,
-        ((Option<Vec<u8>>, Option<Vec<u8>>), Timestamp, Diff),
-        _,
-    >| {
-        let mut fuel_remaining = fuel;
-        // stash away all the input we get, we want to be a nice citizen
-        input.for_each(|cap, data| {
-            data.swap(&mut vector);
-            let stashed = stash.entry(cap.retain()).or_default();
-            for update in vector.drain(..) {
-                let time = update.1;
-
+    input_stream.scope().region_named(&name, |region| {
+        input_stream
+            .enter(region)
+            .flat_map(move |((key, value), time, diff)| {
                 let should_emit = if as_of.strict {
                     as_of.frontier.less_than(&time)
                 } else {
@@ -1399,57 +1364,15 @@ where
 
                 if !should_emit || ts_gated {
                     // Skip stale data for already published timestamps
-                    continue;
-                }
-                stashed.push(update);
-            }
-        });
-
-        // work off some of our data and then yield, can't be hogging
-        // the worker for minutes at a time
-
-        while fuel_remaining > 0 && !stash.is_empty() {
-            let lowest_ts = stash
-                .keys()
-                .min_by(|x, y| x.time().cmp(y.time()))
-                .expect("known to exist")
-                .clone();
-            let records = stash.get_mut(&lowest_ts).expect("known to exist");
-
-            let mut session = output.session(&lowest_ts);
-            let num_records_to_drain = cmp::min(records.len(), fuel_remaining);
-            records
-                .drain(..num_records_to_drain)
-                .for_each(|((key, value), time, diff)| {
+                    None
+                } else {
                     let key = key.map(|key| encoder.encode_key_unchecked(key));
                     let value = value.map(|value| encoder.encode_value_unchecked(value));
-                    session.give(((key, value), time, diff));
-                });
-
-            fuel_remaining -= num_records_to_drain;
-
-            if records.is_empty() {
-                // drop our capability for this time
-                stash.remove(&lowest_ts);
-            }
-        }
-
-        if !stash.is_empty() {
-            activator.activate();
-            return true;
-        }
-        // signal that we're complete now
-        false
-    };
-
-    builder.build_reschedule(|_capabilities| {
-        move |_frontiers| {
-            let mut output_handle = output.activate();
-            encode_logic(&mut input, &mut output_handle)
-        }
-    });
-
-    output_stream
+                    Some(((key, value), time, diff))
+                }
+            })
+            .leave()
+    })
 }
 
 #[derive(Serialize, Deserialize)]
