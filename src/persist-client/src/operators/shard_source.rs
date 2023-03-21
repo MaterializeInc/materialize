@@ -38,7 +38,7 @@ use tracing::{info, trace};
 use crate::cache::PersistClientCache;
 use crate::fetch::{FetchedPart, SerdeLeasedBatchPart};
 use crate::read::ListenEvent;
-use crate::stats::{FetchAllPartFilter, PartFilter};
+use crate::stats::PartStats;
 use crate::{PersistLocation, ShardId};
 
 /// Creates a new source that reads from a persist shard, distributing the work
@@ -63,7 +63,7 @@ use crate::{PersistLocation, ShardId};
 /// using [`timely::dataflow::operators::generic::operator::empty`].
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn shard_source<K, V, D, G>(
+pub fn shard_source<K, V, D, F, G>(
     scope: &mut G,
     name: &str,
     clients: Arc<PersistClientCache>,
@@ -74,11 +74,13 @@ pub fn shard_source<K, V, D, G>(
     flow_control: Option<FlowControl<G>>,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
+    should_fetch_part: F,
 ) -> (Stream<G, FetchedPart<K, V, G::Timestamp, D>>, Rc<dyn Any>)
 where
     K: Debug + Codec,
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
+    F: FnMut(&PartStats) -> bool + 'static,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
@@ -105,7 +107,6 @@ where
     let (completed_fetches_feedback_handle, completed_fetches_feedback_stream) =
         scope.feedback(<<G as ScopeParent>::Timestamp as Timestamp>::Summary::default());
 
-    let filter = FetchAllPartFilter;
     let (descs, descs_token) = shard_source_descs::<K, V, D, _, G>(
         scope,
         name,
@@ -119,7 +120,7 @@ where
         chosen_worker,
         Arc::clone(&key_schema),
         Arc::clone(&val_schema),
-        filter,
+        should_fetch_part,
     );
     let (parts, completed_fetches_stream) = shard_source_fetch(
         &descs, name, clients, location, shard_id, key_schema, val_schema,
@@ -155,13 +156,13 @@ pub(crate) fn shard_source_descs<K, V, D, F, G>(
     chosen_worker: usize,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
-    mut filter: F,
+    mut should_fetch_part: F,
 ) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, Rc<dyn Any>)
 where
     K: Debug + Codec,
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
-    F: PartFilter<K, V>,
+    F: FnMut(&PartStats) -> bool + 'static,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
@@ -386,7 +387,7 @@ where
                                 for part_desc in std::mem::take(&mut batch_parts) {
                                     // TODO(mfp): Push the filter down into the Subscribe?
                                     if cfg.dynamic.stats_filter_enabled() {
-                                        let should_fetch = part_desc.stats.as_ref().map_or(true, |stats| filter.should_fetch(stats));
+                                        let should_fetch = part_desc.stats.as_ref().map_or(true, |stats| should_fetch_part(stats));
                                         if !should_fetch {
                                             // TODO(mfp): Downgrade this to debug! at some point.
                                             info!("skipping part because of stats filter {:?}", part_desc.stats);

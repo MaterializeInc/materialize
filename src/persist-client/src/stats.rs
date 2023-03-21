@@ -18,23 +18,6 @@ use mz_persist_types::Codec;
 
 use crate::internal::encoding::Schemas;
 
-/// Logic for filtering parts in a read as uninteresting purely from stats about
-/// the data held in them.
-pub trait PartFilter<K, V>: 'static {
-    /// True if the part should be fetched, false if it should be skipped.
-    fn should_fetch(&mut self, stats: &PartStats) -> bool;
-}
-
-/// An implementation of [PartFilter] that always returns true.
-#[derive(Debug)]
-pub struct FetchAllPartFilter;
-
-impl<K, V> PartFilter<K, V> for FetchAllPartFilter {
-    fn should_fetch(&mut self, _stats: &PartStats) -> bool {
-        true
-    }
-}
-
 /// Aggregate statistics about data contained in a [Part].
 ///
 /// TODO(mfp): PartialEq, Eq, PartialOrd, Ord are sus.

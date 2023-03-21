@@ -15,7 +15,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use mz_persist_client::operators::shard_source::shard_source;
+use mz_persist_client::stats::PartStats;
 use mz_persist_types::codec_impls::UnitSchema;
+use mz_repr::stats::PersistSourceDataStats;
 use timely::communication::Push;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::Bundle;
@@ -25,10 +27,10 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::scheduling::Activator;
 
-use mz_expr::MfpPlan;
+use mz_expr::{MfpPlan, MfpPushdown};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::fetch::FetchedPart;
-use mz_repr::{DatumVec, Diff, GlobalId, Row, Timestamp};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 
 use crate::controller::CollectionMetadata;
 use crate::types::errors::DataflowError;
@@ -122,6 +124,9 @@ where
     YFn: Fn(Instant, usize) -> bool + 'static,
 {
     let name = source_id.to_string();
+    let mfp_pushdown = map_filter_project
+        .as_ref()
+        .map(|x| MfpPushdown::new(metadata.relation_desc.clone(), *x));
     let (fetched, token) = shard_source(
         &mut scope.clone(),
         &name,
@@ -133,6 +138,11 @@ where
         flow_control,
         Arc::new(metadata.relation_desc),
         Arc::new(UnitSchema),
+        move |stats| {
+            mfp_pushdown.as_ref().map_or(true, |x| {
+                x.should_fetch(&PersistSourceDataStatsImpl { stats })
+            })
+        },
     );
     let rows = decode_and_mfp(&fetched, &name, until, map_filter_project, yield_fn);
     (rows, token)
@@ -293,5 +303,50 @@ impl PendingWork {
             }
         }
         true
+    }
+}
+
+#[derive(Debug)]
+struct PersistSourceDataStatsImpl<'a> {
+    stats: &'a PartStats,
+}
+
+impl PersistSourceDataStats for PersistSourceDataStatsImpl<'_> {
+    fn len(&self) -> Option<usize> {
+        None
+    }
+
+    fn err_count(&self) -> Option<usize> {
+        None
+    }
+
+    fn col_min<'a>(&'a self, name: &str, _arena: &'a RowArena) -> Option<Datum<'a>> {
+        // The `RowArena` is unused now, but it will be needed for things like
+        // e.g. `Datum::List`.
+        self.stats
+            .opt_u64_key_col_min_max_nulls(name)
+            .map(|(min, _, _)| Datum::UInt64(min))
+    }
+
+    fn col_max<'a>(&'a self, name: &str, _arena: &'a RowArena) -> Option<Datum<'a>> {
+        // The `RowArena` is unused now, but it will be needed for things like
+        // e.g. `Datum::List`.
+        self.stats
+            .opt_u64_key_col_min_max_nulls(name)
+            .map(|(_, max, _)| Datum::UInt64(max))
+    }
+
+    fn col_null_count(&self, name: &str) -> Option<usize> {
+        self.stats
+            .opt_u64_key_col_min_max_nulls(name)
+            .map(|(_, _, nulls)| nulls)
+    }
+
+    fn row_min(&self, _row: &mut Row) -> Option<usize> {
+        None
+    }
+
+    fn row_max(&self, _row: &mut Row) -> Option<usize> {
+        None
     }
 }
