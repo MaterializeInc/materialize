@@ -22,7 +22,6 @@ members = [
     "src/http-util",
     "src/interchange",
     "src/kafka-util",
-    "src/kinesis-util",
     "src/lowertest",
     "src/lowertest-derive",
     "src/metabase",
@@ -65,7 +64,6 @@ members = [
     "src/walkabout",
     "src/workspace-hack",
     "test/metabase/smoketest",
-    "test/perf-kinesis",
     "test/test-util",
 ]
 # Use Cargo's new feature resolver, which can handle target-specific features.

@@ -18,68 +18,6 @@ use mz_ore::metric;
 use mz_ore::metrics::{IntCounter, IntCounterVec, IntGaugeVec, MetricsRegistry, UIntGaugeVec};
 use prometheus::core::{AtomicI64, GenericCounterVec};
 
-/// The base metrics set for the s3 module.
-#[derive(Clone, Debug)]
-pub(crate) struct S3Metrics {
-    pub(crate) objects_downloaded: IntCounterVec,
-    pub(crate) objects_duplicate: IntCounterVec,
-    pub(crate) bytes_downloaded: IntCounterVec,
-    pub(crate) messages_ingested: IntCounterVec,
-
-    pub(crate) objects_discovered: IntCounterVec,
-}
-
-impl S3Metrics {
-    fn register_with(registry: &MetricsRegistry) -> Self {
-        Self {
-            objects_downloaded: registry.register(metric!(
-                name: "mz_s3_objects_downloaded",
-                help: "The number of s3 objects that we have downloaded.",
-                var_labels: ["bucket_id", "source_id"],
-            )),
-            objects_duplicate: registry.register(metric!(
-                name: "mz_s3_objects_duplicate_detected",
-                help: "The number of s3 objects that are duplicates, and therefore not downloaded.",
-                var_labels: ["bucket_id", "source_id"],
-            )),
-            bytes_downloaded: registry.register(metric!(
-                name: "mz_s3_bytes_downloaded",
-                help: "The total count of bytes downloaded for this source.",
-                var_labels: ["bucket_id", "source_id"],
-            )),
-            messages_ingested: registry.register(metric!(
-                name: "mz_s3_messages_ingested",
-                help: "The number of messages ingested for this bucket.",
-                var_labels: ["bucket_id", "source_id"],
-            )),
-
-            objects_discovered: registry.register(metric!(
-                name: "mz_s3_objects_discovered",
-                help: "The number of s3 objects that we have discovered via SCAN or SQS.",
-                var_labels: ["bucket_id", "source_id"],
-            )),
-        }
-    }
-}
-
-/// The base metrics set for the kinesis module.
-#[derive(Clone, Debug)]
-pub(crate) struct KinesisMetrics {
-    pub(crate) millis_behind_latest: IntGaugeVec,
-}
-
-impl KinesisMetrics {
-    fn register_with(registry: &MetricsRegistry) -> Self {
-        Self {
-            millis_behind_latest: registry.register(metric!(
-                name: "mz_kinesis_shard_millis_behind_latest",
-                help: "How far the shard is behind the tip of the stream",
-                var_labels: ["stream_name", "shard_id"],
-            )),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(super) struct SourceSpecificMetrics {
     pub(super) enable_multi_worker_storage_persist_sink: IntGaugeVec,
@@ -104,8 +42,8 @@ impl SourceSpecificMetrics {
                 help: "Whether or not the new multi-worker persist_sink is actively being used",
                 var_labels: ["source_id", "worker_id", "parent_source_id", "output"],
             )),
-            // TODO(guswynn): some of these metrics are broken when there are more than 1
-            // worker-id, and need to be fixed
+            // TODO(guswynn): some of these metrics are not clear when subsources are involved, and
+            // should be fixed
             capability: registry.register(metric!(
                 name: "mz_capability",
                 help: "The current capability for this dataflow. This corresponds to min(mz_partition_closed_ts)",
@@ -120,33 +58,33 @@ impl SourceSpecificMetrics {
             progress: registry.register(metric!(
                 name: "mz_source_progress",
                 help: "A timestamp gauge representing forward progess in the data shard",
-                var_labels: ["source_id", "output", "shard"],
+                var_labels: ["source_id", "output", "shard", "worker_id"],
             )),
             row_inserts: registry.register(metric!(
                 name: "mz_source_row_inserts",
                 help: "A counter representing the actual number of rows being inserted to the data shard",
-                var_labels: ["source_id", "output", "shard"],
+                var_labels: ["source_id", "output", "shard", "worker_id"],
             )),
             row_retractions: registry.register(metric!(
                 name: "mz_source_row_retractions",
                 help: "A counter representing the actual number of rows being retracted from the data shard",
-                var_labels: ["source_id", "output", "shard"],
+                var_labels: ["source_id", "output", "shard", "worker_id"],
             )),
             error_inserts: registry.register(metric!(
                 name: "mz_source_error_inserts",
                 help: "A counter representing the actual number of errors being inserted to the data shard",
-                var_labels: ["source_id", "output", "shard"],
+                var_labels: ["source_id", "output", "shard", "worker_id"],
             )),
             error_retractions: registry.register(metric!(
                 name: "mz_source_error_retractions",
                 help: "A counter representing the actual number of errors being retracted from the data shard",
-                var_labels: ["source_id", "output", "shard"],
+                var_labels: ["source_id", "output", "shard", "worker_id"],
             )),
             persist_sink_processed_batches: registry.register(metric!(
                 name: "mz_source_processed_batches",
                 help: "A counter representing the number of persist sink batches with actual data \
                 we have successfully processed.",
-                var_labels: ["source_id", "output", "shard"],
+                var_labels: ["source_id", "output", "shard", "worker_id"],
             )),
             offset_commit_failures: registry.register(metric!(
                 name: "mz_source_offset_commit_failures",
@@ -272,9 +210,6 @@ pub struct SourceBaseMetrics {
     pub(super) partition_specific: PartitionSpecificMetrics,
     pub(super) postgres_source_specific: PostgresSourceSpecificMetrics,
 
-    pub(crate) s3: S3Metrics,
-    pub(crate) kinesis: KinesisMetrics,
-
     pub(crate) bytes_read: IntCounter,
 
     /// Metrics that are also exposed to users.
@@ -288,9 +223,6 @@ impl SourceBaseMetrics {
             source_specific: SourceSpecificMetrics::register_with(registry),
             partition_specific: PartitionSpecificMetrics::register_with(registry),
             postgres_source_specific: PostgresSourceSpecificMetrics::register_with(registry),
-
-            s3: S3Metrics::register_with(registry),
-            kinesis: KinesisMetrics::register_with(registry),
 
             bytes_read: registry.register(metric!(
                 name: "mz_bytes_read_total",

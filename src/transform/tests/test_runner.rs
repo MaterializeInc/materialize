@@ -336,7 +336,7 @@ mod tests {
             "FoldConstants" => Ok(Box::new(mz_transform::fold_constants::FoldConstants {
                 limit: None,
             })),
-            "FlatMapToMap" => Ok(Box::new(mz_transform::fusion::flatmap_to_map::FlatMapToMap)),
+            "FlatMapToMap" => Ok(Box::new(mz_transform::canonicalization::FlatMapToMap)),
             "JoinFusion" => Ok(Box::new(mz_transform::fusion::join::Join)),
             "LiteralLifting" => Ok(Box::new(
                 mz_transform::literal_lifting::LiteralLifting::default(),
@@ -348,7 +348,7 @@ mod tests {
                 mz_transform::predicate_pushdown::PredicatePushdown::default(),
             )),
             "ProjectionExtraction" => Ok(Box::new(
-                mz_transform::projection_extraction::ProjectionExtraction,
+                mz_transform::canonicalization::ProjectionExtraction,
             )),
             "ProjectionLifting" => Ok(Box::new(
                 mz_transform::projection_lifting::ProjectionLifting::default(),
@@ -370,7 +370,8 @@ mod tests {
             "UnionBranchCancellation" => Ok(Box::new(
                 mz_transform::union_cancel::UnionBranchCancellation,
             )),
-            "UnionFusion" => Ok(Box::new(mz_transform::fusion::union::UnionNegate)),
+            "UnionNegateFusion" => Ok(Box::new(mz_transform::compound::UnionNegateFusion)),
+            "UnionFusion" => Ok(Box::new(mz_transform::fusion::union::Union)),
             _ => Err(anyhow!(
                 "no transform named {} (you might have to add it to get_transform)",
                 name

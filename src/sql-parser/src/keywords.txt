@@ -50,7 +50,6 @@ Bpchar
 Broken
 Broker
 Brokers
-Bucket
 By
 Bytes
 Cardinality
@@ -73,7 +72,6 @@ Columns
 Commit
 Committed
 Compaction
-Compression
 Compute
 Computectl
 Confluent
@@ -111,7 +109,6 @@ Delimiter
 Desc
 Details
 Discard
-Discover
 Distinct
 Dot
 Double
@@ -152,7 +149,6 @@ Grant
 Greatest
 Group
 Groups
-Gzip
 Having
 Header
 Headers
@@ -189,7 +185,6 @@ Json
 Kafka
 Key
 Keys
-Kinesis
 Last
 Lateral
 Latest
@@ -206,7 +201,6 @@ Log
 Logical
 Login
 Map
-Matching
 Materialize
 Materialized
 Max
@@ -235,7 +229,6 @@ None
 Nosuperuser
 Not
 Notice
-Notifications
 Null
 Nullif
 Nulls
@@ -301,10 +294,8 @@ Rollback
 Rotate
 Row
 Rows
-S3
 Sasl
 Scale
-Scan
 Schema
 Schemas
 Script
@@ -328,7 +319,6 @@ Snapshot
 Some
 Source
 Sources
-Sqs
 Ssh
 Ssl
 Start

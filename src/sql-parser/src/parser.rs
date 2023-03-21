@@ -1689,7 +1689,7 @@ impl<'a> Parser<'a> {
             } else {
                 self.expected(
                     self.peek_pos(),
-                    "DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW after CREATE",
+                    "DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW after CREATE",
                     self.peek_token(),
                 )
             }
@@ -1971,17 +1971,6 @@ impl<'a> Parser<'a> {
             );
         };
         Ok(envelope)
-    }
-
-    fn parse_compression(&mut self) -> Result<Compression, ParserError> {
-        let compression = if self.parse_keyword(NONE) {
-            Compression::None
-        } else if self.parse_keyword(GZIP) {
-            Compression::Gzip
-        } else {
-            return self.expected(self.peek_pos(), "NONE or GZIP", self.peek_token());
-        };
-        Ok(compression)
     }
 
     fn parse_create_connection(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -2665,7 +2654,7 @@ impl<'a> Parser<'a> {
     fn parse_create_source_connection(
         &mut self,
     ) -> Result<CreateSourceConnection<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[KAFKA, KINESIS, S3, POSTGRES, LOAD, TEST])? {
+        match self.expect_one_of_keywords(&[KAFKA, POSTGRES, LOAD, TEST])? {
             POSTGRES => {
                 self.expect_keyword(CONNECTION)?;
                 let connection = self.parse_raw_name()?;
@@ -2701,63 +2690,6 @@ impl<'a> Parser<'a> {
                     connection,
                     key,
                 }))
-            }
-            KINESIS => {
-                self.expect_keyword(CONNECTION)?;
-                let connection = self.parse_raw_name()?;
-
-                self.expect_keyword(ARN)?;
-                let arn = self.parse_literal_string()?;
-                Ok(CreateSourceConnection::Kinesis { connection, arn })
-            }
-            S3 => {
-                // FROM S3 CONNECTION <aws CONNECTION> DISCOVER OBJECTS
-                // (MATCHING '<pattern>')?
-                // USING
-                // (BUCKET SCAN '<bucket>' | SQS NOTIFICATIONS '<channel>')+
-                self.expect_keyword(CONNECTION)?;
-                let connection = self.parse_raw_name()?;
-
-                self.expect_keywords(&[DISCOVER, OBJECTS])?;
-                let pattern = if self.parse_keyword(MATCHING) {
-                    Some(self.parse_literal_string()?)
-                } else {
-                    None
-                };
-                self.expect_keyword(USING)?;
-                let mut key_sources = Vec::new();
-                while let Some(keyword) = self.parse_one_of_keywords(&[BUCKET, SQS]) {
-                    match keyword {
-                        BUCKET => {
-                            self.expect_keyword(SCAN)?;
-                            let bucket = self.parse_literal_string()?;
-                            key_sources.push(S3KeySource::Scan { bucket });
-                        }
-                        SQS => {
-                            self.expect_keyword(NOTIFICATIONS)?;
-                            let queue = self.parse_literal_string()?;
-                            key_sources.push(S3KeySource::SqsNotifications { queue });
-                        }
-                        key => unreachable!(
-                            "Keyword {} is not expected after DISCOVER OBJECTS USING",
-                            key
-                        ),
-                    }
-                    if !self.consume_token(&Token::Comma) {
-                        break;
-                    }
-                }
-                let compression = if self.parse_keyword(COMPRESSION) {
-                    self.parse_compression()?
-                } else {
-                    Compression::None
-                };
-                Ok(CreateSourceConnection::S3 {
-                    connection,
-                    key_sources,
-                    pattern,
-                    compression,
-                })
             }
             LOAD => {
                 self.expect_keyword(GENERATOR)?;

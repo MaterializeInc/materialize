@@ -365,30 +365,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aws-sdk-kinesis"
-version = "0.23.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d86beba79e9b24f13a6f3f2ff13ca2da332c3d60c44c2d2632bbacb87ee9ad2"
-dependencies = [
- "aws-credential-types",
- "aws-endpoint",
- "aws-http",
- "aws-sig-auth",
- "aws-smithy-async",
- "aws-smithy-client",
- "aws-smithy-http",
- "aws-smithy-http-tower",
- "aws-smithy-json",
- "aws-smithy-types",
- "aws-types",
- "bytes",
- "http",
- "regex",
- "tokio-stream",
- "tower",
-]
-
-[[package]]
 name = "aws-sdk-s3"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -420,33 +396,6 @@ dependencies = [
  "tokio-stream",
  "tower",
  "tracing",
- "url",
-]
-
-[[package]]
-name = "aws-sdk-sqs"
-version = "0.23.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ffe1f563e227905539d5d1514e93a4c4e096366e1325ab24646783a3d6fe2c45"
-dependencies = [
- "aws-credential-types",
- "aws-endpoint",
- "aws-http",
- "aws-sig-auth",
- "aws-smithy-async",
- "aws-smithy-client",
- "aws-smithy-http",
- "aws-smithy-http-tower",
- "aws-smithy-json",
- "aws-smithy-query",
- "aws-smithy-types",
- "aws-smithy-xml",
- "aws-types",
- "bytes",
- "http",
- "regex",
- "tokio-stream",
- "tower",
  "url",
 ]
 
@@ -4022,14 +3971,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-kinesis-util"
-version = "0.0.0"
-dependencies = [
- "aws-sdk-kinesis",
- "workspace-hack",
-]
-
-[[package]]
 name = "mz-lowertest"
 version = "0.0.0"
 dependencies = [
@@ -4223,29 +4164,6 @@ dependencies = [
  "tracing-subscriber",
  "workspace-hack",
  "yansi",
-]
-
-[[package]]
-name = "mz-perf-kinesis"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "aws-config",
- "aws-credential-types",
- "aws-sdk-kinesis",
- "aws-types",
- "bytes",
- "clap",
- "futures",
- "mz-kinesis-util",
- "mz-ore",
- "mz-test-util",
- "rand",
- "tokio",
- "tokio-postgres",
- "tracing",
- "tracing-subscriber",
- "workspace-hack",
 ]
 
 [[package]]
@@ -4829,9 +4747,6 @@ dependencies = [
  "async-compression",
  "async-stream",
  "async-trait",
- "aws-sdk-kinesis",
- "aws-sdk-s3",
- "aws-sdk-sqs",
  "bytesize",
  "chrono",
  "clap",
@@ -4855,7 +4770,6 @@ dependencies = [
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
- "mz-kinesis-util",
  "mz-ore",
  "mz-persist-client",
  "mz-persist-types",
@@ -4874,6 +4788,7 @@ dependencies = [
  "protobuf-src",
  "rand",
  "rdkafka",
+ "ref-cast",
  "regex",
  "serde",
  "serde_json",
@@ -4907,7 +4822,6 @@ dependencies = [
  "derivative",
  "differential-dataflow",
  "futures",
- "globset",
  "http",
  "itertools",
  "mz-build-info",
@@ -4937,6 +4851,7 @@ dependencies = [
  "prost-build",
  "protobuf-src",
  "rdkafka",
+ "ref-cast",
  "regex",
  "serde",
  "thiserror",
@@ -4979,9 +4894,6 @@ dependencies = [
  "atty",
  "aws-config",
  "aws-credential-types",
- "aws-sdk-kinesis",
- "aws-sdk-s3",
- "aws-sdk-sqs",
  "aws-sdk-sts",
  "aws-types",
  "byteorder",
@@ -5006,7 +4918,6 @@ dependencies = [
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
- "mz-kinesis-util",
  "mz-ore",
  "mz-pgrepr",
  "mz-postgres-util",
@@ -6262,6 +6173,26 @@ checksum = "528532f3d801c87aec9def2add9ca802fe569e44a544afe633765267840abe64"
 dependencies = [
  "getrandom",
  "redox_syscall",
+]
+
+[[package]]
+name = "ref-cast"
+version = "1.0.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9af2cf09ef80e610097515e80095b7f76660a92743c4185aff5406cd5ce3dd5"
+dependencies = [
+ "ref-cast-impl",
+]
+
+[[package]]
+name = "ref-cast-impl"
+version = "1.0.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c501201393982e275433bc55de7d6ae6f00e7699cd5572c5b57581cd69c881b"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

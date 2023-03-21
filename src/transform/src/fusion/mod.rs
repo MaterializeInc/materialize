@@ -10,7 +10,6 @@
 //! Transformations that fuse together others of their kind.
 
 pub mod filter;
-pub mod flatmap_to_map;
 pub mod join;
 pub mod map;
 pub mod negate;
@@ -27,6 +26,10 @@ use mz_expr::MirRelationExpr;
 pub struct Fusion;
 
 impl crate::Transform for Fusion {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
@@ -47,10 +50,6 @@ impl crate::Transform for Fusion {
 
 impl Fusion {
     /// Apply fusion action for variants we know how to fuse.
-    ///
-    /// The return value indicates a changed expression, on which we should
-    /// re-execute the transform (e.g. due to a `Negate` elision leaving an
-    /// as-yet-unexplored expression).
     pub(crate) fn action(expr: &mut MirRelationExpr) {
         match expr {
             MirRelationExpr::Filter { .. } => filter::Filter::action(expr),

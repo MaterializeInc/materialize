@@ -13,6 +13,7 @@ use timely::dataflow::operators::Capability;
 use timely::progress::Antichain;
 use timely::scheduling::SyncActivator;
 
+use mz_ore::cast::CastFrom;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sources::GeneratorMessageType;
@@ -106,9 +107,13 @@ impl SourceConnectionBuilder for LoadGeneratorSourceConnection {
             .by_seed(mz_ore::now::SYSTEM_TIME.clone(), None);
 
         // Skip forward to the requested offset.
-        for _ in 0..offset.offset {
-            rows.next();
-        }
+        let tx_count = usize::cast_from(offset.offset);
+        let txns = rows
+            .by_ref()
+            .filter(|(_, typ, _, _)| matches!(typ, GeneratorMessageType::Finalized))
+            .take(tx_count)
+            .count();
+        assert_eq!(txns, tx_count, "produced wrong number of transactions");
 
         let tick = Duration::from_micros(self.tick_micros.unwrap_or(1_000_000));
         Ok((

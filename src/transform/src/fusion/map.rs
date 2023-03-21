@@ -28,6 +28,10 @@ use mz_expr::MirRelationExpr;
 pub struct Map;
 
 impl crate::Transform for Map {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

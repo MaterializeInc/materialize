@@ -10,7 +10,7 @@
 //! This module provides functions that
 //! build decoding pipelines from raw source streams.
 //!
-//! The primary exports are [`render_decode`], [`render_decode_delimited`], and
+//! The primary exports are [`render_decode_delimited`], and
 //! [`render_decode_cdcv2`]. See their docs for more details about their differences.
 
 use std::any::Any;
@@ -23,9 +23,8 @@ use chrono::NaiveDateTime;
 use differential_dataflow::capture::YieldingIter;
 use differential_dataflow::Hashable;
 use differential_dataflow::{AsCollection, Collection};
-use futures::StreamExt as AsyncStreamExt;
 use regex::Regex;
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::Scope;
 use timely::scheduling::SyncActivator;
@@ -43,14 +42,12 @@ use mz_storage_client::types::sources::encoding::{
     AvroEncoding, DataEncoding, DataEncodingInner, RegexEncoding,
 };
 use mz_storage_client::types::sources::{IncludedColumnSource, MzOffset};
-use mz_timely_util::builder_async::Event as AsyncEvent;
-use mz_timely_util::operator::StreamExt;
 
 use self::avro::AvroDecoderState;
 use self::csv::CsvDecoderState;
 use self::metrics::DecodeMetrics;
 use self::protobuf::ProtobufDecoderState;
-use crate::source::types::{ByteStream, DecodeResult, SourceOutput};
+use crate::source::types::{DecodeResult, SourceOutput};
 
 mod avro;
 mod csv;
@@ -465,223 +462,6 @@ where
                 }
             }
         });
-    (results.as_collection(), None)
-}
-
-/// Decode arbitrary chunks of bytes into rows.
-///
-/// This decode API is used for upstream connections
-/// that don't discover delimiters themselves; i.e., those
-/// (like CSV files) that need help from the decoding stage to discover where
-/// one record ends and another begins.
-///
-/// As such, the connections simply present arbitrary chunks of bytes about which
-/// we can't assume any alignment properties. The `DataDecoder` API accepts these,
-/// and returns `None` if it needs more bytes to discover the boundary between messages.
-/// In that case, this function remembers the already-seen bytes and waits for new ones
-/// before calling into the decoder again.
-///
-/// If the decoder does find a message, we verify (by asserting) that it consumed some bytes, to avoid
-/// the possibility of infinite loops.
-pub fn render_decode<G>(
-    input: &Collection<G, SourceOutput<(), ByteStream>, u32>,
-    value_encoding: DataEncoding,
-    debug_name: &str,
-    metadata_items: Vec<IncludedColumnSource>,
-    metrics: DecodeMetrics,
-    connection_context: &ConnectionContext,
-) -> (
-    Collection<G, DecodeResult, Diff>,
-    Option<Box<dyn Any + Send + Sync>>,
-)
-where
-    G: Scope<Timestamp = Timestamp>,
-{
-    let op_name = format!("{}Decode", value_encoding.op_name());
-
-    let mut value_decoder = get_decoder(
-        value_encoding,
-        debug_name,
-        false,
-        metrics,
-        connection_context,
-    );
-
-    let mut value_buf = vec![];
-
-    // The `position` value from `SourceOutput` is meaningless -- it's just a counter of the number
-    // of files emitted so far.
-    // We therefore ignore it, and keep track ourselves of how many records we've seen (for filling in `mz_line_no`, etc).
-    // Historically, non-delimited sources have their offset start at 1
-    let mut n_seen = 1..;
-    let results = input.inner.unary_async(
-        Pipeline,
-        op_name,
-        move |_, _, mut input, mut output| async move {
-            let metadata_items = metadata_items;
-            let mut n_errors = 0;
-            let mut n_successes = 0;
-            while let Some(event) = input.next_mut().await {
-                let (cap, data) = match event {
-                    AsyncEvent::Data(cap, data) => (cap, data),
-                    AsyncEvent::Progress(_) => continue,
-                };
-
-                // Currently Kafka is the only kind of source that can have metadata, and it is
-                // always delimited, so we will never have metadata in `render_decode`
-                for (item, ts, diff) in data.drain(..) {
-                    let SourceOutput {
-                        key: _,
-                        value,
-                        position: _,
-                        upstream_time_millis,
-                        partition,
-                        headers,
-                    } = item;
-                    let diff = Diff::from(diff);
-
-                    let Ok(mut stream) = Rc::try_unwrap(value.stream) else {
-                        panic!("byte stream cloned unexpectedly");
-                    };
-                    while let Some(chunk) = stream.next().await {
-                        // Check whether we have a partial message from last time.
-                        // If so, we need to prepend it to the bytes we got from _this_ message.
-                        let value = if value_buf.is_empty() {
-                            &chunk
-                        } else {
-                            value_buf.extend_from_slice(&*chunk);
-                            &value_buf
-                        };
-
-                        let value_bytes_remaining = &mut value.as_slice();
-
-                        // The intent is that the below loop runs as long as there are more bytes to decode.
-                        //
-                        // We'd like to be able to write `while !value_cursor.empty()`
-                        // here, but that runs into borrow checker issues, so we use `loop`
-                        // and break manually.
-                        loop {
-                            let old_value_cursor = *value_bytes_remaining;
-                            let value = match value_decoder.next(value_bytes_remaining) {
-                                Err(e) => Err(e),
-                                Ok(None) => {
-                                    let leftover = value_bytes_remaining.to_vec();
-                                    value_buf = leftover;
-                                    break;
-                                }
-                                Ok(Some(value)) => Ok(value),
-                            };
-
-                            // If the decoders decoded a message, they need to have made progress consuming the bytes.
-                            // Otherwise, we risk going into an infinite loop.
-                            assert!(old_value_cursor != *value_bytes_remaining || value.is_err());
-
-                            let is_err = value.is_err();
-                            if is_err {
-                                n_errors += 1;
-                            } else if matches!(&value, Ok(_)) {
-                                n_successes += 1;
-                            }
-                            // `RangeFrom` `Iterator`'s never end
-                            let position = n_seen.next().unwrap();
-                            let metadata = to_metadata_row(
-                                &metadata_items,
-                                partition.clone(),
-                                position.into(),
-                                upstream_time_millis,
-                                headers.as_deref(),
-                            );
-
-                            if value_bytes_remaining.is_empty() {
-                                let result = DecodeResult {
-                                    key: None,
-                                    value: Some(value.map_err(|inner| DecodeError {
-                                        kind: inner,
-                                        raw: None,
-                                    })),
-                                    position: position.into(),
-                                    upstream_time_millis,
-                                    partition: partition.clone(),
-                                    metadata,
-                                };
-                                output.give(&cap, (result, ts, diff)).await;
-                                value_buf = vec![];
-                                break;
-                            } else {
-                                let result = DecodeResult {
-                                    key: None,
-                                    value: Some(value.map_err(|inner| DecodeError {
-                                        kind: inner,
-                                        raw: None,
-                                    })),
-                                    position: position.into(),
-                                    upstream_time_millis,
-                                    partition: partition.clone(),
-                                    metadata,
-                                };
-                                output.give(&cap, (result, ts, diff)).await;
-                            }
-                            if is_err {
-                                // If decoding has gone off the rails, we can no longer be sure that the delimiters are correct, so it
-                                // makes no sense to keep going.
-                                break;
-                            }
-                        }
-                    }
-
-                    let data = &mut &value_buf[..];
-                    let mut result = value_decoder.eof(data);
-                    if result.is_ok() && !data.is_empty() {
-                        result = Err(DecodeErrorKind::Text(format!(
-                            "Saw unexpected EOF with bytes remaining in buffer: {:?}",
-                            data
-                        )));
-                    }
-                    value_buf.clear();
-
-                    match result.transpose() {
-                        None => continue,
-                        Some(value) => {
-                            if value.is_err() {
-                                n_errors += 1;
-                            } else if matches!(&value, Ok(_)) {
-                                n_successes += 1;
-                            }
-                            // `RangeFrom` `Iterator`'s never end
-                            let position = n_seen.next().unwrap();
-                            let metadata = to_metadata_row(
-                                &metadata_items,
-                                partition.clone(),
-                                position.into(),
-                                upstream_time_millis,
-                                headers.as_deref(),
-                            );
-
-                            let result = DecodeResult {
-                                key: None,
-                                value: Some(value.map_err(|inner| DecodeError {
-                                    kind: inner,
-                                    raw: None,
-                                })),
-                                position: position.into(),
-                                upstream_time_millis,
-                                partition: partition.clone(),
-                                metadata,
-                            };
-                            output.give(&cap, (result, ts, diff)).await;
-                        }
-                    }
-                }
-            }
-            // Matching historical practice, we only log metrics on the value decoder.
-            if n_errors > 0 {
-                value_decoder.log_errors(n_errors);
-            }
-            if n_successes > 0 {
-                value_decoder.log_successes(n_errors);
-            }
-        },
-    );
     (results.as_collection(), None)
 }
 

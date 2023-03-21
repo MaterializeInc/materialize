@@ -183,7 +183,7 @@ class Test:
             action.run(c)
             if datetime.now() > max_time:
                 print(
-                    f"Desired execution time of {self._max_execution_time} has been reached."
+                    f"--- Desired execution time of {self._max_execution_time} has been reached."
                 )
                 break
 

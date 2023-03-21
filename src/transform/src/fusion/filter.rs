@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Fuses multiple `Filter` operators into one; deduplicates predicates.
+//! Fuses multiple `Filter` operators into one and canonicalizes predicates.
 //!
 //! If the `Filter` operator is empty, removes it.
 //!
@@ -52,6 +52,10 @@ use mz_expr::MirRelationExpr;
 pub struct Filter;
 
 impl crate::Transform for Filter {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

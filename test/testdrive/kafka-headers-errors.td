@@ -52,23 +52,7 @@ contains:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
   ENVELOPE MATERIALIZE
 contains:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
 
-# even the csv header validation doesn't happen before this error
-$ s3-create-bucket bucket=test
-$ s3-put-object bucket=test key=static.csv
-
-> CREATE SECRET s3_conn_secret_access_key AS '${testdrive.aws-secret-access-key}';
-
-> CREATE CONNECTION s3_conn TO AWS (
-    ACCESS KEY ID = '${testdrive.aws-access-key-id}',
-    SECRET ACCESS KEY = SECRET s3_conn_secret_access_key,
-    TOKEN = '${testdrive.aws-token}',
-    REGION = '${testdrive.aws-region}',
-    ENDPOINT = '${testdrive.aws-endpoint}'
-  );
-
 ! CREATE SOURCE headers_src
-  FROM S3 CONNECTION s3_conn
-  DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  FORMAT CSV WITH HEADER (city, state, zip)
+  FROM LOAD GENERATOR COUNTER
   INCLUDE HEADERS
 contains:INCLUDE HEADERS with non-Kafka sources not supported

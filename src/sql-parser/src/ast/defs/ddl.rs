@@ -996,20 +996,6 @@ impl_display_t!(PgConfigOption);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSourceConnection<T: AstInfo> {
     Kafka(KafkaSourceConnection<T>),
-    Kinesis {
-        /// The AWS connection.
-        connection: T::ObjectName,
-        arn: String,
-    },
-    S3 {
-        /// The AWS connection.
-        connection: T::ObjectName,
-        /// The arguments to `DISCOVER OBJECTS USING`: `BUCKET SCAN` or `SQS NOTIFICATIONS`
-        key_sources: Vec<S3KeySource>,
-        /// The argument to the MATCHING clause: `MATCHING 'a/**/*.json'`
-        pattern: Option<String>,
-        compression: Compression,
-    },
     Postgres {
         /// The postgres connection.
         connection: T::ObjectName,
@@ -1035,32 +1021,6 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
                     f.write_node(&display::comma_separated(key));
                     f.write_str(")");
                 }
-            }
-            CreateSourceConnection::Kinesis { connection, arn } => {
-                f.write_str("KINESIS CONNECTION ");
-                f.write_node(connection);
-                f.write_str(" ARN '");
-                f.write_node(&display::escape_single_quote_string(arn));
-                f.write_str("'");
-            }
-            CreateSourceConnection::S3 {
-                connection,
-                key_sources,
-                pattern,
-                compression,
-            } => {
-                f.write_str("S3 CONNECTION ");
-                f.write_node(connection);
-                f.write_str(" DISCOVER OBJECTS");
-                if let Some(pattern) = pattern {
-                    f.write_str(" MATCHING '");
-                    f.write_str(&display::escape_single_quote_string(pattern));
-                    f.write_str("'");
-                }
-                f.write_str(" USING");
-                f.write_node(&display::comma_separated(key_sources));
-                f.write_str(" COMPRESSION ");
-                f.write_node(compression);
             }
             CreateSourceConnection::Postgres {
                 connection,

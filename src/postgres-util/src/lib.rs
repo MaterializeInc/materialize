@@ -79,6 +79,7 @@
 
 use std::time::Duration;
 
+use anyhow::anyhow;
 use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
@@ -87,6 +88,7 @@ use tokio::net::TcpStream as TokioTcpStream;
 use tokio_postgres::config::{Host, ReplicationMode, SslMode};
 use tokio_postgres::tls::MakeTlsConnect;
 use tokio_postgres::Client;
+use tracing::warn;
 
 use mz_ore::task;
 use mz_repr::GlobalId;
@@ -396,15 +398,15 @@ impl Config {
                 let tcp_stream = TokioTcpStream::connect(("localhost", local_port)).await?;
                 let (client, connection) = postgres_config.connect_raw(tcp_stream, tls).await?;
                 task::spawn(|| task_name, async {
-                    _ = connection
-                        .await
-                        .err()
-                        .map(|e| tracing::error!("Postgres connection failed: {e}"));
-                    _ = session
-                        .close()
-                        .await
-                        .err()
-                        .map(|e| tracing::error!("failed to close ssh tunnel: {e}"));
+                    if let Err(e) = connection.await {
+                        warn!("postgres connection failed: {e}");
+                    }
+                    if let Err(e) = session.close().await {
+                        // Convert to `anyhow::Error` to include error source
+                        // via the alternate `Display` implementation, which can
+                        // contain key details about the nature of the failure.
+                        warn!("failed to close ssh tunnel: {:#}", anyhow!(e))
+                    }
                 });
                 Ok(client)
             }

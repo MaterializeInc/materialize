@@ -37,6 +37,10 @@ use mz_expr::{MapFilterProject, MirRelationExpr};
 pub struct CanonicalizeMfp;
 
 impl crate::Transform for CanonicalizeMfp {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

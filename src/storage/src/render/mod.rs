@@ -216,6 +216,7 @@ use crate::source::types::SourcePersistSinkMetrics;
 use crate::storage_state::StorageState;
 
 mod debezium;
+mod multi_worker_persist_sink;
 mod persist_sink;
 pub mod sinks;
 pub mod sources;
@@ -286,21 +287,36 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     },
                 );
 
-                // NOTE: this will be made conditional on `enable_multi_worker_storage_persist_sink`
-                // in <https://github.com/MaterializeInc/materialize/pull/17589>.
-                tracing::info!(
-                    "timely-{worker_id} rendering {} with single-worker persist_sink",
-                    target
-                );
-                let token = crate::render::persist_sink::render(
-                    into_time_scope,
-                    target,
-                    export.output_index,
-                    export.storage_metadata,
-                    source_data,
-                    storage_state,
-                    metrics,
-                );
+                let token = if storage_state
+                    .dataflow_parameters
+                    .enable_multi_worker_storage_persist_sink
+                {
+                    tracing::info!(
+                        "timely-{worker_id} rendering {target} with multi-worker persist_sink",
+                    );
+                    crate::render::multi_worker_persist_sink::render(
+                        into_time_scope,
+                        target,
+                        export.storage_metadata,
+                        source_data,
+                        storage_state,
+                        metrics,
+                        export.output_index,
+                    )
+                } else {
+                    tracing::info!(
+                        "timely-{worker_id} rendering {target} with single-worker persist_sink",
+                    );
+                    crate::render::persist_sink::render(
+                        into_time_scope,
+                        target,
+                        export.output_index,
+                        export.storage_metadata,
+                        source_data,
+                        storage_state,
+                        metrics,
+                    )
+                };
                 tokens.push(token);
             }
 

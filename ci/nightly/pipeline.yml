@@ -250,7 +250,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=KafkaSources, --actions=1000]
+          args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=55m]
 
   - id: zippy-kafka-parallel-insert
     label: "Zippy Kafka Parallel Insert"
@@ -261,7 +261,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=2000]
+          args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=10000, --max-execution-time=55m]
 
   - id: zippy-user-tables
     label: "Zippy User Tables"
@@ -283,7 +283,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=PostgresCdc, --actions=3000]
+          args: [--scenario=PostgresCdc, --actions=10000, --max-execution-time=55m]
 
   - id: zippy-debezium-postgres
     label: "Zippy Debezium Postgres"
@@ -294,7 +294,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=DebeziumPostgres, --actions=1000]
+          args: [--scenario=DebeziumPostgres, --actions=10000, --max-execution-time=55m]
 
   - id: zippy-cluster-replicas
     label: "Zippy Cluster Replicas"
@@ -305,7 +305,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=ClusterReplicas, --actions=1000]
+          args: [--scenario=ClusterReplicas, --actions=10000, --max-execution-time=30m]
 
   - id: zippy-crdb-latest
     label: "Zippy w/ latest CRDB"
@@ -316,7 +316,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=KafkaSources, --actions=1000, --cockroach-tag=latest]
+          args: [--scenario=KafkaSources, --actions=10000, --cockroach-tag=latest, --max-execution-time=55m]
 
   - id: secrets
     label: "Secrets"

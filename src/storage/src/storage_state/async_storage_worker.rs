@@ -32,9 +32,9 @@ use mz_service::local::Activatable;
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::controller::ResumptionFrontierCalculator;
 use mz_storage_client::types::sources::{
-    GenericSourceConnection, IngestionDescription, KafkaSourceConnection, KinesisSourceConnection,
-    LoadGeneratorSourceConnection, PostgresSourceConnection, S3SourceConnection, SourceConnection,
-    SourceData, SourceTimestamp, TestScriptSourceConnection,
+    GenericSourceConnection, IngestionDescription, KafkaSourceConnection,
+    LoadGeneratorSourceConnection, PostgresSourceConnection, SourceConnection, SourceData,
+    SourceTimestamp, TestScriptSourceConnection,
 };
 
 use crate::source::reclock::{ReclockBatch, ReclockFollower};
@@ -184,26 +184,8 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                 .await;
                                 upper.into_iter().map(|ts| ts.encode_row()).collect()
                             }
-                            GenericSourceConnection::Kinesis(_) => {
-                                let upper = reclock_resume_frontier::<KinesisSourceConnection, _>(
-                                    &persist_clients,
-                                    &ingestion_description,
-                                    &resume_upper,
-                                )
-                                .await;
-                                upper.into_iter().map(|ts| ts.encode_row()).collect()
-                            }
                             GenericSourceConnection::Postgres(_) => {
                                 let upper = reclock_resume_frontier::<PostgresSourceConnection, _>(
-                                    &persist_clients,
-                                    &ingestion_description,
-                                    &resume_upper,
-                                )
-                                .await;
-                                upper.into_iter().map(|ts| ts.encode_row()).collect()
-                            }
-                            GenericSourceConnection::S3(_) => {
-                                let upper = reclock_resume_frontier::<S3SourceConnection, _>(
                                     &persist_clients,
                                     &ingestion_description,
                                     &resume_upper,

@@ -56,7 +56,7 @@ Being Kafka API-compatible, Redpanda is supported as a [**source**](/overview/ke
 
 | Service                  | Support level                    | Notes                                           |             |
 | ------------------------ | -------------------------------- | ----------------------------------------------- | ----------- |
-| AWS Kinesis Data Streams | {{< supportLevel in-progress >}} | Subscribe via “Notify Me” to register interest. | [](#notify) |
+| AWS Kinesis Data Streams | {{< supportLevel researching >}} | Subscribe via “Notify Me” to register interest. | [](#notify) |
 
 ### Other message brokers
 
@@ -119,7 +119,7 @@ Debezium has an extensive ecosystem of connectors, but each database has its own
 
 | Service              | Support level                    | Notes                                                                                                                                                                                                            |             |
 | -------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| Amazon S3            | {{< supportLevel in-progress >}} | Subscribe via “Notify Me” to register interest.                                                                                                                                                                  | [](#notify) |
+| Amazon S3            | {{< supportLevel researching >}} | Subscribe via “Notify Me” to register interest.                                                                                                                                                                  | [](#notify) |
 | MinIO Object Storage | {{< supportLevel researching >}} | Not supported yet {{% gh 6568 %}}. <br> MinIO provides a [S3-compatible API](https://min.io/product/s3-compatibility) that may enable interoperability with Materialize, but this hasn't been officially tested. | [](#notify) |
 
 ### Other object storage services

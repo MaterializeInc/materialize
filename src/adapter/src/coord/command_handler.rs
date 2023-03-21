@@ -201,12 +201,10 @@ impl Coordinator {
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
     ) {
-        // Lookup is done with the system session because the current session has no role set.
         if self
             .catalog
-            .for_system_session()
-            .resolve_role(&session.user().name)
-            .is_err()
+            .try_get_role_by_name(&session.user().name)
+            .is_none()
         {
             // If the user has made it to this point, that means they have been fully authenticated.
             // This includes preventing any user, except a pre-defined set of system users, from
@@ -226,13 +224,11 @@ impl Coordinator {
             }
         }
 
-        // Lookup is done with the system session because the current session has no role set.
         let role_id = self
             .catalog
-            .for_system_session()
-            .resolve_role(&session.user().name)
+            .try_get_role_by_name(&session.user().name)
             .expect("created above")
-            .id();
+            .id;
         session.set_role_id(role_id);
 
         if let Err(e) = self

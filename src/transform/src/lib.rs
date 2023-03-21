@@ -100,8 +100,10 @@ use mz_ore::id_gen::IdGen;
 use mz_repr::GlobalId;
 
 pub mod attribute;
+pub mod canonicalization;
 pub mod canonicalize_mfp;
 pub mod column_knowledge;
+pub mod compound;
 pub mod cse;
 pub mod demand;
 pub mod fold_constants;
@@ -110,12 +112,13 @@ pub mod join_implementation;
 pub mod literal_constraints;
 pub mod literal_lifting;
 pub mod monotonic;
+pub mod movement;
 pub mod nonnull_requirements;
 pub mod nonnullable;
-pub mod normalize;
 pub mod normalize_lets;
+pub mod normalize_ops;
+pub mod ordering;
 pub mod predicate_pushdown;
-pub mod projection_extraction;
 pub mod projection_lifting;
 pub mod projection_pushdown;
 pub mod reduce_elision;
@@ -123,7 +126,6 @@ pub mod reduction_pushdown;
 pub mod redundant_join;
 pub mod semijoin_idempotence;
 pub mod threshold_elision;
-pub mod topk_elision;
 pub mod union_cancel;
 
 pub mod dataflow;
@@ -142,6 +144,12 @@ pub struct TransformArgs<'a> {
 
 /// Types capable of transforming relation expressions.
 pub trait Transform: std::fmt::Debug {
+    /// Indicates if the transform can be safely applied to expressions containing
+    /// `LetRec` AST nodes.
+    fn recursion_safe(&self) -> bool {
+        false
+    }
+
     /// Transform a relation into a functionally equivalent relation.
     fn transform(
         &self,
@@ -154,12 +162,6 @@ pub trait Transform: std::fmt::Debug {
     /// and one wants to judge progress before some defect occurs.
     fn debug(&self) -> String {
         format!("{:?}", self)
-    }
-
-    /// Indicates if the transform can be safely applied to expressions containing
-    /// `LetRec` AST nodes.
-    fn recursion_safe(&self) -> bool {
-        false
     }
 }
 
@@ -223,6 +225,7 @@ impl IndexOracle for EmptyIndexOracle {
 /// A sequence of transformations iterated some number of times.
 #[derive(Debug)]
 pub struct Fixpoint {
+    name: &'static str,
     transforms: Vec<Box<dyn crate::Transform>>,
     limit: usize,
 }
@@ -236,7 +239,7 @@ impl Transform for Fixpoint {
         target = "optimizer"
         level = "trace",
         skip_all,
-        fields(path.segment = "fixpoint")
+        fields(path.segment = self.name)
     )]
     fn transform(
         &self,
@@ -322,14 +325,14 @@ impl Default for FuseAndCollapse {
             // TODO (#6542): All the transforms here except for `ProjectionLifting`
             //  and `RedundantJoin` can be implemented as free functions.
             transforms: vec![
-                Box::new(crate::projection_extraction::ProjectionExtraction),
+                Box::new(crate::canonicalization::ProjectionExtraction),
                 Box::new(crate::projection_lifting::ProjectionLifting::default()),
                 Box::new(crate::fusion::Fusion),
-                Box::new(crate::fusion::flatmap_to_map::FlatMapToMap),
+                Box::new(crate::canonicalization::FlatMapToMap),
                 Box::new(crate::fusion::join::Join),
                 Box::new(crate::normalize_lets::NormalizeLets::new(false)),
                 Box::new(crate::fusion::reduce::Reduce),
-                Box::new(crate::fusion::union::UnionNegate),
+                Box::new(crate::compound::UnionNegateFusion),
                 // This goes after union fusion so we can cancel out
                 // more branches at a time.
                 Box::new(crate::union_cancel::UnionBranchCancellation),
@@ -380,6 +383,24 @@ impl Transform for FuseAndCollapse {
     }
 }
 
+/// Construct a normalizing transform that runs transforms that normalize the
+/// structure of the tree until a fixpoint.
+///
+/// Care needs to be taken to ensure that the fixpoint converges for every
+/// possible input tree. If this is not the case, there are two possibilities:
+/// 1. The rewrite loop runs enters an oscillating cycle.
+/// 2. The expression grows without bound.
+pub fn normalize() -> crate::Fixpoint {
+    crate::Fixpoint {
+        name: "normalize",
+        limit: 100,
+        transforms: vec![
+            Box::new(crate::normalize_lets::NormalizeLets::new(false)),
+            Box::new(crate::normalize_ops::NormalizeOps),
+        ],
+    }
+}
+
 /// A naive optimizer for relation expressions.
 ///
 /// The optimizer currently applies only peep-hole optimizations, from a limited
@@ -398,14 +419,14 @@ impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
     pub fn logical_optimizer() -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
-            Box::new(crate::normalize::Normalize::new()),
             // 1. Structure-agnostic cleanup
-            Box::new(crate::topk_elision::TopKElision),
+            Box::new(normalize()),
             Box::new(crate::nonnull_requirements::NonNullRequirements::default()),
             // 2. Collapse constants, joins, unions, and lets as much as possible.
             // TODO: lift filters/maps to maximize ability to collapse
             // things down?
             Box::new(crate::Fixpoint {
+                name: "fixpoint",
                 limit: 100,
                 transforms: vec![Box::new(crate::FuseAndCollapse::default())],
             }),
@@ -414,6 +435,7 @@ impl Optimizer {
             // 4. Move predicate information up and down the tree.
             //    This also fixes the shape of joins in the plan.
             Box::new(crate::Fixpoint {
+                name: "fixpoint",
                 limit: 100,
                 transforms: vec![
                     // Predicate pushdown sets the equivalence classes of joins.
@@ -432,6 +454,7 @@ impl Optimizer {
             }),
             // 5. Reduce/Join simplifications.
             Box::new(crate::Fixpoint {
+                name: "fixpoint",
                 limit: 100,
                 transforms: vec![
                     Box::new(crate::semijoin_idempotence::SemijoinIdempotence),
@@ -493,6 +516,7 @@ impl Optimizer {
             //           Constant
             //             - ()
             Box::new(crate::Fixpoint {
+                name: "fixpoint",
                 limit: 100,
                 transforms: vec![
                     Box::new(crate::column_knowledge::ColumnKnowledge::default()),
@@ -503,6 +527,7 @@ impl Optimizer {
             }),
             Box::new(crate::literal_constraints::LiteralConstraints),
             Box::new(crate::Fixpoint {
+                name: "fix_joins",
                 limit: 100,
                 transforms: vec![Box::new(
                     crate::join_implementation::JoinImplementation::default(),
@@ -533,6 +558,7 @@ impl Optimizer {
             // Delete unnecessary maps.
             Box::new(crate::fusion::Fusion),
             Box::new(crate::Fixpoint {
+                name: "fixpoint",
                 limit: 100,
                 transforms: vec![
                     Box::new(crate::canonicalize_mfp::CanonicalizeMfp),
@@ -543,7 +569,7 @@ impl Optimizer {
                     Box::new(crate::redundant_join::RedundantJoin::default()),
                     // Redundant join produces projects that need to be fused.
                     Box::new(crate::fusion::Fusion),
-                    Box::new(crate::fusion::union::UnionNegate),
+                    Box::new(crate::compound::UnionNegateFusion),
                     // This goes after union fusion so we can cancel out
                     // more branches at a time.
                     Box::new(crate::union_cancel::UnionBranchCancellation),

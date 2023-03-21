@@ -87,6 +87,10 @@ use uuid::Uuid;
 
 use mz_ore::{now::NowFn, retry::Retry};
 
+use crate::app_password::{AppPassword, AppPasswordParseError};
+
+pub mod app_password;
+
 pub struct FronteggConfig {
     /// URL for the token endpoint, including full path.
     pub admin_api_token_url: String,
@@ -98,8 +102,6 @@ pub struct FronteggConfig {
     pub now: NowFn,
     /// Number of seconds before which to attempt to renew an expiring token.
     pub refresh_before_secs: i64,
-    /// Prefix that is expected to be present on all passwords.
-    pub password_prefix: String,
     /// Name of admin role.
     pub admin_role: String,
 }
@@ -114,7 +116,6 @@ pub struct FronteggAuthentication {
     now: NowFn,
     validation: Validation,
     refresh_before_secs: i64,
-    password_prefix: String,
     admin_role: String,
 
     // Reqwest HTTP client pool.
@@ -137,7 +138,6 @@ impl FronteggAuthentication {
             now: config.now,
             validation,
             refresh_before_secs: config.refresh_before_secs,
-            password_prefix: config.password_prefix,
             admin_role: config.admin_role,
             client: Client::builder()
                 .timeout(Duration::from_secs(5))
@@ -169,53 +169,12 @@ impl FronteggAuthentication {
     }
 
     /// Exchanges a password for a JWT token.
-    ///
-    /// Somewhat unusually, the password encodes both the client ID and secret
-    /// for the API key in use. Both the client ID and secret are UUIDs. The
-    /// password can have one of two formats:
-    ///
-    ///   * The URL-safe base64 encoding of the concatenated bytes of the UUIDs.
-    ///
-    ///     This format is a very compact representation (only 43 or 44 bytes)
-    ///     that is safe to use in a connection string without escaping.
-    ///
-    ///   * The concatenated hex-encoding of the UUIDs, with any number of
-    ///     special characters that are ignored.
-    ///
-    ///     This format allows for the UUIDs to be formatted with hyphens, or
-    ///     not, and for the two
     pub async fn exchange_password_for_token(
         &self,
         password: &str,
     ) -> Result<ApiTokenResponse, FronteggError> {
-        let password = password
-            .strip_prefix(&self.password_prefix)
-            .ok_or(FronteggError::InvalidPasswordFormat)?;
-        let (client_id, secret) = if password.len() == 43 || password.len() == 44 {
-            // If it's exactly 43 or 44 bytes, assume we have base64-encoded
-            // UUID bytes without or with padding, respectively.
-            let buf = base64::decode_config(password, base64::URL_SAFE)
-                .map_err(|_| FronteggError::InvalidPasswordFormat)?;
-            let client_id =
-                Uuid::from_slice(&buf[..16]).map_err(|_| FronteggError::InvalidPasswordFormat)?;
-            let secret =
-                Uuid::from_slice(&buf[16..]).map_err(|_| FronteggError::InvalidPasswordFormat)?;
-            (client_id, secret)
-        } else if password.len() >= 64 {
-            // If it's more than 64 bytes, assume we have concatenated
-            // hex-encoded UUIDs, possibly with some special characters mixed
-            // in.
-            let mut chars = password.chars().filter(|c| c.is_alphanumeric());
-            let client_id = Uuid::parse_str(&chars.by_ref().take(32).collect::<String>())
-                .map_err(|_| FronteggError::InvalidPasswordFormat)?;
-            let secret = Uuid::parse_str(&chars.take(32).collect::<String>())
-                .map_err(|_| FronteggError::InvalidPasswordFormat)?;
-            (client_id, secret)
-        } else {
-            // Otherwise it's definitely not a password format we understand.
-            return Err(FronteggError::InvalidPasswordFormat);
-        };
-        self.exchange_client_secret_for_token(client_id, secret)
+        let password: AppPassword = password.parse()?;
+        self.exchange_client_secret_for_token(password.client_id, password.secret_key)
             .await
     }
 
@@ -396,8 +355,8 @@ impl Claims {
 
 #[derive(Error, Debug)]
 pub enum FronteggError {
-    #[error("invalid password format")]
-    InvalidPasswordFormat,
+    #[error(transparent)]
+    InvalidPasswordFormat(#[from] AppPasswordParseError),
     #[error("invalid token format: {0}")]
     InvalidTokenFormat(#[from] jsonwebtoken::errors::Error),
     #[error("authentication token exchange failed: {0}")]

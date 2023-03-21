@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use tokio::net;
 use tokio::sync::oneshot::channel;
 use tokio_postgres::config::SslMode;
+use tracing::warn;
 use url::Url;
 
 use mz_ccsr::tls::{Certificate, Identity};
@@ -1016,11 +1017,12 @@ impl SshTunnel {
         let (tx, rx) = channel();
         mz_ore::task::spawn(|| format!("{}_ssh_session", debug_str), async move {
             let _: Result<(), _> = rx.await;
-            session
-                .close()
-                .await
-                .err()
-                .map(|e| tracing::error!("failed to close ssh tunnel: {e}"));
+            if let Err(e) = session.close().await {
+                // Convert to `anyhow::Error` to include error source via the
+                // alternate `Display` implementation, which can contain key
+                // details about the nature of the failure.
+                warn!("failed to close ssh tunnel: {:#}", anyhow!(e));
+            }
         });
         Ok((local_port, Box::new(tx)))
     }

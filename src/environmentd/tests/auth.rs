@@ -129,6 +129,7 @@ use mz_ore::now::NowFn;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
 use mz_ore::task::RuntimeExt;
+use mz_sql::names::PUBLIC_ROLE_NAME;
 use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
 
 pub mod util;
@@ -819,11 +820,10 @@ fn test_auth_expiry() {
         tenant_id,
         now: SYSTEM_TIME.clone(),
         refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
-        password_prefix: "mzauth_".to_string(),
         admin_role: "mzadmin".to_string(),
     });
     let frontegg_user = "user@_.com";
-    let frontegg_password = &format!("mzauth_{client_id}{secret}");
+    let frontegg_password = &format!("mzp_{client_id}{secret}");
 
     let config = util::Config::default()
         .with_tls(TlsMode::Require, server_cert, server_key)
@@ -960,15 +960,14 @@ fn test_auth_base() {
         tenant_id,
         now,
         refresh_before_secs: 0,
-        password_prefix: "mzauth_".to_string(),
         admin_role: "mzadmin".to_string(),
     });
     let frontegg_user = "user@_.com";
-    let frontegg_password = &format!("mzauth_{client_id}{secret}");
+    let frontegg_password = &format!("mzp_{client_id}{secret}");
     let frontegg_basic = Authorization::basic(frontegg_user, frontegg_password);
     let frontegg_header_basic = make_header(frontegg_basic);
 
-    let frontegg_system_password = &format!("mzauth_{system_client_id}{system_secret}");
+    let frontegg_system_password = &format!("mzp_{system_client_id}{system_secret}");
     let frontegg_system_basic = Authorization::basic(&SYSTEM_USER.name, frontegg_system_password);
     let frontegg_system_header_basic = make_header(frontegg_system_basic);
 
@@ -1033,7 +1032,7 @@ fn test_auth_base() {
                     buf.extend(client_id.as_bytes());
                     buf.extend(secret.as_bytes());
                     Some(&format!(
-                        "mzauth_{}",
+                        "mzp_{}",
                         base64::encode_config(buf, base64::URL_SAFE)
                     ))
                 },
@@ -1049,7 +1048,7 @@ fn test_auth_base() {
                     buf.extend(client_id.as_bytes());
                     buf.extend(secret.as_bytes());
                     Some(&format!(
-                        "mzauth_{}",
+                        "mzp_{}",
                         base64::encode_config(buf, base64::URL_SAFE_NO_PAD)
                     ))
                 },
@@ -1245,6 +1244,37 @@ fn test_auth_base() {
             TestCase::Ws {
                 auth: &WebSocketAuth::Basic {
                     user: (&*SYSTEM_USER.name).into(),
+                    password: frontegg_system_password.to_string(),
+                },
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, CloseCode::Protocol);
+                    assert_eq!(message, "unauthorized");
+                })),
+            },
+            // Public role cannot login.
+            TestCase::Pgwire {
+                user: PUBLIC_ROLE_NAME.as_str(),
+                password: Some(frontegg_system_password),
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|err| {
+                    assert_contains!(err.to_string(), "unauthorized login to user 'PUBLIC'");
+                })),
+            },
+            TestCase::Http {
+                user: PUBLIC_ROLE_NAME.as_str(),
+                scheme: Scheme::HTTPS,
+                headers: &frontegg_system_header_basic,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                    assert_contains!(message, "unauthorized");
+                })),
+            },
+            TestCase::Ws {
+                auth: &WebSocketAuth::Basic {
+                    user: (PUBLIC_ROLE_NAME.as_str()).into(),
                     password: frontegg_system_password.to_string(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1551,14 +1581,13 @@ fn test_auth_admin() {
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
     )
     .unwrap();
-    let password_prefix = "mzauth_";
+    let password_prefix = "mzp_";
     let frontegg_auth = FronteggAuthentication::new(FronteggConfig {
         admin_api_token_url: frontegg_server.url.clone(),
         decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
         tenant_id,
         now,
         refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
-        password_prefix: password_prefix.to_string(),
         admin_role: admin_role.to_string(),
     });
 
