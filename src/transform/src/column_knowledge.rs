@@ -75,7 +75,7 @@ impl ColumnKnowledge {
         knowledge_stack: &mut Vec<DatumKnowledge>,
     ) -> Result<Vec<DatumKnowledge>, TransformError> {
         self.checked_recur(|_| {
-            match expr {
+            let result = match expr {
                 MirRelationExpr::ArrangeBy { input, .. } => {
                     self.harvest(input, knowledge, knowledge_stack)
                 }
@@ -85,14 +85,10 @@ impl ColumnKnowledge {
                     }))
                 }
                 MirRelationExpr::Constant { rows, typ } => {
+                    // TODO: handle multi-row cases with some constant columns.
                     if let Ok([(row, _diff)]) = rows.as_deref() {
-                        let knowledge = row
-                            .iter()
-                            .zip(typ.column_types.iter())
-                            .map(|(datum, typ)| DatumKnowledge {
-                                value: Some((Ok(Row::pack_slice(&[datum.clone()])), typ.clone())),
-                                nullable: datum == Datum::Null,
-                            })
+                        let knowledge = std::iter::zip(row.iter(), typ.column_types.iter())
+                            .map(DatumKnowledge::from)
                             .collect();
                         Ok(knowledge)
                     } else {
@@ -110,7 +106,14 @@ impl ColumnKnowledge {
                     }
                     Ok(body_knowledge)
                 }
-                MirRelationExpr::LetRec { .. } => Err(crate::TransformError::LetRecUnsupported)?,
+                MirRelationExpr::LetRec {
+                    ids: _,
+                    values: _,
+                    body: _,
+                } => {
+                    // TODO
+                    Err(crate::TransformError::LetRecUnsupported)?
+                }
                 MirRelationExpr::Project { input, outputs } => {
                     let input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
                     Ok(outputs
@@ -161,27 +164,31 @@ impl ColumnKnowledge {
                     // If any predicate tests a column for equality, truth, or is_null, we learn stuff.
                     for predicate in predicates.iter() {
                         // Equality tests allow us to unify the column knowledge of each input.
-                        if let MirScalarExpr::CallBinary { func, expr1, expr2 } = predicate {
-                            if func == &mz_expr::BinaryFunc::Eq {
-                                // Collect knowledge about the inputs (for columns and literals).
-                                let mut knowledge = DatumKnowledge::default();
-                                if let MirScalarExpr::Column(c) = &**expr1 {
-                                    knowledge.absorb(&input_knowledge[*c]);
-                                }
-                                if let MirScalarExpr::Column(c) = &**expr2 {
-                                    knowledge.absorb(&input_knowledge[*c]);
-                                }
-                                // Absorb literal knowledge about columns.
-                                knowledge.absorb(&DatumKnowledge::from(&**expr1));
-                                knowledge.absorb(&DatumKnowledge::from(&**expr2));
+                        if let MirScalarExpr::CallBinary {
+                            func: mz_expr::BinaryFunc::Eq,
+                            expr1,
+                            expr2,
+                        } = predicate
+                        {
+                            // Collect knowledge about the inputs (for columns and literals).
+                            let mut knowledge = DatumKnowledge::default();
+                            if let MirScalarExpr::Column(c) = &**expr1 {
+                                knowledge.absorb(&input_knowledge[*c]);
+                            }
+                            if let MirScalarExpr::Column(c) = &**expr2 {
+                                knowledge.absorb(&input_knowledge[*c]);
+                            }
 
-                                // Write back unified knowledge to each column.
-                                if let MirScalarExpr::Column(c) = &**expr1 {
-                                    input_knowledge[*c].absorb(&knowledge);
-                                }
-                                if let MirScalarExpr::Column(c) = &**expr2 {
-                                    input_knowledge[*c].absorb(&knowledge);
-                                }
+                            // Absorb literal knowledge about columns.
+                            knowledge.absorb(&DatumKnowledge::from(&**expr1));
+                            knowledge.absorb(&DatumKnowledge::from(&**expr2));
+
+                            // Write back unified knowledge to each column.
+                            if let MirScalarExpr::Column(c) = &**expr1 {
+                                input_knowledge[*c].absorb(&knowledge);
+                            }
+                            if let MirScalarExpr::Column(c) = &**expr2 {
+                                input_knowledge[*c].absorb(&knowledge);
                             }
                         }
                         if let MirScalarExpr::CallUnary {
@@ -228,8 +235,8 @@ impl ColumnKnowledge {
                     // of the inputs since input keys are unnecessary for reducing
                     // `MirScalarExpr`s.
                     let folded_inputs_typ =
-                        inputs.iter().fold(RelationType::empty(), |mut typ, i| {
-                            typ.column_types.append(&mut i.typ().column_types);
+                        inputs.iter().fold(RelationType::empty(), |mut typ, input| {
+                            typ.column_types.append(&mut input.typ().column_types);
                             typ
                         });
 
@@ -362,7 +369,10 @@ impl ColumnKnowledge {
                     }
                     Ok(know)
                 }
-            }
+            };
+            // println!("knowledge = {result:?}");
+            // println!("-----------------------");
+            result
         })
     }
 }
@@ -371,8 +381,10 @@ impl ColumnKnowledge {
 #[derive(Clone, Debug)]
 pub struct DatumKnowledge {
     /// If set, a specific value for the column.
+    /// Implied partial order: `None < Some(v)` (default!).
     value: Option<(Result<mz_repr::Row, EvalError>, ColumnType)>,
     /// If false, the value is not `Datum::Null`.
+    /// Implied partial order: `true < false` (not the Boolean default!).
     nullable: bool,
 }
 
@@ -405,13 +417,23 @@ impl Default for DatumKnowledge {
 impl From<&MirScalarExpr> for DatumKnowledge {
     fn from(expr: &MirScalarExpr) -> Self {
         if let MirScalarExpr::Literal(l, t) = expr {
-            Self {
-                value: Some((l.clone(), t.clone())),
-                nullable: expr.is_literal_null(),
-            }
+            let nullable = expr.is_literal_null();
+            let value = Some((l.clone(), t.clone().nullable(nullable)));
+            Self { value, nullable }
         } else {
             Self::default()
         }
+    }
+}
+
+impl From<(Datum<'_>, &ColumnType)> for DatumKnowledge {
+    fn from((datum, t): (Datum<'_>, &ColumnType)) -> Self {
+        let nullable = datum == Datum::Null;
+        let value = Some((
+            Ok(Row::pack_slice(&[datum.clone()])),
+            t.clone().nullable(nullable),
+        ));
+        Self { value, nullable }
     }
 }
 
