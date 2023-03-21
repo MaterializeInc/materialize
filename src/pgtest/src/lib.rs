@@ -75,18 +75,21 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-//! pgtest is a Postgres wire protocol tester using
-//! datadriven test files. It can be used to send [specific
+//! pgtest is a Postgres wire protocol tester using datadriven test files. It
+//! can be used to send [specific
 //! messages](https://www.postgresql.org/docs/current/protocol-message-formats.html)
 //! to any Postgres-compatible server and record received messages.
 //!
 //! The following datadriven directives are supported. They support a
 //! `conn=name` argument to specify a non-default connection.
-//! - `send`: Sends input messages to the server. Arguments, if needed,
-//! are specified using JSON. Refer to the associated types to see
-//! supported arguments. Arguments can be omitted to use defaults.
-//! - `until`: Waits until input messages have been received from the
-//! server. Additional messages are accumulated and returned as well.
+//! - `send`: Sends input messages to the server. Arguments, if needed, are
+//! specified using JSON. Refer to the associated types to see supported
+//! arguments. Arguments can be omitted to use defaults.
+//! - `until`: Waits until input messages have been received from the server.
+//! Additional messages are accumulated and returned as well.
+//!
+//! The first time a `conn=name` argument is specified, `cluster=name` can also
+//! be specified to set the sessions cluster on initial connection.
 //!
 //! During debugging, set the environment variable `PGTEST_VERBOSE=1` to see
 //! messages sent and received.
@@ -100,14 +103,14 @@
 //! - `Sync`
 //!
 //! Supported `until` arguments:
-//! - `no_error_fields` causes `ErrorResponse` messages to have empty
-//! contents. Useful when none of our fields match Postgres. For example `until
+//! - `no_error_fields` causes `ErrorResponse` messages to have empty contents.
+//! Useful when none of our fields match Postgres. For example `until
 //! no_error_fields`.
 //! - `err_field_typs` specifies the set of error message fields
 //! ([reference](https://www.postgresql.org/docs/current/protocol-error-fields.html)).
-//! The default is `CMS` (code, message, severity).
-//! For example: `until err_field_typs=SC` would return the severity and code
-//! fields in any ErrorResponse message.
+//! The default is `CMS` (code, message, severity). For example: `until
+//! err_field_typs=SC` would return the severity and code fields in any
+//! ErrorResponse message.
 //!
 //! For example, to execute a simple prepared statement:
 //! ```pgtest
@@ -130,10 +133,10 @@
 //!
 //! # Usage while writing tests
 //!
-//! The expected way to use this while writing tests is to generate output from a postgres server.
-//! Use the `pgtest-mz` directory if our output differs incompatibly from postgres.
-//! Write your test, excluding any lines after the `----` of the `until` directive.
-//! For example:
+//! The expected way to use this while writing tests is to generate output from
+//! a postgres server. Use the `pgtest-mz` directory if our output differs
+//! incompatibly from postgres. Write your test, excluding any lines after the
+//! `----` of the `until` directive. For example:
 //! ```pgtest
 //! send
 //! Query {"query": "SELECT 1"}
@@ -147,8 +150,8 @@
 //! ```shell
 //! REWRITE=1 cargo run --bin mz-pgtest -- test/pgtest/test.pt --addr localhost:5432 --user postgres
 //! ```
-//! This will generate the expected output for the `until` directive.
-//! Now rerun against a running Materialize server:
+//! This will generate the expected output for the `until` directive. Now rerun
+//! against a running Materialize server:
 //! ```shell
 //! cargo run --bin mz-pgtest -- test/pgtest/test.pt
 //! ```
@@ -177,7 +180,13 @@ struct PgConn {
 }
 
 impl PgConn {
-    fn new(addr: &str, user: &str, timeout: Duration, verbose: bool) -> anyhow::Result<Self> {
+    fn new<'a>(
+        addr: &str,
+        user: &'a str,
+        timeout: Duration,
+        verbose: bool,
+        mut options: Vec<(&'a str, &'a str)>,
+    ) -> anyhow::Result<Self> {
         let mut conn = Self {
             stream: TcpStream::connect(addr)?,
             recv_buf: BytesMut::new(),
@@ -187,7 +196,8 @@ impl PgConn {
         };
 
         conn.stream.set_read_timeout(Some(timeout))?;
-        conn.send(|buf| frontend::startup_message(vec![("user", user)], buf).unwrap())?;
+        options.insert(0, ("user", user));
+        conn.send(|buf| frontend::startup_message(options, buf).unwrap())?;
         match conn.recv()?.1 {
             Message::AuthenticationOk => {}
             _ => bail!("expected AuthenticationOk"),
@@ -196,7 +206,7 @@ impl PgConn {
         Ok(conn)
     }
 
-    fn send<F: Fn(&mut BytesMut)>(&mut self, f: F) -> anyhow::Result<()> {
+    fn send<F: FnOnce(&mut BytesMut)>(&mut self, f: F) -> anyhow::Result<()> {
         self.send_buf.clear();
         f(&mut self.send_buf);
         self.stream.write_all(&self.send_buf)?;
@@ -418,7 +428,7 @@ pub struct PgTest {
 impl PgTest {
     pub fn new(addr: String, user: String, timeout: Duration) -> anyhow::Result<Self> {
         let verbose = std::env::var_os("PGTEST_VERBOSE").is_some();
-        let conn = PgConn::new(&addr, &user, timeout.clone(), verbose)?;
+        let conn = PgConn::new(&addr, &user, timeout.clone(), verbose, vec![])?;
         let mut conns = BTreeMap::new();
         conns.insert(DEFAULT_CONN.to_string(), conn);
 
@@ -431,28 +441,46 @@ impl PgTest {
         })
     }
 
-    fn get_conn(&mut self, name: Option<String>) -> anyhow::Result<&mut PgConn> {
+    // Returns the named connection. If this is the first time that connection is
+    // seen, sends options.
+    fn get_conn(
+        &mut self,
+        name: Option<String>,
+        options: Vec<(&str, &str)>,
+    ) -> anyhow::Result<&mut PgConn> {
         let name = name.unwrap_or_else(|| DEFAULT_CONN.to_string());
         if !self.conns.contains_key(&name) {
-            let conn = PgConn::new(&self.addr, &self.user, self.timeout.clone(), self.verbose)?;
+            let conn = PgConn::new(
+                &self.addr,
+                &self.user,
+                self.timeout.clone(),
+                self.verbose,
+                options,
+            )?;
             self.conns.insert(name.clone(), conn);
         }
         Ok(self.conns.get_mut(&name).expect("must exist"))
     }
 
-    pub fn send<F: Fn(&mut BytesMut)>(&mut self, conn: Option<String>, f: F) -> anyhow::Result<()> {
-        let conn = self.get_conn(conn)?;
+    pub fn send<F: Fn(&mut BytesMut)>(
+        &mut self,
+        conn: Option<String>,
+        options: Vec<(&str, &str)>,
+        f: F,
+    ) -> anyhow::Result<()> {
+        let conn = self.get_conn(conn, options)?;
         conn.send(f)
     }
 
     pub fn until(
         &mut self,
         conn: Option<String>,
+        options: Vec<(&str, &str)>,
         until: Vec<&str>,
         err_field_typs: Vec<char>,
         ignore: BTreeSet<String>,
     ) -> anyhow::Result<Vec<String>> {
-        let conn = self.get_conn(conn)?;
+        let conn = self.get_conn(conn, options)?;
         conn.until(until, err_field_typs, ignore)
     }
 }
@@ -538,6 +566,12 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: String, user: String, timeo
             .remove("conn")
             .map(|args| Some(args.into_first()))
             .unwrap_or(None);
+        let mut options: Vec<(&str, &str)> = Vec::new();
+        let cluster = args.remove("cluster");
+        if let Some(cluster) = &cluster {
+            let cluster = cluster.into_first();
+            options.push(("cluster", cluster.as_str()));
+        }
         match tc.directive.as_str() {
             "send" => {
                 for line in lines {
@@ -547,7 +581,7 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: String, user: String, timeo
                     let mut line = line.splitn(2, ' ');
                     let typ = line.next().unwrap_or("");
                     let args = line.next().unwrap_or("{}");
-                    pgt.send(conn.clone(), |buf| match typ {
+                    pgt.send(conn.clone(), options.clone(), |buf| match typ {
                         "Query" => {
                             let v: Query = serde_json::from_str(args).unwrap();
                             frontend::query(&v.query, buf).unwrap();
@@ -641,7 +675,7 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: String, user: String, timeo
                 }
                 format!(
                     "{}\n",
-                    pgt.until(conn, lines.collect(), err_field_typs, ignore)
+                    pgt.until(conn, options, lines.collect(), err_field_typs, ignore)
                         .unwrap()
                         .join("\n")
                 )
