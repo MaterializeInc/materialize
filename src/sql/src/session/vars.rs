@@ -624,7 +624,7 @@ pub const ENABLE_RBAC_CHECKS: ServerVar<bool> = ServerVar {
 pub const FORCE_INTROSPECTION_CLUSTER: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("force_introspection_cluster"),
     value: &false,
-    description: 
+    description:
         "Boolean flag indicating whether we should force queries that depend only on system tables, to run on the mz_introspection cluster (Materialize).",
     internal: true,
     safe: true,

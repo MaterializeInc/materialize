@@ -1878,13 +1878,11 @@ impl Coordinator {
         let view_id = self.allocate_transient_id()?;
         let index_id = self.allocate_transient_id()?;
 
-        // If our query only depends on system tables, then we optionally run it on the 
+        // If our query only depends on system tables, then we optionally run it on the
         // introspection cluster.
-        let cluster = if let Some(cluster) = introspection::auto_run_on_introspection(
-            &self.catalog,
-            &session,
-            source.depends_on()
-        ) {
+        let cluster = if let Some(cluster) =
+            introspection::auto_run_on_introspection(&self.catalog, session, source.depends_on())
+        {
             let cluster = self.catalog.resolve_cluster(cluster.name)?;
             tracing::info!("Running Peek on the mz_introspection cluster");
             cluster
@@ -2227,11 +2225,11 @@ impl Coordinator {
             up_to,
         } = plan;
 
-        // If our query only depends on system tables, then we optionally run it on the 
+        // If our query only depends on system tables, then we optionally run it on the
         // introspection cluster.
         let cluster = if let Some(cluster) = introspection::auto_run_on_introspection(
             &self.catalog,
-            &session,
+            session,
             depends_on.iter().copied(),
         ) {
             let cluster = self.catalog.resolve_cluster(cluster.name)?;
