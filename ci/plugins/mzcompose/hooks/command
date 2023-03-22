@@ -25,6 +25,8 @@ if read_list BUILDKITE_PLUGIN_MZCOMPOSE_ARGS; then
     done
 fi
 
+sar -q 60 > sar.log &
+
 date +"%Y-%m-%d %H:%M:%S" > step_start_timestamp
 
 # Sometimes build cancellations prevent us from properly cleaning up the last
