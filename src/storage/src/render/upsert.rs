@@ -22,13 +22,13 @@ use timely::dataflow::{Scope, Stream};
 use timely::order::PartialOrder;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, ChangeBatch};
-use tracing::{error, info};
+use tracing::info;
 
 use mz_expr::{EvalError, MirScalarExpr};
 use mz_ore::permutations::inverse_argsort;
 use mz_repr::{Datum, DatumVec, DatumVecBorrow, Diff, Row, RowArena, Timestamp};
 use mz_storage_client::types::errors::{
-    DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertValueError,
+    DataflowError, EnvelopeError, UpsertError, UpsertValueError,
 };
 use mz_storage_client::types::sources::{MzOffset, UpsertEnvelope, UpsertStyle};
 use mz_timely_util::operator::StreamExt;
@@ -38,7 +38,7 @@ use crate::source::types::DecodeResult;
 #[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 struct UpsertSourceData {
     /// The actual value
-    value: Option<Result<Row, DataflowError>>,
+    value: Option<Result<Row, UpsertError>>,
     /// The source's reported position for this record
     position: MzOffset,
     /// The time that the upstream source believes that the message was created
@@ -120,8 +120,9 @@ where
     };
 
     // Break `previous` into:
-    // On the one hand, "Ok" and "Err(UpsertError)", which we know how to deal with, and,
-    // On the other hand, "Err(everything eles)", which we don't.
+    //  - On the one hand, `Ok` and `Err(UpsertError)`, which we know how to
+    //   deal with, and,
+    //  - On the other hand, `Err(everything else)`, which we don't.
     let (previous, mut errs) = previous.inner.ok_err(|(d, t, r)| match d {
         Ok(row) => Ok((Ok(row), t, r)),
         Err(DataflowError::EnvelopeError(err)) => match *err {
@@ -202,13 +203,94 @@ fn evaluate(
     Ok(Some(row_buf.clone()))
 }
 
+/// Extracts the data that we need for UPSERT from the given collection of
+/// `DecodeResult`. While doing this, also lifts any errors into the appropriate
+/// `UpsertError`.
+fn extract_from_decode_results<G: Scope>(
+    input: &Collection<G, DecodeResult, Diff>,
+) -> Collection<
+    G,
+    (
+        (
+            Option<Result<Row, UpsertError>>,
+            Option<Result<Row, UpsertError>>,
+        ),
+        MzOffset,
+        Row,
+    ),
+    Diff,
+> {
+    input.map(|decode_result| {
+        let DecodeResult {
+            key,
+            value,
+            position,
+            upstream_time_millis: _,
+            partition,
+            metadata,
+        } = decode_result;
+
+        let (key, value) = match key {
+            Some(Err(decode_error)) => (
+                Some(Err(UpsertError::KeyDecode(decode_error.clone()))),
+                value.map(|decode_result| {
+                    // Match what we do in `extract_from_previous`, though
+                    // the value is not really important when we have a key
+                    // error. Plus, we can't map any value error to an
+                    // UpsertValueError because we don't have a real key that we
+                    // could give to it.
+                    decode_result.map_err(|_err| UpsertError::KeyDecode(decode_error.clone()))
+                }),
+            ),
+            Some(Ok(key)) => (
+                Some(Ok(key.clone())),
+                value.map(|decode_result| {
+                    decode_result.map_err(|err| {
+                        UpsertError::Value(UpsertValueError {
+                            for_key: key,
+                            inner: Box::new(DataflowError::DecodeError(Box::new(err))),
+                        })
+                    })
+                }),
+            ),
+            None => {
+                let key_error = UpsertError::NullKey(
+                    mz_storage_client::types::errors::UpsertNullKeyError::with_partition_id(
+                        partition,
+                    ),
+                );
+                (
+                    None,
+                    // Match what we do in `extract_from_previous`, though
+                    // the value is not really important when we have a key
+                    // error. Plus, we can't map any value error to an
+                    // UpsertValueError because we don't have a real key that we
+                    // could give to it.
+                    //
+                    // This makes sure that `None` stays `None`, meaning we
+                    // retract when we get a `None` value, and that a `Some`
+                    // value gets mapped to an error.
+                    value.map(|_value| Err(key_error)),
+                )
+            }
+        };
+
+        ((key, value), position, metadata)
+    })
+}
+
 /// Given a stream of rows and a description of the columns that form their key,
 /// produce a stream of keys and thinned values.
-fn extract_kv<G: Scope>(
+///
+/// This is used to re-extract a key-value-style collection from the (persisted)
+/// output of an UPSERT source. It is the equivalent to
+/// [`extract_from_decode_results`], but for our already persisted data that we
+/// read on re-hydration.
+fn extract_from_previous<G: Scope>(
     records: Collection<G, Result<Row, UpsertError>, Diff>,
     key_indices_sorted: Vec<usize>,
     key_indices: &[usize],
-) -> Collection<G, (Result<Row, DecodeError>, Result<Row, DataflowError>), Diff> {
+) -> Collection<G, (Option<Result<Row, UpsertError>>, Result<Row, UpsertError>), Diff> {
     debug_assert!({
         let mut verified_sorted = key_indices.to_vec();
         verified_sorted.sort_unstable();
@@ -253,19 +335,18 @@ fn extract_kv<G: Scope>(
                         key_row_packer.push(key_dv[i])
                     }
                 }
-                (Ok(key_row_buf.clone()), Ok(row_buf.clone()))
+                (Some(Ok(key_row_buf.clone())), Ok(row_buf.clone()))
             }
             Err(UpsertError::KeyDecode(err)) => (
-                Err(err.clone()),
-                Err(DataflowError::from(EnvelopeError::Upsert(
-                    UpsertError::KeyDecode(err),
-                ))),
+                Some(Err(UpsertError::KeyDecode(err.clone()))),
+                Err(UpsertError::KeyDecode(err)),
             ),
+            Err(UpsertError::NullKey(null_key_err)) => {
+                (None, Err(UpsertError::NullKey(null_key_err)))
+            }
             Err(UpsertError::Value(UpsertValueError { inner, for_key })) => (
-                Ok(for_key.clone()),
-                Err(DataflowError::from(EnvelopeError::Upsert(
-                    UpsertError::Value(UpsertValueError { inner, for_key }),
-                ))),
+                Some(Ok(for_key.clone())),
+                Err(UpsertError::Value(UpsertValueError { inner, for_key })),
             ),
         }
     })
@@ -290,11 +371,13 @@ where
     let mut key_indices_sorted = upsert_envelope.key_indices.clone();
     key_indices_sorted.sort_unstable();
 
-    let previous_ok = extract_kv(
+    let previous_ok = extract_from_previous(
         previous,
         key_indices_sorted.clone(),
         &upsert_envelope.key_indices,
     );
+
+    let input = extract_from_decode_results(input);
 
     // It's very important to hash the right thing. We have nested `Option` and
     // `Result` here. And, for example, `Some(key).hashed()` is not the same as
@@ -307,12 +390,13 @@ where
     // sources with multiple clusterd workers.
     let result_stream = input.inner.binary_frontier(
         &previous_ok.inner,
-        Exchange::new(move |(DecodeResult { key, .. }, _, _)| {
+        Exchange::new(move |(((key, _v), _pos, _meta), _t, _r)| {
             // N.B. We make the expected type explicit here to make sure it
             // cannot change by accident.
-            let key: &Option<Result<Row, DecodeError>> = key;
+            let key: &Option<Result<Row, UpsertError>> = key;
+
             // Another N.B. we use `as_ref()` here so that we're hashing a
-            // `Option<&Result<Row, DecodeError>`, like we do below. We don't
+            // `Option<&Result<Row, UpsertError>`, like we do below. We don't
             // stricly need it because the result is the same without but with
             // this we are extra future safe.
             key.as_ref().hashed()
@@ -320,8 +404,8 @@ where
         Exchange::new(|((key, _v), _t, _r)| {
             // N.B.  We make the expected type explicit here to make sure it
             // cannot change by accident.
-            let key: &Result<Row, DecodeError> = key;
-            Some(key).hashed()
+            let key: &Option<Result<Row, UpsertError>> = key;
+            key.as_ref().hashed()
         }),
         "Upsert",
         move |_cap, _info| {
@@ -346,7 +430,7 @@ where
                 .map(|(idx, value_idx)| (*value_idx, idx))
                 .collect();
             let mut kdv = DatumVec::new();
-            // this is a map of (decoded key) -> (decoded_value). We store the
+            // This is a map of (decoded key) -> (decoded_value). We store the
             // latest value for a given key that way we know what to retract if
             // a new value with the same key comes along.
             //
@@ -400,6 +484,16 @@ where
                                 r == 1,
                                 "The upsert state should have exactly one value per key"
                             );
+
+                            // `current_values` will contain a `DataflowError`
+                            // for values, because those can result from
+                            // applying the MFP that we apply to values before
+                            // we store them. Technically, the MFP application
+                            // can result in an `EvalError`, and we already
+                            // potentially have `UpsertErrors`, and
+                            // `DataflowError` is the enum that wraps those two.
+                            let v = v.map_err(|err| EnvelopeError::Upsert(err).into());
+
                             match new_current_values.entry(k) {
                                 Entry::Occupied(_oe) => {
                                     panic!("The upsert state should have exactly one value per key")
@@ -471,38 +565,40 @@ where
 
 /// This function fills `pending_values` with new data
 /// from the timely operator input.
+///
+/// The given tuple contains key, value, a "position", and "metadata".
+// TODO(aljoscha): Turn this into a struct?
 fn process_new_data(
-    new_data: &mut Vec<(DecodeResult, Timestamp, Diff)>,
+    new_data: &mut Vec<(
+        (
+            (
+                Option<Result<Row, UpsertError>>,
+                Option<Result<Row, UpsertError>>,
+            ),
+            MzOffset,
+            Row,
+        ),
+        Timestamp,
+        Diff,
+    )>,
     pending_values: &mut BTreeMap<
         Timestamp,
         (
             Capability<Timestamp>,
-            BTreeMap<Option<Result<Row, DecodeError>>, UpsertSourceData>,
+            BTreeMap<Option<Result<Row, UpsertError>>, UpsertSourceData>,
         ),
     >,
     cap: &InputCapability<Timestamp>,
     as_of_frontier: &Antichain<Timestamp>,
 ) {
-    for (result, mut time, diff) in new_data.drain(..) {
+    for (((key, new_value), new_position, metadata), mut time, diff) in new_data.drain(..) {
         // TODO(petrosagg): any positive diff should be accepted
         assert_eq!(
             diff, 1,
             "Upsert should only be used with append-only sources"
         );
-        let DecodeResult {
-            key,
-            value: new_value,
-            position: new_position,
-            upstream_time_millis: _,
-            partition: _,
-            metadata,
-        } = result;
 
         time.advance_by(as_of_frontier.borrow());
-        if key.is_none() {
-            error!(?new_value, "Encountered empty key for value");
-            continue;
-        }
 
         let entry = pending_values
             .entry(time)
@@ -543,9 +639,9 @@ fn process_pending_values_batch(
     // are processing in this call.
     time: &Timestamp,
     cap: &mut Capability<Timestamp>,
-    map: &mut BTreeMap<Option<Result<Row, DecodeError>>, UpsertSourceData>,
+    map: &mut BTreeMap<Option<Result<Row, UpsertError>>, UpsertSourceData>,
     // The current map of values we use to perform the upsert comparision
-    current_values: &mut BTreeMap<Result<Row, DecodeError>, Result<Row, DataflowError>>,
+    current_values: &mut BTreeMap<Option<Result<Row, UpsertError>>, Result<Row, DataflowError>>,
     // A shared row used to pack new rows for evaluation and output
     row_packer: &mut Row,
     // A shared row used to build a Vec<Datum<'_>> for evaluation
@@ -584,16 +680,18 @@ fn process_pending_values_batch(
         if let Some(decoded_key) = key {
             let (decoded_key, decoded_value): (_, Result<_, DataflowError>) =
                 match (decoded_key, data.value) {
-                    (Err(key_decode_error), Some(_)) => {
-                        let err = DataflowError::from(EnvelopeError::Upsert(
-                            UpsertError::KeyDecode(key_decode_error.clone()),
-                        ));
-                        (Err(key_decode_error), Err(err))
-                    }
-                    (Err(key_decode_error), None) => (Err(key_decode_error), Ok(None)),
+                    // Make sure that the value is also an Err if they key is an
+                    // Err. Otherwise, any decoding logic that would try and
+                    // work on this can get flustered.
+                    (Err(upsert_error), Some(_)) => (
+                        Err(upsert_error.clone()),
+                        Err(EnvelopeError::Upsert(upsert_error).into()),
+                    ),
+                    (Err(upsert_error), None) => (Err(upsert_error), Ok(None)),
                     (Ok(decoded_key), None) => (Ok(decoded_key), Ok(None)),
                     (Ok(decoded_key), Some(value)) => {
                         let decoded_value = value
+                            .map_err(|err| EnvelopeError::Upsert(err).into())
                             .and_then(|row| {
                                 build_datum_vec_for_evaluation(
                                     dv,
@@ -604,16 +702,8 @@ fn process_pending_values_batch(
                                 .map_or(Ok(None), |mut datums| {
                                     datums.extend(data.metadata.iter());
                                     evaluate(&datums, predicates, position_or, row_packer)
-                                        .map_err(Into::into)
+                                        .map_err(DataflowError::from)
                                 })
-                            })
-                            .map_err(|err| {
-                                DataflowError::from(EnvelopeError::Upsert(UpsertError::Value(
-                                    UpsertValueError {
-                                        inner: Box::new(err),
-                                        for_key: decoded_key.clone(),
-                                    },
-                                )))
                             });
                         (Ok(decoded_key), decoded_value)
                     }
@@ -632,7 +722,7 @@ fn process_pending_values_batch(
                     .map(|full_row| thin(key_indices_sorted, full_row, row_packer))
                     .map_err(|e| e.clone());
                 current_values
-                    .insert(decoded_key.clone(), thinned_value)
+                    .insert(Some(decoded_key.clone()), thinned_value)
                     .map(|res| {
                         res.map(|v| {
                             rehydrate(
@@ -647,19 +737,22 @@ fn process_pending_values_batch(
                         })
                     })
             } else {
-                current_values.remove(&decoded_key).map(|res| {
-                    res.map(|v| {
-                        rehydrate(
-                            key_indices_map,
-                            // The value is never `Ok`
-                            // unless the key is also
-                            decoded_key.as_ref().unwrap(),
-                            &v,
-                            row_packer,
-                            kdv,
-                        )
+                current_values
+                    // WIP: What to do about this?
+                    .remove(&Some(decoded_key.clone()))
+                    .map(|res| {
+                        res.map(|v| {
+                            rehydrate(
+                                key_indices_map,
+                                // The value is never `Ok`
+                                // unless the key is also
+                                decoded_key.as_ref().unwrap(),
+                                &v,
+                                row_packer,
+                                kdv,
+                            )
+                        })
                     })
-                })
             };
 
             if let Some(old_value) = old_value {
@@ -669,6 +762,49 @@ fn process_pending_values_batch(
             if let Some(new_value) = new_value {
                 // give new value
                 session.give((new_value, cap.time().clone(), 1));
+            }
+        } else {
+            // Special-case handling for NULL keys, which are encoded as `None`
+            // here. We expect to either have an error for the value, or `None`,
+            // which would retract a previous error.
+            //
+            // We don't encode a NULL-key error as an `Err` in the `key`, like
+            // we do for other errors, so that we can change the error when
+            // there are updates.
+            //
+            // When a newer NULL message comes in, say with a higher offset, it
+            // will replace the previous one. This way, we can also make
+            // NULL-key errors retractable without having to match the NULL-key
+            // error exactly, by making sure to emit a retraction for the last
+            // error we saw, when we see a NULL-value message (encoded as the
+            // value being `None`).
+            //
+            // NOTE: We could think about how we can fold this into the if
+            // branch.
+
+            let current_value = current_values.get(&None);
+
+            match data.value {
+                Some(Ok(_value)) => {
+                    panic!("got NULL key but some value that is not an error or NULL as well");
+                }
+                Some(Err(err)) => {
+                    if let Some(old_value) = current_value {
+                        // retract old value
+                        session.give((old_value.clone(), cap.time().clone(), -1));
+                    }
+                    let err = Err(EnvelopeError::Upsert(err).into());
+                    current_values.insert(None, err.clone());
+                    session.give((err, cap.time().clone(), 1));
+                }
+                None => {
+                    if let Some(old_value) = current_value {
+                        // retract old value
+                        session.give((old_value.clone(), cap.time().clone(), -1));
+
+                        current_values.remove(&None);
+                    }
+                }
             }
         }
     }
