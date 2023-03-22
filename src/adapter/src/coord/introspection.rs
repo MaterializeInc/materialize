@@ -73,7 +73,7 @@ pub fn auto_run_on_introspection<'a, 's>(
 
         match (intros_cluster, active_cluster) {
             (Ok(intros), active) => {
-                tracing::info!("Running on mz_introspection cluster");
+                tracing::debug!("Running on mz_introspection cluster");
                 // If we're running on a different cluster than the active
                 // one, notify the user.
                 if active.map(|c| c.id != intros.id).unwrap_or(true) {
