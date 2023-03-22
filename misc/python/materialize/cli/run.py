@@ -114,6 +114,11 @@ def main() -> int:
         help="Disables the limited codesigning we do on macOS to support Instruments",
         action="store_true",
     )
+    parser.add_argument(
+        "--coverage",
+        help="Build with coverage",
+        action="store_true",
+    )
     args = parser.parse_intermixed_args()
 
     # Handle `+toolchain` like rustup.
@@ -262,6 +267,8 @@ def _build(args: argparse.Namespace, extra_programs: list[str] = []) -> int:
     if args.tokio_console:
         features += ["tokio-console"]
         env["RUSTFLAGS"] = env.get("RUSTFLAGS", "") + " --cfg=tokio_unstable"
+    if args.coverage:
+        env["RUSTFLAGS"] = env.get("RUSTFLAGS", "") + " -Cinstrument-coverage"
     if args.features:
         features.extend(args.features.split(","))
     if features:
