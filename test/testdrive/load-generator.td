@@ -20,12 +20,40 @@ users                   subsource      <null>
 
 # Adding test to check for tables() work
 > CREATE SCHEMA a;
-> CREATE SOURCE a.auction_bids FROM LOAD GENERATOR AUCTION FOR TABLES (bids as a.bids);
+> CREATE SOURCE a.auction_bids FROM LOAD GENERATOR AUCTION FOR TABLES (bids);
 
 > SHOW SOURCES FROM a;
 auction_bids            load-generator ${arg.default-storage-size}
 auction_bids_progress   subsource      <null>
 bids                    subsource      <null>
+
+# For Tables with mentioned schema should work
+> CREATE SCHEMA another;
+> CREATE SOURCE another.auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
+
+> SHOW SOURCES FROM another;
+accounts                subsource      <null>
+auction_house           load-generator ${arg.default-storage-size}
+auction_house_progress  subsource <null>
+auctions                subsource      <null>
+bids                    subsource      <null>
+organizations           subsource      <null>
+users                   subsource      <null>
+
+# Subsources should be created in source schema if no schema is provided
+> CREATE SCHEMA foo;
+> CREATE SCHEMA bar;
+> CREATE SOURCE foo.auction_subset
+  FROM LOAD GENERATOR AUCTION
+  FOR TABLES (bids as foo_bids, users as bar.bar_users);
+
+> SHOW SOURCES FROM foo;
+auction_subset            load-generator ${arg.default-storage-size}
+auction_subset_progress   subsource      <null>
+foo_bids                  subsource      <null>
+
+> SHOW SOURCES FROM bar;
+bar_users                 subsource      <null>
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
 

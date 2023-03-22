@@ -155,6 +155,20 @@ impl From<String> for PartialObjectName {
     }
 }
 
+impl From<PartialObjectName> for UnresolvedObjectName {
+    fn from(partial_name: PartialObjectName) -> UnresolvedObjectName {
+        let mut name_parts = Vec::new();
+        if let Some(database) = partial_name.database {
+            name_parts.push(Ident::new(database));
+        }
+        if let Some(schema) = partial_name.schema {
+            name_parts.push(Ident::new(schema));
+        }
+        name_parts.push(Ident::new(partial_name.item));
+        UnresolvedObjectName(name_parts)
+    }
+}
+
 /// A fully-qualified human readable name of a schema in the catalog.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct FullSchemaName {
