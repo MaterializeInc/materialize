@@ -59,15 +59,20 @@ pub fn auto_run_on_introspection<'a, 's>(
         return None;
     }
 
+    // Check to make sure our iterator contains atleast one element, this prevents us
+    // from always running empty queries on the mz_introspection cluster.
+    let mut depends_on = depends_on.into_iter().peekable();
+    let non_empty = depends_on.peek().is_some();
+
     // Make sure we only depend on the system catalog.
-    let allowed = depends_on.into_iter().all(|id| {
+    let system_only = depends_on.all(|id| {
         let entry = catalog.get_entry(&id);
         let full_name = catalog.resolve_full_name(entry.name(), Some(session.conn_id()));
         ALLOWED_SCHEMAS.contains(full_name.schema.as_str())
     });
 
     // If we're allowed to run on the mz_introspection cluster, make sure we can resolve it.
-    if allowed {
+    if non_empty && system_only {
         let intros_cluster = catalog.resolve_cluster(MZ_INTROSPECTION_CLUSTER.name);
         let active_cluster = catalog.active_cluster(session);
 

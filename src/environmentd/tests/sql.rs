@@ -2653,3 +2653,126 @@ fn test_mz_sessions() {
         foo_conn_id,
     );
 }
+
+#[test]
+fn test_auto_run_on_introspection() {
+    let config = util::Config::default();
+    let server = util::start_server(config).unwrap();
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let mut client = server
+        .pg_config()
+        .notice_callback(move |notice| {
+            tx.unbounded_send(notice).unwrap();
+        })
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    let mut assert_introspection_notice = |expected| {
+        match (rx.try_next(), expected) {
+            (Ok(Some(notice)), true) => {
+                let msg = notice.message();
+                let expected = "query was automatically run on the \"mz_introspection\" cluster";
+                assert_eq!(msg, expected);
+            }
+            (Err(_), false) => (),
+            (_, true) => panic!("Didn't get the expected notice!"),
+            (res, false) => panic!("Got a notice, but it wasn't expected! {:?}", res),
+        }
+        // Drain the channel of any other notices
+        while let Ok(Some(_)) = rx.try_next() {}
+    };
+
+    // The notice we assert on only gets emitted at the DEBUG level
+    client
+        .execute("SET client_min_messages = debug", &[])
+        .unwrap();
+
+    // By default force_introspection_cluster should be OFF
+    let _row = client
+        .query_one("SELECT * FROM mz_functions LIMIT 1", &[])
+        .unwrap();
+    assert_introspection_notice(false);
+
+    let _row = client
+        .query_one("SELECT * FROM pg_attribute LIMIT 1", &[])
+        .unwrap();
+    assert_introspection_notice(false);
+
+    let _rows = client
+        .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
+        .unwrap();
+    assert_introspection_notice(false);
+
+    // Start our subscribe.
+    client
+        .batch_execute("BEGIN; DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM mz_functions);")
+        .unwrap();
+    assert_introspection_notice(false);
+
+    // Fetch all of the rows.
+    client.batch_execute("FETCH ALL c").unwrap();
+    assert_introspection_notice(false);
+
+    // End the subscribe.
+    client.batch_execute("COMMIT").unwrap();
+    assert_introspection_notice(false);
+
+    client
+        .execute("SET force_introspection_cluster = true", &[])
+        .unwrap();
+
+    // Queries with no dependencies should not get run on the introspection cluster
+    let _row = client.query_one("SELECT 1;", &[]).unwrap();
+    assert_introspection_notice(false);
+
+    // Queries that only depend on system tables, __should__ get run on the introspection cluster
+    let _row = client
+        .query_one("SELECT * FROM mz_functions LIMIT 1", &[])
+        .unwrap();
+    assert_introspection_notice(true);
+
+    let _row = client
+        .query_one("SELECT * FROM pg_attribute LIMIT 1", &[])
+        .unwrap();
+    assert_introspection_notice(true);
+
+    let _rows = client
+        .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
+        .unwrap();
+    assert_introspection_notice(true);
+
+    // Start our subscribe.
+    client
+        .batch_execute("BEGIN; DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM mz_functions);")
+        .unwrap();
+    assert_introspection_notice(false);
+
+    // Fetch all of the rows.
+    client.batch_execute("FETCH ALL c").unwrap();
+    assert_introspection_notice(true);
+
+    // End the subscribe.
+    client.batch_execute("COMMIT").unwrap();
+    assert_introspection_notice(false);
+
+    // ... even more complex queries that depend on multiple system tables
+    let _rows = client
+        .query("SELECT mz_types.name, mz_types.id FROM mz_types JOIN mz_base_types ON mz_types.id = mz_base_types.id", &[])
+        .unwrap();
+    assert_introspection_notice(true);
+
+    client
+        .execute(
+            "CREATE VIEW user_made AS SELECT name FROM mz_functions;",
+            &[],
+        )
+        .unwrap();
+    assert_introspection_notice(false);
+
+    // But querying user made objects should not result in queries being run on mz_introspection.
+    let _row = client
+        .query_one("SELECT * FROM user_made LIMIT 1", &[])
+        .unwrap();
+    assert_introspection_notice(false);
+}
