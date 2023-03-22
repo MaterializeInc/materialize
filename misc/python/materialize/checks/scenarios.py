@@ -46,8 +46,10 @@ class Scenario:
         self.executor = executor
         self.rng = None if seed is None else Random(seed)
         self._base_version = MzVersion.parse_cargo()
+        # Use base_version() here instead of _base_version so that overwriting
+        # upgrade scenarios can specify another base version.
         self.check_objects = [
-            check_class(self._base_version, self.rng) for check_class in self.checks()
+            check_class(self.base_version(), self.rng) for check_class in self.checks()
         ]
 
     def checks(self) -> List[Type[Check]]:
