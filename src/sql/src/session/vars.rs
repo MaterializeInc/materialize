@@ -628,7 +628,7 @@ pub const FORCE_INTROSPECTION_CLUSTER: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("force_introspection_cluster"),
     value: &false,
     description:
-        "Boolean flag indicating whether we should force queries that depend only on system tables, to run on the mz_introspection cluster (Materialize).",
+        "Whether to force queries that depend only on system tables, to run on the mz_introspection cluster (Materialize).",
     internal: true,
     safe: true,
 };

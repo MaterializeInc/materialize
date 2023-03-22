@@ -591,7 +591,7 @@ impl Severity {
             AdapterNotice::RbacDisabled => Severity::Notice,
             AdapterNotice::RoleMembershipAlreadyExists { .. } => Severity::Notice,
             AdapterNotice::RoleMembershipDoesNotExists { .. } => Severity::Warning,
-            AdapterNotice::AutoRunOnIntrospectionCluster => Severity::Log,
+            AdapterNotice::AutoRunOnIntrospectionCluster => Severity::Debug,
         }
     }
 }
