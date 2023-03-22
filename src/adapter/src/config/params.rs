@@ -160,6 +160,6 @@ mod tests {
         let sync = SynchronizedParameters::new(vars);
 
         // A smoke test to ensure the variables we want to get synced, are getting synced
-        assert!(sync.is_synchronized("enable_force_introspection_cluster"));
+        assert!(sync.is_synchronized("enable_auto_route_introspection_queries"));
     }
 }

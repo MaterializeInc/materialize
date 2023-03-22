@@ -2688,7 +2688,7 @@ fn test_auto_run_on_introspection() {
         .execute("SET client_min_messages = debug", &[])
         .unwrap();
 
-    // By default force_introspection_cluster should be OFF
+    // By default auto_route_introspection_queries should be OFF
     let _row = client
         .query_one("SELECT * FROM mz_functions LIMIT 1", &[])
         .unwrap();
@@ -2727,7 +2727,7 @@ fn test_auto_run_on_introspection() {
         .unwrap();
     sys_client
         .execute(
-            "ALTER SYSTEM SET enable_force_introspection_cluster TO true",
+            "ALTER SYSTEM SET enable_auto_route_introspection_queries TO true",
             &[],
         )
         .unwrap();
@@ -2789,7 +2789,7 @@ fn test_auto_run_on_introspection() {
     // If the feature is enabled, but the behavior is disabled, we shouldn't run on the
     // introspection cluster
     client
-        .execute("SET force_introspection_cluster = false", &[])
+        .execute("SET auto_route_introspection_queries = false", &[])
         .unwrap();
     let _row = client
         .query_one("SELECT * FROM mz_functions LIMIT 1", &[])

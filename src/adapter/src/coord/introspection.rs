@@ -41,8 +41,8 @@ pub fn auto_run_on_introspection<'a, 's>(
 ) -> Option<&'a Cluster> {
     // If this feature is disabled via LaunchDarkly, or the user has disabled it for
     // this session.
-    if !catalog.system_config().enable_force_introspection_cluster()
-        || !session.vars().force_introspection_cluster()
+    if !catalog.system_config().enable_auto_route_introspection_queries()
+        || !session.vars().auto_route_introspection_queries()
     {
         return None;
     }
@@ -59,7 +59,6 @@ pub fn auto_run_on_introspection<'a, 's>(
         catalog.state().is_system_schema_specifier(schema)
     });
 
-    // If we're allowed to run on the mz_introspection cluster, make sure we can resolve it.
     if non_empty && system_only {
         let intros_cluster = catalog.resolve_builtin_cluster(&MZ_INTROSPECTION_CLUSTER);
         tracing::debug!("Running on '{}' cluster", MZ_INTROSPECTION_CLUSTER.name);
