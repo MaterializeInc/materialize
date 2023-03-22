@@ -237,6 +237,9 @@ where
             }
         }
     }
+    session
+        .vars_mut()
+        .end_transaction(EndTransactionAction::Commit);
 
     let mut buf = vec![BackendMessage::AuthenticationOk];
     for var in session.vars().notify_set() {
