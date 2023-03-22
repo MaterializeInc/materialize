@@ -5768,10 +5768,10 @@ impl<'a> Parser<'a> {
         let role_name = self.parse_identifier()?;
         self.expect_keyword(TO)?;
         let _ = self.parse_keyword(GROUP);
-        let member_name = self.parse_identifier()?;
+        let member_names = self.parse_comma_separated(Parser::parse_identifier)?;
         Ok(Statement::GrantRole(GrantRoleStatement {
             role_name,
-            member_name,
+            member_names,
         }))
     }
 
@@ -5781,10 +5781,10 @@ impl<'a> Parser<'a> {
         let role_name = self.parse_identifier()?;
         self.expect_keyword(FROM)?;
         let _ = self.parse_keyword(GROUP);
-        let member_name = self.parse_identifier()?;
+        let member_names = self.parse_comma_separated(Parser::parse_identifier)?;
         Ok(Statement::RevokeRole(RevokeRoleStatement {
             role_name,
-            member_name,
+            member_names,
         }))
     }
 }

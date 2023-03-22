@@ -48,7 +48,7 @@ pub enum Command {
         stmt: Statement<Raw>,
         param_types: Vec<Option<ScalarType>>,
         session: Session,
-        tx: oneshot::Sender<Response<()>>,
+        tx: oneshot::Sender<Response<ExecuteResponse>>,
     },
 
     Describe {

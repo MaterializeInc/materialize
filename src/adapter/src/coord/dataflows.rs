@@ -87,7 +87,7 @@ impl Coordinator {
             .instance_ref(instance)
             .expect("compute instance does not exist");
         DataflowBuilder {
-            catalog: self.catalog.state(),
+            catalog: self.catalog().state(),
             compute,
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
         }

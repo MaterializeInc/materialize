@@ -2906,8 +2906,8 @@ impl_display_t!(ShowStatement);
 pub struct GrantRoleStatement<T: AstInfo> {
     /// The role that is gaining a member.
     pub role_name: T::RoleName,
-    /// The role that will be added to `role_name`.
-    pub member_name: T::RoleName,
+    /// The roles that will be added to `role_name`.
+    pub member_names: Vec<T::RoleName>,
 }
 
 impl<T: AstInfo> AstDisplay for GrantRoleStatement<T> {
@@ -2915,7 +2915,7 @@ impl<T: AstInfo> AstDisplay for GrantRoleStatement<T> {
         f.write_str("GRANT ");
         f.write_node(&self.role_name);
         f.write_str(" TO ");
-        f.write_node(&self.member_name);
+        f.write_node(&display::comma_separated(&self.member_names));
     }
 }
 impl_display_t!(GrantRoleStatement);
@@ -2926,8 +2926,7 @@ pub struct RevokeRoleStatement<T: AstInfo> {
     /// The role that is losing a member.
     pub role_name: T::RoleName,
     /// The role that will be removed from `role_name`.
-    pub member_name: T::RoleName,
-    // TODO(jkosh44) Add cascade/restrict.
+    pub member_names: Vec<T::RoleName>,
 }
 
 impl<T: AstInfo> AstDisplay for RevokeRoleStatement<T> {
@@ -2935,7 +2934,7 @@ impl<T: AstInfo> AstDisplay for RevokeRoleStatement<T> {
         f.write_str("REVOKE ");
         f.write_node(&self.role_name);
         f.write_str(" FROM ");
-        f.write_node(&self.member_name);
+        f.write_node(&display::comma_separated(&self.member_names));
     }
 }
 impl_display_t!(RevokeRoleStatement);

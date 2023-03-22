@@ -104,7 +104,7 @@ impl Coordinator {
         for op in &ops {
             match op {
                 catalog::Op::DropItem(id) => {
-                    match self.catalog.get_entry(id).item() {
+                    match self.catalog().get_entry(id).item() {
                         CatalogItem::Table(_) => {
                             tables_to_drop.push(*id);
                         }
@@ -165,7 +165,7 @@ impl Coordinator {
                     }
                 }
                 catalog::Op::DropCluster { id } => {
-                    let cluster = self.catalog.get_cluster(*id);
+                    let cluster = self.catalog().get_cluster(*id);
 
                     // Drop the introspection sources
                     let replica_logs = cluster
@@ -182,7 +182,7 @@ impl Coordinator {
                     cluster_id,
                     replica_id,
                 } => {
-                    let cluster = self.catalog.get_cluster(*cluster_id);
+                    let cluster = self.catalog().get_cluster(*cluster_id);
                     let replica = &cluster.replicas_by_id[replica_id];
 
                     // Drop the introspection sources
@@ -229,8 +229,10 @@ impl Coordinator {
             })
             .map(|(dependent_id, sink_id, active_subscribe)| {
                 let conn_id = active_subscribe.conn_id;
-                let entry = self.catalog.get_entry(dependent_id);
-                let name = self.catalog.resolve_full_name(entry.name(), Some(conn_id));
+                let entry = self.catalog().get_entry(dependent_id);
+                let name = self
+                    .catalog()
+                    .resolve_full_name(entry.name(), Some(conn_id));
 
                 (
                     (conn_id, name.to_string()),
@@ -249,9 +251,9 @@ impl Coordinator {
                 .iter()
                 .find(|id| relations_to_drop.contains(id))
             {
-                let entry = self.catalog.get_entry(id);
+                let entry = self.catalog().get_entry(id);
                 let name = self
-                    .catalog
+                    .catalog()
                     .resolve_full_name(entry.name(), Some(pending_peek.conn_id));
                 peeks_to_drop.push((name.to_string(), uuid.clone()));
             }
@@ -325,15 +327,15 @@ impl Coordinator {
         // regress or pause for 10s.
         let oracle_write_ts = self.get_local_write_ts().await.timestamp;
 
+        let (catalog, controller) = self.catalog_and_controller_mut();
         let TransactionResult {
             builtin_table_updates,
             audit_events,
             result,
-        } = self
-            .catalog
+        } = catalog
             .transact(oracle_write_ts, session, ops, |catalog| {
                 f(CatalogTxn {
-                    dataflow_client: &self.controller,
+                    dataflow_client: controller,
                     catalog,
                 })
             })
@@ -465,7 +467,7 @@ impl Coordinator {
                     event.event_type.as_title_case()
                 );
                 segment_client.environment_track(
-                    &self.catalog.config().environment_id,
+                    &self.catalog().config().environment_id,
                     user_metadata.user_id,
                     event_type,
                     json!({ "details": event.details.as_json() }),
@@ -485,7 +487,7 @@ impl Coordinator {
         {
             let mut updates = vec![];
             if let Some(last_heartbeat) = last_heartbeat {
-                let retraction = self.catalog.state().pack_replica_heartbeat_update(
+                let retraction = self.catalog().state().pack_replica_heartbeat_update(
                     replica_id,
                     last_heartbeat,
                     -1,
@@ -494,12 +496,12 @@ impl Coordinator {
             }
             if let Some(metrics) = metrics {
                 let retraction = self
-                    .catalog
+                    .catalog()
                     .state()
                     .pack_replica_metric_updates(replica_id, &metrics, -1);
                 updates.extend(retraction.into_iter());
             }
-            let retraction = self.catalog.state().pack_replica_write_frontiers_updates(
+            let retraction = self.catalog().state().pack_replica_write_frontiers_updates(
                 replica_id,
                 &write_frontiers,
                 -1,
@@ -652,7 +654,7 @@ impl Coordinator {
     /// Removes all temporary items created by the specified connection, though
     /// not the temporary schema itself.
     pub(crate) async fn drop_temp_items(&mut self, session: &Session) {
-        let ops = self.catalog.drop_temp_item_ops(&session.conn_id());
+        let ops = self.catalog_mut().drop_temp_item_ops(&session.conn_id());
         if ops.is_empty() {
             return;
         }
@@ -662,17 +664,17 @@ impl Coordinator {
     }
 
     fn update_compute_config(&mut self) {
-        let config_params = self.catalog.compute_config();
+        let config_params = self.catalog().compute_config();
         self.controller.compute.update_configuration(config_params);
     }
 
     fn update_storage_config(&mut self) {
-        let config_params = self.catalog.storage_config();
+        let config_params = self.catalog().storage_config();
         self.controller.storage.update_configuration(config_params);
     }
 
     fn update_metrics_retention(&mut self) {
-        let duration = self.catalog.system_config().metrics_retention();
+        let duration = self.catalog().system_config().metrics_retention();
         let policy = ReadPolicy::lag_writes_by(Timestamp::new(
             u64::try_from(duration.as_millis()).unwrap_or_else(|_e| {
                 tracing::error!("Absurd metrics retention duration: {duration:?}.");
@@ -680,7 +682,7 @@ impl Coordinator {
             }),
         ));
         let policies = self
-            .catalog
+            .catalog()
             .entries()
             .filter(|entry| entry.item().is_retained_metrics_relation())
             .map(|entry| (entry.id(), policy.clone()))
@@ -698,7 +700,7 @@ impl Coordinator {
         self.controller.storage.collection(sink.from)?;
 
         let status_id =
-            Some(self.catalog.resolve_builtin_storage_collection(
+            Some(self.catalog().resolve_builtin_storage_collection(
                 &crate::catalog::builtin::MZ_SINK_STATUS_HISTORY,
             ));
 
@@ -717,11 +719,11 @@ impl Coordinator {
             strict: !sink.with_snapshot,
         };
 
-        let storage_sink_from_entry = self.catalog.get_entry(&sink.from);
+        let storage_sink_from_entry = self.catalog().get_entry(&sink.from);
         let storage_sink_desc = mz_storage_client::types::sinks::StorageSinkDesc {
             from: sink.from,
             from_desc: storage_sink_from_entry
-                .desc(&self.catalog.resolve_full_name(
+                .desc(&self.catalog().resolve_full_name(
                     storage_sink_from_entry.name(),
                     storage_sink_from_entry.conn_id(),
                 ))
@@ -756,7 +758,7 @@ impl Coordinator {
         session: Option<&Session>,
     ) -> Result<(), AdapterError> {
         // Update catalog entry with sink connection.
-        let entry = self.catalog.get_entry(&id);
+        let entry = self.catalog().get_entry(&id);
         let name = entry.name().clone();
         let owner_id = entry.owner_id().clone();
         let sink = match entry.item() {
@@ -909,7 +911,7 @@ impl Coordinator {
                     *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
                 }
                 Op::DropItem(id) => {
-                    let entry = self.catalog.get_entry(id);
+                    let entry = self.catalog().get_entry(id);
                     *new_objects_per_schema
                         .entry((
                             entry.name().qualifiers.database_spec.clone(),
@@ -967,7 +969,7 @@ impl Coordinator {
         }
 
         self.validate_resource_limit(
-            self.catalog
+            self.catalog()
                 .user_connections()
                 .filter(|c| {
                     matches!(
@@ -983,7 +985,7 @@ impl Coordinator {
             "AWS PrivateLink Connection",
         )?;
         self.validate_resource_limit(
-            self.catalog.user_tables().count(),
+            self.catalog().user_tables().count(),
             new_tables,
             SystemVars::max_tables,
             "Table",
@@ -991,7 +993,7 @@ impl Coordinator {
         // Only sources that ingest data from an external system count
         // towards resource limits.
         let current_sources = self
-            .catalog
+            .catalog()
             .user_sources()
             .filter_map(|source| source.source())
             .filter(|source| source.is_external())
@@ -1003,13 +1005,13 @@ impl Coordinator {
             "Source",
         )?;
         self.validate_resource_limit(
-            self.catalog.user_sinks().count(),
+            self.catalog().user_sinks().count(),
             new_sinks,
             SystemVars::max_sinks,
             "Sink",
         )?;
         self.validate_resource_limit(
-            self.catalog.user_materialized_views().count(),
+            self.catalog().user_materialized_views().count(),
             new_materialized_views,
             SystemVars::max_materialized_views,
             "Materialized view",
@@ -1020,7 +1022,7 @@ impl Coordinator {
             //
             // TODO(benesch): remove the `max_sources` and `max_sinks` limit,
             // and set a higher max cluster limit?
-            self.catalog
+            self.catalog()
                 .user_clusters()
                 .filter(|c| c.linked_object_id.is_none())
                 .count(),
@@ -1031,7 +1033,7 @@ impl Coordinator {
         for (cluster_id, new_replicas) in new_replicas_per_cluster {
             // It's possible that the cluster hasn't been created yet.
             let current_amount = self
-                .catalog
+                .catalog()
                 .try_get_cluster(cluster_id)
                 .map(|instance| instance.replicas_by_id.len())
                 .unwrap_or(0);
@@ -1043,14 +1045,14 @@ impl Coordinator {
             )?;
         }
         self.validate_resource_limit(
-            self.catalog.databases().count(),
+            self.catalog().databases().count(),
             new_databases,
             SystemVars::max_databases,
             "Database",
         )?;
         for (database_id, new_schemas) in new_schemas_per_database {
             self.validate_resource_limit(
-                self.catalog.get_database(database_id).schemas_by_id.len(),
+                self.catalog().get_database(database_id).schemas_by_id.len(),
                 new_schemas,
                 SystemVars::max_schemas_per_database,
                 "Schemas per database",
@@ -1058,7 +1060,7 @@ impl Coordinator {
         }
         for ((database_spec, schema_spec), new_objects) in new_objects_per_schema {
             self.validate_resource_limit(
-                self.catalog
+                self.catalog()
                     .get_schema(&database_spec, &schema_spec, conn_id)
                     .items
                     .len(),
@@ -1068,13 +1070,13 @@ impl Coordinator {
             )?;
         }
         self.validate_resource_limit(
-            self.catalog.user_secrets().count(),
+            self.catalog().user_secrets().count(),
             new_secrets,
             SystemVars::max_secrets,
             "Secret",
         )?;
         self.validate_resource_limit(
-            self.catalog.user_roles().count(),
+            self.catalog().user_roles().count(),
             new_roles,
             SystemVars::max_roles,
             "Role",
@@ -1093,7 +1095,7 @@ impl Coordinator {
     where
         F: Fn(&SystemVars) -> u32,
     {
-        let limit = resource_limit(self.catalog.system_config());
+        let limit = resource_limit(self.catalog().system_config());
         let exceeds_limit = match (u32::try_from(current_amount), u32::try_from(new_instances)) {
             // 0 new instances are always ok.
             (_, Ok(new_instances)) if new_instances == 0 => false,

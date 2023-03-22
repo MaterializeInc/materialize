@@ -345,7 +345,7 @@ impl Coordinator {
     ) -> Result<mz_repr::Timestamp, AdapterError> {
         let temp_storage = RowArena::new();
         prep_scalar_expr(
-            self.catalog.state(),
+            self.catalog().state(),
             &mut timestamp,
             ExprPrepStyle::AsOfUpTo,
         )?;
@@ -370,7 +370,9 @@ impl Coordinator {
             ScalarType::Timestamp => evaled.unwrap_timestamp().timestamp_millis().try_into()?,
             _ => coord_bail!(
                 "can't use {} as a mz_timestamp for AS OF or UP TO",
-                self.catalog.for_session(session).humanize_column_type(&ty)
+                self.catalog()
+                    .for_session(session)
+                    .humanize_column_type(&ty)
             ),
         })
     }

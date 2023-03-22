@@ -203,7 +203,7 @@ impl Coordinator {
         const SEED_LEN: usize = 32;
         let mut seed = [0; SEED_LEN];
         for (i, byte) in self
-            .catalog
+            .catalog()
             .state()
             .config()
             .environment_id
@@ -284,12 +284,12 @@ impl Coordinator {
 
                 if old.as_ref() != Some(&new) {
                     let retraction = old.map(|old| {
-                        self.catalog
+                        self.catalog()
                             .state()
                             .pack_replica_heartbeat_update(replica_id, old, -1)
                     });
                     let insertion = self
-                        .catalog
+                        .catalog()
                         .state()
                         .pack_replica_heartbeat_update(replica_id, new, 1);
                     let updates = if let Some(retraction) = retraction {
@@ -314,12 +314,12 @@ impl Coordinator {
                 let old = std::mem::replace(m, Some(new.clone()));
                 if old.as_ref() != Some(&new) {
                     let retractions = old.map(|old| {
-                        self.catalog
+                        self.catalog()
                             .state()
                             .pack_replica_metric_updates(replica_id, &old, -1)
                     });
                     let insertions = self
-                        .catalog
+                        .catalog()
                         .state()
                         .pack_replica_metric_updates(replica_id, &new, 1);
                     let updates = if let Some(retractions) = retractions {
@@ -349,13 +349,13 @@ impl Coordinator {
                     let old = std::mem::replace(m, new.clone());
                     if old != new {
                         let retractions = self
-                            .catalog
+                            .catalog()
                             .state()
                             .pack_replica_write_frontiers_updates(replica_id, &old, -1);
                         builtin_updates.extend(retractions.into_iter());
 
                         let insertions = self
-                            .catalog
+                            .catalog()
                             .state()
                             .pack_replica_write_frontiers_updates(replica_id, &new, 1);
                         builtin_updates.extend(insertions.into_iter());
@@ -396,7 +396,7 @@ impl Coordinator {
         // for connectors that were altered while we were purifying.
         if !depends_on
             .iter()
-            .all(|id| self.catalog.try_get_entry(id).is_some())
+            .all(|id| self.catalog().try_get_entry(id).is_some())
         {
             self.handle_execute_inner(original_stmt, params, session, tx)
                 .await;
@@ -414,7 +414,7 @@ impl Coordinator {
         // First we'll allocate global ids for each subsource and plan them
         for (transient_id, subsource_stmt) in subsource_stmts {
             let depends_on = Vec::from_iter(mz_sql::names::visit_dependencies(&subsource_stmt));
-            let source_id = match self.catalog.allocate_user_id().await {
+            let source_id = match self.catalog_mut().allocate_user_id().await {
                 Ok(id) => id,
                 Err(e) => return tx.send(Err(e.into()), session),
             };
@@ -440,7 +440,7 @@ impl Coordinator {
             Err(e) => return tx.send(Err(e.into()), session),
         };
         let depends_on = Vec::from_iter(mz_sql::names::visit_dependencies(&stmt));
-        let source_id = match self.catalog.allocate_user_id().await {
+        let source_id = match self.catalog_mut().allocate_user_id().await {
             Ok(id) => id,
             Err(e) => return tx.send(Err(e.into()), session),
         };
@@ -475,7 +475,7 @@ impl Coordinator {
                 // connection, which means there is external state (like
                 // a Kafka topic) that's been created on our behalf. If
                 // we fail now, we'll leak that external state.
-                if self.catalog.try_get_entry(&id).is_some() {
+                if self.catalog().try_get_entry(&id).is_some() {
                     // TODO(benesch): this `expect` here is possibly scary, but
                     // no better solution presents itself. Possibly sinks should
                     // have an error bit, and an error here would set the error
@@ -504,8 +504,8 @@ impl Coordinator {
             }
             Err(e) => {
                 // Drop the placeholder sink if still present.
-                if self.catalog.try_get_entry(&id).is_some() {
-                    let ops = self.catalog.drop_items_ops(&[id]);
+                if self.catalog().try_get_entry(&id).is_some() {
+                    let ops = self.catalog().drop_items_ops(&[id]);
                     self.catalog_transact(
                         session_and_tx.as_ref().map(|(ref session, _tx)| session),
                         ops,
@@ -559,7 +559,7 @@ impl Coordinator {
 
         // It is possible that we receive a status update for a replica that has
         // already been dropped from the catalog. Just ignore these events.
-        let Some(cluster) = self.catalog.try_get_cluster(event.cluster_id) else {
+        let Some(cluster) = self.catalog().try_get_cluster(event.cluster_id) else {
             return;
         };
         let Some(replica) = cluster.replicas_by_id.get(&event.replica_id) else {
@@ -578,7 +578,7 @@ impl Coordinator {
             .await
             .unwrap_or_terminate("updating cluster status cannot fail");
 
-            let cluster = self.catalog.get_cluster(event.cluster_id);
+            let cluster = self.catalog().get_cluster(event.cluster_id);
             let replica = &cluster.replicas_by_id[&event.replica_id];
             let new_status = replica.status();
 
@@ -624,7 +624,7 @@ impl Coordinator {
         }
 
         if !ready_txns.is_empty() {
-            self.catalog
+            self.catalog_mut()
                 .confirm_leadership()
                 .await
                 .unwrap_or_terminate("unable to confirm leadership");
@@ -664,7 +664,7 @@ impl Coordinator {
             };
 
         // Re-validate that the catalog hasn't changed.
-        if transient_revision != self.catalog.transient_revision() {
+        if transient_revision != self.catalog().transient_revision() {
             // TODO(jkosh44) It would be preferable to re-validate the query instead of blindly failing.
             let (tx, session) = real_time_recency_context.take_tx_and_session();
             return tx.send(Err(AdapterError::Unstructured(anyhow!("Catalog contents have changed mid-query due to concurrent DDL, please re-try query"))), session);

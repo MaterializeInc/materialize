@@ -227,3 +227,55 @@ NULL NULL
 4 5
 5 5
 5 5
+
+statement ok
+CREATE TABLE init(n int, m int, s string);
+
+# Union branch cancellation should happen inside WMR.
+query T multiline
+EXPLAIN
+WITH MUTUALLY RECURSIVE
+  c0(n int) AS (
+    (SELECT n FROM init)
+    UNION ALL
+    (SELECT * FROM c2)
+  ),
+  c1(n int) AS (
+    (SELECT n+n FROM c0)
+    UNION ALL
+    ((SELECT n+3 FROM c0) EXCEPT ALL (SELECT n+3 FROM c0))
+  ),
+  c2(n int) AS (
+    (SELECT * FROM c0)
+    UNION ALL
+    (SELECT * FROM c1)
+    UNION ALL
+    (SELECT * FROM c1)
+  )
+SELECT * FROM c2;
+----
+Explained Query:
+  Return
+    Get l2
+  With Mutually Recursive
+    cte l2 =
+      Union
+        Get l0
+        Get l1
+        Get l1
+    cte l1 =
+      Union
+        Project (#1)
+          Map ((#0 + #0))
+            Get l0
+        Threshold
+          Union
+            Constant <empty>
+            Constant <empty>
+    cte l0 =
+      Union
+        Project (#0)
+          Get materialize.public.init
+        Get l2
+
+EOF

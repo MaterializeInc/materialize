@@ -48,7 +48,7 @@ impl Coordinator {
         if let Some(session) = cmd.session() {
             session.apply_external_metadata_updates();
         }
-        if let Err(e) = rbac::check_command(&self.catalog, &cmd) {
+        if let Err(e) = rbac::check_command(self.catalog(), &cmd) {
             cmd.send_error(e.into());
             return;
         }
@@ -79,22 +79,22 @@ impl Coordinator {
                 name,
                 stmt,
                 param_types,
-                mut session,
+                session,
                 tx,
             } => {
-                let result = self.declare(&mut session, name, stmt, param_types);
-                let _ = tx.send(Response { result, session });
+                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                self.declare(tx, session, name, stmt, param_types);
             }
 
             Command::Describe {
                 name,
                 stmt,
                 param_types,
-                mut session,
+                session,
                 tx,
             } => {
-                let result = self.handle_describe(&mut session, name, stmt, param_types);
-                let _ = tx.send(Response { result, session });
+                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                self.handle_describe(tx, session, name, stmt, param_types);
             }
 
             Command::CancelRequest {
@@ -109,7 +109,7 @@ impl Coordinator {
                 // require superuser permissions.
 
                 let _ = tx.send(Response {
-                    result: Ok(self.catalog.dump()),
+                    result: Ok(self.catalog().dump()),
                     session,
                 });
             }
@@ -132,7 +132,7 @@ impl Coordinator {
 
             Command::GetSystemVars { session, tx } => {
                 let mut vars = BTreeMap::new();
-                for var in self.catalog.system_config().iter() {
+                for var in self.catalog().system_config().iter() {
                     vars.insert(var.name().to_string(), var.value());
                 }
                 let _ = tx.send(Response {
@@ -189,8 +189,12 @@ impl Coordinator {
                 mut session,
                 tx,
             } => {
-                let result = self.verify_prepared_statement(&mut session, &name);
-                let _ = tx.send(Response { result, session });
+                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                let catalog = self.owned_catalog();
+                mz_ore::task::spawn(|| "coord::VerifyPreparedStatement", async move {
+                    let result = Self::verify_prepared_statement(&catalog, &mut session, &name);
+                    tx.send(result, session);
+                });
             }
         }
     }
@@ -202,7 +206,7 @@ impl Coordinator {
         tx: oneshot::Sender<Response<StartupResponse>>,
     ) {
         if self
-            .catalog
+            .catalog()
             .try_get_role_by_name(&session.user().name)
             .is_none()
         {
@@ -225,14 +229,14 @@ impl Coordinator {
         }
 
         let role_id = self
-            .catalog
+            .catalog()
             .try_get_role_by_name(&session.user().name)
             .expect("created above")
             .id;
         session.set_role_id(role_id);
 
         if let Err(e) = self
-            .catalog
+            .catalog_mut()
             .create_temporary_schema(session.conn_id(), role_id)
         {
             let _ = tx.send(Response {
@@ -243,7 +247,8 @@ impl Coordinator {
         }
 
         let mut messages = vec![];
-        let catalog = self.catalog.for_session(&session);
+        let catalog = self.catalog();
+        let catalog = catalog.for_session(&session);
         if catalog.active_database().is_none() {
             messages.push(StartupMessage::UnknownSessionDatabase(
                 session.vars().database().into(),
@@ -458,7 +463,8 @@ impl Coordinator {
             }
         }
 
-        let catalog = self.catalog.for_session(&session);
+        let catalog = self.catalog();
+        let catalog = catalog.for_session(&session);
         let original_stmt = stmt.clone();
         let (stmt, depends_on) = match mz_sql::names::resolve(&catalog, stmt) {
             Ok(resolved) => resolved,
@@ -521,17 +527,26 @@ impl Coordinator {
 
     fn handle_describe(
         &self,
-        session: &mut Session,
+        tx: ClientTransmitter<()>,
+        mut session: Session,
         name: String,
         stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<ScalarType>>,
-    ) -> Result<(), AdapterError> {
-        let desc = self.describe(session, stmt.clone(), param_types)?;
-        session.set_prepared_statement(
-            name,
-            PreparedStatement::new(stmt, desc, self.catalog.transient_revision()),
-        );
-        Ok(())
+    ) {
+        let catalog = self.owned_catalog();
+        mz_ore::task::spawn(|| "coord::handle_describe", async move {
+            let res = match Self::describe(&catalog, &session, stmt.clone(), param_types) {
+                Ok(desc) => {
+                    session.set_prepared_statement(
+                        name,
+                        PreparedStatement::new(stmt, desc, catalog.transient_revision()),
+                    );
+                    Ok(())
+                }
+                Err(err) => Err(err),
+            };
+            tx.send(res, session);
+        });
     }
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
@@ -611,7 +626,7 @@ impl Coordinator {
         self.clear_transaction(session);
 
         self.drop_temp_items(session).await;
-        self.catalog
+        self.catalog_mut()
             .drop_temporary_schema(&session.conn_id())
             .unwrap_or_terminate("unable to drop temporary schema");
         let session_type = metrics::session_type_label_value(session.user());
