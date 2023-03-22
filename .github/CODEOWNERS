@@ -14,7 +14,7 @@
 /.github                            @benesch
 /bin
 /ci                                 @MaterializeInc/qa
-/doc/user                           @MaterializeInc/devex
+/doc/user                           @MaterializeInc/docs
 /doc/developer/reference/compute    @MaterializeInc/compute
 /doc/developer/reference/storage    @MaterializeInc/storage
 /misc/dbt-materialize               @MaterializeInc/devex
@@ -44,7 +44,7 @@
 /src/lowertest                      @MaterializeInc/compute
 /src/lowertest-derive               @MaterializeInc/compute
 /src/metabase                       @benesch
-/src/mz                             @MaterializeInc/surfaces
+/src/mz                             @MaterializeInc/surfaces @MaterializeInc/devex
 /src/npm                            @benesch
 /src/orchestrator                   @benesch
 /src/orchestrator-kubernetes        @benesch
