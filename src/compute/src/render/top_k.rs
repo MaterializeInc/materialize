@@ -71,7 +71,18 @@ where
                     group_key,
                     arity,
                     limit,
-                }) => render_topk_monotonic(ok_input, group_key, limit, order_key, arity),
+                }) => {
+                    let (oks, errs) = render_topk_monotonic(
+                        ok_input,
+                        group_key,
+                        limit,
+                        order_key,
+                        arity,
+                        &self.debug_name,
+                    );
+                    err_collection = err_collection.concat(&errs);
+                    oks
+                }
                 TopKPlan::Basic(BasicTopKPlan {
                     group_key,
                     order_key,
@@ -282,8 +293,11 @@ where
                 }
             });
 
-            // We arrange the inputs ourself to force it into a leaner structure because we know we
-            // won't care about values.
+            // We ensure physical monotonicity of the input collection by:
+            // (a) Consolidating the input so as to transform any logical monotonicity
+            // into physical monotonicity;
+            // (b) Ensuring that physical monotonicity has been attained and producing
+            // errors otherwise.
             let consolidated = collection
                 .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated MonotonicTop1 input");
             let debug_name = debug_name.to_string();
@@ -330,7 +344,8 @@ where
             limit: Option<usize>,
             order_key: Vec<mz_expr::ColumnOrder>,
             arity: usize,
-        ) -> Collection<G, Row, Diff>
+            debug_name: &str,
+        ) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
         where
             G: Scope,
             G::Timestamp: crate::render::RenderTimestamp,
@@ -346,6 +361,24 @@ where
                     group_row
                 };
                 (group_row, row)
+            });
+
+            // We ensure physical monotonicity of the input collection by:
+            // (a) Consolidating the input so as to transform any logical monotonicity
+            // into physical monotonicity;
+            // (b) Ensuring that physical monotonicity has been attained and producing
+            // errors otherwise.
+            let consolidated = collection
+                .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated MonotonicTopK input");
+            let debug_name = debug_name.to_string();
+            let (collection, errs) = consolidated.ensure_monotonic(move |data, diff| {
+                warn!(
+                    "[customer-data] MonotonicTopK expected monotonic input but \
+                    received {data:?} with diff {diff:?} in dataflow {debug_name}"
+                );
+                error!("Non-monotonic input to MonotonicTopK");
+                let m = "tried to build monotonic top-k on non-monotonic input".to_string();
+                (DataflowError::from(EvalError::Internal(m)), 1)
             });
 
             // For monotonic inputs, we are able to thin the input relation in two stages:
@@ -387,7 +420,7 @@ where
             let result = build_topk_stage(thinned, order_key, 1u64, 0, limit, arity);
             retractions.set(&collection.concat(&result.negate()));
 
-            result.map(|((_key, _hash), row)| row)
+            (result.map(|((_key, _hash), row)| row), errs)
         }
 
         /// Applies a per-worker, intra-timestamp thinning step to speed up

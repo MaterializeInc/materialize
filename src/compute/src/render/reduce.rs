@@ -844,8 +844,11 @@ where
         (key, values)
     });
 
-    // We arrange the inputs ourself to force it into a leaner structure because we know we
-    // won't care about values.
+    // We ensure physical monotonicity of the input collection by:
+    // (a) Consolidating the input so as to transform any logical monotonicity
+    // into physical monotonicity;
+    // (b) Ensuring that physical monotonicity has been attained and producing
+    // errors otherwise.
     let consolidated =
         collection.consolidate_named::<RowKeySpine<_, _, _>>("Consolidated ReduceMonotonic input");
     let debug_name = debug_name.to_string();
