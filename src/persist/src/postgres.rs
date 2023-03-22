@@ -384,6 +384,8 @@ impl PostgresConsensus {
             return; //Ok(());
         }
 
+        // WIP: need to dedupe by (shard, seqno) so we don't return mismatched value
+
         let mut param_count = 1;
         let mut params: Vec<&(dyn ToSql + Sync)> = Vec::new();
 
