@@ -59,6 +59,37 @@ class UpgradeEntireMzPreviousVersion(UpgradeEntireMz):
         return previous_version
 
 
+class UpgradeEntireMzTwoVersions(UpgradeEntireMz):
+    """Upgrade the entire Mz instance starting from the previous
+    released version and passing through the last released version."""
+
+    def base_version(self) -> MzVersion:
+        return previous_version
+
+    def actions(self) -> List[Action]:
+        print(
+            f"Upgrading starting from tag {self.base_version()} going through {last_version}"
+        )
+        return [
+            # Start with previous_version
+            StartMz(tag=self.base_version()),
+            Initialize(self),
+            # Upgrade to last_version
+            KillMz(),
+            StartMz(tag=last_version),
+            Manipulate(self, phase=1),
+            # Upgrade to current source
+            KillMz(),
+            StartMz(tag=None),
+            Manipulate(self, phase=2),
+            Validate(self),
+            # A second restart while already on the current source
+            KillMz(),
+            StartMz(tag=None),
+            Validate(self),
+        ]
+
+
 #
 # We are limited with respect to the different orders in which stuff can be upgraded:
 # - some sequences of events are invalid
