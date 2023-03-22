@@ -71,62 +71,7 @@ where
                     group_key,
                     arity,
                     limit,
-                }) => {
-                    let mut datum_vec = mz_repr::DatumVec::new();
-                    let collection = ok_input.map(move |row| {
-                        let group_row = {
-                            let datums = datum_vec.borrow_with(&row);
-                            let iterator = group_key.iter().map(|i| datums[*i]);
-                            let total_size = mz_repr::datums_size(iterator.clone());
-                            let mut group_row = Row::with_capacity(total_size);
-                            group_row.packer().extend(iterator);
-                            group_row
-                        };
-                        (group_row, row)
-                    });
-
-                    // For monotonic inputs, we are able to thin the input relation in two stages:
-                    // 1. First, we can do an intra-timestamp thinning which has the advantage of
-                    //    being computed in a streaming fashion, even for the initial snapshot.
-                    // 2. Then, we can do inter-timestamp thinning by feeding back negations for
-                    //    any records that have been invalidated.
-                    let collection = if let Some(limit) = limit {
-                        render_intra_ts_thinning(collection, order_key.clone(), limit)
-                    } else {
-                        collection
-                    };
-
-                    let collection =
-                        collection.map(|(group_row, row)| ((group_row, row.hashed()), row));
-
-                    // For monotonic inputs, we are able to retract inputs that can no longer be produced
-                    // as outputs. Any inputs beyond `offset + limit` will never again be produced as
-                    // outputs, and can be removed. The simplest form of this is when `offset == 0` and
-                    // these removable records are those in the input not produced in the output.
-                    // TODO: consider broadening this optimization to `offset > 0` by first filtering
-                    // down to `offset = 0` and `limit = offset + limit`, followed by a finishing act
-                    // of `offset` and `limit`, discarding only the records not produced in the intermediate
-                    // stage.
-                    use differential_dataflow::operators::iterate::Variable;
-                    let delay = std::time::Duration::from_secs(10);
-                    let retractions = Variable::new(
-                        &mut ok_input.scope(),
-                        <G::Timestamp as crate::render::RenderTimestamp>::system_delay(
-                            delay.try_into().expect("must fit"),
-                        ),
-                    );
-                    let thinned = collection.concat(&retractions.negate());
-
-                    // As an additional optimization, we can skip creating the full topk hierachy
-                    // here since we now have an upper bound on the number records due to the
-                    // intra-ts thinning. The maximum number of records per timestamp is
-                    // (num_workers * limit), which we expect to be a small number and so we render
-                    // a single topk stage.
-                    let result = build_topk_stage(thinned, order_key, 1u64, 0, limit, arity);
-                    retractions.set(&collection.concat(&result.negate()));
-
-                    result.map(|((_key, _hash), row)| row)
-                }
+                }) => render_topk_monotonic(ok_input, group_key, limit, order_key, arity),
                 TopKPlan::Basic(BasicTopKPlan {
                     group_key,
                     order_key,
@@ -304,6 +249,11 @@ where
                 .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated TopK")
         }
 
+        /// Builds a specialized dataflow graph for top-1 over monotonic sources.
+        /// Here, we observe that monotonicity implies that we do not need to maintain
+        /// state proportional to the size of the input collection, as loser rows
+        /// can never become part of the top-1. In this setting, top-1 computation
+        /// resembles the computation of an accumulable aggregate.
         fn render_top1_monotonic<G>(
             collection: Collection<G, Row, Diff>,
             group_key: Vec<usize>,
@@ -368,6 +318,81 @@ where
             (result.as_collection(|_k, v| v.clone()), errs)
         }
 
+        /// Builds a specialized dataflow graph for top-k over monotonic sources.
+        /// Here, we observe that monotonicity implies that we do not need to maintain
+        /// state proportional to the size of the input collection, as loser rows
+        /// can never become part of the top-k. We apply an inter-timestamp thinning
+        /// step that discards losers rows as well as an inter-timestamp thinning step
+        /// that computes partial top-k results per worker.
+        fn render_topk_monotonic<G>(
+            collection: Collection<G, Row, Diff>,
+            group_key: Vec<usize>,
+            limit: Option<usize>,
+            order_key: Vec<mz_expr::ColumnOrder>,
+            arity: usize,
+        ) -> Collection<G, Row, Diff>
+        where
+            G: Scope,
+            G::Timestamp: crate::render::RenderTimestamp,
+        {
+            let mut datum_vec = mz_repr::DatumVec::new();
+            let collection = collection.map(move |row| {
+                let group_row = {
+                    let datums = datum_vec.borrow_with(&row);
+                    let iterator = group_key.iter().map(|i| datums[*i]);
+                    let total_size = mz_repr::datums_size(iterator.clone());
+                    let mut group_row = Row::with_capacity(total_size);
+                    group_row.packer().extend(iterator);
+                    group_row
+                };
+                (group_row, row)
+            });
+
+            // For monotonic inputs, we are able to thin the input relation in two stages:
+            // 1. First, we can do an intra-timestamp thinning which has the advantage of
+            //    being computed in a streaming fashion, even for the initial snapshot.
+            // 2. Then, we can do inter-timestamp thinning by feeding back negations for
+            //    any records that have been invalidated.
+            let collection = if let Some(limit) = limit {
+                render_intra_ts_thinning(collection, order_key.clone(), limit)
+            } else {
+                collection
+            };
+
+            let collection = collection.map(|(group_row, row)| ((group_row, row.hashed()), row));
+
+            // For monotonic inputs, we are able to retract inputs that can no longer be produced
+            // as outputs. Any inputs beyond `offset + limit` will never again be produced as
+            // outputs, and can be removed. The simplest form of this is when `offset == 0` and
+            // these removable records are those in the input not produced in the output.
+            // TODO: consider broadening this optimization to `offset > 0` by first filtering
+            // down to `offset = 0` and `limit = offset + limit`, followed by a finishing act
+            // of `offset` and `limit`, discarding only the records not produced in the intermediate
+            // stage.
+            use differential_dataflow::operators::iterate::Variable;
+            let delay = std::time::Duration::from_secs(10);
+            let retractions = Variable::new(
+                &mut collection.scope(),
+                <G::Timestamp as crate::render::RenderTimestamp>::system_delay(
+                    delay.try_into().expect("must fit"),
+                ),
+            );
+            let thinned = collection.concat(&retractions.negate());
+
+            // As an additional optimization, we can skip creating the full topk hierachy
+            // here since we now have an upper bound on the number records due to the
+            // intra-ts thinning. The maximum number of records per timestamp is
+            // (num_workers * limit), which we expect to be a small number and so we render
+            // a single topk stage.
+            let result = build_topk_stage(thinned, order_key, 1u64, 0, limit, arity);
+            retractions.set(&collection.concat(&result.negate()));
+
+            result.map(|((_key, _hash), row)| row)
+        }
+
+        /// Applies a per-worker, intra-timestamp thinning step to speed up
+        /// monotonic top-k computation. The thinning step computes per-key
+        /// top-k results for each worker as updates stream in.
         fn render_intra_ts_thinning<G>(
             collection: Collection<G, (Row, Row), Diff>,
             order_key: Vec<mz_expr::ColumnOrder>,
