@@ -2195,7 +2195,7 @@ impl Coordinator {
         // We do this here so that `optimize_dataflow` can pick up the monotonicity information.
         if let Some(as_of) = dataflow.as_of.as_ref() {
             if !as_of.is_empty() {
-                if let Some(next) = as_of.elements()[0].checked_add(1) {
+                if let Some(next) = as_of.as_option().and_then(|as_of| as_of.checked_add(1)) {
                     dataflow.until = timely::progress::Antichain::from_elem(next);
                     // Indicate imported sources and indexes as monotonic; as we will produce
                     // only the snapshot (without retractions).
