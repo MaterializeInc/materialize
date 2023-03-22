@@ -9,6 +9,8 @@
 
 mode cockroach
 
+reset-server
+
 # Verify initial roles.
 query TTBBBB
 SELECT id, name, inherit, create_role, create_db, create_cluster FROM mz_roles WHERE id LIKE 's%'
@@ -224,3 +226,20 @@ query T
 SELECT pg_get_userbyid(4294967295);
 ----
  unknown (OID=4294967295)
+
+# Test concurrently dropped role
+
+simple conn=foo,user=foo
+SELECT current_user();
+----
+foo
+COMPLETE 1
+
+statement ok
+DROP ROLE foo
+
+simple conn=foo,user=foo
+SELECT current_user();
+----
+db error: ERROR: role u4 was concurrently dropped
+DETAIL: Please disconnect and re-connect with a valid role.
