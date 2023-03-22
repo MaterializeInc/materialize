@@ -382,14 +382,14 @@ impl ColumnKnowledge {
 pub struct DatumKnowledge {
     /// If set, a specific value for the column.
     /// Implied partial order: `None < Some(v)` (default!).
-    value: Option<(Result<mz_repr::Row, EvalError>, ColumnType)>,
+    value: Option<(Result<mz_repr::Row, EvalError>, ScalarType)>,
     /// If false, the value is not `Datum::Null`.
     /// Implied partial order: `true < false` (not the Boolean default!).
     nullable: bool,
 }
 
 impl DatumKnowledge {
-    // Intersects the possible states of a column.
+    // Intersects (strengthens) the possible states of a column.
     fn absorb(&mut self, other: &Self) {
         self.nullable &= other.nullable;
         if self.value.is_none() {
@@ -418,7 +418,7 @@ impl From<&MirScalarExpr> for DatumKnowledge {
     fn from(expr: &MirScalarExpr) -> Self {
         if let MirScalarExpr::Literal(l, t) = expr {
             let nullable = expr.is_literal_null();
-            let value = Some((l.clone(), t.clone().nullable(nullable)));
+            let value = Some((l.clone(), t.scalar_type.clone()));
             Self { value, nullable }
         } else {
             Self::default()
@@ -427,12 +427,9 @@ impl From<&MirScalarExpr> for DatumKnowledge {
 }
 
 impl From<(Datum<'_>, &ColumnType)> for DatumKnowledge {
-    fn from((datum, t): (Datum<'_>, &ColumnType)) -> Self {
-        let nullable = datum == Datum::Null;
-        let value = Some((
-            Ok(Row::pack_slice(&[datum.clone()])),
-            t.clone().nullable(nullable),
-        ));
+    fn from((d, t): (Datum<'_>, &ColumnType)) -> Self {
+        let nullable = d == Datum::Null;
+        let value = Some((Ok(Row::pack_slice(&[d.clone()])), t.scalar_type.clone()));
         Self { value, nullable }
     }
 }
@@ -479,7 +476,8 @@ pub fn optimize(
                 MirScalarExpr::Column(index) => {
                     let index = *index;
                     if let Some((datum, typ)) = &column_knowledge[index].value {
-                        *e = MirScalarExpr::Literal(datum.clone(), typ.clone());
+                        let nullable = column_knowledge[index].nullable;
+                        *e = MirScalarExpr::Literal(datum.clone(), typ.clone().nullable(nullable));
                     }
                     column_knowledge[index].clone()
                 }
