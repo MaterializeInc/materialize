@@ -27,7 +27,7 @@ netstat -panelot > netstat-panelot.log
 ps aux > ps-aux.log
 docker ps -a --no-trunc > docker-ps-a.log
 
-artifacts=(run.log services.log journalctl-merge.log netstat-ant.log netstat-panelot.log ps-aux.log docker-ps-a.log)
+artifacts=(run.log services.log journalctl-merge.log netstat-ant.log netstat-panelot.log ps-aux.log docker-ps-a.log sar.log)
 for artifact in "${artifacts[@]}"; do
   buildkite-agent artifact upload "$artifact"
 done
