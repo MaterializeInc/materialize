@@ -151,10 +151,6 @@ pub fn check_plan(
     session: &Session,
     plan: &Plan,
 ) -> Result<(), AdapterError> {
-    if !catalog.system_vars().enable_rbac_checks() {
-        return Ok(());
-    }
-
     let role_id = session.role_id();
     if catalog.try_get_role(role_id).is_none() {
         // PostgreSQL allows users that have their role dropped to perform some actions,
@@ -163,6 +159,10 @@ pub fn check_plan(
         // role is dropped.
         return Err(AdapterError::ConcurrentRoleDrop(role_id.clone()));
     };
+
+    if !catalog.system_vars().enable_rbac_checks() {
+        return Ok(());
+    }
 
     if session.is_superuser() {
         return Ok(());
