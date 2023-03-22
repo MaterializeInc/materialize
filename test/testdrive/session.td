@@ -22,6 +22,7 @@ emit_timestamp_notice                   off                    "Boolean flag ind
 emit_trace_id_notice                    off                    "Boolean flag indicating whether to send a NOTICE specifying the trace id when available (Materialize)."
 extra_float_digits                      3                      "Adjusts the number of digits displayed for floating-point values (PostgreSQL)."
 failpoints                              ""                     "Allows failpoints to be dynamically activated."
+force_introspection_cluster             on                     "Whether to force queries that depend only on system tables, to run on the mz_introspection cluster (Materialize)."
 idle_in_transaction_session_timeout     "2 min"                "Sets the maximum allowed duration that a session can sit idle in a transaction before being terminated. If this value is specified without units, it is taken as milliseconds. A value of zero disables the timeout (PostgreSQL)."
 integer_datetimes                       on                     "Reports whether the server uses 64-bit-integer dates and times (PostgreSQL)."
 IntervalStyle                           postgres               "Sets the display format for interval values (PostgreSQL)."

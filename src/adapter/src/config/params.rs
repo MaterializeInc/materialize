@@ -138,3 +138,28 @@ pub struct ModifiedParameter {
     pub value: String,
     pub is_default: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::SynchronizedParameters;
+    use mz_sql::session::vars::SystemVars;
+
+    #[test]
+    fn test_github_18189() {
+        let vars = SystemVars::default();
+        let mut sync = SynchronizedParameters::new(vars);
+        assert!(sync.modify("allowed_cluster_replica_sizes", "1,2"));
+        assert_eq!(sync.get("allowed_cluster_replica_sizes"), r#""1", "2""#);
+        assert!(sync.modify("allowed_cluster_replica_sizes", ""));
+        assert_eq!(sync.get("allowed_cluster_replica_sizes"), "");
+    }
+
+    #[test]
+    fn test_vars_are_synced() {
+        let vars = SystemVars::default();
+        let sync = SynchronizedParameters::new(vars);
+
+        // A smoke test to ensure the variables we want to get synced, are getting synced
+        assert!(sync.is_synchronized("enable_force_introspection_cluster"));
+    }
+}

@@ -1920,11 +1920,8 @@ impl Coordinator {
         let view_id = self.allocate_transient_id()?;
         let index_id = self.allocate_transient_id()?;
 
-<<<<<<< HEAD
-        let cluster = self.catalog().active_cluster(session)?;
-=======
-        // If our query only depends on system tables, then we optionally run it on the
-        // introspection cluster.
+        // If our query only depends on system tables, a LaunchDarkly flag is enabled, and a
+        // session var is set, then we automatically run the query on the mz_introspection cluster
         let cluster = match introspection::auto_run_on_introspection(
             &self.catalog,
             session,
@@ -2271,20 +2268,16 @@ impl Coordinator {
             up_to,
         } = plan;
 
-<<<<<<< HEAD
-        let cluster = self.catalog().active_cluster(session)?;
-=======
         // If our query only depends on system tables, then we optionally run it on the
         // introspection cluster.
         let cluster = match introspection::auto_run_on_introspection(
-            &self.catalog,
+            self.catalog(),
             session,
             depends_on.iter().copied(),
         ) {
             Some(cluster) => cluster,
-            None => self.catalog.active_cluster(session)?,
+            None => self.catalog().active_cluster(session)?,
         };
->>>>>>> 344f2cfa2 (branch start)
         let cluster_id = cluster.id;
 
         let target_replica_name = session.vars().cluster_replica();

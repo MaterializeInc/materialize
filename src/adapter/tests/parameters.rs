@@ -76,31 +76,10 @@
 // END LINT CONFIG
 
 use mz_adapter::catalog::Catalog;
-use mz_adapter::config::SynchronizedParameters;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
 use mz_repr::ScalarType;
 use mz_sql::plan::PlanContext;
-use mz_sql::session::vars::SystemVars;
-
-#[test]
-fn test_github_18189() {
-    let vars = SystemVars::default();
-    let mut sync = SynchronizedParameters::new(vars);
-    assert!(sync.modify("allowed_cluster_replica_sizes", "1,2"));
-    assert_eq!(sync.get("allowed_cluster_replica_sizes"), r#""1", "2""#);
-    assert!(sync.modify("allowed_cluster_replica_sizes", ""));
-    assert_eq!(sync.get("allowed_cluster_replica_sizes"), "");
-}
-
-#[test]
-fn test_vars_are_synced() {
-    let vars = SystemVars::default();
-    let sync = SynchronizedParameters::new(vars);
-
-    // A smoke test to ensure the variables we want to get synced, are getting synced
-    assert!(sync.is_synchronized("enable_force_introspection_cluster"));
-}
 
 #[tokio::test]
 async fn test_parameter_type_inference() {

@@ -644,7 +644,7 @@ pub const FORCE_INTROSPECTION_CLUSTER: ServerVar<bool> = ServerVar {
     value: &true,
     description:
         "Whether to force queries that depend only on system tables, to run on the mz_introspection cluster (Materialize).",
-    internal: true,
+    internal: false,
     safe: true,
 };
 

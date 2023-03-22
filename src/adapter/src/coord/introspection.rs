@@ -18,11 +18,9 @@
 //!
 //! [`mz_introspection`]: https://materialize.com/docs/sql/show-clusters/#mz_introspection-system-cluster
 
-use mz_ore::collections::HashSet;
 use mz_repr::GlobalId;
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::Plan;
-use once_cell::sync::Lazy;
 
 use crate::catalog::{Catalog, Cluster};
 use crate::notice::AdapterNotice;
@@ -30,22 +28,9 @@ use crate::rbac;
 use crate::session::Session;
 
 use crate::{
-    catalog::builtin::{
-        INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_INTROSPECTION_CLUSTER,
-        MZ_INTROSPECTION_ROLE, PG_CATALOG_SCHEMA,
-    },
+    catalog::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_INTROSPECTION_ROLE},
     AdapterError,
 };
-
-/// The schema's a user is allowed to query from the `mz_introspection` cluster
-static ALLOWED_SCHEMAS: Lazy<HashSet<&str>> = Lazy::new(|| {
-    HashSet::from([
-        MZ_CATALOG_SCHEMA,
-        PG_CATALOG_SCHEMA,
-        MZ_INTERNAL_SCHEMA,
-        INFORMATION_SCHEMA,
-    ])
-});
 
 /// Checks whether or not we should automatically run a query on the `mz_introspection`
 /// cluster, as opposed to whatever the current default cluster is.
@@ -70,31 +55,20 @@ pub fn auto_run_on_introspection<'a, 's>(
     // Make sure we only depend on the system catalog.
     let system_only = depends_on.all(|id| {
         let entry = catalog.get_entry(&id);
-        let full_name = catalog.resolve_full_name(entry.name(), Some(session.conn_id()));
-        ALLOWED_SCHEMAS.contains(full_name.schema.as_str())
+        let schema = &entry.name().qualifiers.schema_spec;
+        catalog.state().is_system_schema_specifier(schema)
     });
 
     // If we're allowed to run on the mz_introspection cluster, make sure we can resolve it.
     if non_empty && system_only {
-        let intros_cluster = catalog.resolve_cluster(MZ_INTROSPECTION_CLUSTER.name);
-        let active_cluster = catalog.active_cluster(session);
+        let intros_cluster = catalog.resolve_builtin_cluster(&MZ_INTROSPECTION_CLUSTER);
+        tracing::debug!("Running on '{}' cluster", MZ_INTROSPECTION_CLUSTER.name);
 
-        match (intros_cluster, active_cluster) {
-            (Ok(intros), active) => {
-                tracing::debug!("Running on mz_introspection cluster");
-                // If we're running on a different cluster than the active
-                // one, notify the user.
-                if active.map(|c| c.id != intros.id).unwrap_or(true) {
-                    session.add_notice(AdapterNotice::AutoRunOnIntrospectionCluster);
-                }
-                Some(intros)
-            }
-            (Err(e), _) => {
-                // Uh oh, failed to resolve the mz_introspection cluster, nothing we can do.
-                tracing::error!("Failed to resolve mz_introspection cluster, fall {:?}", e);
-                None
-            }
+        // If we're running on a different cluster than the active one, notify the user.
+        if intros_cluster.name != session.vars().cluster() {
+            session.add_notice(AdapterNotice::AutoRunOnIntrospectionCluster);
         }
+        Some(intros_cluster)
     } else {
         None
     }
@@ -185,7 +159,7 @@ pub fn user_privilege_hack(
     for id in depends_on {
         let item = catalog.get_item(id);
         let full_name = catalog.resolve_full_name(item.name());
-        if !ALLOWED_SCHEMAS.contains(full_name.schema.as_str()) {
+        if catalog.is_system_schema(&full_name.schema) {
             return Err(AdapterError::Unauthorized(
                 rbac::UnauthorizedError::privilege(
                     format!("interact with object {full_name}"),
