@@ -239,12 +239,6 @@ a 10 1
 ----
 parts=1 len=1
 
-# however when since is an advance of upper, our update cannot be in advance of since
-write-batch output=b0 lower=0 upper=2 since=10
-a 100 1
-----
-error: timestamp 100 is beyond the expected batch since: Antichain { elements: [10] }
-
 # batches can be written unsorted
 write-batch output=b0 lower=0 upper=2 consolidate=false
 d 0 1
