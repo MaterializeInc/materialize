@@ -39,7 +39,10 @@ use mz_ore::task;
 use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
-use mz_sql::catalog::{CatalogCluster, CatalogError, CatalogItemType, CatalogTypeDetails};
+use mz_sql::catalog::{
+    CatalogCluster, CatalogDatabase, CatalogError, CatalogItemType, CatalogSchema,
+    CatalogTypeDetails,
+};
 use mz_sql::catalog::{CatalogItem as SqlCatalogItem, CatalogRole};
 use mz_sql::names::{QualifiedObjectName, RoleId};
 use mz_sql::plan::{
@@ -1464,7 +1467,16 @@ impl Coordinator {
         session: &Session,
         plan: DropRolesPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let dropped_ids: BTreeSet<_> = plan.ids.iter().map(|(id, _)| id).collect();
+        let dropped_roles: BTreeMap<_, _> = plan
+            .ids
+            .iter()
+            .map(|(role_id, role_name)| (*role_id, role_name.as_str()))
+            .collect();
+
+        // Check to make sure that no object is owned by a dropped role.
+        self.validate_dropped_role_ownership(&dropped_roles)?;
+
+        let dropped_ids: BTreeSet<_> = dropped_roles.keys().collect();
         let mut ops = Vec::new();
 
         // If any role is a member of a dropped role, then we must revoke that membership.
@@ -1494,6 +1506,59 @@ impl Coordinator {
         );
         self.catalog_transact(Some(session), ops).await?;
         Ok(ExecuteResponse::DroppedRole)
+    }
+
+    fn validate_dropped_role_ownership(
+        &self,
+        dropped_roles: &BTreeMap<RoleId, &str>,
+    ) -> Result<(), AdapterError> {
+        let mut dependent_objects: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        for entry in self.catalog.entries() {
+            if let Some(role_name) = dropped_roles.get(entry.owner_id()) {
+                dependent_objects
+                    .entry(role_name.to_string())
+                    .or_default()
+                    .push(format!("{} {}", entry.item().typ(), entry.name().item));
+            }
+        }
+        for database in self.catalog.databases() {
+            if let Some(role_name) = dropped_roles.get(&database.owner_id) {
+                dependent_objects
+                    .entry(role_name.to_string())
+                    .or_default()
+                    .push(format!("database {}", database.name()));
+            }
+            for schema in database.schemas_by_id.values() {
+                if let Some(role_name) = dropped_roles.get(&schema.owner_id) {
+                    dependent_objects
+                        .entry(role_name.to_string())
+                        .or_default()
+                        .push(format!("schema {}", schema.name().schema));
+                }
+            }
+        }
+        for cluster in self.catalog.clusters() {
+            if let Some(role_name) = dropped_roles.get(&cluster.owner_id) {
+                dependent_objects
+                    .entry(role_name.to_string())
+                    .or_default()
+                    .push(format!("cluster {}", cluster.name()));
+            }
+            for replica in cluster.replicas_by_id.values() {
+                if let Some(role_name) = dropped_roles.get(&replica.owner_id) {
+                    dependent_objects
+                        .entry(role_name.to_string())
+                        .or_default()
+                        .push(format!("cluster replica {}", replica.name));
+                }
+            }
+        }
+
+        if !dependent_objects.is_empty() {
+            Err(AdapterError::DependentObjectOwnership(dependent_objects))
+        } else {
+            Ok(())
+        }
     }
 
     pub(super) async fn sequence_drop_clusters(

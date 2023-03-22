@@ -11,6 +11,11 @@ mode cockroach
 
 reset-server
 
+simple conn=mz_system,user=mz_system
+ALTER ROLE materialize CREATEDB CREATECLUSTER CREATEROLE;
+----
+COMPLETE 0
+
 # All objects on a fresh installation should be owned by mz_system (s1)
 
 # No builtin sinks
@@ -91,16 +96,11 @@ s1
 # Test user made objects
 
 simple conn=mz_system,user=mz_system
-ALTER ROLE materialize CREATEDB CREATECLUSTER;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
 CREATE ROLE joe CREATEDB CREATECLUSTER;
 ----
 COMPLETE 0
 
-# Tables
+## Tables
 
 statement ok
 CREATE TABLE mt (a INT);
@@ -142,7 +142,7 @@ SELECT mz_roles.name
 ----
 joe
 
-# Indexes
+## Indexes
 
 statement ok
 CREATE INDEX mt_ind ON mt(a);
@@ -168,7 +168,7 @@ SELECT mz_roles.name
 ----
 joe
 
-# Sources
+## Sources
 
 statement ok
 CREATE SOURCE ms FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
@@ -210,7 +210,7 @@ SELECT mz_roles.name
 ----
 joe
 
-# Views
+## Views
 
 statement ok
 CREATE VIEW mv AS SELECT 1;
@@ -252,7 +252,7 @@ SELECT mz_roles.name
 ----
 joe
 
-# Materialized Views
+## Materialized Views
 
 statement ok
 CREATE MATERIALIZED VIEW mmv AS SELECT 1;
@@ -294,7 +294,7 @@ SELECT mz_roles.name
 ----
 joe
 
-# Connections
+## Connections
 
 statement ok
 CREATE CONNECTION mc TO KAFKA (BROKER 'localhost:9092');
@@ -320,7 +320,7 @@ SELECT mz_roles.name
 ----
 joe
 
-# Types
+## Types
 
 statement ok
 CREATE TYPE mty AS LIST (ELEMENT TYPE=bool);
@@ -346,7 +346,7 @@ SELECT mz_roles.name
 ----
 joe
 
-# Secrets
+## Secrets
 
 statement ok
 CREATE SECRET mse AS decode('c2VjcmV0Cg==', 'base64');
@@ -372,7 +372,7 @@ SELECT mz_roles.name
 ----
 joe
 
-# Databases
+## Databases
 
 statement ok
 CREATE DATABASE mdb;
@@ -398,7 +398,7 @@ SELECT mz_roles.name
 ----
 joe
 
-# Schemas
+## Schemas
 
 statement ok
 CREATE SCHEMA msc;
@@ -435,7 +435,7 @@ SELECT mz_roles.name
 ----
 materialize
 
-# Clusters
+## Clusters
 
 statement ok
 CREATE CLUSTER mclus REPLICAS (mr1 (SIZE '1'));
@@ -477,7 +477,7 @@ SELECT mz_roles.name
 ----
 joe
 
-# Cluster Replicas
+## Cluster Replicas
 
 statement ok
 CREATE CLUSTER REPLICA default.mr2 SIZE '1';
@@ -528,3 +528,297 @@ SELECT mz_roles.name
   WHERE mz_tables.name = 'new_table'
 ----
 materialize
+
+# Prevent dropping roles while owned objects exist
+
+## Tables
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+simple conn=owner,user=owner
+CREATE TABLE t (a INT);
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner,user=owner
+DROP TABLE t;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+## Indexes
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+statement ok
+create TABLE t (a INT);
+
+simple conn=owner,user=owner
+CREATE INDEX ind ON t(a);
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner,user=owner
+DROP INDEX ind;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+statement ok
+DROP TABLE t
+
+## Sources
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+simple conn=owner,user=owner
+create SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner,user=owner
+DROP SOURCE s;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+## Views
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+simple conn=owner,user=owner
+create CREATE VIEW v AS SELECT 1;
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner,user=owner
+DROP VIEW v;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+## Materialized Views
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+simple conn=owner,user=owner
+CREATE MATERIALIZED VIEW mv AS SELECT 1;
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner,user=owner
+DROP MATERIALIZED VIEW mv;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+## Connections
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+simple conn=owner,user=owner
+CREATE CONNECTION c TO KAFKA (BROKER 'localhost:9092');
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner,user=owner
+DROP CONNECTION c;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+## Types
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+simple conn=owner,user=owner
+CREATE CREATE TYPE ty AS LIST (ELEMENT TYPE=bool);
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner,user=owner
+DROP TYPE ty;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+## Secrets
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+simple conn=owner,user=owner
+CREATE SECRET se AS decode('c2VjcmV0Cg==', 'base64');
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner,user=owner
+DROP SECRET se;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+## Databases
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+simple conn=owner,user=owner
+CREATE DATABASE db;
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner,user=owner
+DROP DATABASE db;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+## Schemas
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+simple conn=owner,user=owner
+CREATE SCHEMA sc;
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner,user=owner
+DROP SCHEMA sc;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+## Clusters
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+simple conn=owner,user=owner
+CREATE CLUSTER clus REPLICAS (r1 (SIZE '1'));
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner,user=owner
+DROP CLUSTER clus;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+## Cluster Replicas
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+simple conn=owner,user=owner
+CREATE CLUSTER REPLICA default.r2 SIZE '1';
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner,user=owner
+DROP CLUSTER REPLICA default.r2;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+## Multiple Objects
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+simple conn=owner,user=owner
+TABLE t (a INT)
+----
+COMPLETE 0
+
+simple conn=owner,user=owner
+VIEW v AS SELECT 1
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner,user=owner
+DROP TABLE t
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner,user=owner
+DROP VIEW v
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
