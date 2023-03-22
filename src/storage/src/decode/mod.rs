@@ -320,22 +320,22 @@ fn get_decoder(
     }
 }
 
-fn try_decode_delimited(
-    decoder: &mut DataDecoder,
-    value: Option<&Vec<u8>>,
-) -> Option<Result<Row, DecodeErrorKind>> {
-    let value_buf = &mut value?.as_slice();
-    let value = decoder.next(value_buf);
-    if value.is_ok() && !value_buf.is_empty() {
-        let err = format!(
-            "Unexpected bytes remaining for decoded value: {:?}",
-            value_buf
-        );
-        return Some(Err(DecodeErrorKind::Text(err)));
+fn decode_delimited(decoder: &mut DataDecoder, buf: &[u8]) -> Result<Option<Row>, DecodeError> {
+    fn inner(decoder: &mut DataDecoder, mut buf: &[u8]) -> Result<Option<Row>, DecodeErrorKind> {
+        let value = decoder.next(&mut buf)?;
+        if !buf.is_empty() {
+            let err = format!("Unexpected bytes remaining for decoded value: {buf:?}");
+            return Err(DecodeErrorKind::Text(err));
+        }
+        match value {
+            Some(value) => Ok(Some(value)),
+            None => Ok(decoder.eof(&mut buf)?),
+        }
     }
-    value
-        .transpose()
-        .or_else(|| decoder.eof(&mut &[][..]).transpose())
+    inner(decoder, buf).map_err(|inner| DecodeError {
+        kind: inner,
+        raw: buf.to_vec(),
+    })
 }
 
 /// Decode already delimited records of data.
@@ -412,23 +412,15 @@ where
                             headers,
                         } = output;
 
-                        let key = key_decoder.as_mut().and_then(|decoder| {
-                            try_decode_delimited(decoder, key.as_ref()).map(|result| {
-                                result.map_err(|inner| DecodeError {
-                                    kind: inner,
-                                    raw: key.clone(),
-                                })
-                            })
-                        });
+                        let key = match key_decoder.as_mut().zip(key.as_ref()) {
+                            Some((decoder, buf)) => decode_delimited(decoder, buf).transpose(),
+                            None => None,
+                        };
 
-                        let value = try_decode_delimited(&mut value_decoder, value.as_ref()).map(
-                            |result| {
-                                result.map_err(|inner| DecodeError {
-                                    kind: inner,
-                                    raw: value.clone(),
-                                })
-                            },
-                        );
+                        let value = match value.as_ref() {
+                            Some(buf) => decode_delimited(&mut value_decoder, buf).transpose(),
+                            None => None,
+                        };
 
                         if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
                             n_errors += 1;

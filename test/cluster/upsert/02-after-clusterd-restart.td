@@ -54,19 +54,19 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 
 # Verify that the errors from before are still there
 ! SELECT * FROM upsert
-contains: Value error
-
-# Update the bad value
-$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema}
-{"id": 2} {"before": null, "after": {"row": {"id": 2, "creature": "cow"}}}
-
-# There is still an error, due to the bad key.
-! SELECT * FROM upsert
 contains: Key decode
 
 # Retract the bad key
 $ kafka-ingest format=bytes topic=dbzupsert key-format=bytes omit-value=true
 broken-key:
+
+# There is still an error, due to the bad key.
+! SELECT * FROM upsert
+contains: Value error
+
+# Update the bad value
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema}
+{"id": 2} {"before": null, "after": {"row": {"id": 2, "creature": "cow"}}}
 
 > SELECT * FROM upsert
 id creature
