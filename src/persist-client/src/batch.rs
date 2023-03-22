@@ -848,7 +848,7 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
 mod tests {
     use crate::cache::PersistClientCache;
     use crate::internal::paths::{BlobKey, PartialBlobKey};
-    use crate::tests::all_ok;
+    use crate::tests::{all_ok, CodecProduct};
     use crate::PersistLocation;
 
     use super::*;
@@ -980,6 +980,58 @@ mod tests {
             .await;
 
         assert_eq!(batch.batch.parts.len(), 3);
+        for part in &batch.batch.parts {
+            match BlobKey::parse_ids(&part.key.complete(&shard_id)) {
+                Ok((shard, PartialBlobKey::Batch(writer, _))) => {
+                    assert_eq!(shard.to_string(), shard_id.to_string());
+                    assert_eq!(writer.to_string(), write.writer_id.to_string());
+                }
+                _ => panic!("unparseable blob key"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    async fn batch_builder_partial_order() {
+        mz_ore::test::init_logging();
+
+        let cache = PersistClientCache::new_no_metrics();
+        // Set blob_target_size to 0 so that each row gets forced into its own batch part
+        cache.cfg.dynamic.set_blob_target_size(0);
+        let client = cache
+            .open(PersistLocation {
+                blob_uri: "mem://".to_owned(),
+                consensus_uri: "mem://".to_owned(),
+            })
+            .await
+            .expect("client construction failed");
+        let shard_id = ShardId::new();
+        let (mut write, _) = client
+            .expect_open::<String, String, CodecProduct, i64>(shard_id)
+            .await;
+
+        let batch = write
+            .batch(
+                &[
+                    (
+                        ("1".to_owned(), "one".to_owned()),
+                        CodecProduct::new(0, 10),
+                        1,
+                    ),
+                    (
+                        ("2".to_owned(), "two".to_owned()),
+                        CodecProduct::new(10, 0),
+                        1,
+                    ),
+                ],
+                Antichain::from_elem(CodecProduct::new(0, 0)),
+                Antichain::from_iter([CodecProduct::new(0, 11), CodecProduct::new(10, 1)]),
+            )
+            .await
+            .expect("invalid usage");
+
+        assert_eq!(batch.batch.parts.len(), 2);
         for part in &batch.batch.parts {
             match BlobKey::parse_ids(&part.key.complete(&shard_id)) {
                 Ok((shard, PartialBlobKey::Batch(writer, _))) => {
