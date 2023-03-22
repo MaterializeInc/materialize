@@ -235,62 +235,62 @@ where
                             || limit
                                 .map(|l| source.iter().map(|(_, d)| *d).sum::<Diff>() as usize > l)
                                 .unwrap_or(false);
-                        if must_shrink {
-                            // First go ahead and emit all records
-                            for (row, diff) in source.iter() {
-                                target.push(((*row).clone(), diff.clone()));
-                            }
-                            // local copies that may count down to zero.
-                            let mut offset = offset;
-                            let mut limit = limit;
+                        if !must_shrink {
+                            return;
+                        }
 
-                            // The order in which we should produce rows.
-                            let mut indexes = (0..source.len()).collect::<Vec<_>>();
-                            // We decode the datums once, into a common buffer for efficiency.
-                            // Each row should contain `arity` columns; we should check that.
-                            let mut buffer = Vec::with_capacity(arity * source.len());
-                            for (index, row) in source.iter().enumerate() {
-                                buffer.extend(row.0.iter());
-                                assert_eq!(buffer.len(), arity * (index + 1));
-                            }
-                            let width = buffer.len() / source.len();
+                        // First go ahead and emit all records
+                        for (row, diff) in source.iter() {
+                            target.push(((*row).clone(), diff.clone()));
+                        }
+                        // local copies that may count down to zero.
+                        let mut offset = offset;
+                        let mut limit = limit;
 
-                            //todo: use arrangements or otherwise make the sort more performant?
-                            indexes.sort_by(|left, right| {
-                                let left = &buffer[left * width..][..width];
-                                let right = &buffer[right * width..][..width];
-                                // Note: source was originally ordered by the u8 array representation
-                                // of rows, but left.cmp(right) uses Datum::cmp.
-                                mz_expr::compare_columns(&order_key, left, right, || {
-                                    left.cmp(right)
-                                })
-                            });
+                        // The order in which we should produce rows.
+                        let mut indexes = (0..source.len()).collect::<Vec<_>>();
+                        // We decode the datums once, into a common buffer for efficiency.
+                        // Each row should contain `arity` columns; we should check that.
+                        let mut buffer = Vec::with_capacity(arity * source.len());
+                        for (index, row) in source.iter().enumerate() {
+                            buffer.extend(row.0.iter());
+                            assert_eq!(buffer.len(), arity * (index + 1));
+                        }
+                        let width = buffer.len() / source.len();
 
-                            // We now need to lay out the data in order of `buffer`, but respecting
-                            // the `offset` and `limit` constraints.
-                            for index in indexes.into_iter() {
-                                let (row, mut diff) = source[index];
+                        //todo: use arrangements or otherwise make the sort more performant?
+                        indexes.sort_by(|left, right| {
+                            let left = &buffer[left * width..][..width];
+                            let right = &buffer[right * width..][..width];
+                            // Note: source was originally ordered by the u8 array representation
+                            // of rows, but left.cmp(right) uses Datum::cmp.
+                            mz_expr::compare_columns(&order_key, left, right, || left.cmp(right))
+                        });
+
+                        // We now need to lay out the data in order of `buffer`, but respecting
+                        // the `offset` and `limit` constraints.
+                        for index in indexes.into_iter() {
+                            let (row, mut diff) = source[index];
+                            if diff > 0 {
+                                // If we are still skipping early records ...
+                                if offset > 0 {
+                                    let to_skip =
+                                        std::cmp::min(offset, usize::try_from(diff).unwrap());
+                                    offset -= to_skip;
+                                    diff -= Diff::try_from(to_skip).unwrap();
+                                }
+                                // We should produce at most `limit` records.
+                                // TODO(benesch): avoid dangerous `as` conversion.
+                                #[allow(clippy::as_conversions)]
+                                if let Some(limit) = &mut limit {
+                                    diff = std::cmp::min(diff, Diff::try_from(*limit).unwrap());
+                                    *limit -= diff as usize;
+                                }
+                                // Output the indicated number of rows.
                                 if diff > 0 {
-                                    // If we are still skipping early records ...
-                                    if offset > 0 {
-                                        let to_skip =
-                                            std::cmp::min(offset, usize::try_from(diff).unwrap());
-                                        offset -= to_skip;
-                                        diff -= Diff::try_from(to_skip).unwrap();
-                                    }
-                                    // We should produce at most `limit` records.
-                                    // TODO(benesch): avoid dangerous `as` conversion.
-                                    #[allow(clippy::as_conversions)]
-                                    if let Some(limit) = &mut limit {
-                                        diff = std::cmp::min(diff, Diff::try_from(*limit).unwrap());
-                                        *limit -= diff as usize;
-                                    }
-                                    // Output the indicated number of rows.
-                                    if diff > 0 {
-                                        // Emit retractions for the elements actually part of
-                                        // the set of TopK elements.
-                                        target.push((row.clone(), -diff));
-                                    }
+                                    // Emit retractions for the elements actually part of
+                                    // the set of TopK elements.
+                                    target.push((row.clone(), -diff));
                                 }
                             }
                         }
