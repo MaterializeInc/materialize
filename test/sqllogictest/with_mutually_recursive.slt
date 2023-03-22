@@ -263,7 +263,7 @@ EXPLAIN WITH MUTUALLY RECURSIVE
             bar (b int8) AS (
                 SELECT * FROM foo
             )
-        SELECT * FROM (SELECT * FROM foo EXCEPT ALL SELECT * FROM bar)
+        SELECT * FROM (SELECT * FROM foo UNION ALL SELECT * FROM bar)
     )
 SELECT * FROM foo;
 ----
@@ -272,11 +272,9 @@ Explained Query:
     Get l0
   With Mutually Recursive
     cte l0 =
-      Threshold
-        Union
-          Get l0
-          Negate
-            Get l0
+      Union
+        Get l0
+        Get l0
 
 EOF
 

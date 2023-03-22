@@ -15,10 +15,23 @@ use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
 
 /// Detects an input being unioned with its negation and cancels them out
+///
+/// `UnionBranchCancellation` is recursion-safe, but this is not immediately trivial:
+/// It relies on the equality of certain `MirRelationExpr`s, which is a scary thing in a WMR
+/// context, because `Get x` can mean not-equal things in different Let bindings.
+/// However, this problematic case can't happen here, because when `UnionBranchCancellation` is
+/// looking at two Gets to the same Id, then these have to be under the same Let binding.
+/// This is because the recursion of `compare_branches` starts from two things in the same Let
+/// binding (from two inputs of a Union), and then we don't make any `compare_branches` call
+/// where `relation` and `other` are in different Let bindings.
 #[derive(Debug)]
 pub struct UnionBranchCancellation;
 
 impl crate::Transform for UnionBranchCancellation {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
