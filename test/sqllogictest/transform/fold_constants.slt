@@ -140,9 +140,6 @@ Explained Query:
         Union // { arity: 1 }
           Project (#1) // { arity: 1 }
             Get materialize.public.edges // { arity: 2 }
-          Filter (#0) IS NULL // { arity: 1 }
-            Get l0 // { arity: 1 }
-          Filter (#0) IS NOT NULL // { arity: 1 }
-            Get l0 // { arity: 1 }
+          Get l0 // { arity: 1 }
 
 EOF

@@ -214,12 +214,13 @@ Explained Query:
   With Mutually Recursive
     cte l0 =
       Project (#0)
-        Distinct group_by=[#0, #1]
+        Distinct group_by=[1, #0]
           Union
-            Map (7)
-              Get l0
+            Project (#1)
+              Map (7)
+                Get l0
             Constant
-              - (1, 2)
+              - (2)
 
 EOF
 
@@ -306,7 +307,7 @@ Explained Query:
 
 EOF
 
-## Tests for nested WITH MUTUALLY RECURSIVE
+# Tests for nested WITH MUTUALLY RECURSIVE
 
 statement ok
 CREATE TABLE edges (src int, dst int);
