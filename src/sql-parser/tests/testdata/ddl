@@ -1644,25 +1644,53 @@ GRANT admin TO joe
 ----
 GRANT admin TO joe
 =>
-GrantRole(GrantRoleStatement { role_name: Ident("admin"), member_name: Ident("joe") })
+GrantRole(GrantRoleStatement { role_name: Ident("admin"), member_names: [Ident("joe")] })
 
 parse-statement
 GRANT scientist TO GROUP joseph
 ----
 GRANT scientist TO joseph
 =>
-GrantRole(GrantRoleStatement { role_name: Ident("scientist"), member_name: Ident("joseph") })
+GrantRole(GrantRoleStatement { role_name: Ident("scientist"), member_names: [Ident("joseph")] })
+
+parse-statement
+GRANT admin TO joe, mike
+----
+GRANT admin TO joe, mike
+=>
+GrantRole(GrantRoleStatement { role_name: Ident("admin"), member_names: [Ident("joe"), Ident("mike")] })
+
+parse-statement
+GRANT scientist TO GROUP joseph, michael
+----
+GRANT scientist TO joseph, michael
+=>
+GrantRole(GrantRoleStatement { role_name: Ident("scientist"), member_names: [Ident("joseph"), Ident("michael")] })
 
 parse-statement
 REVOKE doctor FROM joe
 ----
 REVOKE doctor FROM joe
 =>
-RevokeRole(RevokeRoleStatement { role_name: Ident("doctor"), member_name: Ident("joe") })
+RevokeRole(RevokeRoleStatement { role_name: Ident("doctor"), member_names: [Ident("joe")] })
 
 parse-statement
 REVOKE ability_to_practice_law_in_arkansas FROM GROUP joseph
 ----
 REVOKE ability_to_practice_law_in_arkansas FROM joseph
 =>
-RevokeRole(RevokeRoleStatement { role_name: Ident("ability_to_practice_law_in_arkansas"), member_name: Ident("joseph") })
+RevokeRole(RevokeRoleStatement { role_name: Ident("ability_to_practice_law_in_arkansas"), member_names: [Ident("joseph")] })
+
+parse-statement
+REVOKE doctor FROM joe, mike
+----
+REVOKE doctor FROM joe, mike
+=>
+RevokeRole(RevokeRoleStatement { role_name: Ident("doctor"), member_names: [Ident("joe"), Ident("mike")] })
+
+parse-statement
+REVOKE ability_to_practice_law_in_arkansas FROM GROUP joseph, michael
+----
+REVOKE ability_to_practice_law_in_arkansas FROM joseph, michael
+=>
+RevokeRole(RevokeRoleStatement { role_name: Ident("ability_to_practice_law_in_arkansas"), member_names: [Ident("joseph"), Ident("michael")] })

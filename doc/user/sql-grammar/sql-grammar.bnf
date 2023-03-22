@@ -207,7 +207,7 @@ format_spec ::=
   'TEXT' |
   'BYTES'
 grant_role ::=
-  'GRANT' role_name 'TO' 'GROUP'? member_name
+  'GRANT' role_name 'TO' 'GROUP'? member_name ( ',' member_name )*
 key_strat ::=
   'KEY STRATEGY' strat
 val_strat ::=
@@ -278,7 +278,7 @@ prepare ::=
 reset_session_variable ::=
   'RESET' variable_name
 revoke_role ::=
-  'REVOKE' role_name 'FROM' 'GROUP'? member_name
+  'REVOKE' role_name 'FROM' 'GROUP'? member_name ( ',' member_name )*
 rollback ::=
   'ROLLBACK'
 select_stmt ::=
