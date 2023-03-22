@@ -22,16 +22,17 @@ use deadpool_postgres::{
 use deadpool_postgres::{Manager, Pool};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::SYSTEM_TIME;
+use mz_ore::now::{EpochMillis, SYSTEM_TIME};
 use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
 use postgres_openssl::MakeTlsConnector;
 use std::fmt::Formatter;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tracing::debug;
+use tokio::sync::oneshot::error::RecvError;
+use tracing::{debug, info, warn};
 
 use crate::error::Error;
 use crate::location::{CaSResult, Consensus, ExternalError, SeqNo, VersionedData};
@@ -158,9 +159,19 @@ impl PostgresConsensusConfig {
 }
 
 /// Implementation of [Consensus] over a Postgres database.
+#[derive(Clone)]
 pub struct PostgresConsensus {
     pool: Pool,
     metrics: PostgresConsensusMetrics,
+    buf: Arc<Mutex<Vec<Entry>>>,
+    last_flush_timestamp: Arc<AtomicU64>,
+}
+
+struct Entry {
+    key: String,
+    expected: SeqNo,
+    new: VersionedData,
+    tx: tokio::sync::oneshot::Sender<bool>,
 }
 
 impl std::fmt::Debug for PostgresConsensus {
@@ -247,10 +258,15 @@ impl PostgresConsensus {
             ))
             .await?;
 
-        Ok(PostgresConsensus {
+        let pg_consensus = PostgresConsensus {
             pool,
             metrics: config.metrics,
-        })
+            buf: Arc::new(Mutex::new(Vec::new())),
+            last_flush_timestamp: Arc::new((SYSTEM_TIME)().into()),
+        };
+        pg_consensus.start_task();
+
+        Ok(pg_consensus)
     }
 
     /// Drops and recreates the `consensus` table in Postgres
@@ -342,6 +358,137 @@ fn make_tls(config: &Config) -> Result<MakeTlsConnector, anyhow::Error> {
     Ok(tls_connector)
 }
 
+impl PostgresConsensus {
+    fn start_task(&self) {
+        let s = self.clone();
+        let _ = mz_ore::task::spawn(|| format!("postgres batcher"), async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(500));
+            loop {
+                interval.tick().await;
+                info!("running loop");
+                s.execute_batch_cas().await;
+            }
+        });
+    }
+
+    async fn execute_batch_cas(&self) {
+        let batch = {
+            let mut buf = self.buf.lock().expect("abc");
+            self.last_flush_timestamp
+                .store((SYSTEM_TIME)().into(), Ordering::SeqCst);
+            std::mem::take(&mut *buf)
+        };
+
+        info!("Batch size: {}", batch.len());
+        if batch.is_empty() {
+            return; //Ok(());
+        }
+
+        let mut param_count = 1;
+        let mut params: Vec<&(dyn ToSql + Sync)> = Vec::new();
+
+        let mut cas_batch_values = vec![];
+        let mut seqno_queries = vec![];
+        let mut slices = vec![];
+        for cas in &batch {
+            slices.push(cas.new.data.as_ref());
+        }
+        let slices = slices;
+
+        for (i, cas) in batch.iter().enumerate() {
+            cas_batch_values.push(format!(
+                "(${}::text, ${}::bigint, ${}::bigint, ${}::bytea)",
+                param_count,
+                param_count + 1,
+                param_count + 2,
+                param_count + 3
+            ));
+            seqno_queries.push(format!("(SELECT shard, sequence_number FROM consensus.consensus WHERE shard = ${param_count} ORDER BY sequence_number DESC LIMIT 1)"));
+            params.push(&cas.key);
+            params.push(&cas.expected);
+            params.push(&cas.new.seqno);
+            params.push(&slices[i]);
+            param_count += 4;
+        }
+
+        let q = format!(
+            r#"
+            WITH cas_batch (shard, expected_sequence_number, new_sequence_number, data) AS (
+               VALUES {}
+            ),
+            shard_seqnos (shard, sequence_number) AS (
+              {}
+            )
+            INSERT INTO consensus.consensus (shard, sequence_number, data)
+            SELECT cas_batch.shard, cas_batch.new_sequence_number, cas_batch.data
+            FROM cas_batch, shard_seqnos
+            WHERE cas_batch.shard = shard_seqnos.shard AND cas_batch.expected_sequence_number = shard_seqnos.sequence_number
+            ON CONFLICT (shard, sequence_number) DO NOTHING
+            RETURNING shard, sequence_number;
+        "#,
+            cas_batch_values.join(","),
+            seqno_queries.join(" UNION "),
+        );
+
+        info!("Query: {}, params: {:?}", q, params);
+
+        let client = self.get_connection().await.expect("conn");
+        let statement = client.prepare_cached(&q).await.expect("statement");
+        let rows = client
+            .query(&statement, params.as_slice())
+            .await
+            .expect("rows");
+        let mut successful_cas = vec![];
+        for row in rows {
+            let shard: String = row.try_get("shard").expect("shahd");
+            let seqno: SeqNo = row.try_get("sequence_number").expect("seqno");
+            successful_cas.push((shard, seqno));
+        }
+
+        for entry in batch {
+            if successful_cas.contains(&(entry.key.clone(), entry.new.seqno.clone())) {
+                info!("({}, {}) passed CaS", entry.key, entry.expected);
+                let _ = entry.tx.send(true);
+            } else {
+                info!("({}, {}) failed CaS", entry.key, entry.expected);
+                let _ = entry.tx.send(false);
+            }
+            // if let Some(_) = successful_cas.first() {
+            //     let cas = successful_cas.pop().expect("abc");
+            //     if (entry.key, entry.new.seqno) == cas {
+            //     } else {
+            //         info!("failed CaS");
+            //     }
+            // } else {
+            //     info!("({}, {}) failed CaS", entry.key, entry.expected);
+            //     entry.tx.send(false).expect("abc");
+            // }
+        }
+    }
+    async fn batch_compare_and_set(
+        &self,
+        key: String,
+        expected: SeqNo,
+        new: VersionedData,
+        tx: tokio::sync::oneshot::Sender<bool>,
+    ) {
+        let should_execute = {
+            let mut buf = self.buf.lock().expect("abc");
+            buf.push(Entry {
+                key,
+                expected,
+                new,
+                tx,
+            });
+            buf.len() >= 10
+        };
+
+        if should_execute {
+            self.execute_batch_cas().await;
+        }
+    }
+}
+
 #[async_trait]
 impl Consensus for PostgresConsensus {
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
@@ -387,21 +534,38 @@ impl Consensus for PostgresConsensus {
             // 1-phase commit of CRDB. Any changes to this query should
             // confirm an EXPLAIN ANALYZE (VERBOSE) query plan contains
             // `auto commit`
-            let q = r#"
-                INSERT INTO consensus (shard, sequence_number, data)
-                SELECT $1, $2, $3
-                WHERE (SELECT sequence_number FROM consensus
-                       WHERE shard = $1
-                       ORDER BY sequence_number DESC LIMIT 1) = $4;
-            "#;
-            let client = self.get_connection().await?;
-            let statement = client.prepare_cached(q).await?;
-            client
-                .execute(
-                    &statement,
-                    &[&key, &new.seqno, &new.data.as_ref(), &expected],
-                )
-                .await?
+            let (oneshot_tx, oneshot_rx) = tokio::sync::oneshot::channel();
+
+            self.batch_compare_and_set(key.to_string(), expected, new, oneshot_tx)
+                .await;
+            match oneshot_rx.await {
+                Ok(res) => {
+                    if res {
+                        1
+                    } else {
+                        0
+                    }
+                }
+                Err(err) => {
+                    warn!("for some reason the rx channel errored: {:?}", err);
+                    0
+                }
+            }
+            // let q = r#"
+            //     INSERT INTO consensus (shard, sequence_number, data)
+            //     SELECT $1, $2, $3
+            //     WHERE (SELECT sequence_number FROM consensus
+            //            WHERE shard = $1
+            //            ORDER BY sequence_number DESC LIMIT 1) = $4;
+            // "#;
+            // let client = self.get_connection().await?;
+            // let statement = client.prepare_cached(q).await?;
+            // client
+            //     .execute(
+            //         &statement,
+            //         &[&key, &new.seqno, &new.data.as_ref(), &expected],
+            //     )
+            //     .await?
         } else {
             // Insert the new row as long as no other row exists for the same shard.
             let q = "INSERT INTO consensus SELECT $1, $2, $3 WHERE
