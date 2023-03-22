@@ -8,7 +8,6 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.66"
-async-compression = { version = "0.3.15", features = ["tokio", "gzip"] }
 async-stream = "0.3.3"
 async-trait = "0.1.59"
 bytesize = "1.1.0"

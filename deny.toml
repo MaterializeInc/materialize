@@ -80,7 +80,6 @@ name = "rustls"
 [[bans.deny]]
 name = "lazy_static"
 wrappers = [
-  "aws-arn",
   "aws-http",
   "bindgen",
   "bstr",
