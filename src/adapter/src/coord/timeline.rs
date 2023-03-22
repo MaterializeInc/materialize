@@ -348,7 +348,7 @@ impl<T: TimestampManipulation> DurableTimestampOracle<T> {
 
 impl Coordinator {
     pub(crate) fn now(&self) -> EpochMillis {
-        (self.catalog.config().now)()
+        (self.catalog().config().now)()
     }
 
     pub(crate) fn now_datetime(&self) -> DateTime<Utc> {
@@ -442,7 +442,7 @@ impl Coordinator {
         Self::ensure_timeline_state_with_initial_time(
             timeline,
             Timestamp::minimum(),
-            self.catalog.config().now.clone(),
+            self.catalog().config().now.clone(),
             |ts| self.catalog.persist_timestamp(timeline, ts),
             &mut self.global_timelines,
         )
@@ -571,7 +571,7 @@ impl Coordinator {
 
     pub(crate) fn ids_in_timeline(&self, timeline: &Timeline) -> CollectionIdBundle {
         let mut id_bundle = CollectionIdBundle::default();
-        for entry in self.catalog.entries() {
+        for entry in self.catalog().entries() {
             if let TimelineContext::TimelineDependent(entry_timeline) =
                 self.get_timeline_context(entry.id())
             {
@@ -699,7 +699,7 @@ impl Coordinator {
             if timelines.contains_key(&id) {
                 continue;
             }
-            if let Some(entry) = self.catalog.try_get_entry(&id) {
+            if let Some(entry) = self.catalog().try_get_entry(&id) {
                 match entry.item() {
                     CatalogItem::Source(source) => {
                         timelines.insert(
@@ -800,7 +800,7 @@ impl Coordinator {
         // Gather all the used schemas.
         let mut schemas = BTreeSet::new();
         for id in uses_ids {
-            let entry = self.catalog.get_entry(id);
+            let entry = self.catalog().get_entry(id);
             let name = entry.name();
             schemas.insert((&name.qualifiers.database_spec, &name.qualifiers.schema_spec));
         }
@@ -810,19 +810,19 @@ impl Coordinator {
         let system_schemas = [
             (
                 &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog.get_mz_catalog_schema_id().clone()),
+                &SchemaSpecifier::Id(self.catalog().get_mz_catalog_schema_id().clone()),
             ),
             (
                 &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog.get_pg_catalog_schema_id().clone()),
+                &SchemaSpecifier::Id(self.catalog().get_pg_catalog_schema_id().clone()),
             ),
             (
                 &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog.get_information_schema_id().clone()),
+                &SchemaSpecifier::Id(self.catalog().get_information_schema_id().clone()),
             ),
             (
                 &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog.get_mz_internal_schema_id().clone()),
+                &SchemaSpecifier::Id(self.catalog().get_mz_internal_schema_id().clone()),
             ),
         ];
         if system_schemas.iter().any(|s| schemas.contains(s)) {
@@ -832,7 +832,7 @@ impl Coordinator {
         // Gather the IDs of all items in all used schemas.
         let mut item_ids: BTreeSet<GlobalId> = BTreeSet::new();
         for (db, schema) in schemas {
-            let schema = self.catalog.get_schema(db, schema, conn_id);
+            let schema = self.catalog().get_schema(db, schema, conn_id);
             item_ids.extend(schema.items.values());
         }
 
@@ -896,7 +896,7 @@ impl Coordinator {
                 self.largest_not_in_advance_of_upper(&self.least_valid_write(&id_bundle))
             };
             oracle
-                .apply_write(now, |ts| self.catalog.persist_timestamp(&timeline, ts))
+                .apply_write(now, |ts| self.catalog().persist_timestamp(&timeline, ts))
                 .await;
             let read_ts = oracle.read_ts();
             if read_holds.times().any(|time| time.less_than(&read_ts)) {

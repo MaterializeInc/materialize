@@ -138,7 +138,7 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) async fn try_group_commit(&mut self) {
         let timestamp = self.peek_local_write_ts();
-        let now = Timestamp::from((self.catalog.config().now)());
+        let now = Timestamp::from((self.catalog().config().now)());
         if timestamp > now {
             // Cap retry time to 1s. In cases where the system clock has retreated by
             // some large amount of time, this prevents against then waiting for that
@@ -252,7 +252,7 @@ impl Coordinator {
                         // client that the write was successful. This is only possible if the write
                         // and the delete were concurrent. Therefore, we are free to order the
                         // write before the delete without violating any consistency guarantees.
-                        if self.catalog.try_get_entry(&id).is_some() {
+                        if self.catalog().try_get_entry(&id).is_some() {
                             appends.entry(id).or_default().extend(rows);
                         }
                     }
@@ -278,7 +278,7 @@ impl Coordinator {
             differential_dataflow::consolidation::consolidate(updates);
         }
         // Add table advancements for all tables.
-        for table in self.catalog.entries().filter(|entry| entry.is_table()) {
+        for table in self.catalog().entries().filter(|entry| entry.is_table()) {
             appends.entry(table.id()).or_default();
         }
         let appends = appends
