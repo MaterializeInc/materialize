@@ -2504,9 +2504,6 @@ fn test_concurrent_role_drop() {
         .user(&SYSTEM_USER.name)
         .connect(postgres::NoTls)
         .unwrap();
-    sys_client
-        .execute("ALTER SYSTEM SET enable_rbac_checks TO true", &[])
-        .unwrap();
     assert_eq!(
         1,
         foo_client
