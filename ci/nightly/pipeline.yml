@@ -47,6 +47,7 @@ steps:
           - { value: checks-parallel-restart-redpanda }
           - { value: checks-upgrade-entire-mz }
           - { value: checks-upgrade-entire-mz-previous-version }
+          - { value: checks-upgrade-entire-mz-two-versions }
           - { value: checks-upgrade-clusterd-compute-first }
           - { value: checks-upgrade-clusterd-compute-last }
           - { value: cloudtest-upgrade }
@@ -426,6 +427,17 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=UpgradeEntireMzPreviousVersion]
+
+  - id: checks-upgrade-entire-mz-two-versions
+    label: "Checks upgrade across two versions"
+    timeout_in_minutes: 60
+    agents:
+      queue: linux-x86_64
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=UpgradeEntireMzTwoVersions]
 
   - id: checks-upgrade-clusterd-compute-first
     label: "Platform checks upgrade, restarting compute clusterd first"
