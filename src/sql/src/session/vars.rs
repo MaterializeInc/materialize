@@ -624,9 +624,24 @@ pub const ENABLE_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+/// This is separate from the [`FORCE_INTROSPECTION_CLUSTER`] `ServerVar` so we can
+/// independently roll out this feature via LaunchDarkly without effecting user's ability
+/// to disable the behavior for there sessions.
+pub const ENABLE_FORCE_INTROSPECTION_CLUSTER: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_force_introspection_cluster"),
+    value: &false,
+    description:
+        "Whether the feature to force queries that depends only on system tables to run on the mz_introspection cluster, is enabled (Materialize).",
+    internal: true,
+    safe: true,
+};
+
+/// This is separate from the [`ENABLE_FORCE_INTROSPECTION_CLUSTER`] `ServerVar` so we
+/// can independently roll out this feature via LaunchDarkly. Users can set this var as
+/// a session variable, while we can control the feature overall with the former.
 pub const FORCE_INTROSPECTION_CLUSTER: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("force_introspection_cluster"),
-    value: &false,
+    value: &true,
     description:
         "Whether to force queries that depend only on system tables, to run on the mz_introspection cluster (Materialize).",
     internal: true,
@@ -1344,6 +1359,7 @@ impl Default for SystemVars {
             .with_var(&MOCK_AUDIT_EVENT_TIMESTAMP)
             .with_var(&ENABLE_WITH_MUTUALLY_RECURSIVE)
             .with_var(&ENABLE_RBAC_CHECKS)
+            .with_var(&ENABLE_FORCE_INTROSPECTION_CLUSTER)
     }
 }
 
@@ -1635,6 +1651,13 @@ impl SystemVars {
     /// Returns the `enable_rbac_checks` configuration parameter.
     pub fn enable_rbac_checks(&self) -> bool {
         *self.expect_value(&ENABLE_RBAC_CHECKS)
+    }
+
+    /// Returns the `enable_force_introspection_cluster` configuration parameter.
+    ///
+    /// Note: this is generally intended to be set via LaunchDarkly
+    pub fn enable_force_introspection_cluster(&self) -> bool {
+        *self.expect_value(&ENABLE_FORCE_INTROSPECTION_CLUSTER)
     }
 }
 

@@ -54,8 +54,11 @@ pub fn auto_run_on_introspection<'a, 's>(
     session: &'s mut Session,
     depends_on: impl IntoIterator<Item = GlobalId>,
 ) -> Option<&'a Cluster> {
-    // Allow users to opt out of this behavior.
-    if !session.vars().force_introspection_cluster() {
+    // If this feature is disabled via LaunchDarkly, or the user has disabled it for
+    // this session.
+    if !catalog.system_config().enable_force_introspection_cluster()
+        || !session.vars().force_introspection_cluster()
+    {
         return None;
     }
 

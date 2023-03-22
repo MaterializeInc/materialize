@@ -93,6 +93,15 @@ fn test_github_18189() {
     assert_eq!(sync.get("allowed_cluster_replica_sizes"), "");
 }
 
+#[test]
+fn test_vars_are_synced() {
+    let vars = SystemVars::default();
+    let sync = SynchronizedParameters::new(vars);
+
+    // A smoke test to ensure the variables we want to get synced, are getting synced
+    assert!(sync.is_synchronized("enable_force_introspection_cluster"));
+}
+
 #[tokio::test]
 async fn test_parameter_type_inference() {
     let test_cases = vec![

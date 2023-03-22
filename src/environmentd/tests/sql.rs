@@ -2718,8 +2718,18 @@ fn test_auto_run_on_introspection() {
     client.batch_execute("COMMIT").unwrap();
     assert_introspection_notice(false);
 
-    client
-        .execute("SET force_introspection_cluster = true", &[])
+    // For every session the behavior is enabled, but by default the feature is disabled at
+    // the system level
+    let mut sys_client = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+    sys_client
+        .execute(
+            "ALTER SYSTEM SET enable_force_introspection_cluster TO true",
+            &[],
+        )
         .unwrap();
 
     // Queries with no dependencies should not get run on the introspection cluster
@@ -2773,6 +2783,16 @@ fn test_auto_run_on_introspection() {
     // But querying user made objects should not result in queries being run on mz_introspection.
     let _row = client
         .query_one("SELECT * FROM user_made LIMIT 1", &[])
+        .unwrap();
+    assert_introspection_notice(false);
+
+    // If the feature is enabled, but the behavior is disabled, we shouldn't run on the
+    // introspection cluster
+    client
+        .execute("SET force_introspection_cluster = false", &[])
+        .unwrap();
+    let _row = client
+        .query_one("SELECT * FROM mz_functions LIMIT 1", &[])
         .unwrap();
     assert_introspection_notice(false);
 }
