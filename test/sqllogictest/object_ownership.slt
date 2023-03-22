@@ -536,7 +536,7 @@ materialize
 statement ok
 CREATE ROLE owner CREATEDB CREATECLUSTER
 
-simple conn=owner,user=owner
+simple conn=owner1,user=owner
 CREATE TABLE t (a INT);
 ----
 COMPLETE 0
@@ -544,7 +544,7 @@ COMPLETE 0
 statement error role "owner" cannot be dropped because some objects depend on it
 DROP ROLE owner
 
-simple conn=owner,user=owner
+simple conn=owner1,user=owner
 DROP TABLE t;
 ----
 COMPLETE 0
@@ -560,7 +560,7 @@ CREATE ROLE owner CREATEDB CREATECLUSTER
 statement ok
 create TABLE t (a INT);
 
-simple conn=owner,user=owner
+simple conn=owner2,user=owner
 CREATE INDEX ind ON t(a);
 ----
 COMPLETE 0
@@ -568,7 +568,7 @@ COMPLETE 0
 statement error role "owner" cannot be dropped because some objects depend on it
 DROP ROLE owner
 
-simple conn=owner,user=owner
+simple conn=owner2,user=owner
 DROP INDEX ind;
 ----
 COMPLETE 0
@@ -584,7 +584,7 @@ DROP TABLE t
 statement ok
 CREATE ROLE owner CREATEDB CREATECLUSTER
 
-simple conn=owner,user=owner
+simple conn=owner3,user=owner
 create SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
 ----
 COMPLETE 0
@@ -592,7 +592,7 @@ COMPLETE 0
 statement error role "owner" cannot be dropped because some objects depend on it
 DROP ROLE owner
 
-simple conn=owner,user=owner
+simple conn=owner3,user=owner
 DROP SOURCE s;
 ----
 COMPLETE 0
@@ -605,15 +605,15 @@ DROP ROLE owner
 statement ok
 CREATE ROLE owner CREATEDB CREATECLUSTER
 
-simple conn=owner,user=owner
-create CREATE VIEW v AS SELECT 1;
+simple conn=owner4,user=owner
+CREATE VIEW v AS SELECT 1;
 ----
 COMPLETE 0
 
 statement error role "owner" cannot be dropped because some objects depend on it
 DROP ROLE owner
 
-simple conn=owner,user=owner
+simple conn=owner4,user=owner
 DROP VIEW v;
 ----
 COMPLETE 0
@@ -626,16 +626,16 @@ DROP ROLE owner
 statement ok
 CREATE ROLE owner CREATEDB CREATECLUSTER
 
-simple conn=owner,user=owner
-CREATE MATERIALIZED VIEW mv AS SELECT 1;
+simple conn=owner5,user=owner
+CREATE MATERIALIZED VIEW mvv AS SELECT 1;
 ----
 COMPLETE 0
 
 statement error role "owner" cannot be dropped because some objects depend on it
 DROP ROLE owner
 
-simple conn=owner,user=owner
-DROP MATERIALIZED VIEW mv;
+simple conn=owner5,user=owner
+DROP MATERIALIZED VIEW mvv;
 ----
 COMPLETE 0
 
@@ -647,7 +647,7 @@ DROP ROLE owner
 statement ok
 CREATE ROLE owner CREATEDB CREATECLUSTER
 
-simple conn=owner,user=owner
+simple conn=owner6,user=owner
 CREATE CONNECTION c TO KAFKA (BROKER 'localhost:9092');
 ----
 COMPLETE 0
@@ -655,7 +655,7 @@ COMPLETE 0
 statement error role "owner" cannot be dropped because some objects depend on it
 DROP ROLE owner
 
-simple conn=owner,user=owner
+simple conn=owner6,user=owner
 DROP CONNECTION c;
 ----
 COMPLETE 0
@@ -668,15 +668,15 @@ DROP ROLE owner
 statement ok
 CREATE ROLE owner CREATEDB CREATECLUSTER
 
-simple conn=owner,user=owner
-CREATE CREATE TYPE ty AS LIST (ELEMENT TYPE=bool);
+simple conn=owner7,user=owner
+CREATE TYPE ty AS LIST (ELEMENT TYPE=bool);
 ----
 COMPLETE 0
 
 statement error role "owner" cannot be dropped because some objects depend on it
 DROP ROLE owner
 
-simple conn=owner,user=owner
+simple conn=owner7,user=owner
 DROP TYPE ty;
 ----
 COMPLETE 0
@@ -689,7 +689,7 @@ DROP ROLE owner
 statement ok
 CREATE ROLE owner CREATEDB CREATECLUSTER
 
-simple conn=owner,user=owner
+simple conn=owner8,user=owner
 CREATE SECRET se AS decode('c2VjcmV0Cg==', 'base64');
 ----
 COMPLETE 0
@@ -697,7 +697,7 @@ COMPLETE 0
 statement error role "owner" cannot be dropped because some objects depend on it
 DROP ROLE owner
 
-simple conn=owner,user=owner
+simple conn=owner8,user=owner
 DROP SECRET se;
 ----
 COMPLETE 0
@@ -710,7 +710,7 @@ DROP ROLE owner
 statement ok
 CREATE ROLE owner CREATEDB CREATECLUSTER
 
-simple conn=owner,user=owner
+simple conn=owner9,user=owner
 CREATE DATABASE db;
 ----
 COMPLETE 0
@@ -718,7 +718,7 @@ COMPLETE 0
 statement error role "owner" cannot be dropped because some objects depend on it
 DROP ROLE owner
 
-simple conn=owner,user=owner
+simple conn=owner9,user=owner
 DROP DATABASE db;
 ----
 COMPLETE 0
@@ -731,7 +731,7 @@ DROP ROLE owner
 statement ok
 CREATE ROLE owner CREATEDB CREATECLUSTER
 
-simple conn=owner,user=owner
+simple conn=owner10,user=owner
 CREATE SCHEMA sc;
 ----
 COMPLETE 0
@@ -739,7 +739,7 @@ COMPLETE 0
 statement error role "owner" cannot be dropped because some objects depend on it
 DROP ROLE owner
 
-simple conn=owner,user=owner
+simple conn=owner10,user=owner
 DROP SCHEMA sc;
 ----
 COMPLETE 0
@@ -752,7 +752,7 @@ DROP ROLE owner
 statement ok
 CREATE ROLE owner CREATEDB CREATECLUSTER
 
-simple conn=owner,user=owner
+simple conn=owner11,user=owner
 CREATE CLUSTER clus REPLICAS (r1 (SIZE '1'));
 ----
 COMPLETE 0
@@ -760,7 +760,7 @@ COMPLETE 0
 statement error role "owner" cannot be dropped because some objects depend on it
 DROP ROLE owner
 
-simple conn=owner,user=owner
+simple conn=owner11,user=owner
 DROP CLUSTER clus;
 ----
 COMPLETE 0
@@ -773,7 +773,7 @@ DROP ROLE owner
 statement ok
 CREATE ROLE owner CREATEDB CREATECLUSTER
 
-simple conn=owner,user=owner
+simple conn=owner12,user=owner
 CREATE CLUSTER REPLICA default.r2 SIZE '1';
 ----
 COMPLETE 0
@@ -781,7 +781,7 @@ COMPLETE 0
 statement error role "owner" cannot be dropped because some objects depend on it
 DROP ROLE owner
 
-simple conn=owner,user=owner
+simple conn=owner12,user=owner
 DROP CLUSTER REPLICA default.r2;
 ----
 COMPLETE 0
@@ -794,20 +794,20 @@ DROP ROLE owner
 statement ok
 CREATE ROLE owner CREATEDB CREATECLUSTER
 
-simple conn=owner,user=owner
-TABLE t (a INT)
+simple conn=owner13,user=owner
+CREATE TABLE t (a INT)
 ----
 COMPLETE 0
 
-simple conn=owner,user=owner
-VIEW v AS SELECT 1
+simple conn=owner13,user=owner
+CREATE VIEW v AS SELECT 1
 ----
 COMPLETE 0
 
 statement error role "owner" cannot be dropped because some objects depend on it
 DROP ROLE owner
 
-simple conn=owner,user=owner
+simple conn=owner13,user=owner
 DROP TABLE t
 ----
 COMPLETE 0
@@ -815,7 +815,7 @@ COMPLETE 0
 statement error role "owner" cannot be dropped because some objects depend on it
 DROP ROLE owner
 
-simple conn=owner,user=owner
+simple conn=owner13,user=owner
 DROP VIEW v
 ----
 COMPLETE 0

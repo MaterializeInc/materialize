@@ -247,5 +247,5 @@ DROP ROLE foo
 simple conn=foo,user=foo
 SELECT current_user();
 ----
-db error: ERROR: role u4 was concurrently dropped
+db error: ERROR: role u5 was concurrently dropped
 DETAIL: Please disconnect and re-connect with a valid role.
