@@ -1,0 +1,68 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# Start from a pristine server
+reset-server
+
+statement ok
+CREATE SCHEMA foo
+----
+
+statement ok
+CREATE SOURCE foo.auction FROM LOAD GENERATOR AUCTION FOR ALL TABLES WITH (SIZE '1');
+
+query TTT
+SHOW SOURCES FROM foo;
+----
+accounts         subsource      NULL
+auction          load-generator 1
+auction_progress subsource      NULL
+auctions         subsource      NULL
+bids             subsource      NULL
+organizations    subsource      NULL
+users            subsource      NULL
+
+statement ok
+CREATE SCHEMA bar
+----
+
+statement ok
+CREATE SOURCE bar.auction FROM LOAD GENERATOR AUCTION FOR TABLES (bids) WITH (SIZE '1');
+
+query TTT
+SHOW SOURCES FROM bar;
+----
+auction          load-generator 1
+auction_progress subsource      NULL
+bids             subsource      NULL
+
+statement ok
+CREATE SCHEMA baz;
+----
+
+statement ok
+CREATE SCHEMA qux;
+----
+
+statement ok
+CREATE SOURCE baz.auction FROM LOAD GENERATOR AUCTION FOR TABLES (bids AS baz_bids, users AS qux.users) WITH (SIZE '1');
+
+query TTT
+SHOW SOURCES FROM baz;
+----
+auction          load-generator 1
+auction_progress subsource      NULL
+baz_bids         subsource      NULL
+
+query TTT
+SHOW SOURCES FROM qux;
+----
+users         subsource      NULL

@@ -257,6 +257,14 @@ mammal1:
   VALUE FORMAT TEXT
   ENVELOPE UPSERT
 
+! select * from nullkey
+contains: record with NULL key in UPSERT source
+
+# Ingest a null value for our null key, to retract it.
+$ kafka-ingest format=bytes topic=nullkey key-format=bytes key-terminator=:
+:
+
+# Now we should be able to query the source.
 > select * from nullkey
 key           text
 -------------------

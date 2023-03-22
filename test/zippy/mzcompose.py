@@ -17,10 +17,12 @@ from materialize.mzcompose.services import (
     Clusterd,
     Cockroach,
     Debezium,
+    Grafana,
     Kafka,
     Materialized,
     Minio,
     Postgres,
+    Prometheus,
     SchemaRegistry,
     Testdrive,
     Zookeeper,
@@ -40,6 +42,8 @@ SERVICES = [
     Materialized(),
     Clusterd(name="storaged"),
     Testdrive(),
+    Grafana(),
+    Prometheus(),
 ]
 
 
@@ -115,10 +119,19 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="Cockroach DockerHub tag to use.",
     )
 
+    parser.add_argument(
+        "--observability",
+        action="store_true",
+        help="Start Prometheus and Grafana",
+    )
+
     args = parser.parse_args()
     scenario_class = globals()[args.scenario]
 
     c.up("zookeeper", "kafka", "schema-registry")
+
+    if args.observability:
+        c.up("prometheus", "grafana")
 
     random.seed(args.seed)
 

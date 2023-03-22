@@ -937,7 +937,7 @@ impl KafkaSinkState {
                         });
 
                 self.update_status(SinkStatus::Stalled {
-                    error: error.to_string(),
+                    error: format!("{:#}", error),
                     hint,
                 })
                 .await;

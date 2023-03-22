@@ -47,6 +47,7 @@ steps:
           - { value: checks-parallel-restart-redpanda }
           - { value: checks-upgrade-entire-mz }
           - { value: checks-upgrade-entire-mz-previous-version }
+          - { value: checks-upgrade-entire-mz-two-versions }
           - { value: checks-upgrade-clusterd-compute-first }
           - { value: checks-upgrade-clusterd-compute-last }
           - { value: cloudtest-upgrade }
@@ -427,6 +428,17 @@ steps:
           composition: platform-checks
           args: [--scenario=UpgradeEntireMzPreviousVersion]
 
+  - id: checks-upgrade-entire-mz-two-versions
+    label: "Checks upgrade across two versions"
+    timeout_in_minutes: 60
+    agents:
+      queue: linux-x86_64
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=UpgradeEntireMzTwoVersions]
+
   - id: checks-upgrade-clusterd-compute-first
     label: "Platform checks upgrade, restarting compute clusterd first"
     timeout_in_minutes: 30
@@ -548,7 +560,7 @@ steps:
   - id: sqlsmith-2-joins
     label: "SQLsmith 2 joins"
     artifact_paths: junit_*.xml
-    timeout_in_minutes: 70
+    timeout_in_minutes: 58
     agents:
       # A larger instance is needed since SQLsmith likes creating
       # large queries and going out of memory
@@ -556,18 +568,18 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqlsmith
-          args: [--max-joins=2, --runtime=3600]
+          args: [--max-joins=2, --runtime=3300]
 
   - id: sqlsmith-explain
     label: "SQLsmith explain"
     artifact_paths: junit_*.xml
-    timeout_in_minutes: 70
+    timeout_in_minutes: 58
     agents:
       queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqlsmith
-          args: [--max-joins=15, --explain-only, --runtime=3600]
+          args: [--max-joins=15, --explain-only, --runtime=3300]
 
   - id: crdb-restarts
     label: "CRDB rolling restarts"

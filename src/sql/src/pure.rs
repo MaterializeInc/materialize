@@ -56,13 +56,22 @@ use crate::plan::StatementContext;
 fn subsource_gen<'a, T>(
     selected_subsources: &mut Vec<CreateSourceSubsource<Aug>>,
     catalog: &ErsatzCatalog<'a, T>,
+    source_name: &mut UnresolvedObjectName,
 ) -> Result<Vec<(UnresolvedObjectName, UnresolvedObjectName, &'a T)>, PlanError> {
     let mut validated_requested_subsources = vec![];
 
     for subsource in selected_subsources {
         let subsource_name = match &subsource.subsource {
             Some(name) => match name {
-                DeferredObjectName::Deferred(name) => name.clone(),
+                DeferredObjectName::Deferred(name) => {
+                    let partial = normalize::unresolved_object_name(name.clone())?;
+                    match partial.schema {
+                        Some(_) => name.clone(),
+                        // In cases when a prefix is not provided for the deferred name
+                        // fallback to using the schema of the source with the given name
+                        None => subsource_name_gen(source_name, &partial.item)?,
+                    }
+                }
                 DeferredObjectName::Named(..) => {
                     unreachable!("already errored on this condition")
                 }
@@ -70,10 +79,12 @@ fn subsource_gen<'a, T>(
             None => {
                 // Use the entered name as the upstream reference, and then use
                 // the item as the subsource name to ensure it's created in the
-                // current schema, not mirroring the schema of the reference.
-                UnresolvedObjectName::unqualified(
+                // current schema or the source's schema if provided, not mirroring
+                // the schema of the reference.
+                subsource_name_gen(
+                    source_name,
                     &normalize::unresolved_object_name(subsource.reference.clone())?.item,
-                )
+                )?
             }
         };
 
@@ -83,6 +94,19 @@ fn subsource_gen<'a, T>(
     }
 
     Ok(validated_requested_subsources)
+}
+
+/// Generates a subsource name by prepending source schema name if present
+///
+/// For eg. if source is `a.b`, then `a` will be prepended to the subsource name
+/// so that it's generated in the same schema as source
+fn subsource_name_gen(
+    source_name: &UnresolvedObjectName,
+    subsource_name: &String,
+) -> Result<UnresolvedObjectName, PlanError> {
+    let mut partial = normalize::unresolved_object_name(source_name.clone())?;
+    partial.item = subsource_name.to_string();
+    Ok(UnresolvedObjectName::from(partial))
 }
 
 /// Purifies a statement, removing any dependencies on external state.
@@ -102,7 +126,7 @@ pub async fn purify_create_source(
     PlanError,
 > {
     let CreateSourceStatement {
-        name,
+        name: source_name,
         connection,
         format,
         envelope,
@@ -303,7 +327,7 @@ pub async fn purify_create_source(
                             &table.namespace,
                             &table.name,
                         ]);
-                        let subsource_name = UnresolvedObjectName::unqualified(&table.name);
+                        let subsource_name = subsource_name_gen(source_name, &table.name)?;
                         validated_requested_subsources.push((upstream_name, subsource_name, table));
                     }
                 }
@@ -326,8 +350,11 @@ pub async fn purify_create_source(
                             .or_insert(table);
                     }
 
-                    validated_requested_subsources
-                        .extend(subsource_gen(subsources, &publication_catalog)?);
+                    validated_requested_subsources.extend(subsource_gen(
+                        subsources,
+                        &publication_catalog,
+                        source_name,
+                    )?);
                 }
                 None => {
                     sql_bail!("multi-output sources require a FOR TABLES (..) or FOR ALL TABLES statement");
@@ -515,7 +542,7 @@ pub async fn purify_create_source(
                     };
                     for (name, (_, desc)) in available_subsources {
                         let upstream_name = UnresolvedObjectName::from(name.clone());
-                        let subsource_name = UnresolvedObjectName::unqualified(&name.item);
+                        let subsource_name = subsource_name_gen(source_name, &name.item)?;
                         validated_requested_subsources.push((upstream_name, subsource_name, desc));
                     }
                 }
@@ -548,6 +575,7 @@ pub async fn purify_create_source(
                     validated_requested_subsources.extend(subsource_gen(
                         selected_subsources,
                         &ErsatzCatalog(tables_by_name),
+                        source_name,
                     )?);
                 }
                 None => {
@@ -613,7 +641,7 @@ pub async fn purify_create_source(
             DeferredObjectName::Named(_) => unreachable!("already checked for this value"),
         },
         None => {
-            let (item, prefix) = name.0.split_last().unwrap();
+            let (item, prefix) = source_name.0.split_last().unwrap();
             let mut suggested_name = prefix.to_vec();
             suggested_name.push(format!("{}_progress", item).into());
 

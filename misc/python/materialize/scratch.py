@@ -398,6 +398,7 @@ def mssh(
     instance: Instance,
     command: str,
     *,
+    extra_ssh_args: List[str] = [],
     input: Optional[bytes] = None,
 ) -> None:
     """Runs a command over SSH via EC2 Instance Connect."""
@@ -409,9 +410,11 @@ def mssh(
         command = shlex.quote(command)
     else:
         print(f"$ mssh {host}")
+
     subprocess.run(
         [
             *SSH_COMMAND,
+            *extra_ssh_args,
             host,
             command,
         ],

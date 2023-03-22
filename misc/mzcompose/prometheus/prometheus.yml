@@ -1,0 +1,60 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+global:
+  scrape_interval: 15s
+scrape_configs:
+  - job_name: environmentd
+    static_configs:
+    - targets: [materialized:6878]
+      labels:
+        namespace: local
+        pod: environmentd-0
+  - job_name: services
+    file_sd_configs:
+    - files:
+      - /mnt/mzdata/prometheus/*.json
+      refresh_interval: 30s
+    relabel_configs:
+      # Rewrite references to 127.0.0.1 or 0.0.0.0 to materialized,
+      # since the services are running in that container.
+      - source_labels: [__address__]
+        target_label: __address__
+        regex: (127\.0\.0\.1|0\.0\.0\.0)(.*)
+        replacement: materialized$2
+        action: replace
+      # The process orchestrator emits static configurations for all ports, but
+      # only the "internal-http" port serves metrics. Filter out other configs,
+      # to avoid scrape failures in the Prometheus UI.
+      - source_labels: [mz_orchestrator_port]
+        regex: internal-http
+        action: keep
+      # Construct namespace and pod labels that are similar to the label that
+      # Kubernetes installs, so that production dashboards work without changes
+      # when running locally.
+      - target_label: namespace
+        replacement: local
+      - source_labels: [mz_orchestrator_namespace, mz_orchestrator_service_id]
+        separator: "-"
+        target_label: pod
+        replacement: $1-0
+
+  - job_name: 'cockroachdb'
+    metrics_path: '/_status/vars'
+    # Insecure mode:
+    scheme: 'http'
+    # Secure mode:
+    # scheme: 'https'
+    tls_config:
+      insecure_skip_verify: true
+
+    static_configs:
+    - targets: ['cockroach:8080']
+      labels:
+        cluster: cockroach
