@@ -86,9 +86,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     in_assertion = False
     for line in result.stderr.splitlines():
-        if line.startswith("Caused by: "):
+        if line.startswith("--java.lang.AssertionError: "):
             in_assertion = True
-            print(f"--- [SQLancer] {line.removeprefix('Caused by: ')}")
+            print(f"--- [SQLancer] {line.removeprefix('--java.lang.AssertionError: ')}")
         elif line == "":
             in_assertion = False
         elif in_assertion:
