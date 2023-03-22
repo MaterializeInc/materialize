@@ -950,7 +950,10 @@ fn div_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     if b == 0 {
         Err(EvalError::DivisionByZero)
     } else {
-        Ok(Datum::from(a.unwrap_int16() / b))
+        a.unwrap_int16()
+            .checked_div(b)
+            .map(Datum::from)
+            .ok_or(EvalError::Int16OutOfRange)
     }
 }
 
@@ -959,7 +962,10 @@ fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     if b == 0 {
         Err(EvalError::DivisionByZero)
     } else {
-        Ok(Datum::from(a.unwrap_int32() / b))
+        a.unwrap_int32()
+            .checked_div(b)
+            .map(Datum::from)
+            .ok_or(EvalError::Int32OutOfRange)
     }
 }
 
@@ -968,7 +974,10 @@ fn div_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     if b == 0 {
         Err(EvalError::DivisionByZero)
     } else {
-        Ok(Datum::from(a.unwrap_int64() / b))
+        a.unwrap_int64()
+            .checked_div(b)
+            .map(Datum::from)
+            .ok_or(EvalError::Int64OutOfRange)
     }
 }
 
@@ -1072,7 +1081,7 @@ fn mod_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     if b == 0 {
         Err(EvalError::DivisionByZero)
     } else {
-        Ok(Datum::from(a.unwrap_int16() % b))
+        Ok(Datum::from(a.unwrap_int16().checked_rem(b).unwrap_or(0)))
     }
 }
 
@@ -1081,7 +1090,7 @@ fn mod_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     if b == 0 {
         Err(EvalError::DivisionByZero)
     } else {
-        Ok(Datum::from(a.unwrap_int32() % b))
+        Ok(Datum::from(a.unwrap_int32().checked_rem(b).unwrap_or(0)))
     }
 }
 
@@ -1090,7 +1099,7 @@ fn mod_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     if b == 0 {
         Err(EvalError::DivisionByZero)
     } else {
-        Ok(Datum::from(a.unwrap_int64() % b))
+        Ok(Datum::from(a.unwrap_int64().checked_rem(b).unwrap_or(0)))
     }
 }
 

@@ -1130,3 +1130,27 @@ SELECT - '-9223372036854775808'::int8
 
 query error bigint out of range
 SELECT  ABS('-9223372036854775808'::int8)
+
+query error smallint out of range
+SELECT '-32768'::int2 / '-1'::int2
+
+query error integer out of range
+SELECT '-2147483648'::int4 / '-1'::int4
+
+query error bigint out of range
+SELECT '-9223372036854775808'::int8 / '-1'::int8
+
+query I
+SELECT '-32768'::int2 % '-1'::int2
+----
+0
+
+query I
+SELECT '-2147483648'::int4 % '-1'::int4
+----
+0
+
+query I
+SELECT '-9223372036854775808'::int8 % '-1'::int8
+----
+0
