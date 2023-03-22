@@ -553,30 +553,31 @@ def workflow_test_github_15496(c: Composition) -> None:
                     WORKERS 2
                 )
             );
+            -- Set data for test up.
+            SET cluster = cluster1;
+            CREATE TABLE base (data bigint, diff bigint);
+            CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
+            INSERT INTO base VALUES (1, 1);
+            INSERT INTO base VALUES (1, -1), (1, -1);
+
+            -- Create a materialized view to ensure non-monotonic rendering.
+            -- Note that we employ below a query hint to hit the case of not yet
+            -- generating a SQL-level error, given the partial fix to bucketed
+            -- aggregates introduced in PR #17918.
+            CREATE MATERIALIZED VIEW sum_and_max AS
+            SELECT SUM(data), MAX(data) FROM data OPTIONS (EXPECTED GROUP SIZE = 1);
             """
         )
         c.testdrive(
             dedent(
                 f"""
-            # Set data for test up
             > SET cluster = cluster1;
-
-            > CREATE TABLE base (data bigint, diff bigint);
-
-            > CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
-
-            > INSERT INTO base VALUES (1, 1);
-
-            > INSERT INTO base VALUES (1, -1), (1, -1);
 
             # Run a query that would generate a panic before the fix. Note that
             # we expect the query to succeed for now, but follow-up work might
             # eventually lead us to favor a SQL-level error for such a query, as
             # tracked by issue #17178.
-            # Note that we employ below a query hint to hit the case of not yet
-            # generating a SQL-level error, given the partial fix to bucketed
-            # aggregates introduced in PR #17918.
-            > SELECT SUM(data), MAX(data) FROM data OPTIONS (EXPECTED GROUP SIZE = 1);
+            > SELECT * FROM sum_and_max;
             <null> <null>
             """
             )
@@ -846,36 +847,39 @@ def workflow_test_github_17509(c: Composition) -> None:
                     WORKERS 2
                 )
             );
+            -- Set data for test up.
+            SET cluster = cluster1;
+            CREATE TABLE base (data bigint, diff bigint);
+            CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
+            INSERT INTO base VALUES (1, 1);
+            INSERT INTO base VALUES (1, -1), (1, -1);
+
+            -- Create materialized views to ensure non-monotonic rendering.
+            CREATE MATERIALIZED VIEW max_data AS
+            SELECT MAX(data) FROM data;
+            CREATE MATERIALIZED VIEW max_group_by_data AS
+            SELECT data, MAX(data) FROM data GROUP BY data;
             """
         )
         c.testdrive(
             dedent(
                 f"""
-            # Set data for test up
             > SET cluster = cluster1;
 
-            > CREATE TABLE base (data bigint, diff bigint);
-
-            > CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
-
-            > INSERT INTO base VALUES (1, 1);
-
-            > INSERT INTO base VALUES (1, -1), (1, -1);
-
             # The query below would return a null previously, but now fails cleanly.
-            ! SELECT MAX(data) FROM data;
+            ! SELECT * FROM max_data;
             contains:Invalid data in source, saw negative accumulation for key
 
-            ! SELECT data, MAX(data) FROM data GROUP BY data;
+            ! SELECT * FROM max_group_by_data;
             contains:Invalid data in source, saw negative accumulation for key
 
             # Repairing the error must be possible.
             > INSERT INTO base VALUES (1, 2), (2, 1);
 
-            > SELECT MAX(data) FROM data;
+            > SELECT * FROM max_data;
             2
 
-            > SELECT data, MAX(data) FROM data GROUP BY data;
+            > SELECT * FROM max_group_by_data;
             1 1
             2 2
             """
