@@ -231,7 +231,7 @@ fetch-batch input=b0
 write-batch output=b0 lower=0 upper=2
 a 3 1
 ----
-error: maximum timestamp 3 is beyond the expected batch upper: Antichain { elements: [2] }
+error: timestamp 3 is beyond the expected batch upper: Antichain { elements: [2] }
 
 # but batches with since > upper are allowed to have updates with timestamps beyond upper
 write-batch output=b0 lower=0 upper=2 since=10
@@ -243,7 +243,7 @@ parts=1 len=1
 write-batch output=b0 lower=0 upper=2 since=10
 a 100 1
 ----
-error: maximum timestamp 100 is beyond the expected batch since: Antichain { elements: [10] }
+error: timestamp 100 is beyond the expected batch since: Antichain { elements: [10] }
 
 # batches can be written unsorted
 write-batch output=b0 lower=0 upper=2 consolidate=false

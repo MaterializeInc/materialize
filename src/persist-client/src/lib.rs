@@ -1095,7 +1095,7 @@ mod tests {
                     .await
                     .unwrap_err(),
                 InvalidUsage::UpdateBeyondUpper {
-                    max_ts: 3,
+                    ts: 3,
                     expected_upper: Antichain::from_elem(3),
                 },
             );
