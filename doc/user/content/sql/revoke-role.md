@@ -6,17 +6,13 @@ menu:
     parent: commands
 ---
 
-`REVOKE` revokes membership of one role from another role.
-
-## Conceptual framework
-
-Roles can be a member of another role and inherit all the attributes and
-privileges of the other role. They can also have this membership revoked.
+`REVOKE` revokes membership of one role from another role. Roles can be members
+of other roles, as well as inherit all the attributes and privileges of those
+roles. This membership can also be revoked.
 
 {{< warning >}}
-Roles in Materialize are currently limited in functionality. In the future they
-will be used for role-based access control. See GitHub issue {{% gh 11579 %}}
-for details.
+Currently, roles have limited functionality in Materialize. This is part of the
+work to enable **Role-based access control** (RBAC) in a future release {{% gh 11579 %}}.
 {{< /warning >}}
 
 
