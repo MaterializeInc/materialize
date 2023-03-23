@@ -496,7 +496,7 @@ where
             let orchestrator = Arc::clone(&self.orchestrator);
             let service_name = service_name.clone();
             async move {
-                const METRICS_INTERVAL: Duration = Duration::from_secs(10);
+                const METRICS_INTERVAL: Duration = Duration::from_secs(60);
 
                 // TODO[btv] -- I tried implementing a `watch_metrics` function,
                 // similar to `watch_services`, but it crashed due to
