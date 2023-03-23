@@ -109,7 +109,7 @@ use mz_ore::cli::{self, CliConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::indexed::columnar::ColumnarRecords;
 use mz_persist::workload::DataGenerator;
-use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
+use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 
 // TODO(aljoscha): Make workload configurable: cardinality of keyspace, hot vs. cold keys, the
 // works.
@@ -383,8 +383,7 @@ async fn run_benchmark(
                 let source_rxs = Arc::clone(&source_rxs);
 
                 let source_stream = generator_source(scope, source_id, source_rxs);
-
-                // TODO(gus): Plug in upsert here.
+                let source_stream = upsert(scope, &source_stream, source_id);
 
                 // Choose a different worker for the counting.
                 // TODO(aljoscha): Factor out into function.
@@ -578,4 +577,78 @@ where
     });
 
     output_stream
+}
+
+/// Upsert
+fn upsert<G>(
+    scope: &G,
+    source_stream: &Stream<G, (Vec<u8>, Vec<u8>)>,
+    source_id: usize,
+) -> Stream<G, (Vec<u8>, Vec<u8>, i32)>
+where
+    G: Scope<Timestamp = u64>,
+{
+    let mut upsert_op =
+        AsyncOperatorBuilder::new(format!("source-{source_id}-upsert"), scope.clone());
+
+    let mut input = upsert_op.new_input(
+        source_stream,
+        Exchange::new(|d: &(Vec<u8>, Vec<u8>)| d.0.hashed()),
+    );
+    let (mut output, source_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) =
+        upsert_op.new_output();
+
+    upsert_op.build(move |capabilities| async move {
+        drop(capabilities);
+
+        let mut pending_values: BTreeMap<u64, (_, BTreeMap<_, _>)> = BTreeMap::new();
+        let mut current_values: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
+
+        let mut frontier = Antichain::from_elem(0);
+        while let Some(event) = input.next_mut().await {
+            match event {
+                AsyncEvent::Data(cap, buffer) => {
+                    for (k, v) in buffer.drain(..) {
+                        let time = *cap.time();
+                        let map = &mut pending_values
+                            .entry(time)
+                            .or_insert_with(|| (cap.delayed(cap.time()), BTreeMap::new()))
+                            .1;
+                        // In real upsert we sort by offset, but here we just
+                        // choose the latest one.
+                        map.insert(k, v);
+                    }
+                }
+                AsyncEvent::Progress(new_frontier) => frontier = new_frontier,
+            }
+            let mut removed_times = Vec::new();
+            for (time, (cap, map)) in pending_values.iter_mut() {
+                if frontier.less_equal(time) {
+                    break;
+                }
+                // UPSERT
+
+                for (k, v) in std::mem::take(map).into_iter() {
+                    let old_value = current_values.insert(k.clone(), v.clone());
+
+                    if let Some(old_value) = old_value {
+                        // we might be able to avoid this extra key clone here,
+                        // if we really tried
+                        output.give(cap, (k.clone(), old_value, -1)).await;
+                    }
+                    // we don't do deletes right now
+                    output.give(cap, (k, v, 1)).await;
+                }
+
+                removed_times.push(*time)
+            }
+
+            // Discard entries, capabilities for complete times.
+            for time in removed_times {
+                pending_values.remove(&time);
+            }
+        }
+    });
+
+    source_stream
 }
