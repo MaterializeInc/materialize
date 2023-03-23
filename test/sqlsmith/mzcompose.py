@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import json
+import os
 import random
 import time
 from datetime import datetime
@@ -17,7 +18,14 @@ from typing import Any, Dict, FrozenSet, List, Tuple
 from materialize.mzcompose import Composition, Service, WorkflowArgumentParser
 from materialize.mzcompose.services import Materialized
 
-MZ_SERVERS = [f"mz_{i + 1}" for i in range(4)]
+if os.getenv("BUILDKITE_AGENT_META_DATA_AWS_INSTANCE_TYPE") == "c5.2xlarge":
+    TOTAL_MEMORY = 12
+    NUM_SERVERS = 4
+else:
+    TOTAL_MEMORY = 48
+    NUM_SERVERS = 4
+
+MZ_SERVERS = [f"mz_{i + 1}" for i in range(NUM_SERVERS)]
 
 SERVICES = [
     # Auto-restart so we can keep testing even after we ran into a panic
@@ -26,7 +34,7 @@ SERVICES = [
     Materialized(
         name=mz_server,
         restart="on-failure",
-        memory=f"{48 / len(MZ_SERVERS)}GB",
+        memory=f"{TOTAL_MEMORY / len(MZ_SERVERS)}GB",
         use_default_volumes=False,
     )
     for mz_server in MZ_SERVERS
