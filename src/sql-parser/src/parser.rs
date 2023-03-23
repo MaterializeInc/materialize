@@ -3240,94 +3240,67 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_drop(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let object_type = match self.expect_one_of_keywords(&[
-            CONNECTION,
-            CLUSTER,
-            DATABASE,
-            INDEX,
-            MATERIALIZED,
-            ROLE,
-            SECRET,
-            SCHEMA,
-            SINK,
-            SOURCE,
-            TABLE,
-            TYPE,
-            USER,
-            VIEW,
-        ])? {
-            DATABASE => {
-                let if_exists = self.parse_if_exists()?;
+        let object_type = self.expect_object_type()?;
+        let if_exists = self.parse_if_exists()?;
+        match object_type {
+            ObjectType::Database => {
                 let name = self.parse_database_name()?;
                 let restrict = matches!(
                     self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
                     Some(RESTRICT),
                 );
-                return Ok(Statement::DropDatabase(DropDatabaseStatement {
+                Ok(Statement::DropDatabase(DropDatabaseStatement {
                     if_exists,
                     name,
                     restrict,
-                }));
+                }))
             }
-            SCHEMA => {
-                let if_exists = self.parse_if_exists()?;
+            ObjectType::Schema => {
                 let name = self.parse_schema_name()?;
                 let cascade = matches!(
                     self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
                     Some(CASCADE),
                 );
-                return Ok(Statement::DropSchema(DropSchemaStatement {
+                Ok(Statement::DropSchema(DropSchemaStatement {
                     name,
                     if_exists,
                     cascade,
-                }));
+                }))
             }
-            ROLE | USER => {
-                let if_exists = self.parse_if_exists()?;
+            ObjectType::Role => {
                 let names = self.parse_comma_separated(Parser::parse_object_name)?;
-                return Ok(Statement::DropRoles(DropRolesStatement {
+                Ok(Statement::DropRoles(DropRolesStatement {
                     if_exists,
                     names,
-                }));
+                }))
             }
-            CLUSTER => {
-                return if self.peek_keyword(REPLICA) {
-                    self.parse_drop_cluster_replicas()
-                } else {
-                    self.parse_drop_clusters()
-                };
+            ObjectType::Cluster => self.parse_drop_clusters(if_exists),
+            ObjectType::ClusterReplica => self.parse_drop_cluster_replicas(if_exists),
+            ObjectType::Table
+            | ObjectType::View
+            | ObjectType::MaterializedView
+            | ObjectType::Source
+            | ObjectType::Sink
+            | ObjectType::Index
+            | ObjectType::Type
+            | ObjectType::Secret
+            | ObjectType::Connection => {
+                let names = self.parse_comma_separated(Parser::parse_object_name)?;
+                let cascade = matches!(
+                    self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
+                    Some(CASCADE),
+                );
+                Ok(Statement::DropObjects(DropObjectsStatement {
+                    object_type,
+                    if_exists,
+                    names,
+                    cascade,
+                }))
             }
-            INDEX => ObjectType::Index,
-            SINK => ObjectType::Sink,
-            SOURCE => ObjectType::Source,
-            TABLE => ObjectType::Table,
-            TYPE => ObjectType::Type,
-            VIEW => ObjectType::View,
-            MATERIALIZED => {
-                self.expect_keyword(VIEW)?;
-                ObjectType::MaterializedView
-            }
-            SECRET => ObjectType::Secret,
-            CONNECTION => ObjectType::Connection,
-            _ => unreachable!(),
-        };
-
-        let if_exists = self.parse_if_exists()?;
-        let names = self.parse_comma_separated(Parser::parse_object_name)?;
-        let cascade = matches!(
-            self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
-            Some(CASCADE),
-        );
-        Ok(Statement::DropObjects(DropObjectsStatement {
-            object_type,
-            if_exists,
-            names,
-            cascade,
-        }))
+        }
     }
 
-    fn parse_drop_clusters(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let if_exists = self.parse_if_exists()?;
+    fn parse_drop_clusters(&mut self, if_exists: bool) -> Result<Statement<Raw>, ParserError> {
         let names = self.parse_comma_separated(Parser::parse_object_name)?;
         let cascade = matches!(
             self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
@@ -3340,9 +3313,10 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_drop_cluster_replicas(&mut self) -> Result<Statement<Raw>, ParserError> {
-        self.expect_keyword(REPLICA).unwrap();
-        let if_exists = self.parse_if_exists()?;
+    fn parse_drop_cluster_replicas(
+        &mut self,
+        if_exists: bool,
+    ) -> Result<Statement<Raw>, ParserError> {
         let names = self.parse_comma_separated(|p| {
             let cluster = p.parse_identifier()?;
             p.expect_token(&Token::Dot)?;
@@ -3605,46 +3579,41 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_alter(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let object_type = match self.expect_one_of_keywords(&[
-            SINK,
-            SOURCE,
-            VIEW,
-            MATERIALIZED,
-            TABLE,
-            INDEX,
-            SECRET,
-            SYSTEM,
-            CONNECTION,
-            ROLE,
-        ])? {
-            SINK => return self.parse_alter_sink(),
-            SOURCE => return self.parse_alter_source(),
-            VIEW => ObjectType::View,
-            MATERIALIZED => {
-                self.expect_keyword(VIEW)?;
-                ObjectType::MaterializedView
+        if self.parse_keyword(SYSTEM) {
+            return self.parse_alter_system();
+        }
+
+        let object_type = self.expect_object_type()?;
+
+        match object_type {
+            ObjectType::Role => self.parse_alter_role(),
+            ObjectType::Sink => self.parse_alter_sink(),
+            ObjectType::Source => self.parse_alter_source(),
+            ObjectType::Index => self.parse_alter_index(),
+            ObjectType::Secret => self.parse_alter_secret(),
+            ObjectType::Connection => self.parse_alter_connection(),
+            ObjectType::View | ObjectType::MaterializedView | ObjectType::Table => {
+                let if_exists = self.parse_if_exists()?;
+                let name = self.parse_object_name()?;
+                self.expect_keywords(&[RENAME, TO])?;
+                let to_item_name = self.parse_identifier()?;
+                Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
+                    object_type,
+                    if_exists,
+                    name,
+                    to_item_name,
+                }))
             }
-            TABLE => ObjectType::Table,
-            INDEX => return self.parse_alter_index(),
-            SECRET => return self.parse_alter_secret(),
-            SYSTEM => return self.parse_alter_system(),
-            CONNECTION => return self.parse_alter_connection(),
-            ROLE => return self.parse_alter_role(),
-            _ => unreachable!(),
-        };
-
-        let if_exists = self.parse_if_exists()?;
-        let name = self.parse_object_name()?;
-
-        self.expect_keywords(&[RENAME, TO])?;
-        let to_item_name = self.parse_identifier()?;
-
-        Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
-            object_type,
-            if_exists,
-            name,
-            to_item_name,
-        }))
+            ObjectType::Type
+            | ObjectType::Cluster
+            | ObjectType::ClusterReplica
+            | ObjectType::Database
+            | ObjectType::Schema => parser_err!(
+                self,
+                self.peek_prev_pos(),
+                format!("Unsupported ALTER on {object_type}")
+            ),
+        }
     }
 
     fn parse_alter_source(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -3839,6 +3808,7 @@ impl<'a> Parser<'a> {
 
                 Statement::AlterObjectRename(AlterObjectRenameStatement {
                     object_type: ObjectType::Connection,
+
                     if_exists,
                     name,
                     to_item_name,
@@ -4869,74 +4839,39 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_show(&mut self) -> Result<ShowStatement<Raw>, ParserError> {
-        if self.parse_keyword(DATABASES) {
-            return Ok(ShowStatement::ShowDatabases(ShowDatabasesStatement {
-                filter: self.parse_show_statement_filter()?,
-            }));
-        }
-
         if self.parse_one_of_keywords(&[COLUMNS, FIELDS]).is_some() {
             self.parse_show_columns()
-        } else if self.parse_keyword(SCHEMAS) {
-            let from = if self.parse_keyword(FROM) {
-                Some(self.parse_database_name()?)
-            } else {
-                None
-            };
-            Ok(ShowStatement::ShowSchemas(ShowSchemasStatement {
-                from,
-                filter: self.parse_show_statement_filter()?,
-            }))
-        } else if let Some(object_type) = self.parse_one_of_keywords(&[
-            OBJECTS,
-            ROLES,
-            CLUSTER,
-            CLUSTERS,
-            SINKS,
-            SOURCES,
-            TABLES,
-            TYPES,
-            USERS,
-            VIEWS,
-            MATERIALIZED,
-            SECRETS,
-            INDEXES,
-            CONNECTIONS,
-        ]) {
-            let object_type = match object_type {
-                OBJECTS => ObjectType::Object,
-                ROLES | USERS => ObjectType::Role,
-                CLUSTERS => ObjectType::Cluster,
-                SINKS => ObjectType::Sink,
-                SOURCES => ObjectType::Source,
-                TABLES => ObjectType::Table,
-                TYPES => ObjectType::Type,
-                VIEWS => ObjectType::View,
-                SECRETS => ObjectType::Secret,
-                CONNECTIONS => ObjectType::Connection,
-                CLUSTER => {
-                    if self.parse_keyword(REPLICAS) {
-                        ObjectType::ClusterReplica
-                    } else {
-                        return Ok(ShowStatement::ShowVariable(ShowVariableStatement {
-                            variable: Ident::from("cluster"),
-                        }));
-                    }
-                }
-                MATERIALIZED => {
-                    self.expect_keyword(VIEWS)?;
-                    ObjectType::MaterializedView
-                }
-                INDEXES => ObjectType::Index,
-                _ => unreachable!(),
-            };
+        } else if self.parse_keyword(OBJECTS) {
             let from = if self.parse_keywords(&[FROM]) {
                 Some(self.parse_schema_name()?)
             } else {
                 None
             };
-
+            Ok(ShowStatement::ShowObjects(ShowObjectsStatement {
+                object_type: ShowObjectType::Object,
+                from,
+                filter: self.parse_show_statement_filter()?,
+            }))
+        } else if let Some(object_type) = self.parse_plural_object_type() {
+            let from = if object_type.lives_in_schema() {
+                if self.parse_keywords(&[FROM]) {
+                    Some(self.parse_schema_name()?)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             let show_object_type = match object_type {
+                ObjectType::Database => ShowObjectType::Database,
+                ObjectType::Schema => {
+                    let from = if self.parse_keyword(FROM) {
+                        Some(self.parse_database_name()?)
+                    } else {
+                        None
+                    };
+                    ShowObjectType::Schema { from }
+                }
                 ObjectType::Table => ShowObjectType::Table,
                 ObjectType::View => ShowObjectType::View,
                 ObjectType::Source => ShowObjectType::Source,
@@ -4944,7 +4879,6 @@ impl<'a> Parser<'a> {
                 ObjectType::Type => ShowObjectType::Type,
                 ObjectType::Role => ShowObjectType::Role,
                 ObjectType::ClusterReplica => ShowObjectType::ClusterReplica,
-                ObjectType::Object => ShowObjectType::Object,
                 ObjectType::Secret => ShowObjectType::Secret,
                 ObjectType::Connection => ShowObjectType::Connection,
                 ObjectType::Cluster => ShowObjectType::Cluster,
@@ -4974,12 +4908,14 @@ impl<'a> Parser<'a> {
                     }
                 }
             };
-
-            // Only Materialized Views and Indexes (handled separately below) are associated with clusters.
             Ok(ShowStatement::ShowObjects(ShowObjectsStatement {
                 object_type: show_object_type,
                 from,
                 filter: self.parse_show_statement_filter()?,
+            }))
+        } else if self.parse_keyword(CLUSTER) {
+            Ok(ShowStatement::ShowVariable(ShowVariableStatement {
+                variable: Ident::from("cluster"),
             }))
         } else if self.parse_keywords(&[CREATE, VIEW]) {
             Ok(ShowStatement::ShowCreateView(ShowCreateViewStatement {
@@ -5786,6 +5722,105 @@ impl<'a> Parser<'a> {
             role_name,
             member_names,
         }))
+    }
+
+    /// Bail out if the current token is not an object type, or consume and return it if it is.
+    fn expect_object_type(&mut self) -> Result<ObjectType, ParserError> {
+        Ok(
+            match self.expect_one_of_keywords(&[
+                TABLE,
+                VIEW,
+                MATERIALIZED,
+                SOURCE,
+                SINK,
+                INDEX,
+                TYPE,
+                ROLE,
+                USER,
+                CLUSTER,
+                SECRET,
+                CONNECTION,
+                DATABASE,
+                SCHEMA,
+            ])? {
+                TABLE => ObjectType::Table,
+                VIEW => ObjectType::View,
+                MATERIALIZED => {
+                    self.expect_keyword(VIEW)?;
+                    ObjectType::MaterializedView
+                }
+                SOURCE => ObjectType::Source,
+                SINK => ObjectType::Sink,
+                INDEX => ObjectType::Index,
+                TYPE => ObjectType::Type,
+                ROLE | USER => ObjectType::Role,
+                CLUSTER => {
+                    if self.parse_keyword(REPLICA) {
+                        ObjectType::ClusterReplica
+                    } else {
+                        ObjectType::Cluster
+                    }
+                }
+                SECRET => ObjectType::Secret,
+                CONNECTION => ObjectType::Connection,
+                DATABASE => ObjectType::Database,
+                SCHEMA => ObjectType::Schema,
+                _ => unreachable!(),
+            },
+        )
+    }
+
+    /// Look for an object type in the plural form and return it if it matches.
+    fn parse_plural_object_type(&mut self) -> Option<ObjectType> {
+        Some(
+            match self.parse_one_of_keywords(&[
+                TABLES,
+                VIEWS,
+                MATERIALIZED,
+                SOURCES,
+                SINKS,
+                INDEXES,
+                TYPES,
+                ROLES,
+                USERS,
+                CLUSTER,
+                CLUSTERS,
+                SECRETS,
+                CONNECTIONS,
+                DATABASES,
+                SCHEMAS,
+            ])? {
+                TABLES => ObjectType::Table,
+                VIEWS => ObjectType::View,
+                MATERIALIZED => {
+                    if self.parse_keyword(VIEWS) {
+                        ObjectType::MaterializedView
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
+                SOURCES => ObjectType::Source,
+                SINKS => ObjectType::Sink,
+                INDEXES => ObjectType::Index,
+                TYPES => ObjectType::Type,
+                ROLES | USERS => ObjectType::Role,
+                CLUSTER => {
+                    if self.parse_keyword(REPLICAS) {
+                        ObjectType::ClusterReplica
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
+                CLUSTERS => ObjectType::Cluster,
+                SECRETS => ObjectType::Secret,
+                CONNECTIONS => ObjectType::Connection,
+                DATABASES => ObjectType::Database,
+                SCHEMAS => ObjectType::Schema,
+                _ => unreachable!(),
+            },
+        )
     }
 }
 

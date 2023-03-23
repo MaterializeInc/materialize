@@ -23,14 +23,21 @@ SHOW DATABASES
 ----
 SHOW DATABASES
 =>
-Show(ShowDatabases(ShowDatabasesStatement { filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Database, from: None, filter: None }))
 
 parse-statement
 SHOW DATABASES LIKE 'blah'
 ----
 SHOW DATABASES LIKE 'blah'
 =>
-Show(ShowDatabases(ShowDatabasesStatement { filter: Some(Like("blah")) }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Database, from: None, filter: Some(Like("blah")) }))
+
+parse-statement
+SHOW DATABASES FROM foo
+----
+error: Expected end of statement, found FROM
+SHOW DATABASES FROM foo
+               ^
 
 parse-statement
 SHOW ROLES
@@ -40,11 +47,32 @@ SHOW ROLES
 Show(ShowObjects(ShowObjectsStatement { object_type: Role, from: None, filter: None }))
 
 parse-statement
+SHOW ROLES FROM BAR
+----
+error: Expected end of statement, found FROM
+SHOW ROLES FROM BAR
+           ^
+
+parse-statement
 SHOW CLUSTERS
 ----
 SHOW CLUSTERS
 =>
 Show(ShowObjects(ShowObjectsStatement { object_type: Cluster, from: None, filter: None }))
+
+parse-statement
+SHOW CLUSTERS FROM foobar
+----
+error: Expected end of statement, found FROM
+SHOW CLUSTERS FROM foobar
+              ^
+
+parse-statement
+SHOW CLUSTER REPLICAS FROM ny
+----
+error: Expected end of statement, found FROM
+SHOW CLUSTER REPLICAS FROM ny
+                      ^
 
 parse-statement
 SHOW USERS
@@ -58,7 +86,7 @@ SHOW SCHEMAS
 ----
 SHOW SCHEMAS
 =>
-Show(ShowSchemas(ShowSchemasStatement { from: None, filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Schema { from: None }, from: None, filter: None }))
 
 parse-statement
 SHOW SCHEMAS FROM foo.bar

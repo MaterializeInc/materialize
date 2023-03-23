@@ -27,8 +27,7 @@ use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
     SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement, ShowCreateSinkStatement,
     ShowCreateSourceStatement, ShowCreateTableStatement, ShowCreateViewStatement,
-    ShowDatabasesStatement, ShowObjectsStatement, ShowSchemasStatement, ShowStatementFilter,
-    Statement, Value,
+    ShowObjectsStatement, ShowStatementFilter, Statement, Value,
 };
 use crate::catalog::{CatalogItemType, SessionCatalog};
 use crate::names::{
@@ -269,7 +268,7 @@ pub fn plan_show_create_connection(
 
 pub fn show_databases<'a>(
     scx: &'a StatementContext<'a>,
-    ShowDatabasesStatement { filter }: ShowDatabasesStatement<Aug>,
+    filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let query = "SELECT name FROM mz_catalog.mz_databases".to_string();
     ShowSelect::new(scx, query, filter, None, None)
@@ -277,7 +276,8 @@ pub fn show_databases<'a>(
 
 pub fn show_schemas<'a>(
     scx: &'a StatementContext<'a>,
-    ShowSchemasStatement { from, filter }: ShowSchemasStatement<Aug>,
+    from: Option<ResolvedDatabaseName>,
+    filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let database_id = match from {
         Some(ResolvedDatabaseName::Database { id, .. }) => id.0,
@@ -313,8 +313,14 @@ pub fn show_objects<'a>(
         ShowObjectType::Type => show_types(scx, from, filter),
         ShowObjectType::Object => show_all_objects(scx, from, filter),
         ShowObjectType::Role => bail_unsupported!("SHOW ROLES"),
-        ShowObjectType::Cluster => show_clusters(scx, filter),
-        ShowObjectType::ClusterReplica => show_cluster_replicas(scx, filter),
+        ShowObjectType::Cluster => {
+            assert!(from.is_none(), "parser should reject from");
+            show_clusters(scx, filter)
+        }
+        ShowObjectType::ClusterReplica => {
+            assert!(from.is_none(), "parser should reject from");
+            show_cluster_replicas(scx, filter)
+        }
         ShowObjectType::Secret => show_secrets(scx, from, filter),
         ShowObjectType::Connection => show_connections(scx, from, filter),
         ShowObjectType::MaterializedView { in_cluster } => {
@@ -324,6 +330,14 @@ pub fn show_objects<'a>(
             in_cluster,
             on_object,
         } => show_indexes(scx, from, on_object, in_cluster, filter),
+        ShowObjectType::Database => {
+            assert!(from.is_none(), "parser should reject from");
+            show_databases(scx, filter)
+        }
+        ShowObjectType::Schema { from: db_from } => {
+            assert!(from.is_none(), "parser should reject from");
+            show_schemas(scx, db_from, filter)
+        }
     }
 }
 
