@@ -41,7 +41,9 @@ pub fn auto_run_on_introspection<'a, 's>(
 ) -> Option<&'a Cluster> {
     // If this feature is disabled via LaunchDarkly, or the user has disabled it for
     // this session.
-    if !catalog.system_config().enable_auto_route_introspection_queries()
+    if !catalog
+        .system_config()
+        .enable_auto_route_introspection_queries()
         || !session.vars().auto_route_introspection_queries()
     {
         return None;
@@ -52,14 +54,19 @@ pub fn auto_run_on_introspection<'a, 's>(
     let mut depends_on = depends_on.into_iter().peekable();
     let non_empty = depends_on.peek().is_some();
 
-    // Make sure we only depend on the system catalog.
-    let system_only = depends_on.all(|id| {
+    // Make sure we only depend on the system catalog, and nothing we depend on is a
+    // per-replica object, that requires being run a specific replica.
+    let valid_dependencies = depends_on.all(|id| {
         let entry = catalog.get_entry(&id);
         let schema = &entry.name().qualifiers.schema_spec;
-        catalog.state().is_system_schema_specifier(schema)
+
+        let system_only = catalog.state().is_system_schema_specifier(schema);
+        let non_replica = catalog.arranged_introspection_dependencies(id).is_empty();
+
+        system_only && non_replica
     });
 
-    if non_empty && system_only {
+    if non_empty && valid_dependencies {
         let intros_cluster = catalog.resolve_builtin_cluster(&MZ_INTROSPECTION_CLUSTER);
         tracing::debug!("Running on '{}' cluster", MZ_INTROSPECTION_CLUSTER.name);
 
@@ -158,7 +165,7 @@ pub fn user_privilege_hack(
     for id in depends_on {
         let item = catalog.get_item(id);
         let full_name = catalog.resolve_full_name(item.name());
-        if catalog.is_system_schema(&full_name.schema) {
+        if !catalog.is_system_schema(&full_name.schema) {
             return Err(AdapterError::Unauthorized(
                 rbac::UnauthorizedError::privilege(
                     format!("interact with object {full_name}"),
