@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+#![allow(unused)]
 //! A configurable data generator for benchmarking.
 
 use std::cmp;
@@ -17,7 +18,7 @@ use std::mem::size_of;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::Codec64;
 
-use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
+use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 
 /// A configurable data generator for benchmarking.
 #[derive(Clone, Debug)]
