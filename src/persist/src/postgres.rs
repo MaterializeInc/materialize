@@ -22,7 +22,7 @@ use deadpool_postgres::{
 use deadpool_postgres::{Manager, Pool};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::{EpochMillis, SYSTEM_TIME};
+use mz_ore::now::SYSTEM_TIME;
 use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
@@ -31,7 +31,6 @@ use std::fmt::Formatter;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::sync::oneshot::error::RecvError;
 use tracing::{debug, info, warn};
 
 use crate::error::Error;
@@ -163,11 +162,11 @@ impl PostgresConsensusConfig {
 pub struct PostgresConsensus {
     pool: Pool,
     metrics: PostgresConsensusMetrics,
-    buf: Arc<Mutex<Vec<Entry>>>,
+    buf: Arc<Mutex<Vec<CaSEntry>>>,
     last_flush_timestamp: Arc<AtomicU64>,
 }
 
-struct Entry {
+struct CaSEntry {
     key: String,
     expected: SeqNo,
     new: VersionedData,
@@ -362,10 +361,9 @@ impl PostgresConsensus {
     fn start_task(&self) {
         let s = self.clone();
         let _ = mz_ore::task::spawn(|| format!("postgres batcher"), async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(500));
+            let mut interval = tokio::time::interval(Duration::from_millis(25));
             loop {
                 interval.tick().await;
-                info!("running loop");
                 s.execute_batch_cas().await;
             }
         });
@@ -379,12 +377,11 @@ impl PostgresConsensus {
             std::mem::take(&mut *buf)
         };
 
-        info!("Batch size: {}", batch.len());
         if batch.is_empty() {
-            return; //Ok(());
+            return;
         }
 
-        // WIP: need to dedupe by (shard, seqno) so we don't return mismatched value
+        info!("Batch size: {}", batch.len());
 
         let mut param_count = 1;
         let mut params: Vec<&(dyn ToSql + Sync)> = Vec::new();
@@ -449,24 +446,13 @@ impl PostgresConsensus {
 
         for entry in batch {
             if successful_cas.contains(&(entry.key.clone(), entry.new.seqno.clone())) {
-                info!("({}, {}) passed CaS", entry.key, entry.expected);
                 let _ = entry.tx.send(true);
             } else {
-                info!("({}, {}) failed CaS", entry.key, entry.expected);
                 let _ = entry.tx.send(false);
             }
-            // if let Some(_) = successful_cas.first() {
-            //     let cas = successful_cas.pop().expect("abc");
-            //     if (entry.key, entry.new.seqno) == cas {
-            //     } else {
-            //         info!("failed CaS");
-            //     }
-            // } else {
-            //     info!("({}, {}) failed CaS", entry.key, entry.expected);
-            //     entry.tx.send(false).expect("abc");
-            // }
         }
     }
+
     async fn batch_compare_and_set(
         &self,
         key: String,
@@ -476,13 +462,37 @@ impl PostgresConsensus {
     ) {
         let should_execute = {
             let mut buf = self.buf.lock().expect("abc");
-            buf.push(Entry {
+
+            for existing_entry in buf.iter_mut() {
+                if &existing_entry.key == &key {
+                    // our CaS is greater than a pending request, we can replace it
+                    // because it must be out-of-date at this point
+                    if &existing_entry.expected < &expected {
+                        let new = CaSEntry {
+                            key,
+                            expected,
+                            new,
+                            tx,
+                        };
+                        let old = std::mem::replace(existing_entry, new);
+                        let _ = old.tx.send(false);
+                    } else {
+                        // otherwise, someone beat us to add a pending CaS request, send
+                        // an early-return to our caller without needing to ping CRDB
+                        let _ = tx.send(false);
+                    }
+                    return;
+                }
+            }
+
+            buf.push(CaSEntry {
                 key,
                 expected,
                 new,
                 tx,
             });
-            buf.len() >= 10
+
+            buf.len() >= 50
         };
 
         if should_execute {
@@ -583,8 +593,10 @@ impl Consensus for PostgresConsensus {
         };
 
         if result == 1 {
+            info!("({}, {:?}) passed CaS", key, expected);
             Ok(CaSResult::Committed)
         } else {
+            info!("({}, {:?}) failed CaS", key, expected);
             Ok(CaSResult::ExpectationMismatch)
         }
     }
