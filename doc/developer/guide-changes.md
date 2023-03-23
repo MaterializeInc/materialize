@@ -152,7 +152,7 @@ Roughly speaking, Materialize's stable APIs are:
   * The observable behavior of any source or sink.
   * The behavior of all documented command-line flags.
 
-For details, see the [backwards compatibility policy](https://materialize.com/docs//versions/#Backwards-compatibility).
+For details, see the [backwards compatibility policy](https://materialize.com/docs/releases/#backwards-compatibility).
 
 Notably, changes to experimental or unstable APIs should *not* have release
 notes. The point of having experimental and unstable APIs is to decrease the
