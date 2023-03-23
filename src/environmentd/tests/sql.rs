@@ -2655,8 +2655,9 @@ fn test_mz_sessions() {
 }
 
 #[test]
-fn test_auto_run_on_introspection() {
-    let config = util::Config::default();
+fn test_auto_run_on_introspection_feature_enabled() {
+    // unsafe_mode enables the feature as a whole
+    let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
@@ -2688,50 +2689,6 @@ fn test_auto_run_on_introspection() {
         .execute("SET client_min_messages = debug", &[])
         .unwrap();
 
-    // By default auto_route_introspection_queries should be OFF
-    let _row = client
-        .query_one("SELECT * FROM mz_functions LIMIT 1", &[])
-        .unwrap();
-    assert_introspection_notice(false);
-
-    let _row = client
-        .query_one("SELECT * FROM pg_attribute LIMIT 1", &[])
-        .unwrap();
-    assert_introspection_notice(false);
-
-    let _rows = client
-        .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
-        .unwrap();
-    assert_introspection_notice(false);
-
-    // Start our subscribe.
-    client
-        .batch_execute("BEGIN; DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM mz_functions);")
-        .unwrap();
-    assert_introspection_notice(false);
-
-    // Fetch all of the rows.
-    client.batch_execute("FETCH ALL c").unwrap();
-    assert_introspection_notice(false);
-
-    // End the subscribe.
-    client.batch_execute("COMMIT").unwrap();
-    assert_introspection_notice(false);
-
-    // For every session the behavior is enabled, but by default the feature is disabled at
-    // the system level
-    let mut sys_client = server
-        .pg_config_internal()
-        .user(&SYSTEM_USER.name)
-        .connect(postgres::NoTls)
-        .unwrap();
-    sys_client
-        .execute(
-            "ALTER SYSTEM SET enable_auto_route_introspection_queries TO true",
-            &[],
-        )
-        .unwrap();
-
     // Queries with no dependencies should not get run on the introspection cluster
     let _row = client.query_one("SELECT 1;", &[]).unwrap();
     assert_introspection_notice(false);
@@ -2747,8 +2704,11 @@ fn test_auto_run_on_introspection() {
         .unwrap();
     assert_introspection_notice(true);
 
-    let _rows = client
-        .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
+    let _row = client
+        .query_one(
+            "SELECT * FROM mz_internal.mz_cluster_replica_heartbeats LIMIT 1",
+            &[],
+        )
         .unwrap();
     assert_introspection_notice(true);
 
@@ -2785,14 +2745,167 @@ fn test_auto_run_on_introspection() {
         .query_one("SELECT * FROM user_made LIMIT 1", &[])
         .unwrap();
     assert_introspection_notice(false);
+}
 
-    // If the feature is enabled, but the behavior is disabled, we shouldn't run on the
-    // introspection cluster
+#[test]
+fn test_auto_run_on_introspection_feature_disabled() {
+    // unsafe_mode enables the feature as a whole
+    let config = util::Config::default().unsafe_mode();
+    let server = util::start_server(config).unwrap();
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let mut client = server
+        .pg_config()
+        .notice_callback(move |notice| {
+            tx.unbounded_send(notice).unwrap();
+        })
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    let mut assert_introspection_notice = |expected| {
+        match (rx.try_next(), expected) {
+            (Ok(Some(notice)), true) => {
+                let msg = notice.message();
+                let expected = "query was automatically run on the \"mz_introspection\" cluster";
+                assert_eq!(msg, expected);
+            }
+            (Err(_), false) => (),
+            (_, true) => panic!("Didn't get the expected notice!"),
+            (res, false) => panic!("Got a notice, but it wasn't expected! {:?}", res),
+        }
+        // Drain the channel of any other notices
+        while let Ok(Some(_)) = rx.try_next() {}
+    };
+
+    // The notice we assert on only gets emitted at the DEBUG level
+    client
+        .execute("SET client_min_messages = debug", &[])
+        .unwrap();
+    // Disable the feature, as a user would
     client
         .execute("SET auto_route_introspection_queries = false", &[])
         .unwrap();
+
+    // Nothing should emit the notice
+
     let _row = client
         .query_one("SELECT * FROM mz_functions LIMIT 1", &[])
+        .unwrap();
+    assert_introspection_notice(false);
+
+    let _row = client
+        .query_one("SELECT * FROM pg_attribute LIMIT 1", &[])
+        .unwrap();
+    assert_introspection_notice(false);
+
+    let _row = client
+        .query_one(
+            "SELECT * FROM mz_internal.mz_cluster_replica_heartbeats LIMIT 1",
+            &[],
+        )
+        .unwrap();
+    assert_introspection_notice(true);
+
+    let _rows = client
+        .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
+        .unwrap();
+    assert_introspection_notice(false);
+
+    let _rows = client
+        .query(
+            "SELECT * FROM mz_internal.mz_dataflow_operator_parents",
+            &[],
+        )
+        .unwrap();
+    assert_introspection_notice(false);
+
+    client
+        .batch_execute("BEGIN; DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM mz_functions);")
+        .unwrap();
+    assert_introspection_notice(false);
+
+    client.batch_execute("FETCH ALL c").unwrap();
+    assert_introspection_notice(false);
+
+    client.batch_execute("COMMIT").unwrap();
+    assert_introspection_notice(false);
+}
+
+#[test]
+fn test_auto_run_on_introspection_per_replica_relations() {
+    // unsafe_mode enables the feature as a whole
+    let config = util::Config::default().unsafe_mode();
+    let server = util::start_server(config).unwrap();
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let mut client = server
+        .pg_config()
+        .notice_callback(move |notice| {
+            tx.unbounded_send(notice).unwrap();
+        })
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    let mut assert_introspection_notice = |expected| {
+        match (rx.try_next(), expected) {
+            (Ok(Some(notice)), true) => {
+                let msg = notice.message();
+                let expected = "query was automatically run on the \"mz_introspection\" cluster";
+                assert_eq!(msg, expected);
+            }
+            (Err(_), false) => (),
+            (_, true) => panic!("Didn't get the expected notice!"),
+            (res, false) => panic!("Got a notice, but it wasn't expected! {:?}", res),
+        }
+        // Drain the channel of any other notices
+        while let Ok(Some(_)) = rx.try_next() {}
+    };
+
+    // The notice we assert on only gets emitted at the DEBUG level
+    client
+        .execute("SET client_min_messages = debug", &[])
+        .unwrap();
+
+    // Disable the feature, as a user would
+    client
+        .execute("SET auto_route_introspection_queries = false", &[])
+        .unwrap();
+
+    // If a system object is a per-replica relation we do not want to automatically run
+    // it on the mz_introspection cluster
+
+    // `mz_active_peeks` is a per-replica relation
+    let _rows = client
+        .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
+        .unwrap();
+    assert_introspection_notice(false);
+
+    // `mz_dataflow_operator_parents` is a VIEW that depends on per-replica relations
+    let _rows = client
+        .query(
+            "SELECT * FROM mz_internal.mz_dataflow_operator_parents",
+            &[],
+        )
+        .unwrap();
+    assert_introspection_notice(false);
+
+    // Enable the feature
+    client
+        .execute("SET auto_route_introspection_queries = true", &[])
+        .unwrap();
+
+    // Even after enabling the feature we still shouldn't emit any notices
+
+    let _rows = client
+        .query(
+            "SELECT * FROM mz_internal.mz_dataflow_operator_parents",
+            &[],
+        )
+        .unwrap();
+    assert_introspection_notice(false);
+
+    let _rows = client
+        .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
         .unwrap();
     assert_introspection_notice(false);
 }
