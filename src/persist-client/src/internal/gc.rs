@@ -407,8 +407,11 @@ where
             });
 
             for (seqno, rollup) in state.collections.rollups.iter() {
-                let previous = rollup_holds.insert(rollup.key.clone(), *seqno);
-                if previous.is_none() && *seqno <= req.new_seqno_since {
+                if rollup_holds.contains_key(&rollup.key) {
+                    continue;
+                }
+                rollup_holds.insert(rollup.key.clone(), *seqno);
+                if *seqno <= req.new_seqno_since {
                     // We've discovered a new rollup! It's safe to truncate up to here.
                     // Note that this may cause a large number of additional truncate calls,
                     // compared to truncating only once per GC run. If this turns out to be too
