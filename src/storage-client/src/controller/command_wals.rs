@@ -40,15 +40,6 @@ where
 
     Self: super::StorageController<Timestamp = T>,
 {
-    /// `true` if shard is in register for shards marked for finalization.
-    pub(super) async fn is_shard_registered_for_finalization(&mut self, shard: ShardId) -> bool {
-        SHARD_FINALIZATION
-            .peek_key_one(&mut self.state.stash, shard)
-            .await
-            .expect("must be able to connect to stash")
-            .is_some()
-    }
-
     /// Register shards for finalization. This must be called if you intend to
     /// finalize shards, before you perform any work to e.g. replace one shard
     /// with another.
@@ -136,10 +127,6 @@ where
 
         // Remove any shards that are currently in use from shard finalization register.
         self.clear_from_shard_finalization_register(shard_ids_to_keep)
-            .await;
-
-        // Determine all shards that are registered that are not in use.
-        self.finalize_shards(registered_shards.difference(&in_use_shards).cloned())
             .await;
     }
 }
