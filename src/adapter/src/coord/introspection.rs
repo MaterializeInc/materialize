@@ -51,6 +51,11 @@ pub fn auto_run_on_introspection<'a, 's>(
         return None;
     }
 
+    // We can't switch what cluster we're using, if the user has specified a replica.
+    if session.vars().cluster_replica().is_some() {
+        return None;
+    }
+
     // Check to make sure our iterator contains atleast one element, this prevents us
     // from always running empty queries on the mz_introspection cluster.
     let mut depends_on = depends_on.into_iter().peekable();
