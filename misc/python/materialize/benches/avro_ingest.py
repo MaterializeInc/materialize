@@ -91,7 +91,8 @@ def main() -> None:
     args = parser.parse_args()
 
     os.chdir(ROOT)
-    repo = mzbuild.Repository(ROOT)
+    coverage = bool(os.getenv("CI_COVERAGE_ENABLED", False))
+    repo = mzbuild.Repository(ROOT, coverage=coverage)
 
     wait_for_confluent(args.confluent_host)
 

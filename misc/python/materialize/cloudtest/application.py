@@ -49,7 +49,10 @@ class Application:
             resource.create()
 
     def acquire_images(self) -> None:
-        repo = mzbuild.Repository(ROOT, release_mode=self.release_mode)
+        coverage = bool(os.getenv("CI_COVERAGE_ENABLED", False))
+        repo = mzbuild.Repository(
+            ROOT, release_mode=self.release_mode, coverage=coverage
+        )
         for image in self.images:
             deps = repo.resolve_dependencies([repo.images[image]])
             deps.acquire()

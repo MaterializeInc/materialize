@@ -19,6 +19,7 @@ For details about how steps are trimmed, see the comment at the top of
 pipeline.template.yml and the docstring on `trim_pipeline` below.
 """
 
+import argparse
 import copy
 import os
 import subprocess
@@ -46,6 +47,19 @@ CI_GLUE_GLOBS = ["bin", "ci", "misc/python"]
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="mkpipeline",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="""
+mkpipeline creates a Buildkite pipeline based on a template file and uploads it
+so it is executed.""",
+    )
+
+    parser.add_argument("--coverage", action="store_true")
+    # TODO Empty argument, used in tests pipeline, remove
+    parser.add_argument("rest", nargs=argparse.REMAINDER)
+    args = parser.parse_args()
+
     # Make sure we have an up to date view of main.
     spawn.runv(["git", "fetch", "origin", "main"])
 
@@ -58,7 +72,9 @@ def main() -> int:
     raw = raw.replace("$RUST_VERSION", rust_version())
     pipeline = yaml.safe_load(raw)
 
-    if os.environ["BUILDKITE_BRANCH"] == "main" or os.environ["BUILDKITE_TAG"]:
+    if args.coverage:
+        print("Coverage build, not trimming pipeline")
+    elif os.environ["BUILDKITE_BRANCH"] == "main" or os.environ["BUILDKITE_TAG"]:
         print("On main branch or tag, so not trimming pipeline")
     elif have_paths_changed(CI_GLUE_GLOBS):
         # We still execute pipeline trimming on a copy of the pipeline to
@@ -67,21 +83,39 @@ def main() -> int:
         print(
             "Repository glue code has changed, so the trimmed pipeline below does not apply"
         )
-        trim_pipeline(copy.deepcopy(pipeline))
+        trim_pipeline(copy.deepcopy(pipeline), args.coverage)
     else:
         print("--- Trimming unchanged steps from pipeline")
-        trim_pipeline(pipeline)
+        trim_pipeline(pipeline, args.coverage)
 
     # Upload a dummy JUnit report so that the "Analyze tests" step doesn't fail
     # if we trim away all the JUnit report-generating steps.
     Path("junit-dummy.xml").write_text("")
     spawn.runv(["buildkite-agent", "artifact", "upload", "junit-dummy.xml"])
 
+    if args.coverage:
+        pipeline["env"]["CI_BUILDER_SCCACHE"] = 1
+        pipeline["env"]["CI_COVERAGE_ENABLED"] = 1
+        for step in pipeline["steps"]:
+            # Coverage runs are slower
+            if "timeout_in_minutes" in step:
+                step["timeout_in_minutes"] *= 2
+            if step.get("coverage") == "skip":
+                step["skip"] = True
+            if step.get("id") == "build-x86_64":
+                step["name"] = "Build x86_64 with coverage"
+    else:
+        for step in pipeline["steps"]:
+            if step.get("coverage") == "only":
+                step["skip"] = True
+
     # Remove the Materialize-specific keys from the configuration that are
-    # only used to inform how to trim the pipeline.
+    # only used to inform how to trim the pipeline and for coverage runs.
     for step in pipeline["steps"]:
         if "inputs" in step:
             del step["inputs"]
+        if "coverage" in step:
+            del step["coverage"]
 
     spawn.runv(
         ["buildkite-agent", "pipeline", "upload"], stdin=yaml.dump(pipeline).encode()
@@ -105,7 +139,7 @@ class PipelineStep:
         return inputs
 
 
-def trim_pipeline(pipeline: Any) -> None:
+def trim_pipeline(pipeline: Any, coverage: bool) -> None:
     """Trim pipeline steps whose inputs have not changed in this branch.
 
     Steps are assigned inputs in two ways:
@@ -119,7 +153,7 @@ def trim_pipeline(pipeline: Any) -> None:
     A step is trimmed if a) none of its inputs have changed, and b) there are
     no other untrimmed steps that depend on it.
     """
-    repo = mzbuild.Repository(Path("."))
+    repo = mzbuild.Repository(Path("."), coverage=coverage)
     deps = repo.resolve_dependencies(image for image in repo)
 
     steps = OrderedDict()

@@ -20,7 +20,7 @@ env:
 steps:
   - id: build-x86_64
     label: Build x86_64
-    command: bin/ci-builder run stable bin/pyactivate -m ci.test.build x86_64
+    command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
     inputs:
       - "*"
     timeout_in_minutes: 60
@@ -30,13 +30,14 @@ steps:
 
   - id: build-aarch64
     label: Build aarch64
-    command: bin/ci-builder run stable bin/pyactivate -m ci.test.build aarch64
+    command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
     inputs:
       - "*"
     timeout_in_minutes: 60
     priority: 1
     agents:
       queue: builder-linux-aarch64
+    coverage: skip
 
   - id: check-merge-with-target
     label: Merge skew cargo check
@@ -49,6 +50,7 @@ steps:
     agents:
       queue: linux-x86_64
     if: "build.pull_request.id != null"
+    coverage: skip
 
   - id: devel-docker-tags
     label: Tag development docker images
@@ -61,6 +63,7 @@ steps:
     timeout_in_minutes: 10
     agents:
       queue: linux-x86_64
+    coverage: skip
 
   - id: lint-fast
     label: Lint and rustfmt
@@ -70,6 +73,7 @@ steps:
     timeout_in_minutes: 10
     agents:
       queue: linux-x86_64
+    coverage: skip
 
   - id: lint-slow
     label: Clippy and doctests
@@ -81,6 +85,7 @@ steps:
     timeout_in_minutes: 30
     agents:
       queue: builder-linux-x86_64
+    coverage: skip
 
   - id: lint-macos
     label: macOS Clippy
@@ -95,6 +100,7 @@ steps:
     timeout_in_minutes: 30
     agents:
       queue: mac
+    coverage: skip
 
   - id: lint-deps
     label: Lint dependencies
@@ -106,6 +112,7 @@ steps:
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
+    coverage: skip
 
   - id: lint-docs
     label: Lint docs
@@ -114,6 +121,7 @@ steps:
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
+    coverage: skip
 
   - id: preview-docs
     label: Preview docs
@@ -122,6 +130,7 @@ steps:
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
+    coverage: skip
 
   - id: cargo-test
     label: Cargo test
@@ -141,6 +150,7 @@ steps:
           composition: cargo-test
     agents:
       queue: builder-linux-x86_64
+    coverage: skip
 
   - id: miri-test
     label: Miri test
@@ -149,6 +159,7 @@ steps:
     timeout_in_minutes: 30
     agents:
       queue: builder-linux-x86_64
+    coverage: skip
 
   - id: testdrive
     label: Testdrive %n
@@ -441,6 +452,7 @@ steps:
           args: [--consensus=mem, --blob=mem]
     agents:
       queue: linux-x86_64
+    coverage: skip # TODO(def-): Should we support coverage for persist-maelstrom?
 
   - id: checks-drop-create-default-replica
     label: "Checks + DROP/CREATE replica"
@@ -531,6 +543,7 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
           args: [--exitfirst, -m, "not long", --aws-region=us-east-2, test/cloudtest/]
+    coverage: skip # TODO(def-): Should we support coverage for cloudtest?
 
   - id: source-sink-errors
     label: "Source/Sink Error Reporting"
@@ -611,6 +624,19 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: feature-benchmark
           args: [--scenario=KafkaUpsertUnique]
+    coverage: skip
+
+  - wait: ~
+    continue_on_failure: true
+
+  - id: coverage-pr-analyze
+    label: Analyze code coverage for PR
+    command: bin/ci-builder run stable ci/test/coverage_report.sh
+    inputs: ["*"]
+    priority: 1
+    agents:
+      queue: linux-x86_64
+    coverage: only
 
   - wait: ~
     continue_on_failure: true
@@ -638,3 +664,4 @@ steps:
       branch: "$BUILDKITE_BRANCH"
       env:
         BUILDKITE_TAG: "$BUILDKITE_TAG"
+    coverage: skip

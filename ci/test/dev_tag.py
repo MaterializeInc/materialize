@@ -17,8 +17,8 @@ from materialize.xcompile import Arch
 
 def main() -> None:
     repos = [
-        mzbuild.Repository(Path("."), Arch.X86_64),
-        mzbuild.Repository(Path("."), Arch.AARCH64),
+        mzbuild.Repository(Path("."), Arch.X86_64, coverage=False),
+        mzbuild.Repository(Path("."), Arch.AARCH64, coverage=False),
     ]
     print(f"--- Tagging development Docker images")
     deps = [
