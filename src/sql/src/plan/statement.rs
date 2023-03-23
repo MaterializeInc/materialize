@@ -171,14 +171,8 @@ pub fn describe(
         Statement::Show(ShowStatement::ShowCreateMaterializedView(stmt)) => {
             show::describe_show_create_materialized_view(&scx, stmt)?
         }
-        Statement::Show(ShowStatement::ShowDatabases(stmt)) => {
-            show::show_databases(&scx, stmt)?.describe()?
-        }
         Statement::Show(ShowStatement::ShowObjects(stmt)) => {
             show::show_objects(&scx, stmt)?.describe()?
-        }
-        Statement::Show(ShowStatement::ShowSchemas(stmt)) => {
-            show::show_schemas(&scx, stmt)?.describe()?
         }
 
         // SCL statements.
@@ -321,11 +315,7 @@ pub fn plan(
         Statement::Show(ShowStatement::ShowCreateMaterializedView(stmt)) => {
             show::plan_show_create_materialized_view(scx, stmt).map(Plan::SendRows)
         }
-        Statement::Show(ShowStatement::ShowDatabases(stmt)) => {
-            show::show_databases(scx, stmt)?.plan()
-        }
         Statement::Show(ShowStatement::ShowObjects(stmt)) => show::show_objects(scx, stmt)?.plan(),
-        Statement::Show(ShowStatement::ShowSchemas(stmt)) => show::show_schemas(scx, stmt)?.plan(),
 
         // SCL statements.
         Statement::Close(stmt) => scl::plan_close(scx, stmt),

@@ -1843,46 +1843,6 @@ impl AstDisplay for ShowVariableStatement {
 }
 impl_display!(ShowVariableStatement);
 
-/// `SHOW DATABASES`
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ShowDatabasesStatement<T: AstInfo> {
-    pub filter: Option<ShowStatementFilter<T>>,
-}
-
-impl<T: AstInfo> AstDisplay for ShowDatabasesStatement<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("SHOW DATABASES");
-        if let Some(filter) = &self.filter {
-            f.write_str(" ");
-            f.write_node(filter);
-        }
-    }
-}
-impl_display_t!(ShowDatabasesStatement);
-
-/// `SHOW SCHEMAS`
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ShowSchemasStatement<T: AstInfo> {
-    pub from: Option<T::DatabaseName>,
-    pub filter: Option<ShowStatementFilter<T>>,
-}
-
-impl<T: AstInfo> AstDisplay for ShowSchemasStatement<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("SHOW");
-        f.write_str(" SCHEMAS");
-        if let Some(from) = &self.from {
-            f.write_str(" FROM ");
-            f.write_node(from);
-        }
-        if let Some(filter) = &self.filter {
-            f.write_str(" ");
-            f.write_node(filter);
-        }
-    }
-}
-impl_display_t!(ShowSchemasStatement);
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ShowObjectType<T: AstInfo> {
     MaterializedView {
@@ -1903,6 +1863,10 @@ pub enum ShowObjectType<T: AstInfo> {
     Object,
     Secret,
     Connection,
+    Database,
+    Schema {
+        from: Option<T::DatabaseName>,
+    },
 }
 /// `SHOW <object>S`
 ///
@@ -1937,6 +1901,8 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::Connection => "CONNECTIONS",
             ShowObjectType::MaterializedView { .. } => "MATERIALIZED VIEWS",
             ShowObjectType::Index { .. } => "INDEXES",
+            ShowObjectType::Database => "DATABASES",
+            ShowObjectType::Schema { .. } => "SCHEMAS",
         });
 
         if let ShowObjectType::Index { on_object, .. } = &self.object_type {
@@ -1944,6 +1910,11 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
                 f.write_str(" ON ");
                 f.write_node(on_object);
             }
+        }
+
+        if let ShowObjectType::Schema { from: Some(from) } = &self.object_type {
+            f.write_str(" FROM ");
+            f.write_node(from);
         }
 
         if let Some(from) = &self.from {
@@ -2294,9 +2265,31 @@ pub enum ObjectType {
     Role,
     Cluster,
     ClusterReplica,
-    Object,
     Secret,
     Connection,
+    Database,
+    Schema,
+}
+
+impl ObjectType {
+    pub fn lives_in_schema(&self) -> bool {
+        match self {
+            ObjectType::Table
+            | ObjectType::View
+            | ObjectType::MaterializedView
+            | ObjectType::Source
+            | ObjectType::Sink
+            | ObjectType::Index
+            | ObjectType::Type
+            | ObjectType::Secret
+            | ObjectType::Connection => true,
+            ObjectType::Database
+            | ObjectType::Schema
+            | ObjectType::Cluster
+            | ObjectType::ClusterReplica
+            | ObjectType::Role => false,
+        }
+    }
 }
 
 impl AstDisplay for ObjectType {
@@ -2312,9 +2305,10 @@ impl AstDisplay for ObjectType {
             ObjectType::Role => "ROLE",
             ObjectType::Cluster => "CLUSTER",
             ObjectType::ClusterReplica => "CLUSTER REPLICA",
-            ObjectType::Object => "OBJECT",
             ObjectType::Secret => "SECRET",
             ObjectType::Connection => "CONNECTION",
+            ObjectType::Database => "DATABASE",
+            ObjectType::Schema => "SCHEMA",
         })
     }
 }
@@ -2867,8 +2861,6 @@ impl_display_t!(AsOf);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ShowStatement<T: AstInfo> {
-    ShowDatabases(ShowDatabasesStatement<T>),
-    ShowSchemas(ShowSchemasStatement<T>),
     ShowObjects(ShowObjectsStatement<T>),
     ShowColumns(ShowColumnsStatement<T>),
     ShowCreateView(ShowCreateViewStatement<T>),
@@ -2884,8 +2876,6 @@ pub enum ShowStatement<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for ShowStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            ShowStatement::ShowDatabases(stmt) => f.write_node(stmt),
-            ShowStatement::ShowSchemas(stmt) => f.write_node(stmt),
             ShowStatement::ShowObjects(stmt) => f.write_node(stmt),
             ShowStatement::ShowColumns(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateView(stmt) => f.write_node(stmt),

@@ -3291,10 +3291,13 @@ pub fn plan_drop_objects(
         | ObjectType::Type
         | ObjectType::Secret
         | ObjectType::Connection => plan_drop_items(scx, object_type, &items, cascade),
-        ObjectType::Role | ObjectType::Cluster | ObjectType::ClusterReplica => {
+        ObjectType::Role
+        | ObjectType::Cluster
+        | ObjectType::ClusterReplica
+        | ObjectType::Database
+        | ObjectType::Schema => {
             unreachable!("handled through their respective plan_drop functions")
         }
-        ObjectType::Object => unreachable!("cannot drop generic OBJECT, must provide object type"),
     }
 }
 

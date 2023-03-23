@@ -1562,10 +1562,13 @@ impl Coordinator {
             ObjectType::Type => ExecuteResponse::DroppedType,
             ObjectType::Secret => ExecuteResponse::DroppedSecret,
             ObjectType::Connection => ExecuteResponse::DroppedConnection,
-            ObjectType::Role | ObjectType::Cluster | ObjectType::ClusterReplica => {
+            ObjectType::Role
+            | ObjectType::Cluster
+            | ObjectType::ClusterReplica
+            | ObjectType::Database
+            | ObjectType::Schema => {
                 unreachable!("handled through their respective sequence_drop functions")
             }
-            ObjectType::Object => unreachable!("generic OBJECT cannot be dropped"),
         })
     }
 
