@@ -2194,7 +2194,7 @@ where
     }
 
     async fn reconcile_state(&mut self) {
-        self.reconcile_shards().await
+        self.reconcile_state_inner().await
     }
 }
 
