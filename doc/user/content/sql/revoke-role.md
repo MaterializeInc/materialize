@@ -50,3 +50,4 @@ REVOKE data_scientist FROM joe, mike;
 - [DROP ROLE](../drop-role)
 - [DROP USER](../drop-user)
 - [GRANT ROLE](../grant-role)
+- [ALTER OWNER](../alter-owner)

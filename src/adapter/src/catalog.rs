@@ -324,6 +324,10 @@ impl CatalogState {
         &self.entry_by_id[id]
     }
 
+    pub fn get_entry_mut(&mut self, id: &GlobalId) -> &mut CatalogEntry {
+        self.entry_by_id.get_mut(id).expect("catalog out of sync")
+    }
+
     pub fn try_get_entry_in_schema(
         &self,
         name: &QualifiedObjectName,
@@ -392,8 +396,17 @@ impl CatalogState {
             .unwrap_or_else(|| panic!("unknown cluster {cluster_id}"))
     }
 
+    fn get_cluster_mut(&mut self, cluster_id: ClusterId) -> &mut Cluster {
+        self.try_get_cluster_mut(cluster_id)
+            .unwrap_or_else(|| panic!("unknown cluster {cluster_id}"))
+    }
+
     fn try_get_cluster(&self, cluster_id: ClusterId) -> Option<&Cluster> {
         self.clusters_by_id.get(&cluster_id)
+    }
+
+    fn try_get_cluster_mut(&mut self, cluster_id: ClusterId) -> Option<&mut Cluster> {
+        self.clusters_by_id.get_mut(&cluster_id)
     }
 
     fn get_linked_cluster(&self, object_id: GlobalId) -> Option<&Cluster> {
@@ -618,6 +631,12 @@ impl CatalogState {
 
     fn get_database(&self, database_id: &DatabaseId) -> &Database {
         &self.database_by_id[database_id]
+    }
+
+    fn get_database_mut(&mut self, database_id: &DatabaseId) -> &mut Database {
+        self.database_by_id
+            .get_mut(database_id)
+            .expect("catalog out of sync")
     }
 
     fn insert_cluster(
@@ -5360,6 +5379,107 @@ impl Catalog {
                         update_item(state, builtin_table_updates, id, to_name, to_item)?;
                     }
                 }
+                Op::ClusterOwner { id, new_owner } => {
+                    let cluster = state.get_cluster(id);
+                    if id.is_system() {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReadOnlyCluster(cluster.name().to_string()),
+                        )));
+                    }
+                    builtin_table_updates.push(state.pack_cluster_update(cluster.name(), -1));
+                    let cluster = state.get_cluster_mut(id);
+                    cluster.owner_id = new_owner;
+                    let cluster = state.get_cluster(id);
+                    tx.update_cluster(id, cluster)?;
+                    builtin_table_updates.push(state.pack_cluster_update(cluster.name(), 1));
+                }
+                Op::ClusterReplicaOwner {
+                    cluster_id,
+                    replica_id,
+                    new_owner,
+                } => {
+                    let cluster = state.get_cluster(cluster_id);
+                    if cluster_id.is_system() {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReadOnlyCluster(cluster.name().to_string()),
+                        )));
+                    }
+                    let replica = cluster
+                        .replicas_by_id
+                        .get(&replica_id)
+                        .expect("catalog out of sync");
+                    builtin_table_updates.push(state.pack_cluster_replica_update(
+                        cluster_id,
+                        &replica.name,
+                        -1,
+                    ));
+                    let cluster = state.get_cluster_mut(cluster_id);
+                    let replica = cluster
+                        .replicas_by_id
+                        .get_mut(&replica_id)
+                        .expect("catalog out of sync");
+                    replica.owner_id = new_owner;
+                    let cluster = state.get_cluster(cluster_id);
+                    let replica = cluster
+                        .replicas_by_id
+                        .get(&replica_id)
+                        .expect("catalog out of sync");
+                    tx.update_cluster_replica(cluster_id, replica_id, replica)?;
+                    builtin_table_updates.push(state.pack_cluster_replica_update(
+                        cluster_id,
+                        &replica.name,
+                        1,
+                    ));
+                }
+                Op::DatabaseOwner { id, new_owner } => {
+                    let database = state.get_database(&id);
+                    builtin_table_updates.push(state.pack_database_update(database, -1));
+                    let database = state.get_database_mut(&id);
+                    database.owner_id = new_owner;
+                    let database = state.get_database(&id);
+                    tx.update_database(id, database)?;
+                    builtin_table_updates.push(state.pack_database_update(database, 1));
+                }
+                Op::SchemaOwner {
+                    database_id,
+                    schema_id,
+                    new_owner,
+                } => {
+                    builtin_table_updates.push(state.pack_schema_update(
+                        &ResolvedDatabaseSpecifier::Id(database_id),
+                        &schema_id,
+                        -1,
+                    ));
+                    let database = state.get_database_mut(&database_id);
+                    let schema = database
+                        .schemas_by_id
+                        .get_mut(&schema_id)
+                        .expect("catalog out of sync");
+                    schema.owner_id = new_owner;
+                    tx.update_schema(Some(database_id), schema_id, schema)?;
+                    builtin_table_updates.push(state.pack_schema_update(
+                        &ResolvedDatabaseSpecifier::Id(database_id),
+                        &schema_id,
+                        1,
+                    ));
+                }
+                Op::ItemOwner { id, new_owner } => {
+                    let entry = state.get_entry(&id);
+                    if id.is_system() {
+                        let full_name = state.resolve_full_name(
+                            entry.name(),
+                            session.map(|session| session.conn_id()),
+                        );
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReadOnlyCluster(full_name.to_string()),
+                        )));
+                    }
+                    builtin_table_updates.extend(state.pack_item_update(id, -1));
+                    let entry = state.get_entry_mut(&id);
+                    entry.owner_id = new_owner;
+                    tx.update_item(id, &entry.name().item, &Self::serialize_item(entry.item()))?;
+                    builtin_table_updates.extend(state.pack_item_update(id, 1));
+                }
                 Op::UpdateClusterReplicaStatus { event } => {
                     builtin_table_updates.push(state.pack_cluster_replica_status_update(
                         event.cluster_id,
@@ -6005,6 +6125,28 @@ pub enum Op {
         id: GlobalId,
         current_full_name: FullObjectName,
         to_name: String,
+    },
+    ClusterOwner {
+        id: ClusterId,
+        new_owner: RoleId,
+    },
+    ClusterReplicaOwner {
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+        new_owner: RoleId,
+    },
+    DatabaseOwner {
+        id: DatabaseId,
+        new_owner: RoleId,
+    },
+    SchemaOwner {
+        database_id: DatabaseId,
+        schema_id: SchemaId,
+        new_owner: RoleId,
+    },
+    ItemOwner {
+        id: GlobalId,
+        new_owner: RoleId,
     },
     RevokeRole {
         role_id: RoleId,

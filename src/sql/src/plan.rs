@@ -135,6 +135,11 @@ pub enum Plan {
     AlterSystemReset(AlterSystemResetPlan),
     AlterSystemResetAll(AlterSystemResetAllPlan),
     AlterRole(AlterRolePlan),
+    AlterClusterOwner(AlterClusterOwnerPlan),
+    AlterClusterReplicaOwner(AlterClusterReplicaOwnerPlan),
+    AlterDatabaseOwner(AlterDatabaseOwnerPlan),
+    AlterSchemaOwner(AlterSchemaOwnerPlan),
+    AlterItemOwner(AlterItemOwnerPlan),
     Declare(DeclarePlan),
     Fetch(FetchPlan),
     Close(ClosePlan),
@@ -173,6 +178,19 @@ impl Plan {
                 vec![PlanKind::AlterNoop, PlanKind::AlterSystemResetAll]
             }
             StatementKind::AlterSystemSet => vec![PlanKind::AlterNoop, PlanKind::AlterSystemSet],
+            StatementKind::AlterClusterOwner => {
+                vec![PlanKind::AlterNoop, PlanKind::AlterClusterOwner]
+            }
+            StatementKind::AlterClusterReplicaOwner => {
+                vec![PlanKind::AlterNoop, PlanKind::AlterClusterReplicaOwner]
+            }
+            StatementKind::AlterDatabaseOwner => {
+                vec![PlanKind::AlterNoop, PlanKind::AlterDatabaseOwner]
+            }
+            StatementKind::AlterSchemaOwner => {
+                vec![PlanKind::AlterNoop, PlanKind::AlterSchemaOwner]
+            }
+            StatementKind::AlterObjectOwner => vec![PlanKind::AlterNoop, PlanKind::AlterItemOwner],
             StatementKind::Close => vec![PlanKind::Close],
             StatementKind::Commit => vec![PlanKind::CommitTransaction],
             StatementKind::Copy => vec![PlanKind::CopyFrom, PlanKind::Peek, PlanKind::Subscribe],
@@ -309,6 +327,26 @@ impl Plan {
             Plan::AlterSystemReset(_) => "alter system",
             Plan::AlterSystemResetAll(_) => "alter system",
             Plan::AlterRole(_) => "alter role",
+            Plan::AlterClusterOwner(_) => "alter cluster owner",
+            Plan::AlterClusterReplicaOwner(_) => "alter cluster replica owner",
+            Plan::AlterDatabaseOwner(_) => "alter database owner",
+            Plan::AlterSchemaOwner(_) => "alter schema owner",
+            Plan::AlterItemOwner(plan) => match plan.object_type {
+                ObjectType::Table => "alter table owner",
+                ObjectType::View => "alter view owner",
+                ObjectType::MaterializedView => "alter materialized view owner",
+                ObjectType::Source => "alter source owner",
+                ObjectType::Sink => "alter sink owner",
+                ObjectType::Index => "alter index owner",
+                ObjectType::Type => "alter type owner",
+                ObjectType::Role => "alter role owner",
+                ObjectType::Cluster => "alter cluster owner",
+                ObjectType::ClusterReplica => "alter cluster replica owner",
+                ObjectType::Secret => "alter secret owner",
+                ObjectType::Connection => "alter connection owner",
+                ObjectType::Database => "alter database owner",
+                ObjectType::Schema => "alter schema owner",
+            },
             Plan::Declare(_) => "declare",
             Plan::Fetch(_) => "fetch",
             Plan::Close(_) => "close",
@@ -752,6 +790,39 @@ pub struct AlterRolePlan {
     pub id: RoleId,
     pub name: String,
     pub attributes: RoleAttributes,
+}
+
+#[derive(Debug)]
+pub struct AlterClusterOwnerPlan {
+    pub id: ClusterId,
+    pub new_owner: RoleId,
+}
+
+#[derive(Debug)]
+pub struct AlterClusterReplicaOwnerPlan {
+    pub cluster_id: ClusterId,
+    pub replica_id: ReplicaId,
+    pub new_owner: RoleId,
+}
+
+#[derive(Debug)]
+pub struct AlterDatabaseOwnerPlan {
+    pub id: DatabaseId,
+    pub new_owner: RoleId,
+}
+
+#[derive(Debug)]
+pub struct AlterSchemaOwnerPlan {
+    pub database_id: DatabaseId,
+    pub schema_id: SchemaId,
+    pub new_owner: RoleId,
+}
+
+#[derive(Debug)]
+pub struct AlterItemOwnerPlan {
+    pub id: GlobalId,
+    pub object_type: ObjectType,
+    pub new_owner: RoleId,
 }
 
 #[derive(Debug)]

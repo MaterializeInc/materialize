@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="539" height="631">
+   <polygon points="9 17 1 13 1 21"/>
+   <polygon points="17 17 9 13 9 21"/>
+   <rect x="31" y="3" width="66" height="32" rx="10"/>
+   <rect x="29"
+         y="1"
+         width="66"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="39" y="21">ALTER</text>
+   <rect x="137" y="3" width="84" height="32" rx="10"/>
+   <rect x="135"
+         y="1"
+         width="84"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="145" y="21">CLUSTER</text>
+   <rect x="137" y="47" width="148" height="32" rx="10"/>
+   <rect x="135"
+         y="45"
+         width="148"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="145" y="65">CLUSTER REPLICA</text>
+   <rect x="137" y="91" width="116" height="32" rx="10"/>
+   <rect x="135"
+         y="89"
+         width="116"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="145" y="109">CONNECTION</text>
+   <rect x="137" y="135" width="98" height="32" rx="10"/>
+   <rect x="135"
+         y="133"
+         width="98"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="145" y="153">DATABASE</text>
+   <rect x="137" y="179" width="62" height="32" rx="10"/>
+   <rect x="135"
+         y="177"
+         width="62"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="145" y="197">INDEX</text>
+   <rect x="137" y="223" width="82" height="32" rx="10"/>
+   <rect x="135"
+         y="221"
+         width="82"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="145" y="241">SCHEMA</text>
+   <rect x="137" y="267" width="78" height="32" rx="10"/>
+   <rect x="135"
+         y="265"
+         width="78"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="145" y="285">SOURCE</text>
+   <rect x="137" y="311" width="52" height="32" rx="10"/>
+   <rect x="135"
+         y="309"
+         width="52"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="145" y="329">SINK</text>
+   <rect x="137" y="355" width="58" height="32" rx="10"/>
+   <rect x="135"
+         y="353"
+         width="58"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="145" y="373">VIEW</text>
+   <rect x="137" y="399" width="166" height="32" rx="10"/>
+   <rect x="135"
+         y="397"
+         width="166"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="145" y="417">MATERIALIZED VIEW</text>
+   <rect x="137" y="443" width="66" height="32" rx="10"/>
+   <rect x="135"
+         y="441"
+         width="66"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="145" y="461">TABLE</text>
+   <rect x="137" y="487" width="56" height="32" rx="10"/>
+   <rect x="135"
+         y="485"
+         width="56"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="145" y="505">TYPE</text>
+   <rect x="137" y="531" width="76" height="32" rx="10"/>
+   <rect x="135"
+         y="529"
+         width="76"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="145" y="549">SECRET</text>
+   <rect x="343" y="3" width="56" height="32"/>
+   <rect x="341" y="1" width="56" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="351" y="21">name</text>
+   <rect x="419" y="3" width="98" height="32" rx="10"/>
+   <rect x="417"
+         y="1"
+         width="98"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="427" y="21">OWNER TO</text>
+   <rect x="417" y="597" width="94" height="32"/>
+   <rect x="415" y="595" width="94" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="425" y="615">new_owner</text>
+   <path class="line"
+         d="m17 17 h2 m0 0 h10 m66 0 h10 m20 0 h10 m84 0 h10 m0 0 h82 m-206 0 h20 m186 0 h20 m-226 0 q10 0 10 10 m206 0 q0 -10 10 -10 m-216 10 v24 m206 0 v-24 m-206 24 q0 10 10 10 m186 0 q10 0 10 -10 m-196 10 h10 m148 0 h10 m0 0 h18 m-196 -10 v20 m206 0 v-20 m-206 20 v24 m206 0 v-24 m-206 24 q0 10 10 10 m186 0 q10 0 10 -10 m-196 10 h10 m116 0 h10 m0 0 h50 m-196 -10 v20 m206 0 v-20 m-206 20 v24 m206 0 v-24 m-206 24 q0 10 10 10 m186 0 q10 0 10 -10 m-196 10 h10 m98 0 h10 m0 0 h68 m-196 -10 v20 m206 0 v-20 m-206 20 v24 m206 0 v-24 m-206 24 q0 10 10 10 m186 0 q10 0 10 -10 m-196 10 h10 m62 0 h10 m0 0 h104 m-196 -10 v20 m206 0 v-20 m-206 20 v24 m206 0 v-24 m-206 24 q0 10 10 10 m186 0 q10 0 10 -10 m-196 10 h10 m82 0 h10 m0 0 h84 m-196 -10 v20 m206 0 v-20 m-206 20 v24 m206 0 v-24 m-206 24 q0 10 10 10 m186 0 q10 0 10 -10 m-196 10 h10 m78 0 h10 m0 0 h88 m-196 -10 v20 m206 0 v-20 m-206 20 v24 m206 0 v-24 m-206 24 q0 10 10 10 m186 0 q10 0 10 -10 m-196 10 h10 m52 0 h10 m0 0 h114 m-196 -10 v20 m206 0 v-20 m-206 20 v24 m206 0 v-24 m-206 24 q0 10 10 10 m186 0 q10 0 10 -10 m-196 10 h10 m58 0 h10 m0 0 h108 m-196 -10 v20 m206 0 v-20 m-206 20 v24 m206 0 v-24 m-206 24 q0 10 10 10 m186 0 q10 0 10 -10 m-196 10 h10 m166 0 h10 m-196 -10 v20 m206 0 v-20 m-206 20 v24 m206 0 v-24 m-206 24 q0 10 10 10 m186 0 q10 0 10 -10 m-196 10 h10 m66 0 h10 m0 0 h100 m-196 -10 v20 m206 0 v-20 m-206 20 v24 m206 0 v-24 m-206 24 q0 10 10 10 m186 0 q10 0 10 -10 m-196 10 h10 m56 0 h10 m0 0 h110 m-196 -10 v20 m206 0 v-20 m-206 20 v24 m206 0 v-24 m-206 24 q0 10 10 10 m186 0 q10 0 10 -10 m-196 10 h10 m76 0 h10 m0 0 h90 m20 -528 h10 m56 0 h10 m0 0 h10 m98 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-144 594 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m94 0 h10 m3 0 h-3"/>
+   <polygon points="529 611 537 607 537 615"/>
+   <polygon points="529 611 521 607 521 615"/>
+</svg>

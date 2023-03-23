@@ -112,6 +112,13 @@ pub fn describe(
         // DDL statements.
         Statement::AlterConnection(stmt) => ddl::describe_alter_connection(&scx, stmt)?,
         Statement::AlterIndex(stmt) => ddl::describe_alter_index_options(&scx, stmt)?,
+        Statement::AlterClusterOwner(stmt) => ddl::describe_alter_cluster_owner(&scx, stmt)?,
+        Statement::AlterClusterReplicaOwner(stmt) => {
+            ddl::describe_alter_cluster_replica_owner(&scx, stmt)?
+        }
+        Statement::AlterDatabaseOwner(stmt) => ddl::describe_alter_database_owner(&scx, stmt)?,
+        Statement::AlterSchemaOwner(stmt) => ddl::describe_alter_schema_owner(&scx, stmt)?,
+        Statement::AlterObjectOwner(stmt) => ddl::describe_alter_object_owner(&scx, stmt)?,
         Statement::AlterObjectRename(stmt) => ddl::describe_alter_object_rename(&scx, stmt)?,
         Statement::AlterRole(stmt) => ddl::describe_alter_role(&scx, stmt)?,
         Statement::AlterSecret(stmt) => ddl::describe_alter_secret_options(&scx, stmt)?,
@@ -249,6 +256,13 @@ pub fn plan(
         // DDL statements.
         Statement::AlterConnection(stmt) => ddl::plan_alter_connection(scx, stmt),
         Statement::AlterIndex(stmt) => ddl::plan_alter_index_options(scx, stmt),
+        Statement::AlterClusterOwner(stmt) => ddl::plan_alter_cluster_owner(scx, stmt),
+        Statement::AlterClusterReplicaOwner(stmt) => {
+            ddl::plan_alter_cluster_replica_owner(scx, stmt)
+        }
+        Statement::AlterDatabaseOwner(stmt) => ddl::plan_alter_database_owner(scx, stmt),
+        Statement::AlterSchemaOwner(stmt) => ddl::plan_alter_schema_owner(scx, stmt),
+        Statement::AlterObjectOwner(stmt) => ddl::plan_alter_object_owner(scx, stmt),
         Statement::AlterObjectRename(stmt) => ddl::plan_alter_object_rename(scx, stmt),
         Statement::AlterRole(stmt) => ddl::plan_alter_role(scx, stmt),
         Statement::AlterSecret(stmt) => ddl::plan_alter_secret(scx, stmt),
