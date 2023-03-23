@@ -32,11 +32,8 @@ CREATE SOURCE s FROM LOAD GENERATOR COUNTER;
 
 mode standard
 
-# Filter out persisted introspection sources, as their existence depends on
-# whether or not we run with --persisted-introspection.
-
 query TTTT rowsort
-SELECT * FROM information_schema.tables WHERE table_name !~ 'mz_.+_\d+';
+SELECT * FROM information_schema.tables;
 ----
 materialize
 information_schema

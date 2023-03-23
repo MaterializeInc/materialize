@@ -148,6 +148,12 @@ where
 ///    batches. Whenever the frontiers sufficiently advance, we take a batch
 ///    description and all the batches that belong to it and append it to the
 ///    persist shard.
+///
+/// Note that `mint_batch_descriptions` inspects the frontier of
+/// `desired_collection`, and passes the data through to `write_batches`.
+/// This is done to avoid a clone of the underlying data so that both
+/// operators can have the collection as input.
+///
 fn install_desired_into_persist<G>(
     sink_id: GlobalId,
     target: &CollectionMetadata,
@@ -185,7 +191,7 @@ where
     // the timestamp on feeding back using the summary.
     let (persist_feedback_handle, persist_feedback_stream) = scope.feedback(Timestamp::default());
 
-    let (batch_descriptions, mint_token) = mint_batch_descriptions(
+    let (batch_descriptions, passthrough_desired_stream, mint_token) = mint_batch_descriptions(
         sink_id,
         operator_name.clone(),
         target,
@@ -201,7 +207,7 @@ where
         operator_name.clone(),
         target,
         &batch_descriptions,
-        &desired_collection.inner,
+        &passthrough_desired_stream,
         &persist_collection.inner,
         Arc::clone(&persist_clients),
     );
@@ -246,6 +252,7 @@ fn mint_batch_descriptions<G>(
     compute_state: &mut crate::compute_state::ComputeState,
 ) -> (
     Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
+    Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     Rc<dyn Any>,
 )
 where
@@ -285,17 +292,41 @@ where
         AsyncOperatorBuilder::new(format!("{} mint_batch_descriptions", operator_name), scope);
 
     let (mut output, output_stream) = mint_op.new_output();
+    let (mut data_output, data_output_stream) = mint_op.new_output();
 
+    // The description and the data-passthrough outputs are both driven by this input, so
+    // they use a standard input connection.
     let mut desired_input = mint_op.new_input(desired_stream, Pipeline);
-    let mut persist_feedback_input =
-        mint_op.new_input_connection(persist_feedback_stream, Pipeline, vec![Antichain::new()]);
 
-    let shutdown_button = mint_op.build(move |mut capabilities| async move {
+    let mut persist_feedback_input = mint_op.new_input_connection(
+        persist_feedback_stream,
+        Pipeline,
+        // Neither output's capabilities should depend on the feedback input.
+        vec![Antichain::new(), Antichain::new()],
+    );
+
+    let shutdown_button = mint_op.build(move |capabilities| async move {
+        // Non-active workers should just pass the data through.
         if !active_worker {
+            // The description output is entirely driven by the active worker, so we drop
+            // its capability here. The data-passthrough output just uses the data
+            // capabilities.
+            drop(capabilities);
+            while let Some(event) = desired_input.next_mut().await {
+                match event {
+                    Event::Data(cap, data) => {
+                        data_output.give_container(&cap, data).await;
+                    }
+                    Event::Progress(_) => {}
+                }
+            }
             return;
         }
 
-        let mut cap_set = CapabilitySet::from_elem(capabilities.pop().expect("missing capability"));
+        // The data-passthrough output will use the data capabilities, so we drop
+        // its capability here.
+        let [desc_cap, _]: [_; 2] = capabilities.try_into().expect("one capability per output");
+        let mut cap_set = CapabilitySet::from_elem(desc_cap);
 
         // TODO(aljoscha): We need to figure out what to do with error
         // results from these calls.
@@ -365,10 +396,11 @@ where
 
         loop {
             tokio::select! {
-                Some(event) = desired_input.next() => {
+                Some(event) = desired_input.next_mut() => {
                     match event {
-                        Event::Data(_cap, _data) => {
-                            // Just read away data.
+                        Event::Data(cap, data) => {
+                            // Just passthrough the data.
+                            data_output.give_container(&cap, data).await;
                             continue;
                         }
                         Event::Progress(frontier) => {
@@ -379,7 +411,7 @@ where
                 Some(event) = persist_feedback_input.next() => {
                     match event {
                         Event::Data(_cap, _data) => {
-                            // Just read away data.
+                            // This input produces no data.
                             continue;
                         }
                         Event::Progress(frontier) => {
@@ -490,7 +522,7 @@ where
     }
 
     let token = Rc::new(shutdown_button.press_on_drop());
-    (output_stream, token)
+    (output_stream, data_output_stream, token)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

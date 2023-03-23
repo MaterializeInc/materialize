@@ -94,41 +94,10 @@ class AllowCompactionCheck:
     @staticmethod
     def all_checks(replica: str, host: str) -> list["AllowCompactionCheck"]:
         return [
-            PersistedIntro(replica, host),
             MaterializedView(replica, host),
             ArrangedIntro(replica, host),
             ArrangedIndex(replica, host),
         ]
-
-
-class PersistedIntro(AllowCompactionCheck):
-    """
-    Checks that clusterd receives AllowCompaction commands for persisted
-    introspection data, such as mz_internal.mz_scheduling_elapsed_internal_1.
-
-    This should not be influenced by other failing replicas.
-    """
-
-    # TODO: AllowCompactions are currently not sent for persisted introspection. Its unclear
-    # if they should arrive or not
-    # This test is disabled.
-    def find_ids(self, c: Composition) -> None:
-        cursor = c.sql_cursor()
-        replica_id = self.replica_id(c)
-
-        # Get a persisted introspection id
-        cursor.execute(
-            f"""
-                SELECT id,shard_id from mz_internal.mz_storage_shards,mz_catalog.mz_sources
-                WHERE object_id = id AND name LIKE '%_{replica_id}'
-            """
-        )
-        self.ids = [self._format_id(x[0]) for x in cursor.fetchall()]
-
-    def print_error(self) -> None:
-        print(
-            f"!! AllowCompaction not found for persisted introspection with ids {self.ids}"
-        )
 
 
 class MaterializedView(AllowCompactionCheck):
@@ -156,14 +125,13 @@ class MaterializedView(AllowCompactionCheck):
 
 class ArrangedIntro(AllowCompactionCheck):
     """
-    Checks that clusterd receives AllowCompaction commands for arranged introspection.
+    Checks that clusterd receives AllowCompaction commands for introspection sources.
 
     This is purely per replica property. Other failing replicas in the same cluster should
     not influence the result of this test.
     """
 
     def find_ids(self, c: Composition) -> None:
-        # Get the arranged introspection id, no shard id for those
         cluster_id = self.cluster_id(c)
         cursor = c.sql_cursor()
         cursor.execute(
@@ -174,9 +142,7 @@ class ArrangedIntro(AllowCompactionCheck):
         self.ids = [self._format_id(x[0]) for x in cursor.fetchall()]
 
     def print_error(self) -> None:
-        print(
-            f"!! AllowCompaction not found for arranged introspection with ids {self.ids}"
-        )
+        print(f"!! AllowCompaction not found for introspection with ids {self.ids}")
 
 
 class ArrangedIndex(AllowCompactionCheck):
@@ -188,7 +154,6 @@ class ArrangedIndex(AllowCompactionCheck):
     """
 
     def find_ids(self, c: Composition) -> None:
-        # Get the arranged introspection id, no shard id for those
         cursor = c.sql_cursor()
         cursor.execute(
             f"""
@@ -362,18 +327,14 @@ disruptions = [
     Disruption(
         name="drop-create-replica",
         disruption=lambda c: drop_create_replica(c),
-        # With a disfunctional replica, we don't expect AllowCompactions for materialized views.
         compaction_checks=[
-            # PersistedIntro("cluster1.replica2", "clusterd_2_1"),
             ArrangedIntro("cluster1.replica2", "clusterd_2_1"),
         ],
     ),
     Disruption(
         name="create-invalid-replica",
         disruption=lambda c: create_invalid_replica(c),
-        # With a disfunctional replica, we don't expect AllowCompactions for materialized views.
         compaction_checks=[
-            # PersistedIntro("cluster1.replica2", "clusterd_2_1"),
             ArrangedIntro("cluster1.replica2", "clusterd_2_1"),
         ],
     ),
@@ -388,18 +349,14 @@ disruptions = [
     Disruption(
         name="pause-one-clusterd",
         disruption=lambda c: c.pause("clusterd_1_1"),
-        # With a disfunctional replica, we don't expect AllowCompactions for materialized views.
         compaction_checks=[
-            # PersistedIntro("cluster1.replica2", "clusterd_2_1"),
             ArrangedIntro("cluster1.replica2", "clusterd_2_1"),
         ],
     ),
     Disruption(
         name="kill-replica",
         disruption=lambda c: c.kill("clusterd_1_1", "clusterd_1_2"),
-        # With a disfunctional replica, we don't expect AllowCompactions for materialized views.
         compaction_checks=[
-            # PersistedIntro("cluster1.replica2", "clusterd_2_1"),
             ArrangedIntro("cluster1.replica2", "clusterd_2_1"),
         ],
     ),

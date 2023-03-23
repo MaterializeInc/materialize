@@ -131,7 +131,7 @@ def run_sqlsmith(c: Composition, cmd: str, aggregate: Dict[str, Any]) -> None:
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    parser.add_argument("--num-sqlsmith", default=4, type=int)
+    parser.add_argument("--num-sqlsmith", default=len(MZ_SERVERS), type=int)
     # parser.add_argument("--queries", default=10000, type=int)
     parser.add_argument("--runtime", default=600, type=int)
     # https://github.com/MaterializeInc/materialize/issues/2392

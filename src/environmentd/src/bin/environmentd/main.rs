@@ -161,17 +161,6 @@ pub struct Args {
     ///     legitimate security risk if used in Materialize Cloud.
     #[clap(long, env = "UNSAFE_MODE")]
     unsafe_mode: bool,
-    /// Enable persisted introspection sources.
-    ///
-    /// These sources are temporarily disabled because they put significant
-    /// pressure on persist compaction, which is currently affected by some
-    /// known bugs. Once these are resolved, the plan is to enable persisted
-    /// introspection sources by default again.
-    ///
-    /// See <https://github.com/MaterializeInc/materialize/issues/15415>
-    /// for context.
-    #[clap(long, env = "PERSISTED_INTROSPECTION")]
-    persisted_introspection: bool,
 
     // === Connection options. ===
     /// The address on which to listen for untrusted SQL connections.
@@ -292,6 +281,9 @@ pub struct Args {
     /// The service orchestrator implementation to use.
     #[structopt(long, arg_enum, env = "ORCHESTRATOR")]
     orchestrator: OrchestratorKind,
+    /// Name of a non-default Kubernetes scheduler, if any.
+    #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SCHEDULER_NAME")]
+    orchestrator_kubernetes_scheduler_name: Option<String>,
     /// Labels to apply to all services created by the Kubernetes orchestrator
     /// in the form `KEY=VALUE`.
     #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_LABEL")]
@@ -654,6 +646,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 runtime
                     .block_on(KubernetesOrchestrator::new(KubernetesOrchestratorConfig {
                         context: args.orchestrator_kubernetes_context.clone(),
+                        scheduler_name: args.orchestrator_kubernetes_scheduler_name,
                         service_labels: args
                             .orchestrator_kubernetes_service_label
                             .into_iter()
@@ -766,7 +759,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         secrets_controller,
         cloud_resource_controller,
         unsafe_mode: args.unsafe_mode,
-        persisted_introspection: args.persisted_introspection,
         metrics_registry,
         now,
         environment_id: args.environment_id,

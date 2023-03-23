@@ -31,6 +31,7 @@ ERROR_RE = re.compile(
     | cannot\ migrate\ from\ catalog
     | halting\ process: # Rust unwrap
     | \[SQLsmith\] # Unknown errors are logged
+    | \[SQLancer\] # Unknown errors are logged
     # From src/testdrive/src/action/sql.rs
     | column\ name\ mismatch
     | non-matching\ rows:

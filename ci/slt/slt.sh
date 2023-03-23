@@ -26,6 +26,7 @@ sqllogictest \
     -v "$@" \
     test/sqllogictest/*.slt \
     test/sqllogictest/attributes/*.slt \
+    test/sqllogictest/introspection/*.slt \
     test/sqllogictest/explain/*.slt \
     test/sqllogictest/transform/*.slt \
     | tee -a target/slt.log
@@ -33,9 +34,4 @@ sqllogictest \
 sqllogictest --auto-index-tables --auto-transactions \
     -v "$@" \
     test/sqllogictest/sqlite/test \
-    | tee -a target/slt.log
-
-sqllogictest --persisted-introspection \
-    -v "$@" \
-    test/sqllogictest/introspection/*.slt \
     | tee -a target/slt.log

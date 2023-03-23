@@ -279,17 +279,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aws-arn"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6da0fae6942d45915eebb3c2cfad48c5359d969a58b24696c71baf6a54489a98"
-dependencies = [
- "lazy_static",
- "regex",
- "serde",
-]
-
-[[package]]
 name = "aws-config"
 version = "0.53.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4564,7 +4553,6 @@ name = "mz-sql"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "aws-arn",
  "aws-sdk-sts",
  "bitflags",
  "chrono",
@@ -4744,7 +4732,6 @@ name = "mz-storage"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "async-compression",
  "async-stream",
  "async-trait",
  "bytesize",

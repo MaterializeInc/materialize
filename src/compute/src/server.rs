@@ -593,11 +593,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
                                 old_logging_config,
                             );
                         }
-
-                        // Ensure we retain the logging sink dataflows.
-                        for (id, _) in logging.sink_logs.values() {
-                            retain_ids.insert(*id);
-                        }
                     }
                     // All other commands we apply as requested.
                     command => {

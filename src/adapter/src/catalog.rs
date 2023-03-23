@@ -33,7 +33,7 @@ use mz_audit_log::{
 };
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::controller::ComputeReplicaConfig;
-use mz_compute_client::logging::{LogVariant, LogView, DEFAULT_LOG_VARIANTS, DEFAULT_LOG_VIEWS};
+use mz_compute_client::logging::LogVariant;
 use mz_compute_client::protocol::command::ComputeParameters;
 use mz_controller::clusters::ClusterRole;
 use mz_controller::clusters::{
@@ -215,37 +215,24 @@ impl CatalogState {
 
     /// Computes the IDs of any log sources this catalog entry transitively
     /// depends on.
-    pub fn arranged_introspection_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
+    pub fn introspection_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
         let mut out = Vec::new();
-        self.arranged_introspection_dependencies_inner(id, &mut out);
-
-        // Filter out persisted logs
-        let mut persisted_source_ids = BTreeSet::new();
-        for cluster in self.clusters_by_id.values() {
-            for replica in cluster.replicas_by_id.values() {
-                persisted_source_ids.extend(replica.config.compute.logging.source_ids());
-            }
-        }
-
-        out.into_iter()
-            .filter(|x| !persisted_source_ids.contains(x))
-            .collect()
+        self.introspection_dependencies_inner(id, &mut out);
+        out
     }
 
-    fn arranged_introspection_dependencies_inner(&self, id: GlobalId, out: &mut Vec<GlobalId>) {
+    fn introspection_dependencies_inner(&self, id: GlobalId, out: &mut Vec<GlobalId>) {
         match self.get_entry(&id).item() {
             CatalogItem::Log(_) => out.push(id),
             item @ (CatalogItem::View(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Connection(_)) => {
                 for id in item.uses() {
-                    self.arranged_introspection_dependencies_inner(*id, out);
+                    self.introspection_dependencies_inner(*id, out);
                 }
             }
-            CatalogItem::Sink(sink) => {
-                self.arranged_introspection_dependencies_inner(sink.from, out)
-            }
-            CatalogItem::Index(idx) => self.arranged_introspection_dependencies_inner(idx.on, out),
+            CatalogItem::Sink(sink) => self.introspection_dependencies_inner(sink.from, out),
+            CatalogItem::Index(idx) => self.introspection_dependencies_inner(idx.on, out),
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
             | CatalogItem::Type(_)
@@ -454,81 +441,6 @@ impl CatalogState {
             }
         }
         membership
-    }
-
-    /// Create and insert the per replica log sources and log views.
-    #[tracing::instrument(level = "info", skip_all)]
-    fn insert_replica_introspection_items(&mut self, logging: &ReplicaLogging, replica_id: u64) {
-        for (variant, source_id) in &logging.sources {
-            let oid = self
-                .allocate_oid()
-                .unwrap_or_terminate("cannot return error here");
-            // TODO(lh): Once we get rid of legacy active logs, we should refactor the
-            // CatalogItem::Log. For now  we just use the log variant to lookup the unique CatalogItem
-            // in BUILTINS.
-            let log = BUILTINS::logs()
-                .find(|log| log.variant == *variant)
-                .expect("variant must be included in builtins");
-
-            let source_name = QualifiedObjectName {
-                qualifiers: ObjectQualifiers {
-                    database_spec: ResolvedDatabaseSpecifier::Ambient,
-                    schema_spec: SchemaSpecifier::Id(self.get_mz_internal_schema_id().clone()),
-                },
-                item: format!("{}_{}", log.name, replica_id),
-            };
-            self.insert_item(
-                *source_id,
-                oid,
-                source_name,
-                CatalogItem::Log(Log {
-                    variant: variant.clone(),
-                    has_storage_collection: true,
-                }),
-                MZ_SYSTEM_ROLE_ID,
-            );
-        }
-
-        for (logview, id) in &logging.views {
-            let (sql_template, name_template) = logview.get_template();
-            assert!(sql_template.find("{}").is_some());
-            assert!(name_template.find("{}").is_some());
-            let name = name_template.replace("{}", &replica_id.to_string());
-            let sql = "CREATE VIEW ".to_string()
-                + MZ_INTERNAL_SCHEMA
-                + "."
-                + &name
-                + " AS "
-                + &sql_template.replace("{}", &replica_id.to_string());
-
-            let item = self.parse_view_item(sql);
-
-            match item {
-                Ok(item) => {
-                    let oid = self
-                        .allocate_oid()
-                        .unwrap_or_terminate("cannot return error here");
-                    let view_name = QualifiedObjectName {
-                        qualifiers: ObjectQualifiers {
-                            database_spec: ResolvedDatabaseSpecifier::Ambient,
-                            schema_spec: SchemaSpecifier::Id(
-                                self.get_mz_internal_schema_id().clone(),
-                            ),
-                        },
-                        item: name,
-                    };
-
-                    self.insert_item(*id, oid, view_name, item, MZ_SYSTEM_ROLE_ID);
-                }
-                Err(e) => {
-                    // This error should never happen, but if we add a logging
-                    // source + view pair and make a mistake in the migration
-                    // it's better to bring up the cluster without the view
-                    // than to crash.
-                    tracing::error!("Could not create log view: {}", e);
-                }
-            }
-        }
     }
 
     /// Parse a SQL string into a catalog view item with only a limited
@@ -801,7 +713,6 @@ impl CatalogState {
         config: ReplicaConfig,
         owner_id: RoleId,
     ) {
-        self.insert_replica_introspection_items(&config.compute.logging, replica_id);
         let replica = ClusterReplica {
             name: replica_name.clone(),
             process_status: (0..config.location.num_processes())
@@ -2390,7 +2301,6 @@ impl Catalog {
                     start_instant: Instant::now(),
                     nonce: rand::random(),
                     unsafe_mode: config.unsafe_mode,
-                    persisted_introspection: config.persisted_introspection,
                     environment_id: config.environment_id,
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,
@@ -2691,20 +2601,9 @@ impl Catalog {
 
         let replicas = catalog.storage().await.load_cluster_replicas().await?;
         for (cluster_id, replica_id, name, serialized_config, owner_id) in replicas {
-            let log_sources = match serialized_config.logging.sources {
-                Some(sources) => sources,
-                None => catalog.allocate_persisted_introspection_sources().await,
-            };
-            let log_views = match serialized_config.logging.views {
-                Some(views) => views,
-                None => catalog.allocate_persisted_introspection_views().await,
-            };
-
             let logging = ReplicaLogging {
                 log_logging: serialized_config.logging.log_logging,
                 interval: serialized_config.logging.interval,
-                sources: log_sources,
-                views: log_views,
             };
             let config = ReplicaConfig {
                 location: catalog
@@ -3663,7 +3562,6 @@ impl Catalog {
         let (catalog, _, _, _) = Catalog::open(Config {
             storage,
             unsafe_mode: true,
-            persisted_introspection: true,
             build_info: &DUMMY_BUILD_INFO,
             environment_id: EnvironmentId::for_tests(),
             now,
@@ -4133,7 +4031,6 @@ impl Catalog {
         seen: &mut BTreeSet<CatalogEntityId>,
     ) -> Vec<Op> {
         let mut ops = vec![];
-        let mut ids_to_drop = vec![];
         for (cluster_id, replica_id) in ids {
             if !seen.contains(&CatalogEntityId::ClusterReplica(*replica_id)) {
                 seen.insert(CatalogEntityId::ClusterReplica(*replica_id));
@@ -4141,39 +4038,7 @@ impl Catalog {
                     cluster_id: *cluster_id,
                     replica_id: *replica_id,
                 });
-
-                // Determine from the replica which additional items to drop. This is the set
-                // of items that depend on the introspection sources. The sources
-                // itself are removed with Op::DropCluster.
-                let cluster = &self.state.clusters_by_id[cluster_id];
-                let logging = &cluster
-                    .replicas_by_id
-                    .get(replica_id)
-                    .expect("catalog out of sync")
-                    .config
-                    .compute
-                    .logging;
-
-                let log_and_view_ids = logging.source_and_view_ids();
-                let view_ids: BTreeSet<_> = logging.view_ids().collect();
-
-                for log_id in log_and_view_ids {
-                    // We consider the dependencies of both views and logs, but remove the
-                    // views itself. The views are included as they depend on the source,
-                    // but we dont need an explicit Op::DropItem as they are dropped together
-                    // with the replica.
-                    ids_to_drop.extend(
-                        self.get_entry(&log_id)
-                            .used_by()
-                            .into_iter()
-                            .filter(|x| !view_ids.contains(x)),
-                    )
-                }
             }
-        }
-
-        for id in ids_to_drop {
-            self.drop_item_cascade(id, &mut ops, seen);
         }
         ops
     }
@@ -4869,7 +4734,7 @@ impl Catalog {
                     id,
                     name,
                     linked_object_id,
-                    arranged_introspection_sources,
+                    introspection_sources,
                     owner_id,
                 } => {
                     if is_reserved_name(&name) {
@@ -4877,13 +4742,7 @@ impl Catalog {
                             ErrorKind::ReservedClusterName(name),
                         )));
                     }
-                    tx.insert_user_cluster(
-                        id,
-                        &name,
-                        linked_object_id,
-                        &arranged_introspection_sources,
-                        owner_id,
-                    )?;
+                    tx.insert_user_cluster(id, &name, linked_object_id, &introspection_sources, owner_id)?;
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -4898,18 +4757,9 @@ impl Catalog {
                         }),
                     )?;
                     info!("create cluster {}", name);
-                    let arranged_introspection_source_ids: Vec<GlobalId> =
-                        arranged_introspection_sources
-                            .iter()
-                            .map(|(_, id)| *id)
-                            .collect();
-                    state.insert_cluster(
-                        id,
-                        name.clone(),
-                        linked_object_id,
-                        arranged_introspection_sources,
-                        owner_id,
-                    );
+                    let introspection_source_ids: Vec<GlobalId> =
+                        introspection_sources.iter().map(|(_, id)| *id).collect();
+                    state.insert_cluster(id, name.clone(), linked_object_id, introspection_sources, owner_id);
                     builtin_table_updates.push(state.pack_cluster_update(&name, 1));
                     if let Some(linked_object_id) = linked_object_id {
                         builtin_table_updates.push(state.pack_cluster_link_update(
@@ -4918,7 +4768,7 @@ impl Catalog {
                             1,
                         ));
                     }
-                    for id in arranged_introspection_source_ids {
+                    for id in introspection_source_ids {
                         builtin_table_updates.extend(state.pack_item_update(id, 1));
                     }
                 }
@@ -4975,12 +4825,7 @@ impl Catalog {
                         )?;
                     }
                     let num_processes = config.location.num_processes();
-                    let introspection_ids: Vec<_> =
-                        config.compute.logging.source_and_view_ids().collect();
                     state.insert_cluster_replica(cluster_id, name.clone(), id, config, owner_id);
-                    for id in introspection_ids {
-                        builtin_table_updates.extend(state.pack_item_update(id, 1));
-                    }
                     builtin_table_updates
                         .push(state.pack_cluster_replica_update(cluster_id, &name, 1));
                     for process_id in 0..num_processes {
@@ -5298,13 +5143,7 @@ impl Catalog {
                         .replica_id_by_name
                         .remove(&replica.name)
                         .expect("catalog out of sync");
-                    let persisted_log_ids = replica.config.compute.logging.source_and_view_ids();
                     assert!(cluster.replica_id_by_name.len() == cluster.replicas_by_id.len());
-
-                    for id in persisted_log_ids {
-                        builtin_table_updates.extend(state.pack_item_update(id, -1));
-                        state.drop_item(id);
-                    }
                 }
                 Op::DropItem(id) => {
                     let entry = state.get_entry(&id);
@@ -5887,9 +5726,9 @@ impl Catalog {
         self.state.uses_tables(id)
     }
 
-    /// Return the ids of all active log sources the given object depends on.
-    pub fn arranged_introspection_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
-        self.state.arranged_introspection_dependencies(id)
+    /// Return the ids of all log sources the given object depends on.
+    pub fn introspection_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
+        self.state.introspection_dependencies(id)
     }
 
     /// Serializes the catalog's in-memory state.
@@ -5966,10 +5805,8 @@ impl Catalog {
             .filter(|role| role.is_user())
     }
 
-    /// Allocate ids for legacy, active logs. Called once per cluster creation.
-    pub async fn allocate_arranged_introspection_sources(
-        &self,
-    ) -> Vec<(&'static BuiltinLog, GlobalId)> {
+    /// Allocate ids for introspection sources. Called once per cluster creation.
+    pub async fn allocate_introspection_sources(&self) -> Vec<(&'static BuiltinLog, GlobalId)> {
         let log_amount = BUILTINS::logs().count();
         let system_ids = self
             .storage()
@@ -5982,55 +5819,6 @@ impl Catalog {
             .await
             .unwrap_or_terminate("cannot fail to allocate system ids");
         BUILTINS::logs().zip(system_ids.into_iter()).collect()
-    }
-
-    /// Allocate ids for persisted introspection views. Called once per cluster replica creation
-    pub async fn allocate_persisted_introspection_views(&self) -> Vec<(LogView, GlobalId)> {
-        if !self.state.config.persisted_introspection {
-            return Vec::new();
-        }
-
-        let log_amount = DEFAULT_LOG_VIEWS
-            .len()
-            .try_into()
-            .expect("default log variants should fit into u64");
-        let system_ids = self
-            .storage()
-            .await
-            .allocate_system_ids(log_amount)
-            .await
-            .unwrap_or_terminate("cannot fail to allocate system ids");
-
-        DEFAULT_LOG_VIEWS
-            .clone()
-            .into_iter()
-            .zip(system_ids.into_iter())
-            .collect()
-    }
-
-    /// Allocate ids for persisted introspection sources.
-    /// Called once per cluster replica creation.
-    pub async fn allocate_persisted_introspection_sources(&self) -> Vec<(LogVariant, GlobalId)> {
-        if !self.state.config.persisted_introspection {
-            return Vec::new();
-        }
-
-        let log_amount = DEFAULT_LOG_VARIANTS
-            .len()
-            .try_into()
-            .expect("default log variants should fit into u64");
-        let system_ids = self
-            .storage()
-            .await
-            .allocate_system_ids(log_amount)
-            .await
-            .unwrap_or_terminate("cannot fail to allocate system ids");
-
-        DEFAULT_LOG_VARIANTS
-            .clone()
-            .into_iter()
-            .zip(system_ids.into_iter())
-            .collect()
     }
 
     pub fn pack_item_update(&self, id: GlobalId, diff: Diff) -> Vec<BuiltinTableUpdate> {
@@ -6156,7 +5944,7 @@ pub enum Op {
         id: ClusterId,
         name: String,
         linked_object_id: Option<GlobalId>,
-        arranged_introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
         owner_id: RoleId,
     },
     CreateClusterReplica {
@@ -6245,17 +6033,10 @@ pub enum SerializedCatalogItem {
 
 /// Serialized (stored alongside the replica) logging configuration of
 /// a replica. Serialized variant of `ReplicaLogging`.
-///
-/// A `None` value for `sources` or `views` indicates that we did not yet create them in the
-/// catalog. This is only used for initializing the default replica of the default cluster.
-///
-/// To indicate the absence of sources/views, use `Some(Vec::new())`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SerializedReplicaLogging {
     log_logging: bool,
     interval: Option<Duration>,
-    sources: Option<Vec<(LogVariant, GlobalId)>>,
-    views: Option<Vec<(LogView, GlobalId)>>,
 }
 
 impl From<ReplicaLogging> for SerializedReplicaLogging {
@@ -6263,15 +6044,11 @@ impl From<ReplicaLogging> for SerializedReplicaLogging {
         ReplicaLogging {
             log_logging,
             interval,
-            sources,
-            views,
         }: ReplicaLogging,
     ) -> Self {
         Self {
             log_logging,
             interval,
-            sources: Some(sources),
-            views: Some(views),
         }
     }
 }

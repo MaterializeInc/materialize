@@ -247,8 +247,6 @@ pub struct CatalogConfig {
     pub session_id: Uuid,
     /// Whether the server is running in unsafe mode.
     pub unsafe_mode: bool,
-    /// Whether persisted introspection sources are enabled.
-    pub persisted_introspection: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
     /// Default timestamp interval.

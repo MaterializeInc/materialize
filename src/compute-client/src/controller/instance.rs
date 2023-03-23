@@ -115,8 +115,8 @@ pub(super) struct Instance<T> {
     /// Only if both these conditions hold is dropping a collection's state, and the associated
     /// read holds on its inputs, sound.
     collections: BTreeMap<GlobalId, CollectionState<T>>,
-    /// IDs of arranged log sources maintained by this compute instance.
-    arranged_logs: BTreeMap<LogVariant, GlobalId>,
+    /// IDs of log sources maintained by this compute instance.
+    log_sources: BTreeMap<LogVariant, GlobalId>,
     /// Currently outstanding peeks.
     ///
     /// New entries are added for all peeks initiated through [`ActiveInstance::peek`].
@@ -234,7 +234,7 @@ where
             initialized: false,
             replicas: Default::default(),
             collections,
-            arranged_logs,
+            log_sources: arranged_logs,
             peeks: Default::default(),
             subscribes: Default::default(),
             history: Default::default(),
@@ -385,22 +385,15 @@ where
             return Err(ReplicaExists(id));
         }
 
-        // Initialize state for per-replica log collections.
-        for (log_id, _) in config.logging.sink_logs.values() {
-            self.compute
-                .collections
-                .insert(*log_id, CollectionState::new_log_collection());
-        }
-
-        config.logging.index_logs = self.compute.arranged_logs.clone();
-        let maintained_logs: BTreeSet<_> = config.logging.log_identifiers().collect();
+        config.logging.index_logs = self.compute.log_sources.clone();
+        let log_ids: BTreeSet<_> = config.logging.index_logs.values().collect();
 
         // Initialize frontier tracking for the new replica
         // and clean up any dropped collections that we can
         let mut updates = Vec::new();
         for (compute_id, collection) in &mut self.compute.collections {
             // Skip log collections not maintained by this replica.
-            if collection.log_collection && !maintained_logs.contains(compute_id) {
+            if collection.log_collection && !log_ids.contains(compute_id) {
                 continue;
             }
 

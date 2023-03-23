@@ -185,16 +185,19 @@ class Composition:
             if "allow_host_ports" in config:
                 config.pop("allow_host_ports")
 
-            if self.repo.rd.coverage:
+            coverage_volume = "./coverage:/coverage"
+            if self.repo.rd.coverage and coverage_volume not in config.get(
+                "volumes", []
+            ):
                 # Emit coverage information to a file in a directory that is
                 # bind-mounted to the "coverage" directory on the host. We
                 # inject the configuration to all services for simplicity, but
                 # this only have an effect if the service runs instrumented Rust
                 # binaries.
+                config.setdefault("volumes", []).append(coverage_volume)
                 config.setdefault("environment", []).append(
-                    f"LLVM_PROFILE_FILE=/coverage/{name}-%m.profraw"
+                    f"LLVM_PROFILE_FILE=/coverage/{name}-%p-%9m.profraw"
                 )
-                config.setdefault("volumes", []).append("./coverage:/coverage")
 
         # Determine mzbuild specs and inject them into services accordingly.
         deps = self.repo.resolve_dependencies(images)
@@ -215,6 +218,7 @@ class Composition:
         self,
         *args: str,
         capture: bool = False,
+        capture_stderr: bool = False,
         stdin: Optional[str] = None,
         check: bool = True,
     ) -> subprocess.CompletedProcess:
@@ -223,6 +227,7 @@ class Composition:
         Args:
             args: The arguments to pass to `docker compose`.
             capture: Whether to capture the child's stdout stream.
+            capture_stderr: Whether to capture the child's stderr stream.
             input: A string to provide as stdin for the command.
         """
 
@@ -234,6 +239,9 @@ class Composition:
         stdout = None
         if capture:
             stdout = subprocess.PIPE
+        stderr = None
+        if capture_stderr:
+            stderr = subprocess.PIPE
 
         try:
             return subprocess.run(
@@ -248,6 +256,7 @@ class Composition:
                 close_fds=False,
                 check=check,
                 stdout=stdout,
+                stderr=stderr,
                 input=stdin,
                 text=True,
                 bufsize=1,
@@ -454,6 +463,7 @@ class Composition:
         rm: bool = False,
         env_extra: Dict[str, str] = {},
         capture: bool = False,
+        capture_stderr: bool = False,
         stdin: Optional[str] = None,
         entrypoint: Optional[str] = None,
         check: bool = True,
@@ -473,6 +483,7 @@ class Composition:
             env_extra: Additional environment variables to set in the container.
             rm: Remove container after run.
             capture: Capture the stdout of the `docker compose` invocation.
+            capture_stderr: Capture the stderr of the `docker compose` invocation.
         """
         # Restart any dependencies whose definitions have changed. The trick,
         # taken from Buildkite's Docker Compose plugin, is to run an `up`
@@ -487,6 +498,7 @@ class Composition:
             service,
             *args,
             capture=capture,
+            capture_stderr=capture_stderr,
             stdin=stdin,
             check=check,
         )
@@ -497,6 +509,7 @@ class Composition:
         *args: str,
         detach: bool = False,
         capture: bool = False,
+        capture_stderr: bool = False,
         stdin: Optional[str] = None,
     ) -> subprocess.CompletedProcess:
         """Execute a one-off command in a service's running container
@@ -523,6 +536,7 @@ class Composition:
             ),
             *args,
             capture=capture,
+            capture_stderr=capture_stderr,
             stdin=stdin,
         )
 

@@ -60,6 +60,10 @@ steps:
           - { value: cloud-canary }
           - { value: sqlsmith-2-joins }
           - { value: sqlsmith-explain }
+          - { value: sqlancer-pqs }
+          - { value: sqlancer-norec }
+          - { value: sqlancer-having }
+          - { value: sqlancer-query-partitioning }
           - { value: crdb-restarts }
         multiple: true
         required: false
@@ -97,10 +101,10 @@ steps:
   - id: coverage
     label: Code coverage
     timeout_in_minutes: 240
-    command: bin/ci-builder run nightly bin/pyactivate -m ci.nightly.coverage
+    command: bin/ci-builder run stable bin/pyactivate -m ci.nightly.coverage
+    artifact_paths: coverage-*.json
     agents:
       queue: linux-x86_64
-    skip: Disabled due to persistent OOMs when linking
 
   - id: kafka-matrix
     label: Kafka smoke test against previous Kafka versions
@@ -580,6 +584,54 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: sqlsmith
           args: [--max-joins=15, --explain-only, --runtime=3300]
+
+  # TODO(def-) Reenable when figured out why no queries run
+  - id: sqlancer-pqs
+    label: "SQLancer PQS"
+    skip: true
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 58
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlancer
+          args: [--runtime=3300, --oracle=PQS]
+
+  - id: sqlancer-norec
+    label: "SQLancer NoREC"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 58
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlancer
+          args: [--runtime=3300, --oracle=NOREC]
+
+  - id: sqlancer-query-partitioning
+    label: "SQLancer QueryPartitioning"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 58
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlancer
+          args: [--runtime=3300, --oracle=QUERY_PARTITIONING]
+
+  # TODO(def-) Reenable when I have a SQLancer workaround for #18346
+  - id: sqlancer-having
+    label: "SQLancer Having"
+    skip: true
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 58
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlancer
+          args: [--runtime=3300, --oracle=HAVING]
 
   - id: crdb-restarts
     label: "CRDB rolling restarts"

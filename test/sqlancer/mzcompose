@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -6,11 +8,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+#
+# mzcompose — runs Docker Compose with Materialize customizations.
 
-mode cockroach
-
-query error cannot show create for system object mz_internal.mz_dataflow_channels
-SHOW CREATE SOURCE mz_internal.mz_dataflow_channels
-
-query error system schema 'mz_internal.mz_dataflow_channels' cannot be modified
-ALTER SOURCE mz_internal.mz_dataflow_channels RENAME TO foo;
+exec "$(dirname "$0")"/../../bin/pyactivate -m materialize.cli.mzcompose "$@"
