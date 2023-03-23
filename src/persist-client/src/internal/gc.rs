@@ -304,7 +304,7 @@ where
         let mut maintenance = RoutineMaintenance::default();
 
         async fn truncate_range<K, V, T, D>(
-            shard_id: ShardId,
+            req: &GcReq,
             from_seqno: SeqNo,
             until_seqno: SeqNo,
             machine: &Machine<K, V, T, D>,
@@ -313,9 +313,20 @@ where
             rollup_holds: &mut BTreeMap<PartialRollupKey, SeqNo>,
             part_holds: &mut BTreeMap<PartialBatchKey, SeqNo>,
         ) {
+            let GcReq {
+                shard_id,
+                new_seqno_since,
+            } = *req;
+
+            assert!(
+                until_seqno <= new_seqno_since,
+                "should not truncate past the new seqno since"
+            );
+
             if until_seqno <= from_seqno {
-                // We've already truncated past this point! This can happen if eg. rollups were
-                // added to consensus out of order, and appears harmless.
+                // We've already truncated past this point! This can happen when we encounter an
+                // already-removed rollup, or if rollups were added to consensus out of order, and
+                // should be harmless.
                 return;
             }
             let mut deletable_rollups = vec![];
@@ -401,7 +412,7 @@ where
                     // We've discovered a new rollup! It's safe to truncate up to here.
                     report_step_timing(&machine.applier.metrics.gc.steps.apply_diff_seconds);
                     truncate_range(
-                        req.shard_id,
+                        &req,
                         earliest_live_seqno,
                         *seqno,
                         machine,
@@ -470,7 +481,7 @@ where
         // Finally, truncate to the rollup at new_seqno_since... which we know exists because
         // we created it.
         truncate_range(
-            req.shard_id,
+            &req,
             earliest_live_seqno,
             req.new_seqno_since,
             machine,
