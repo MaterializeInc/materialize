@@ -4742,7 +4742,13 @@ impl Catalog {
                             ErrorKind::ReservedClusterName(name),
                         )));
                     }
-                    tx.insert_user_cluster(id, &name, linked_object_id, &introspection_sources, owner_id)?;
+                    tx.insert_user_cluster(
+                        id,
+                        &name,
+                        linked_object_id,
+                        &introspection_sources,
+                        owner_id,
+                    )?;
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -4759,7 +4765,13 @@ impl Catalog {
                     info!("create cluster {}", name);
                     let introspection_source_ids: Vec<GlobalId> =
                         introspection_sources.iter().map(|(_, id)| *id).collect();
-                    state.insert_cluster(id, name.clone(), linked_object_id, introspection_sources, owner_id);
+                    state.insert_cluster(
+                        id,
+                        name.clone(),
+                        linked_object_id,
+                        introspection_sources,
+                        owner_id,
+                    );
                     builtin_table_updates.push(state.pack_cluster_update(&name, 1));
                     if let Some(linked_object_id) = linked_object_id {
                         builtin_table_updates.push(state.pack_cluster_link_update(
