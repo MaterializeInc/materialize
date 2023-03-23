@@ -360,7 +360,9 @@ impl KafkaConnection {
 
                     context.add_broker_rewrite_with_token(
                         &broker.address,
-                        "localhost",
+                        // This should never be `"localhost"`, as that causes reliability
+                        // problems, _probably_ related to resolving to ipv6.
+                        "127.0.0.1",
                         Some(local_port),
                         // Note, this does double-boxing, but its only relevant during dropping,
                         // so not a performance problem.
