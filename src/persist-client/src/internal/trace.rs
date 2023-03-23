@@ -173,8 +173,12 @@ impl<T: Timestamp + Lattice> Trace<T> {
     #[must_use]
     pub fn push_batch(&mut self, batch: HollowBatch<T>) -> Vec<FueledMergeReq<T>> {
         let mut merge_reqs = Vec::new();
-        self.spine
-            .insert(SpineBatch::Merged(Arc::new(batch)), &mut merge_reqs);
+        self.spine.insert(
+            SpineBatch::Merged(Arc::new(batch)),
+            &mut SpineLog::Enabled {
+                merge_reqs: &mut merge_reqs,
+            },
+        );
         // Spine::roll_up (internally used by insert) clears all batches out of
         // levels below a target by walking up from level 0 and merging each
         // level into the next (providing the necessary fuel). In practice, this
@@ -182,6 +186,13 @@ impl<T: Timestamp + Lattice> Trace<T> {
         // It's a waste to do all of these (we'll throw away the results), so we
         // filter out any that are entirely covered by some other request.
         Self::remove_redundant_merge_reqs(merge_reqs)
+    }
+
+    /// The same as [Self::push_batch] but without the `FueledMergeReq`s, which
+    /// account for a surprising amount of cpu in prod. #18368
+    pub(crate) fn push_batch_no_merge_reqs(&mut self, batch: HollowBatch<T>) {
+        self.spine
+            .insert(SpineBatch::Merged(Arc::new(batch)), &mut SpineLog::Disabled);
     }
 
     pub fn apply_merge_res(&mut self, res: &FueledMergeRes<T>) -> ApplyMergeResult {
@@ -271,6 +282,15 @@ impl<T: Timestamp + Lattice> Trace<T> {
         }
         ret
     }
+}
+
+/// A log of what transitively happened during a Spine operation: e.g.
+/// FueledMergeReqs were generated.
+enum SpineLog<'a, T> {
+    Enabled {
+        merge_reqs: &'a mut Vec<FueledMergeReq<T>>,
+    },
+    Disabled,
 }
 
 #[derive(Debug, Clone)]
@@ -478,7 +498,7 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
     ///
     /// This method should only be called after `work` has been called and has
     /// not brought `fuel` to zero. Otherwise, the merge is still in progress.
-    fn done(self, merge_reqs: &mut Vec<FueledMergeReq<T>>) -> SpineBatch<T> {
+    fn done(self, log: &mut SpineLog<'_, T>) -> SpineBatch<T> {
         let lower = self.b1.desc().lower().clone();
         let upper = self.b2.desc().upper().clone();
         let since = self.since;
@@ -511,10 +531,12 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
         // Sanity check the pre-size code.
         debug_assert_eq!(merged_parts.len(), merged_parts_len);
 
-        merge_reqs.push(FueledMergeReq {
-            desc: desc.clone(),
-            inputs: merged_parts.clone(),
-        });
+        if let SpineLog::Enabled { merge_reqs } = log {
+            merge_reqs.push(FueledMergeReq {
+                desc: desc.clone(),
+                inputs: merged_parts.clone(),
+            });
+        }
 
         SpineBatch::Fueled {
             desc,
@@ -649,7 +671,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
     // Ideally, this method acts as insertion of `batch`, even if we are not yet
     // able to begin merging the batch. This means it is a good time to perform
     // amortized work proportional to the size of batch.
-    pub fn insert(&mut self, batch: SpineBatch<T>, merge_reqs: &mut Vec<FueledMergeReq<T>>) {
+    pub fn insert(&mut self, batch: SpineBatch<T>, log: &mut SpineLog<'_, T>) {
         assert!(batch.lower() != batch.upper());
         assert_eq!(batch.lower(), &self.upper);
 
@@ -663,7 +685,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
             if let Some(position) = self.merging.iter().position(|m| !m.is_vacant()) {
                 if self.merging[position].is_single() && self.merging[position].is_empty() {
                     self.insert_at(Some(batch), position);
-                    let merged = self.complete_at(position, merge_reqs);
+                    let merged = self.complete_at(position, log);
                     self.merging[position] = MergeState::Single(merged);
                     return;
                 }
@@ -672,11 +694,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
 
         // Normal insertion for the batch.
         let index = batch.len().next_power_of_two();
-        self.introduce_batch(
-            Some(batch),
-            usize::cast_from(index.trailing_zeros()),
-            merge_reqs,
-        );
+        self.introduce_batch(Some(batch), usize::cast_from(index.trailing_zeros()), log);
     }
 
     /// Apply some amount of effort to trace maintenance.
@@ -688,12 +706,13 @@ impl<T: Timestamp + Lattice> Spine<T> {
     /// When this function is called, `effort` must be non-negative
     #[allow(dead_code)]
     pub fn exert(&mut self, effort: &mut isize, merge_reqs: &mut Vec<FueledMergeReq<T>>) {
+        let mut log = SpineLog::Enabled { merge_reqs };
         // If there is work to be done, ...
         self.tidy_layers();
         if !self.reduced() {
             // If any merges exist, we can directly call `apply_fuel`.
             if self.merging.iter().any(|b| b.is_double()) {
-                self.apply_fuel(effort, merge_reqs);
+                self.apply_fuel(effort, &mut log);
             }
             // Otherwise, we'll need to introduce fake updates to move merges
             // along.
@@ -705,7 +724,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
                         .next_power_of_two()
                         .trailing_zeros(),
                 );
-                self.introduce_batch(None, level, merge_reqs);
+                self.introduce_batch(None, level, &mut log);
             }
         }
     }
@@ -755,7 +774,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
         &mut self,
         batch: Option<SpineBatch<T>>,
         batch_index: usize,
-        merge_reqs: &mut Vec<FueledMergeReq<T>>,
+        log: &mut SpineLog<'_, T>,
     ) {
         // Step 0.  Determine an amount of fuel to use for the computation.
         //
@@ -802,7 +821,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
         //          fuel to in-progress merges, as this fuel is what ensures
         //          that the merges will be complete by the time we insert
         //          the updates.
-        self.apply_fuel(&mut fuel, merge_reqs);
+        self.apply_fuel(&mut fuel, log);
 
         // Step 2.  We must ensure the invariant that adjacent layers do not
         //          contain two batches will be satisfied when we insert the
@@ -820,7 +839,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
         //          surprised later on. The number of fake updates should
         //          correspond to the deficit for the layer, which perhaps
         //          we should track explicitly.
-        self.roll_up(batch_index, merge_reqs);
+        self.roll_up(batch_index, log);
 
         // Step 3. This insertion should be into an empty layer. It is a logical
         //         error otherwise, as we may be violating our invariant, from
@@ -842,7 +861,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
     /// present at lower levels before the method is called. In doing this, we
     /// should not introduce more virtual records than 2^index, as that is the
     /// amount of excess fuel we have budgeted for completing merges.
-    fn roll_up(&mut self, index: usize, merge_reqs: &mut Vec<FueledMergeReq<T>>) {
+    fn roll_up(&mut self, index: usize, log: &mut SpineLog<'_, T>) {
         // Ensure entries sufficient for `index`.
         while self.merging.len() <= index {
             self.merging.push(MergeState::Vacant);
@@ -855,7 +874,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
             let mut merged = None;
             for i in 0..index {
                 self.insert_at(merged, i);
-                merged = self.complete_at(i, merge_reqs);
+                merged = self.complete_at(i, log);
             }
 
             // The merged results should be introduced at level `index`, which
@@ -866,7 +885,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
             // If the insertion results in a merge, we should complete it to
             // ensure the upcoming insertion at `index` does not panic.
             if self.merging[index].is_double() {
-                let merged = self.complete_at(index, merge_reqs);
+                let merged = self.complete_at(index, log);
                 self.insert_at(merged, index + 1);
             }
         }
@@ -879,7 +898,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
     /// could do so in order to maintain fewer batches on average (at the risk
     /// of completing merges of large batches later, but tbh probably not much
     /// later).
-    pub fn apply_fuel(&mut self, fuel: &mut isize, merge_reqs: &mut Vec<FueledMergeReq<T>>) {
+    pub fn apply_fuel(&mut self, fuel: &mut isize, log: &mut SpineLog<'_, T>) {
         // For the moment our strategy is to apply fuel independently to each
         // merge in progress, rather than prioritizing small merges. This sounds
         // like a great idea, but we need better accounting in place to ensure
@@ -890,7 +909,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
             let mut fuel = *fuel;
             // Pass along various logging stuffs, in case we need to report
             // success.
-            self.merging[index].work(&mut fuel, merge_reqs);
+            self.merging[index].work(&mut fuel, log);
             // `fuel` could have a deficit at this point, meaning we over-spent
             // when we took a merge step. We could ignore this, or maintain the
             // deficit and account future fuel against it before spending again.
@@ -903,7 +922,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
             // level, which is "guaranteed" to be complete at this point, by our
             // fueling discipline.
             if self.merging[index].is_complete() {
-                let complete = self.complete_at(index, merge_reqs);
+                let complete = self.complete_at(index, log);
                 self.insert_at(complete, index + 1);
             }
         }
@@ -936,12 +955,8 @@ impl<T: Timestamp + Lattice> Spine<T> {
     }
 
     /// Completes and extracts what ever is at layer `index`.
-    fn complete_at(
-        &mut self,
-        index: usize,
-        merge_reqs: &mut Vec<FueledMergeReq<T>>,
-    ) -> Option<SpineBatch<T>> {
-        if let Some((merged, _)) = self.merging[index].complete(merge_reqs) {
+    fn complete_at(&mut self, index: usize, log: &mut SpineLog<'_, T>) -> Option<SpineBatch<T>> {
+        if let Some((merged, _)) = self.merging[index].complete(log) {
             Some(merged)
         } else {
             None
@@ -1093,12 +1108,12 @@ impl<T: Timestamp + Lattice> MergeState<T> {
     /// There is the additional option of input batches.
     fn complete(
         &mut self,
-        merge_reqs: &mut Vec<FueledMergeReq<T>>,
+        log: &mut SpineLog<'_, T>,
     ) -> Option<(SpineBatch<T>, Option<(SpineBatch<T>, SpineBatch<T>)>)> {
         match std::mem::replace(self, MergeState::Vacant) {
             MergeState::Vacant => None,
             MergeState::Single(batch) => batch.map(|b| (b, None)),
-            MergeState::Double(variant) => variant.complete(merge_reqs),
+            MergeState::Double(variant) => variant.complete(log),
         }
     }
 
@@ -1116,10 +1131,10 @@ impl<T: Timestamp + Lattice> MergeState<T> {
     /// If the merge completes, the resulting batch is returned. If a batch is
     /// returned, it is the obligation of the caller to correctly install the
     /// result.
-    fn work(&mut self, fuel: &mut isize, merge_reqs: &mut Vec<FueledMergeReq<T>>) {
+    fn work(&mut self, fuel: &mut isize, log: &mut SpineLog<'_, T>) {
         // We only perform work for merges in progress.
         if let MergeState::Double(layer) = self {
-            layer.work(fuel, merge_reqs)
+            layer.work(fuel, log)
         }
     }
 
@@ -1175,10 +1190,10 @@ impl<T: Timestamp + Lattice> MergeVariant<T> {
     /// and optionally input batches from which it derived.
     fn complete(
         mut self,
-        merge_reqs: &mut Vec<FueledMergeReq<T>>,
+        log: &mut SpineLog<'_, T>,
     ) -> Option<(SpineBatch<T>, Option<(SpineBatch<T>, SpineBatch<T>)>)> {
         let mut fuel = isize::max_value();
-        self.work(&mut fuel, merge_reqs);
+        self.work(&mut fuel, log);
         if let MergeVariant::Complete(batch) = self {
             batch
         } else {
@@ -1190,12 +1205,12 @@ impl<T: Timestamp + Lattice> MergeVariant<T> {
     ///
     /// In case the work completes, the source batches are returned. This allows
     /// the caller to manage the released resources.
-    fn work(&mut self, fuel: &mut isize, merge_reqs: &mut Vec<FueledMergeReq<T>>) {
+    fn work(&mut self, fuel: &mut isize, log: &mut SpineLog<'_, T>) {
         let variant = std::mem::replace(self, MergeVariant::Complete(None));
         if let MergeVariant::InProgress(b1, b2, mut merge) = variant {
             merge.work(&b1, &b2, fuel);
             if *fuel > 0 {
-                *self = MergeVariant::Complete(Some((merge.done(merge_reqs), Some((b1, b2)))));
+                *self = MergeVariant::Complete(Some((merge.done(log), Some((b1, b2)))));
             } else {
                 *self = MergeVariant::InProgress(b1, b2, merge);
             }

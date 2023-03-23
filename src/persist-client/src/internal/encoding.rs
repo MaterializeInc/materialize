@@ -745,7 +745,7 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoTrace> for Trace<T> {
             //
             // Ignore merge_reqs because whichever process generated this diff is
             // assigned the work.
-            let _merge_reqs = ret.push_batch(batch);
+            let () = ret.push_batch_no_merge_reqs(batch);
 
             batches_pushed += 1;
             if batches_pushed % 1000 == 0 {
