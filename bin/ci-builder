@@ -60,7 +60,7 @@ arch_go=$(arch_go "$arch_gcc")
 
 cid_file=ci/builder/.${channel%%-*}.cidfile
 
-rust_components=rustc,cargo,rust-std-$arch_gcc-unknown-linux-gnu
+rust_components=rustc,cargo,rust-std-$arch_gcc-unknown-linux-gnu,llvm-tools-preview
 if [[ $rust_version = nightly ]]; then
     rust_components+=,miri-preview
 else

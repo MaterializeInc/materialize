@@ -101,10 +101,10 @@ steps:
   - id: coverage
     label: Code coverage
     timeout_in_minutes: 240
-    command: bin/ci-builder run nightly bin/pyactivate -m ci.nightly.coverage
+    command: bin/ci-builder run stable bin/pyactivate -m ci.nightly.coverage
+    artifact_paths: coverage-*.json
     agents:
       queue: linux-x86_64
-    skip: Disabled due to persistent OOMs when linking
 
   - id: kafka-matrix
     label: Kafka smoke test against previous Kafka versions

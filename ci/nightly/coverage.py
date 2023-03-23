@@ -19,48 +19,70 @@ For details about how steps are trimmed, see the comment at the top of
 pipeline.template.yml and the docstring on `trim_pipeline` below.
 """
 
+import subprocess
 import sys
 from pathlib import Path
-
-import yaml
 
 import materialize.cli.mzcompose
 
 
 def main() -> int:
-    with open(Path(__file__).parent.parent / "test" / "pipeline.template.yml") as f:
-        pipeline = yaml.safe_load(f)
-
-    tests = []
-
-    for step in pipeline["steps"]:
-        for plugin in step.get("plugins", []):
-            for plugin_name, plugin_config in plugin.items():
-                if plugin_name == "./ci/plugins/mzcompose":
-                    tests.append((plugin_config["composition"], plugin_config["run"]))
+    # Just the fast sqllogictests, for now
+    tests = [("sqllogictest", "default")]
 
     for (composition, workflow) in tests:
-        print(f"==> Running workflow {workflow} in {composition}")
         materialize.cli.mzcompose.main(
             [
-                "run",
-                workflow,
-                "--coverage",
                 "--find",
                 composition,
+                "--coverage",
+                "run",
+                workflow,
             ]
         )
         materialize.cli.mzcompose.main(
             [
-                "down",
-                "-v",
-                "--coverage",
                 "--find",
                 composition,
+                "down",
+                "-v",
             ]
         )
 
-    # TODO: gather and combine coverage information.
+    # NB: mzcompose _munge_services() sets LLVM_PROFILE_FILE, so that
+    # output will go to a special coverage volume, but as a
+    # conesquence we can't really distinguish between sqllogictest and
+    # clusterd's output.
+    subprocess.run(
+        [
+            "rust-profdata",
+            "merge",
+            "-sparse",
+            *Path("test/sqllogictest/coverage").glob("sqllogictest*.profraw"),
+            "-o",
+            "sqllogictest.profdata",
+        ]
+    )
+    with open("coverage-sqllogictest.json", "w") as out:
+        subprocess.run(
+            [
+                "rust-cov",
+                "export",
+                "./target-xcompile/x86_64-unknown-linux-gnu/release/sqllogictest",
+                "--instr-profile=sqllogictest.profdata",
+            ],
+            stdout=out,
+        )
+    with open("coverage-clusterd.json", "w") as out:
+        subprocess.run(
+            [
+                "rust-cov",
+                "export",
+                "./target-xcompile/x86_64-unknown-linux-gnu/release/clusterd",
+                "--instr-profile=sqllogictest.profdata",
+            ],
+            stdout=out,
+        )
 
     return 0
 
