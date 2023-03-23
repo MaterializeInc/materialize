@@ -2804,7 +2804,7 @@ fn test_auto_run_on_introspection_feature_disabled() {
             &[],
         )
         .unwrap();
-    assert_introspection_notice(true);
+    assert_introspection_notice(false);
 
     let _rows = client
         .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
