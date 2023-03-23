@@ -1923,15 +1923,14 @@ impl Coordinator {
         // If our query only depends on system tables, a LaunchDarkly flag is enabled, and a
         // session var is set, then we automatically run the query on the mz_introspection cluster
         let cluster = match introspection::auto_run_on_introspection(
-            &self.catalog,
+            self.catalog(),
             session,
             source.depends_on(),
         ) {
             Some(cluster) => cluster,
-            None => self.catalog.active_cluster(session)?,
+            None => self.catalog().active_cluster(session)?,
         };
 
->>>>>>> 344f2cfa2 (branch start)
         let target_replica_name = session.vars().cluster_replica();
         let mut target_replica = target_replica_name
             .map(|name| {

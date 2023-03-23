@@ -63,7 +63,7 @@ pub fn auto_run_on_introspection<'a, 's>(
         let schema = &entry.name().qualifiers.schema_spec;
 
         let system_only = catalog.state().is_system_schema_specifier(schema);
-        let non_replica = catalog.arranged_introspection_dependencies(id).is_empty();
+        let non_replica = catalog.introspection_dependencies(id).is_empty();
 
         system_only && non_replica
     });
