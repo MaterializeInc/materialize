@@ -21,7 +21,7 @@ This design does not propose making this value user-configurable; we only want t
 1. Add a new LaunchDarkly parameter for `retained_metrics_since_granularity`, which will be set to 1 day by default.
 2. Add a "granularity" parameter to [`ReadPolicy::lag_writes_by`](https://github.com/MaterializeInc/materialize/blob/eda55b5c68/src/storage-client/src/controller.rs#L516-L530).
 3. For all objects with `is_retained_metrics_relation` set to true, use that LaunchDarkly parameter as the value of the parameter discussed in point 2.
-4. For all other objects, continue using 1 second as the default. 
+4. For all other objects, continue using 1 second as the default.
 
 ## Testing and observability
 [testing-and-observability]: #testing-and-observability
