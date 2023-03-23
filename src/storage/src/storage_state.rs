@@ -208,7 +208,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             sink_tokens: BTreeMap::new(),
             sink_write_frontiers: BTreeMap::new(),
             sink_handles: BTreeMap::new(),
-            dropped_ids: Vec::new(),
+            dropped_ids: BTreeSet::new(),
             source_statistics: BTreeMap::new(),
             sink_statistics: BTreeMap::new(),
             internal_cmd_tx: command_sequencer,
@@ -273,7 +273,7 @@ pub struct StorageState {
     /// See: [SinkHandle]
     pub sink_handles: BTreeMap<GlobalId, SinkHandle>,
     /// Collection ids that have been dropped but not yet reported as dropped
-    pub dropped_ids: Vec<GlobalId>,
+    pub dropped_ids: BTreeSet<GlobalId>,
 
     /// Stats objects shared with operators to allow them to update the metrics
     /// we report in `StatisticsUpdates` responses.
@@ -957,7 +957,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         if drop_commands.remove(&ingestion.id) {
                             // Make sure that we report back that the ID was
                             // dropped.
-                            self.storage_state.dropped_ids.push(ingestion.id.clone());
+                            self.storage_state.dropped_ids.insert(ingestion.id);
 
                             false
                         } else if let Some(existing) = self.storage_state.ingestions.get(&ingestion.id) {
@@ -990,7 +990,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         if drop_commands.remove(&export.id) {
                             // Make sure that we report back that the ID was
                             // dropped.
-                            self.storage_state.dropped_ids.push(export.id.clone());
+                            self.storage_state.dropped_ids.insert(export.id);
 
                             false
                         } else if let Some(existing) = self.storage_state.exports.get(&export.id) {

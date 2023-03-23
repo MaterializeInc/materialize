@@ -14,7 +14,7 @@
 
 //! The public API of the storage layer.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::iter;
 
@@ -366,7 +366,7 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
     /// information to assert the correct implementation of our protocols at various places.
     FrontierUppers(Vec<(GlobalId, Antichain<T>)>),
     /// Punctuation indicates that no more responses will be transmitted for the specified ids
-    DroppedIds(Vec<GlobalId>),
+    DroppedIds(BTreeSet<GlobalId>),
 
     /// A list of statistics updates, currently only for sources.
     StatisticsUpdates(Vec<SourceStatisticsUpdate>, Vec<SinkStatisticsUpdate>),
@@ -624,7 +624,7 @@ where
                 }
             }
             StorageResponse::DroppedIds(dropped_ids) => {
-                let mut new_drops = vec![];
+                let mut new_drops = BTreeSet::new();
 
                 for id in dropped_ids {
                     let (_, shard_frontiers) = match self.uppers.get_mut(&id) {
@@ -639,7 +639,7 @@ where
 
                     if shard_frontiers.iter().all(Option::is_none) {
                         self.uppers.remove(&id);
-                        new_drops.push(id);
+                        new_drops.insert(id);
                     }
                 }
 
