@@ -122,6 +122,8 @@ pub struct KubernetesOrchestratorConfig {
     /// The name of a Kubernetes context to use, if the Kubernetes configuration
     /// is loaded from the local kubeconfig.
     pub context: String,
+    /// The name of a non-default Kubernetes scheduler to use, if any.
+    pub scheduler_name: Option<String>,
     /// Labels to install on every service created by the orchestrator.
     pub service_labels: BTreeMap<String, String>,
     /// Node selector to install on every service created by the orchestrator.
@@ -710,6 +712,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     ..Default::default()
                 }],
                 node_selector: Some(node_selector),
+                scheduler_name: self.config.scheduler_name.clone(),
                 service_account: self.config.service_account.clone(),
                 affinity: Some(Affinity {
                     pod_anti_affinity: anti_affinity,

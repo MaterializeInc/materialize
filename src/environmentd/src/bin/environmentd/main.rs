@@ -281,6 +281,9 @@ pub struct Args {
     /// The service orchestrator implementation to use.
     #[structopt(long, arg_enum, env = "ORCHESTRATOR")]
     orchestrator: OrchestratorKind,
+    /// Name of a non-default Kubernetes scheduler, if any.
+    #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SCHEDULER_NAME")]
+    orchestrator_kubernetes_scheduler_name: Option<String>,
     /// Labels to apply to all services created by the Kubernetes orchestrator
     /// in the form `KEY=VALUE`.
     #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_LABEL")]
@@ -643,6 +646,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 runtime
                     .block_on(KubernetesOrchestrator::new(KubernetesOrchestratorConfig {
                         context: args.orchestrator_kubernetes_context.clone(),
+                        scheduler_name: args.orchestrator_kubernetes_scheduler_name,
                         service_labels: args
                             .orchestrator_kubernetes_service_label
                             .into_iter()
