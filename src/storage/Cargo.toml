@@ -6,6 +6,10 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[[example]]
+name = "upsert_open_loop"
+bench = false
+
 [dependencies]
 anyhow = "1.0.66"
 async-stream = "0.3.3"
@@ -33,6 +37,7 @@ mz-cluster = { path = "../cluster" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-ore = { path = "../ore", features = ["async", "tracing_", "chrono"] }
+mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-pgcopy = { path = "../pgcopy" }
@@ -71,9 +76,16 @@ protobuf-src = "1.1.0"
 tonic-build = "0.8.2"
 
 [dev-dependencies]
+async-trait = "0.1.59"
+axum = { version = "0.6.7" }
+clap = { version = "3.2.20", features = ["derive", "env"] }
 datadriven = { version = "0.6.0", features = ["async"] }
+humantime = "2.1.0"
 rocksdb = { version = "0.20.1", default-features = false, features = ["snappy"] }
+mz-http-util = { path = "../http-util" }
+mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 itertools = "0.10.5"
+num_cpus = "1.14.0"
 tokio = { version = "1.24.2", features = ["test-util"] }
 
 [package.metadata.cargo-udeps.ignore]
