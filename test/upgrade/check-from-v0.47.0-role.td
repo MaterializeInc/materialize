@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 > SELECT name FROM mz_roles;
+default_owner
 group
 joe
 mz_system

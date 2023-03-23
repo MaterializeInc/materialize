@@ -237,7 +237,7 @@ impl Coordinator {
 
         if let Err(e) = self
             .catalog_mut()
-            .create_temporary_schema(session.conn_id())
+            .create_temporary_schema(session.conn_id(), role_id)
         {
             let _ = tx.send(Response {
                 result: Err(e.into()),

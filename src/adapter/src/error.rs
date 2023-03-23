@@ -7,11 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::num::TryFromIntError;
 
 use dec::TryFromDecimalError;
+use itertools::Itertools;
 use mz_repr::adt::timestamp::TimestampError;
 use tokio::sync::oneshot;
 
@@ -195,6 +197,10 @@ pub enum AdapterError {
     Orchestrator(anyhow::Error),
     /// The active role was dropped while a user was logged in.
     ConcurrentRoleDrop(RoleId),
+    /// A statement tried to drop a role that still owned one or more objects.
+    ///
+    /// The map keys are role names and values are owned object names.
+    DependentObjectOwnership(BTreeMap<String, Vec<String>>),
 }
 
 impl AdapterError {
@@ -251,6 +257,15 @@ impl AdapterError {
             AdapterError::VarError(e) => e.detail(),
             AdapterError::ConcurrentRoleDrop(_) => Some("Please disconnect and re-connect with a valid role.".into()),
             AdapterError::Unauthorized(unauthorized) => unauthorized.detail(),
+            AdapterError::DependentObjectOwnership(dependent_objects) => {
+                Some(dependent_objects
+                    .iter()
+                    .map(|(role_name, object_names)| object_names
+                        .iter()
+                        .map(|object_name| format!("{role_name} is owner of {object_name}"))
+                        .join("\n"))
+                    .join("\n"))
+            },
             _ => None,
         }
     }
@@ -476,6 +491,18 @@ impl fmt::Display for AdapterError {
             AdapterError::Orchestrator(e) => e.fmt(f),
             AdapterError::ConcurrentRoleDrop(role_id) => {
                 write!(f, "role {role_id} was concurrently dropped")
+            }
+            AdapterError::DependentObjectOwnership(dependent_objects) => {
+                let role_str = if dependent_objects.keys().count() == 1 {
+                    "role"
+                } else {
+                    "roles"
+                };
+                write!(
+                    f,
+                    "{role_str} \"{}\" cannot be dropped because some objects depend on it",
+                    dependent_objects.keys().join(", ")
+                )
             }
         }
     }

@@ -22,7 +22,7 @@ oid                 false       oid
 relname             false       text
 relnamespace        false       oid
 reloftype           false       oid
-relowner            true        oid
+relowner            false       oid
 relam               false       oid
 reltablespace       false       oid
 reltoastrelid       false       oid

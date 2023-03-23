@@ -43,7 +43,7 @@ statement ok
 CREATE CLUSTER bar REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'))
 
 query TT rowsort
-SELECT * FROM mz_clusters
+SELECT id, name FROM mz_clusters
 ----
 s1  mz_system
 s2  mz_introspection

@@ -25,7 +25,7 @@ where
 {
     let mut updated_items = BTreeMap::new();
     let items = tx.loaded_items();
-    for (id, name, SerializedCatalogItem::V1 { create_sql }) in items {
+    for (id, name, SerializedCatalogItem::V1 { create_sql }, _owner_id) in items {
         let mut stmt = mz_sql::parse::parse(&create_sql)?.into_element();
 
         f(tx, &mut stmt)?;
