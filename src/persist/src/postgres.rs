@@ -441,7 +441,7 @@ impl PostgresConsensus {
             seqno_queries.join(" UNION "),
         );
 
-        info!("Query: {}, params: {:?}", q, params);
+        // info!("Query: {}, params: {:?}", q, params);
 
         let client = self.get_connection().await.expect("conn");
         let statement = client.prepare_cached(&q).await.expect("statement");
@@ -608,10 +608,10 @@ impl Consensus for PostgresConsensus {
         };
 
         if result == 1 {
-            info!("({}, {:?}) passed CaS", key, expected);
+            // info!("({}, {:?}) passed CaS", key, expected);
             Ok(CaSResult::Committed)
         } else {
-            info!("({}, {:?}) failed CaS", key, expected);
+            // info!("({}, {:?}) failed CaS", key, expected);
             Ok(CaSResult::ExpectationMismatch)
         }
     }

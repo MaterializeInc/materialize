@@ -2856,4 +2856,6 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name()
         || name == PERSIST_STATS_COLLECTION_ENABLED.name()
         || name == PERSIST_STATS_FILTER_ENABLED.name()
+        || name == PERSIST_CAS_BATCH_INTERVAL.name()
+        || name == PERSIST_CAS_MAX_BATCH_SIZE.name()
 }
