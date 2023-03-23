@@ -332,7 +332,7 @@ where
             let mut deletable_rollups = vec![];
             rollup_holds.retain(|rollup, last_seen| {
                 if *last_seen < from_seqno {
-                    deletable_rollups.push(rollup.clone());
+                    deletable_rollups.push(rollup.complete(&shard_id));
                     false
                 } else {
                     true
@@ -340,7 +340,7 @@ where
             });
             delete_all(
                 machine.applier.state_versions.blob.borrow(),
-                deletable_rollups.iter().map(|k| k.complete(&shard_id)),
+                deletable_rollups.into_iter(),
                 &machine.applier.metrics.retries.external.rollup_delete,
                 debug_span!("rollup::delete"),
                 delete_semaphore,
@@ -410,6 +410,9 @@ where
                 let previous = rollup_holds.insert(rollup.key.clone(), *seqno);
                 if previous.is_none() && *seqno <= req.new_seqno_since {
                     // We've discovered a new rollup! It's safe to truncate up to here.
+                    // Note that this may cause a large number of additional truncate calls,
+                    // compared to truncating only once per GC run. If this turns out to be too
+                    // expensive we should consider only truncating when the range is large enough.
                     report_step_timing(&machine.applier.metrics.gc.steps.apply_diff_seconds);
                     truncate_range(
                         &req,
