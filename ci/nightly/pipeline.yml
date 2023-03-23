@@ -620,10 +620,8 @@ steps:
           composition: sqlancer
           args: [--runtime=3300, --oracle=QUERY_PARTITIONING]
 
-  # TODO(def-) Reenable when I have a SQLancer workaround for #18346
   - id: sqlancer-having
     label: "SQLancer Having"
-    skip: true
     artifact_paths: junit_*.xml
     timeout_in_minutes: 58
     agents:
