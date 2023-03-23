@@ -146,6 +146,14 @@ impl PostgresConsensusConfig {
             fn connect_timeout(&self) -> Duration {
                 Duration::MAX
             }
+
+            fn cas_batch_interval(&self) -> Duration {
+                Duration::from_millis(25)
+            }
+
+            fn cas_max_batch_size(&self) -> usize {
+                0
+            }
         }
 
         let config = PostgresConsensusConfig::new(
@@ -161,6 +169,7 @@ impl PostgresConsensusConfig {
 #[derive(Clone)]
 pub struct PostgresConsensus {
     pool: Pool,
+    config: PostgresConsensusConfig,
     metrics: PostgresConsensusMetrics,
     buf: Arc<Mutex<Vec<CaSEntry>>>,
     last_flush_timestamp: Arc<AtomicU64>,
@@ -198,6 +207,7 @@ impl PostgresConsensus {
         let last_ttl_connection = AtomicU64::new(0);
         let connections_created = config.metrics.connpool_connections_created.clone();
         let ttl_reconnections = config.metrics.connpool_ttl_reconnections.clone();
+        let knobs = Arc::clone(&config.knobs);
         let pool = Pool::builder(manager)
             .max_size(config.knobs.connection_pool_max_size())
             .post_create(Hook::async_fn(move |client, _| {
@@ -216,7 +226,7 @@ impl PostgresConsensus {
                 // maintained by the pool after bursty workloads.
 
                 // add a bias towards TTLing older connections first
-                if conn_metrics.age() < config.knobs.connection_pool_ttl() {
+                if conn_metrics.age() < knobs.connection_pool_ttl() {
                     return Ok(());
                 }
 
@@ -225,7 +235,7 @@ impl PostgresConsensus {
                 let elapsed_since_last_ttl = Duration::from_millis(now.saturating_sub(last_ttl));
 
                 // stagger out reconnections to avoid stampeding the DB
-                if elapsed_since_last_ttl > config.knobs.connection_pool_ttl_stagger()
+                if elapsed_since_last_ttl > knobs.connection_pool_ttl_stagger()
                     && last_ttl_connection
                         .compare_exchange_weak(last_ttl, now, Ordering::SeqCst, Ordering::SeqCst)
                         .is_ok()
@@ -259,7 +269,8 @@ impl PostgresConsensus {
 
         let pg_consensus = PostgresConsensus {
             pool,
-            metrics: config.metrics,
+            metrics: config.metrics.clone(),
+            config,
             buf: Arc::new(Mutex::new(Vec::new())),
             last_flush_timestamp: Arc::new((SYSTEM_TIME)().into()),
         };
@@ -361,10 +372,11 @@ impl PostgresConsensus {
     fn start_task(&self) {
         let s = self.clone();
         let _ = mz_ore::task::spawn(|| format!("postgres batcher"), async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(25));
+            let mut interval = tokio::time::interval(s.config.knobs.cas_batch_interval());
             loop {
                 interval.tick().await;
                 s.execute_batch_cas().await;
+                interval = tokio::time::interval(s.config.knobs.cas_batch_interval());
             }
         });
     }
@@ -465,8 +477,8 @@ impl PostgresConsensus {
 
             for existing_entry in buf.iter_mut() {
                 if &existing_entry.key == &key {
-                    // our CaS is greater than a pending request, we can replace it
-                    // because it must be out-of-date at this point
+                    // our CaS is greater than a pending request, we can replace the
+                    // pending request because it must be out-of-date at this point
                     if &existing_entry.expected < &expected {
                         let new = CaSEntry {
                             key,
@@ -492,7 +504,7 @@ impl PostgresConsensus {
                 tx,
             });
 
-            buf.len() >= 50
+            buf.len() >= self.config.knobs.cas_max_batch_size()
         };
 
         if should_execute {
@@ -546,38 +558,41 @@ impl Consensus for PostgresConsensus {
             // 1-phase commit of CRDB. Any changes to this query should
             // confirm an EXPLAIN ANALYZE (VERBOSE) query plan contains
             // `auto commit`
-            let (oneshot_tx, oneshot_rx) = tokio::sync::oneshot::channel();
+            if self.config.knobs.cas_max_batch_size() == 0 {
+                let q = r#"
+                    INSERT INTO consensus (shard, sequence_number, data)
+                    SELECT $1, $2, $3
+                    WHERE (SELECT sequence_number FROM consensus
+                           WHERE shard = $1
+                           ORDER BY sequence_number DESC LIMIT 1) = $4;
+                "#;
+                let client = self.get_connection().await?;
+                let statement = client.prepare_cached(q).await?;
+                client
+                    .execute(
+                        &statement,
+                        &[&key, &new.seqno, &new.data.as_ref(), &expected],
+                    )
+                    .await?
+            } else {
+                let (oneshot_tx, oneshot_rx) = tokio::sync::oneshot::channel();
+                self.batch_compare_and_set(key.to_string(), expected, new, oneshot_tx)
+                    .await;
 
-            self.batch_compare_and_set(key.to_string(), expected, new, oneshot_tx)
-                .await;
-            match oneshot_rx.await {
-                Ok(res) => {
-                    if res {
-                        1
-                    } else {
+                match oneshot_rx.await {
+                    Ok(res) => {
+                        if res {
+                            1
+                        } else {
+                            0
+                        }
+                    }
+                    Err(err) => {
+                        warn!("for some reason the rx channel errored: {:?}", err);
                         0
                     }
                 }
-                Err(err) => {
-                    warn!("for some reason the rx channel errored: {:?}", err);
-                    0
-                }
             }
-            // let q = r#"
-            //     INSERT INTO consensus (shard, sequence_number, data)
-            //     SELECT $1, $2, $3
-            //     WHERE (SELECT sequence_number FROM consensus
-            //            WHERE shard = $1
-            //            ORDER BY sequence_number DESC LIMIT 1) = $4;
-            // "#;
-            // let client = self.get_connection().await?;
-            // let statement = client.prepare_cached(q).await?;
-            // client
-            //     .execute(
-            //         &statement,
-            //         &[&key, &new.seqno, &new.data.as_ref(), &expected],
-            //     )
-            //     .await?
         } else {
             // Insert the new row as long as no other row exists for the same shard.
             let q = "INSERT INTO consensus SELECT $1, $2, $3 WHERE

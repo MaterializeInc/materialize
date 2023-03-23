@@ -139,6 +139,8 @@ impl PersistConfig {
                 next_listen_batch_retryer: RwLock::new(Self::DEFAULT_NEXT_LISTEN_BATCH_RETRYER),
                 stats_collection_enabled: AtomicBool::new(Self::DEFAULT_STATS_COLLECTION_ENABLED),
                 stats_filter_enabled: AtomicBool::new(Self::DEFAULT_STATS_FILTER_ENABLED),
+                cas_batch_interval: RwLock::new(Self::DEFAULT_CAS_BATCH_INTERVAL),
+                cas_max_batch_size: AtomicUsize::new(Self::DEFAULT_CAS_MAX_BATCH_SIZE),
             }),
             compaction_enabled: !compaction_disabled,
             compaction_concurrency_limit: 5,
@@ -200,6 +202,11 @@ impl PersistConfig {
         clamp: Duration::from_secs(16),
     };
 
+    /// WIP
+    pub const DEFAULT_CAS_BATCH_INTERVAL: Duration = Duration::from_millis(20);
+    /// WIP
+    pub const DEFAULT_CAS_MAX_BATCH_SIZE: usize = 0;
+
     // Move this to a PersistConfig field when we actually have read leases.
     //
     // MIGRATION: Remove this once we remove the ReaderState <->
@@ -237,6 +244,14 @@ impl ConsensusKnobs for PersistConfig {
             .consensus_connect_timeout
             .read()
             .expect("lock poisoned")
+    }
+
+    fn cas_batch_interval(&self) -> Duration {
+        self.dynamic.cas_batch_interval()
+    }
+
+    fn cas_max_batch_size(&self) -> usize {
+        self.dynamic.cas_max_batch_size()
     }
 }
 
@@ -279,6 +294,9 @@ pub struct DynamicConfig {
     // We put them under a single RwLock to reduce the cost of reads
     // and to logically group them together.
     next_listen_batch_retryer: RwLock<RetryParameters>,
+
+    cas_batch_interval: RwLock<Duration>,
+    cas_max_batch_size: AtomicUsize,
 
     // TODO: Figure out how to make these dynamic.
     compaction_minimum_timeout: Duration,
@@ -333,6 +351,16 @@ impl DynamicConfig {
     // TODO: Decide if we can relax these.
     const LOAD_ORDERING: Ordering = Ordering::SeqCst;
     const STORE_ORDERING: Ordering = Ordering::SeqCst;
+
+    /// WIP
+    pub fn cas_batch_interval(&self) -> Duration {
+        *self.cas_batch_interval.read().expect("lock poisoned")
+    }
+
+    /// WIP
+    pub fn cas_max_batch_size(&self) -> usize {
+        self.cas_max_batch_size.load(Ordering::SeqCst)
+    }
 
     /// The maximum number of parts (s3 blobs) that [crate::batch::BatchBuilder]
     /// will pipeline before back-pressuring [crate::batch::BatchBuilder::add]
@@ -525,6 +553,10 @@ pub struct PersistParameters {
     pub stats_collection_enabled: Option<bool>,
     /// Configures [`DynamicConfig::stats_filter_enabled`].
     pub stats_filter_enabled: Option<bool>,
+    /// WIP
+    pub cas_batch_interval: Option<Duration>,
+    /// WIP
+    pub cas_max_batch_size: Option<usize>,
 }
 
 impl PersistParameters {
@@ -540,6 +572,8 @@ impl PersistParameters {
             next_listen_batch_retryer: self_next_listen_batch_retryer,
             stats_collection_enabled: self_stats_collection_enabled,
             stats_filter_enabled: self_stats_filter_enabled,
+            cas_batch_interval: self_cas_batch_interval,
+            cas_max_batch_size: self_cas_max_batch_size,
         } = self;
         let Self {
             blob_target_size: other_blob_target_size,
@@ -549,6 +583,8 @@ impl PersistParameters {
             next_listen_batch_retryer: other_next_listen_batch_retryer,
             stats_collection_enabled: other_stats_collection_enabled,
             stats_filter_enabled: other_stats_filter_enabled,
+            cas_batch_interval: other_cas_batch_interval,
+            cas_max_batch_size: other_cas_max_batch_size,
         } = other;
         if let Some(v) = other_blob_target_size {
             *self_blob_target_size = Some(v);
@@ -571,6 +607,12 @@ impl PersistParameters {
         if let Some(v) = other_stats_filter_enabled {
             *self_stats_filter_enabled = Some(v)
         }
+        if let Some(v) = other_cas_batch_interval {
+            *self_cas_batch_interval = Some(v);
+        }
+        if let Some(v) = other_cas_max_batch_size {
+            *self_cas_max_batch_size = Some(v);
+        }
     }
 
     /// Return whether all parameters are unset.
@@ -587,6 +629,8 @@ impl PersistParameters {
             next_listen_batch_retryer,
             stats_collection_enabled,
             stats_filter_enabled,
+            cas_batch_interval,
+            cas_max_batch_size,
         } = self;
         blob_target_size.is_none()
             && compaction_minimum_timeout.is_none()
@@ -595,6 +639,8 @@ impl PersistParameters {
             && next_listen_batch_retryer.is_none()
             && stats_collection_enabled.is_none()
             && stats_filter_enabled.is_none()
+            && cas_batch_interval.is_none()
+            && cas_max_batch_size.is_none()
     }
 
     /// Applies the parameter values to persist's in-memory config object.
@@ -612,6 +658,8 @@ impl PersistParameters {
             next_listen_batch_retryer,
             stats_collection_enabled,
             stats_filter_enabled,
+            cas_batch_interval,
+            cas_max_batch_size,
         } = self;
         if let Some(blob_target_size) = blob_target_size {
             cfg.dynamic
@@ -652,6 +700,19 @@ impl PersistParameters {
                 .stats_filter_enabled
                 .store(*stats_filter_enabled, DynamicConfig::STORE_ORDERING);
         }
+        if let Some(x) = cas_batch_interval {
+            let mut interval = cfg
+                .dynamic
+                .cas_batch_interval
+                .write()
+                .expect("lock poisoned");
+            *interval = *x;
+        }
+        if let Some(x) = cas_max_batch_size {
+            cfg.dynamic
+                .cas_max_batch_size
+                .store(*x, DynamicConfig::STORE_ORDERING);
+        }
     }
 }
 
@@ -665,6 +726,8 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             next_listen_batch_retryer: self.next_listen_batch_retryer.into_proto(),
             stats_collection_enabled: self.stats_collection_enabled.into_proto(),
             stats_filter_enabled: self.stats_filter_enabled.into_proto(),
+            cas_batch_interval: self.cas_batch_interval.into_proto(),
+            cas_max_batch_size: self.cas_max_batch_size.into_proto(),
         }
     }
 
@@ -677,6 +740,8 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             next_listen_batch_retryer: proto.next_listen_batch_retryer.into_rust()?,
             stats_collection_enabled: proto.stats_collection_enabled.into_rust()?,
             stats_filter_enabled: proto.stats_filter_enabled.into_rust()?,
+            cas_batch_interval: proto.cas_batch_interval.into_rust()?,
+            cas_max_batch_size: proto.cas_max_batch_size.into_rust()?,
         })
     }
 }

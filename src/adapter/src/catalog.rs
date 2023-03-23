@@ -6033,6 +6033,8 @@ impl Catalog {
             }),
             stats_collection_enabled: Some(config.persist_stats_collection_enabled()),
             stats_filter_enabled: Some(config.persist_stats_filter_enabled()),
+            cas_max_batch_size: Some(config.persist_cas_max_batch_size()),
+            cas_batch_interval: Some(config.persist_cas_batch_interval()),
         }
     }
 

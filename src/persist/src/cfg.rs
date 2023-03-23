@@ -157,6 +157,10 @@ pub trait ConsensusKnobs: std::fmt::Debug + Send + Sync {
     fn connection_pool_ttl_stagger(&self) -> Duration;
     /// Time to wait for a connection to be made before trying.
     fn connect_timeout(&self) -> Duration;
+    /// Maximum time to wait before flushing a batch of CaS operations.
+    fn cas_batch_interval(&self) -> Duration;
+    /// Max size to batch CaS operations together. Set to 0 to use the old code path.
+    fn cas_max_batch_size(&self) -> usize;
 }
 
 impl ConsensusConfig {

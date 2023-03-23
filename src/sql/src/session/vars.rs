@@ -557,6 +557,24 @@ const PERSIST_STATS_FILTER_ENABLED: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+/// WIP
+const PERSIST_CAS_BATCH_INTERVAL: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("persist_cas_batch_interval"),
+    value: &PersistConfig::DEFAULT_CAS_BATCH_INTERVAL,
+    description: "",
+    internal: true,
+    safe: true,
+};
+
+/// WIP
+const PERSIST_CAS_MAX_BATCH_SIZE: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("persist_cas_max_batch_size"),
+    value: &PersistConfig::DEFAULT_CAS_MAX_BATCH_SIZE,
+    description: "",
+    internal: true,
+    safe: true,
+};
+
 /// Boolean flag indicating that the remote configuration was synchronized at
 /// least once with the persistent [SessionVars].
 pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
@@ -1307,6 +1325,9 @@ pub struct SystemVars {
     persist_next_listen_batch_retryer_multiplier: SystemVar<u32>,
     persist_next_listen_batch_retryer_clamp: SystemVar<Duration>,
 
+    persist_cas_batch_interval: SystemVar<Duration>,
+    persist_cas_max_batch_size: SystemVar<usize>,
+
     // crdb configuration
     crdb_connect_timeout: SystemVar<Duration>,
 
@@ -1357,6 +1378,8 @@ impl Default for SystemVars {
             ),
             persist_stats_collection_enabled: SystemVar::new(&PERSIST_STATS_COLLECTION_ENABLED),
             persist_stats_filter_enabled: SystemVar::new(&PERSIST_STATS_FILTER_ENABLED),
+            persist_cas_batch_interval: SystemVar::new(&PERSIST_CAS_BATCH_INTERVAL),
+            persist_cas_max_batch_size: SystemVar::new(&PERSIST_CAS_MAX_BATCH_SIZE),
             metrics_retention: SystemVar::new(&METRICS_RETENTION),
             mock_audit_event_timestamp: SystemVar::new(&MOCK_AUDIT_EVENT_TIMESTAMP),
             enable_with_mutually_recursive: SystemVar::new(&ENABLE_WITH_MUTUALLY_RECURSIVE),
@@ -1398,6 +1421,8 @@ impl SystemVars {
             &self.persist_sink_minimum_batch_updates,
             &self.persist_stats_collection_enabled,
             &self.persist_stats_filter_enabled,
+            &self.persist_cas_batch_interval,
+            &self.persist_cas_max_batch_size,
             &self.metrics_retention,
             &self.mock_audit_event_timestamp,
             &self.enable_with_mutually_recursive,
@@ -1482,6 +1507,10 @@ impl SystemVars {
             Ok(&self.persist_stats_collection_enabled)
         } else if name == PERSIST_STATS_FILTER_ENABLED.name {
             Ok(&self.persist_stats_filter_enabled)
+        } else if name == PERSIST_CAS_BATCH_INTERVAL.name {
+            Ok(&self.persist_cas_batch_interval)
+        } else if name == PERSIST_CAS_MAX_BATCH_SIZE.name {
+            Ok(&self.persist_cas_max_batch_size)
         } else if name == METRICS_RETENTION.name {
             Ok(&self.metrics_retention)
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
@@ -1561,6 +1590,10 @@ impl SystemVars {
             self.persist_stats_collection_enabled.is_default(input)
         } else if name == PERSIST_STATS_FILTER_ENABLED.name {
             self.persist_stats_filter_enabled.is_default(input)
+        } else if name == PERSIST_CAS_BATCH_INTERVAL.name {
+            self.persist_cas_batch_interval.is_default(input)
+        } else if name == PERSIST_CAS_MAX_BATCH_SIZE.name {
+            self.persist_cas_max_batch_size.is_default(input)
         } else if name == METRICS_RETENTION.name {
             self.metrics_retention.is_default(input)
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
@@ -1646,6 +1679,10 @@ impl SystemVars {
             self.persist_stats_collection_enabled.set(input)
         } else if name == PERSIST_STATS_FILTER_ENABLED.name {
             self.persist_stats_filter_enabled.set(input)
+        } else if name == PERSIST_CAS_BATCH_INTERVAL.name {
+            self.persist_cas_batch_interval.set(input)
+        } else if name == PERSIST_CAS_MAX_BATCH_SIZE.name {
+            self.persist_cas_max_batch_size.set(input)
         } else if name == METRICS_RETENTION.name {
             self.metrics_retention.set(input)
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
@@ -1727,6 +1764,10 @@ impl SystemVars {
             Ok(self.persist_stats_collection_enabled.reset())
         } else if name == PERSIST_STATS_FILTER_ENABLED.name {
             Ok(self.persist_stats_filter_enabled.reset())
+        } else if name == PERSIST_CAS_BATCH_INTERVAL.name {
+            Ok(self.persist_cas_batch_interval.reset())
+        } else if name == PERSIST_CAS_MAX_BATCH_SIZE.name {
+            Ok(self.persist_cas_max_batch_size.reset())
         } else if name == METRICS_RETENTION.name {
             Ok(self.metrics_retention.reset())
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
@@ -1874,6 +1915,16 @@ impl SystemVars {
     /// Returns the `persist_stats_filter_enabled` configuration parameter.
     pub fn persist_stats_filter_enabled(&self) -> bool {
         *self.persist_stats_filter_enabled.value()
+    }
+
+    /// WIP
+    pub fn persist_cas_batch_interval(&self) -> Duration {
+        *self.persist_cas_batch_interval.value()
+    }
+
+    /// WIP
+    pub fn persist_cas_max_batch_size(&self) -> usize {
+        *self.persist_cas_max_batch_size.value()
     }
 
     /// Returns the `metrics_retention` configuration parameter.
