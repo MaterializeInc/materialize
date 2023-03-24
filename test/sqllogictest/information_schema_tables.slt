@@ -341,6 +341,10 @@ mz_scheduling_parks_histogram_internal
 SOURCE
 materialize
 mz_internal
+mz_sessions
+BASE TABLE
+materialize
+mz_internal
 mz_show_cluster_replicas
 VIEW
 materialize

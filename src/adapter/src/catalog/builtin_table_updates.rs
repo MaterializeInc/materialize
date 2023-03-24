@@ -21,6 +21,7 @@ use mz_expr::MirScalarExpr;
 use mz_orchestrator::{CpuLimit, MemoryLimit, ServiceProcessMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::now::SYSTEM_TIME;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::{Datum, Diff, GlobalId, Row};
@@ -41,13 +42,14 @@ use crate::catalog::builtin::{
     MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS,
     MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS,
     MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS,
-    MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS,
-    MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_SESSIONS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connection, DataSourceDesc, Database, Error, ErrorKind, Func, Index,
     MaterializedView, Sink, StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
+use crate::client::ConnectionId;
 use crate::subscribe::ActiveSubscribe;
 
 use super::AwsPrincipalContext;
@@ -1159,6 +1161,28 @@ impl CatalogState {
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SUBSCRIPTIONS),
             row,
+            diff,
+        }
+    }
+
+    pub fn pack_session_update(
+        &self,
+        id: ConnectionId,
+        role_id: RoleId,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        // We use the system clock to determine when a session
+        // connected to Materialize. This is not intended to be 100%
+        // accurate and correct, so we don't burden the timestamp
+        // oracle with generating a more correct timestamp.
+        let connect_dt = mz_ore::now::to_datetime(SYSTEM_TIME());
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_SESSIONS),
+            row: Row::pack_slice(&[
+                Datum::UInt32(id),
+                Datum::String(&role_id.to_string()),
+                Datum::TimestampTz(connect_dt.try_into().expect("must fit")),
+            ]),
             diff,
         }
     }
