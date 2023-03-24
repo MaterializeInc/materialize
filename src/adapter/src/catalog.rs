@@ -677,6 +677,8 @@ impl CatalogState {
                     conn_id: None,
                     depends_on: vec![log_id],
                     cluster_id: id,
+                    is_retained_metrics_relation: false,
+                    custom_logical_compaction_window: None,
                 }),
                 MZ_SYSTEM_ROLE_ID,
             );
@@ -1679,6 +1681,8 @@ pub struct Index {
     pub conn_id: Option<ConnectionId>,
     pub depends_on: Vec<GlobalId>,
     pub cluster_id: ClusterId,
+    pub custom_logical_compaction_window: Option<Duration>,
+    pub is_retained_metrics_relation: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1914,7 +1918,7 @@ impl CatalogItem {
         }
     }
 
-    fn cluster_id(&self) -> Option<ClusterId> {
+    pub fn cluster_id(&self) -> Option<ClusterId> {
         match self {
             CatalogItem::MaterializedView(mv) => Some(mv.cluster_id),
             CatalogItem::Index(index) => Some(index.cluster_id),
@@ -1939,7 +1943,7 @@ impl CatalogItem {
         let custom_logical_compaction_window = match self {
             CatalogItem::Table(table) => table.custom_logical_compaction_window,
             CatalogItem::Source(source) => source.custom_logical_compaction_window,
-            CatalogItem::Index(_) => None,
+            CatalogItem::Index(index) => index.custom_logical_compaction_window,
             CatalogItem::MaterializedView(_) => None,
             CatalogItem::Log(_)
             | CatalogItem::View(_)
@@ -1959,11 +1963,11 @@ impl CatalogItem {
         match self {
             CatalogItem::Table(table) => table.is_retained_metrics_relation,
             CatalogItem::Source(source) => source.is_retained_metrics_relation,
+            CatalogItem::Index(index) => index.is_retained_metrics_relation,
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Sink(_)
-            | CatalogItem::Index(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
@@ -2639,7 +2643,7 @@ impl Catalog {
             };
             match builtin {
                 Builtin::Index(index) => {
-                    let item = catalog
+                    let mut item = catalog
                         .parse_item(
                             id,
                             index.sql.into(),
@@ -2655,6 +2659,15 @@ impl Catalog {
                                 index.name, e
                             )
                         });
+                    let CatalogItem::Index(catalog_index) = &mut item else {
+                        panic!("internal error: builtin index {}'s SQL does not begin with \"CREATE INDEX\".", index.name);
+                    };
+                    if index.is_retained_metrics_relation {
+                        catalog_index.is_retained_metrics_relation = true;
+                        catalog_index.custom_logical_compaction_window =
+                            Some(catalog.state.system_config().metrics_retention());
+                    }
+
                     let oid = catalog.allocate_oid()?;
                     catalog
                         .state
@@ -5691,6 +5704,8 @@ impl Catalog {
                 conn_id: None,
                 depends_on,
                 cluster_id: index.cluster_id,
+                custom_logical_compaction_window: None,
+                is_retained_metrics_relation: false,
             }),
             Plan::CreateSink(CreateSinkPlan {
                 sink,

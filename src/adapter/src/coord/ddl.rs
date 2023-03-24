@@ -653,13 +653,30 @@ impl Coordinator {
             })),
             SINCE_GRANULARITY,
         );
-        let policies = self
+        let storage_policies = self
             .catalog()
             .entries()
-            .filter(|entry| entry.item().is_retained_metrics_relation())
+            .filter(|entry| {
+                entry.item().is_retained_metrics_relation() && entry.item().cluster_id().is_none()
+            })
             .map(|entry| (entry.id(), policy.clone()))
             .collect::<Vec<_>>();
-        self.update_storage_base_read_policies(policies)
+        let compute_policies = self
+            .catalog()
+            .entries()
+            .filter_map(|entry| {
+                if let (true, Some(cluster_id)) = (
+                    entry.item().is_retained_metrics_relation(),
+                    entry.item().cluster_id(),
+                ) {
+                    Some((cluster_id, entry.id(), policy.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        self.update_storage_base_read_policies(storage_policies);
+        self.update_compute_base_read_policies(compute_policies);
     }
 
     async fn create_storage_export(

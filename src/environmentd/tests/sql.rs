@@ -1298,11 +1298,18 @@ fn test_utilization_hold() {
 
     let mut client = server.connect(postgres::NoTls).unwrap();
 
+    // Use the indexes
+    client.execute("SET cluster=mz_introspection", &[]).unwrap();
+
     let q =
         "EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM mz_internal.mz_cluster_replica_utilization";
     let row = client.query_one(q, &[]).unwrap();
     let explain: String = row.get(0);
     let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+    // Assert that we actually used the indexes
+    for s in &explain.sources {
+        assert!(s.name.ends_with("compute)"));
+    }
 
     // If we're not in EpochMilliseconds, the timestamp math below is invalid, so assert that here.
     assert!(matches!(

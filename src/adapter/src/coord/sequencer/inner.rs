@@ -1319,6 +1319,8 @@ impl Coordinator {
             conn_id: None,
             depends_on,
             cluster_id,
+            is_retained_metrics_relation: false,
+            custom_logical_compaction_window: None,
         };
         let oid = self.catalog_mut().allocate_oid()?;
         let op = catalog::Op::CreateItem {
