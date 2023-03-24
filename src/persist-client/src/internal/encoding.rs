@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
+use bytes::Bytes;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_persist::location::{SeqNo, VersionedData};
@@ -39,7 +40,7 @@ use crate::internal::state::{
     ProtoU64Description, ProtoWriterState, State, StateCollections, TypedState, WriterState,
 };
 use crate::internal::state_diff::{
-    ProtoStateFieldDiff, StateDiff, StateFieldDiff, StateFieldValDiff,
+    ProtoStateFieldDiff, ProtoStateFieldDiffsWriter, StateDiff, StateFieldDiff, StateFieldValDiff,
 };
 use crate::internal::trace::Trace;
 use crate::read::LeasedReaderId;
@@ -203,7 +204,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
             .expect("no required fields means no initialization errors");
     }
 
-    pub fn decode(build_version: &Version, buf: &[u8]) -> Self {
+    pub fn decode(build_version: &Version, buf: Bytes) -> Self {
         let proto = ProtoStateDiff::decode(buf)
             // We received a State that we couldn't decode. This could happen if
             // persist messes up backward/forward compatibility, if the durable
@@ -235,23 +236,27 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
             spine,
         } = self;
 
-        let mut field_diffs = ProtoStateFieldDiffs::default();
-        field_diffs_into_proto(ProtoStateField::Hostname, hostname, &mut field_diffs);
-        field_diffs_into_proto(ProtoStateField::LastGcReq, last_gc_req, &mut field_diffs);
-        field_diffs_into_proto(ProtoStateField::Rollups, rollups, &mut field_diffs);
-        field_diffs_into_proto(
-            ProtoStateField::LeasedReaders,
-            leased_readers,
-            &mut field_diffs,
-        );
+        let proto = ProtoStateFieldDiffs::default();
+
+        // Create a writer so we can efficiently encode our data.
+        let mut writer = proto.into_writer();
+
+        field_diffs_into_proto(ProtoStateField::Hostname, hostname, &mut writer);
+        field_diffs_into_proto(ProtoStateField::LastGcReq, last_gc_req, &mut writer);
+        field_diffs_into_proto(ProtoStateField::Rollups, rollups, &mut writer);
+        field_diffs_into_proto(ProtoStateField::LeasedReaders, leased_readers, &mut writer);
         field_diffs_into_proto(
             ProtoStateField::CriticalReaders,
             critical_readers,
-            &mut field_diffs,
+            &mut writer,
         );
-        field_diffs_into_proto(ProtoStateField::Writers, writers, &mut field_diffs);
-        field_diffs_into_proto(ProtoStateField::Since, since, &mut field_diffs);
-        field_diffs_into_proto(ProtoStateField::Spine, spine, &mut field_diffs);
+        field_diffs_into_proto(ProtoStateField::Writers, writers, &mut writer);
+        field_diffs_into_proto(ProtoStateField::Since, since, &mut writer);
+        field_diffs_into_proto(ProtoStateField::Spine, spine, &mut writer);
+
+        // After encoding all of our data, convert back into the proto.
+        let field_diffs = writer.into_proto();
+
         debug_assert_eq!(field_diffs.validate(), Ok(()));
         ProtoStateDiff {
             applier_version: applier_version.to_string(),
@@ -375,7 +380,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
 fn field_diffs_into_proto<K, KP, V, VP>(
     field: ProtoStateField,
     diffs: &[StateFieldDiff<K, V>],
-    proto: &mut ProtoStateFieldDiffs,
+    writer: &mut ProtoStateFieldDiffsWriter,
 ) where
     KP: prost::Message,
     K: RustType<KP>,
@@ -383,41 +388,35 @@ fn field_diffs_into_proto<K, KP, V, VP>(
     V: RustType<VP>,
 {
     for diff in diffs.iter() {
-        field_diff_into_proto(field, diff, proto);
+        field_diff_into_proto(field, diff, writer);
     }
 }
 
 fn field_diff_into_proto<K, KP, V, VP>(
     field: ProtoStateField,
     diff: &StateFieldDiff<K, V>,
-    proto: &mut ProtoStateFieldDiffs,
+    writer: &mut ProtoStateFieldDiffsWriter,
 ) where
     KP: prost::Message,
     K: RustType<KP>,
     VP: prost::Message,
     V: RustType<VP>,
 {
-    proto.fields.push(i32::from(field));
-    proto.encode_proto(&diff.key.into_proto());
+    writer.push_field(field);
+    writer.encode_proto(&diff.key.into_proto());
     match &diff.val {
         StateFieldValDiff::Insert(to) => {
-            proto
-                .diff_types
-                .push(i32::from(ProtoStateFieldDiffType::Insert));
-            proto.encode_proto(&to.into_proto());
+            writer.push_diff_type(ProtoStateFieldDiffType::Insert);
+            writer.encode_proto(&to.into_proto());
         }
         StateFieldValDiff::Update(from, to) => {
-            proto
-                .diff_types
-                .push(i32::from(ProtoStateFieldDiffType::Update));
-            proto.encode_proto(&from.into_proto());
-            proto.encode_proto(&to.into_proto());
+            writer.push_diff_type(ProtoStateFieldDiffType::Update);
+            writer.encode_proto(&from.into_proto());
+            writer.encode_proto(&to.into_proto());
         }
         StateFieldValDiff::Delete(from) => {
-            proto
-                .diff_types
-                .push(i32::from(ProtoStateFieldDiffType::Delete));
-            proto.encode_proto(&from.into_proto());
+            writer.push_diff_type(ProtoStateFieldDiffType::Delete);
+            writer.encode_proto(&from.into_proto());
         }
     };
 }
@@ -560,7 +559,7 @@ impl<T: Timestamp + Lattice + Codec64> UntypedState<T> {
         &self.state.collections.rollups
     }
 
-    pub fn apply_encoded_diffs<'a, I: IntoIterator<Item = &'a VersionedData>>(
+    pub fn apply_encoded_diffs<I: IntoIterator<Item = VersionedData>>(
         &mut self,
         cfg: &PersistConfig,
         metrics: &Metrics,
@@ -1104,16 +1103,17 @@ mod tests {
         );
         let mut buf = Vec::new();
         diff.encode(&mut buf);
+        let bytes = Bytes::from(buf);
 
         // We can read it back using persist code v2 and v3.
-        assert_eq!(StateDiff::decode(&v2, &buf), diff);
-        assert_eq!(StateDiff::decode(&v3, &buf), diff);
+        assert_eq!(StateDiff::decode(&v2, bytes.clone()), diff);
+        assert_eq!(StateDiff::decode(&v3, bytes.clone()), diff);
 
         // But we can't read it back using v1 because v1 might corrupt it by
         // losing or misinterpreting something written out by a future version
         // of code.
         mz_ore::process::PANIC_ON_HALT.store(true, Ordering::SeqCst);
-        let v1_res = mz_ore::panic::catch_unwind(|| StateDiff::<u64>::decode(&v1, &buf));
+        let v1_res = mz_ore::panic::catch_unwind(|| StateDiff::<u64>::decode(&v1, bytes));
         assert!(v1_res.is_err());
     }
 
@@ -1276,6 +1276,9 @@ mod tests {
         diff.rollups.push(r3.clone());
         let mut diff_proto = diff.into_proto();
 
+        let field_diffs = std::mem::take(&mut diff_proto.field_diffs).unwrap();
+        let mut field_diffs_writer = field_diffs.into_writer();
+
         // Manually add the old rollup encoding.
         field_diffs_into_proto(
             ProtoStateField::DeprecatedRollups,
@@ -1283,8 +1286,11 @@ mod tests {
                 key: r1.key,
                 val: StateFieldValDiff::Insert(r1_rollup.key.clone()),
             }],
-            diff_proto.field_diffs.as_mut().unwrap(),
+            &mut field_diffs_writer,
         );
+
+        assert!(diff_proto.field_diffs.is_none());
+        diff_proto.field_diffs = Some(field_diffs_writer.into_proto());
 
         let diff = StateDiff::<u64>::from_proto(diff_proto.clone()).unwrap();
         assert_eq!(
@@ -1313,7 +1319,7 @@ mod tests {
             seqno: SeqNo(5),
             data: diff_proto.encode_to_vec().into(),
         };
-        state.apply_encoded_diffs(cache.cfg(), &cache.metrics, std::iter::once(&encoded_diff));
+        state.apply_encoded_diffs(cache.cfg(), &cache.metrics, std::iter::once(encoded_diff));
         assert_eq!(
             state
                 .state

@@ -11,6 +11,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 
+use bytes::BytesMut;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
@@ -242,7 +243,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
 }
 
 impl<T: Timestamp + Lattice + Codec64> State<T> {
-    pub fn apply_encoded_diffs<'a, I: IntoIterator<Item = &'a VersionedData>>(
+    pub fn apply_encoded_diffs<I: IntoIterator<Item = VersionedData>>(
         &mut self,
         cfg: &PersistConfig,
         metrics: &Metrics,
@@ -257,7 +258,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
             let diff = metrics
                 .codecs
                 .state_diff
-                .decode(|| StateDiff::decode(&cfg.build_version, &x.data));
+                .decode(|| StateDiff::decode(&cfg.build_version, x.data));
             assert_eq!(diff.seqno_from, state_seqno);
             state_seqno = diff.seqno_to;
             Some(diff)
@@ -866,20 +867,83 @@ fn apply_compaction_lenient<'a, T: Timestamp + Lattice>(
     Ok(trace)
 }
 
-impl ProtoStateFieldDiffs {
+/// A type that facilitates the proto encoding of a [`ProtoStateFieldDiffs`]
+///
+/// [`ProtoStateFieldDiffs`] is a columnar encoding of [`StateFieldDiff`]s, see
+/// its doc comment for more info. The underlying buffer for a [`ProtoStateFieldDiffs`]
+/// is a [`Bytes`] struct, which is an immutable, shared, reference counted,
+/// buffer of data. Using a [`Bytes`] struct is a very efficient way to manage data
+/// becuase multiple [`Bytes`] can reference different parts of the same underlying
+/// portion of memory. See its doc comment for more info.
+///
+/// A [`ProtoStateFieldDiffsWriter`] maintains a mutable, unique, data buffer, i.e.
+/// a [`BytesMut`], which we use when encoding a [`StateFieldDiff`]. And when
+/// finished encoding, we convert it into a [`ProtoStateFieldDiffs`] by "freezing" the
+/// underlying buffer, converting it into a [`Bytes`] struct, so it can be shared.
+///
+/// [`Bytes`]: bytes::Bytes
+#[derive(Debug)]
+pub struct ProtoStateFieldDiffsWriter {
+    data_buf: BytesMut,
+    proto: ProtoStateFieldDiffs,
+}
+
+impl ProtoStateFieldDiffsWriter {
+    /// Record a [`ProtoStateField`] for our columnar encoding.
+    pub fn push_field(&mut self, field: ProtoStateField) {
+        self.proto.fields.push(i32::from(field));
+    }
+
+    /// Record a [`ProtoStateFieldDiffType`] for our columnar encoding.
+    pub fn push_diff_type(&mut self, diff_type: ProtoStateFieldDiffType) {
+        self.proto.diff_types.push(i32::from(diff_type));
+    }
+
+    /// Encode a message for our columnar encoding.
     pub fn encode_proto<M: prost::Message>(&mut self, msg: &M) {
-        let len_before = self.data_bytes.len();
-        self.data_bytes.reserve(msg.encoded_len());
+        let len_before = self.data_buf.len();
+        self.data_buf.reserve(msg.encoded_len());
 
         // Note: we use `encode_raw` as opposed to `encode` because all `encode` does is
         // check to make sure there's enough bytes in the buffer to fit our message
         // which we know there are because we just reserved the space. When benchmarking
         // `encode_raw` does offer a slight performance improvement over `encode`.
-        msg.encode_raw(&mut self.data_bytes);
+        msg.encode_raw(&mut self.data_buf);
 
         // Record exactly how many bytes were written.
-        let written_len = self.data_bytes.len() - len_before;
-        self.data_lens.push(u64::cast_from(written_len));
+        let written_len = self.data_buf.len() - len_before;
+        self.proto.data_lens.push(u64::cast_from(written_len));
+    }
+
+    pub fn into_proto(self) -> ProtoStateFieldDiffs {
+        let ProtoStateFieldDiffsWriter {
+            data_buf,
+            mut proto,
+        } = self;
+
+        // Assert we didn't write into the proto's data_bytes field
+        assert!(proto.data_bytes.is_empty());
+
+        // Move our buffer into the proto
+        let data_bytes = data_buf.freeze();
+        proto.data_bytes = data_bytes;
+
+        proto
+    }
+}
+
+impl ProtoStateFieldDiffs {
+    pub fn into_writer(mut self) -> ProtoStateFieldDiffsWriter {
+        let mut data_buf = BytesMut::new();
+
+        // Take our existing data, and copy it into our buffer
+        let existing_data = std::mem::take(&mut self.data_bytes);
+        data_buf.copy_from_slice(&existing_data[..]);
+
+        ProtoStateFieldDiffsWriter {
+            data_buf,
+            proto: self,
+        }
     }
 
     pub fn iter<'a>(&'a self) -> ProtoStateFieldDiffsIter<'a> {
