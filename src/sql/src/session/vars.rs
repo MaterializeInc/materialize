@@ -1725,8 +1725,8 @@ where
 #[derive(Debug)]
 struct SystemVar<V>
 where
-    V: Value + fmt::Debug + 'static,
-    V::Owned: fmt::Debug + PartialEq + Eq,
+    V: Value + fmt::Debug + ?Sized + 'static,
+    V::Owned: fmt::Debug,
 {
     persisted_value: Option<V::Owned>,
     parent: &'static ServerVar<V>,
@@ -1735,8 +1735,8 @@ where
 // The derived `Clone` implementation requires `V: Clone`, which is not needed.
 impl<V> Clone for SystemVar<V>
 where
-    V: Value + fmt::Debug + 'static,
-    V::Owned: fmt::Debug + Clone + Eq,
+    V: Value + fmt::Debug + ?Sized + 'static,
+    V::Owned: fmt::Debug + Clone,
 {
     fn clone(&self) -> Self {
         SystemVar {
@@ -1748,14 +1748,18 @@ where
 
 impl<V> SystemVar<V>
 where
-    V: Value + fmt::Debug + PartialEq + Eq + 'static,
-    V::Owned: fmt::Debug + PartialEq + Eq,
+    V: Value + fmt::Debug + Eq + ?Sized + 'static,
+    V::Owned: fmt::Debug,
 {
     fn new(parent: &'static ServerVar<V>) -> SystemVar<V> {
         SystemVar {
             persisted_value: None,
             parent,
         }
+    }
+
+    fn persisted_value(&self) -> Option<&V> {
+        self.persisted_value.as_ref().map(|v| v.borrow())
     }
 
     fn value(&self) -> &V {
@@ -1768,8 +1772,8 @@ where
 
 impl<V> Var for SystemVar<V>
 where
-    V: Value + ToOwned + fmt::Debug + PartialEq + Eq + 'static,
-    V::Owned: fmt::Debug + PartialEq + Eq,
+    V: Value + fmt::Debug + Eq + ?Sized + 'static,
+    V::Owned: fmt::Debug,
 {
     fn name(&self) -> &'static str {
         self.parent.name()
@@ -1798,8 +1802,8 @@ where
 
 impl<V> VarMut for SystemVar<V>
 where
-    V: Value + ToOwned + fmt::Debug + PartialEq + Eq + 'static,
-    V::Owned: fmt::Debug + Clone + Eq + Send + Sync,
+    V: Value + fmt::Debug + Eq + 'static,
+    V::Owned: fmt::Debug + Clone + Send + Sync,
 {
     fn as_var(&self) -> &dyn Var {
         self
@@ -1824,7 +1828,7 @@ where
     fn set(&mut self, input: VarInput) -> Result<bool, VarError> {
         match V::parse(input) {
             Ok(v) => {
-                if self.persisted_value.as_ref() != Some(&v) {
+                if self.persisted_value() != Some(v.borrow()) {
                     self.persisted_value = Some(v);
                     Ok(true)
                 } else {
@@ -1836,7 +1840,7 @@ where
     }
 
     fn reset(&mut self) -> bool {
-        if self.persisted_value.as_ref() != None {
+        if self.persisted_value() != None {
             self.persisted_value = None;
             true
         } else {
@@ -1920,7 +1924,7 @@ where
 
 impl<V> Var for SessionVar<V>
 where
-    V: Value + ToOwned + fmt::Debug + ?Sized + 'static,
+    V: Value + fmt::Debug + ?Sized + 'static,
     V::Owned: fmt::Debug,
 {
     fn name(&self) -> &'static str {
