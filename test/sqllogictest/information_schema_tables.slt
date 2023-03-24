@@ -338,11 +338,11 @@ VIEW
 materialize
 mz_internal
 mz_scheduling_parks_histogram_internal
-BASE TABLE
+SOURCE
 materialize
 mz_internal
 mz_sessions
-SOURCE
+BASE TABLE
 materialize
 mz_internal
 mz_show_cluster_replicas
