@@ -3362,7 +3362,9 @@ impl Coordinator {
                         .expect("setting options on index")
                         .cluster_id;
                     let policy = match window {
-                        Some(time) => ReadPolicy::lag_writes_by(time.try_into()?, SINCE_GRANULARITY),
+                        Some(time) => {
+                            ReadPolicy::lag_writes_by(time.try_into()?, SINCE_GRANULARITY)
+                        }
                         None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
                     };
                     self.update_compute_base_read_policy(cluster, id, policy);

@@ -646,12 +646,13 @@ impl Coordinator {
 
     fn update_metrics_retention(&mut self) {
         let duration = self.catalog().system_config().metrics_retention();
-        let policy = ReadPolicy::lag_writes_by(Timestamp::new(
-            u64::try_from(duration.as_millis()).unwrap_or_else(|_e| {
+        let policy = ReadPolicy::lag_writes_by(
+            Timestamp::new(u64::try_from(duration.as_millis()).unwrap_or_else(|_e| {
                 tracing::error!("Absurd metrics retention duration: {duration:?}.");
                 u64::MAX
-            }),
-        ), SINCE_GRANULARITY);
+            })),
+            SINCE_GRANULARITY,
+        );
         let policies = self
             .catalog()
             .entries()
