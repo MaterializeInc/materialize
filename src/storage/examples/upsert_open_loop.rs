@@ -372,14 +372,16 @@ async fn run_benchmark(
     let source_rxs = Arc::new(Mutex::new(source_rxs));
 
     let rocks_dir = tempfile::tempdir().unwrap();
-    println!("At path: {}", rocks_dir.path().display());
+    let dir_path = rocks_dir.path().to_owned();
+    println!("At path: {}", dir_path.display());
+    std::mem::forget(rocks_dir);
 
     let timely_config = timely::Config::process(num_workers);
     let timely_guards = timely::execute::execute(timely_config, move |timely_worker| {
         let progress_tx = Arc::clone(&progress_tx);
         let source_rxs = Arc::clone(&source_rxs);
 
-        let dir_path = rocks_dir.path().to_owned();
+        let dir_path = dir_path.clone();
 
         let probe = timely_worker.dataflow::<u64, _, _>(move |scope| {
             let mut source_streams = Vec::new();
@@ -417,6 +419,12 @@ async fn run_benchmark(
                             if input.frontier().is_empty() && active_worker {
                                 assert!(count == num_records_total);
                                 info!("final count for source {source_id}: {count}");
+
+                                println!(
+                                    "Processing {} finished after {} ms and processed {count} records",
+                                    source_id,
+                                    start.elapsed().as_millis(),
+                                );
                             }
                         }
                     },
@@ -629,25 +637,44 @@ where
                 AsyncEvent::Progress(new_frontier) => frontier = new_frontier,
             }
             let mut removed_times = Vec::new();
+
+            let mut batches = Vec::new();
+            let mut caps = Vec::new();
             for (time, (cap, map)) in pending_values.iter_mut() {
                 if frontier.less_equal(time) {
                     break;
                 }
-                // UPSERT
-
-                for (k, v) in std::mem::take(map).into_iter() {
-                    let old_value = current_values.insert(k.clone(), v.clone()).await;
-
-                    if let Some(old_value) = old_value {
-                        // we might be able to avoid this extra key clone here,
-                        // if we really tried
-                        output.give(cap, (k.clone(), old_value, -1)).await;
-                    }
-                    // we don't do deletes right now
-                    output.give(cap, (k, v, 1)).await;
-                }
+                let len = map.len();
+                batches.push(std::mem::take(map).into_iter().collect());
+                caps.push((cap, len));
 
                 removed_times.push(*time)
+            }
+
+            let mut cap_iter = caps.into_iter();
+            let mut cur_cap = None;
+            for (k, old_value, v) in current_values.insert(batches).await {
+                let cap = match &mut cur_cap {
+                    None => {
+                        let stuff = cur_cap.insert(cap_iter.next().unwrap());
+                        stuff.1 -= 1;
+                        &mut stuff.0
+                    }
+                    Some((_cap, num)) if *num == 0 => {
+                        &mut cur_cap.insert(cap_iter.next().unwrap()).0
+                    }
+                    Some((cap, num)) => {
+                        *num -= 1;
+                        cap
+                    }
+                };
+                if let Some(old_value) = old_value {
+                    // we might be able to avoid this extra key clone here,
+                    // if we really tried
+                    output.give(*cap, (k.clone(), old_value, -1)).await;
+                }
+                // we don't do deletes right now
+                output.give(*cap, (k, v, 1)).await;
             }
 
             // Discard entries, capabilities for complete times.
@@ -662,53 +689,107 @@ where
 
 #[async_trait::async_trait]
 trait Map {
-    async fn insert(&mut self, key: Vec<u8>, value: Vec<u8>) -> Option<Vec<u8>>;
+    async fn insert(
+        &mut self,
+        batches: Vec<Vec<(Vec<u8>, Vec<u8>)>>,
+    ) -> Vec<(Vec<u8>, Option<Vec<u8>>, Vec<u8>)>;
 }
 
 #[async_trait::async_trait]
 impl Map for BTreeMap<Vec<u8>, Vec<u8>> {
-    async fn insert(&mut self, key: Vec<u8>, value: Vec<u8>) -> Option<Vec<u8>> {
-        self.insert(key, value)
+    async fn insert(
+        &mut self,
+        batches: Vec<Vec<(Vec<u8>, Vec<u8>)>>,
+    ) -> Vec<(Vec<u8>, Option<Vec<u8>>, Vec<u8>)> {
+        let mut out = Vec::new();
+        for batch in batches {
+            for (k, v) in batch {
+                let in_k = k.clone();
+                out.push((k, self.insert(in_k, v.clone()), v))
+            }
+        }
+        out
     }
 }
 
-use rocksdb::{Error, Options, SingleThreaded, TransactionDB, DB};
+use rocksdb::{Error, DB};
 use std::path::Path;
-use tokio::sync::oneshot::{channel, Receiver, Sender};
+use tokio::sync::oneshot::{channel, Sender};
 
 #[derive(Clone)]
 struct IoThreadRocksDB {
-    tx: crossbeam_channel::Sender<(Vec<u8>, Vec<u8>, Sender<Result<Option<Vec<u8>>, Error>>)>,
+    tx: crossbeam_channel::Sender<(
+        Vec<Vec<(Vec<u8>, Vec<u8>)>>,
+        Sender<Result<Vec<(Vec<u8>, Option<Vec<u8>>, Vec<u8>)>, Error>>,
+    )>,
 }
 
 impl IoThreadRocksDB {
     fn new(temp_dir: &Path, index: usize) -> Self {
         // bounded??
-        let (tx, mut rx): (
+        let (tx, rx): (
             _,
-            crossbeam_channel::Receiver<(Vec<u8>, Vec<u8>, Sender<Result<Option<Vec<u8>>, Error>>)>,
+            crossbeam_channel::Receiver<(
+                Vec<Vec<(Vec<u8>, Vec<u8>)>>,
+                Sender<Result<Vec<(Vec<u8>, Option<Vec<u8>>, Vec<u8>)>, Error>>,
+            )>,
         ) = crossbeam_channel::unbounded();
         let db: DB = DB::open_default(temp_dir.join(index.to_string())).unwrap();
         std::thread::spawn(move || {
-            while let Ok((k, v, resp)) = rx.recv() {
-                let mut previous: Option<Vec<u8>> = None;
+            let mut wo = rocksdb::WriteOptions::new();
+            wo.disable_wal(false);
 
-                match db.get(k.as_slice()) {
-                    Ok(p) => previous = p,
-                    Err(e) => {
-                        let _ = resp.send(Err(e));
-                        continue;
+            'batch: while let Ok((batches, resp)) = rx.recv() {
+                let mut size = 0;
+                for _ in batches.iter().flat_map(|b| b.iter()) {
+                    size += 1;
+                }
+
+                if size == 0 {
+                    let _ = resp.send(Ok(Vec::new()));
+                    continue;
+                }
+
+                if size == 1 {
+                    dbg!(&batches);
+                }
+
+                let gets = db.multi_get(
+                    batches
+                        .iter()
+                        .flat_map(|b| b.iter().map(|(k, _)| k.as_slice())),
+                );
+
+                let mut out = Vec::new();
+
+                for (get, (k, v)) in gets.into_iter().zip(batches.iter().flat_map(|b| b.iter())) {
+                    match get {
+                        Ok(thing) => {
+                            out.push((k.clone(), thing, v.clone()));
+                        }
+                        Err(e) => {
+                            let _ = resp.send(Err(e));
+                            continue 'batch;
+                        }
                     }
                 }
 
-                match db.put(k, v) {
+                let mut writes = rocksdb::WriteBatch::default();
+
+                // SORT
+                let mut size = 1;
+                for (k, v) in batches.into_iter().flat_map(|b| b.into_iter()) {
+                    writes.put(k.as_slice(), v.as_slice());
+                    size += 1;
+                }
+                match db.write_opt(writes, &wo) {
                     Ok(()) => {}
                     Err(e) => {
                         let _ = resp.send(Err(e));
-                        continue;
+                        continue 'batch;
                     }
                 }
-                println!("done putting");
+                println!("finished writing batch size({size}) for worker {index}");
 
                 /*
                 match transaction.commit() {
@@ -718,25 +799,31 @@ impl IoThreadRocksDB {
                         continue;
                     }
                     }*/
-                let _ = resp.send(Ok(previous));
+                let _ = resp.send(Ok(out));
             }
         });
 
         Self { tx }
     }
 
-    async fn insert_inner(&mut self, key: Vec<u8>, value: Vec<u8>) -> Option<Vec<u8>> {
+    async fn insert_inner(
+        &mut self,
+        batches: Vec<Vec<(Vec<u8>, Vec<u8>)>>,
+    ) -> Vec<(Vec<u8>, Option<Vec<u8>>, Vec<u8>)> {
         let (tx, rx) = channel();
 
         // unwrap????
-        self.tx.send((key, value, tx)).unwrap();
+        self.tx.send((batches, tx)).unwrap();
         rx.await.unwrap().unwrap()
     }
 }
 
 #[async_trait::async_trait]
 impl Map for IoThreadRocksDB {
-    async fn insert(&mut self, key: Vec<u8>, value: Vec<u8>) -> Option<Vec<u8>> {
-        self.insert_inner(key, value).await
+    async fn insert(
+        &mut self,
+        batches: Vec<Vec<(Vec<u8>, Vec<u8>)>>,
+    ) -> Vec<(Vec<u8>, Option<Vec<u8>>, Vec<u8>)> {
+        self.insert_inner(batches).await
     }
 }
