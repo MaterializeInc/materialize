@@ -78,6 +78,7 @@
 //! Integration tests for Materialize server.
 
 use std::fmt::Write;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{iter, thread};
 
@@ -93,6 +94,7 @@ use tungstenite::error::ProtocolError;
 use tungstenite::{Error, Message};
 
 use mz_environmentd::WebSocketResponse;
+use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
 use mz_pgrepr::UInt8;
 use mz_sql::session::user::SYSTEM_USER;
@@ -674,25 +676,33 @@ fn test_storage_usage_collection_interval_timestamps() {
 }
 
 #[test]
-#[ignore] // Flaking often, tracked in #18108
 fn test_old_storage_usage_records_are_reaped_on_restart() {
     mz_ore::test::init_logging();
 
+    let now = Arc::new(Mutex::new(0));
+    let now_fn = {
+        let timestamp = Arc::clone(&now);
+        NowFn::from(move || *timestamp.lock().expect("lock poisoned"))
+    };
     let data_dir = tempfile::tempdir().unwrap();
     let collection_interval = Duration::from_secs(1);
     let retention_period = Duration::from_millis(1100);
     let config = util::Config::default()
+        .with_now(now_fn)
         .with_storage_usage_collection_interval(collection_interval)
         .with_storage_usage_retention_period(retention_period)
         .data_directory(data_dir.path());
 
-    {
+    let initial_timestamp = {
         let server = util::start_server(config.clone()).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
         // Create a table with no data, which should have some overhead and therefore some storage usage
         client
             .batch_execute("CREATE TABLE usage_test (a int)")
             .unwrap();
+
+        *now.lock().expect("lock poisoned") +=
+            u64::try_from(collection_interval.as_millis()).expect("known to fit") + 1;
 
         // Wait for initial storage usage collection, to be sure records are present.
         let initial_timestamp = Retry::default().max_duration(Duration::from_secs(5)).retry(|_| {
@@ -721,28 +731,37 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
             initial_server_usage_records >= 1,
             "No initial server usage records!"
         );
+
+        initial_timestamp
     };
 
-    // Wait, start a new server, and assert that the previous storage records have been reaped
-    std::thread::sleep(retention_period);
+    // Push time forward, start a new server, and assert that the previous storage records have been reaped
+    *now.lock().expect("lock poisoned") = u64::try_from(initial_timestamp)
+        .expect("negative timestamps are impossible")
+        + u64::try_from(retention_period.as_millis()).expect("known to fit")
+        + 1;
 
     {
         let server = util::start_server(config).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
-        let subsequent_server_usage_records = client
-            .query_one(
-                "SELECT COUNT(*)::integer AS number
-                     FROM mz_internal.mz_storage_usage_by_shard",
-                &[],
-            )
-            .unwrap()
-            .try_get::<_, i32>(0)
-            .expect("Could not get subsequent count of records");
+        *now.lock().expect("lock poisoned") +=
+            u64::try_from(collection_interval.as_millis()).expect("known to fit") + 1;
 
-        info!(%subsequent_server_usage_records);
-        assert_eq!(
-            subsequent_server_usage_records, 0,
+        let subsequent_initial_timestamp = Retry::default().max_duration(Duration::from_secs(5)).retry(|_| {
+            client
+                .query_one(
+                    "SELECT EXTRACT(EPOCH FROM MIN(collection_timestamp))::integer FROM mz_internal.mz_storage_usage_by_shard;",
+                    &[],
+                )
+                .map_err(|e| e.to_string()).unwrap()
+                .try_get::<_, i32>(0)
+                .map_err(|e| e.to_string())
+        }).expect("Could not fetch initial timestamp");
+
+        info!(%subsequent_initial_timestamp);
+        assert!(
+            subsequent_initial_timestamp > initial_timestamp,
             "Records were not reaped!"
         );
     };

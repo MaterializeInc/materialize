@@ -933,7 +933,7 @@ impl Connection {
         // is removed.
         let cutoff_ts = match retention_period {
             None => u128::MIN,
-            Some(period) => u128::from(self.boot_ts) - period.as_millis(),
+            Some(period) => u128::from(self.boot_ts).saturating_sub(period.as_millis()),
         };
         Ok(self
             .stash
