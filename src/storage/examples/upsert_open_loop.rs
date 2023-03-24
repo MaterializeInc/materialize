@@ -80,6 +80,35 @@
 //! ```
 //! $ cargo run --example upsert_open_loop -- --runtime 10sec
 //! ```
+//!
+//!
+//! Notes from @guswynn's testing, and remaining work before this
+//! benchmark can be trusted:
+//!
+//! - Reduce some extraneous clones.
+//! - Make the data-generator actually generate new values for previous keys (right now, all keys
+//! are unique)
+//! - Ensure that rocksb has read-your-writes, in-process, without "transactions" (docs are unclear here)
+//! - Limit the size of write batches (and possibly multi-gets, based on
+//!     <https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ#basic-readwrite>).
+//!     - Make it possible to configure the MemTable type (we probably want `Vector` for this
+//!     workload).
+//! - Ensure sst files are actually being written, from all workers.
+//! - Figure out why this workload has large numbers of empty batches (???)
+//! - Have at least a few people sign off on this being a reasonable benchmark.
+//!     - In debug mode on a laptop, it seems to sometimes be cpu-bound, not storage-bound.
+//! - Figure out if the code is broken, of its just macos that causes multi-second (sometimes 10+
+//! second) stalls.
+//! - Sort values before writing them.
+//! - Improve the metrics we write. Currently `lag` is very opaque.
+//!
+//! Additional notes:
+//! - Its unclear if the single-thread-per-rocksdb-instance model is performant, or considered a
+//! reasonable model.
+//! - Its unclear if fsync can be entirely turned off in rocksdb. If it can, we should turn that
+//! off
+//! - I think shutdown is a bit iffy right now, sometimes a pthread error can happen...
+//!
 
 #![allow(clippy::cast_precision_loss)]
 
@@ -113,6 +142,8 @@ use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as Asyn
 
 // TODO(aljoscha): Make workload configurable: cardinality of keyspace, hot vs. cold keys, the
 // works.
+//
+// Note that this module is currently unused.
 #[path = "upsert_open_loop/workload.rs"]
 mod workload;
 
@@ -159,6 +190,25 @@ pub struct Args {
 
     #[clap(flatten)]
     tracing: TracingCliArgs,
+
+    // RocksDB settings
+    /// Whether or not to use rocksdb. Defaults to using an in-memory hashmap.
+    #[clap(long)]
+    use_rocksdb: bool,
+
+    /// Whether or not to use the WAL in rocksdb.
+    #[clap(long)]
+    use_wal: bool,
+
+    /// Whether or not to cleanup the rocksdb instances
+    /// in the temporary directory.
+    #[clap(long)]
+    dont_cleanup_rocksdb: bool,
+    /*
+    /// Use rocksdb transactional db
+    #[clap(long)]
+    use_rocksb_transactions: bool,
+    */
 }
 
 fn main() {
@@ -174,7 +224,7 @@ fn main() {
 
     let _ = runtime
         .block_on(args.tracing.configure_tracing(StaticTracingConfig {
-            service_name: "persist-open-loop",
+            service_name: "upsert-open-loop",
             build_info: BUILD_INFO,
         }))
         .expect("failed to init tracing");
@@ -373,8 +423,14 @@ async fn run_benchmark(
 
     let rocks_dir = tempfile::tempdir().unwrap();
     let dir_path = rocks_dir.path().to_owned();
-    println!("At path: {}", dir_path.display());
-    std::mem::forget(rocks_dir);
+    info!(
+        "RocksDB instances will be hosted at: {}",
+        dir_path.display()
+    );
+
+    if args.dont_cleanup_rocksdb {
+        std::mem::forget(rocks_dir);
+    }
 
     let timely_config = timely::Config::process(num_workers);
     let timely_guards = timely::execute::execute(timely_config, move |timely_worker| {
@@ -391,8 +447,13 @@ async fn run_benchmark(
 
                 let source_stream = generator_source(scope, source_id, source_rxs);
 
-                let rocks = IoThreadRocksDB::new(&dir_path, scope.index());
-                let source_stream = upsert(scope, &source_stream, source_id, rocks);
+                let upsert_stream = upsert(
+                    scope,
+                    &source_stream,
+                    source_id,
+                    args.use_rocksdb
+                        .then(|| IoThreadRocksDB::new(&dir_path, scope.index(), args.use_wal)),
+                );
 
                 // Choose a different worker for the counting.
                 // TODO(aljoscha): Factor out into function.
@@ -402,7 +463,7 @@ async fn run_benchmark(
                     usize::cast_from((source_id + 1).hashed() % u64::cast_from(worker_count));
                 let active_worker = chosen_worker == worker_id;
 
-                let _output: Stream<_, ()> = source_stream.unary_frontier(
+                let _output: Stream<_, ()> = upsert_stream.unary_frontier(
                     Exchange::new(move |_| u64::cast_from(chosen_worker)),
                     &format!("source-{source_id}-counter"),
                     move |_caps, _info| {
@@ -418,10 +479,9 @@ async fn run_benchmark(
 
                             if input.frontier().is_empty() && active_worker {
                                 assert!(count == num_records_total);
-                                info!("final count for source {source_id}: {count}");
-
-                                println!(
-                                    "Processing {} finished after {} ms and processed {count} records",
+                                info!(
+                                    "Processing {} finished \
+                                    after {} ms and processed {count} records",
                                     source_id,
                                     start.elapsed().as_millis(),
                                 );
@@ -430,7 +490,7 @@ async fn run_benchmark(
                     },
                 );
 
-                source_streams.push(source_stream);
+                source_streams.push(upsert_stream);
             }
 
             let probe = Handle::default();
@@ -594,8 +654,24 @@ where
     output_stream
 }
 
-/// Upsert
-fn upsert<G, M: Map + 'static>(
+/// A representative upsert operator.
+fn upsert<G>(
+    scope: &G,
+    source_stream: &Stream<G, (Vec<u8>, Vec<u8>)>,
+    source_id: usize,
+    rocksdb: Option<IoThreadRocksDB>,
+) -> Stream<G, (Vec<u8>, Vec<u8>, i32)>
+where
+    G: Scope<Timestamp = u64>,
+{
+    if let Some(rocksdb) = rocksdb {
+        upsert_core(scope, source_stream, source_id, rocksdb)
+    } else {
+        upsert_core(scope, source_stream, source_id, BTreeMap::new())
+    }
+}
+
+fn upsert_core<G, M: Map + 'static>(
     scope: &G,
     source_stream: &Stream<G, (Vec<u8>, Vec<u8>)>,
     source_id: usize,
@@ -617,6 +693,7 @@ where
     upsert_op.build(move |capabilities| async move {
         drop(capabilities);
 
+        // Just use a basic nested-map like the old upsert implementation to buffer values by time.
         let mut pending_values: BTreeMap<u64, (_, BTreeMap<_, _>)> = BTreeMap::new();
 
         let mut frontier = Antichain::from_elem(0);
@@ -638,6 +715,9 @@ where
             }
             let mut removed_times = Vec::new();
 
+            // TODO(guswynn): All this code is pretty gross, but I couldn't figure out a better
+            // way to share `&mut Capability`s and also provide the `Map` implementations the
+            // largest batches possible.
             let mut batches = Vec::new();
             let mut caps = Vec::new();
             for (time, (cap, map)) in pending_values.iter_mut() {
@@ -651,9 +731,11 @@ where
                 removed_times.push(*time)
             }
 
+            // `caps` holds references to `Capability`s, and also the number of values
+            // in the mega-batches they correspond too.
             let mut cap_iter = caps.into_iter();
             let mut cur_cap = None;
-            for (k, old_value, v) in current_values.insert(batches).await {
+            for (k, v, previous_v) in current_values.ingest(batches).await {
                 let cap = match &mut cur_cap {
                     None => {
                         let stuff = cur_cap.insert(cap_iter.next().unwrap());
@@ -668,10 +750,10 @@ where
                         cap
                     }
                 };
-                if let Some(old_value) = old_value {
+                if let Some(previous_v) = previous_v {
                     // we might be able to avoid this extra key clone here,
                     // if we really tried
-                    output.give(*cap, (k.clone(), old_value, -1)).await;
+                    output.give(*cap, (k.clone(), previous_v, -1)).await;
                 }
                 // we don't do deletes right now
                 output.give(*cap, (k, v, 1)).await;
@@ -687,25 +769,32 @@ where
     source_stream
 }
 
+type KV = (Vec<u8>, Vec<u8>);
+type KVAndPrevious = (Vec<u8>, Vec<u8>, Option<Vec<u8>>);
+type Batch<T = KV> = Vec<T>;
+
+/// A "map" we can ingest data into.
 #[async_trait::async_trait]
 trait Map {
-    async fn insert(
-        &mut self,
-        batches: Vec<Vec<(Vec<u8>, Vec<u8>)>>,
-    ) -> Vec<(Vec<u8>, Option<Vec<u8>>, Vec<u8>)>;
+    /// Ingest the batches of `KV`s. Return the `KV`s back in a single
+    /// allocation, along with that key's previous value, if it existed.
+    ///
+    /// The input and output use different nesting schemes
+    /// (nested batches vs flat) to reduce additional allocations in
+    /// the `upsert` operator.
+    async fn ingest(&mut self, batches: Vec<Batch>) -> Batch<KVAndPrevious>;
 }
 
 #[async_trait::async_trait]
 impl Map for BTreeMap<Vec<u8>, Vec<u8>> {
-    async fn insert(
-        &mut self,
-        batches: Vec<Vec<(Vec<u8>, Vec<u8>)>>,
-    ) -> Vec<(Vec<u8>, Option<Vec<u8>>, Vec<u8>)> {
+    async fn ingest(&mut self, batches: Vec<Batch>) -> Batch<KVAndPrevious> {
         let mut out = Vec::new();
         for batch in batches {
             for (k, v) in batch {
+                // TODO(guswynn): reduce clones.
                 let in_k = k.clone();
-                out.push((k, self.insert(in_k, v.clone()), v))
+                let in_v = v.clone();
+                out.push((k, v, self.insert(in_k, in_v)))
             }
         }
         out
@@ -718,40 +807,28 @@ use tokio::sync::oneshot::{channel, Sender};
 
 #[derive(Clone)]
 struct IoThreadRocksDB {
-    tx: crossbeam_channel::Sender<(
-        Vec<Vec<(Vec<u8>, Vec<u8>)>>,
-        Sender<Result<Vec<(Vec<u8>, Option<Vec<u8>>, Vec<u8>)>, Error>>,
-    )>,
+    tx: crossbeam_channel::Sender<(Vec<Batch>, Sender<Result<Batch<KVAndPrevious>, Error>>)>,
 }
 
 impl IoThreadRocksDB {
-    fn new(temp_dir: &Path, index: usize) -> Self {
+    fn new(temp_dir: &Path, index: usize, use_wal: bool) -> Self {
         // bounded??
         let (tx, rx): (
             _,
-            crossbeam_channel::Receiver<(
-                Vec<Vec<(Vec<u8>, Vec<u8>)>>,
-                Sender<Result<Vec<(Vec<u8>, Option<Vec<u8>>, Vec<u8>)>, Error>>,
-            )>,
+            crossbeam_channel::Receiver<(Vec<Batch>, Sender<Result<Batch<KVAndPrevious>, Error>>)>,
         ) = crossbeam_channel::unbounded();
         let db: DB = DB::open_default(temp_dir.join(index.to_string())).unwrap();
         std::thread::spawn(move || {
             let mut wo = rocksdb::WriteOptions::new();
-            wo.disable_wal(false);
+            wo.disable_wal(!use_wal);
 
             'batch: while let Ok((batches, resp)) = rx.recv() {
-                let mut size = 0;
-                for _ in batches.iter().flat_map(|b| b.iter()) {
-                    size += 1;
-                }
+                let size: usize = batches.iter().map(|b| b.len()).sum();
 
+                // TODO(guswynn): this should probably be lifted into the upsert operator.
                 if size == 0 {
                     let _ = resp.send(Ok(Vec::new()));
                     continue;
-                }
-
-                if size == 1 {
-                    dbg!(&batches);
                 }
 
                 let gets = db.multi_get(
@@ -760,70 +837,55 @@ impl IoThreadRocksDB {
                         .flat_map(|b| b.iter().map(|(k, _)| k.as_slice())),
                 );
 
-                let mut out = Vec::new();
+                let mut previous = Vec::new();
+                let mut writes = rocksdb::WriteBatch::default();
 
-                for (get, (k, v)) in gets.into_iter().zip(batches.iter().flat_map(|b| b.iter())) {
+                // TODO(guswynn): sort by key before writing.
+                for ((k, v), get) in batches.into_iter().flat_map(|b| b.into_iter()).zip(gets) {
+                    writes.put(k.as_slice(), v.as_slice());
+
                     match get {
-                        Ok(thing) => {
-                            out.push((k.clone(), thing, v.clone()));
+                        Ok(prev) => {
+                            previous.push((k, v, prev));
                         }
                         Err(e) => {
+                            // Give up on the batch on errors.
                             let _ = resp.send(Err(e));
                             continue 'batch;
                         }
                     }
                 }
-
-                let mut writes = rocksdb::WriteBatch::default();
-
-                // SORT
-                let mut size = 1;
-                for (k, v) in batches.into_iter().flat_map(|b| b.into_iter()) {
-                    writes.put(k.as_slice(), v.as_slice());
-                    size += 1;
-                }
                 match db.write_opt(writes, &wo) {
                     Ok(()) => {}
                     Err(e) => {
+                        // Give up on the batch on errors.
                         let _ = resp.send(Err(e));
                         continue 'batch;
                     }
                 }
-                println!("finished writing batch size({size}) for worker {index}");
+                info!("finished writing batch size({size}) for worker {index}");
 
-                /*
-                match transaction.commit() {
-                    Ok(()) => {}
-                    Err(e) => {
-                        let _ = resp.send(Err(e));
-                        continue;
-                    }
-                    }*/
-                let _ = resp.send(Ok(out));
+                let _ = resp.send(Ok(previous));
             }
         });
 
         Self { tx }
     }
 
-    async fn insert_inner(
-        &mut self,
-        batches: Vec<Vec<(Vec<u8>, Vec<u8>)>>,
-    ) -> Vec<(Vec<u8>, Option<Vec<u8>>, Vec<u8>)> {
+    async fn ingest_inner(&mut self, batches: Vec<Batch>) -> Batch<KVAndPrevious> {
         let (tx, rx) = channel();
 
-        // unwrap????
+        // We assume the rocksdb thread doesnt shutdown before timely
         self.tx.send((batches, tx)).unwrap();
+
+        // We also unwrap all rocksdb errors here.
         rx.await.unwrap().unwrap()
     }
 }
 
 #[async_trait::async_trait]
 impl Map for IoThreadRocksDB {
-    async fn insert(
-        &mut self,
-        batches: Vec<Vec<(Vec<u8>, Vec<u8>)>>,
-    ) -> Vec<(Vec<u8>, Option<Vec<u8>>, Vec<u8>)> {
-        self.insert_inner(batches).await
+    async fn ingest(&mut self, batches: Vec<Batch>) -> Batch<KVAndPrevious> {
+        self.ingest_inner(batches).await
     }
 }
