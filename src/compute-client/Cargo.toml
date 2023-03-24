@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.66"
 async-stream = "0.3.3"
-async-trait = "0.1.59"
+async-trait = "0.1.66"
 bytesize = "1.1.0"
 columnation = { git = "https://github.com/frankmcsherry/columnation" }
 chrono = { version = "0.4.23", default-features = false, features = ["std"] }

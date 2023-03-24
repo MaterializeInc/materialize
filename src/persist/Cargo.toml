@@ -21,7 +21,7 @@ bench = false
 [dependencies]
 anyhow = { version = "1.0.66", features = ["backtrace"] }
 arrow2 = { version = "0.16.0", features = ["io_ipc", "io_parquet"] }
-async-trait = "0.1.59"
+async-trait = "0.1.66"
 aws-config = { version = "0.53.0", default-features = false, features = ["native-tls"] }
 aws-credential-types = { version = "0.53.0", features = ["hardcoded-credentials"] }
 aws-sdk-s3 = { version = "0.23.0", default-features = false, features = ["native-tls", "rt-tokio"]  }
