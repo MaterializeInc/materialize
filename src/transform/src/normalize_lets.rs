@@ -438,29 +438,38 @@ mod inlining {
 
     use mz_expr::{Id, LocalId, MirRelationExpr};
 
-    /// Considers inlining actions to perform for a sequence of bindings and a following body.
+    /// Considers inlining actions to perform for a sequence of bindings and a
+    /// following body.
     ///
-    /// A let binding may be inlined only in subsequent bindings or in the body; other bindings should
-    /// not "immediately" observe the binding, and it would be a change to the semantics of `LetRec`.
-    /// For example, it would not be correct to replace `C` with `A` in the definition of `B` here:
+    /// A let binding may be inlined only in subsequent bindings or in the body;
+    /// other bindings should not "immediately" observe the binding, and it
+    /// would be a change to the semantics of `LetRec`. For example, it would
+    /// not be correct to replace `C` with `A` in the definition of `B` here:
     /// ```ignore
     /// let A = ...;
     /// let B = A - C;
     /// let C = a;
     ///```
-    /// The explanation is that `B` should always be the difference between the current and previous `A`,
-    /// and that the substitution of `C` would instead make it always zero, changing its definition.
+    /// The explanation is that `B` should always be the difference between the
+    /// current and previous `A`, and that the substitution of `C` would instead
+    /// make it always zero, changing its definition.
     ///
     /// Here a let binding is proposed for inlining if any of the following:
     ///  1. It has a single reference across all bindings and the body.
-    ///  2. It is a "sufficient simple" `Get`, determined in part by the `inline_mfp` argument.
-    /// The case of `Constant` binding could also apply, but is better handled by `FoldConstants`. Although
-    /// a bit weird, constants should also not be inlined into prior bindings as this does change the behavior
-    /// from one where the collection is initially empty to one where it is always the constant.
+    ///  2. It is a "sufficient simple" `Get`, determined in part by the
+    ///     `inline_mfp` argument.
     ///
-    /// Having inlined bindings, many of them may now be dead (with no transitive references from `body`).
-    /// These can now be removed. They may not be exactly those bindings that were inlineable, as we may not always
-    /// be able to apply inlining due to ordering (we cannot inline a binding into one that is not strictly later).
+    /// The case of `Constant` binding is handled here (as opposed to
+    /// `FoldConstants`) in a somewhat limited manner (see #18180). Although a
+    /// bit weird, constants should also not be inlined into prior bindings as
+    /// this does change the behavior from one where the collection is initially
+    /// empty to one where it is always the constant.
+    ///
+    /// Having inlined bindings, many of them may now be dead (with no
+    /// transitive references from `body`). These can now be removed. They may
+    /// not be exactly those bindings that were inlineable, as we may not always
+    /// be able to apply inlining due to ordering (we cannot inline a binding
+    /// into one that is not strictly later).
     pub(super) fn inline_lets(
         expr: &mut MirRelationExpr,
         inline_mfp: bool,
