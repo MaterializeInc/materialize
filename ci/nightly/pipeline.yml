@@ -585,10 +585,8 @@ steps:
           composition: sqlsmith
           args: [--max-joins=15, --explain-only, --runtime=3300]
 
-  # TODO(def-) Reenable when figured out why no queries run
   - id: sqlancer-pqs
     label: "SQLancer PQS"
-    skip: true
     artifact_paths: junit_*.xml
     timeout_in_minutes: 58
     agents:
@@ -620,10 +618,8 @@ steps:
           composition: sqlancer
           args: [--runtime=3300, --oracle=QUERY_PARTITIONING]
 
-  # TODO(def-) Reenable when I have a SQLancer workaround for #18346
   - id: sqlancer-having
     label: "SQLancer Having"
-    skip: true
     artifact_paths: junit_*.xml
     timeout_in_minutes: 58
     agents:
