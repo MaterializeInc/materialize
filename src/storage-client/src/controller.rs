@@ -509,9 +509,9 @@ where
 }
 
 impl ReadPolicy<mz_repr::Timestamp> {
-    /// Creates a read policy that lags the write frontier by the indicated amount, rounded down to the specified value.
+    /// Creates a read policy that lags the write frontier by the indicated amount, rounded down to (at most) the specified value.
     /// The rounding down is done to reduce the number of changes the capability undergoes.
-    pub fn lag_writes_by(lag: mz_repr::Timestamp, granularity: mz_repr::Timestamp) -> Self {
+    pub fn lag_writes_by(lag: mz_repr::Timestamp, max_granularity: mz_repr::Timestamp) -> Self {
         Self::LagWriteFrontier(Arc::new(move |upper| {
             if upper.is_empty() {
                 Antichain::from_elem(Timestamp::minimum())
@@ -520,9 +520,10 @@ impl ReadPolicy<mz_repr::Timestamp> {
                 let mut time = upper[0];
                 if lag != mz_repr::Timestamp::default() {
                     time = time.saturating_sub(lag);
-                    if granularity != mz_repr::Timestamp::default() {
-                        time = time.saturating_sub(time % granularity);
-                    }
+                    // It makes little sense to refuse to compact if the user genuinely
+                    // sets a smaller compaction window than the default, so honor it here.
+                    let granularity = std::cmp::min(lag, max_granularity);
+                    time = time.saturating_sub(time % granularity);
                 }
                 Antichain::from_elem(time)
             }
