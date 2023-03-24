@@ -12,6 +12,7 @@ from pg8000.exceptions import InterfaceError
 
 from materialize.cloudtest.application import MaterializeApplication
 from materialize.cloudtest.exists import exists, not_exists
+from materialize.cloudtest.k8s import cluster_pod_name, cluster_service_name
 from materialize.cloudtest.wait import wait
 
 
@@ -33,7 +34,7 @@ def test_cluster_sizing(mz: MaterializeApplication) -> None:
     assert replica_id is not None
 
     for compute_id in range(0, SIZE):
-        compute_pod = f"pod/cluster-{cluster_id}-replica-{replica_id}-{compute_id}"
+        compute_pod = cluster_pod_name(cluster_id, replica_id, compute_id)
         wait(condition="condition=Ready", resource=compute_pod)
 
     mz.environmentd.sql("DROP CLUSTER sized1 CASCADE")
@@ -77,11 +78,11 @@ def test_cluster_shutdown(mz: MaterializeApplication, failpoint: str) -> None:
         )[0][0]
         assert replica_id is not None
 
-        compute_pod = f"pod/cluster-{cluster_id}-replica-{replica_id}-0"
+        compute_pod = cluster_pod_name(cluster_id, replica_id)
         compute_pods[replica_name] = compute_pod
         wait(condition="condition=Ready", resource=compute_pod)
 
-        compute_svc = f"service/cluster-{cluster_id}-replica-{replica_id}"
+        compute_svc = cluster_service_name(cluster_id, replica_id)
         compute_svcs[replica_name] = compute_svc
         exists(resource=compute_svc)
 

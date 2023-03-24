@@ -14,6 +14,7 @@ from kubernetes.client import V1Pod, V1StatefulSet
 from pg8000.exceptions import InterfaceError
 
 from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.k8s import cluster_pod_name
 from materialize.cloudtest.wait import wait
 
 
@@ -88,7 +89,7 @@ def test_crash_storage(mz: MaterializeApplication) -> None:
     [cluster_id, replica_id] = mz.environmentd.sql_query(
         f"SELECT s.cluster_id, r.id FROM mz_sources s JOIN mz_cluster_replicas r ON r.cluster_id = s.cluster_id WHERE s.name = 's1'"
     )[0]
-    pod_name = f"pod/cluster-{cluster_id}-replica-{replica_id}-0"
+    pod_name = cluster_pod_name(cluster_id, replica_id)
 
     wait(condition="jsonpath={.status.phase}=Running", resource=pod_name)
     mz.kubectl("exec", pod_name, "--", "bash", "-c", "kill -9 `pidof clusterd` || true")
