@@ -196,7 +196,7 @@ class Composition:
                 # binaries.
                 config.setdefault("volumes", []).append(coverage_volume)
                 config.setdefault("environment", []).append(
-                    f"LLVM_PROFILE_FILE=/coverage/{name}-%p-%9m.profraw"
+                    f"LLVM_PROFILE_FILE=/coverage/{name}-%p-%9m%c.profraw"
                 )
 
         # Determine mzbuild specs and inject them into services accordingly.
