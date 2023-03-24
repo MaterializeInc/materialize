@@ -934,11 +934,12 @@ impl ProtoStateFieldDiffsWriter {
 
 impl ProtoStateFieldDiffs {
     pub fn into_writer(mut self) -> ProtoStateFieldDiffsWriter {
-        let mut data_buf = BytesMut::new();
+        // Create a new buffer which we'll encode data into.
+        let mut data_buf = BytesMut::with_capacity(self.data_bytes.len());
 
-        // Take our existing data, and copy it into our buffer
+        // Take our existing data, and copy it into our buffer.
         let existing_data = std::mem::take(&mut self.data_bytes);
-        data_buf.copy_from_slice(&existing_data[..]);
+        data_buf.extend(existing_data);
 
         ProtoStateFieldDiffsWriter {
             data_buf,
