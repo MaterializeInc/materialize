@@ -2527,3 +2527,126 @@ fn test_timelines_persist_after_failed_transaction() {
     // Dropping the source should also work now.
     client.batch_execute("DROP SOURCE counter").unwrap();
 }
+
+// This can almost be tested with SLT using the simple directive, but
+// we have no way to disconnect sessions using SLT.
+#[test]
+fn test_mz_sessions() {
+    let config = util::Config::default().unsafe_mode();
+    let server = util::start_server(config).unwrap();
+
+    let mut foo_client = server
+        .pg_config()
+        .user("foo")
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    // Active session appears in mz_sessions.
+
+    assert_eq!(
+        foo_client
+            .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
+            .unwrap()
+            .get::<_, i64>(0),
+        1,
+    );
+    let foo_session_row = foo_client
+        .query_one("SELECT id::int8, role_id FROM mz_internal.mz_sessions", &[])
+        .unwrap();
+    let foo_conn_id = foo_session_row.get::<_, i64>("id");
+    let foo_role_id = foo_session_row.get::<_, String>("role_id");
+    assert_eq!(
+        foo_client
+            .query_one("SELECT name FROM mz_roles WHERE id = $1", &[&foo_role_id])
+            .unwrap()
+            .get::<_, String>(0),
+        "foo",
+    );
+
+    // Concurrent session appears in mz_sessions and is removed from mz_sessions.
+    {
+        let _bar_client = server
+            .pg_config()
+            .user("bar")
+            .connect(postgres::NoTls)
+            .unwrap();
+        assert_eq!(
+            foo_client
+                .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
+                .unwrap()
+                .get::<_, i64>(0),
+            2,
+        );
+        let bar_session_row = foo_client
+            .query_one(
+                &format!("SELECT role_id FROM mz_internal.mz_sessions WHERE id <> {foo_conn_id}"),
+                &[],
+            )
+            .unwrap();
+        let bar_role_id = bar_session_row.get::<_, String>("role_id");
+        assert_eq!(
+            foo_client
+                .query_one("SELECT name FROM mz_roles WHERE id = $1", &[&bar_role_id])
+                .unwrap()
+                .get::<_, String>(0),
+            "bar",
+        );
+    }
+
+    assert_eq!(
+        foo_client
+            .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
+            .unwrap()
+            .get::<_, i64>(0),
+        1,
+    );
+    assert_eq!(
+        foo_client
+            .query_one("SELECT id::int8 FROM mz_internal.mz_sessions", &[])
+            .unwrap()
+            .get::<_, i64>("id"),
+        foo_conn_id,
+    );
+
+    // Concurrent session, with the same name as active session,
+    // appears in mz_sessions and is removed from mz_sessions.
+    {
+        let _other_foo_client = server
+            .pg_config()
+            .user("foo")
+            .connect(postgres::NoTls)
+            .unwrap();
+        assert_eq!(
+            foo_client
+                .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
+                .unwrap()
+                .get::<_, i64>(0),
+            2,
+        );
+        let other_foo_session_row = foo_client
+            .query_one(
+                &format!("SELECT id::int8, role_id FROM mz_internal.mz_sessions WHERE id <> {foo_conn_id}"),
+                &[],
+            )
+            .unwrap();
+        let other_foo_conn_id = other_foo_session_row.get::<_, i64>("id");
+        let other_foo_role_id = other_foo_session_row.get::<_, String>("role_id");
+        assert_ne!(foo_conn_id, other_foo_conn_id);
+        assert_eq!(foo_role_id, other_foo_role_id);
+    }
+
+    assert_eq!(
+        foo_client
+            .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
+            .unwrap()
+            .get::<_, i64>(0),
+        1,
+    );
+    assert_eq!(
+        foo_client
+            .query_one("SELECT id::int8 FROM mz_internal.mz_sessions", &[])
+            .unwrap()
+            .get::<_, i64>("id"),
+        foo_conn_id,
+    );
+}

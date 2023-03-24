@@ -41,13 +41,14 @@ use crate::catalog::builtin::{
     MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS,
     MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS,
     MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS,
-    MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS,
-    MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_SESSIONS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connection, DataSourceDesc, Database, Error, ErrorKind, Func, Index,
     MaterializedView, Sink, StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
+use crate::client::ConnectionId;
 use crate::subscribe::ActiveSubscribe;
 
 use super::AwsPrincipalContext;
@@ -1159,6 +1160,19 @@ impl CatalogState {
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SUBSCRIPTIONS),
             row,
+            diff,
+        }
+    }
+
+    pub fn pack_session_update(
+        &self,
+        id: ConnectionId,
+        role_id: RoleId,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_SESSIONS),
+            row: Row::pack_slice(&[Datum::UInt32(id), Datum::String(&role_id.to_string())]),
             diff,
         }
     }
