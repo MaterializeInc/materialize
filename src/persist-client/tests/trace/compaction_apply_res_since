@@ -35,7 +35,6 @@ take-merge-reqs
 ----
 [0][2][0] k0 k1
 [0][4][4] k0 k1 k2 k3
-[2][4][0] k2 k3
 
 # We cannot use a compaction response with a since in advance of the spine batch
 apply-merge-res
