@@ -294,7 +294,7 @@ The `mz_sessions` table contains a row for each active session in the system.
 Field     | Type      | Meaning
 ----------|-----------|--------
 `id`      | [`uint4`] | The ID of the session.
-`role_id` | [`text`]  | The role ID of the role that the session is loggen in as. Corresponds to [`mz_catalog.mz_roles`](../mz_catalog#mz_roles).
+`role_id` | [`text`]  | The role ID of the role that the session is logged in as. Corresponds to [`mz_catalog.mz_roles`](../mz_catalog#mz_roles).
 
 ### `mz_subscriptions`
 
