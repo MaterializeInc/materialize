@@ -1943,6 +1943,18 @@ pub trait Var: fmt::Debug {
     }
 }
 
+pub trait VarMut: Var {
+    /// Upcast to Var, for use with `dyn`.
+    fn as_var(&self) -> &dyn Var;
+
+    /// Return whether or not `input` is equal to this var's default value,
+    /// if there is one.
+    fn is_default(&self, input: VarInput) -> Result<bool, VarError>;
+
+    fn set(&mut self, input: VarInput) -> Result<bool, VarError>;
+    fn reset(&mut self) -> bool;
+}
+
 /// A `ServerVar` is the default value for a configuration parameter.
 #[derive(Debug)]
 pub struct ServerVar<V>
@@ -2009,41 +2021,11 @@ where
         }
     }
 
-    fn set(&mut self, input: VarInput) -> Result<bool, VarError> {
-        match V::parse(input) {
-            Ok(v) => {
-                if self.persisted_value.as_ref() != Some(&v) {
-                    self.persisted_value = Some(v);
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
-            }
-            Err(()) => Err(VarError::InvalidParameterType(self.parent)),
-        }
-    }
-
-    fn reset(&mut self) -> bool {
-        if self.persisted_value.as_ref() != None {
-            self.persisted_value = None;
-            true
-        } else {
-            false
-        }
-    }
-
     fn value(&self) -> &V {
         self.persisted_value
             .as_ref()
             .map(|v| v.borrow())
             .unwrap_or(self.parent.value)
-    }
-
-    fn is_default(&self, input: VarInput) -> Result<bool, VarError> {
-        match V::parse(input) {
-            Ok(v) => Ok(self.parent.value == v.borrow()),
-            Err(()) => Err(VarError::InvalidParameterType(self.parent)),
-        }
     }
 }
 
@@ -2074,6 +2056,46 @@ where
 
     fn safe(&self) -> bool {
         self.parent.safe()
+    }
+}
+
+impl<V> VarMut for SystemVar<V>
+where
+    V: Value + ToOwned + fmt::Debug + PartialEq + Eq + ?Sized + 'static,
+    V::Owned: fmt::Debug + PartialEq + Eq + PartialEq + Eq,
+{
+    fn as_var(&self) -> &dyn Var {
+        self
+    }
+
+    fn is_default(&self, input: VarInput) -> Result<bool, VarError> {
+        match V::parse(input) {
+            Ok(v) => Ok(self.parent.value == v.borrow()),
+            Err(()) => Err(VarError::InvalidParameterType(self.parent)),
+        }
+    }
+
+    fn set(&mut self, input: VarInput) -> Result<bool, VarError> {
+        match V::parse(input) {
+            Ok(v) => {
+                if self.persisted_value.as_ref() != Some(&v) {
+                    self.persisted_value = Some(v);
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            }
+            Err(()) => Err(VarError::InvalidParameterType(self.parent)),
+        }
+    }
+
+    fn reset(&mut self) -> bool {
+        if self.persisted_value.as_ref() != None {
+            self.persisted_value = None;
+            true
+        } else {
+            false
+        }
     }
 }
 
