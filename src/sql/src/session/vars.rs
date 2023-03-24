@@ -9,6 +9,7 @@
 
 use std::any::Any;
 use std::borrow::Borrow;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::Debug;
 use std::time::Duration;
@@ -1272,13 +1273,13 @@ impl SessionVars {
 /// See [`SessionVars`] for more details on the Materialize configuration model.
 #[derive(Debug)]
 pub struct SystemVars {
-    vars: Vec<Box<dyn VarMut>>,
+    vars: BTreeMap<&'static UncasedStr, Box<dyn VarMut>>,
 }
 
 impl Clone for SystemVars {
     fn clone(&self) -> Self {
         SystemVars {
-            vars: self.vars.iter().map(|v| v.clone_var()).collect(),
+            vars: self.vars.iter().map(|(k, v)| (*k, v.clone_var())).collect(),
         }
     }
 }
@@ -1331,7 +1332,7 @@ impl SystemVars {
         V: Value + Debug + Eq + Clone + 'static,
         V::Owned: Debug + Eq + Send + Clone + Sync,
     {
-        self.vars.push(Box::new(SystemVar::new(var)));
+        self.vars.insert(var.name, Box::new(SystemVar::new(var)));
         self
     }
 
@@ -1342,8 +1343,7 @@ impl SystemVars {
     {
         let var = self
             .vars
-            .iter()
-            .find(|v| v.name() == var.name)
+            .get(var.name)
             .expect("provided var should be in state");
 
         var.value_any()
@@ -1354,7 +1354,7 @@ impl SystemVars {
     /// Returns an iterator over the configuration parameters and their current
     /// values on disk.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        self.vars.iter().map(|v| v.as_var())
+        self.vars.values().map(|v| v.as_var())
     }
 
     /// Returns an iterator over the configuration parameters and their current
@@ -1382,8 +1382,7 @@ impl SystemVars {
     /// 1. If `name` does not refer to a valid [`SystemVars`] field.
     pub fn get(&self, name: &str) -> Result<&dyn Var, VarError> {
         self.vars
-            .iter()
-            .find(|v| v.name() == name)
+            .get(UncasedStr::new(name))
             .map(|v| v.as_var())
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
     }
@@ -1399,8 +1398,7 @@ impl SystemVars {
     ///    `name`.
     pub fn is_default(&self, name: &str, input: VarInput) -> Result<bool, VarError> {
         self.vars
-            .iter()
-            .find(|v| v.name() == name)
+            .get(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .and_then(|v| v.is_default(input))
     }
@@ -1425,8 +1423,7 @@ impl SystemVars {
     ///    `name`.
     pub fn set(&mut self, name: &str, input: VarInput) -> Result<bool, VarError> {
         self.vars
-            .iter_mut()
-            .find(|v| v.name() == name)
+            .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .and_then(|v| v.set(input))
     }
@@ -1446,8 +1443,7 @@ impl SystemVars {
     /// 1. If `name` does not refer to a valid [`SystemVars`] field.
     pub fn reset(&mut self, name: &str) -> Result<bool, VarError> {
         self.vars
-            .iter_mut()
-            .find(|v| v.name() == name)
+            .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .map(|v| v.reset())
     }
@@ -1603,8 +1599,7 @@ impl SystemVars {
     /// Sets the `enable_with_mutually_recursive` configuration parameter.
     pub fn set_enable_with_mutually_recursive(&mut self, value: bool) -> bool {
         self.vars
-            .iter_mut()
-            .find(|v| v.name() == ENABLE_WITH_MUTUALLY_RECURSIVE.name)
+            .get_mut(ENABLE_WITH_MUTUALLY_RECURSIVE.name)
             .expect("var known to exist")
             .set(VarInput::Flat(value.format().as_str()))
             .expect("valid parameter value")
