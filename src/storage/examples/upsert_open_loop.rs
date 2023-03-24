@@ -371,10 +371,15 @@ async fn run_benchmark(
 
     let source_rxs = Arc::new(Mutex::new(source_rxs));
 
+    let rocks_dir = tempfile::tempdir().unwrap();
+    println!("At path: {}", rocks_dir.path().display());
+
     let timely_config = timely::Config::process(num_workers);
     let timely_guards = timely::execute::execute(timely_config, move |timely_worker| {
         let progress_tx = Arc::clone(&progress_tx);
         let source_rxs = Arc::clone(&source_rxs);
+
+        let dir_path = rocks_dir.path().to_owned();
 
         let probe = timely_worker.dataflow::<u64, _, _>(move |scope| {
             let mut source_streams = Vec::new();
@@ -383,7 +388,9 @@ async fn run_benchmark(
                 let source_rxs = Arc::clone(&source_rxs);
 
                 let source_stream = generator_source(scope, source_id, source_rxs);
-                let source_stream = upsert(scope, &source_stream, source_id);
+
+                let rocks = IoThreadRocksDB::new(&dir_path, scope.index());
+                let source_stream = upsert(scope, &source_stream, source_id, rocks);
 
                 // Choose a different worker for the counting.
                 // TODO(aljoscha): Factor out into function.
@@ -580,10 +587,11 @@ where
 }
 
 /// Upsert
-fn upsert<G>(
+fn upsert<G, M: Map + 'static>(
     scope: &G,
     source_stream: &Stream<G, (Vec<u8>, Vec<u8>)>,
     source_id: usize,
+    mut current_values: M,
 ) -> Stream<G, (Vec<u8>, Vec<u8>, i32)>
 where
     G: Scope<Timestamp = u64>,
@@ -602,7 +610,6 @@ where
         drop(capabilities);
 
         let mut pending_values: BTreeMap<u64, (_, BTreeMap<_, _>)> = BTreeMap::new();
-        let mut current_values: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
 
         let mut frontier = Antichain::from_elem(0);
         while let Some(event) = input.next_mut().await {
@@ -629,7 +636,7 @@ where
                 // UPSERT
 
                 for (k, v) in std::mem::take(map).into_iter() {
-                    let old_value = current_values.insert(k.clone(), v.clone());
+                    let old_value = current_values.insert(k.clone(), v.clone()).await;
 
                     if let Some(old_value) = old_value {
                         // we might be able to avoid this extra key clone here,
@@ -651,4 +658,85 @@ where
     });
 
     source_stream
+}
+
+#[async_trait::async_trait]
+trait Map {
+    async fn insert(&mut self, key: Vec<u8>, value: Vec<u8>) -> Option<Vec<u8>>;
+}
+
+#[async_trait::async_trait]
+impl Map for BTreeMap<Vec<u8>, Vec<u8>> {
+    async fn insert(&mut self, key: Vec<u8>, value: Vec<u8>) -> Option<Vec<u8>> {
+        self.insert(key, value)
+    }
+}
+
+use rocksdb::{Error, Options, SingleThreaded, TransactionDB, DB};
+use std::path::Path;
+use tokio::sync::oneshot::{channel, Receiver, Sender};
+
+#[derive(Clone)]
+struct IoThreadRocksDB {
+    tx: crossbeam_channel::Sender<(Vec<u8>, Vec<u8>, Sender<Result<Option<Vec<u8>>, Error>>)>,
+}
+
+impl IoThreadRocksDB {
+    fn new(temp_dir: &Path, index: usize) -> Self {
+        // bounded??
+        let (tx, mut rx): (
+            _,
+            crossbeam_channel::Receiver<(Vec<u8>, Vec<u8>, Sender<Result<Option<Vec<u8>>, Error>>)>,
+        ) = crossbeam_channel::unbounded();
+        let db: DB = DB::open_default(temp_dir.join(index.to_string())).unwrap();
+        std::thread::spawn(move || {
+            while let Ok((k, v, resp)) = rx.recv() {
+                let mut previous: Option<Vec<u8>> = None;
+
+                match db.get(k.as_slice()) {
+                    Ok(p) => previous = p,
+                    Err(e) => {
+                        let _ = resp.send(Err(e));
+                        continue;
+                    }
+                }
+
+                match db.put(k, v) {
+                    Ok(()) => {}
+                    Err(e) => {
+                        let _ = resp.send(Err(e));
+                        continue;
+                    }
+                }
+                println!("done putting");
+
+                /*
+                match transaction.commit() {
+                    Ok(()) => {}
+                    Err(e) => {
+                        let _ = resp.send(Err(e));
+                        continue;
+                    }
+                    }*/
+                let _ = resp.send(Ok(previous));
+            }
+        });
+
+        Self { tx }
+    }
+
+    async fn insert_inner(&mut self, key: Vec<u8>, value: Vec<u8>) -> Option<Vec<u8>> {
+        let (tx, rx) = channel();
+
+        // unwrap????
+        self.tx.send((key, value, tx)).unwrap();
+        rx.await.unwrap().unwrap()
+    }
+}
+
+#[async_trait::async_trait]
+impl Map for IoThreadRocksDB {
+    async fn insert(&mut self, key: Vec<u8>, value: Vec<u8>) -> Option<Vec<u8>> {
+        self.insert_inner(key, value).await
+    }
 }
