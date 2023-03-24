@@ -13,7 +13,7 @@ mz-ore = { path = "../ore", features = ["async"] }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-ssh-util = { path = "../ssh-util" }
-openssl = { version = "0.10.43", features = ["vendored"] }
+openssl = { version = "0.10.48", features = ["vendored"] }
 openssh = "0.9.8"
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
