@@ -1316,6 +1316,10 @@ fn test_utilization_hold() {
         .expect("The since must be finite");
     let past_since = Timestamp::from(past_millis);
     assert!(since.less_equal(&past_since));
+    // Assert we aren't lagging by more than 30 days + 1 second.
+    // If we ever make the since granularity configurable, this line will
+    // need to be changed.
+    assert!(past_since.less_equal(&since.checked_add(1000).unwrap()));
 
     // Check that we can turn off retention
     let mut sys_client = server
