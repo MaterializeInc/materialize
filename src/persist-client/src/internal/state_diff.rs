@@ -538,7 +538,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
     if let Some(insert) = sniff_insert(&mut diffs, trace.upper()) {
         // Ignore merge_reqs because whichever process generated this diff is
         // assigned the work.
-        let _merge_reqs = trace.push_batch(insert);
+        let () = trace.push_batch_no_merge_reqs(insert);
         // If this insert was the only thing in diffs, then return now instead
         // of falling through to the "no diffs" case in the match so we can inc
         // the apply_spine_fast_path metric.
@@ -569,7 +569,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
             {
                 // Ignore merge_reqs because whichever process generated this diff is
                 // assigned the work.
-                let _merge_reqs = trace.push_batch(HollowBatch {
+                let () = trace.push_batch_no_merge_reqs(HollowBatch {
                     desc: Description::new(
                         del.desc.upper().clone(),
                         ins.desc.upper().clone(),
@@ -621,7 +621,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
                 for batch in batches {
                     // Ignore merge_reqs because whichever process generated
                     // this diff is assigned the work.
-                    let _merge_reqs = new_trace.push_batch(batch.clone());
+                    let () = new_trace.push_batch_no_merge_reqs(batch.clone());
                 }
                 *trace = new_trace;
                 metrics.state.apply_spine_slow_path_lenient.inc();
@@ -667,7 +667,9 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
             // batches.
             let mut reconstructed_spine = Trace::default();
             trace.map_batches(|b| {
-                let _merge_reqs = reconstructed_spine.push_batch(b.clone());
+                // Ignore merge_reqs because whichever process generated this
+                // diff is assigned the work.
+                let () = reconstructed_spine.push_batch_no_merge_reqs(b.clone());
             });
 
             let mut batches = BTreeMap::new();
@@ -682,7 +684,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
     for (batch, ()) in batches {
         // Ignore merge_reqs because whichever process generated this diff is
         // assigned the work.
-        let _merge_reqs = new_trace.push_batch(batch);
+        let () = new_trace.push_batch_no_merge_reqs(batch);
     }
     *trace = new_trace;
     Ok(())

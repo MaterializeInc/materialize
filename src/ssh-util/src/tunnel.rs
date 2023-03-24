@@ -10,6 +10,7 @@
 use std::fmt;
 use std::fs::{self, File};
 use std::io::Write;
+use std::net::Ipv4Addr;
 use std::os::unix::fs::PermissionsExt;
 
 use anyhow::bail;
@@ -74,7 +75,7 @@ impl SshTunnelConfig {
             .user(self.user.clone())
             .port(self.port)
             .keyfile(&path)
-            .connect(self.host.clone())
+            .connect_mux(self.host.clone())
             .await?;
 
         // Delete the private key for safety: since `ssh` still has an open
@@ -101,7 +102,9 @@ impl SshTunnelConfig {
             // Choosing a dynamic port according to RFC 6335
             let local_port: u16 = rng.gen_range(49152..65535);
 
-            let local = openssh::Socket::new(&("localhost", local_port))?;
+            // This should never be `"localhost"`, as that causes reliability
+            // problems, _probably_ related to resolving to ipv6.
+            let local = openssh::Socket::new(&(Ipv4Addr::LOCALHOST, local_port))?;
             let remote = openssh::Socket::new(&(host, port))?;
 
             match session
@@ -109,7 +112,7 @@ impl SshTunnelConfig {
                 .await
             {
                 Err(err) => match err {
-                    openssh::Error::Ssh(err)
+                    openssh::Error::SshMux(err)
                         if err.to_string().contains("forwarding request failed") =>
                     {
                         info!("port {local_port} already in use, testing another port");

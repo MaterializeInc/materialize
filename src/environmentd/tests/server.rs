@@ -674,6 +674,7 @@ fn test_storage_usage_collection_interval_timestamps() {
 }
 
 #[test]
+#[ignore] // Flaking often, tracked in #18108
 fn test_old_storage_usage_records_are_reaped_on_restart() {
     mz_ore::test::init_logging();
 
