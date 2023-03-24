@@ -91,7 +91,10 @@ impl ProjectionLifting {
                     gets.remove(&id);
                     Ok(())
                 }
-                MirRelationExpr::LetRec { .. } => Err(crate::TransformError::LetRecUnsupported)?,
+                MirRelationExpr::LetRec { .. } => {
+                    // TODO
+                    Err(crate::TransformError::LetRecUnsupported)?
+                }
                 MirRelationExpr::Project { input, outputs } => {
                     self.action(input, gets)?;
                     if let MirRelationExpr::Project {
@@ -199,6 +202,7 @@ impl ProjectionLifting {
                         }
                     }
 
+                    // Don't add the identity permutation as a projection.
                     if projection.len() != temp_arity || (0..temp_arity).any(|i| projection[i] != i)
                     {
                         // Update equivalences and implementation.

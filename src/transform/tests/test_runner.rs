@@ -352,7 +352,7 @@ mod tests {
                 mz_transform::canonicalization::ProjectionExtraction,
             )),
             "ProjectionLifting" => Ok(Box::new(
-                mz_transform::projection_lifting::ProjectionLifting::default(),
+                mz_transform::movement::ProjectionLifting::default(),
             )),
             "ProjectionPushdown" => Ok(Box::new(
                 mz_transform::projection_pushdown::ProjectionPushdown,

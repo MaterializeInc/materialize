@@ -119,7 +119,6 @@ pub mod normalize_lets;
 pub mod normalize_ops;
 pub mod ordering;
 pub mod predicate_pushdown;
-pub mod projection_lifting;
 pub mod projection_pushdown;
 pub mod reduce_elision;
 pub mod reduction_pushdown;
@@ -340,7 +339,7 @@ impl Default for FuseAndCollapse {
             //  and `RedundantJoin` can be implemented as free functions.
             transforms: vec![
                 Box::new(crate::canonicalization::ProjectionExtraction),
-                Box::new(crate::projection_lifting::ProjectionLifting::default()),
+                Box::new(crate::movement::ProjectionLifting::default()),
                 Box::new(crate::fusion::Fusion),
                 Box::new(crate::canonicalization::FlatMapToMap),
                 Box::new(crate::fusion::join::Join),
