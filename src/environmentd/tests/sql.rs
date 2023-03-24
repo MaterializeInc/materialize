@@ -2542,7 +2542,6 @@ fn test_mz_sessions() {
         .unwrap();
 
     // Active session appears in mz_sessions.
-
     assert_eq!(
         foo_client
             .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])

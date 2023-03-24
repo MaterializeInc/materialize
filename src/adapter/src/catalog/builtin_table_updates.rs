@@ -21,6 +21,7 @@ use mz_expr::MirScalarExpr;
 use mz_orchestrator::{CpuLimit, MemoryLimit, ServiceProcessMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::now::SYSTEM_TIME;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::{Datum, Diff, GlobalId, Row};
@@ -1170,9 +1171,18 @@ impl CatalogState {
         role_id: RoleId,
         diff: Diff,
     ) -> BuiltinTableUpdate {
+        // We use the system clock to determine when a session
+        // connected to Materialize. This is not intended to be 100%
+        // accurate and correct, so we don't burden the timestamp
+        // oracle with generating a more correct timestamp.
+        let connect_dt = mz_ore::now::to_datetime(SYSTEM_TIME());
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SESSIONS),
-            row: Row::pack_slice(&[Datum::UInt32(id), Datum::String(&role_id.to_string())]),
+            row: Row::pack_slice(&[
+                Datum::UInt32(id),
+                Datum::String(&role_id.to_string()),
+                Datum::TimestampTz(connect_dt.try_into().expect("must fit")),
+            ]),
             diff,
         }
     }

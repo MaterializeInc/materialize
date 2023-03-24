@@ -539,6 +539,7 @@ mz_cluster_replica_metrics
 mz_cluster_replica_sizes
 mz_cluster_replica_statuses
 mz_postgres_sources
+mz_sessions
 mz_storage_usage_by_shard
 mz_subscriptions
 mz_view_foreign_keys

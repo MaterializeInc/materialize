@@ -1836,7 +1836,8 @@ pub static MZ_SESSIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_INTERNAL_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::UInt32.nullable(false))
-        .with_column("role_id", ScalarType::String.nullable(false)),
+        .with_column("role_id", ScalarType::String.nullable(false))
+        .with_column("connected_at", ScalarType::TimestampTz.nullable(false)),
     is_retained_metrics_relation: false,
 });
 

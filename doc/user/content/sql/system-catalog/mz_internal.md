@@ -291,10 +291,11 @@ Field      | Type       | Meaning
 
 The `mz_sessions` table contains a row for each active session in the system.
 
-Field     | Type      | Meaning
-----------|-----------|--------
-`id`      | [`uint4`] | The ID of the session.
-`role_id` | [`text`]  | The role ID of the role that the session is logged in as. Corresponds to [`mz_catalog.mz_roles`](../mz_catalog#mz_roles).
+Field          | Type                         | Meaning
+---------------|------------------------------|--------
+`id`           | [`uint4`]                    | The ID of the session.
+`role_id`      | [`text`]                     | The role ID of the role that the session is logged in as. Corresponds to [`mz_catalog.mz_roles`](../mz_catalog#mz_roles).
+`connected_at` | [`timestamp with time zone`] | The time at which the session connected to the system.
 
 ### `mz_subscriptions`
 
