@@ -509,20 +509,20 @@ where
 }
 
 impl ReadPolicy<mz_repr::Timestamp> {
-    /// Creates a read policy that lags the write frontier by the indicated amount, rounded down to a multiple of that amount.
-    ///
-    /// The rounding down is done to reduce the number of changes the capability undergoes, with the thinking
-    /// being that if you are ok with `lag`, then getting something between `lag` and `2 x lag` should be ok.
-    pub fn lag_writes_by(lag: mz_repr::Timestamp) -> Self {
+    /// Creates a read policy that lags the write frontier by the indicated amount, rounded down to the specified value.
+    /// The rounding down is done to reduce the number of changes the capability undergoes.
+    pub fn lag_writes_by(lag: mz_repr::Timestamp, granularity: mz_repr::Timestamp) -> Self {
         Self::LagWriteFrontier(Arc::new(move |upper| {
             if upper.is_empty() {
                 Antichain::from_elem(Timestamp::minimum())
             } else {
-                // Subtract the lag from the time, and then round down to a multiple thereof to cut chatter.
+                // Subtract the lag from the time, and then round down to a multiple of `granularity` to cut chatter.
                 let mut time = upper[0];
                 if lag != mz_repr::Timestamp::default() {
                     time = time.saturating_sub(lag);
-                    time = time.saturating_sub(time % lag);
+                    if granularity != mz_repr::Timestamp::default() {
+                        time = time.saturating_sub(time % granularity);
+                    }
                 }
                 Antichain::from_elem(time)
             }
@@ -2837,7 +2837,7 @@ mod tests {
 
     #[test]
     fn lag_writes_by_zero() {
-        let policy = ReadPolicy::lag_writes_by(mz_repr::Timestamp::default());
+        let policy = ReadPolicy::lag_writes_by(mz_repr::Timestamp::default(), mz_repr::Timestamp::default());
         let write_frontier = Antichain::from_elem(mz_repr::Timestamp::from(5));
         assert_eq!(policy.frontier(write_frontier.borrow()), write_frontier);
     }

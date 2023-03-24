@@ -43,6 +43,7 @@ use crate::telemetry::SegmentClientExt;
 use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterError, AdapterNotice};
 
+use super::read_policy::SINCE_GRANULARITY;
 use super::timeline::{TimelineContext, TimelineState};
 
 /// State provided to a catalog transaction closure.
@@ -650,7 +651,7 @@ impl Coordinator {
                 tracing::error!("Absurd metrics retention duration: {duration:?}.");
                 u64::MAX
             }),
-        ));
+        ), SINCE_GRANULARITY);
         let policies = self
             .catalog()
             .entries()
