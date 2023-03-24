@@ -1641,7 +1641,7 @@ pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_cluster_replicas",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::UInt64.nullable(false))
+        .with_column("id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("size", ScalarType::String.nullable(true))
@@ -1654,7 +1654,7 @@ pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| Builti
     name: "mz_cluster_replica_statuses",
     schema: MZ_INTERNAL_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("replica_id", ScalarType::UInt64.nullable(false))
+        .with_column("replica_id", ScalarType::String.nullable(false))
         .with_column("process_id", ScalarType::UInt64.nullable(false))
         .with_column("status", ScalarType::String.nullable(false))
         .with_column("updated_at", ScalarType::TimestampTz.nullable(false)),
@@ -1677,7 +1677,7 @@ pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinTable> = Lazy::new(|| Buil
     name: "mz_cluster_replica_heartbeats",
     schema: MZ_INTERNAL_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("replica_id", ScalarType::UInt64.nullable(false))
+        .with_column("replica_id", ScalarType::String.nullable(false))
         .with_column("last_heartbeat", ScalarType::TimestampTz.nullable(false)),
     is_retained_metrics_relation: false,
 });
@@ -1795,7 +1795,7 @@ pub static MZ_CLUSTER_REPLICA_METRICS: Lazy<BuiltinTable> = Lazy::new(|| Builtin
     // the corresponding Storage tables.
     schema: MZ_INTERNAL_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("replica_id", ScalarType::UInt64.nullable(false))
+        .with_column("replica_id", ScalarType::String.nullable(false))
         .with_column("process_id", ScalarType::UInt64.nullable(false))
         .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(true))
         .with_column("memory_bytes", ScalarType::UInt64.nullable(true)),
@@ -1806,7 +1806,7 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS: Lazy<BuiltinTable> = Lazy::new(|| Built
     name: "mz_cluster_replica_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("replica_id", ScalarType::UInt64.nullable(false))
+        .with_column("replica_id", ScalarType::String.nullable(false))
         .with_column("export_id", ScalarType::String.nullable(false))
         .with_column("time", ScalarType::MzTimestamp.nullable(false)),
     is_retained_metrics_relation: false,

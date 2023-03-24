@@ -52,7 +52,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 
 Field              | Type       | Meaning
 -------------------|------------|--------
-`replica_id`       | [`bigint`] | The ID of a cluster replica.
+`replica_id`       | [`text`]   | The ID of a cluster replica.
 `process_id`       | [`bigint`] | An identifier of a compute process within a replica.
 `cpu_nano_cores`   | [`bigint`] | Approximate CPU usage, in billionths of a vCPU core.
 `memory_bytes`     | [`bigint`] | Approximate RAM usage, in bytes.
@@ -102,7 +102,7 @@ of each process in each cluster replica in the system.
 
 Field               | Type                          | Meaning
 --------------------|-------------------------------|--------
-`replica_id`        | [`uint8`]                     | Materialize's unique ID for the cluster replica.
+`replica_id`        | [`text`]                      | Materialize's unique ID for the cluster replica.
 `process_id`        | [`uint8`]                     | The ID of the process within the cluster replica.
 `status`            | [`text`]                      | The status of the cluster replica: `ready` or `not-ready`.
 `updated_at`        | [`timestamp with time zone`]  | The time at which the status was last updated.
@@ -116,7 +116,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 
 | Field            | Type      | Meaning                                                    |
 |------------------|-----------|------------------------------------------------------------|
-| `replica_id`     | [`uint8`] | The ID of a cluster replica.                               |
+| `replica_id`     | [`text`]  | The ID of a cluster replica.                               |
 | `process_id`     | [`uint8`] | An identifier of a compute process within a replica.       |
 | `cpu_percent`    | [`uint8`] | Approximate CPU usage, in percent of the total allocation. |
 | `memory_percent` | [`uint8`] | Approximate RAM usage, in percent of the total allocation. |
@@ -242,7 +242,7 @@ At this time, we do not make any guarantees about the freshness of these numbers
 
 Field        | Type       | Meaning
 -------------|------------|--------
-`replica_id` | [`bigint`] | The ID of a cluster replica.
+`replica_id` | [`text`]   | The ID of a cluster replica.
 `export_id ` | [`text`]   | The ID of the index, materialized view, or subscription that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
 `time`       | [`mz_timestamp`] | The next timestamp at which the output may change.
 

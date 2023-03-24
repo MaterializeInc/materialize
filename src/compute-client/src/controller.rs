@@ -30,6 +30,7 @@
 //! recover each dataflow to its current state in case of failure or other reconfiguration.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::num::NonZeroI64;
 use std::time::Duration;
 
@@ -77,6 +78,22 @@ pub type ComputeInstanceId = StorageInstanceId;
 
 /// Identifier of a replica.
 pub type ReplicaId = u64;
+
+/// Identifier of a replica.
+// TODO(#18377): Replace `ReplicaId` with this type.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub enum NewReplicaId {
+    /// A user replica.
+    User(u64),
+}
+
+impl fmt::Display for NewReplicaId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::User(id) => write!(f, "u{}", id),
+        }
+    }
+}
 
 /// Responses from the compute controller.
 #[derive(Debug)]

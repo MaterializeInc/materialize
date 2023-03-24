@@ -14,6 +14,7 @@ from pg8000.exceptions import InterfaceError
 
 from materialize.cloudtest.application import MaterializeApplication
 from materialize.cloudtest.exists import exists, not_exists
+from materialize.cloudtest.k8s import cluster_pod_name, cluster_service_name
 from materialize.cloudtest.wait import wait
 
 
@@ -49,7 +50,7 @@ def test_source_creation(mz: MaterializeApplication) -> None:
             f"SELECT s.cluster_id, r.id FROM mz_sources s JOIN mz_cluster_replicas r ON r.cluster_id = s.cluster_id WHERE s.name = '{source}'"
         )[0]
 
-        storage_cluster = f"pod/cluster-{cluster_id}-replica-{replica_id}-0"
+        storage_cluster = cluster_pod_name(cluster_id, replica_id)
         wait(condition="condition=Ready", resource=storage_cluster)
 
         mz.environmentd.sql(f"DROP SOURCE {source}")
@@ -79,7 +80,7 @@ def test_source_resizing(mz: MaterializeApplication) -> None:
     [cluster_id, replica_id] = mz.environmentd.sql_query(
         f"SELECT s.cluster_id, r.id FROM mz_sources s JOIN mz_cluster_replicas r ON r.cluster_id = s.cluster_id WHERE s.name = 'resize_source'"
     )[0]
-    storage_cluster = f"pod/cluster-{cluster_id}-replica-{replica_id}-0"
+    storage_cluster = cluster_pod_name(cluster_id, replica_id)
 
     wait(condition="condition=Ready", resource=storage_cluster)
 
@@ -142,8 +143,8 @@ def test_source_shutdown(mz: MaterializeApplication, failpoint: bool) -> None:
     [cluster_id, replica_id] = mz.environmentd.sql_query(
         f"SELECT s.cluster_id, r.id FROM mz_sources s JOIN mz_cluster_replicas r ON r.cluster_id = s.cluster_id WHERE s.name = 'source1'"
     )[0]
-    storage_cluster_pod = f"pod/cluster-{cluster_id}-replica-{replica_id}-0"
-    storage_cluster_svc = f"service/cluster-{cluster_id}-replica-{replica_id}"
+    storage_cluster_pod = cluster_pod_name(cluster_id, replica_id)
+    storage_cluster_svc = cluster_service_name(cluster_id, replica_id)
 
     wait(condition="condition=Ready", resource=storage_cluster_pod)
     exists(storage_cluster_svc)
@@ -202,12 +203,11 @@ def test_sink_resizing(mz: MaterializeApplication) -> None:
             """
         )
     )
-    storage_cluster = f"pod/storage-{id}-0"
     [cluster_id, replica_id] = mz.environmentd.sql_query(
         f"SELECT s.cluster_id, r.id FROM mz_sinks s JOIN mz_cluster_replicas r ON r.cluster_id = s.cluster_id WHERE s.name = 'resize_sink'"
     )[0]
     assert id is not None
-    storage_cluster = f"pod/cluster-{cluster_id}-replica-{replica_id}-0"
+    storage_cluster = cluster_pod_name(cluster_id, replica_id)
 
     assert get_num_workers(mz) == "'2'"
 

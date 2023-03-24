@@ -13,6 +13,7 @@ use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
+use mz_compute_client::controller::NewReplicaId;
 use mz_controller::clusters::{
     ClusterId, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaAllocation, ReplicaId,
     ReplicaLocation,
@@ -205,10 +206,13 @@ impl CatalogState {
             ReplicaLocation::Unmanaged(_) => (None, None),
         };
 
+        // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
+        let id = NewReplicaId::User(id);
+
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS),
             row: Row::pack_slice(&[
-                Datum::UInt64(id),
+                Datum::String(&id.to_string()),
                 Datum::String(name),
                 Datum::String(&cluster_id.to_string()),
                 Datum::from(size),
@@ -249,10 +253,13 @@ impl CatalogState {
             ClusterStatus::NotReady => "not-ready",
         };
 
+        // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
+        let replica_id = NewReplicaId::User(replica_id);
+
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_STATUSES),
             row: Row::pack_slice(&[
-                Datum::UInt64(replica_id),
+                Datum::String(&replica_id.to_string()),
                 Datum::UInt64(process_id),
                 Datum::String(status),
                 Datum::TimestampTz(event.time.try_into().expect("must fit")),
@@ -1016,14 +1023,15 @@ impl CatalogState {
         last_heartbeat: DateTime<Utc>,
         diff: Diff,
     ) -> BuiltinTableUpdate {
-        let table = self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_HEARTBEATS);
-        let row = Row::pack_slice(&[
-            Datum::UInt64(id),
-            Datum::TimestampTz(last_heartbeat.try_into().expect("must fit")),
-        ]);
+        // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
+        let id = NewReplicaId::User(id);
+
         BuiltinTableUpdate {
-            id: table,
-            row,
+            id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_HEARTBEATS),
+            row: Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::TimestampTz(last_heartbeat.try_into().expect("must fit")),
+            ]),
             diff,
         }
     }
@@ -1059,6 +1067,10 @@ impl CatalogState {
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         let id = self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_METRICS);
+
+        // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
+        let replica_id = NewReplicaId::User(replica_id);
+
         let rows = updates.iter().enumerate().map(
             |(
                 process_id,
@@ -1068,7 +1080,7 @@ impl CatalogState {
                 },
             )| {
                 Row::pack_slice(&[
-                    replica_id.into(),
+                    Datum::String(&replica_id.to_string()),
                     u64::cast_from(process_id).into(),
                     (*cpu_nano_cores).into(),
                     (*memory_bytes).into(),
@@ -1123,9 +1135,13 @@ impl CatalogState {
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         let id = self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_FRONTIERS);
+
+        // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
+        let replica_id = NewReplicaId::User(replica_id);
+
         let rows = updates.into_iter().map(|(coll_id, time)| {
             Row::pack_slice(&[
-                replica_id.into(),
+                Datum::String(&replica_id.to_string()),
                 Datum::String(&coll_id.to_string()),
                 Datum::MzTimestamp(*time),
             ])
