@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 anyhow = { version = "1.0.66" }
 openssh = { version = "0.9.8", default-features = false, features = ["native-mux"] }
-openssl = { version = "0.10.43", features = ["vendored"] }
+openssl = { version = "0.10.48", features = ["vendored"] }
 rand = "0.8.5"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = { version = "1.0.89" }
