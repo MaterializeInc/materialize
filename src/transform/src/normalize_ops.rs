@@ -11,7 +11,7 @@
 
 use mz_expr::{visit::Visit, MirRelationExpr};
 
-use crate::TransformArgs;
+use crate::{all, TransformArgs};
 
 /// Normalize the structure of various operators.
 #[derive(Debug)]
@@ -19,7 +19,14 @@ pub struct NormalizeOps;
 
 impl crate::Transform for NormalizeOps {
     fn recursion_safe(&self) -> bool {
-        true
+        // Keep this in sync with the actions called in `NormalizeOps::action`!
+        all![
+            crate::canonicalization::FlatMapToMap.recursion_safe(),
+            crate::canonicalization::TopKElision.recursion_safe(),
+            crate::canonicalization::ProjectionExtraction.recursion_safe(),
+            crate::fusion::Fusion.recursion_safe(),
+            crate::fusion::join::Join.recursion_safe(),
+        ]
     }
 
     #[tracing::instrument(
@@ -39,7 +46,7 @@ impl crate::Transform for NormalizeOps {
                 // (a) Might enable fusion in the next step.
                 crate::canonicalization::FlatMapToMap::action(expr);
                 crate::canonicalization::TopKElision::action(expr);
-                // (b) Fuse various like-kinded operators. Might enable furhter canonicalization.
+                // (b) Fuse various like-kinded operators. Might enable further canonicalization.
                 crate::fusion::Fusion::action(expr);
                 // (c) Fuse join trees (might lift in-between Filters).
                 crate::fusion::join::Join::action(expr)?;
