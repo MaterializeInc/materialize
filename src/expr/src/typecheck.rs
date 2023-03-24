@@ -1,9 +1,12 @@
 use itertools::Itertools;
 use mz_repr::{ColumnType, RelationType, Row, ScalarType};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use tracing::warn;
 
-use crate::{AggregateExpr, Id, JoinImplementation, MirRelationExpr, MirScalarExpr};
+use crate::{
+    func as scalar_func, AggregateExpr, ColumnOrder, Id, JoinImplementation, LocalId,
+    MirRelationExpr, MirScalarExpr, UnaryFunc,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum TypeError<'a> {
@@ -46,19 +49,27 @@ pub enum TypeError<'a> {
     },
     BadTopKOrdering {
         source: &'a MirRelationExpr,
+        order: ColumnOrder,
+        input_type: Vec<ColumnType>,
+    },
+    BadLetRecBindings {
+        source: &'a MirRelationExpr,
     },
 }
 
 type Ctx = BTreeMap<Id, Vec<ColumnType>>;
 
-fn columns_match(t1: &[ColumnType], t2: &[ColumnType]) -> bool {
-    if t1.len() != t2.len() {
+/// Returns true when it is safe to treat a `got` row as an `expected` row
+///
+/// In particular, the core types must be equal, and if a column in `got` is nullable, that column should also be nullable in `expected`
+fn columns_match(got: &[ColumnType], expected: &[ColumnType]) -> bool {
+    if got.len() != expected.len() {
         return false;
     }
 
-    t1.iter()
-        .zip_eq(t2.iter())
-        .all(|(c1, c2)| c1.nullable == c2.nullable && c1.scalar_type.base_eq(&c2.scalar_type))
+    got.iter()
+        .zip_eq(expected.iter())
+        .all(|(c1, c2)| (!c1.nullable || c2.nullable) && c1.scalar_type.base_eq(&c2.scalar_type))
 }
 
 impl MirRelationExpr {
@@ -91,7 +102,7 @@ impl MirRelationExpr {
                         if datums
                             .iter()
                             .zip_eq(typ.column_types.iter())
-                            .any(|(d, ty)| !d.is_instance_of(ty))
+                            .any(|(d, ty)| d != &mz_repr::Datum::Dummy && !d.is_instance_of(ty))
                         {
                             return Err(TypeError::BadConstantRow {
                                 source: self,
@@ -124,12 +135,9 @@ impl MirRelationExpr {
                 if !columns_match(&typ.column_types, ctx_typ) {
                     return Err(TypeError::MismatchColumns {
                         source: self,
-                        got: ctx_typ.clone(),
-                        expected: typ.column_types.clone(),
-                        message: format!(
-                            "{:?}'s annotation did not match context type {:?}",
-                            self, ctx_typ
-                        ),
+                        got: typ.column_types.clone(),
+                        expected: ctx_typ.clone(),
+                        message: "annotation did not match context type".into(),
                     });
                 }
 
@@ -174,32 +182,58 @@ impl MirRelationExpr {
                 t_in.extend(t_out);
                 Ok(t_in)
             }
-            Filter {
-                input,
-                predicates: _,
-            } => {
-                let t_in = input.typecheck(ctx)?;
+            Filter { input, predicates } => {
+                let mut t_in = input.typecheck(ctx)?;
 
-                // col_with_input_cols does a analysis to determine which columns will never be null when the predicate is passed
-                //
-                // but the analysis is ad hoc, and will miss things:
-                //
-                // materialize=> create table a(x int, y int);
-                // CREATE TABLE
-                // materialize=> explain with(types) select x from a where (y=x and y is not null) or x is not null;
-                // Optimized Plan
-                // --------------------------------------------------------------------------------------------------------
-                // Explained Query:                                                                                      +
-                // Project (#0) // { types: "(integer?)" }                                                             +
-                // Filter ((#0) IS NOT NULL OR ((#1) IS NOT NULL AND (#0 = #1))) // { types: "(integer?, integer?)" }+
-                // Get materialize.public.a // { types: "(integer?, integer?)" }                                   +
-                //                                                                           +
-                // Source materialize.public.a                                                                           +
-                // filter=(((#0) IS NOT NULL OR ((#1) IS NOT NULL AND (#0 = #1))))                                     +
-                //
-                // (1 row)
+                /*
+                col_with_input_cols does a analysis to determine which columns will never be null when the predicate is passed
 
-                // we're skipping the analysis here just to be conservative
+                but the analysis is ad hoc, and will miss things:
+
+                materialize=> create table a(x int, y int);
+                CREATE TABLE
+                materialize=> explain with(types) select x from a where (y=x and y is not null) or x is not null;
+                Optimized Plan
+                --------------------------------------------------------------------------------------------------------
+                Explained Query:                                                                                      +
+                Project (#0) // { types: "(integer?)" }                                                             +
+                Filter ((#0) IS NOT NULL OR ((#1) IS NOT NULL AND (#0 = #1))) // { types: "(integer?, integer?)" }+
+                Get materialize.public.a // { types: "(integer?, integer?)" }                                   +
+                                                                                          +
+                Source materialize.public.a                                                                           +
+                filter=(((#0) IS NOT NULL OR ((#1) IS NOT NULL AND (#0 = #1))))                                     +
+
+                (1 row)
+                */
+
+                // stolen from `col_with_input_cols`
+                let mut nonnull_required_columns = BTreeSet::new();
+                for predicate in predicates {
+                    // Add any columns that being null would force the predicate to be null.
+                    // Should that happen, the row would be discarded.
+                    predicate.non_null_requirements(&mut nonnull_required_columns);
+                    // Test for explicit checks that a column is non-null.
+                    if let MirScalarExpr::CallUnary {
+                        func: UnaryFunc::Not(scalar_func::Not),
+                        expr,
+                    } = predicate
+                    {
+                        if let MirScalarExpr::CallUnary {
+                            func: UnaryFunc::IsNull(scalar_func::IsNull),
+                            expr,
+                        } = &**expr
+                        {
+                            if let MirScalarExpr::Column(c) = &**expr {
+                                t_in[*c].nullable = false;
+                            }
+                        }
+                    }
+                }
+                // Set as nonnull any columns where null values would cause
+                // any predicate to evaluate to null.
+                for column in nonnull_required_columns.into_iter() {
+                    t_in[column].nullable = false;
+                }
 
                 Ok(t_in)
             }
@@ -281,7 +315,7 @@ impl MirRelationExpr {
                             if datums
                                 .iter()
                                 .zip_eq(typ.iter())
-                                .any(|(d, ty)| !d.is_instance_of(ty))
+                                .any(|(d, ty)| d != &mz_repr::Datum::Dummy && !d.is_instance_of(ty))
                             {
                                 return Err(TypeError::BadConstantRow {
                                     source: self,
@@ -305,16 +339,16 @@ impl MirRelationExpr {
             } => {
                 let t_in = input.typecheck(ctx)?;
 
-                let t_keys = group_key
+                let mut t_out = group_key
                     .iter()
                     .map(|expr| expr.typecheck(self, &t_in))
                     .collect::<Result<Vec<_>, _>>()?;
 
                 for agg in aggregates {
-                    let _ = agg.typecheck(self, &t_in)?;
+                    t_out.push(agg.typecheck(self, &t_in)?);
                 }
 
-                Ok(t_keys)
+                Ok(t_out)
             }
             TopK {
                 input,
@@ -330,14 +364,20 @@ impl MirRelationExpr {
                     if key >= t_in.len() {
                         return Err(TypeError::BadTopKGroupKey {
                             source: self,
-                            key: key,
+                            key,
                             input_type: t_in,
                         });
                     }
                 }
 
-                if group_key.len() != order_key.len() {
-                    return Err(TypeError::BadTopKOrdering { source: self });
+                for order in order_key {
+                    if order.column >= t_in.len() {
+                        return Err(TypeError::BadTopKOrdering {
+                            source: self,
+                            order: order.clone(),
+                            input_type: t_in,
+                        });
+                    }
                 }
 
                 Ok(t_in)
@@ -385,10 +425,42 @@ impl MirRelationExpr {
 
                 body.typecheck(&mut body_ctx)
             }
-            LetRec { .. } => {
-                // TODO temporary hack: steal info from the Gets inside to learn the expected types
-                // or, more cleanly, add type information to LetRec
-                unimplemented!("can't typecheck letrec without constraints or something else fancy")
+            LetRec { ids, values, body } => {
+                if ids.len() != values.len() {
+                    return Err(TypeError::BadLetRecBindings { source: self });
+                }
+
+                // temporary hack: steal info from the Gets inside to learn the expected types
+                let mut ctx = ctx.clone();
+                // calling self.collect_recursive_variable_types() triggers a panic due to nested letrecs with shadowing IDs
+                for expr in values.iter().chain(std::iter::once(body.as_ref())) {
+                    expr.collect_recursive_variable_types(ids, &mut ctx)?;
+                }
+
+                for (id, value) in ids.iter().zip_eq(values.iter()) {
+                    let typ = value.typecheck(&mut ctx)?;
+
+                    let id = Id::Local(id.clone());
+                    if let Some(ctx_typ) = ctx.get_mut(&id) {
+                        for (base_col, input_col) in ctx_typ.iter_mut().zip_eq(typ) {
+                            *base_col = base_col.union(&input_col).map_err(|e| {
+                                TypeError::MismatchColumn {
+                                    source: self,
+                                    got: input_col,
+                                    expected: base_col.clone(),
+                                    message: format!(
+                                        "couldn't compute union of column types in let rec: {:?}",
+                                        e
+                                    ),
+                                }
+                            })?;
+                        }
+                    } else {
+                        ctx.insert(id, typ);
+                    }
+                }
+
+                body.typecheck(&mut ctx)
             }
             ArrangeBy { input, keys } => {
                 let t_in = input.typecheck(ctx)?;
@@ -402,6 +474,104 @@ impl MirRelationExpr {
                 Ok(t_in)
             }
         }
+    }
+
+    /// Traverses a term to collect the types of given ids.
+    ///
+    /// LetRec doesn't have type info stored in it. Until we change the MIR to track that information explicitly, we have to rebuild it from looking at the term.
+    fn collect_recursive_variable_types(
+        &self,
+        ids: &[LocalId],
+        ctx: &mut Ctx,
+    ) -> Result<(), TypeError> {
+        match self {
+            MirRelationExpr::Get {
+                id: Id::Local(id),
+                typ,
+            } => {
+                if !ids.contains(id) {
+                    return Ok(());
+                }
+
+                let id = Id::Local(id.clone());
+                if let Some(ctx_typ) = ctx.get_mut(&id) {
+                    for (base_col, input_col) in ctx_typ.iter_mut().zip_eq(typ.column_types.iter())
+                    {
+                        *base_col =
+                            base_col
+                                .union(&input_col)
+                                .map_err(|e| TypeError::MismatchColumn {
+                                    source: self,
+                                    got: input_col.clone(),
+                                    expected: base_col.clone(),
+                                    message: format!(
+                                        "couldn't compute union of collected column types: {:?}",
+                                        e
+                                    ),
+                                })?;
+                    }
+                } else {
+                    ctx.insert(id, typ.column_types.clone());
+                }
+            }
+            MirRelationExpr::Get {
+                id: Id::Global(..), ..
+            }
+            | MirRelationExpr::Constant { .. } => (),
+            MirRelationExpr::Let { id, value, body } => {
+                value.collect_recursive_variable_types(ids, ctx)?;
+
+                // we've shadowed the id
+                if ids.contains(id) {
+                    warn!("id {} shadowed in {:#?}", id, self);
+                    return Ok(());
+                }
+
+                body.collect_recursive_variable_types(ids, ctx)?;
+            }
+            MirRelationExpr::LetRec {
+                ids: inner_ids,
+                values,
+                body,
+            } => {
+                for inner_id in inner_ids {
+                    if ids.contains(inner_id) {
+                        panic!("let recs shadowing other let recs (inner id {} appears in outer ids {:?}", inner_id, ids);
+                    }
+                }
+
+                for value in values {
+                    value.collect_recursive_variable_types(ids, ctx)?;
+                }
+
+                body.collect_recursive_variable_types(ids, ctx)?;
+            }
+            MirRelationExpr::Project { input, .. }
+            | MirRelationExpr::Map { input, .. }
+            | MirRelationExpr::FlatMap { input, .. }
+            | MirRelationExpr::Filter { input, .. }
+            | MirRelationExpr::Reduce { input, .. }
+            | MirRelationExpr::TopK { input, .. }
+            | MirRelationExpr::Negate { input }
+            | MirRelationExpr::Threshold { input }
+            | MirRelationExpr::ArrangeBy { input, .. } => {
+                input.collect_recursive_variable_types(ids, ctx)?;
+            }
+            MirRelationExpr::Join { inputs, .. } => {
+                for input in inputs {
+                    input.collect_recursive_variable_types(ids, ctx)?;
+                }
+            }
+            MirRelationExpr::Union { base, inputs } => {
+                base.collect_recursive_variable_types(ids, ctx)?;
+
+                for input in inputs {
+                    input.collect_recursive_variable_types(ids, ctx)?;
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -424,7 +594,9 @@ impl MirScalarExpr {
                 if let Ok(row) = row {
                     let datums = row.unpack();
 
-                    if datums.len() != 1 || !datums[0].is_instance_of(typ) {
+                    if datums.len() != 1
+                        || (datums[0] != mz_repr::Datum::Dummy && !datums[0].is_instance_of(typ))
+                    {
                         return Err(TypeError::BadConstantRow {
                             source,
                             got: row.clone(),
@@ -498,22 +670,22 @@ impl AggregateExpr {
 impl<'a> TypeError<'a> {
     pub fn source(&self) -> &'a MirRelationExpr {
         match self {
-            TypeError::Unbound { source, .. } => source,
-            TypeError::NoSuchColumn { source, .. } => source,
-            TypeError::MismatchColumn { source, .. } => source,
-            TypeError::MismatchColumns { source, .. } => source,
-            TypeError::BadConstantRow { source, .. } => source,
-            TypeError::BadProject { source, .. } => source,
-            TypeError::BadTopKGroupKey { source, .. } => source,
-            TypeError::BadTopKOrdering { source } => source,
+            TypeError::Unbound { source, .. }
+            | TypeError::NoSuchColumn { source, .. }
+            | TypeError::MismatchColumn { source, .. }
+            | TypeError::MismatchColumns { source, .. }
+            | TypeError::BadConstantRow { source, .. }
+            | TypeError::BadProject { source, .. }
+            | TypeError::BadTopKGroupKey { source, .. }
+            | TypeError::BadTopKOrdering { source, .. }
+            | TypeError::BadLetRecBindings { source } => source,
         }
     }
 }
 
 impl<'a> std::fmt::Display for TypeError<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "TYPE ERROR")?;
-        writeln!(f, "{}\n", self.source().pretty())?;
+        writeln!(f, "In the MIR term:\n{:#?}\n", self.source())?;
 
         use TypeError::*;
         match self {
@@ -524,40 +696,66 @@ impl<'a> std::fmt::Display for TypeError<'a> {
                 source: _,
                 expr,
                 col,
-            } => writeln!(
-                f,
-                "{} references non-existent column {}",
-                expr,
-                *col
-            )?,
+            } => writeln!(f, "{} references non-existent column {}", expr, *col)?,
             MismatchColumn {
                 source: _,
                 got,
                 expected,
                 message,
-            } => writeln!(f, "mismatched column types: {}\ngot {:?}\nexpected {:?}\n", message, got, expected)?,
+            } => writeln!(
+                f,
+                "mismatched column types: {}\ngot {:?}\nexpected {:?}\n",
+                message, got, expected
+            )?,
             MismatchColumns {
                 source: _,
                 got,
                 expected,
                 message,
-            } => writeln!(f, "mismatched relation types: {}\ngot {:?}\nexpected {:?}", message, got, expected)?,
+            } => writeln!(
+                f,
+                "mismatched relation types: {}\ngot {:?}\nexpected {:?}",
+                message, got, expected
+            )?,
             BadConstantRow {
                 source: _,
                 got,
                 expected,
-            } => writeln!(f, "bad constant row\ngot {}\nexpected row of type {:?}", got, expected)?,
+            } => writeln!(
+                f,
+                "bad constant row\ngot {}\nexpected row of type {:?}",
+                got, expected
+            )?,
             BadProject {
                 source: _,
                 got,
                 input_type,
-            } => writeln!(f, "projection of non-existant columns {:?} from type {:?}", got, input_type)?,
+            } => writeln!(
+                f,
+                "projection of non-existant columns {:?} from type {:?}",
+                got, input_type
+            )?,
             BadTopKGroupKey {
                 source: _,
                 key,
                 input_type,
-            } => writeln!(f, "TopK group key {} references invalid group\ngroups {:?}", key, input_type)?,
-            BadTopKOrdering { source: _ } => writeln!(f, "TopK group keys and orderings have different lengths")?,
+            } => writeln!(
+                f,
+                "TopK group key {} references invalid column\ncolumns: {:?}",
+                key, input_type
+            )?,
+            BadTopKOrdering {
+                source: _,
+                order,
+                input_type,
+            } => writeln!(
+                f,
+                "TopK ordering {} references invalid column {} orderings\ncolumns: {:?}",
+                order, order.column, input_type
+            )?,
+            BadLetRecBindings { source: _ } => {
+                writeln!(f, "LetRec ids and definitions don't line up")?
+            }
         }
 
         Ok(())

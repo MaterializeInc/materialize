@@ -48,7 +48,7 @@ pub fn optimize_dataflow(
             Ok(typ) => {
                 ctx.insert(Id::Global(id.clone()), typ);
             }
-            Err(err) => warn!("TYPE ERROR: {}", err),
+            Err(err) => warn!("TYPE ERROR: {}\nIN QUERY BOUND TO {}:\n{:#?}", err, id, plan),
         }
     }
 
