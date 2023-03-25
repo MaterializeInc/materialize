@@ -126,7 +126,7 @@ pub(crate) async fn migrate(
 // they were not used to generate the DDL for the subsources and it is now too
 // late to apply them.
 //
-// TODO(migration): delete in version v.50 (released in v0.48 + 1 additional
+// TODO(migration): delete in version v.51 (released in v0.49 + 1 additional
 // release)
 async fn pg_source_table_metadata_rewrite(
     catalog: &ConnCatalog<'_>,
