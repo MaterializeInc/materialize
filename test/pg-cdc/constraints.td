@@ -27,65 +27,58 @@ CREATE SCHEMA public;
 DROP PUBLICATION IF EXISTS mz_source;
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-CREATE TABLE pk_table (pk INTEGER PRIMARY KEY, f2 TEXT);
-INSERT INTO pk_table VALUES (1, 'one');
-ALTER TABLE pk_table REPLICA IDENTITY FULL;
-INSERT INTO pk_table VALUES (2, 'two');
+CREATE TABLE pk (f1 INT, f2 INT, f3 INT, PRIMARY KEY (f1, f2));
+INSERT INTO pk VALUES (1,1,null);
+ALTER TABLE pk REPLICA IDENTITY FULL;
 
-INSERT INTO pk_table VALUES (3, 'three');
+CREATE TABLE unique_not_null (f1 INT NOT NULL, f2 INT NOT NULL, f3 INT, UNIQUE (f1, f2));
+INSERT INTO unique_not_null VALUES (1,1,null);
+ALTER TABLE unique_not_null REPLICA IDENTITY FULL;
 
-CREATE TABLE nonpk_table (f1 INTEGER, f2 INTEGER);
-INSERT INTO nonpk_table VALUES (1, 1), (1, 1);
-ALTER TABLE nonpk_table REPLICA IDENTITY FULL;
-INSERT INTO nonpk_table VALUES (2, 2), (2, 2);
-
-CREATE TABLE complex_constraints (pk INTEGER, f2 TEXT NOT NULL, f3 TEXT, UNIQUE (f3, pk), UNIQUE (f2));
-ALTER TABLE complex_constraints ADD PRIMARY KEY (pk);
-INSERT INTO complex_constraints VALUES (1, 'one', 1);
-ALTER TABLE complex_constraints REPLICA IDENTITY FULL;
-INSERT INTO complex_constraints VALUES (2, 'two', 2);
-INSERT INTO complex_constraints VALUES (3, 'three', 3);
+CREATE TABLE unique_nullable (f1 INT, f2 INT, f3 INT, UNIQUE (f1, f2));
+INSERT INTO unique_nullable VALUES (1,1,null), (null,null,null), (null,null,null);
+ALTER TABLE unique_nullable REPLICA IDENTITY FULL;
 
 > CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR TABLES (pk_table, nonpk_table, complex_constraints);
+  FOR ALL TABLES;
 
-> CREATE DEFAULT INDEX ON pk_table;
+> CREATE DEFAULT INDEX ON pk;
+> CREATE DEFAULT INDEX ON unique_not_null;
+> CREATE DEFAULT INDEX ON unique_nullable;
 
-# Default index only includes primary key column
-> SHOW CREATE INDEX pk_table_primary_idx;
-name                                     create_sql
--------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.pk_table_primary_idx "CREATE INDEX \"pk_table_primary_idx\" IN CLUSTER \"default\" ON \"materialize\".\"public\".\"pk_table\" (\"pk\")"
+> SELECT key FROM (SHOW INDEXES ON pk);
+{f1,f2}
 
-# Not null constraint optimizes like this:
-> EXPLAIN SELECT * FROM pk_table WHERE pk IS NULL;
-"Explained Query (fast path):\n  Constant <empty>\n"
+> SELECT key FROM (SHOW INDEXES ON unique_not_null);
+{f1,f2}
 
-# Unique is applied
-> EXPLAIN SELECT DISTINCT pk FROM pk_table
-"Explained Query (fast path):\n  Project (#0)\n    ReadExistingIndex materialize.public.pk_table_primary_idx\n\nUsed Indexes:\n  - materialize.public.pk_table_primary_idx\n"
+> SELECT key FROM (SHOW INDEXES ON unique_nullable);
+{f1,f2,f3}
 
-> CREATE DEFAULT INDEX ON nonpk_table;
-
-# Default index only includes primary key column
-> SHOW CREATE INDEX nonpk_table_primary_idx;
-name                                     create_sql
--------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.nonpk_table_primary_idx "CREATE INDEX \"nonpk_table_primary_idx\" IN CLUSTER \"default\" ON \"materialize\".\"public\".\"nonpk_table\" (\"f1\", \"f2\")"
-
-# No not-null constraint
-> EXPLAIN SELECT * FROM nonpk_table WHERE f1 IS NULL;
-"Explained Query (fast path):\n  Filter (#0) IS NULL\n    ReadExistingIndex materialize.public.nonpk_table_primary_idx\n\nUsed Indexes:\n  - materialize.public.nonpk_table_primary_idx\n"
-
-> CREATE DEFAULT INDEX ON complex_constraints;
-
-# Default index only includes primary key column
-> SHOW CREATE INDEX complex_constraints_primary_idx;
-name                                     create_sql
--------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.complex_constraints_primary_idx "CREATE INDEX \"complex_constraints_primary_idx\" IN CLUSTER \"default\" ON \"materialize\".\"public\".\"complex_constraints\" (\"pk\")"
+> SELECT * FROM unique_nullable
+1 1 <null>
+<null> <null> <null>
+<null> <null> <null>
 
 # Not null constraint optimizes like this:
-> EXPLAIN SELECT * FROM pk_table WHERE pk IS NULL;
+> EXPLAIN SELECT * FROM pk WHERE f1 IS NULL OR f2 IS NULL;
 "Explained Query (fast path):\n  Constant <empty>\n"
+
+> EXPLAIN SELECT * FROM unique_not_null WHERE f1 IS NULL OR f2 IS NULL;
+"Explained Query (fast path):\n  Constant <empty>\n"
+
+#
+# Unique converted to keys
+> EXPLAIN SELECT DISTINCT f1, f2 FROM pk
+"Explained Query (fast path):\n  Project (#0, #1)\n    ReadExistingIndex materialize.public.pk_primary_idx\n\nUsed Indexes:\n  - materialize.public.pk_primary_idx\n"
+
+#
+# Unique converted to keys
+> EXPLAIN SELECT DISTINCT f1, f2 FROM unique_not_null
+"Explained Query (fast path):\n  Project (#0, #1)\n    ReadExistingIndex materialize.public.unique_not_null_primary_idx\n\nUsed Indexes:\n  - materialize.public.unique_not_null_primary_idx\n"
+
+#
+# Unique NOT converted to keys because values are nullable
+> EXPLAIN SELECT DISTINCT f1, f2 FROM unique_nullable
+"Explained Query:\n  Distinct group_by=[#0, #1]\n    Project (#0, #1)\n      Get materialize.public.unique_nullable\n\nUsed Indexes:\n  - materialize.public.unique_nullable_primary_idx\n"
