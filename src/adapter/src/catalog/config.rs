@@ -69,7 +69,7 @@ pub struct Config<'a> {
     /// skip any migrations that require it, which will likely cause tests to
     /// fail.
     ///
-    /// TODO(migration): delete in version v.50 (released in v0.48 + 1
+    /// TODO(migration): delete in version v.51 (released in v0.49 + 1
     /// additional release)
     pub connection_context: Option<mz_storage_client::types::connections::ConnectionContext>,
 }
