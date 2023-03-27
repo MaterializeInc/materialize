@@ -51,6 +51,49 @@ CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     echo "ssh-ed25519 AAAA...76RH materialize" >> ~/.ssh/authorized_keys
     ```
 
+1. Configure your internal firewall to allow the SSH bastion host to connect to your Kafka cluster or PostgreSQL instance.
+
+    If you are using a cloud provider like AWS or GCP, update the security group or firewall rules for your PostgreSQL instance or Kafka brokers.
+
+    You'll need to allow incoming traffic from the IP address of the SSH bastion host on the necessary ports.
+
+    For example, use port `5432` for PostgreSQL and ports `9092`, `9094`, and `9096` for Kafka.
+
+    After that, test the connection from the bastion host to the Kafka cluster or PostgreSQL instance.
+
+    ```bash
+    telnet <KAFKA_BROKER_HOST> <KAFKA_BROKER_PORT>
+    telnet <POSTGRES_HOST> <POSTGRES_PORT>
+    ```
+
+1. Verify that you can create SSH tunnels.
+
+    ```bash
+    # Command for Linux
+    ssh -L 9092:kafka-broker:9092 <SSH_BASTION_USER>@<SSH_BASTION_HOST>
+    ```
+
+    If you are unable to start the tunnel, enable `AllowTcpForwarding` and `PermitTunnel` in the SSH config file.
+    On your SSH bastion host, open the SSH config file (usually located at `/etc/ssh/sshd_config`) using a text editor:
+
+    ```bash
+    sudo nano /etc/ssh/sshd_config
+    ```
+    Ensure that the following lines are present and uncommented:
+
+    ```bash
+    AllowTcpForwarding yes
+    PermitTunnel yes
+    ```
+
+    If these lines are not present, add them to the file.
+
+    Save the changes and restart the SSH service:
+
+    ```bash
+    sudo systemctl restart sshd
+    ```
+
 1. Retrieve the static egress IPs from Materialize and configure the firewall rules (e.g. AWS Security Groups) for your SSH bastion to allow SSH traffic only for those IP addresses.
 
     ```sql
@@ -62,6 +105,7 @@ CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     XXX.198.159.213
     XXX.100.27.23
     ```
+
 ## Create a source connection
 
 In Materialize, create a source connection that uses the SSH tunnel connection you just configured:
@@ -73,6 +117,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 BROKERS (
     'broker1:9092' USING SSH TUNNEL ssh_connection,
     'broker2:9092' USING SSH TUNNEL ssh_connection
+    -- Add all Kafka brokers
     )
 );
 ```
