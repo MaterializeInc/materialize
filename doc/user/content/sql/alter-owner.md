@@ -25,7 +25,7 @@ _new&lowbar;owner_ | The role name you want to set as the new owner.
 
 ## Details
 
-In order to alter the ownership of an object, you must be a member of the new owner role.
+You must be a member of the new owner role to alter the ownership of an object.
 
 
 ## Examples
