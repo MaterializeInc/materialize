@@ -39,8 +39,7 @@ use mz_timely_util::order::Partitioned;
 
 use crate::source::commit::LogCommitter;
 
-use crate::source::source_reader_pipeline::HealthStatus;
-use crate::source::types::{OffsetCommitter, SourceConnectionBuilder};
+use crate::source::types::{HealthStatus, OffsetCommitter, SourceConnectionBuilder};
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };

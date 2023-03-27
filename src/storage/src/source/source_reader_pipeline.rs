@@ -41,7 +41,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
-use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::capture::capture::Capture;
@@ -80,8 +79,8 @@ use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, ReclockOperator};
 use crate::source::types::{
-    HealthStatusUpdate, MaybeLength, OffsetCommitter, SourceConnectionBuilder, SourceMessage,
-    SourceMessageType, SourceMetrics, SourceOutput, SourceReader, SourceReaderError,
+    HealthStatus, HealthStatusUpdate, MaybeLength, OffsetCommitter, SourceConnectionBuilder,
+    SourceMessage, SourceMessageType, SourceMetrics, SourceOutput, SourceReader, SourceReaderError,
     SourceReaderMetrics,
 };
 use crate::statistics::{SourceStatisticsMetrics, StorageStatistics};
@@ -226,40 +225,6 @@ where
     let token = Rc::new((token, remap_token, resume_token, health_token));
 
     ((reclocked_stream, reclocked_err_stream), Some(token))
-}
-
-/// NB: we derive Ord here, so the enum order matters. Generally, statuses later in the list
-/// take precedence over earlier ones: so if one worker is stalled, we'll consider the entire
-/// source to be stalled.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub enum HealthStatus {
-    Starting,
-    Running,
-    StalledWithError { error: String, hint: Option<String> },
-}
-
-impl HealthStatus {
-    fn name(&self) -> &'static str {
-        match self {
-            HealthStatus::Starting => "starting",
-            HealthStatus::Running => "running",
-            HealthStatus::StalledWithError { .. } => "stalled",
-        }
-    }
-
-    fn error(&self) -> Option<&str> {
-        match self {
-            HealthStatus::Starting | HealthStatus::Running => None,
-            HealthStatus::StalledWithError { error, .. } => Some(error),
-        }
-    }
-
-    fn hint(&self) -> Option<&str> {
-        match self {
-            HealthStatus::Starting | HealthStatus::Running => None,
-            HealthStatus::StalledWithError { error: _, hint } => hint.as_deref(),
-        }
-    }
 }
 
 type WorkerId = usize;

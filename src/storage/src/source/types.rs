@@ -34,7 +34,6 @@ use mz_storage_client::types::sources::encoding::SourceDataEncoding;
 use mz_storage_client::types::sources::{MzOffset, SourceTimestamp};
 
 use crate::source::metrics::SourceBaseMetrics;
-use crate::source::source_reader_pipeline::HealthStatus;
 
 /// Extension trait to the SourceConnection trait that defines how to intantiate a particular
 /// connetion into a reader and offset committer
@@ -153,6 +152,40 @@ pub enum NextMessage<Key, Value, Time: Timestamp, Diff> {
 pub struct HealthStatusUpdate {
     pub update: HealthStatus,
     pub should_halt: bool,
+}
+
+/// NB: we derive Ord here, so the enum order matters. Generally, statuses later in the list
+/// take precedence over earlier ones: so if one worker is stalled, we'll consider the entire
+/// source to be stalled.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HealthStatus {
+    Starting,
+    Running,
+    StalledWithError { error: String, hint: Option<String> },
+}
+
+impl HealthStatus {
+    pub fn name(&self) -> &'static str {
+        match self {
+            HealthStatus::Starting => "starting",
+            HealthStatus::Running => "running",
+            HealthStatus::StalledWithError { .. } => "stalled",
+        }
+    }
+
+    pub fn error(&self) -> Option<&str> {
+        match self {
+            HealthStatus::Starting | HealthStatus::Running => None,
+            HealthStatus::StalledWithError { error, .. } => Some(error),
+        }
+    }
+
+    pub fn hint(&self) -> Option<&str> {
+        match self {
+            HealthStatus::Starting | HealthStatus::Running => None,
+            HealthStatus::StalledWithError { error: _, hint } => hint.as_deref(),
+        }
+    }
 }
 
 /// A wrapper around [`SourceMessage`] that allows [`SourceReader`]'s to

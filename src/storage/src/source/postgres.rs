@@ -49,8 +49,9 @@ use self::metrics::PgSourceMetrics;
 use super::metrics::SourceBaseMetrics;
 use crate::source::commit::LogCommitter;
 
-use crate::source::source_reader_pipeline::HealthStatus;
-use crate::source::types::{HealthStatusUpdate, OffsetCommitter, SourceConnectionBuilder};
+use crate::source::types::{
+    HealthStatus, HealthStatusUpdate, OffsetCommitter, SourceConnectionBuilder,
+};
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };
