@@ -7,25 +7,28 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::time::{Duration, Instant};
+use std::any::Any;
+use std::convert::Infallible;
+use std::rc::Rc;
+use std::time::Duration;
 
-use timely::dataflow::operators::Capability;
+use differential_dataflow::{AsCollection, Collection};
+use timely::dataflow::operators::ToStream;
+use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
-use timely::scheduling::SyncActivator;
 
 use mz_ore::cast::CastFrom;
-use mz_repr::{Diff, GlobalId, Row};
+use mz_ore::collections::CollectionExt;
+use mz_repr::{Diff, Row};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sources::GeneratorMessageType;
 use mz_storage_client::types::sources::{
-    encoding::SourceDataEncoding, Generator, LoadGenerator, LoadGeneratorSourceConnection, MzOffset,
+    Generator, LoadGenerator, LoadGeneratorSourceConnection, MzOffset, SourceTimestamp,
 };
+use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
 
-use super::metrics::SourceBaseMetrics;
-use super::{SourceMessage, SourceMessageType};
-use crate::source::commit::LogCommitter;
-use crate::source::types::SourceConnectionBuilder;
-use crate::source::{NextMessage, SourceReader};
+use crate::source::types::{HealthStatus, HealthStatusUpdate, SourceRender};
+use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 mod auction;
 mod counter;
@@ -63,115 +66,87 @@ pub fn as_generator(g: &LoadGenerator, tick_micros: Option<u64>) -> Box<dyn Gene
     }
 }
 
-pub struct LoadGeneratorSourceReader {
-    rows: Box<dyn Iterator<Item = (usize, GeneratorMessageType, Row, i64)>>,
-    last: Instant,
-    tick: Duration,
-    offset: MzOffset,
-    // Load-generator sources support single-threaded ingestion only, so only
-    // one of the `LoadGeneratorSourceReader`s will actually produce data.
-    active_read_worker: bool,
-    /// Capabilities used to produce messages
-    data_capability: Capability<MzOffset>,
-    upper_capability: Capability<MzOffset>,
-}
-
-impl SourceConnectionBuilder for LoadGeneratorSourceConnection {
-    type Reader = LoadGeneratorSourceReader;
-    type OffsetCommitter = LogCommitter;
-
-    fn into_reader(
-        self,
-        _source_name: String,
-        source_id: GlobalId,
-        worker_id: usize,
-        worker_count: usize,
-        _consumer_activator: SyncActivator,
-        mut data_capability: Capability<MzOffset>,
-        mut upper_capability: Capability<MzOffset>,
-        resume_upper: Antichain<MzOffset>,
-        _encoding: SourceDataEncoding,
-        _metrics: SourceBaseMetrics,
-        _connection_context: ConnectionContext,
-    ) -> Result<(Self::Reader, Self::OffsetCommitter), anyhow::Error> {
-        let active_read_worker =
-            crate::source::responsible_for(&source_id, worker_id, worker_count, ());
-
-        // TODO(petrosagg): handle the empty frontier correctly. Currenty the framework code never
-        // constructs a reader when the resumption frontier is the empty antichain
-        let offset = resume_upper.into_option().unwrap();
-        data_capability.downgrade(&offset);
-        upper_capability.downgrade(&offset);
-
-        let mut rows = as_generator(&self.load_generator, self.tick_micros)
-            .by_seed(mz_ore::now::SYSTEM_TIME.clone(), None);
-
-        // Skip forward to the requested offset.
-        let tx_count = usize::cast_from(offset.offset);
-        let txns = rows
-            .by_ref()
-            .filter(|(_, typ, _, _)| matches!(typ, GeneratorMessageType::Finalized))
-            .take(tx_count)
-            .count();
-        assert_eq!(txns, tx_count, "produced wrong number of transactions");
-
-        let tick = Duration::from_micros(self.tick_micros.unwrap_or(1_000_000));
-        Ok((
-            LoadGeneratorSourceReader {
-                rows: Box::new(rows),
-                // Subtract tick so we immediately produce a row.
-                #[allow(clippy::unchecked_duration_subtraction)]
-                last: Instant::now() - tick,
-                tick,
-                offset,
-                active_read_worker,
-                data_capability,
-                upper_capability,
-            },
-            LogCommitter {
-                source_id,
-                worker_id,
-                worker_count,
-            },
-        ))
-    }
-}
-
-impl SourceReader for LoadGeneratorSourceReader {
+impl SourceRender for LoadGeneratorSourceConnection {
     type Key = ();
     type Value = Row;
     type Time = MzOffset;
-    type Diff = Diff;
 
-    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Time, Self::Diff> {
-        if !self.active_read_worker {
-            return NextMessage::Finished;
-        }
+    fn render<G: Scope<Timestamp = MzOffset>>(
+        self,
+        scope: &mut G,
+        config: RawSourceCreationConfig,
+        _connection_context: ConnectionContext,
+        _resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+    ) -> (
+        Collection<G, Result<SourceMessage<(), Row>, SourceReaderError>, Diff>,
+        Option<Stream<G, Infallible>>,
+        Stream<G, HealthStatusUpdate>,
+        Rc<dyn Any>,
+    ) {
+        let mut builder = AsyncOperatorBuilder::new(config.name, scope.clone());
 
-        if self.last.elapsed() < self.tick {
-            return NextMessage::Pending;
-        }
+        let (mut data_output, stream) = builder.new_output();
 
-        let (output, typ, value, specific_diff) = match self.rows.next() {
-            Some(row) => row,
-            None => return NextMessage::Finished,
-        };
+        let button = builder.build(move |caps| async move {
+            let mut cap = caps.into_element();
 
-        let message = SourceMessage {
-            output,
-            upstream_time_millis: None,
-            key: (),
-            value,
-            headers: None,
-        };
-        let cap = self.data_capability.delayed(&self.offset);
-        let next_ts = self.offset + 1;
-        self.upper_capability.downgrade(&next_ts);
-        if matches!(typ, GeneratorMessageType::Finalized) {
-            self.last += self.tick;
-            self.offset += 1;
-            self.data_capability.downgrade(&next_ts);
-        }
-        NextMessage::Ready(SourceMessageType::Message(Ok(message), cap, specific_diff))
+            let responsible = crate::source::responsible_for(
+                &config.id,
+                config.worker_id,
+                config.worker_count,
+                (),
+            );
+            if !responsible {
+                return;
+            }
+
+            let resume_upper =
+                Antichain::from_iter(config.source_resume_upper.iter().map(MzOffset::decode_row));
+
+            let Some(mut offset) = resume_upper.into_option() else {
+                return
+            };
+            cap.downgrade(&offset);
+
+            let mut rows = as_generator(&self.load_generator, self.tick_micros)
+                .by_seed(mz_ore::now::SYSTEM_TIME.clone(), None);
+
+            // Skip forward to the requested offset.
+            let tx_count = usize::cast_from(offset.offset);
+            let txns = rows
+                .by_ref()
+                .filter(|(_, typ, _, _)| matches!(typ, GeneratorMessageType::Finalized))
+                .take(tx_count)
+                .count();
+            assert_eq!(txns, tx_count, "produced wrong number of transactions");
+
+            let tick = Duration::from_micros(self.tick_micros.unwrap_or(1_000_000));
+
+            while let Some((output, typ, value, diff)) = rows.next() {
+                let message = Ok(SourceMessage {
+                    output,
+                    upstream_time_millis: None,
+                    key: (),
+                    value,
+                    headers: None,
+                });
+
+                data_output.give(&cap, (message, offset, diff)).await;
+
+                if matches!(typ, GeneratorMessageType::Finalized) {
+                    offset += 1;
+                    cap.downgrade(&offset);
+                    tokio::time::sleep(tick).await;
+                }
+            }
+        });
+
+        let status = [HealthStatusUpdate::from(HealthStatus::Running)].to_stream(scope);
+        (
+            stream.as_collection(),
+            None,
+            status,
+            Rc::new(button.press_on_drop()),
+        )
     }
 }
