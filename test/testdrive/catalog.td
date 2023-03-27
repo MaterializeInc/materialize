@@ -44,26 +44,27 @@ mz_catalog
 mz_internal
 pg_catalog
 $ psql-execute command=\dn
-\   List of schemas
-    Name     | Owner
--------------+-------
- mz_catalog  |
- mz_internal |
- public      |
+\     List of schemas
+    Name     |   Owner
+-------------+-----------
+ mz_catalog  | mz_system
+ mz_internal | mz_system
+ public      | mz_system
+
 
 $ psql-execute command="\dn mz_catalog"
-\  List of schemas
-    Name    | Owner
-------------+-------
- mz_catalog |
+\    List of schemas
+    Name    |   Owner
+------------+-----------
+ mz_catalog | mz_system
 
 
 $ psql-execute command="\dn mz_*"
-\   List of schemas
-    Name     | Owner
--------------+-------
- mz_catalog  |
- mz_internal |
+\     List of schemas
+    Name     |   Owner
+-------------+-----------
+ mz_catalog  | mz_system
+ mz_internal | mz_system
 
 # What objects do we have by default?
 > SHOW OBJECTS
@@ -120,11 +121,12 @@ materialize
 
 # ...and also in `\l`
 $ psql-execute command="\l"
-\                          List of databases
-    Name     | Owner | Encoding | Collate | Ctype | Access privileges
--------------+-------+----------+---------+-------+-------------------
- d           |       | UTF8     | C       | C     |
- materialize |       | UTF8     | C       | C     |
+\                             List of databases
+    Name     |    Owner    | Encoding | Collate | Ctype | Access privileges
+-------------+-------------+----------+---------+-------+-------------------
+ d           | materialize | UTF8     | C       | C     |
+ materialize | mz_system   | UTF8     | C       | C     |
+
 
 
 > SELECT name FROM mz_databases
@@ -616,3 +618,14 @@ $ psql-execute command="\dt *.test_table"
 ---------+------------+-------+-------------
  tester  | test_table | table | materialize
  tester2 | test_table | table | materialize
+
+> CREATE TYPE type1 AS LIST (ELEMENT TYPE = text)
+
+> SHOW TYPES
+type1
+
+$ psql-execute command="\dT"
+\      List of data types
+ Schema | Name  | Description
+--------+-------+-------------
+ public | type1 |
