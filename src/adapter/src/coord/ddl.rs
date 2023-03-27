@@ -657,7 +657,8 @@ impl Coordinator {
             .catalog()
             .entries()
             .filter(|entry| {
-                entry.item().is_retained_metrics_object() && entry.item().cluster_id().is_none()
+                entry.item().is_retained_metrics_object()
+                    && entry.item().is_compute_object_on_cluster().is_none()
             })
             .map(|entry| (entry.id(), policy.clone()))
             .collect::<Vec<_>>();
@@ -667,7 +668,7 @@ impl Coordinator {
             .filter_map(|entry| {
                 if let (true, Some(cluster_id)) = (
                     entry.item().is_retained_metrics_object(),
-                    entry.item().cluster_id(),
+                    entry.item().is_compute_object_on_cluster(),
                 ) {
                     Some((cluster_id, entry.id(), policy.clone()))
                 } else {

@@ -1918,6 +1918,28 @@ impl CatalogItem {
         }
     }
 
+    /// If the object is considered a "compute object"
+    /// (i.e., it is managed by the compute controller),
+    /// this function returns its cluster ID. Otherwise, it returns nothing.
+    ///
+    /// This function differs from `cluster_id` because while all
+    /// compute objects run on a cluster, the converse is not true.
+    pub fn is_compute_object_on_cluster(&self) -> Option<ClusterId> {
+        match self {
+            CatalogItem::Index(index) => Some(index.cluster_id),
+            CatalogItem::Table(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => None,
+        }
+    }
+
     pub fn cluster_id(&self) -> Option<ClusterId> {
         match self {
             CatalogItem::MaterializedView(mv) => Some(mv.cluster_id),
