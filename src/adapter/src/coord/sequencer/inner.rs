@@ -80,6 +80,7 @@ use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::dataflows::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{FastPathPlan, PlannedPeek};
+use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampSource};
 use crate::coord::{
@@ -3361,7 +3362,9 @@ impl Coordinator {
                         .expect("setting options on index")
                         .cluster_id;
                     let policy = match window {
-                        Some(time) => ReadPolicy::lag_writes_by(time.try_into()?),
+                        Some(time) => {
+                            ReadPolicy::lag_writes_by(time.try_into()?, SINCE_GRANULARITY)
+                        }
                         None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
                     };
                     self.update_compute_base_read_policy(cluster, id, policy);

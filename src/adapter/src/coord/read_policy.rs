@@ -36,6 +36,12 @@ use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::util::ResultExt;
 
+/// The value to round all `since` frontiers to.
+/// We pick 1s somewhat arbitrarily, but matching historical practice.
+// TODO[btv] If we want to further reduce capability chatter, we can implement the design in
+// `20230322_metrics_since_granularity.md`, making it configurable.
+pub(crate) const SINCE_GRANULARITY: mz_repr::Timestamp = mz_repr::Timestamp::new(1000);
+
 /// Information about the read capability requirements of a collection.
 ///
 /// This type tracks both a default policy, as well as various holds that may
@@ -301,7 +307,7 @@ impl crate::coord::Coordinator {
         compaction_window_ms: Option<Timestamp>,
     ) -> ReadCapability<Timestamp> {
         let policy = match compaction_window_ms {
-            Some(time) => ReadPolicy::lag_writes_by(time),
+            Some(time) => ReadPolicy::lag_writes_by(time, SINCE_GRANULARITY),
             None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
         };
         policy.into()
