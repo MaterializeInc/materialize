@@ -332,6 +332,10 @@ pub fn plan_explain(
         .collect::<BTreeSet<_>>();
     let config = ExplainConfig::try_from(config_flags)?;
 
+    if config.mfp_pushdown {
+        scx.require_unsafe_mode("`mfp_pushdown` explain flag")?;
+    }
+
     let format = match format {
         mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
         mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,

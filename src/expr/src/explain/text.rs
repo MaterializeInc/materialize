@@ -101,6 +101,10 @@ where
             for (id, op) in self.sources.iter().filter(|(_, op)| !op.is_identity()) {
                 writeln!(f, "{}Source {}", ctx.indent, id)?;
                 ctx.indented(|ctx| op.fmt_text(f, ctx))?;
+                if self.context.config.mfp_pushdown {
+                    let pushdown = "?"; // TODO: extract this info from the MFP!
+                    ctx.indented(|ctx| writeln!(f, "{}mfp_pushdown={pushdown}", ctx.indent))?;
+                }
             }
         }
 
