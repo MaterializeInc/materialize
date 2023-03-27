@@ -22,8 +22,9 @@ class DBObject:
 
 
 class Database(DBObject):
-    def __init__(self, name: str):
+    def __init__(self, name: str, owner: str):
         self.name = name
+        self.owner = owner
 
 
 class Grant(DBObject):
@@ -56,7 +57,7 @@ class Universe:
             Role("mz_introspection", False, False, False, False),
             Role("mz_system", True, True, True, True),
         ]
-        self.dbs: List[Database] = [Database("materialize")]
+        self.dbs: List[Database] = [Database("materialize", "mz_system")]
         self.rbac_checks = False
 
 
@@ -133,6 +134,12 @@ class CreateRole(Action):
 
 
 class DropRole(Action):
+    def _owns_objects(self, user: str, db: Universe) -> bool:
+        for db2 in db.dbs:
+            if db2.owner == user:
+                return True
+        return False
+
     def run(self, db: Universe, rng: random.Random) -> Optional[str]:
         if not db.roles:
             return None
@@ -153,14 +160,17 @@ class DropRole(Action):
             if user.name == "materialize":
                 return f"! {cmd}\ncontains: permission denied to drop roles"
             return None
+        if self._owns_objects(role.name, db):
+            if user.name == "materialize":
+                return f"! {cmd}\ncontains: cannot be dropped because some objects depend on it"
+            return None
         db.roles.remove(role)
         for grant in db.roles:
             if grant.name == role.name:
                 db.roles.remove(grant)
                 continue
+            grant.grants = [grant2 for grant2 in grant.grants if grant2.role.name != role.name]
             for grant2 in grant.grants:
-                if grant2.role.name == role.name:
-                    grant.grants.remove(grant2)
                 if grant2.grantor.name == role.name:
                     grant2.grantor.name = "<null>"
         return self._connect_str(user.name) + cmd
@@ -283,10 +293,10 @@ class CreateDatabase(Action):
             if all(f"db{i}" != existing.name for existing in db.dbs):
                 break
             i += 1
-        newdb = Database(f"db{i}")
+        user = rng.choice(db.roles)
+        newdb = Database(f"db{i}", user.name)
         if_not_exists = "IF NOT EXISTS " if rng.choice([True, False]) else ""
         cmd = f"CREATE DATABASE {if_not_exists}{newdb.name}"
-        user = rng.choice(db.roles)
         if not self._can_create_db(user.name, db):
             if user.name == "materialize":
                 return f"! {cmd}\ncontains: permission denied to create database"
