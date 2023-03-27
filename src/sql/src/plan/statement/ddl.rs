@@ -240,13 +240,13 @@ pub fn plan_create_table(
     }
 
     let mut seen_primary = false;
-    for constraint in constraints {
+    'c: for constraint in constraints {
         match constraint {
             TableConstraint::Unique {
                 name: _,
                 columns,
                 is_primary,
-                nulls_not_distinct: _,
+                nulls_not_distinct,
             } => {
                 if seen_primary && *is_primary {
                     sql_bail!(
@@ -262,10 +262,22 @@ pub fn plan_create_table(
                     match names.iter().position(|name| *name == column) {
                         None => sql_bail!("unknown column in constraint: {}", column),
                         Some(i) => {
-                            key.push(i);
+                            let nullable = &mut column_types[i].nullable;
                             if *is_primary {
-                                column_types[i].nullable = false;
+                                if *nulls_not_distinct {
+                                    sql_bail!(
+                                        "[internal error] PRIMARY KEY does not support NULLS NOT DISTINCT"
+                                    );
+                                }
+
+                                *nullable = false;
+                            } else if !(*nulls_not_distinct || !*nullable) {
+                                // Non-primary key unique constraints are only keys if all of their
+                                // columns are `NOT NULL` or the constraint is `NULLS NOT DISTINCT`.
+                                break 'c;
                             }
+
+                            key.push(i);
                         }
                     }
                 }
@@ -1103,13 +1115,13 @@ pub fn plan_create_subsource(
     }
 
     let mut seen_primary = false;
-    for constraint in constraints {
+    'c: for constraint in constraints {
         match constraint {
             TableConstraint::Unique {
                 name: _,
                 columns,
                 is_primary,
-                nulls_not_distinct: _,
+                nulls_not_distinct,
             } => {
                 if seen_primary && *is_primary {
                     sql_bail!(
@@ -1125,10 +1137,21 @@ pub fn plan_create_subsource(
                     match names.iter().position(|name| *name == column) {
                         None => sql_bail!("unknown column in constraint: {}", column),
                         Some(i) => {
-                            key.push(i);
+                            let nullable = &mut column_types[i].nullable;
                             if *is_primary {
-                                column_types[i].nullable = false;
+                                if *nulls_not_distinct {
+                                    sql_bail!(
+                                        "[internal error] PRIMARY KEY does not support NULLS NOT DISTINCT"
+                                    );
+                                }
+                                *nullable = false;
+                            } else if !(*nulls_not_distinct || !*nullable) {
+                                // Non-primary key unique constraints are only keys if all of their
+                                // columns are `NOT NULL` or the constraint is `NULLS NOT DISTINCT`.
+                                break 'c;
                             }
+
+                            key.push(i);
                         }
                     }
                 }
