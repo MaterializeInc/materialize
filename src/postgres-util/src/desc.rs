@@ -14,6 +14,7 @@ use std::collections::BTreeSet;
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
+use tokio_postgres::types::Oid;
 
 use mz_proto::{RustType, TryFromProtoError};
 
@@ -23,7 +24,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_postgres_util.desc.rs"));
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PostgresTableDesc {
     /// The OID of the table.
-    pub oid: u32,
+    pub oid: Oid,
     /// The name of the schema that the table belongs to.
     pub namespace: String,
     /// The name of the table.
@@ -99,7 +100,7 @@ pub struct PostgresColumnDesc {
     // additional release)
     pub col_num: Option<u16>,
     /// The OID of the column's type.
-    pub type_oid: u32,
+    pub type_oid: Oid,
     /// The modifier for the column's type.
     pub type_mod: i32,
     /// True if the column lacks a `NOT NULL` constraint.
@@ -168,7 +169,7 @@ impl Arbitrary for PostgresColumnDesc {
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct PostgresKeyDesc {
     /// This key is derived from the `pg_constraint` with this OID.
-    pub oid: u32,
+    pub oid: Oid,
     /// The name of the constraints.
     pub name: String,
     /// The `attnum` of the columns comprising the key. `attnum` is a unique identifier for a column
