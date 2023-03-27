@@ -90,7 +90,11 @@ where
     let arrangement_or_bundle: ArrangementOrCollection<G> = match plan {
         // If we have no aggregations or just a single type of reduction, we
         // can go ahead and render them directly.
-        ReducePlan::Distinct => build_distinct(debug_name, collection).into(),
+        ReducePlan::Distinct => {
+            let (arranged_output, errs) = build_distinct(debug_name, collection);
+            err_collection = err_collection.concat(&errs);
+            arranged_output.into()
+        }
         ReducePlan::DistinctNegated => build_distinct_retractions(debug_name, collection).into(),
         ReducePlan::Accumulable(expr) => {
             let (arranged_output, errs) = build_accumulable(debug_name, collection, expr);
@@ -437,23 +441,42 @@ where
 
 /// Build the dataflow to compute the set of distinct keys.
 fn build_distinct<G>(
-    _debug_name: &str,
+    debug_name: &str,
     collection: Collection<G, (Row, Row), Diff>,
-) -> Arrangement<G, Row>
+) -> (Arrangement<G, Row>, Collection<G, DataflowError, Diff>)
 where
     G: Scope,
     G::Timestamp: Lattice,
 {
-    collection
+    let debug_name = debug_name.to_string();
+    let (output, errors) = collection
         .arrange_named::<RowSpine<_, _, _, _>>("Arranged DistinctBy")
-        .reduce_abelian::<_, RowSpine<_, _, _, _>>("DistinctBy", {
+        .reduce_pair::<_, RowSpine<_, _, _, _>, _, ErrValSpine<_, _, _>>(
+            "DistinctBy",
+            "DistinctByErrorCheck",
             |_key, _input, output| {
                 // We're pushing an empty row here because the key is implicitly added by the
                 // arrangement, and the permutation logic takes care of using the key part of the
                 // output.
                 output.push((Row::default(), 1));
-            }
-        })
+            },
+            move |_key, input: &[(_, Diff)], output| {
+                for (row, count) in input.iter() {
+                    if count.is_positive() {
+                        continue;
+                    }
+                    let message = "Non-positive multiplicity in DistinctBy";
+                    warn!(?row, ?count, debug_name, "[customer-data] {message}");
+                    error!("{message}");
+                    output.push((
+                        DataflowError::EvalError(EvalError::Internal(message.to_string()).into()),
+                        1,
+                    ));
+                    return;
+                }
+            },
+        );
+    (output, errors.as_collection(|_k, v| v.clone()))
 }
 
 /// Build the dataflow to compute the set of distinct keys.
