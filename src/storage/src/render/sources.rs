@@ -19,17 +19,20 @@ use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::{self, Exchange, OkErr};
 use timely::dataflow::Scope;
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::source::persist_source;
-use mz_storage_client::types::errors::{DataflowError, DecodeError, EnvelopeError};
+use mz_storage_client::types::errors::{
+    DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertNullKeyError, UpsertValueError,
+};
 use mz_storage_client::types::sources::{encoding::*, *};
 use mz_timely_util::operator::CollectionExt;
 
 use crate::decode::{render_decode_cdcv2, render_decode_delimited};
+use crate::render::upsert::UpsertCommand;
 use crate::source::types::{DecodeResult, SourceOutput};
 use crate::source::{self, RawSourceCreationConfig};
 
@@ -336,44 +339,23 @@ where
                     (debezium_ok, Some(errors))
                 }
                 SourceEnvelope::Upsert(upsert_envelope) => {
-                    // TODO: use the key envelope to figure out when to add keys.
-                    // The operator currently does it unconditionally
-                    let transformed_results =
-                        transform_keys_from_key_envelope(upsert_envelope, results);
+                    let upsert_input = upsert_commands(results, upsert_envelope.clone());
 
                     let persist_clients = Arc::clone(&storage_state.persist_clients);
 
-                    // persit requires an `as_of`, and presents all data before that
-                    // `as_of` as if its at that `as_of`. We only care about if
-                    // the data is before the `resume_upper` or not, so we pick
-                    // the biggest `as_of` we can. We could always choose
-                    // 0, but that may have been compacted away.
-                    let previous_as_of = match resume_upper.as_option() {
-                        None => {
-                            // We are at the end of time, so our `as_of` is everything.
-                            Some(Timestamp::MAX)
-                        }
-                        Some(&Timestamp::MIN) => {
-                            // We are the beginning of time (no data persisted yet), so we can
-                            // skip reading out of persist.
-                            None
-                        }
-                        Some(&t) => Some(t.saturating_sub(1)),
-                    };
-                    let (previous, previous_token) = if let Some(previous_as_of) = previous_as_of {
+                    let upper_ts = resume_upper
+                        .as_option()
+                        .expect("resuming an already finished ingestion")
+                        .clone();
+                    let (previous, previous_token) = if Timestamp::minimum() < upper_ts {
+                        let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
+
                         let (stream, tok) = persist_source::persist_source_core(
                             scope,
                             id,
                             persist_clients,
-                            // TODO(petrosagg): upsert needs to read its output and here we
-                            // assume that all upsert ingestion will output their data to the
-                            // same collection as the one carrying the ingestion. This is the
-                            // case at the time of writing but we need a more robust
-                            // implementation. Consider having the upsert operator hold private
-                            // state (a copy), or encoding the fact that this operator's state
-                            // and the output collection state is the same in an explicit way
                             description.ingestion_metadata,
-                            Some(Antichain::from_elem(previous_as_of)),
+                            Some(as_of),
                             Antichain::new(),
                             None,
                             None,
@@ -387,35 +369,22 @@ where
                             None,
                         )
                     };
-                    let (upsert_ok, upsert_err) = super::upsert::upsert(
-                        &transformed_results,
+                    let upsert = crate::render::upsert::upsert(
+                        &upsert_input,
+                        upsert_envelope.key_indices.clone(),
                         resume_upper,
-                        upsert_envelope.clone(),
                         previous,
                         previous_token,
                     );
 
-                    (upsert_ok, Some(upsert_err))
+                    let (upsert_ok, upsert_err) = upsert.inner.ok_err(split_ok_err);
+
+                    (upsert_ok.as_collection(), Some(upsert_err.as_collection()))
                 }
                 SourceEnvelope::None(none_envelope) => {
                     let results = append_metadata_to_value(results);
 
                     let flattened_stream = flatten_results_prepend_keys(none_envelope, results);
-
-                    // TODO: Maybe we should finally move this to some central
-                    // place and re-use. There seem to be enough instances of this
-                    // by now.
-                    fn split_ok_err(
-                        x: (Result<Row, DataflowError>, mz_repr::Timestamp, Diff),
-                    ) -> Result<
-                        (Row, mz_repr::Timestamp, Diff),
-                        (DataflowError, mz_repr::Timestamp, Diff),
-                    > {
-                        match x {
-                            (Ok(row), ts, diff) => Ok((row, ts, diff)),
-                            (Err(err), ts, diff) => Err((err, ts, diff)),
-                        }
-                    }
 
                     let (stream, errors) = flattened_stream.inner.ok_err(split_ok_err);
 
@@ -447,6 +416,15 @@ where
     (collection, err_collection, needed_tokens)
 }
 
+// TODO: Maybe we should finally move this to some central place and re-use. There seem to be
+// enough instances of this by now.
+fn split_ok_err<O, E, T, D>(x: (Result<O, E>, T, D)) -> Result<(O, T, D), (E, T, D)> {
+    match x {
+        (Ok(ok), ts, diff) => Ok((ok, ts, diff)),
+        (Err(err), ts, diff) => Err((err, ts, diff)),
+    }
+}
+
 /// After handling metadata insertion, we split streams into key/value parts for convenience
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize)]
 struct KV {
@@ -471,44 +449,78 @@ fn append_metadata_to_value<G: Scope>(
     })
 }
 
-/// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
-// TODO(guswynn): figure out how to merge this duplicated logic with `flatten_results_prepend_keys`
-fn transform_keys_from_key_envelope<G: Scope>(
-    upsert_envelope: &UpsertEnvelope,
-    results: Collection<G, DecodeResult, Diff>,
-) -> Collection<G, DecodeResult, Diff> {
-    match upsert_envelope {
-        UpsertEnvelope {
-            style: UpsertStyle::Default(KeyEnvelope::Flattened) | UpsertStyle::Debezium { .. },
-            ..
-        } => results,
-        UpsertEnvelope {
-            style: UpsertStyle::Default(KeyEnvelope::Named(_)),
-            ..
-        } => {
-            let mut row_buf = mz_repr::Row::default();
-            results.map(move |mut res| {
-                res.key = res.key.map(|k_result| {
-                    k_result.map(|k| {
-                        if k.iter().nth(1).is_none() {
-                            k
-                        } else {
-                            row_buf.packer().push_list(k.iter());
-                            row_buf.clone()
-                        }
-                    })
-                });
+/// Convert from streams of [`DecodeResult`] to UpsertCommands, inserting the Key according to [`KeyEnvelope`]
+fn upsert_commands<G: Scope>(
+    input: Collection<G, DecodeResult, Diff>,
+    upsert_envelope: UpsertEnvelope,
+) -> Collection<G, (UpsertCommand, MzOffset), Diff> {
+    let mut row_buf = Row::default();
+    input.map(move |result| {
+        let key = match result.key {
+            Some(Ok(key)) => Ok(key),
+            None => Err(UpsertError::NullKey(UpsertNullKeyError::with_partition_id(
+                result.partition,
+            ))),
+            Some(Err(err)) => Err(UpsertError::KeyDecode(err)),
+        };
 
-                res
-            })
-        }
-        UpsertEnvelope {
-            style: UpsertStyle::Default(KeyEnvelope::None),
-            ..
-        } => {
-            unreachable!("SourceEnvelope::Upsert should never have KeyEnvelope::None")
-        }
-    }
+        // If we have a well-formed key we can continue, otherwise we're upserting an error
+        let key = match key {
+            Ok(key) => key,
+            Err(err) => match result.value {
+                Some(_) => return (UpsertCommand::Insert(Err(err)), result.position),
+                None => return (UpsertCommand::Remove(Err(err)), result.position),
+            },
+        };
+
+        // We can now apply the key envelope
+        let key = match upsert_envelope.style {
+            UpsertStyle::Debezium { .. } | UpsertStyle::Default(KeyEnvelope::Flattened) => key,
+            UpsertStyle::Default(KeyEnvelope::Named(_)) => {
+                if key.iter().nth(1).is_none() {
+                    key
+                } else {
+                    row_buf.packer().push_list(key.iter());
+                    row_buf.clone()
+                }
+            }
+            UpsertStyle::Default(KeyEnvelope::None) => unreachable!(),
+        };
+
+        // If we have a well-formed value we can continue, otherwise we're upserting an error
+        let metadata = result.metadata;
+        let value = match result.value {
+            Some(Ok(ref row)) => match upsert_envelope.style {
+                UpsertStyle::Debezium { after_idx } => match row.iter().nth(after_idx).unwrap() {
+                    Datum::List(after) => {
+                        row_buf.packer().extend(after.iter().chain(metadata.iter()));
+                        Some(row_buf.clone())
+                    }
+                    Datum::Null => None,
+                    d => panic!("type error: expected record, found {:?}", d),
+                },
+                UpsertStyle::Default(_) => {
+                    let mut packer = row_buf.packer();
+                    packer.extend(key.iter().chain(row.iter()).chain(metadata.iter()));
+                    Some(row_buf.clone())
+                }
+            },
+            None => None,
+            Some(Err(err)) => {
+                let cmd = UpsertCommand::Insert(Err(UpsertError::Value(UpsertValueError {
+                    for_key: key,
+                    inner: Box::new(DataflowError::DecodeError(Box::new(err))),
+                })));
+                return (cmd, result.position);
+            }
+        };
+
+        let command = match value {
+            Some(value) => UpsertCommand::Insert(Ok(value)),
+            None => UpsertCommand::Remove(Ok(key)),
+        };
+        (command, result.position)
+    })
 }
 
 /// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
