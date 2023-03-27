@@ -677,7 +677,7 @@ impl CatalogState {
                     conn_id: None,
                     depends_on: vec![log_id],
                     cluster_id: id,
-                    is_retained_metrics_relation: false,
+                    is_retained_metrics_object: false,
                     custom_logical_compaction_window: None,
                 }),
                 MZ_SYSTEM_ROLE_ID,
@@ -1481,7 +1481,7 @@ pub struct Table {
     pub custom_logical_compaction_window: Option<Duration>,
     /// Whether the table's logical compaction window is controlled by
     /// METRICS_RETENTION
-    pub is_retained_metrics_relation: bool,
+    pub is_retained_metrics_object: bool,
 }
 
 impl Table {
@@ -1514,7 +1514,7 @@ pub struct Source {
     pub custom_logical_compaction_window: Option<Duration>,
     /// Whether the source's logical compaction window is controlled by
     /// METRICS_RETENTION
-    pub is_retained_metrics_relation: bool,
+    pub is_retained_metrics_object: bool,
 }
 
 impl Source {
@@ -1682,7 +1682,7 @@ pub struct Index {
     pub depends_on: Vec<GlobalId>,
     pub cluster_id: ClusterId,
     pub custom_logical_compaction_window: Option<Duration>,
-    pub is_retained_metrics_relation: bool,
+    pub is_retained_metrics_object: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1959,11 +1959,11 @@ impl CatalogItem {
     /// Whether the item's logical compaction window
     /// is controlled by the METRICS_RETENTION
     /// system var.
-    pub fn is_retained_metrics_relation(&self) -> bool {
+    pub fn is_retained_metrics_object(&self) -> bool {
         match self {
-            CatalogItem::Table(table) => table.is_retained_metrics_relation,
-            CatalogItem::Source(source) => source.is_retained_metrics_relation,
-            CatalogItem::Index(index) => index.is_retained_metrics_relation,
+            CatalogItem::Table(table) => table.is_retained_metrics_object,
+            CatalogItem::Source(source) => source.is_retained_metrics_object,
+            CatalogItem::Index(index) => index.is_retained_metrics_object,
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::MaterializedView(_)
@@ -2492,9 +2492,9 @@ impl Catalog {
                                 conn_id: None,
                                 depends_on: vec![],
                                 custom_logical_compaction_window: table
-                                    .is_retained_metrics_relation
+                                    .is_retained_metrics_object
                                     .then(|| catalog.state.system_config().metrics_retention()),
-                                is_retained_metrics_relation: table.is_retained_metrics_relation,
+                                is_retained_metrics_object: table.is_retained_metrics_object,
                             }),
                             MZ_SYSTEM_ROLE_ID,
                         );
@@ -2556,9 +2556,9 @@ impl Catalog {
                                 timeline: Timeline::EpochMilliseconds,
                                 depends_on: vec![],
                                 custom_logical_compaction_window: coll
-                                    .is_retained_metrics_relation
+                                    .is_retained_metrics_object
                                     .then(|| catalog.state.system_config().metrics_retention()),
-                                is_retained_metrics_relation: coll.is_retained_metrics_relation,
+                                is_retained_metrics_object: coll.is_retained_metrics_object,
                             }),
                             MZ_SYSTEM_ROLE_ID,
                         );
@@ -2662,8 +2662,8 @@ impl Catalog {
                     let CatalogItem::Index(catalog_index) = &mut item else {
                         panic!("internal error: builtin index {}'s SQL does not begin with \"CREATE INDEX\".", index.name);
                     };
-                    if index.is_retained_metrics_relation {
-                        catalog_index.is_retained_metrics_relation = true;
+                    if index.is_retained_metrics_object {
+                        catalog_index.is_retained_metrics_object = true;
                         catalog_index.custom_logical_compaction_window =
                             Some(catalog.state.system_config().metrics_retention());
                     }
@@ -5637,7 +5637,7 @@ impl Catalog {
                 conn_id: None,
                 depends_on,
                 custom_logical_compaction_window: None,
-                is_retained_metrics_relation: false,
+                is_retained_metrics_object: false,
             }),
             Plan::CreateSource(CreateSourcePlan {
                 source,
@@ -5669,7 +5669,7 @@ impl Catalog {
                 timeline,
                 depends_on,
                 custom_logical_compaction_window: None,
-                is_retained_metrics_relation: false,
+                is_retained_metrics_object: false,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let optimizer = Optimizer::logical_optimizer();
@@ -5705,7 +5705,7 @@ impl Catalog {
                 depends_on,
                 cluster_id: index.cluster_id,
                 custom_logical_compaction_window: None,
-                is_retained_metrics_relation: false,
+                is_retained_metrics_object: false,
             }),
             Plan::CreateSink(CreateSinkPlan {
                 sink,
@@ -6981,7 +6981,7 @@ mod tests {
                         conn_id: None,
                         depends_on: vec![],
                         custom_logical_compaction_window: None,
-                        is_retained_metrics_relation: false,
+                        is_retained_metrics_object: false,
                     }),
                     SimplifiedItem::MaterializedView { depends_on } => {
                         let table_list = depends_on.iter().join(",");
@@ -7013,6 +7013,8 @@ mod tests {
                             conn_id: None,
                             depends_on: vec![on_id],
                             cluster_id: ClusterId::User(1),
+                            custom_logical_compaction_window: None,
+                            is_retained_metrics_object: false,
                         })
                     }
                 };

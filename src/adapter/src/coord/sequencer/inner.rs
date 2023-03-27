@@ -179,7 +179,7 @@ impl Coordinator {
                 timeline: plan.timeline,
                 depends_on,
                 custom_logical_compaction_window: None,
-                is_retained_metrics_relation: false,
+                is_retained_metrics_object: false,
             };
             ops.push(catalog::Op::CreateItem {
                 id: source_id,
@@ -777,7 +777,7 @@ impl Coordinator {
             conn_id,
             depends_on,
             custom_logical_compaction_window: None,
-            is_retained_metrics_relation: false,
+            is_retained_metrics_object: false,
         };
         let table_oid = self.catalog_mut().allocate_oid()?;
         let ops = vec![catalog::Op::CreateItem {
@@ -1319,7 +1319,7 @@ impl Coordinator {
             conn_id: None,
             depends_on,
             cluster_id,
-            is_retained_metrics_relation: false,
+            is_retained_metrics_object: false,
             custom_logical_compaction_window: None,
         };
         let oid = self.catalog_mut().allocate_oid()?;

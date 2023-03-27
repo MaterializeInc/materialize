@@ -20,10 +20,11 @@
 //! `mz_ore` wrapper either.
 #![allow(clippy::disallowed_types)]
 
-use differential_dataflow::lattice::Lattice;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::Hash;
 
+use differential_dataflow::lattice::Lattice;
+use itertools::Itertools;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 
@@ -334,7 +335,6 @@ impl crate::coord::Coordinator {
         mut base_policies: Vec<(ComputeInstanceId, GlobalId, ReadPolicy<mz_repr::Timestamp>)>,
     ) {
         base_policies.sort_by_key(|&(cluster_id, _, _)| cluster_id);
-        use itertools::Itertools;
         for (cluster_id, group) in &base_policies
             .into_iter()
             .group_by(|&(cluster_id, _, _)| cluster_id)
