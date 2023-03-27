@@ -32,15 +32,15 @@ use mz_expr::MirScalarExpr;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
-use mz_sql_parser::ast::Expr;
 use mz_sql_parser::ast::UnresolvedObjectName;
+use mz_sql_parser::ast::{Expr, ObjectType};
 use mz_storage_client::types::connections::Connection;
 use mz_storage_client::types::sources::SourceDesc;
 
 use crate::func::Func;
 use crate::names::{
-    Aug, DatabaseId, FullObjectName, PartialObjectName, QualifiedObjectName, QualifiedSchemaName,
-    ResolvedDatabaseSpecifier, RoleId, SchemaSpecifier,
+    Aug, DatabaseId, FullObjectName, FullSchemaName, PartialObjectName, QualifiedObjectName,
+    QualifiedSchemaName, ResolvedDatabaseSpecifier, RoleId, SchemaSpecifier,
 };
 use crate::normalize;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
@@ -198,6 +198,13 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Gets a cluster by ID.
     fn get_cluster(&self, id: ClusterId) -> &dyn CatalogCluster;
 
+    /// Gets a cluster replica by ID.
+    fn get_cluster_replica(
+        &self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+    ) -> &dyn CatalogClusterReplica;
+
     /// Finds a name like `name` that is not already in use.
     ///
     /// If `name` itself is available, it is returned unchanged.
@@ -205,6 +212,10 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
 
     /// Returns a fully qualified human readable name from fully qualified non-human readable name
     fn resolve_full_name(&self, name: &QualifiedObjectName) -> FullObjectName;
+
+    /// Returns a fully qualified human readable schema name from fully qualified non-human
+    /// readable schema name
+    fn resolve_full_schema_name(&self, name: &QualifiedSchemaName) -> FullSchemaName;
 
     /// Returns the configuration of the catalog.
     fn config(&self) -> &CatalogConfig;
@@ -277,6 +288,9 @@ pub trait CatalogDatabase {
 
     /// Returns whether the database contains schemas.
     fn has_schemas(&self) -> bool;
+
+    /// Returns the ID of the owning role.
+    fn owner_id(&self) -> RoleId;
 }
 
 /// A schema in a [`SessionCatalog`].
@@ -292,6 +306,9 @@ pub trait CatalogSchema {
 
     /// Lists the `CatalogItem`s for the schema.
     fn has_items(&self) -> bool;
+
+    /// Returns the ID of the owning role.
+    fn owner_id(&self) -> RoleId;
 }
 
 // TODO(jkosh44) When https://github.com/MaterializeInc/materialize/issues/17824 is implemented
@@ -435,6 +452,21 @@ pub trait CatalogCluster<'a> {
     /// Returns the replicas of the cluster as a map from replica name to
     /// replica ID.
     fn replicas(&self) -> &BTreeMap<String, ReplicaId>;
+
+    /// Returns the replica belonging to the cluster with replica ID `id`.
+    fn replica(&self, id: ReplicaId) -> &dyn CatalogClusterReplica;
+
+    /// Returns the ID of the owning role.
+    fn owner_id(&self) -> RoleId;
+}
+
+/// A cluster replica in a [`SessionCatalog`]
+pub trait CatalogClusterReplica<'a> {
+    /// Returns the name of the cluster replica.
+    fn name(&self) -> &str;
+
+    /// Returns the ID of the owning role.
+    fn owner_id(&self) -> RoleId;
 }
 
 /// An item in a [`SessionCatalog`].
@@ -502,6 +534,9 @@ pub trait CatalogItem {
     /// Returns the type information associated with the catalog item, if the
     /// catalog item is a type.
     fn type_details(&self) -> Option<&CatalogTypeDetails<IdReference>>;
+
+    /// Returns the ID of the owning role.
+    fn owner_id(&self) -> RoleId;
 }
 
 /// The type of a [`CatalogItem`].
@@ -542,6 +577,23 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Func => f.write_str("func"),
             CatalogItemType::Secret => f.write_str("secret"),
             CatalogItemType::Connection => f.write_str("connection"),
+        }
+    }
+}
+
+impl From<CatalogItemType> for ObjectType {
+    fn from(value: CatalogItemType) -> Self {
+        match value {
+            CatalogItemType::Table => ObjectType::Table,
+            CatalogItemType::Source => ObjectType::Source,
+            CatalogItemType::Sink => ObjectType::Sink,
+            CatalogItemType::View => ObjectType::View,
+            CatalogItemType::MaterializedView => ObjectType::MaterializedView,
+            CatalogItemType::Index => ObjectType::Index,
+            CatalogItemType::Type => ObjectType::Type,
+            CatalogItemType::Func => ObjectType::Func,
+            CatalogItemType::Secret => ObjectType::Secret,
+            CatalogItemType::Connection => ObjectType::Connection,
         }
     }
 }

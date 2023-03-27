@@ -53,14 +53,14 @@ use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogError as SqlCatalogError,
+    CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogItemType,
     CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId, IdReference,
     NameReference, RoleAttributes, SessionCatalog, TypeReference,
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
-    Aug, DatabaseId, FullObjectName, ObjectId, ObjectQualifiers, PartialObjectName,
+    Aug, DatabaseId, FullObjectName, FullSchemaName, ObjectId, ObjectQualifiers, PartialObjectName,
     QualifiedObjectName, QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier,
     RoleId, SchemaId, SchemaSpecifier, PUBLIC_ROLE_NAME,
 };
@@ -6632,12 +6632,34 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self.state.clusters_by_id[&id]
     }
 
+    fn get_cluster_replica(
+        &self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+    ) -> &dyn mz_sql::catalog::CatalogClusterReplica {
+        let cluster = self.get_cluster(cluster_id);
+        cluster.replica(replica_id)
+    }
+
     fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName {
         self.state.find_available_name(name, self.conn_id)
     }
 
     fn resolve_full_name(&self, name: &QualifiedObjectName) -> FullObjectName {
         self.state.resolve_full_name(name, Some(self.conn_id))
+    }
+
+    fn resolve_full_schema_name(&self, name: &QualifiedSchemaName) -> FullSchemaName {
+        let database = match &name.database {
+            ResolvedDatabaseSpecifier::Ambient => RawDatabaseSpecifier::Ambient,
+            ResolvedDatabaseSpecifier::Id(id) => {
+                RawDatabaseSpecifier::Name(self.get_database(id).name().to_string())
+            }
+        };
+        FullSchemaName {
+            database,
+            schema: name.schema.clone(),
+        }
     }
 
     fn config(&self) -> &mz_sql::catalog::CatalogConfig {
@@ -6673,6 +6695,10 @@ impl mz_sql::catalog::CatalogDatabase for Database {
     fn has_schemas(&self) -> bool {
         !self.schemas_by_name.is_empty()
     }
+
+    fn owner_id(&self) -> RoleId {
+        self.owner_id
+    }
 }
 
 impl mz_sql::catalog::CatalogSchema for Schema {
@@ -6690,6 +6716,10 @@ impl mz_sql::catalog::CatalogSchema for Schema {
 
     fn has_items(&self) -> bool {
         !self.items.is_empty()
+    }
+
+    fn owner_id(&self) -> RoleId {
+        self.owner_id
     }
 }
 
@@ -6746,6 +6776,24 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
 
     fn replicas(&self) -> &BTreeMap<String, ReplicaId> {
         &self.replica_id_by_name
+    }
+
+    fn replica(&self, id: ReplicaId) -> &dyn CatalogClusterReplica {
+        self.replicas_by_id.get(&id).expect("catalog out of sync")
+    }
+
+    fn owner_id(&self) -> RoleId {
+        self.owner_id
+    }
+}
+
+impl mz_sql::catalog::CatalogClusterReplica<'_> for ClusterReplica {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn owner_id(&self) -> RoleId {
+        self.owner_id
     }
 }
 
@@ -6834,6 +6882,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn subsources(&self) -> Vec<GlobalId> {
         self.subsources()
+    }
+
+    fn owner_id(&self) -> RoleId {
+        self.owner_id
     }
 }
 

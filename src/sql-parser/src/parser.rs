@@ -3297,6 +3297,11 @@ impl<'a> Parser<'a> {
                     cascade,
                 }))
             }
+            ObjectType::Func => parser_err!(
+                self,
+                self.peek_prev_pos(),
+                format!("Unsupported DROP on {object_type}")
+            ),
         }
     }
 
@@ -3681,6 +3686,11 @@ impl<'a> Parser<'a> {
                     new_owner,
                 }))
             }
+            ObjectType::Func => parser_err!(
+                self,
+                self.peek_prev_pos(),
+                format!("Unsupported ALTER on {object_type}")
+            ),
         }
     }
 
@@ -5041,6 +5051,13 @@ impl<'a> Parser<'a> {
                         on_object,
                     }
                 }
+                ObjectType::Func => {
+                    return parser_err!(
+                        self,
+                        self.peek_prev_pos(),
+                        format!("Unsupported SHOW on {object_type}")
+                    )
+                }
             };
             Ok(ShowStatement::ShowObjects(ShowObjectsStatement {
                 object_type: show_object_type,
@@ -5876,6 +5893,7 @@ impl<'a> Parser<'a> {
                 CONNECTION,
                 DATABASE,
                 SCHEMA,
+                FUNCTION,
             ])? {
                 TABLE => ObjectType::Table,
                 VIEW => ObjectType::View,
@@ -5899,6 +5917,7 @@ impl<'a> Parser<'a> {
                 CONNECTION => ObjectType::Connection,
                 DATABASE => ObjectType::Database,
                 SCHEMA => ObjectType::Schema,
+                FUNCTION => ObjectType::Func,
                 _ => unreachable!(),
             },
         )

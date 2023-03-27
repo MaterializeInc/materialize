@@ -1589,6 +1589,7 @@ impl Coordinator {
             | ObjectType::Schema => {
                 unreachable!("handled through their respective sequence_drop functions")
             }
+            ObjectType::Func => unreachable!("rejected by the parser"),
         })
     }
 
