@@ -7,21 +7,23 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::time::Duration;
+use std::any::Any;
+use std::convert::Infallible;
+use std::rc::Rc;
 
-use timely::dataflow::operators::Capability;
+use differential_dataflow::{AsCollection, Collection};
+use timely::dataflow::operators::ToStream;
+use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
-use timely::scheduling::SyncActivator;
-use tokio::time::sleep;
 
-use mz_repr::GlobalId;
+use mz_ore::collections::CollectionExt;
+use mz_repr::Diff;
 use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::sources::encoding::SourceDataEncoding;
 use mz_storage_client::types::sources::{MzOffset, TestScriptSourceConnection};
+use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
 
-use crate::source::commit::LogCommitter;
-use crate::source::types::SourceConnectionBuilder;
-use crate::source::{SourceMessage, SourceMessageType, SourceReader};
+use crate::source::types::{HealthStatus, HealthStatusUpdate, SourceRender};
+use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 #[serde(tag = "command")]
@@ -41,92 +43,61 @@ pub enum ScriptCommand {
     Terminate,
 }
 
-struct Script {
-    commands: std::vec::IntoIter<ScriptCommand>,
-}
-
-pub struct TestScriptSourceReader {
-    script: Script,
-    /// Capabilities used to produce messages
-    data_capability: Capability<MzOffset>,
-    upper_capability: Capability<MzOffset>,
-}
-
-impl SourceConnectionBuilder for TestScriptSourceConnection {
-    type Reader = TestScriptSourceReader;
-    type OffsetCommitter = LogCommitter;
-
-    fn into_reader(
-        self,
-        _source_name: String,
-        source_id: GlobalId,
-        worker_id: usize,
-        worker_count: usize,
-        _consumer_activator: SyncActivator,
-        data_capability: Capability<<Self::Reader as SourceReader>::Time>,
-        upper_capability: Capability<<Self::Reader as SourceReader>::Time>,
-        _resume_upper: Antichain<<Self::Reader as SourceReader>::Time>,
-        _encoding: SourceDataEncoding,
-        _metrics: crate::source::metrics::SourceBaseMetrics,
-        _connection_context: ConnectionContext,
-    ) -> Result<(Self::Reader, Self::OffsetCommitter), anyhow::Error> {
-        let commands: Vec<ScriptCommand> = serde_json::from_str(&self.desc_json)?;
-        Ok((
-            TestScriptSourceReader {
-                script: Script {
-                    commands: commands.into_iter(),
-                },
-                data_capability,
-                upper_capability,
-            },
-            LogCommitter {
-                source_id,
-                worker_id,
-                worker_count,
-            },
-        ))
-    }
-}
-
-#[async_trait::async_trait(?Send)]
-impl SourceReader for TestScriptSourceReader {
+impl SourceRender for TestScriptSourceConnection {
     type Key = Option<Vec<u8>>;
     type Value = Option<Vec<u8>>;
     type Time = MzOffset;
-    type Diff = u32;
 
-    async fn next(
-        &mut self,
-        timestamp_granularity: Duration,
-    ) -> Option<SourceMessageType<Self::Key, Self::Value, Self::Time, Self::Diff>> {
-        if let Some(command) = self.script.commands.next() {
-            match command {
-                ScriptCommand::Terminate => {
-                    return None;
-                }
-                ScriptCommand::Emit { key, value, offset } => {
-                    // For now we only support `Finalized` messages
-                    let msg = Ok(SourceMessage {
-                        // For now, we only support single-output, single partition
-                        output: 0,
-                        upstream_time_millis: None,
-                        key: key.map(|k| k.into_bytes()),
-                        value: Some(value.into_bytes()),
-                        headers: None,
-                    });
-                    let ts = MzOffset::from(offset);
-                    let cap = self.data_capability.delayed(&ts);
-                    let next_ts = ts + 1;
-                    self.data_capability.downgrade(&next_ts);
-                    self.upper_capability.downgrade(&next_ts);
-                    return Some(SourceMessageType::Message(msg, cap, 1));
+    fn render<G: Scope<Timestamp = MzOffset>>(
+        self,
+        scope: &mut G,
+        config: RawSourceCreationConfig,
+        _connection_context: ConnectionContext,
+        _resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+    ) -> (
+        Collection<G, Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>, Diff>,
+        Option<Stream<G, Infallible>>,
+        Stream<G, HealthStatusUpdate>,
+        Rc<dyn Any>,
+    ) {
+        let mut builder = AsyncOperatorBuilder::new(config.name, scope.clone());
+
+        let (mut data_output, stream) = builder.new_output();
+
+        let button = builder.build(move |caps| async move {
+            let mut cap = caps.into_element();
+            let commands: Vec<ScriptCommand> =
+                serde_json::from_str(&self.desc_json).expect("Invalid command description");
+
+            for command in commands {
+                match command {
+                    ScriptCommand::Emit { key, value, offset } => {
+                        // For now we only support `Finalized` messages
+                        let msg = Ok(SourceMessage {
+                            // For now, we only support single-output, single partition
+                            output: 0,
+                            upstream_time_millis: None,
+                            key: key.map(|k| k.into_bytes()),
+                            value: Some(value.into_bytes()),
+                            headers: None,
+                        });
+                        let ts = MzOffset::from(offset);
+                        data_output.give(&cap.delayed(&ts), (msg, ts, 1)).await;
+                        cap.downgrade(&(ts + 1));
+                    }
+                    ScriptCommand::Terminate => return,
                 }
             }
-        } else {
-            loop {
-                // sleep continuously
-                sleep(timestamp_granularity).await;
-            }
-        }
+            // Keep the source alive if we didn't get an explicit Terminate command
+            futures::future::pending::<()>().await;
+        });
+
+        let status = [HealthStatusUpdate::from(HealthStatus::Running)].to_stream(scope);
+        (
+            stream.as_collection(),
+            None,
+            status,
+            Rc::new(button.press_on_drop()),
+        )
     }
 }
