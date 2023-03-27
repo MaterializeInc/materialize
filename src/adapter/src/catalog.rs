@@ -2391,7 +2391,9 @@ impl Catalog {
                     name: role.name,
                     id,
                     oid,
-                    attributes: role.attributes,
+                    attributes: role
+                        .attributes
+                        .expect("serialized role was not properly migrated"),
                     membership: role
                         .membership
                         .expect("serialized role was not properly migrated"),
@@ -4697,7 +4699,7 @@ impl Catalog {
                     let membership = RoleMembership::new();
                     let serialized_role = SerializedRole {
                         name: name.clone(),
-                        attributes: attributes.clone(),
+                        attributes: Some(attributes.clone()),
                         membership: Some(membership.clone()),
                     };
                     let id = tx.insert_user_role(serialized_role)?;
@@ -6139,7 +6141,8 @@ impl From<ReplicaLocation> for SerializedReplicaLocation {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct SerializedRole {
     pub name: String,
-    pub attributes: RoleAttributes,
+    // TODO(jkosh44): Remove Option when stash consolidation bug is fixed
+    pub attributes: Option<RoleAttributes>,
     // TODO(jkosh44): Remove Option in v0.49.0
     pub membership: Option<RoleMembership>,
 }
@@ -6148,7 +6151,7 @@ impl From<Role> for SerializedRole {
     fn from(role: Role) -> Self {
         SerializedRole {
             name: role.name,
-            attributes: role.attributes,
+            attributes: Some(role.attributes),
             membership: Some(role.membership),
         }
     }
@@ -6158,7 +6161,7 @@ impl From<&BuiltinRole> for SerializedRole {
     fn from(role: &BuiltinRole) -> Self {
         SerializedRole {
             name: role.name.to_string(),
-            attributes: role.attributes.clone(),
+            attributes: Some(role.attributes.clone()),
             membership: Some(RoleMembership::new()),
         }
     }
