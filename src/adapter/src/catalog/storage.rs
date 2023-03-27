@@ -398,7 +398,7 @@ async fn migrate(
                 RoleValue {
                     role: SerializedRole {
                         name: PUBLIC_ROLE_NAME.as_str().to_lowercase(),
-                        attributes: RoleAttributes::new(),
+                        attributes: Some(RoleAttributes::new()),
                         membership: Some(RoleMembership::new()),
                     },
                 },
@@ -456,7 +456,7 @@ async fn migrate(
                 None => {
                     let role_id = txn.insert_user_role(SerializedRole {
                         name: default_owner_name.to_string(),
-                        attributes: RoleAttributes::new(),
+                        attributes: Some(RoleAttributes::new()),
                         membership: Some(RoleMembership::new()),
                     })?;
                     let audit_id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
