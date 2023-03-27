@@ -75,10 +75,14 @@ where
         let ok_collection = ok_collection.leave();
         let err_collection = err_collection.leave();
 
+        let region_name = match sink.connection {
+            ComputeSinkConnection::Subscribe(_) => format!("SubscribeSink({:?})", sink_id),
+            ComputeSinkConnection::Persist(_) => format!("PersistSink({:?})", sink_id),
+        };
         self.scope
             .parent
             .clone()
-            .region_named(&format!("PersistSink({:?})", sink_id), |inner| {
+            .region_named(&region_name, |inner| {
                 let sink_render = get_sink_render_for::<_>(&sink.connection);
 
                 let sink_token = sink_render.render_continuous_sink(
