@@ -3871,11 +3871,13 @@ dependencies = [
  "derivative",
  "jsonwebtoken",
  "mz-ore",
+ "once_cell",
  "reqwest",
  "serde",
  "thiserror",
  "tokio",
  "tracing",
+ "url",
  "uuid",
  "workspace-hack",
 ]

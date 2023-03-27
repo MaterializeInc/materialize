@@ -90,7 +90,9 @@ use mz_ore::{now::NowFn, retry::Retry};
 use crate::app_password::{AppPassword, AppPasswordParseError};
 
 pub mod app_password;
+pub mod config;
 pub mod client;
+pub mod error;
 
 pub struct FronteggConfig {
     /// URL for the token endpoint, including full path.

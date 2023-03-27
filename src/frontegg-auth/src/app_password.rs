@@ -33,6 +33,7 @@ pub const PREFIX: &str = "mzp_";
 ///     This format allows for the UUIDs to be formatted with hyphens, or
 ///     not.
 ///
+#[derive(Debug)]
 pub struct AppPassword {
     /// The client ID embedded in the app password.
     pub client_id: Uuid,
