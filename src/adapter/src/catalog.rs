@@ -5383,7 +5383,7 @@ impl Catalog {
                     let cluster_name = state.get_cluster(id).name().to_string();
                     if id.is_system() {
                         return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReadOnlyCluster(cluster_name.clone()),
+                            ErrorKind::ReadOnlyCluster(cluster_name),
                         )));
                     }
                     builtin_table_updates.push(state.pack_cluster_update(&cluster_name, -1));
@@ -5398,10 +5398,9 @@ impl Catalog {
                     new_owner,
                 } => {
                     let cluster = state.get_cluster(cluster_id);
-                    let cluster_name = cluster.name();
                     if cluster_id.is_system() {
                         return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReadOnlyCluster(cluster_name.to_string()),
+                            ErrorKind::ReadOnlyCluster(cluster.name().to_string()),
                         )));
                     }
                     let replica_name = cluster
@@ -5461,8 +5460,8 @@ impl Catalog {
                     ));
                 }
                 Op::ItemOwner { id, new_owner } => {
-                    let entry = state.get_entry(&id);
                     if id.is_system() {
+                        let entry = state.get_entry(&id);
                         let full_name = state.resolve_full_name(
                             entry.name(),
                             session.map(|session| session.conn_id()),
