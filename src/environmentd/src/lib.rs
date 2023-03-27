@@ -102,6 +102,7 @@ use mz_build_info::{build_info, BuildInfo};
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::FronteggAuthentication;
+use mz_orchestrator::NamespacedOrchestrator;
 use mz_ore::future::OreFutureExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -345,6 +346,12 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             .context("opening storage usage client")?,
     );
 
+    // TODO(teskje): Remove this migration in v0.42, since v0.41+ will only create orchestrator
+    // resources in the "cluster" namespace.
+    tracing::info!("SPECIAL MIGRATION: removing legacy orchestrator services");
+    remove_orchestrator_services(config.controller.orchestrator.namespace("compute")).await?;
+    remove_orchestrator_services(config.controller.orchestrator.namespace("storage")).await?;
+
     // Initialize controller.
     let controller = mz_controller::Controller::new(config.controller, envd_epoch).await;
 
@@ -502,4 +509,13 @@ impl Server {
     pub fn internal_http_local_addr(&self) -> SocketAddr {
         self.internal_http_listener.local_addr()
     }
+}
+
+async fn remove_orchestrator_services(
+    orchestrator: Arc<dyn NamespacedOrchestrator>,
+) -> Result<(), anyhow::Error> {
+    for name in orchestrator.list_services().await? {
+        orchestrator.drop_service(&name).await?;
+    }
+    Ok(())
 }
