@@ -60,7 +60,7 @@ pub async fn initialize_networking(
     info!(
         process = process,
         ?addresses,
-        "initializing network for multi-process timely instance, with {} processes for epoch number {epoch}",
+        "initializing network for timely instance, with {} processes for epoch number {epoch}",
         addresses.len()
     );
     let sockets = create_sockets(addresses, u64::cast_from(process), epoch)
