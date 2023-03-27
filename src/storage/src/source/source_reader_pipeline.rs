@@ -34,18 +34,18 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
-use futures::{FutureExt, StreamExt};
+use futures::stream::StreamExt;
 use itertools::Itertools;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::capture::capture::Capture;
 use timely::dataflow::operators::capture::Event;
-use timely::dataflow::operators::{Broadcast, CapabilitySet, Partition};
+use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, Map, Partition};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
@@ -79,13 +79,10 @@ use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, ReclockOperator};
 use crate::source::types::{
-    HealthStatus, HealthStatusUpdate, MaybeLength, OffsetCommitter, SourceConnectionBuilder,
-    SourceMessage, SourceMessageType, SourceMetrics, SourceOutput, SourceReader, SourceReaderError,
-    SourceReaderMetrics,
+    HealthStatus, HealthStatusUpdate, MaybeLength, SourceMessage, SourceMetrics, SourceOutput,
+    SourceReaderError, SourceRender,
 };
 use crate::statistics::{SourceStatisticsMetrics, StorageStatistics};
-
-const YIELD_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Shared configuration information for all source types. This is used in the
 /// `create_raw_source` functions, which produce raw sources.
@@ -127,8 +124,7 @@ pub struct RawSourceCreationConfig {
     pub shared_remap_upper: Rc<RefCell<Antichain<mz_repr::Timestamp>>>,
 }
 
-/// Creates a source dataflow operator graph from a connection that has a
-/// corresponding [`SourceReader`] implementation. The type of SourceConnection
+/// Creates a source dataflow operator graph from a source connection. The type of SourceConnection
 /// determines the type of connection that _should_ be created.
 ///
 /// This is also the place where _reclocking_
@@ -147,13 +143,7 @@ pub fn create_raw_source<RootG, G, C, R>(
     internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
 ) -> (
     (
-        Vec<
-            Collection<
-                G,
-                SourceOutput<<C::Reader as SourceReader>::Key, <C::Reader as SourceReader>::Value>,
-                <C::Reader as SourceReader>::Diff,
-            >,
-        >,
+        Vec<Collection<G, SourceOutput<C::Key, C::Value>, Diff>>,
         Collection<G, SourceError, Diff>,
     ),
     Option<Rc<dyn Any>>,
@@ -161,8 +151,7 @@ pub fn create_raw_source<RootG, G, C, R>(
 where
     RootG: Scope<Timestamp = ()> + Clone,
     G: Scope<Timestamp = mz_repr::Timestamp> + Clone,
-    C: SourceConnection + SourceConnectionBuilder + Clone + 'static,
-    <C::Reader as SourceReader>::Diff: Into<Diff>,
+    C: SourceConnection + SourceRender + Clone + 'static,
     R: ResumptionFrontierCalculator<mz_repr::Timestamp> + 'static,
 {
     let worker_id = config.worker_id;
@@ -197,7 +186,7 @@ where
     let (token, health_token) = {
         let config = config.clone();
         root_scope.scoped("SourceTimeDomain", move |scope| {
-            let (source, source_upper, health_stream, token) = source_reader_operator(
+            let (source, source_upper, health_stream, token) = source_render_operator(
                 scope,
                 config.clone(),
                 source_connection,
@@ -229,233 +218,99 @@ where
 
 type WorkerId = usize;
 
-/// Reads from a [`SourceReader`] and returns a collection timestamped with the
-/// source specific timestamp type. Also returns a second stream that can be used to
-/// learn about the `source_upper` that all the source reader instances know
-/// about. This second stream will be used by the `remap_operator` to mint new
-/// timestamp bindings into the remap shard.
-fn source_reader_operator<G, C, R>(
-    scope: &G,
+/// Renders the source dataflow fragment from the given [SourceConnection]. This returns a
+/// collection timestamped with the source specific timestamp type. Also returns a second stream
+/// that can be used to learn about the `source_upper` that all the source reader instances know
+/// about. This second stream will be used by the `remap_operator` to mint new timestamp bindings
+/// into the remap shard.
+fn source_render_operator<G, C>(
+    scope: &mut G,
     config: RawSourceCreationConfig,
     source_connection: C,
     connection_context: ConnectionContext,
-    resume_uppers: impl futures::Stream<Item = Antichain<R::Time>> + 'static,
+    resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + 'static,
 ) -> (
-    Collection<G, Result<SourceMessage<R::Key, R::Value>, SourceReaderError>, R::Diff>,
+    Collection<G, Result<SourceMessage<C::Key, C::Value>, SourceReaderError>, Diff>,
     Stream<G, Infallible>,
     Stream<G, (WorkerId, HealthStatusUpdate)>,
     Rc<dyn Any>,
 )
 where
-    G: Scope<Timestamp = R::Time>,
-    C: SourceConnectionBuilder<Reader = R> + 'static,
-    R: SourceReader,
+    G: Scope<Timestamp = C::Time>,
+    C: SourceRender + 'static,
 {
-    let RawSourceCreationConfig {
-        name,
-        id,
-        num_outputs: _,
-        worker_id,
-        worker_count,
-        timestamp_interval,
-        encoding,
-        storage_metadata: _,
-        resume_upper: _,
-        source_resume_upper,
-        base_metrics,
-        now: _,
-        persist_clients: _,
-        source_statistics,
-        shared_remap_upper: _,
-    } = config;
+    let source_id = config.id;
+    let worker_id = config.worker_id;
+    let source_statistics = config.source_statistics.clone();
 
-    let mut builder = AsyncOperatorBuilder::new(name.clone(), scope.clone());
+    let resume_uppers = resume_uppers.inspect(move |upper| {
+        let upper = upper.pretty();
+        trace!(%upper, "timely-{worker_id} source({source_id}) received resume upper");
+    });
 
-    let info = builder.operator_info();
-    // TODO(guswynn): should sources still be able to self-activate?
-    // probably not, so we should remove this
-    let sync_activator = scope.sync_activator_for(&info.address[..]);
+    let (data, progress, health, token) =
+        source_connection.render(scope, config, connection_context, resume_uppers);
 
-    let (mut output, stream) = builder.new_output();
-    // We don't need the output because we simply downgrade the output's capability.
-    let (_upper_output, upper_stream) = builder.new_output();
-    let (mut health_output, health_stream) = builder.new_output();
+    let name = format!("SourceStats({})", source_id);
+    let mut builder = AsyncOperatorBuilder::new(name, scope.clone());
 
-    let button = builder.build(move |mut capabilities| async move {
-        let health_cap = capabilities.pop().unwrap();
-        let upper_cap = capabilities.pop().unwrap();
-        let data_cap = capabilities.pop().unwrap();
+    let mut data_input = builder.new_input(&data.inner, Pipeline);
+    let (mut data_output, data) = builder.new_output();
+    let (mut _progress_output, derived_progress) = builder.new_output();
+    let (mut health_output, derived_health) = builder.new_output();
 
-        let mut source_metrics = SourceReaderMetrics::new(&base_metrics, id);
-        let offset_commit_metrics = source_metrics.offset_commit_metrics();
+    builder.build(move |mut caps| async move {
+        let health_cap = caps.pop().unwrap();
+        drop(caps);
 
-        let source_upper = Antichain::from_iter(source_resume_upper.iter().map(R::Time::decode_row));
-        info!(
-            "timely-{worker_id} source({id}) initial resume upper: source_upper={}",
-            source_upper.pretty()
-        );
+        health_output
+            .give(&health_cap, HealthStatus::Starting.into())
+            .await;
 
-        for ts in source_upper.iter() {
-            // TODO(petrosagg): rework metrics to be generic over the source timestamp
-            if let Some((pid, offset)) = ts.try_into_compat_ts() {
-                source_metrics
-                    .metrics_for_partition(&pid)
-                    .source_resume_upper
-                    .set(offset.offset)
-            }
-        }
+        let mut statuses = vec![];
 
-        // TODO(petrosagg): pass the source upper frontier directly to sources
-        // sources should be able to handle resuming at the empty antichain by doing nothing
-        if source_upper.is_empty() {
-            return;
-        }
-        let (source_reader, offset_committer) = match source_connection
-            .into_reader(
-                name.clone(),
-                id,
-                worker_id,
-                worker_count,
-                sync_activator,
-                data_cap,
-                upper_cap,
-                source_upper,
-                encoding,
-                base_metrics,
-                connection_context.clone(),
-            ) {
-                Ok(res) => res,
-                Err(e) => {
-                    panic!("Failed to create source: {:#}", e);
-                }
+        while let Some(event) = data_input.next_mut().await {
+            let AsyncEvent::Data(cap, data) = event else {
+                continue;
             };
+            for (message, _, _) in data.iter() {
+                let status = match message {
+                    Ok(_) => HealthStatusUpdate::from(HealthStatus::Running),
+                    Err(ref error) => HealthStatusUpdate::from(HealthStatus::StalledWithError {
+                        error: error.inner.to_string(),
+                        hint: None,
+                    }),
+                };
+                if statuses.last() != Some(&status) {
+                    statuses.push(status);
+                }
 
-        let source_stream = source_reader.into_stream(timestamp_interval).peekable();
-        tokio::pin!(source_stream);
-        tokio::pin!(resume_uppers);
-
-        health_output.give(&health_cap, (worker_id, HealthStatusUpdate {
-            update: HealthStatus::Starting,
-            should_halt: false,
-        })).await;
-        let mut prev_status = HealthStatusUpdate {
-            update: HealthStatus::Starting,
-            should_halt: false,
-        };
-
-        // We want to commit offsets concurrently with ingestion so that a slow commit
-        // implementation doesn't stall the operator and prevent it from reading more data. For
-        // this reason we package up the logic in a future that is polled below in the select loop.
-        let offset_commit_loop = async {
-            while let Some(frontier) = resume_uppers.next().await {
-                trace!(
-                    "timely-{worker_id} source({id}) committing offsets: resume_upper={}",
-                    frontier.pretty()
-                );
-                if let Err(e) = offset_committer.commit_offsets(frontier.clone()).await {
-                    offset_commit_metrics.offset_commit_failures.inc();
-                    tracing::warn!(
-                        %e,
-                        "timely-{worker_id} source({id}) failed to commit offsets: resume_upper={}",
-                        frontier.pretty()
-                    );
+                match message {
+                    Ok(message) => {
+                        source_statistics.inc_messages_received_by(1);
+                        let key_len = u64::cast_from(message.key.len().unwrap_or(0));
+                        let value_len = u64::cast_from(message.value.len().unwrap_or(0));
+                        source_statistics.inc_bytes_received_by(key_len + value_len);
+                    }
+                    Err(_) => {}
                 }
             }
-        };
-        tokio::pin!(offset_commit_loop);
-
-        let mut batch = Vec::new();
-        loop {
-            tokio::select! {
-                _ = source_stream.as_mut().peek() => {
-                    let timer = Instant::now();
-
-                    // We stash a capability here to try and coalesce multiple messages emitted by
-                    // the source at the same timestamp. Ideally this should be performed by the
-                    // source implementation itself, presenting directly timely friendly batches,
-                    // but we're not there yet. The `SourceReader::get_next_message` API forces
-                    // processing at a message-at-a-time granularity so we need to do batching here
-                    let mut emit_cap = None;
-
-                    // We want to efficiently batch up messages that are ready. To do that we will
-                    // activate the output handle here and then drain the currently available
-                    // messages until we either run out of messages or run out of time.
-                    while timer.elapsed() < YIELD_INTERVAL {
-                        match source_stream.next().now_or_never() {
-                            Some(Some(SourceMessageType::Message(message, cap, diff))) => {
-                                let new_status = match message {
-                                    Ok(_) => HealthStatus::Running,
-                                    Err(ref error) => {
-                                        HealthStatus::StalledWithError {error: error.inner.to_string(), hint: None }
-                                    }
-                                };
-
-                                let new_status_update = HealthStatusUpdate {
-                                    update: new_status,
-                                    should_halt: false,
-                                };
-
-                                if prev_status != new_status_update {
-                                    prev_status = new_status_update.clone();
-                                    health_output.give(&health_cap, (worker_id, new_status_update)).await;
-                                }
-
-                                if let Ok(message) = &message {
-                                    source_statistics.inc_messages_received_by(1);
-                                    let key_len = u64::cast_from(message.key.len().unwrap_or(0));
-                                    let value_len = u64::cast_from(message.value.len().unwrap_or(0));
-                                    source_statistics.inc_bytes_received_by(key_len + value_len);
-                                }
-
-                                let time = cap.time().clone();
-                                match emit_cap.as_mut() {
-                                    // If cap is not beyond emit_cap we can't re-use emit_cap so
-                                    // flush the current batch
-                                    Some(emit_cap) => if !PartialOrder::less_equal(emit_cap, &cap) {
-                                        output.give_container(&*emit_cap, &mut batch).await;
-                                        batch.clear();
-                                        *emit_cap = cap;
-                                    },
-                                    None => emit_cap = Some(cap),
-                                };
-                                batch.push((message, time, diff));
-                            }
-                            Some(Some(SourceMessageType::SourceStatus(new_status))) => {
-                                prev_status = new_status.clone();
-                                health_output.give(&health_cap, (worker_id, new_status)).await;
-                            }
-                            Some(None) => {
-                                trace!("timely-{worker_id} source({id}): source ended, dropping capabilities");
-                                if let Some(emit_cap) = emit_cap.take() {
-                                    output.give_container(&emit_cap, &mut batch).await;
-                                    batch.clear();
-                                }
-                                return;
-                            }
-                            None => break,
-                        }
-                    }
-                    if let Some(emit_cap) = emit_cap.take() {
-                        output.give_container(&emit_cap, &mut batch).await;
-                        batch.clear();
-                    }
-                    assert!(batch.is_empty());
-                    if timer.elapsed() > YIELD_INTERVAL {
-                        tokio::task::yield_now().await;
-                    }
-                }
-                // This future is not cancel safe but we are only passing a reference to it in the
-                // select! loop so the future stays on the stack and never gets cancelled until the
-                // end of the function.
-                _ = offset_commit_loop.as_mut() => break,
-            }
+            data_output.give_container(&cap, data).await;
+            health_output
+                .give_container(&health_cap, &mut statuses)
+                .await;
         }
     });
+
+    let health = health
+        .concat(&derived_health)
+        .map(move |status| (worker_id, status));
+
     (
-        stream.as_collection(),
-        upper_stream,
-        health_stream,
-        Rc::new(button.press_on_drop()),
+        data.as_collection(),
+        progress.unwrap_or(derived_progress),
+        health,
+        token,
     )
 }
 

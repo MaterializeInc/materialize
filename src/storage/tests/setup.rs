@@ -99,7 +99,7 @@ use mz_storage::internal_control::{InternalCommandSender, InternalStorageCommand
 use mz_storage::sink::SinkBaseMetrics;
 use mz_storage::source::metrics::SourceBaseMetrics;
 use mz_storage::source::testscript::ScriptCommand;
-use mz_storage::source::types::{SourceConnectionBuilder, SourceReader};
+use mz_storage::source::types::SourceRender;
 use mz_storage::DecodeMetrics;
 use mz_storage_client::types::sources::{
     encoding::SourceDataEncoding, GenericSourceConnection, SourceData, SourceDesc, SourceEnvelope,
@@ -375,8 +375,8 @@ where
 
 /// Calculates the minimum frontier for a particular source connection using the source specific
 /// timestamp
-fn minimum_frontier<C: SourceConnectionBuilder>(_conn: &C) -> Vec<Row> {
-    vec![<C::Reader as SourceReader>::Time::minimum().encode_row()]
+fn minimum_frontier<C: SourceRender>(_conn: &C) -> Vec<Row> {
+    vec![C::Time::minimum().encode_row()]
 }
 
 struct HaltingInternalCommandSender {}
