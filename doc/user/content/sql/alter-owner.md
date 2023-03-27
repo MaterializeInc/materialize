@@ -35,7 +35,7 @@ ALTER TABLE t OWNER TO joe;
 ```
 
 ```sql
-ALTER CLUSTER REPLICA production.r1 TO admin;
+ALTER CLUSTER REPLICA production.r1 OWNER TO admin;
 ```
 
 ## See also

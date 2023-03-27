@@ -5380,18 +5380,17 @@ impl Catalog {
                     }
                 }
                 Op::ClusterOwner { id, new_owner } => {
-                    let cluster = state.get_cluster(id);
+                    let cluster_name = state.get_cluster(id).name().to_string();
                     if id.is_system() {
                         return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReadOnlyCluster(cluster.name().to_string()),
+                            ErrorKind::ReadOnlyCluster(cluster_name.clone()),
                         )));
                     }
-                    builtin_table_updates.push(state.pack_cluster_update(cluster.name(), -1));
+                    builtin_table_updates.push(state.pack_cluster_update(&cluster_name, -1));
                     let cluster = state.get_cluster_mut(id);
                     cluster.owner_id = new_owner;
-                    let cluster = state.get_cluster(id);
                     tx.update_cluster(id, cluster)?;
-                    builtin_table_updates.push(state.pack_cluster_update(cluster.name(), 1));
+                    builtin_table_updates.push(state.pack_cluster_update(&cluster_name, 1));
                 }
                 Op::ClusterReplicaOwner {
                     cluster_id,
@@ -5399,18 +5398,21 @@ impl Catalog {
                     new_owner,
                 } => {
                     let cluster = state.get_cluster(cluster_id);
+                    let cluster_name = cluster.name();
                     if cluster_id.is_system() {
                         return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReadOnlyCluster(cluster.name().to_string()),
+                            ErrorKind::ReadOnlyCluster(cluster_name.to_string()),
                         )));
                     }
-                    let replica = cluster
+                    let replica_name = cluster
                         .replicas_by_id
                         .get(&replica_id)
-                        .expect("catalog out of sync");
+                        .expect("catalog out of sync")
+                        .name
+                        .clone();
                     builtin_table_updates.push(state.pack_cluster_replica_update(
                         cluster_id,
-                        &replica.name,
+                        &replica_name,
                         -1,
                     ));
                     let cluster = state.get_cluster_mut(cluster_id);
@@ -5419,15 +5421,10 @@ impl Catalog {
                         .get_mut(&replica_id)
                         .expect("catalog out of sync");
                     replica.owner_id = new_owner;
-                    let cluster = state.get_cluster(cluster_id);
-                    let replica = cluster
-                        .replicas_by_id
-                        .get(&replica_id)
-                        .expect("catalog out of sync");
                     tx.update_cluster_replica(cluster_id, replica_id, replica)?;
                     builtin_table_updates.push(state.pack_cluster_replica_update(
                         cluster_id,
-                        &replica.name,
+                        &replica_name,
                         1,
                     ));
                 }

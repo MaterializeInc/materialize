@@ -3771,8 +3771,11 @@ pub fn plan_alter_object_owner(
                 return Err(PlanError::AlterViewOnMaterializedView(name));
             } else if object_type != item_type {
                 sql_bail!(
-                    "\"{}\" is a {} not a {}",
-                    scx.catalog.resolve_full_name(item.name()),
+                    "{} is a {} not a {}",
+                    scx.catalog
+                        .resolve_full_name(item.name())
+                        .to_string()
+                        .quoted(),
                     item.item_type(),
                     format!("{object_type}").to_lowercase(),
                 );
