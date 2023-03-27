@@ -2075,10 +2075,11 @@ pub const PG_NAMESPACE: BuiltinView = BuiltinView {
     sql: "CREATE VIEW pg_catalog.pg_namespace AS SELECT
 s.oid AS oid,
 s.name AS nspname,
-NULL::pg_catalog.oid AS nspowner,
+role_owner.oid AS nspowner,
 NULL::pg_catalog.text[] AS nspacl
 FROM mz_catalog.mz_schemas s
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+JOIN mz_catalog.mz_roles role_owner ON role_owner.id = s.owner_id
 WHERE s.database_id IS NULL OR d.name = pg_catalog.current_database()",
 };
 
@@ -2136,7 +2137,7 @@ FROM (
 ) AS class_objects
 JOIN mz_catalog.mz_schemas ON mz_schemas.id = class_objects.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
-JOIN mz_catalog.mz_roles role_owner ON  role_owner.id = class_objects.owner_id
+JOIN mz_catalog.mz_roles role_owner ON role_owner.id = class_objects.owner_id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
 };
 
@@ -2144,14 +2145,15 @@ pub const PG_DATABASE: BuiltinView = BuiltinView {
     name: "pg_database",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_catalog.pg_database AS SELECT
-    oid,
-    name as datname,
-    NULL::pg_catalog.oid AS datdba,
+    d.oid as oid,
+    d.name as datname,
+    role_owner.oid as datdba,
     6 as encoding,
     'C' as datcollate,
     'C' as datctype,
     NULL::pg_catalog.text[] as datacl
-FROM mz_catalog.mz_databases d",
+FROM mz_catalog.mz_databases d
+JOIN mz_catalog.mz_roles role_owner ON role_owner.id = d.owner_id",
 };
 
 pub const PG_INDEX: BuiltinView = BuiltinView {
@@ -2209,6 +2211,7 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
     mz_types.oid,
     mz_types.name AS typname,
     mz_schemas.oid AS typnamespace,
+    role_owner.oid AS typowner,
     NULL::pg_catalog.int2 AS typlen,
     -- 'a' is used internally to denote an array type, but in postgres they show up
     -- as 'b'.
@@ -2275,6 +2278,7 @@ FROM
         )
             AS t ON mz_types.id = t.id
     LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
+    JOIN mz_catalog.mz_roles role_owner ON role_owner.id = mz_types.owner_id
     WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
 };
 
@@ -2320,13 +2324,14 @@ pub const PG_PROC: BuiltinView = BuiltinView {
     mz_functions.oid,
     mz_functions.name AS proname,
     mz_schemas.oid AS pronamespace,
-    NULL::pg_catalog.oid AS proowner,
+    role_owner.oid AS proowner,
     NULL::pg_catalog.text AS proargdefaults,
     ret_type.oid AS prorettype
 FROM mz_catalog.mz_functions
 JOIN mz_catalog.mz_schemas ON mz_functions.schema_id = mz_schemas.id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
 JOIN mz_catalog.mz_types AS ret_type ON mz_functions.return_type_id = ret_type.id
+JOIN mz_catalog.mz_roles role_owner ON role_owner.id = mz_functions.owner_id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
 };
 
@@ -2683,11 +2688,12 @@ pub const PG_VIEWS: BuiltinView = BuiltinView {
     sql: "CREATE VIEW pg_catalog.pg_views AS SELECT
     s.name AS schemaname,
     v.name AS viewname,
-    NULL::pg_catalog.oid AS viewowner,
+    role_owner.oid AS viewowner,
     v.definition AS definition
 FROM mz_catalog.mz_views v
 LEFT JOIN mz_catalog.mz_schemas s ON s.id = v.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+JOIN mz_catalog.mz_roles role_owner ON role_owner.id = v.owner_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 
@@ -2697,11 +2703,12 @@ pub const PG_MATVIEWS: BuiltinView = BuiltinView {
     sql: "CREATE VIEW pg_catalog.pg_matviews AS SELECT
     s.name AS schemaname,
     m.name AS matviewname,
-    NULL::pg_catalog.oid AS matviewowner,
+    role_owner.oid AS matviewowner,
     m.definition AS definition
 FROM mz_catalog.mz_materialized_views m
 LEFT JOIN mz_catalog.mz_schemas s ON s.id = m.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
+JOIN mz_catalog.mz_roles role_owner ON role_owner.id = m.owner_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 

@@ -12,7 +12,7 @@ name     nullable  type
 --------------------------
 oid      false     oid
 nspname  false     text
-nspowner true      oid
+nspowner false     oid
 nspacl   true      text[]
 
 > SHOW COLUMNS FROM pg_class
@@ -44,7 +44,7 @@ name         nullable  type
 ---------------------------
  oid         false     oid
  datname     false     text
- datdba      true      oid
+ datdba      false     oid
  encoding    false     integer
  datcollate  false     text
  datctype    false     text
