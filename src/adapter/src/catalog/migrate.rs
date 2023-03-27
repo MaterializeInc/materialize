@@ -14,6 +14,7 @@ use tracing::info;
 use mz_ore::collections::CollectionExt;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, UnresolvedObjectName};
+use mz_sql::names::RoleId;
 use mz_sql::plan::{Params, PlanContext};
 
 use crate::catalog::{Catalog, ConnCatalog, SerializedCatalogItem};
@@ -22,14 +23,18 @@ use super::storage::Transaction;
 
 fn rewrite_items<F>(tx: &mut Transaction, mut f: F) -> Result<(), anyhow::Error>
 where
-    F: FnMut(&mut Transaction, &mut mz_sql::ast::Statement<Raw>) -> Result<(), anyhow::Error>,
+    F: FnMut(
+        &mut Transaction,
+        &mut mz_sql::ast::Statement<Raw>,
+        RoleId,
+    ) -> Result<(), anyhow::Error>,
 {
     let mut updated_items = BTreeMap::new();
     let items = tx.loaded_items();
-    for (id, name, SerializedCatalogItem::V1 { create_sql }, _owner_id) in items {
+    for (id, name, SerializedCatalogItem::V1 { create_sql }, owner_id) in items {
         let mut stmt = mz_sql::parse::parse(&create_sql)?.into_element();
 
-        f(tx, &mut stmt)?;
+        f(tx, &mut stmt, owner_id)?;
 
         let serialized_item = SerializedCatalogItem::V1 {
             create_sql: stmt.to_ast_string_stable(),
@@ -53,7 +58,7 @@ pub(crate) async fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> 
 
     let mut tx = storage.transaction().await?;
     // First, do basic AST -> AST transformations.
-    rewrite_items(&mut tx, |_tx, stmt| {
+    rewrite_items(&mut tx, |_tx, stmt, _owner_id| {
         subsource_type_option_rewrite(stmt);
         csr_url_path_rewrite(stmt);
         Ok(())
@@ -66,9 +71,9 @@ pub(crate) async fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> 
     // you are really certain you want one of these crazy migrations.
     let cat = Catalog::load_catalog_items(&mut tx, catalog)?;
     let conn_cat = cat.for_system_session();
-    rewrite_items(&mut tx, |tx, item| {
+    rewrite_items(&mut tx, |tx, item, owner_id| {
         normalize_create_secrets(&conn_cat, item)?;
-        progress_collection_rewrite(&conn_cat, tx, item)?;
+        progress_collection_rewrite(&conn_cat, tx, item, owner_id)?;
         Ok(())
     })?;
     tx.commit().await?;
@@ -189,6 +194,7 @@ fn progress_collection_rewrite(
     cat: &ConnCatalog<'_>,
     tx: &mut Transaction<'_>,
     stmt: &mut mz_sql::ast::Statement<Raw>,
+    owner_id: RoleId,
 ) -> Result<(), anyhow::Error> {
     use mz_sql::ast::{CreateSourceConnection, CreateSubsourceOptionName};
 
@@ -206,12 +212,6 @@ fn progress_collection_rewrite(
         let progress_desc = match connection {
             CreateSourceConnection::Kafka(_) => {
                 &mz_storage_client::types::sources::KAFKA_PROGRESS_DESC
-            }
-            CreateSourceConnection::Kinesis { .. } => {
-                &mz_storage_client::types::sources::KINESIS_PROGRESS_DESC
-            }
-            CreateSourceConnection::S3 { .. } => {
-                &mz_storage_client::types::sources::S3_PROGRESS_DESC
             }
             CreateSourceConnection::Postgres { .. } => {
                 &mz_storage_client::types::sources::PG_PROGRESS_DESC
@@ -279,6 +279,7 @@ fn progress_collection_rewrite(
             SerializedCatalogItem::V1 {
                 create_sql: subsource.to_ast_string_stable(),
             },
+            owner_id,
         )?;
 
         // Place the newly created subsource into the `CREATE SOURCE` statement.
