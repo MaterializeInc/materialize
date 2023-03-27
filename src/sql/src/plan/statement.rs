@@ -295,25 +295,25 @@ pub fn plan(
         // `SHOW` statements.
         Statement::Show(ShowStatement::ShowColumns(stmt)) => show::show_columns(scx, stmt)?.plan(),
         Statement::Show(ShowStatement::ShowCreateConnection(stmt)) => {
-            show::plan_show_create_connection(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_connection(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateIndex(stmt)) => {
-            show::plan_show_create_index(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_index(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateSink(stmt)) => {
-            show::plan_show_create_sink(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_sink(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateSource(stmt)) => {
-            show::plan_show_create_source(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_source(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateTable(stmt)) => {
-            show::plan_show_create_table(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_table(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateView(stmt)) => {
-            show::plan_show_create_view(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_view(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateMaterializedView(stmt)) => {
-            show::plan_show_create_materialized_view(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_materialized_view(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowObjects(stmt)) => show::show_objects(scx, stmt)?.plan(),
 

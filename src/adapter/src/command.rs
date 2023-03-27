@@ -492,7 +492,7 @@ impl ExecuteResponse {
                 DroppedSecret,
             ],
             PlanKind::EmptyQuery => vec![ExecuteResponseKind::EmptyQuery],
-            Explain | Peek | SendRows | ShowAllVariables | ShowVariable => {
+            Explain | Peek | SendRows | ShowAllVariables | ShowCreate | ShowVariable => {
                 vec![CopyTo, SendingRows]
             }
             Execute | ReadThenWrite => vec![Deleted, Inserted, SendingRows, Updated],
