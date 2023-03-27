@@ -24,7 +24,7 @@ use maplit::btreemap;
 use mz_interchange::avro::{AvroEncoder, AvroSchemaGenerator, AvroSchemaOptions};
 use mz_interchange::encode::Encode;
 use mz_interchange::json::JsonEncoder;
-use mz_kafka_util::client::{BrokerRewritingClientContext, MzClientContext};
+use mz_kafka_util::client::{MzClientContext, TunnelingClientContext};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
@@ -252,7 +252,7 @@ impl ProducerContext for SinkProducerContext {
 #[derive(Clone)]
 struct KafkaTxProducer {
     name: String,
-    inner: Arc<ThreadedProducer<BrokerRewritingClientContext<SinkProducerContext>>>,
+    inner: Arc<ThreadedProducer<TunnelingClientContext<SinkProducerContext>>>,
     timeout: Duration,
 }
 
@@ -384,7 +384,7 @@ struct KafkaSinkState {
 
     progress_topic: String,
     progress_key: String,
-    progress_client: Option<Arc<BaseConsumer<BrokerRewritingClientContext<MzClientContext>>>>,
+    progress_client: Option<Arc<BaseConsumer<TunnelingClientContext<MzClientContext>>>>,
 
     healthchecker: HealthOutputHandle,
     gate_ts: Rc<Cell<Option<Timestamp>>>,

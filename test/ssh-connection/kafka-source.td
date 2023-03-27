@@ -30,6 +30,26 @@ one
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred);
 
+# Test that we can create, validate, and use a dynamic kafka connection
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_default_kafka_ssh_tunnel = true
+
+> CREATE CONNECTION kafka_conn_top_level
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SSH TUNNEL thancred);
+
+> CREATE SOURCE mz_source_top_level IN CLUSTER sc
+  FROM KAFKA CONNECTION kafka_conn_top_level (
+    TOPIC 'testdrive-thetopic-${testdrive.seed}',
+    TOPIC METADATA REFRESH INTERVAL MS 1000
+  )
+  FORMAT TEXT
+  ENVELOPE NONE
+
+> SELECT * FROM mz_source_top_level
+text
+----
+one
+
 # Create source with a faster metadata refresh interval so
 # errors are detected every second instead of every minute.
 > CREATE SOURCE mz_source IN CLUSTER sc

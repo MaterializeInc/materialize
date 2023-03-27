@@ -14,7 +14,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context};
 use maplit::btreemap;
 use mz_kafka_util::client::{
-    BrokerRewritingClientContext, MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT,
+    MzClientContext, TunnelingClientContext, DEFAULT_FETCH_METADATA_TIMEOUT,
 };
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
@@ -372,7 +372,7 @@ pub async fn determine_latest_progress_record(
     name: String,
     progress_topic: String,
     progress_key: String,
-    progress_client: Arc<BaseConsumer<BrokerRewritingClientContext<MzClientContext>>>,
+    progress_client: Arc<BaseConsumer<TunnelingClientContext<MzClientContext>>>,
 ) -> Result<Option<Timestamp>, anyhow::Error> {
     // Polls a message from a Kafka Source.  Blocking so should always be called on background
     // thread.

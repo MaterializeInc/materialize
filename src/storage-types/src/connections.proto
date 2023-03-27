@@ -58,6 +58,7 @@ message ProtoKafkaConnection {
     reserved 1, 2;
     reserved "broker";
     repeated ProtoKafkaBroker brokers = 3;
+    ProtoTunnel default_tunnel = 7;
     optional ProtoKafkaConnectionSecurity security = 4;
     optional string progress_topic = 5;
     map<string, mz_storage_types.connections.ProtoStringOrSecret> options = 6;

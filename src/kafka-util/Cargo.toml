@@ -15,13 +15,14 @@ fancy-regex = "0.11.0"
 mz-avro = { path = "../avro" }
 mz-ccsr = { path = "../ccsr" }
 mz-ore = { path = "../ore", features = ["cli", "network", "async"] }
+mz-ssh-util = { path = "../ssh-util" }
 num_cpus = "1.14.0"
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = "1.0.89"
-tokio = { version = "1.32.0", features = ["macros", "sync"] }
+tokio = { version = "1.32.0", features = ["macros", "rt", "sync"] }
 thiserror = "1.0.37"
 tracing = "0.1.37"
 url = "2.3.1"

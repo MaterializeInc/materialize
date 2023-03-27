@@ -1991,6 +1991,13 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_default_kafka_ssh_tunnel,
+        desc: "the top-level SSH TUNNEL feature for kafka connections",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
 );
 
 /// Represents the input to a variable.
