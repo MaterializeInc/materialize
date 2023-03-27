@@ -84,7 +84,7 @@ use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampSource};
 use crate::coord::{
-    peek, Coordinator, Message, PendingReadTxn, PendingTxn, RealTimeRecencyContext,
+    introspection, peek, Coordinator, Message, PendingReadTxn, PendingTxn, RealTimeRecencyContext,
     SinkConnectionReady, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
@@ -1817,7 +1817,11 @@ impl Coordinator {
             target_replica,
             timeline_context,
             in_immediate_multi_stmt_txn,
-        ) = return_if_err!(self.sequence_peek_begin_inner(&session, plan), tx, session);
+        ) = return_if_err!(
+            self.sequence_peek_begin_inner(&mut session, plan),
+            tx,
+            session
+        );
 
         match self.recent_timestamp(&session, source_ids.iter().cloned()) {
             Some(fut) => {
@@ -1883,7 +1887,7 @@ impl Coordinator {
 
     fn sequence_peek_begin_inner(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         plan: PeekPlan,
     ) -> Result<
         (
@@ -1916,7 +1920,17 @@ impl Coordinator {
         let view_id = self.allocate_transient_id()?;
         let index_id = self.allocate_transient_id()?;
 
-        let cluster = self.catalog().active_cluster(session)?;
+        // If our query only depends on system tables, a LaunchDarkly flag is enabled, and a
+        // session var is set, then we automatically run the query on the mz_introspection cluster
+        let cluster = match introspection::auto_run_on_introspection(
+            self.catalog(),
+            session,
+            source.depends_on(),
+        ) {
+            Some(cluster) => cluster,
+            None => self.catalog().active_cluster(session)?,
+        };
+
         let target_replica_name = session.vars().cluster_replica();
         let mut target_replica = target_replica_name
             .map(|name| {
@@ -2253,7 +2267,16 @@ impl Coordinator {
             up_to,
         } = plan;
 
-        let cluster = self.catalog().active_cluster(session)?;
+        // If our query only depends on system tables, then we optionally run it on the
+        // introspection cluster.
+        let cluster = match introspection::auto_run_on_introspection(
+            self.catalog(),
+            session,
+            depends_on.iter().copied(),
+        ) {
+            Some(cluster) => cluster,
+            None => self.catalog().active_cluster(session)?,
+        };
         let cluster_id = cluster.id;
 
         let target_replica_name = session.vars().cluster_replica();

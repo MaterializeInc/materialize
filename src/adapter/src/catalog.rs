@@ -101,7 +101,7 @@ use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
 use crate::{AdapterError, DUMMY_AVAILABILITY_ZONE};
 
-use self::builtin::BuiltinSource;
+use self::builtin::{BuiltinCluster, BuiltinSource};
 
 mod builtin_table_updates;
 mod config;
@@ -1039,6 +1039,16 @@ impl CatalogState {
             .get(name)
             .ok_or_else(|| SqlCatalogError::UnknownCluster(name.to_string()))?;
         Ok(&self.clusters_by_id[id])
+    }
+
+    pub fn resolve_builtin_cluster(&self, cluster: &BuiltinCluster) -> &Cluster {
+        let id = self
+            .clusters_by_name
+            .get(cluster.name)
+            .expect("failed to lookup BuiltinCluster by name");
+        self.clusters_by_id
+            .get(id)
+            .expect("failed to lookup BuiltinCluster by ID")
     }
 
     /// Resolves [`PartialObjectName`] into a [`CatalogEntry`].
@@ -3817,6 +3827,15 @@ impl Catalog {
 
     pub fn resolve_cluster(&self, name: &str) -> Result<&Cluster, SqlCatalogError> {
         self.state.resolve_cluster(name)
+    }
+
+    /// Resolves a [`Cluster`] for a [`BuiltinCluster`]
+    ///
+    /// # Panics
+    /// * If the [`BuiltinCluster`] doesn't exist.
+    ///
+    pub fn resolve_builtin_cluster(&self, cluster: &BuiltinCluster) -> &Cluster {
+        self.state.resolve_builtin_cluster(cluster)
     }
 
     pub fn active_cluster(&self, session: &Session) -> Result<&Cluster, AdapterError> {

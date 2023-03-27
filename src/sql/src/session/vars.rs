@@ -624,6 +624,30 @@ pub const ENABLE_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+/// This is separate from the [`AUTO_ROUTE_INTROSPECTION_QUERIES`] `ServerVar` so we can
+/// independently roll out this feature via LaunchDarkly without effecting user's ability
+/// to disable the behavior for there sessions.
+pub const ENABLE_AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_auto_route_introspection_queries"),
+    value: &false,
+    description:
+        "Whether the feature to force queries that depends only on system tables to run on the mz_introspection cluster, is enabled (Materialize).",
+    internal: true,
+    safe: true,
+};
+
+/// This is separate from the [`ENABLE_AUTO_ROUTE_INTROSPECTION_QUERIES`] `ServerVar` so we
+/// can independently roll out this feature via LaunchDarkly. Users can set this var as
+/// a session variable, while we can control the feature overall with the former.
+pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("auto_route_introspection_queries"),
+    value: &true,
+    description:
+        "Whether to force queries that depend only on system tables, to run on the mz_introspection cluster (Materialize).",
+    internal: false,
+    safe: true,
+};
+
 /// Represents the input to a variable.
 ///
 /// Each variable has different rules for how it handles each style of input.
@@ -721,6 +745,7 @@ pub struct SessionVars {
     real_time_recency: SessionVar<bool>,
     emit_timestamp_notice: SessionVar<bool>,
     emit_trace_id_notice: SessionVar<bool>,
+    auto_route_introspection_queries: SessionVar<bool>,
     // Inputs to computed variables.
     build_info: &'static BuildInfo,
     user: User,
@@ -755,6 +780,7 @@ impl SessionVars {
             real_time_recency: SessionVar::new(&REAL_TIME_RECENCY),
             emit_timestamp_notice: SessionVar::new(&EMIT_TIMESTAMP_NOTICE),
             emit_trace_id_notice: SessionVar::new(&EMIT_TRACE_ID_NOTICE),
+            auto_route_introspection_queries: SessionVar::new(&AUTO_ROUTE_INTROSPECTION_QUERIES),
             build_info,
             user,
         }
@@ -763,8 +789,10 @@ impl SessionVars {
     /// Returns an iterator over the configuration parameters and their current
     /// values for this session.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        let vars: [&dyn Var; 25] = [
-            &self.application_name,
+        // `as` is ok to use to cast to a trait object.
+        #[allow(clippy::as_conversions)]
+        let vars = [
+            &self.application_name as &dyn Var,
             &self.client_encoding,
             &self.client_min_messages,
             &self.cluster,
@@ -787,6 +815,7 @@ impl SessionVars {
             &self.real_time_recency,
             &self.emit_timestamp_notice,
             &self.emit_trace_id_notice,
+            &self.auto_route_introspection_queries,
             self.build_info,
             &self.user,
         ];
@@ -876,6 +905,8 @@ impl SessionVars {
             Ok(&self.emit_timestamp_notice)
         } else if name == EMIT_TRACE_ID_NOTICE.name {
             Ok(&self.emit_trace_id_notice)
+        } else if name == AUTO_ROUTE_INTROSPECTION_QUERIES.name {
+            Ok(&self.auto_route_introspection_queries)
         } else if name == IS_SUPERUSER_NAME {
             Ok(&self.user)
         } else {
@@ -1012,6 +1043,8 @@ impl SessionVars {
             self.emit_timestamp_notice.set(input, local)
         } else if name == EMIT_TRACE_ID_NOTICE.name {
             self.emit_trace_id_notice.set(input, local)
+        } else if name == AUTO_ROUTE_INTROSPECTION_QUERIES.name {
+            self.auto_route_introspection_queries.set(input, local)
         } else if name == IS_SUPERUSER_NAME {
             Err(VarError::ReadOnlyParameter(self.user.name()))
         } else {
@@ -1060,6 +1093,8 @@ impl SessionVars {
             self.emit_timestamp_notice.reset(local);
         } else if name == EMIT_TRACE_ID_NOTICE.name {
             self.emit_trace_id_notice.reset(local);
+        } else if name == AUTO_ROUTE_INTROSPECTION_QUERIES.name {
+            self.auto_route_introspection_queries.reset(local);
         } else if name == CLIENT_ENCODING.name
             || name == DATE_STYLE.name
             || name == FAILPOINTS.name
@@ -1106,6 +1141,7 @@ impl SessionVars {
             real_time_recency,
             emit_timestamp_notice,
             emit_trace_id_notice,
+            auto_route_introspection_queries,
             build_info: _,
             user: _,
         } = self;
@@ -1124,6 +1160,7 @@ impl SessionVars {
         real_time_recency.end_transaction(action);
         emit_timestamp_notice.end_transaction(action);
         emit_trace_id_notice.end_transaction(action);
+        auto_route_introspection_queries.end_transaction(action);
     }
 
     /// Returns the value of the `application_name` configuration parameter.
@@ -1248,6 +1285,11 @@ impl SessionVars {
         *self.emit_trace_id_notice.value()
     }
 
+    /// Returns the value of `auto_route_introspection_queries` configuration parameter.
+    pub fn auto_route_introspection_queries(&self) -> bool {
+        *self.auto_route_introspection_queries.value()
+    }
+
     /// Returns the value of `is_superuser` configuration parameter.
     pub fn is_superuser(&self) -> bool {
         self.user.is_superuser()
@@ -1317,6 +1359,7 @@ impl Default for SystemVars {
             .with_var(&MOCK_AUDIT_EVENT_TIMESTAMP)
             .with_var(&ENABLE_WITH_MUTUALLY_RECURSIVE)
             .with_var(&ENABLE_RBAC_CHECKS)
+            .with_var(&ENABLE_AUTO_ROUTE_INTROSPECTION_QUERIES)
     }
 }
 
@@ -1608,6 +1651,13 @@ impl SystemVars {
     /// Returns the `enable_rbac_checks` configuration parameter.
     pub fn enable_rbac_checks(&self) -> bool {
         *self.expect_value(&ENABLE_RBAC_CHECKS)
+    }
+
+    /// Returns the `enable_auto_route_introspection_queries` configuration parameter.
+    ///
+    /// Note: this is generally intended to be set via LaunchDarkly
+    pub fn enable_auto_route_introspection_queries(&self) -> bool {
+        *self.expect_value(&ENABLE_AUTO_ROUTE_INTROSPECTION_QUERIES)
     }
 }
 
