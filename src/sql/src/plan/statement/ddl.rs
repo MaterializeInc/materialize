@@ -241,6 +241,7 @@ pub fn plan_create_table(
         defaults.push(default);
     }
 
+    let mut seen_primary = false;
     for constraint in constraints {
         match constraint {
             TableConstraint::Unique {
@@ -248,6 +249,14 @@ pub fn plan_create_table(
                 columns,
                 is_primary,
             } => {
+                if seen_primary && *is_primary {
+                    sql_bail!(
+                        "multiple primary keys for table {} are not allowed",
+                        name.to_ast_string_stable()
+                    );
+                }
+                seen_primary = *is_primary || seen_primary;
+
                 let mut key = vec![];
                 for column in columns {
                     let column = normalize::column_name(column.clone());
@@ -1094,6 +1103,7 @@ pub fn plan_create_subsource(
         column_types.push(ty.nullable(nullable));
     }
 
+    let mut seen_primary = false;
     for constraint in constraints {
         match constraint {
             TableConstraint::Unique {
@@ -1101,6 +1111,14 @@ pub fn plan_create_subsource(
                 columns,
                 is_primary,
             } => {
+                if seen_primary && *is_primary {
+                    sql_bail!(
+                        "multiple primary keys for source {} are not allowed",
+                        name.to_ast_string_stable()
+                    );
+                }
+                seen_primary = *is_primary || seen_primary;
+
                 let mut key = vec![];
                 for column in columns {
                     let column = normalize::column_name(column.clone());
