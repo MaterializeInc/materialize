@@ -246,6 +246,7 @@ pub fn plan_create_table(
                 name: _,
                 columns,
                 is_primary,
+                nulls_not_distinct: _,
             } => {
                 if seen_primary && *is_primary {
                     sql_bail!(
@@ -1108,6 +1109,7 @@ pub fn plan_create_subsource(
                 name: _,
                 columns,
                 is_primary,
+                nulls_not_distinct: _,
             } => {
                 if seen_primary && *is_primary {
                     sql_bail!(

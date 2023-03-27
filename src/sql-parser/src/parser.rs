@@ -3460,16 +3460,30 @@ impl<'a> Parser<'a> {
             None
         };
         match self.next_token() {
-            Some(Token::Keyword(kw @ PRIMARY)) | Some(Token::Keyword(kw @ UNIQUE)) => {
-                let is_primary = kw == PRIMARY;
-                if is_primary {
-                    self.expect_keyword(KEY)?;
-                }
+            Some(Token::Keyword(PRIMARY)) => {
+                self.expect_keyword(KEY)?;
                 let columns = self.parse_parenthesized_column_list(Mandatory)?;
                 Ok(Some(TableConstraint::Unique {
                     name,
                     columns,
-                    is_primary,
+                    is_primary: true,
+                    nulls_not_distinct: false,
+                }))
+            }
+            Some(Token::Keyword(UNIQUE)) => {
+                let nulls_not_distinct = if self.parse_keyword(NULLS) {
+                    self.expect_keywords(&[NOT, DISTINCT])?;
+                    true
+                } else {
+                    false
+                };
+
+                let columns = self.parse_parenthesized_column_list(Mandatory)?;
+                Ok(Some(TableConstraint::Unique {
+                    name,
+                    columns,
+                    is_primary: false,
+                    nulls_not_distinct,
                 }))
             }
             Some(Token::Keyword(FOREIGN)) => {

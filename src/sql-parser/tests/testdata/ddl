@@ -106,14 +106,21 @@ CREATE TABLE foo (id int, CONSTRAINT address_pkey PRIMARY KEY (address_id))
 ----
 CREATE TABLE foo (id int4, CONSTRAINT address_pkey PRIMARY KEY (address_id))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: Some(Ident("address_pkey")), columns: [Ident("address_id")], is_primary: true }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: Some(Ident("address_pkey")), columns: [Ident("address_id")], is_primary: true, nulls_not_distinct: false }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE foo (id int, CONSTRAINT uk_task UNIQUE (report_date, task_id))
 ----
 CREATE TABLE foo (id int4, CONSTRAINT uk_task UNIQUE (report_date, task_id))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: Some(Ident("uk_task")), columns: [Ident("report_date"), Ident("task_id")], is_primary: false }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: Some(Ident("uk_task")), columns: [Ident("report_date"), Ident("task_id")], is_primary: false, nulls_not_distinct: false }], if_not_exists: false, temporary: false })
+
+parse-statement
+CREATE TABLE foo (id int, CONSTRAINT uk_task UNIQUE NULLS NOT DISTINCT (report_date, task_id))
+----
+CREATE TABLE foo (id int4, CONSTRAINT uk_task UNIQUE NULLS NOT DISTINCT (report_date, task_id))
+=>
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: Some(Ident("uk_task")), columns: [Ident("report_date"), Ident("task_id")], is_primary: false, nulls_not_distinct: true }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE foo (id int, CONSTRAINT customer_address_id_fkey FOREIGN KEY (address_id) REFERENCES public.address(address_id))
@@ -134,14 +141,14 @@ CREATE TABLE foo (id int, PRIMARY KEY (foo, bar))
 ----
 CREATE TABLE foo (id int4, PRIMARY KEY (foo, bar))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: None, columns: [Ident("foo"), Ident("bar")], is_primary: true }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: None, columns: [Ident("foo"), Ident("bar")], is_primary: true, nulls_not_distinct: false }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE foo (id int, UNIQUE (id))
 ----
 CREATE TABLE foo (id int4, UNIQUE (id))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: None, columns: [Ident("id")], is_primary: false }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: None, columns: [Ident("id")], is_primary: false, nulls_not_distinct: false }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE foo (id int, FOREIGN KEY (foo, bar) REFERENCES anothertable(foo, bar))

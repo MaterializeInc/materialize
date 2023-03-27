@@ -12,7 +12,7 @@
 //! This module houses the entry points for planning a SQL statement.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
@@ -779,6 +779,7 @@ impl<'a> StatementContext<'a> {
         desc: &RelationDesc,
     ) -> Result<(Vec<ColumnDef<Aug>>, Vec<TableConstraint<Aug>>), PlanError> {
         let mut columns = vec![];
+        let mut null_cols = BTreeSet::new();
         for (column_name, column_type) in desc.iter() {
             let name = Ident::new(column_name.as_str().to_owned());
 
@@ -786,6 +787,7 @@ impl<'a> StatementContext<'a> {
             let data_type = self.resolve_type(ty)?;
 
             let options = if !column_type.nullable {
+                null_cols.insert(columns.len());
                 vec![mz_sql_parser::ast::ColumnOptionDef {
                     name: None,
                     option: mz_sql_parser::ast::ColumnOption::NotNull,
@@ -806,12 +808,18 @@ impl<'a> StatementContext<'a> {
         for key in desc.typ().keys.iter() {
             let mut col_names = vec![];
             for col_idx in key {
+                if !null_cols.contains(col_idx) {
+                    // Note that alternatively we could support NULL values in keys with `NULLS NOT
+                    // DISTINCT` semantics, which treats `NULL` as a distinct value.
+                    sql_bail!("[internal error] key columns must be NOT NULL when generating table constraints");
+                }
                 col_names.push(columns[*col_idx].name.clone());
             }
             table_constraints.push(TableConstraint::Unique {
                 name: None,
                 columns: col_names,
                 is_primary: false,
+                nulls_not_distinct: false,
             });
         }
 
