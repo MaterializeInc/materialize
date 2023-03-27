@@ -4354,6 +4354,7 @@ dependencies = [
  "mz-avro",
  "mz-ccsr",
  "mz-ore",
+ "mz-ssh-util",
  "num_cpus",
  "prost",
  "prost-build",

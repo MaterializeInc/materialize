@@ -14,11 +14,15 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use mz_ore::collections::CollectionExt;
+use mz_ore::error::ErrorExt;
+use mz_ssh_util::tunnel::SshTunnelConfig;
+use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
 use rdkafka::client::{BrokerAddr, Client, NativeClient, OAuthToken};
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::{ConsumerContext, Rebalance};
@@ -27,6 +31,7 @@ use rdkafka::producer::{DefaultProducerContext, DeliveryResult, ProducerContext}
 use rdkafka::types::RDKafkaRespErr;
 use rdkafka::util::Timeout;
 use rdkafka::{ClientContext, Statistics, TopicPartitionList};
+use tokio::runtime::Handle;
 use tracing::{debug, error, info, warn, Level};
 
 /// A reasonable default timeout when fetching metadata or partitions.
@@ -224,7 +229,7 @@ impl ProducerContext for MzClientContext {
 
 /// Rewrites a broker address.
 ///
-/// For use with [`BrokerRewritingClientContext`].
+/// For use with [`TunnelingClientContext`].
 #[derive(Debug, Clone)]
 pub struct BrokerRewrite {
     /// The rewritten hostname.
@@ -235,36 +240,83 @@ pub struct BrokerRewrite {
     pub port: Option<u16>,
 }
 
-/// A client context that supports rewriting broker addresses.
 #[derive(Clone)]
-pub struct BrokerRewritingClientContext<C> {
-    inner: C,
-    rewrites: BTreeMap<BrokerAddr, Arc<dyn Fn() -> BrokerRewrite + Send + Sync>>,
+enum BrokerRewriteHandle {
+    Simple(BrokerRewrite),
+    SshTunnel(
+        // This ensures the ssh tunnel is not shutdown.
+        ManagedSshTunnelHandle,
+    ),
 }
 
-impl<C> BrokerRewritingClientContext<C> {
+/// A client context that supports rewriting broker addresses.
+#[derive(Clone)]
+pub struct TunnelingClientContext<C> {
+    inner: C,
+    rewrites: Arc<Mutex<BTreeMap<BrokerAddr, BrokerRewriteHandle>>>,
+    default_tunnel: Option<SshTunnelConfig>,
+    ssh_tunnel_manager: SshTunnelManager,
+    runtime: Handle,
+}
+
+impl<C> TunnelingClientContext<C> {
     /// Constructs a new context that wraps `inner`.
-    pub fn new(inner: C) -> BrokerRewritingClientContext<C> {
-        BrokerRewritingClientContext {
+    pub fn new(
+        inner: C,
+        runtime: Handle,
+        ssh_tunnel_manager: SshTunnelManager,
+    ) -> TunnelingClientContext<C> {
+        TunnelingClientContext {
             inner,
-            rewrites: BTreeMap::new(),
+            rewrites: Arc::new(Mutex::new(BTreeMap::new())),
+            default_tunnel: None,
+            ssh_tunnel_manager,
+            runtime,
         }
+    }
+
+    /// Adds the default broker rewrite rule.
+    ///
+    /// Connections to brokers that aren't specified in other rewrites will be rewritten to connect to
+    /// `rewrite_host` and `rewrite_port` instead.
+    pub fn set_default_ssh_tunnel(&mut self, tunnel: SshTunnelConfig) {
+        self.default_tunnel = Some(tunnel);
+    }
+
+    /// Adds an SSH tunnel for a specific broker.
+    ///
+    /// Overrides the existing SSH tunnel or rewrite for this broker, if any.
+    ///
+    /// This tunnel allows the rewrite to evolve over time, for example, if
+    /// the ssh tunnel's address changes if it fails and restarts.
+    pub async fn add_ssh_tunnel(
+        &self,
+        broker: BrokerAddr,
+        tunnel: SshTunnelConfig,
+    ) -> Result<(), anyhow::Error> {
+        let ssh_tunnel = self
+            .ssh_tunnel_manager
+            .connect(
+                tunnel,
+                &broker.host,
+                broker.port.parse().context("parsing broker port")?,
+            )
+            .await
+            .context("creating ssh tunnel")?;
+
+        let mut rewrites = self.rewrites.lock().expect("poisoned");
+        rewrites.insert(broker, BrokerRewriteHandle::SshTunnel(ssh_tunnel));
+        Ok(())
     }
 
     /// Adds a broker rewrite rule.
     ///
-    /// `rewrite` is a function that returns a `BrokerRewrite` that specifies
-    /// how to rewrite the address for `broker`.
+    /// Overrides the existing SSH tunnel or rewrite for this broker, if any.
     ///
-    /// The function is invoked by librdkafka on every connection attempt to the
-    /// broker. This permits the rewrite to evolve over time, for example, if
-    /// the rewrite is for a tunnel whose address changes if the tunnel fails
-    /// and restarts.
-    pub fn add_broker_rewrite<F>(&mut self, broker: BrokerAddr, rewrite: F)
-    where
-        F: Fn() -> BrokerRewrite + Send + Sync + 'static,
-    {
-        self.rewrites.insert(broker, Arc::new(rewrite));
+    /// `rewrite` is `BrokerRewrite` that specifies how to rewrite the address for `broker`.
+    pub fn add_broker_rewrite(&self, broker: BrokerAddr, rewrite: BrokerRewrite) {
+        let mut rewrites = self.rewrites.lock().expect("poisoned");
+        rewrites.insert(broker, BrokerRewriteHandle::Simple(rewrite));
     }
 
     /// Returns a reference to the wrapped context.
@@ -273,30 +325,88 @@ impl<C> BrokerRewritingClientContext<C> {
     }
 }
 
-impl<C> ClientContext for BrokerRewritingClientContext<C>
+impl<C> ClientContext for TunnelingClientContext<C>
 where
     C: ClientContext,
 {
     const ENABLE_REFRESH_OAUTH_TOKEN: bool = C::ENABLE_REFRESH_OAUTH_TOKEN;
 
     fn rewrite_broker_addr(&self, addr: BrokerAddr) -> BrokerAddr {
-        match self.rewrites.get(&addr) {
-            None => addr,
-            Some(rewrite) => {
-                let rewrite = rewrite();
-                let new_addr = BrokerAddr {
-                    host: rewrite.host,
-                    port: match rewrite.port {
-                        None => addr.port.clone(),
-                        Some(port) => port.to_string(),
-                    },
-                };
-                info!(
-                    "rewriting broker {}:{} to {}:{}",
-                    addr.host, addr.port, new_addr.host, new_addr.port
-                );
-                new_addr
+        let return_rewrite = |rewrite: &BrokerRewriteHandle| -> BrokerAddr {
+            let rewrite = match rewrite {
+                BrokerRewriteHandle::Simple(rewrite) => rewrite.clone(),
+                BrokerRewriteHandle::SshTunnel(ssh_tunnel) => {
+                    // The port for this can change over time, as the ssh tunnel is maintained through
+                    // errors.
+                    let addr = ssh_tunnel.local_addr();
+                    BrokerRewrite {
+                        host: addr.ip().to_string(),
+                        port: Some(addr.port()),
+                    }
+                }
+            };
+
+            let new_addr = BrokerAddr {
+                host: rewrite.host,
+                port: match rewrite.port {
+                    None => addr.port.clone(),
+                    Some(port) => port.to_string(),
+                },
+            };
+            info!(
+                "rewriting broker {}:{} to {}:{}",
+                addr.host, addr.port, new_addr.host, new_addr.port
+            );
+            new_addr
+        };
+
+        let rewrite = self.rewrites.lock().expect("poisoned").get(&addr).cloned();
+
+        match rewrite {
+            None => {
+                match &self.default_tunnel {
+                    Some(default_tunnel) => {
+                        let broker = addr.clone();
+                        let default_tunnel = default_tunnel.clone();
+                        let ssh_tunnel_manager = self.ssh_tunnel_manager.clone();
+                        let runtime = self.runtime.clone();
+
+                        // Multiple users could all run `connect` at the same time; only one ssh
+                        // tunnel will ever be connected, and only one will be inserted into the
+                        // map.
+                        let ssh_tunnel = runtime.block_on(async {
+                            ssh_tunnel_manager
+                                .connect(default_tunnel, &broker.host, broker.port.parse().unwrap())
+                                .await
+                        });
+                        match ssh_tunnel {
+                            Ok(ssh_tunnel) => {
+                                let mut rewrites = self.rewrites.lock().expect("poisoned");
+                                let rewrite = rewrites.entry(addr.clone()).or_insert_with(|| {
+                                    BrokerRewriteHandle::SshTunnel(ssh_tunnel.clone())
+                                });
+
+                                return_rewrite(&*rewrite)
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "failed to create ssh tunnel for {:?}: {}",
+                                    addr,
+                                    e.display_with_causes()
+                                );
+                                // We have to give rdkafka an address, as this callback can't fail,
+                                // we just give it a random one that will never resolve.
+                                BrokerAddr {
+                                    host: "failed-ssh-tunnel.dev.materialize.com".to_string(),
+                                    port: 1337.to_string(),
+                                }
+                            }
+                        }
+                    }
+                    None => addr,
+                }
             }
+            Some(rewrite) => return_rewrite(&rewrite),
         }
     }
 
@@ -324,7 +434,7 @@ where
     }
 }
 
-impl<C> ConsumerContext for BrokerRewritingClientContext<C>
+impl<C> ConsumerContext for TunnelingClientContext<C>
 where
     C: ConsumerContext,
 {
@@ -354,7 +464,7 @@ where
     }
 }
 
-impl<C> ProducerContext for BrokerRewritingClientContext<C>
+impl<C> ProducerContext for TunnelingClientContext<C>
 where
     C: ProducerContext,
 {

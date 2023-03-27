@@ -22,14 +22,13 @@ use differential_dataflow::{AsCollection, Collection};
 use futures::StreamExt;
 use maplit::btreemap;
 use mz_kafka_util::client::{
-    get_partitions, BrokerRewritingClientContext, MzClientContext, PartitionId,
+    get_partitions, MzClientContext, PartitionId, TunnelingClientContext,
     DEFAULT_FETCH_METADATA_TIMEOUT,
 };
 use mz_ore::error::ErrorExt;
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
-use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{Datum, Diff, GlobalId, Row};
+use mz_repr::{adt::jsonb::Jsonb, Datum, Diff, GlobalId, Row};
 use mz_storage_types::connections::{ConnectionContext, StringOrSecret};
 use mz_storage_types::sources::{
     KafkaMetadataKind, KafkaSourceConnection, MzOffset, SourceTimestamp,
@@ -68,7 +67,7 @@ pub struct KafkaSourceReader {
     /// Source global ID
     id: GlobalId,
     /// Kafka consumer for this source
-    consumer: Arc<BaseConsumer<BrokerRewritingClientContext<GlueConsumerContext>>>,
+    consumer: Arc<BaseConsumer<TunnelingClientContext<GlueConsumerContext>>>,
     /// List of consumers. A consumer should be assigned per partition to guarantee fairness
     partition_consumers: Vec<PartitionConsumer>,
     /// Worker ID
@@ -121,7 +120,7 @@ struct WatermarkOffsets {
 pub struct KafkaOffsetCommiter {
     config: RawSourceCreationConfig,
     topic_name: String,
-    consumer: Arc<BaseConsumer<BrokerRewritingClientContext<GlueConsumerContext>>>,
+    consumer: Arc<BaseConsumer<TunnelingClientContext<GlueConsumerContext>>>,
 }
 
 impl SourceRender for KafkaSourceConnection {
@@ -982,7 +981,7 @@ struct PartitionConsumer {
     /// the partition id with which this consumer is associated
     pid: PartitionId,
     /// The underlying Kafka partition queue
-    partition_queue: PartitionQueue<BrokerRewritingClientContext<GlueConsumerContext>>,
+    partition_queue: PartitionQueue<TunnelingClientContext<GlueConsumerContext>>,
     /// Additional metadata columns requested by the user
     metadata_columns: Vec<KafkaMetadataKind>,
 }
@@ -991,7 +990,7 @@ impl PartitionConsumer {
     /// Creates a new partition consumer from underlying Kafka consumer
     fn new(
         pid: PartitionId,
-        partition_queue: PartitionQueue<BrokerRewritingClientContext<GlueConsumerContext>>,
+        partition_queue: PartitionQueue<TunnelingClientContext<GlueConsumerContext>>,
         metadata_columns: Vec<KafkaMetadataKind>,
     ) -> Self {
         PartitionConsumer {

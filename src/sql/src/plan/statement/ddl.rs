@@ -3590,8 +3590,12 @@ impl KafkaConnectionOptionExtracted {
         scx: &StatementContext,
     ) -> Result<mz_storage_types::connections::KafkaConnection<ReferencedConnection>, PlanError>
     {
+        if self.ssh_tunnel.is_some() {
+            scx.require_feature_flag(&vars::ENABLE_DEFAULT_KAFKA_SSH_TUNNEL)?;
+        }
         Ok(KafkaConnection {
             brokers: self.get_brokers(scx)?,
+            default_tunnel: scx.build_tunnel_definition(self.ssh_tunnel, None)?,
             security: Option::<KafkaSecurity>::try_from(&self)?,
             progress_topic: self.progress_topic,
             options: BTreeMap::new(),

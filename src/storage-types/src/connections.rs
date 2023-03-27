@@ -18,7 +18,7 @@ use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceReader};
 use mz_kafka_util::client::{
-    BrokerRewrite, BrokerRewritingClientContext, MzClientContext, MzKafkaError,
+    BrokerRewrite, MzClientContext, MzKafkaError, TunnelingClientContext,
     DEFAULT_FETCH_METADATA_TIMEOUT,
 };
 use mz_proto::tokio_postgres::any_ssl_mode;
@@ -38,6 +38,7 @@ use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::ClientContext;
 use serde::{Deserialize, Serialize};
 use tokio::net;
+use tokio::runtime::Handle;
 use tokio_postgres::config::SslMode;
 use url::Url;
 
@@ -347,6 +348,10 @@ impl RustType<ProtoKafkaBroker> for KafkaBroker {
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaConnection<C: ConnectionAccess = InlinedConnection> {
     pub brokers: Vec<KafkaBroker<C>>,
+    /// A tunnel through which to route traffic,
+    /// that can be overridden for individual brokers
+    /// in `brokers`.
+    pub default_tunnel: Tunnel<C>,
     pub progress_topic: Option<String>,
     pub security: Option<KafkaSecurity>,
     pub options: BTreeMap<String, StringOrSecret>,
@@ -359,6 +364,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaConnection, R>
         let KafkaConnection {
             brokers,
             progress_topic,
+            default_tunnel,
             security,
             options,
         } = self;
@@ -371,6 +377,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaConnection, R>
         KafkaConnection {
             brokers,
             progress_topic,
+            default_tunnel: default_tunnel.into_inline_connection(&r),
             security,
             options,
         }
@@ -393,7 +400,7 @@ impl KafkaConnection {
     ) -> Result<T, anyhow::Error>
     where
         C: ClientContext,
-        T: FromClientConfigAndContext<BrokerRewritingClientContext<C>>,
+        T: FromClientConfigAndContext<TunnelingClientContext<C>>,
     {
         let mut options = self.options.clone();
         options.insert(
@@ -446,7 +453,35 @@ impl KafkaConnection {
             config.set(*k, v);
         }
 
-        let mut context = BrokerRewritingClientContext::new(context);
+        let mut context = TunnelingClientContext::new(
+            context,
+            Handle::current(),
+            connection_context.ssh_tunnel_manager.clone(),
+        );
+
+        match &self.default_tunnel {
+            Tunnel::Direct => {
+                // By default, don't offer a default override for broker address lookup.
+            }
+            Tunnel::AwsPrivatelink(_) => {
+                unreachable!("top-level AwsPrivatelink tunnels are not supported yet")
+            }
+            Tunnel::Ssh(ssh_tunnel) => {
+                let secret = connection_context
+                    .secrets_reader
+                    .read(ssh_tunnel.connection_id)
+                    .await?;
+                let key_pair = SshKeyPair::from_bytes(&secret)?;
+
+                context.set_default_ssh_tunnel(SshTunnelConfig {
+                    host: ssh_tunnel.connection.host.clone(),
+                    port: ssh_tunnel.connection.port,
+                    user: ssh_tunnel.connection.user.clone(),
+                    key_pair,
+                });
+            }
+        }
+
         for broker in &self.brokers {
             let mut addr_parts = broker.address.splitn(2, ':');
             let addr = BrokerAddr {
@@ -466,28 +501,31 @@ impl KafkaConnection {
                         aws_privatelink.availability_zone.as_deref(),
                     );
                     let port = aws_privatelink.port;
-                    context.add_broker_rewrite(addr, move || BrokerRewrite {
-                        host: host.clone(),
-                        port,
-                    });
+                    context.add_broker_rewrite(
+                        addr,
+                        BrokerRewrite {
+                            host: host.clone(),
+                            port,
+                        },
+                    );
                 }
                 Tunnel::Ssh(ssh_tunnel) => {
-                    let ssh_tunnel = ssh_tunnel
-                        .connect(
-                            connection_context,
-                            &addr.host,
-                            addr.port.parse().context("parsing broker port")?,
+                    context
+                        .add_ssh_tunnel(
+                            addr,
+                            SshTunnelConfig {
+                                host: ssh_tunnel.connection.host.clone(),
+                                port: ssh_tunnel.connection.port,
+                                user: ssh_tunnel.connection.user.clone(),
+                                key_pair: SshKeyPair::from_bytes(
+                                    &connection_context
+                                        .secrets_reader
+                                        .read(ssh_tunnel.connection_id)
+                                        .await?,
+                                )?,
+                            },
                         )
-                        .await
-                        .context("creating ssh tunnel")?;
-
-                    context.add_broker_rewrite(addr, move || {
-                        let addr = ssh_tunnel.local_addr();
-                        BrokerRewrite {
-                            host: addr.ip().to_string(),
-                            port: Some(addr.port()),
-                        }
-                    });
+                        .await?;
                 }
             }
         }
@@ -611,6 +649,7 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
     fn into_proto(&self) -> ProtoKafkaConnection {
         ProtoKafkaConnection {
             brokers: self.brokers.into_proto(),
+            default_tunnel: Some(self.default_tunnel.into_proto()),
             progress_topic: self.progress_topic.into_proto(),
             security: self.security.into_proto(),
             options: self
@@ -624,6 +663,9 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
     fn from_proto(proto: ProtoKafkaConnection) -> Result<Self, TryFromProtoError> {
         Ok(KafkaConnection {
             brokers: proto.brokers.into_rust()?,
+            default_tunnel: proto
+                .default_tunnel
+                .into_rust_if_some("ProtoKafkaConnection::default_tunnel")?,
             progress_topic: proto.progress_topic,
             security: proto.security.into_rust()?,
             options: proto
