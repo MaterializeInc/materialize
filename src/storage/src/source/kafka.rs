@@ -28,11 +28,13 @@ use timely::scheduling::activate::SyncActivator;
 use tokio::runtime::Handle as TokioHandle;
 use tracing::{error, info, trace, warn};
 
-use mz_kafka_util::client::{BrokerRewritingClientContext, MzClientContext};
+use mz_kafka_util::client::MzClientContext;
 use mz_ore::collections::HashMap;
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::{adt::jsonb::Jsonb, GlobalId};
-use mz_storage_client::types::connections::{ConnectionContext, StringOrSecret};
+use mz_storage_client::types::connections::{
+    ConnectionContext, DynamicBrokerRewritingClientContext, StringOrSecret,
+};
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
 use mz_storage_client::types::sources::{KafkaSourceConnection, MzOffset};
 use mz_timely_util::order::Partitioned;
@@ -60,7 +62,7 @@ pub struct KafkaSourceReader {
     /// Source global ID
     id: GlobalId,
     /// Kafka consumer for this source
-    consumer: Arc<BaseConsumer<BrokerRewritingClientContext<GlueConsumerContext>>>,
+    consumer: Arc<BaseConsumer<DynamicBrokerRewritingClientContext<GlueConsumerContext>>>,
     /// List of consumers. A consumer should be assigned per partition to guarantee fairness
     partition_consumers: VecDeque<PartitionConsumer>,
     /// Worker ID
@@ -105,7 +107,7 @@ pub struct KafkaOffsetCommiter {
     worker_count: usize,
     topic_name: String,
     logger: LogCommitter,
-    consumer: Arc<BaseConsumer<BrokerRewritingClientContext<GlueConsumerContext>>>,
+    consumer: Arc<BaseConsumer<DynamicBrokerRewritingClientContext<GlueConsumerContext>>>,
 }
 
 impl SourceConnectionBuilder for KafkaSourceConnection {
@@ -838,7 +840,7 @@ struct PartitionConsumer {
     /// the partition id with which this consumer is associated
     pid: PartitionId,
     /// The underlying Kafka partition queue
-    partition_queue: PartitionQueue<BrokerRewritingClientContext<GlueConsumerContext>>,
+    partition_queue: PartitionQueue<DynamicBrokerRewritingClientContext<GlueConsumerContext>>,
     /// Whether or not to unpack and allocate headers and pass them through in the `SourceMessage`
     include_headers: bool,
 }
@@ -847,7 +849,7 @@ impl PartitionConsumer {
     /// Creates a new partition consumer from underlying Kafka consumer
     fn new(
         pid: PartitionId,
-        partition_queue: PartitionQueue<BrokerRewritingClientContext<GlueConsumerContext>>,
+        partition_queue: PartitionQueue<DynamicBrokerRewritingClientContext<GlueConsumerContext>>,
         include_headers: bool,
     ) -> Self {
         PartitionConsumer {
@@ -931,7 +933,7 @@ impl ConsumerContext for GlueConsumerContext {}
 
 /// Return the list of partition ids associated with a specific topic
 fn get_kafka_partitions<C>(
-    consumer: &BaseConsumer<C>,
+    consumer: &BaseConsumer<DynamicBrokerRewritingClientContext<C>>,
     topic: &str,
     timeout: Duration,
 ) -> Result<Vec<PartitionId>, anyhow::Error>
@@ -939,6 +941,14 @@ where
     C: ConsumerContext,
 {
     let metadata = consumer.fetch_metadata(Some(topic), timeout)?;
+
+    // Check if creating ssh tunnels has errored. Note that
+    // we will only catch these errors and report them to users
+    // when we re-fetch kafka partitions. `rdkadka` doesn't
+    // give us much of a better route to take...
+    if let Some(dynamic_error) = consumer.context().dynamic_error() {
+        return Err(anyhow::anyhow!(dynamic_error));
+    }
     let topic_meta = metadata
         .topics()
         .get(0)

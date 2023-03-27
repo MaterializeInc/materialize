@@ -15,7 +15,7 @@ $ kafka-ingest topic=thetopic format=bytes
 one
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred);
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SSH TUNNEL thancred);
 
 > CREATE SOURCE mz_source
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-thetopic-${testdrive.seed}')

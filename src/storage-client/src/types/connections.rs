@@ -13,6 +13,7 @@ use std::any::Any;
 use std::collections::BTreeMap;
 use std::ops::Deref;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use anyhow::{anyhow, Context};
 use itertools::Itertools;
@@ -22,6 +23,7 @@ use rdkafka::config::FromClientConfigAndContext;
 use rdkafka::ClientContext;
 use serde::{Deserialize, Serialize};
 use tokio::net;
+use tokio::runtime::Handle;
 use tokio::sync::oneshot::channel;
 use tokio_postgres::config::SslMode;
 use tracing::warn;
@@ -254,6 +256,10 @@ impl RustType<ProtoKafkaBroker> for KafkaBroker {
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaConnection {
     pub brokers: Vec<KafkaBroker>,
+    /// A tunnel through which to route traffic,
+    /// that can be overridden for individual brokers
+    /// in `brokers`.
+    pub top_level_tunnel: Tunnel,
     pub progress_topic: Option<String>,
     pub security: Option<KafkaSecurity>,
     pub options: BTreeMap<String, StringOrSecret>,
@@ -269,7 +275,7 @@ impl KafkaConnection {
     ) -> Result<T, anyhow::Error>
     where
         C: ClientContext,
-        T: FromClientConfigAndContext<BrokerRewritingClientContext<C>>,
+        T: FromClientConfigAndContext<DynamicBrokerRewritingClientContext<C>>,
     {
         let mut options = self.options.clone();
         options.insert(
@@ -322,14 +328,31 @@ impl KafkaConnection {
             config.set(*k, v);
         }
 
-        let mut context = BrokerRewritingClientContext::new(context);
+        let mut context = DynamicBrokerRewritingClientContext::new(
+            context,
+            Arc::clone(&connection_context.secrets_reader),
+            Handle::current(),
+        );
+
+        match &self.top_level_tunnel {
+            Tunnel::Direct => {
+                // By default, don't offer a default override for broker address lookup.
+            }
+            Tunnel::AwsPrivatelink(_) => {
+                unreachable!("top-level AwsPrivatelink tunnels are not supported yet")
+            }
+            Tunnel::Ssh(ssh_tunnel) => {
+                context.add_default_broker_rewrite(ssh_tunnel.clone());
+            }
+        }
+
         for broker in &self.brokers {
             match &broker.tunnel {
                 Tunnel::Direct => {
                     // By default, don't override broker address lookup.
                 }
                 Tunnel::AwsPrivatelink(aws_privatelink) => {
-                    context.add_broker_rewrite(
+                    context.inner.add_broker_rewrite(
                         &broker.address,
                         &mz_cloud_resources::vpc_endpoint_host(
                             aws_privatelink.connection_id,
@@ -358,7 +381,7 @@ impl KafkaConnection {
                         )
                         .await?;
 
-                    context.add_broker_rewrite_with_token(
+                    context.inner.add_broker_rewrite_with_token(
                         &broker.address,
                         // This should never be `"localhost"`, as that causes reliability
                         // problems, _probably_ related to resolving to ipv6.
@@ -443,6 +466,7 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
     fn into_proto(&self) -> ProtoKafkaConnection {
         ProtoKafkaConnection {
             brokers: self.brokers.into_proto(),
+            top_level_tunnel: Some(self.top_level_tunnel.into_proto()),
             progress_topic: self.progress_topic.into_proto(),
             security: self.security.into_proto(),
             options: self
@@ -456,6 +480,9 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
     fn from_proto(proto: ProtoKafkaConnection) -> Result<Self, TryFromProtoError> {
         Ok(KafkaConnection {
             brokers: proto.brokers.into_rust()?,
+            top_level_tunnel: proto
+                .top_level_tunnel
+                .into_rust_if_some("ProtoKafkaConnection::top_level_tunnel")?,
             progress_topic: proto.progress_topic,
             security: proto.security.into_rust()?,
             options: proto
@@ -1027,5 +1054,197 @@ impl SshTunnel {
             }
         });
         Ok((local_port, Box::new(tx)))
+    }
+}
+
+use rdkafka::client::{BrokerAddr, NativeClient, OAuthToken};
+use rdkafka::config::RDKafkaLogLevel;
+use rdkafka::consumer::{ConsumerContext, Rebalance};
+use rdkafka::error::{KafkaError, KafkaResult};
+use rdkafka::producer::{DeliveryResult, ProducerContext};
+use rdkafka::types::RDKafkaRespErr;
+use rdkafka::util::Timeout;
+use rdkafka::{Statistics, TopicPartitionList};
+
+/// A client context that supports rewriting broker addresses,
+/// and is also able to spin up ssh tunnels dynamically.
+pub struct DynamicBrokerRewritingClientContext<C> {
+    pub inner: BrokerRewritingClientContext<C>,
+    default_override: Option<SshTunnel>,
+    secrets_reader: Arc<dyn SecretsReader>,
+    error: Mutex<Option<String>>,
+    runtime: Handle,
+}
+
+impl<C> DynamicBrokerRewritingClientContext<C> {
+    /// Constructs a new context that wraps `inner`.
+    pub fn new(
+        inner: C,
+        secrets_reader: Arc<dyn SecretsReader>,
+        runtime: Handle,
+    ) -> DynamicBrokerRewritingClientContext<C> {
+        DynamicBrokerRewritingClientContext {
+            inner: BrokerRewritingClientContext::new(inner),
+            default_override: None,
+            secrets_reader,
+            error: Mutex::new(None),
+            runtime,
+        }
+    }
+
+    /// Adds the default broker rewrite rule.
+    ///
+    /// Connections to brokers that aren't specified in other rewrites will be rewritten to connect to
+    /// `rewrite_host` and `rewrite_port` instead.
+    pub fn add_default_broker_rewrite(&mut self, tunnel: SshTunnel) {
+        self.default_override = Some(tunnel);
+    }
+
+    /// Returns a reference to the wrapped context.
+    pub fn inner(&self) -> &C {
+        &self.inner.inner()
+    }
+
+    /// Returns any errors that occurred when setting up
+    /// ssh tunnels.
+    pub fn dynamic_error(&self) -> Option<String> {
+        self.error.lock().expect("poisoned").clone()
+    }
+}
+
+impl<C> ClientContext for DynamicBrokerRewritingClientContext<C>
+where
+    C: ClientContext,
+{
+    const ENABLE_REFRESH_OAUTH_TOKEN: bool = C::ENABLE_REFRESH_OAUTH_TOKEN;
+
+    fn rewrite_broker_addr(&self, addr: BrokerAddr) -> BrokerAddr {
+        if self.inner.overridden(&addr) {
+            return self.inner.rewrite_broker_addr(addr);
+        }
+
+        match &self.default_override {
+            Some(default_tunnel) => {
+                let broker = addr.clone();
+                let default_tunnel = default_tunnel.clone();
+                let sr = Arc::clone(&self.secrets_reader);
+                let runtime = self.runtime.clone();
+                // We spawn an additional thread here, and immediately
+                // join it so that the rdkafka thread calling this callback
+                // spends all its time parked, instead of being
+                // continuously woken up when we `block_on` the
+                // ssh tunnel creation.
+                let res = match std::thread::spawn(move || {
+                    runtime.block_on(async move {
+                        let ret = default_tunnel
+                            .build_ssh_tunnel_for_url(
+                                &*sr,
+                                &broker.host,
+                                broker.port.parse().unwrap(),
+                                "kafka default",
+                            )
+                            .await;
+                        ret
+                    })
+                })
+                .join()
+                {
+                    Ok(res) => res,
+                    Err(e) => std::panic::resume_unwind(e),
+                };
+
+                match res {
+                    Ok((local_port, token)) => {
+                        self.inner.add_broker_rewrite_with_token(
+                            &format!("{}:{}", addr.host, addr.port),
+                            "127.0.0.1",
+                            Some(local_port),
+                            token,
+                        );
+
+                        let ret = self.inner.rewrite_broker_addr(addr);
+                        ret
+                    }
+                    Err(e) => {
+                        // Record the error...
+                        *self.error.lock().expect("poisoned") = Some(e.to_string());
+                        // ...and also ensure a log line shows up.
+                        self.error(KafkaError::ClientCreation(e.to_string()), &e.to_string());
+                        // We have to give rdkafka an address, as this callback can't fail,
+                        // so we have no better choice than the untranslated one.
+                        addr
+                    }
+                }
+            }
+            None => addr,
+        }
+    }
+
+    fn log(&self, level: RDKafkaLogLevel, fac: &str, log_message: &str) {
+        self.inner().log(level, fac, log_message)
+    }
+
+    fn error(&self, error: KafkaError, reason: &str) {
+        self.inner().error(error, reason)
+    }
+
+    fn stats(&self, statistics: Statistics) {
+        self.inner().stats(statistics)
+    }
+
+    fn stats_raw(&self, statistics: &[u8]) {
+        self.inner().stats_raw(statistics)
+    }
+
+    fn generate_oauth_token(
+        &self,
+        oauthbearer_config: Option<&str>,
+    ) -> Result<OAuthToken, Box<dyn std::error::Error>> {
+        self.inner().generate_oauth_token(oauthbearer_config)
+    }
+}
+
+impl<C> ConsumerContext for DynamicBrokerRewritingClientContext<C>
+where
+    C: ConsumerContext,
+{
+    fn rebalance(
+        &self,
+        native_client: &NativeClient,
+        err: RDKafkaRespErr,
+        tpl: &mut TopicPartitionList,
+    ) {
+        self.inner().rebalance(native_client, err, tpl)
+    }
+
+    fn pre_rebalance<'a>(&self, rebalance: &Rebalance<'a>) {
+        self.inner().pre_rebalance(rebalance)
+    }
+
+    fn post_rebalance<'a>(&self, rebalance: &Rebalance<'a>) {
+        self.inner().post_rebalance(rebalance)
+    }
+
+    fn commit_callback(&self, result: KafkaResult<()>, offsets: &TopicPartitionList) {
+        self.inner().commit_callback(result, offsets)
+    }
+
+    fn main_queue_min_poll_interval(&self) -> Timeout {
+        self.inner().main_queue_min_poll_interval()
+    }
+}
+
+impl<C> ProducerContext for DynamicBrokerRewritingClientContext<C>
+where
+    C: ProducerContext,
+{
+    type DeliveryOpaque = C::DeliveryOpaque;
+
+    fn delivery(
+        &self,
+        delivery_result: &DeliveryResult<'_>,
+        delivery_opaque: Self::DeliveryOpaque,
+    ) {
+        self.inner().delivery(delivery_result, delivery_opaque)
     }
 }

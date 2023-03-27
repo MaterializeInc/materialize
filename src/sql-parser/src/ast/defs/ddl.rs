@@ -565,7 +565,7 @@ impl AstDisplay for KafkaConnectionOptionName {
             KafkaConnectionOptionName::Broker => "BROKER",
             KafkaConnectionOptionName::Brokers => "BROKERS",
             KafkaConnectionOptionName::ProgressTopic => "PROGRESS TOPIC",
-            KafkaConnectionOptionName::SshTunnel => "SSL TUNNEL",
+            KafkaConnectionOptionName::SshTunnel => "SSH TUNNEL",
             KafkaConnectionOptionName::SslKey => "SSL KEY",
             KafkaConnectionOptionName::SslCertificate => "SSL CERTIFICATE",
             KafkaConnectionOptionName::SslCertificateAuthority => "SSL CERTIFICATE AUTHORITY",

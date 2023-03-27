@@ -2933,6 +2933,7 @@ impl KafkaConnectionOptionExtracted {
     ) -> Result<mz_storage_client::types::connections::KafkaConnection, PlanError> {
         Ok(KafkaConnection {
             brokers: self.get_brokers(scx)?,
+            top_level_tunnel: scx.build_tunnel_definition(self.ssh_tunnel, None)?,
             security: Option::<KafkaSecurity>::try_from(&self)?,
             progress_topic: self.progress_topic,
             options: BTreeMap::new(),

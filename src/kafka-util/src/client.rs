@@ -12,6 +12,7 @@
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::error::Error;
+use std::sync::RwLock;
 use std::time::Duration;
 
 use anyhow::bail;
@@ -72,9 +73,12 @@ impl ProducerContext for MzClientContext {
 /// A client context that supports rewriting broker addresses.
 pub struct BrokerRewritingClientContext<C> {
     inner: C,
-    overrides: BTreeMap<BrokerAddr, BrokerAddr>,
-    /// Opaque tokens to cleanup resources associated with overrides.
-    drop_tokens: Vec<Box<dyn Any + Send + Sync>>,
+    overrides: RwLock<(
+        BTreeMap<BrokerAddr, BrokerAddr>,
+        // Overrides and their opaque tokens to cleanup resources
+        // associated with overrides.
+        Vec<Box<dyn Any + Send + Sync>>,
+    )>,
 }
 
 impl<C> BrokerRewritingClientContext<C> {
@@ -82,8 +86,7 @@ impl<C> BrokerRewritingClientContext<C> {
     pub fn new(inner: C) -> BrokerRewritingClientContext<C> {
         BrokerRewritingClientContext {
             inner,
-            overrides: BTreeMap::new(),
-            drop_tokens: vec![],
+            overrides: RwLock::new((BTreeMap::new(), Vec::new())),
         }
     }
 
@@ -92,19 +95,14 @@ impl<C> BrokerRewritingClientContext<C> {
     /// Connections to the specified `broker` will be rewritten to connect to
     /// `rewrite_host` and `rewrite_port` instead. If `rewrite_port` is omitted,
     /// only the host is rewritten.
-    pub fn add_broker_rewrite(
-        &mut self,
-        broker: &str,
-        rewrite_host: &str,
-        rewrite_port: Option<u16>,
-    ) {
+    pub fn add_broker_rewrite(&self, broker: &str, rewrite_host: &str, rewrite_port: Option<u16>) {
         self.add_broker_rewrite_inner(broker, rewrite_host, rewrite_port, None)
     }
 
     /// The same as `add_broker_rewrite`, but holds onto a token that may perform
     /// some shutdown on drop.
     pub fn add_broker_rewrite_with_token<T: Any + Send + Sync>(
-        &mut self,
+        &self,
         broker: &str,
         rewrite_host: &str,
         rewrite_port: Option<u16>,
@@ -113,8 +111,17 @@ impl<C> BrokerRewritingClientContext<C> {
         self.add_broker_rewrite_inner(broker, rewrite_host, rewrite_port, Some(Box::new(token)))
     }
 
+    /// Returns a reference to the wrapped context.
+    pub fn overridden(&self, broker: &BrokerAddr) -> bool {
+        self.overrides
+            .read()
+            .expect("poisoned")
+            .0
+            .contains_key(broker)
+    }
+
     fn add_broker_rewrite_inner(
-        &mut self,
+        &self,
         broker: &str,
         rewrite_host: &str,
         rewrite_port: Option<u16>,
@@ -132,10 +139,13 @@ impl<C> BrokerRewritingClientContext<C> {
                 Some(port) => port.to_string(),
             },
         };
-        self.overrides.insert(broker, rewrite);
+
+        let mut overrides = self.overrides.write().expect("poisoned");
+        // TODO(guswynn): HANDLE RACE HERE
+        overrides.0.insert(broker, rewrite);
 
         if let Some(token) = token {
-            self.drop_tokens.push(token)
+            overrides.1.push(token)
         }
     }
 
@@ -152,7 +162,7 @@ where
     const ENABLE_REFRESH_OAUTH_TOKEN: bool = C::ENABLE_REFRESH_OAUTH_TOKEN;
 
     fn rewrite_broker_addr(&self, addr: BrokerAddr) -> BrokerAddr {
-        match self.overrides.get(&addr) {
+        match self.overrides.read().expect("poisoned").0.get(&addr) {
             None => addr,
             Some(o) => {
                 info!(

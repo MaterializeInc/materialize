@@ -43,7 +43,7 @@ use tracing::{debug, error, info, warn};
 use mz_interchange::avro::{AvroEncoder, AvroSchemaGenerator};
 use mz_interchange::encode::Encode;
 use mz_interchange::json::JsonEncoder;
-use mz_kafka_util::client::{BrokerRewritingClientContext, MzClientContext};
+use mz_kafka_util::client::MzClientContext;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
@@ -51,7 +51,9 @@ use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::task;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::client::SinkStatisticsUpdate;
-use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_client::types::connections::{
+    ConnectionContext, DynamicBrokerRewritingClientContext,
+};
 use mz_storage_client::types::errors::DataflowError;
 use mz_storage_client::types::sinks::{
     KafkaSinkConnection, MetadataFilled, PublishedSchemaInfo, SinkAsOf, SinkEnvelope,
@@ -265,7 +267,7 @@ impl ProducerContext for SinkProducerContext {
 #[derive(Clone)]
 struct KafkaTxProducer {
     name: String,
-    inner: Arc<ThreadedProducer<BrokerRewritingClientContext<SinkProducerContext>>>,
+    inner: Arc<ThreadedProducer<DynamicBrokerRewritingClientContext<SinkProducerContext>>>,
     timeout: Duration,
 }
 
@@ -385,7 +387,8 @@ struct KafkaSinkState {
 
     progress_topic: String,
     progress_key: String,
-    progress_client: Option<Arc<BaseConsumer<BrokerRewritingClientContext<SinkConsumerContext>>>>,
+    progress_client:
+        Option<Arc<BaseConsumer<DynamicBrokerRewritingClientContext<SinkConsumerContext>>>>,
 
     healthchecker: Arc<Mutex<Option<Healthchecker>>>,
     internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,

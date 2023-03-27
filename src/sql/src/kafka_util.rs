@@ -18,11 +18,13 @@ use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
 use tokio::time::Duration;
 
-use mz_kafka_util::client::{BrokerRewritingClientContext, MzClientContext};
+use mz_kafka_util::client::MzClientContext;
 use mz_ore::task;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{AstInfo, KafkaConfigOption, KafkaConfigOptionName};
-use mz_storage_client::types::connections::{ConnectionContext, KafkaConnection, StringOrSecret};
+use mz_storage_client::types::connections::{
+    ConnectionContext, DynamicBrokerRewritingClientContext, KafkaConnection, StringOrSecret,
+};
 
 use crate::names::Aug;
 use crate::normalize::generate_extracted_config;
@@ -211,7 +213,8 @@ pub async fn create_consumer(
     connection_context: &ConnectionContext,
     kafka_connection: &KafkaConnection,
     topic: &str,
-) -> Result<Arc<BaseConsumer<BrokerRewritingClientContext<KafkaErrCheckContext>>>, PlanError> {
+) -> Result<Arc<BaseConsumer<DynamicBrokerRewritingClientContext<KafkaErrCheckContext>>>, PlanError>
+{
     let consumer: BaseConsumer<_> = kafka_connection
         .create_with_context(
             connection_context,
@@ -237,6 +240,13 @@ pub async fn create_consumer(
     })
     .await
     .map_err(|e| sql_err!("{}", e))?;
+
+    // Check if the `DynamicBrokerRewritingClientContext` has
+    // errored first.
+    let error = context.dynamic_error();
+    if let Some(error) = error {
+        sql_bail!("setting up ssh tunnel: {}", error)
+    }
     let error = context.inner().error.lock().expect("lock poisoned");
     if let Some(error) = &*error {
         sql_bail!("librdkafka: {}", error)
