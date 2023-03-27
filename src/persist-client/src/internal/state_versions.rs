@@ -335,7 +335,10 @@ impl StateVersions {
                 .metrics
                 .codecs
                 .state_diff
-                .decode(|| StateDiff::<T>::decode(&self.cfg.build_version, &latest_diff.data));
+                // Note: `latest_diff.data` is a `Bytes`, so cloning just increments a ref count
+                .decode(|| {
+                    StateDiff::<T>::decode(&self.cfg.build_version, latest_diff.data.clone())
+                });
             let mut state = match self
                 .fetch_rollup_at_key(shard_id, &latest_diff.latest_rollup_key)
                 .await
@@ -369,7 +372,14 @@ impl StateVersions {
             };
 
             let rollup_seqno = state.seqno();
-            let diffs = live_diffs.iter().filter(|x| x.seqno > rollup_seqno);
+            let diffs = live_diffs
+                .iter()
+                .filter(|x| x.seqno > rollup_seqno)
+                // Note: `x.data` is a `Bytes`, so cloning just increments a ref count
+                .map(|x| VersionedData {
+                    seqno: x.seqno,
+                    data: x.data.clone(),
+                });
             state.apply_encoded_diffs(&self.cfg, &self.metrics, diffs);
             return state;
         }
@@ -405,7 +415,7 @@ impl StateVersions {
             .map_or(true, |x| x.seqno == seqno_before.next());
         if diffs_apply {
             self.metrics.state.update_state_fast_path.inc();
-            state.apply_encoded_diffs(&self.cfg, &self.metrics, &diffs_to_current);
+            state.apply_encoded_diffs(&self.cfg, &self.metrics, diffs_to_current);
             Ok(())
         } else {
             self.metrics.state.update_state_slow_path.inc();
@@ -551,7 +561,7 @@ impl StateVersions {
             .metrics
             .codecs
             .state_diff
-            .decode(|| StateDiff::<T>::decode(&self.cfg.build_version, &head.data));
+            .decode(|| StateDiff::<T>::decode(&self.cfg.build_version, head.data));
 
         match BlobKey::parse_ids(&latest_diff.latest_rollup_key.complete(shard_id)) {
             Ok((_shard_id, PartialBlobKey::Rollup(seqno, _rollup))) => {
@@ -699,7 +709,8 @@ impl StateVersions {
                 .metrics
                 .codecs
                 .state_diff
-                .decode(|| StateDiff::<T>::decode(&self.cfg.build_version, &x.data));
+                // Note: `x.data` is a `Bytes`, so cloning just increments a ref count
+                .decode(|| StateDiff::<T>::decode(&self.cfg.build_version, x.data.clone()));
             diff.rollups
                 .iter()
                 .find(|x| x.key == seqno)
@@ -881,7 +892,7 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
             .metrics
             .codecs
             .state_diff
-            .decode(|| StateDiff::decode(&self.cfg.build_version, &diff.data));
+            .decode(|| StateDiff::decode(&self.cfg.build_version, diff.data));
 
         // A bit hacky, but the first diff in StateVersionsIter is always a
         // no-op.
@@ -964,9 +975,10 @@ impl<K, V, T: Timestamp + Lattice + Codec64, D> TypedStateVersionsIter<K, V, T, 
             Some(x) => x,
             None => return None,
         };
+        let diff_seqno = diff.seqno;
         self.state
-            .apply_encoded_diffs(&self.cfg, &self.metrics, std::iter::once(&diff));
-        assert_eq!(self.state.seqno, diff.seqno);
+            .apply_encoded_diffs(&self.cfg, &self.metrics, std::iter::once(diff));
+        assert_eq!(self.state.seqno, diff_seqno);
         Some(&self.state)
     }
 
