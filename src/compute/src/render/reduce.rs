@@ -41,7 +41,7 @@ use mz_timely_util::reduce::ReduceExt;
 
 use crate::render::context::{Arrangement, CollectionBundle, Context};
 use crate::render::reduce::monoids::ReductionMonoid;
-use crate::render::ArrangementFlavor;
+use crate::render::{ArrangementFlavor, MaybeValidatingRow};
 use crate::typedefs::{ErrValSpine, RowKeySpine, RowSpine};
 
 /// Render a dataflow based on the provided plan.
@@ -651,18 +651,41 @@ where
         let mut stage = input.map(move |(key, values)| ((key, values.hashed()), values));
         let mut validating = true;
         for b in buckets.into_iter() {
-            let (stage_output, stage_errs) =
-                build_bucketed_stage(debug_name, stage, aggr_funcs.clone(), b, validating);
-            stage = stage_output;
-            assert!((validating && stage_errs.is_some()) || (!validating && stage_errs.is_none()));
+            let input = stage.map(move |((key, hash), values)| ((key, hash % b), values));
 
             // We only want the first stage to perform validation of whether invalid accumulations
             // were observed in the input. Subsequently, we will either produce an error in the error
             // stream or produce correct data in the output stream.
-            if let Some(errs) = stage_errs {
+            let negated_output = if validating {
+                let (oks, errs) = build_bucketed_negated_output::<_, Result<Vec<Row>, (Row, u64)>>(
+                    debug_name,
+                    &input,
+                    aggr_funcs.clone(),
+                )
+                .map_fallible(
+                    "Checked Invalid Accumulations",
+                    |(key, result)| match result {
+                        Err((key, _)) => {
+                            let message = format!(
+                                "Invalid data in source, saw negative accumulation for \
+                                         key {key:?} in hierarchical mins-maxes aggregate"
+                            );
+                            Err(EvalError::Internal(message).into())
+                        }
+                        Ok(values) => Ok((key, values)),
+                    },
+                );
                 validating = false;
                 err_output = Some(errs.leave_region());
-            }
+                oks
+            } else {
+                build_bucketed_negated_output::<_, Vec<Row>>(debug_name, &input, aggr_funcs.clone())
+            };
+
+            stage = negated_output
+                .negate()
+                .concat(&input)
+                .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated MinsMaxesHierarchical");
         }
 
         // Discard the hash from the key and return to the format of the input data.
@@ -721,103 +744,66 @@ where
 /// `validating` indicates whether we want this stage to perform error detection
 /// for invalid accumulations. Once a stage is clean of such errors, subsequent
 /// stages can skip validation.
-fn build_bucketed_stage<G>(
+fn build_bucketed_negated_output<G, R>(
     debug_name: &str,
-    input: Collection<G, ((Row, u64), Vec<Row>), Diff>,
+    input: &Collection<G, ((Row, u64), Vec<Row>), Diff>,
     aggrs: Vec<AggregateFunc>,
-    buckets: u64,
-    validating: bool,
-) -> (
-    Collection<G, ((Row, u64), Vec<Row>), Diff>,
-    Option<Collection<G, DataflowError, Diff>>,
-)
+) -> Collection<G, ((Row, u64), R), Diff>
 where
     G: Scope,
     G::Timestamp: Lattice,
+    R: MaybeValidatingRow<Vec<Row>, (Row, u64)>,
 {
-    let input = input.map(move |((key, hash), values)| ((key, hash % buckets), values));
-
     let debug_name = debug_name.to_string();
     let arranged_input =
         input.arrange_named::<RowSpine<_, Vec<Row>, _, _>>("Arranged MinsMaxesHierarchical input");
 
-    #[inline]
-    fn inner<C: Fn(Vec<Row>) -> R, R>(
-        aggrs: &[AggregateFunc],
-        source: &[(&Vec<Row>, Diff)],
-        target: &mut Vec<(R, Diff)>,
-        logic: C,
-    ) {
-        let mut output = Vec::with_capacity(aggrs.len());
-        for (aggr_index, func) in aggrs.iter().enumerate() {
-            let iter = source
-                .iter()
-                .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
-            output.push(Row::pack_slice(&[func.eval(iter, &RowArena::new())]));
-        }
-        // We only want to arrange the parts of the input that are not part of the output.
-        // More specifically, we want to arrange it so that `input.concat(&output.negate())`
-        // gives us the intended value of this aggregate function. Also we assume that regardless
-        // of the multiplicity of the final result in the input, we only want to have one copy
-        // in the output.
-        target.push((logic(output), -1));
-        target.extend(
-            source
-                .iter()
-                .map(|(values, cnt)| (logic((*values).clone()), *cnt)),
-        );
-    }
-
-    let (negated_output, stage_errs) = if validating {
-        let (negated_output, errs) = arranged_input
-        .reduce_abelian::<_,RowSpine<_,Result<_,_>,_,_>>("Reduced Fallibly MinsMaxesHierarchical", {
+    arranged_input
+        .reduce_abelian::<_, RowSpine<_, _, _, _>>(
+            "Reduced Fallibly MinsMaxesHierarchical",
             move |key, source, target| {
-                // Should negative accumulations reach us, we should loudly complain.
-                if source.iter().any(|(_val, cnt)| cnt <= &0) {
-                    for (val, cnt) in source.iter() {
-                        // XXX: This reports user data, which we perhaps should not do!
-                        if *cnt <= 0 {
-                            warn!("[customer-data] Non-positive accumulation in MinsMaxesHierarchical: \
-                                key: {key:?}\tvalue: {val:?}\tcount: {cnt:?} in dataflow {debug_name}");
-                            soft_assert_or_log!(
-                                false,
-                                "Non-positive accumulation in MinsMaxesHierarchical"
-                            );
+                if let Some(err) = R::into_error() {
+                    // Should negative accumulations reach us, we should loudly complain.
+                    for (value, count) in source.iter() {
+                        if count.is_positive() {
+                            continue;
                         }
+                        let message = "Non-positive accumulation in MinsMaxesHierarchical";
+                        warn!(
+                            ?key,
+                            ?value,
+                            ?count,
+                            debug_name,
+                            "[customer-data] {message}"
+                        );
+                        error!("{message}");
+                        // After complaining, output an error here so that we can eventually
+                        // report it in an error stream.
+                        target.push((err(key.clone()), -1));
+                        return;
                     }
-                    // After complaining, output an error here so that we can eventually
-                    // report it in an error stream.
-                    target.push((Err(format!("Invalid data in source, saw negative accumulation for \
-                        key {key:?} in hierarchical mins-maxes aggregate")), 1));
-                } else {
-                    inner(&aggrs, source, target, Ok);
                 }
-            }
-        })
-        .as_collection(|k,v| (k.clone(), v.clone()))
-        .map_fallible("Checked Invalid Accumulations", |(key, result)| {
-            match result {
-                Err(message) => Err(EvalError::Internal(message).into()),
-                Ok(values) => Ok((key, values)),
-            }
-        });
-        (negated_output, Some(errs))
-    } else {
-        let negated_output = arranged_input
-            .reduce_abelian::<_, RowSpine<_, _, _, _>>("Reduced MinsMaxesHierarchical", {
-                move |_key, source, target| {
-                    inner(&aggrs, source, target, std::convert::identity);
+                let mut output = Vec::with_capacity(aggrs.len());
+                for (aggr_index, func) in aggrs.iter().enumerate() {
+                    let iter = source
+                        .iter()
+                        .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
+                    output.push(Row::pack_slice(&[func.eval(iter, &RowArena::new())]));
                 }
-            })
-            .as_collection(|k, v| (k.clone(), v.clone()));
-        (negated_output, None)
-    };
-
-    let stage_output = negated_output
-        .negate()
-        .concat(&input)
-        .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated MinsMaxesHierarchical");
-    (stage_output, stage_errs)
+                // We only want to arrange the parts of the input that are not part of the output.
+                // More specifically, we want to arrange it so that `input.concat(&output.negate())`
+                // gives us the intended value of this aggregate function. Also we assume that regardless
+                // of the multiplicity of the final result in the input, we only want to have one copy
+                // in the output.
+                target.push((R::ok(output), -1));
+                target.extend(
+                    source
+                        .iter()
+                        .map(|(values, cnt)| (R::ok((*values).clone()), *cnt)),
+                );
+            },
+        )
+        .as_collection(|k, v| (k.clone(), v.clone()))
 }
 
 /// Build the dataflow to compute and arrange multiple hierarchical aggregations
