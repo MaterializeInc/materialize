@@ -114,7 +114,7 @@ pub fn user_privilege_hack(
         Plan::ShowCreate(_) => {
             return Ok(());
         }
-        
+
         Plan::Subscribe(_)
         | Plan::Peek(_)
         | Plan::CopyFrom(_)
