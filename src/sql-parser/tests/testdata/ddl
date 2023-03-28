@@ -1700,179 +1700,179 @@ ALTER CLUSTER foo OWNER TO joe
 ----
 ALTER CLUSTER foo OWNER TO joe
 =>
-AlterClusterOwner(AlterClusterOwnerStatement { if_exists: false, name: Ident("foo"), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Cluster, if_exists: false, name: Cluster(Ident("foo")), new_owner: Ident("joe") })
 
 parse-statement
 ALTER CLUSTER IF EXISTS foo OWNER TO joe
 ----
 ALTER CLUSTER IF EXISTS foo OWNER TO joe
 =>
-AlterClusterOwner(AlterClusterOwnerStatement { if_exists: true, name: Ident("foo"), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Cluster, if_exists: true, name: Cluster(Ident("foo")), new_owner: Ident("joe") })
 
 parse-statement
 ALTER CLUSTER REPLICA c.foo OWNER TO joe
 ----
 ALTER CLUSTER REPLICA c.foo OWNER TO joe
 =>
-AlterClusterReplicaOwner(AlterClusterReplicaOwnerStatement { if_exists: false, name: QualifiedReplica { cluster: Ident("c"), replica: Ident("foo") }, new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: ClusterReplica, if_exists: false, name: ClusterReplica(QualifiedReplica { cluster: Ident("c"), replica: Ident("foo") }), new_owner: Ident("joe") })
 
 parse-statement
 ALTER CLUSTER REPLICA IF EXISTS c.foo OWNER TO joe
 ----
 ALTER CLUSTER REPLICA IF EXISTS c.foo OWNER TO joe
 =>
-AlterClusterReplicaOwner(AlterClusterReplicaOwnerStatement { if_exists: true, name: QualifiedReplica { cluster: Ident("c"), replica: Ident("foo") }, new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: ClusterReplica, if_exists: true, name: ClusterReplica(QualifiedReplica { cluster: Ident("c"), replica: Ident("foo") }), new_owner: Ident("joe") })
 
 parse-statement
 ALTER DATABASE foo OWNER TO joe
 ----
 ALTER DATABASE foo OWNER TO joe
 =>
-AlterDatabaseOwner(AlterDatabaseOwnerStatement { if_exists: false, name: UnresolvedDatabaseName(Ident("foo")), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Database, if_exists: false, name: Database(UnresolvedDatabaseName(Ident("foo"))), new_owner: Ident("joe") })
 
 parse-statement
 ALTER DATABASE IF EXISTS foo OWNER TO joe
 ----
 ALTER DATABASE IF EXISTS foo OWNER TO joe
 =>
-AlterDatabaseOwner(AlterDatabaseOwnerStatement { if_exists: true, name: UnresolvedDatabaseName(Ident("foo")), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Database, if_exists: true, name: Database(UnresolvedDatabaseName(Ident("foo"))), new_owner: Ident("joe") })
 
 parse-statement
 ALTER SCHEMA foo OWNER TO joe
 ----
 ALTER SCHEMA foo OWNER TO joe
 =>
-AlterSchemaOwner(AlterSchemaOwnerStatement { if_exists: false, name: UnresolvedSchemaName([Ident("foo")]), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Schema, if_exists: false, name: Schema(UnresolvedSchemaName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER SCHEMA IF EXISTS foo OWNER TO joe
 ----
 ALTER SCHEMA IF EXISTS foo OWNER TO joe
 =>
-AlterSchemaOwner(AlterSchemaOwnerStatement { if_exists: true, name: UnresolvedSchemaName([Ident("foo")]), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Schema, if_exists: true, name: Schema(UnresolvedSchemaName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER SCHEMA bar.foo OWNER TO joe
 ----
 ALTER SCHEMA bar.foo OWNER TO joe
 =>
-AlterSchemaOwner(AlterSchemaOwnerStatement { if_exists: false, name: UnresolvedSchemaName([Ident("bar"), Ident("foo")]), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Schema, if_exists: false, name: Schema(UnresolvedSchemaName([Ident("bar"), Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER SCHEMA IF EXISTS bar.foo OWNER TO joe
 ----
 ALTER SCHEMA IF EXISTS bar.foo OWNER TO joe
 =>
-AlterSchemaOwner(AlterSchemaOwnerStatement { if_exists: true, name: UnresolvedSchemaName([Ident("bar"), Ident("foo")]), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Schema, if_exists: true, name: Schema(UnresolvedSchemaName([Ident("bar"), Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER TABLE foo OWNER TO joe
 ----
 ALTER TABLE foo OWNER TO joe
 =>
-AlterObjectOwner(AlterObjectOwnerStatement { object_type: Table, if_exists: false, name: UnresolvedObjectName([Ident("foo")]), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Table, if_exists: false, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER TABLE IF EXISTS foo OWNER TO joe
 ----
 ALTER TABLE IF EXISTS foo OWNER TO joe
 =>
-AlterObjectOwner(AlterObjectOwnerStatement { object_type: Table, if_exists: true, name: UnresolvedObjectName([Ident("foo")]), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Table, if_exists: true, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER SINK foo OWNER TO joe
 ----
 ALTER SINK foo OWNER TO joe
 =>
-AlterObjectOwner(AlterObjectOwnerStatement { object_type: Sink, if_exists: false, name: UnresolvedObjectName([Ident("foo")]), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Sink, if_exists: false, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER SINK IF EXISTS foo OWNER TO joe
 ----
 ALTER SINK IF EXISTS foo OWNER TO joe
 =>
-AlterObjectOwner(AlterObjectOwnerStatement { object_type: Sink, if_exists: true, name: UnresolvedObjectName([Ident("foo")]), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Sink, if_exists: true, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER SOURCE foo OWNER TO joe
 ----
 ALTER SOURCE foo OWNER TO joe
 =>
-AlterObjectOwner(AlterObjectOwnerStatement { object_type: Source, if_exists: false, name: UnresolvedObjectName([Ident("foo")]), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Source, if_exists: false, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER SOURCE IF EXISTS foo OWNER TO joe
 ----
 ALTER SOURCE IF EXISTS foo OWNER TO joe
 =>
-AlterObjectOwner(AlterObjectOwnerStatement { object_type: Source, if_exists: true, name: UnresolvedObjectName([Ident("foo")]), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Source, if_exists: true, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER INDEX foo OWNER TO joe
 ----
 ALTER INDEX foo OWNER TO joe
 =>
-AlterObjectOwner(AlterObjectOwnerStatement { object_type: Index, if_exists: false, name: UnresolvedObjectName([Ident("foo")]), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Index, if_exists: false, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER INDEX IF EXISTS foo OWNER TO joe
 ----
 ALTER INDEX IF EXISTS foo OWNER TO joe
 =>
-AlterObjectOwner(AlterObjectOwnerStatement { object_type: Index, if_exists: true, name: UnresolvedObjectName([Ident("foo")]), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Index, if_exists: true, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER SECRET foo OWNER TO joe
 ----
 ALTER SECRET foo OWNER TO joe
 =>
-AlterObjectOwner(AlterObjectOwnerStatement { object_type: Secret, if_exists: false, name: UnresolvedObjectName([Ident("foo")]), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Secret, if_exists: false, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER SECRET IF EXISTS foo OWNER TO joe
 ----
 ALTER SECRET IF EXISTS foo OWNER TO joe
 =>
-AlterObjectOwner(AlterObjectOwnerStatement { object_type: Secret, if_exists: true, name: UnresolvedObjectName([Ident("foo")]), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Secret, if_exists: true, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER CONNECTION foo OWNER TO joe
 ----
 ALTER CONNECTION foo OWNER TO joe
 =>
-AlterObjectOwner(AlterObjectOwnerStatement { object_type: Connection, if_exists: false, name: UnresolvedObjectName([Ident("foo")]), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Connection, if_exists: false, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER CONNECTION IF EXISTS foo OWNER TO joe
 ----
 ALTER CONNECTION IF EXISTS foo OWNER TO joe
 =>
-AlterObjectOwner(AlterObjectOwnerStatement { object_type: Connection, if_exists: true, name: UnresolvedObjectName([Ident("foo")]), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Connection, if_exists: true, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER VIEW foo OWNER TO joe
 ----
 ALTER VIEW foo OWNER TO joe
 =>
-AlterObjectOwner(AlterObjectOwnerStatement { object_type: View, if_exists: false, name: UnresolvedObjectName([Ident("foo")]), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: View, if_exists: false, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER VIEW IF EXISTS foo OWNER TO joe
 ----
 ALTER VIEW IF EXISTS foo OWNER TO joe
 =>
-AlterObjectOwner(AlterObjectOwnerStatement { object_type: View, if_exists: true, name: UnresolvedObjectName([Ident("foo")]), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: View, if_exists: true, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER MATERIALIZED VIEW foo OWNER TO joe
 ----
 ALTER MATERIALIZED VIEW foo OWNER TO joe
 =>
-AlterObjectOwner(AlterObjectOwnerStatement { object_type: MaterializedView, if_exists: false, name: UnresolvedObjectName([Ident("foo")]), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: MaterializedView, if_exists: false, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER MATERIALIZED VIEW IF EXISTS foo OWNER TO joe
 ----
 ALTER MATERIALIZED VIEW IF EXISTS foo OWNER TO joe
 =>
-AlterObjectOwner(AlterObjectOwnerStatement { object_type: MaterializedView, if_exists: true, name: UnresolvedObjectName([Ident("foo")]), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: MaterializedView, if_exists: true, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
