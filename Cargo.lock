@@ -121,6 +121,7 @@ dependencies = [
  "futures",
  "getrandom",
  "hash_hasher",
+ "multiversion",
  "num-traits",
  "parquet2",
  "rustc_version",
@@ -3201,6 +3202,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5ce46fe64a9d73be07dcbe690a38ce1b293be448fd8ce1e6c1b8062c9f72c6a"
 
 [[package]]
+name = "multiversion"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "025c962a3dd3cc5e0e520aa9c612201d127dcdf28616974961a649dca64f5373"
+dependencies = [
+ "multiversion-macros",
+]
+
+[[package]]
+name = "multiversion-macros"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8a3e2bde382ebf960c1f3e79689fa5941625fe9bf694a1cb64af3e85faff3af"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "mysql_async"
 version = "0.31.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4258,7 +4279,12 @@ dependencies = [
  "anyhow",
  "arrow2",
  "bytes",
+ "mz-proto",
  "parquet2",
+ "prost",
+ "prost-build",
+ "protobuf-src",
+ "serde",
  "workspace-hack",
 ]
 
@@ -8224,7 +8250,6 @@ dependencies = [
  "futures-sink",
  "futures-task",
  "futures-util",
- "getrandom",
  "globset",
  "hashbrown",
  "hyper",

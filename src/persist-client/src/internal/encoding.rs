@@ -36,8 +36,8 @@ use crate::internal::state::{
     IdempotencyToken, LeasedReaderState, OpaqueState, ProtoCriticalReaderState,
     ProtoHandleDebugState, ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowRollup,
     ProtoLeasedReaderState, ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType,
-    ProtoStateFieldDiffs, ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64ColStats,
-    ProtoU64Description, ProtoWriterState, State, StateCollections, TypedState, WriterState,
+    ProtoStateFieldDiffs, ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description,
+    ProtoWriterState, State, StateCollections, TypedState, WriterState,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, ProtoStateFieldDiffsWriter, StateDiff, StateFieldDiff, StateFieldValDiff,
@@ -910,41 +910,20 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
 
 impl RustType<ProtoHollowBatchPart> for HollowBatchPart {
     fn into_proto(&self) -> ProtoHollowBatchPart {
-        let key_col_stats = match self.stats.as_ref() {
-            Some(x) => x
-                .key_col_min_max_nulls
-                .iter()
-                .map(|(name, (min, max, nulls))| ProtoU64ColStats {
-                    name: name.into_proto(),
-                    min: min.into_proto(),
-                    max: max.into_proto(),
-                    nulls: nulls.into_proto(),
-                })
-                .collect(),
-            None => Vec::new(),
-        };
+        let key_stats = self.stats.as_ref().map(|x| x.key.into_proto());
         ProtoHollowBatchPart {
             key: self.key.into_proto(),
             encoded_size_bytes: self.encoded_size_bytes.into_proto(),
-            key_col_stats,
+            key_stats,
         }
     }
 
     fn from_proto(proto: ProtoHollowBatchPart) -> Result<Self, TryFromProtoError> {
-        let stats = if proto.key_col_stats.is_empty() {
-            None
-        } else {
-            let mut key_col_min_max_nulls = BTreeMap::new();
-            for x in proto.key_col_stats {
-                key_col_min_max_nulls.insert(
-                    x.name.into_rust()?,
-                    (x.min.into_rust()?, x.max.into_rust()?, x.nulls.into_rust()?),
-                );
-            }
-            let stats = Arc::new(PartStats {
-                key_col_min_max_nulls,
-            });
-            Some(stats)
+        let stats = match proto.key_stats {
+            Some(x) => Some(Arc::new(PartStats {
+                key: x.into_rust()?,
+            })),
+            None => None,
         };
         Ok(HollowBatchPart {
             key: proto.key.into_rust()?,

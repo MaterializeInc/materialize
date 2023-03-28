@@ -9,6 +9,8 @@
 
 syntax = "proto3";
 
+import "persist-types/src/stats.proto";
+
 package mz_persist_client.internal.state;
 
 message ProtoU64Antichain {
@@ -26,14 +28,8 @@ message ProtoHollowBatchPart {
     uint64 encoded_size_bytes = 2;
 
     // TODO(mfp): This is definitely not the final way for us to store this.
-    repeated ProtoU64ColStats key_col_stats = 536870911;
-}
-
-message ProtoU64ColStats {
-    string name = 1;
-    uint64 min = 2;
-    uint64 max = 3;
-    uint64 nulls = 4;
+    mz_persist_types.stats.ProtoStructStats key_stats = 536870910;
+    reserved 536870911;
 }
 
 message ProtoHollowBatch {

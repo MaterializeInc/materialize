@@ -2564,7 +2564,7 @@ impl<'a> PartEncoder<'a, SourceData> for SourceDataEncoder<'a> {
     }
 }
 
-const SOURCE_DATA_ERROR: &str = "mz_internal_super_secret_source_data_errors";
+pub(crate) const SOURCE_DATA_ERROR: &str = "mz_internal_super_secret_source_data_errors";
 fn fake_relation_desc(desc: &RelationDesc) -> RelationDesc {
     let names = desc.iter_names().cloned();
     let typs = desc.iter_types().map(|x| {
