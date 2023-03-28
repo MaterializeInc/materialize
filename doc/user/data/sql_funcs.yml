@@ -740,7 +740,7 @@
       Reconstructs the creating command for an index. (This is a decompiled
       reconstruction, not the original text of the command.) If column is
       supplied and is not zero, only the definition of that column is reconstructed.
-  - signature: 'pg_get_userbyid(role:oid) -> text'
+  - signature: 'pg_get_userbyid(role: oid) -> text'
     description: >-
       Returns the role (user) name for the given `oid`. If no role matches the
       specified OID, the string `unknown (OID=oid)` is returned.
