@@ -2167,7 +2167,7 @@ impl Coordinator {
             .collect();
         let (permutation, thinning) = permutation_for_arrangement(&key, typ.arity());
         // The assembled dataflow contains a view and an index of that view.
-        let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
+        let mut dataflow = DataflowDesc::new(format!("oneshot-select-{}", view_id));
         dataflow.set_as_of(timestamp_context.antichain());
         let mut builder = self.dataflow_builder(cluster_id);
         builder.import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
@@ -2197,13 +2197,19 @@ impl Coordinator {
             if !as_of.is_empty() {
                 if let Some(next) = as_of.as_option().and_then(|as_of| as_of.checked_add(1)) {
                     dataflow.until = timely::progress::Antichain::from_elem(next);
-                    // Indicate imported sources and indexes as monotonic; as we will produce
-                    // only the snapshot (without retractions).
-                    for (_id, (_source, monotonic)) in dataflow.source_imports.iter_mut() {
-                        *monotonic = true;
-                    }
-                    for (_id, (_index, _type, monotonic)) in dataflow.index_imports.iter_mut() {
-                        *monotonic = true;
+                    if self
+                        .catalog
+                        .system_config()
+                        .enable_monotonic_oneshot_selects()
+                    {
+                        // Indicate imported sources and indexes as monotonic; as we will produce
+                        // only the snapshot (without retractions).
+                        for (_id, (_source, monotonic)) in dataflow.source_imports.iter_mut() {
+                            *monotonic = true;
+                        }
+                        for (_id, (_index, _type, monotonic)) in dataflow.index_imports.iter_mut() {
+                            *monotonic = true;
+                        }
                     }
                 }
             }

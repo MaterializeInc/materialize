@@ -576,6 +576,16 @@ static ENABLE_WITH_MUTUALLY_RECURSIVE: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+/// Feature flag indicating whether monotonic evaluation of one-shot SELECT queries is enabled.
+static ENABLE_MONOTONIC_ONESHOT_SELECTS: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_monotonic_oneshot_selects"),
+    value: &false,
+    description: "Feature flag indicating whether monotonic evaluation of one-shot SELECT queries \
+                  is enabled (Materialize).",
+    internal: true,
+    safe: true,
+};
+
 /// Feature flag indicating whether real time recency is enabled.
 static REAL_TIME_RECENCY: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("real_time_recency"),
@@ -1291,6 +1301,7 @@ pub struct SystemVars {
 
     // features
     enable_with_mutually_recursive: SystemVar<bool>,
+    enable_monotonic_oneshot_selects: SystemVar<bool>,
     enable_rbac_checks: SystemVar<bool>,
 
     // storage configuration
@@ -1360,6 +1371,7 @@ impl Default for SystemVars {
             metrics_retention: SystemVar::new(&METRICS_RETENTION),
             mock_audit_event_timestamp: SystemVar::new(&MOCK_AUDIT_EVENT_TIMESTAMP),
             enable_with_mutually_recursive: SystemVar::new(&ENABLE_WITH_MUTUALLY_RECURSIVE),
+            enable_monotonic_oneshot_selects: SystemVar::new(&ENABLE_MONOTONIC_ONESHOT_SELECTS),
             enable_rbac_checks: SystemVar::new(&ENABLE_RBAC_CHECKS),
         }
     }
@@ -1401,6 +1413,7 @@ impl SystemVars {
             &self.metrics_retention,
             &self.mock_audit_event_timestamp,
             &self.enable_with_mutually_recursive,
+            &self.enable_monotonic_oneshot_selects,
             &self.enable_rbac_checks,
         ];
         vars.into_iter()
@@ -1488,6 +1501,8 @@ impl SystemVars {
             Ok(&self.mock_audit_event_timestamp)
         } else if name == ENABLE_WITH_MUTUALLY_RECURSIVE.name {
             Ok(&self.enable_with_mutually_recursive)
+        } else if name == ENABLE_MONOTONIC_ONESHOT_SELECTS.name {
+            Ok(&self.enable_monotonic_oneshot_selects)
         } else if name == ENABLE_RBAC_CHECKS.name {
             Ok(&self.enable_rbac_checks)
         } else {
@@ -1567,6 +1582,8 @@ impl SystemVars {
             self.mock_audit_event_timestamp.is_default(input)
         } else if name == ENABLE_WITH_MUTUALLY_RECURSIVE.name {
             self.enable_with_mutually_recursive.is_default(input)
+        } else if name == ENABLE_MONOTONIC_ONESHOT_SELECTS.name {
+            self.enable_monotonic_oneshot_selects.is_default(input)
         } else if name == ENABLE_RBAC_CHECKS.name {
             self.enable_rbac_checks.is_default(input)
         } else {
@@ -1652,6 +1669,8 @@ impl SystemVars {
             self.mock_audit_event_timestamp.set(input)
         } else if name == ENABLE_WITH_MUTUALLY_RECURSIVE.name {
             self.enable_with_mutually_recursive.set(input)
+        } else if name == ENABLE_MONOTONIC_ONESHOT_SELECTS.name {
+            self.enable_monotonic_oneshot_selects.set(input)
         } else if name == ENABLE_RBAC_CHECKS.name {
             self.enable_rbac_checks.set(input)
         } else {
@@ -1733,6 +1752,8 @@ impl SystemVars {
             Ok(self.mock_audit_event_timestamp.reset())
         } else if name == ENABLE_WITH_MUTUALLY_RECURSIVE.name {
             Ok(self.enable_with_mutually_recursive.reset())
+        } else if name == ENABLE_MONOTONIC_ONESHOT_SELECTS.name {
+            Ok(self.enable_monotonic_oneshot_selects.reset())
         } else if name == ENABLE_RBAC_CHECKS.name {
             Ok(self.enable_rbac_checks.reset())
         } else {
@@ -1896,6 +1917,11 @@ impl SystemVars {
         self.enable_with_mutually_recursive
             .set(VarInput::Flat(value.format().as_str()))
             .expect("valid parameter value")
+    }
+
+    /// Returns the `enable_monotonic_oneshot_selects` configuration parameter.
+    pub fn enable_monotonic_oneshot_selects(&self) -> bool {
+        *self.enable_monotonic_oneshot_selects.value()
     }
 
     /// Returns the `enable_rbac_checks` configuration parameter.
