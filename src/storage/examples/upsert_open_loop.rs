@@ -126,6 +126,7 @@ use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
+use timely::PartialOrder;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
@@ -147,6 +148,8 @@ use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as Asyn
 mod workload;
 
 const BUILD_INFO: BuildInfo = build_info!();
+
+const MIB: u64 = 1024 * 1024;
 
 /// Open-loop benchmark for persistence.
 #[derive(Debug, Clone, clap::Parser)]
@@ -504,7 +507,14 @@ async fn run_benchmark(
                         let mut num_additions = 0;
                         let mut num_retractions = 0;
                         let mut buffer = Vec::new();
+
+                        let mut frontier = Antichain::from_elem(0);
+                        let mut max_lag = 0;
+
                         move |input, _output| {
+                            if !active_worker {
+                                return;
+                            }
                             input.for_each(|_time, data| {
                                 data.swap(&mut buffer);
                                 for (_k, _v, diff) in buffer.drain(..) {
@@ -518,7 +528,7 @@ async fn run_benchmark(
                                 }
                             });
 
-                            if input.frontier().is_empty() && active_worker {
+                            if input.frontier().is_empty() {
                                 assert_eq!(num_records_total, num_additions);
                                 info!(
                                     "Processing {} finished \
@@ -526,6 +536,27 @@ async fn run_benchmark(
                                     {num_retractions} retractions",
                                     source_id,
                                     start.elapsed().as_millis(),
+                                );
+                            } else if PartialOrder::less_than(
+                                &frontier.borrow(),
+                                &input.frontier().frontier(),
+                            ) {
+                                frontier = input.frontier().frontier().to_owned();
+                                let data_timestamp = frontier.clone().into_option().unwrap();
+                                let elapsed = start.elapsed();
+
+                                let lag = elapsed.as_millis() as u64 - data_timestamp;
+                                max_lag = std::cmp::max(max_lag, lag);
+                                let elapsed_seconds = elapsed.as_secs();
+                                let mb_read =
+                                    (num_additions * args.record_size_bytes) as f64 / MIB as f64;
+                                let throughput = mb_read / elapsed_seconds as f64;
+                                info!(
+                                    "After {} ms, source {source_id} has read {num_additions} \
+                                    records (throughput {:.3} MiB/s). Max processing \
+                                    lag {max_lag}ms, most recent processing lag {lag}ms.",
+                                    elapsed.as_millis(),
+                                    throughput,
                                 );
                             }
                         }
@@ -598,7 +629,7 @@ async fn run_benchmark(
             // output throughput, num records, etc.
             let now: u64 = start_clone.elapsed().as_millis().try_into().unwrap();
             let diff = now - observed_time;
-            info!("lag: {diff}ms");
+            info!("global processing lag: {diff}ms");
         }
         trace!("progress channel closed!");
     });
