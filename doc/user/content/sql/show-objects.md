@@ -19,7 +19,7 @@ Objects include tables, sources, sinks, views, indexes, secrets and connections.
 
 Field | Use
 ------|-----
-_schema&lowbar;name_ | The schema to show objects from. Defaults to `public` in the current database. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+_schema&lowbar;name_ | The schema to show objects from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 
 ## Details
 
