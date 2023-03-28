@@ -37,6 +37,8 @@ Field                                   | Value            | Required | Descript
 `BROKER`                                | `text`           | ✓        | The Kafka bootstrap server. Exclusive with `BROKERS`.
 `BROKERS`                               | `text[]`         |          | A comma-separated list of Kafka bootstrap servers. Exclusive with `BROKER`.
 `PROGRESS TOPIC`                        | `text`           |          | The name of a topic that Kafka sinks can use to track internal consistency metadata. If this is not specified, a default topic name will be selected.
+`SSH TUNNEL`                            | object name      |          | The name of an [SSH tunnel connection](#ssh-tunnel) through which network traffic should be routed, for brokers that are not overridden.
+
 
 #### Authentication {#kafka-auth}
 
@@ -113,6 +115,32 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 If your Kafka broker is not exposed to the public internet, you can tunnel the
 connection through an AWS PrivateLink service or an SSH bastion host.
 
+`SSH TUNNEL` can be configured at a top-level, but `AWS PRIVATELINK` currently
+can only be configured per-broker.
+[See here](/sql/create-connection#kafka-per-broker-network-security) for more details.
+
+Top level `SSH TUNNEL` example:
+
+```sql
+CREATE CONNECTION ssh_connection TO SSH TUNNEL (
+    HOST '<SSH_BASTION_HOST>',
+    USER '<SSH_BASTION_USER>',
+    PORT <SSH_BASTION_PORT>
+);
+
+CREATE CONNECTION kafka_connection TO KAFKA (
+    BROKERS ('broker1:9092', 'broker2:9092'), SSH TUNNEL ssh_connection
+);
+```
+
+Other brokers advertised by kafka will also be routed through the given ssh
+connection.
+
+#### Per-broker network security {#kafka-per-broker-network-security}
+
+If your Kafka broker is not exposed to the public internet, you can tunnel the
+connection through an AWS PrivateLink service or an SSH bastion host.
+
 {{< tabs >}}
 {{< tab "AWS PrivateLink">}}
 
@@ -121,7 +149,9 @@ connection through an AWS PrivateLink service or an SSH bastion host.
 {{< warning >}}
 If your Kafka cluster advertises brokers that are not specified
 in the `BROKERS` clause, Materialize will attempt to connect to
-those brokers without any tunneling.
+those brokers without any tunneling, or with the
+[top level `SSH TUNNEL`](/sql/create-connection#kafka-network-security)
+if configured.
 {{< /warning >}}
 
 {{< diagram "create-connection-kafka-brokers.svg" >}}
@@ -187,7 +217,9 @@ check [this guide](/ops/network-security/privatelink/).
 {{< warning >}}
 If your Kafka cluster advertises brokers that are not specified
 in the `BROKERS` clause, Materialize will attempt to connect to
-those brokers without any tunneling.
+those brokers without any tunneling, or with the
+[top level `SSH TUNNEL`](/sql/create-connection#kafka-network-security)
+if configured.
 {{< /warning >}}
 
 {{< diagram "create-connection-kafka-brokers.svg" >}}
