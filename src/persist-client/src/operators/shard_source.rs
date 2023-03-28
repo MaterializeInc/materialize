@@ -31,6 +31,7 @@ use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
+use timely::scheduling::Activator;
 use timely::PartialOrder;
 use tokio::sync::mpsc;
 use tracing::{info, trace};
@@ -143,6 +144,19 @@ pub struct FlowControl<G: Scope> {
     pub max_inflight_bytes: usize,
 }
 
+#[derive(Debug)]
+struct ActivateOnDrop {
+    token_rx: tokio::sync::mpsc::Receiver<()>,
+    activator: Activator,
+}
+
+impl Drop for ActivateOnDrop {
+    fn drop(&mut self) {
+        self.token_rx.close();
+        self.activator.activate();
+    }
+}
+
 pub(crate) fn shard_source_descs<K, V, D, F, G>(
     scope: &G,
     name: &str,
@@ -214,11 +228,18 @@ where
     // NB: It is not safe to use the shutdown button, due to the possibility
     // of the Subscribe handle's SeqNo hold releasing before `shard_source_fetch`
     // has completed fetches to each outstanding part. Instead, we create a
-    // channel that we pass along as a token. Dropping the Receiver informs this
+    // channel that we pass along as a token. Closing the Receiver informs this
     // operator that the dataflow is being shutdown, and allows for a graceful
     // termination where we wait for `shard_source_fetch` to complete all of
     // its fetches before expiring our Subscribe handle and its SeqNo hold.
+    // We wrap the token with `ActivateOnDrop` to ensure that the operator is
+    // activated after the Receiver is closed.
     let (token_tx, token_rx) = mpsc::channel::<()>(1);
+    let activate_on_drop = Rc::new(ActivateOnDrop {
+        activator: builder.activator().clone(),
+        token_rx,
+    });
+
     let _shutdown_button = builder.build(move |caps| async move {
         let mut cap_set = CapabilitySet::from_elem(caps.into_element());
 
@@ -507,7 +528,7 @@ where
         }
     });
 
-    (descs_stream, Rc::new(token_rx))
+    (descs_stream, activate_on_drop)
 }
 
 pub(crate) fn shard_source_fetch<K, V, T, D, G>(
