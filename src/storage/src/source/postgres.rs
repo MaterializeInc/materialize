@@ -235,6 +235,7 @@ struct SourceTable {
 struct PostgresTaskInfo {
     source_id: GlobalId,
     connection_config: mz_postgres_util::Config,
+    database_system_id: i64,
     publication: String,
     slot: String,
     /// Our cursor into the WAL
@@ -311,6 +312,10 @@ impl SourceConnectionBuilder for PostgresSourceConnection {
             let task_info = PostgresTaskInfo {
                 source_id,
                 connection_config,
+                database_system_id: self
+                    .publication_details
+                    .database_system_id
+                    .expect("must have gotten database_system_id by this point"),
                 publication: self.publication,
                 slot: self.publication_details.slot,
                 replication_lsn: start_offset.offset.into(),
@@ -509,13 +514,24 @@ async fn postgres_replication_loop_inner(
 ) -> Result<(), ReplicationError> {
     if task_info.replication_lsn == PgLsn::from(0) {
         // Get all the relevant tables for this publication
-        let (_database_system_id, publication_tables) = mz_postgres_util::publication_info(
+        let (database_system_id, publication_tables) = mz_postgres_util::publication_info(
             &task_info.connection_config,
             &task_info.publication,
             None,
         )
         .await
         .err_indefinite()?;
+
+        if task_info.database_system_id != database_system_id {
+            warn!(
+                "Upstream PG database system identifier changed; had {}, now {}",
+                task_info.database_system_id, database_system_id
+            );
+            return Err(ReplicationError::Definite(anyhow!(
+                "PostgreSQL WAL feeding replication slot {} has changed",
+                task_info.slot
+            )));
+        }
 
         // Validate publication tables against the state snapshot
         determine_table_compatibility(&task_info.source_tables, publication_tables)
@@ -623,6 +639,7 @@ async fn postgres_replication_loop_inner(
             // stream until the snapshot lsn and emitting any rows that we find with negated diffs
             let replication_stream = produce_replication(
                 task_info.connection_config.clone(),
+                task_info.database_system_id,
                 &task_info.slot,
                 &task_info.publication,
                 slot_lsn,
@@ -671,6 +688,7 @@ async fn postgres_replication_loop_inner(
 
     let replication_stream = produce_replication(
         task_info.connection_config.clone(),
+        task_info.database_system_id,
         &task_info.slot,
         &task_info.publication,
         task_info.replication_lsn,
@@ -961,6 +979,7 @@ fn cast_row(table_cast: &[MirScalarExpr], datums: &[Datum<'_>]) -> Result<Row, a
 // in this function.
 async fn produce_replication<'a>(
     client_config: mz_postgres_util::Config,
+    database_system_id: i64,
     slot: &'a str,
     publication: &'a str,
     as_of: PgLsn,
@@ -1133,7 +1152,7 @@ async fn produce_replication<'a>(
                                 // the current remote schema to ensure e.g. we haven't received
                                 // a schema update with the same terminal column name which is
                                 // actually a different column.
-                                let (_database_system_id, current_publication_info) =
+                                let (new_database_system_id, current_publication_info) =
                                     mz_postgres_util::publication_info(
                                         &client_config,
                                         publication,
@@ -1141,6 +1160,13 @@ async fn produce_replication<'a>(
                                     )
                                     .await
                                     .err_indefinite()?;
+
+                                if new_database_system_id != database_system_id {
+                                    return Err(Definite(anyhow!(
+                                        "PostgreSQL WAL feeding replication slot {} has changed",
+                                        slot
+                                    )))?;
+                                }
 
                                 match current_publication_info.get(0) {
                                     Some(desc) => {
