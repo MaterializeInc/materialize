@@ -32,6 +32,7 @@ use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
+use mz_sql::session::vars::VarInput;
 use openssl::ssl::{Ssl, SslContext};
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
@@ -41,11 +42,10 @@ use tokio_openssl::SslStream;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
-use mz_adapter::{AdapterError, Client, SessionClient};
+use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient};
 use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
 use mz_ore::cast::u64_to_usize;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::result::ResultExt;
 use mz_ore::tracing::TracingHandle;
 use mz_sql::session::user::{ExternalUserMetadata, User, HTTP_DEFAULT_USER, SYSTEM_USER};
 
@@ -421,21 +421,47 @@ async fn init_ws(
             }
         }
     };
-    let creds = if frontegg.is_some() {
+    let (creds, options) = if frontegg.is_some() {
         match ws_auth {
-            WebSocketAuth::Basic { user, password } => Credentials::Password {
-                username: user,
+            WebSocketAuth::Basic {
+                user,
                 password,
-            },
-            WebSocketAuth::Bearer { token } => Credentials::Token { token },
+                options,
+            } => {
+                let creds = Credentials::Password {
+                    username: user,
+                    password,
+                };
+                (creds, options)
+            }
+            WebSocketAuth::Bearer { token, options } => {
+                let creds = Credentials::Token { token };
+                (creds, options)
+            }
         }
-    } else if let WebSocketAuth::Basic { user, .. } = ws_auth {
-        Credentials::User(Some(user))
+    } else if let WebSocketAuth::Basic { user, options, .. } = ws_auth {
+        (Credentials::User(Some(user)), options)
     } else {
         anyhow::bail!("unexpected")
     };
     let user = auth(frontegg, creds).await?;
-    AuthedClient::new(adapter_client, user).await.err_into()
+    let mut client = AuthedClient::new(adapter_client, user).await?;
+
+    // Assign any options we got from our WebSocket startup.
+    let options = options.unwrap_or_default();
+    let session = client.0.session();
+    for (key, val) in options {
+        const LOCAL: bool = false;
+        if let Err(err) = session.vars_mut().set(&key, VarInput::Flat(&val), LOCAL) {
+            println!("bad val");
+            session.add_notice(AdapterNotice::BadStartupSetting {
+                name: key,
+                reason: err.to_string(),
+            })
+        }
+    }
+
+    Ok(client)
 }
 
 enum Credentials {

@@ -77,6 +77,7 @@
 
 //! Integration tests for Materialize server.
 
+use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -264,7 +265,7 @@ fn test_http_sql() {
         ))
         .unwrap();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
-        util::auth_with_ws(&mut ws);
+        util::auth_with_ws(&mut ws, None);
 
         f.run(|tc| {
             let msg = match tc.directive.as_str() {
@@ -842,7 +843,7 @@ fn test_max_request_size() {
         ))
         .unwrap();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
-        util::auth_with_ws(&mut ws);
+        util::auth_with_ws(&mut ws, None);
         let json =
             format!("{{\"queries\":[{{\"query\":\"{statement}\",\"params\":[\"{param}\"]}}]}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -914,7 +915,7 @@ fn test_max_statement_batch_size() {
         ))
         .unwrap();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
-        util::auth_with_ws(&mut ws);
+        util::auth_with_ws(&mut ws, None);
         let json = format!("{{\"query\":\"{statements}\"}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
         ws.write_message(Message::Text(json.to_string())).unwrap();
@@ -956,4 +957,81 @@ fn test_mz_system_user_admin() {
             .unwrap()
             .get::<_, String>(0)
     );
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_ws_passes_options() {
+    let server = util::start_server(util::Config::default()).unwrap();
+
+    // Create our WebSocket.
+    let ws_url = Url::parse(&format!(
+        "ws://{}/api/experimental/sql",
+        server.inner.http_local_addr()
+    ))
+    .unwrap();
+    let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
+    let options = BTreeMap::from([(
+        "application_name".to_string(),
+        "billion_dollar_idea".to_string(),
+    )]);
+    util::auth_with_ws(&mut ws, Some(options));
+
+    // Query to make sure we get back the correct session var, which should be
+    // set from the options map we passed with the auth.
+    let json = format!("{{\"query\":\"SHOW application_name;\"}}");
+    let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+    ws.write_message(Message::Text(json.to_string())).unwrap();
+
+    let mut read_msg = || -> WebSocketResponse {
+        let msg = ws.read_message().unwrap();
+        let msg = msg.into_text().expect("response should be text");
+        serde_json::from_str(&msg).unwrap()
+    };
+    let col_name = read_msg();
+    let row_val = read_msg();
+
+    if let WebSocketResponse::Rows(rows) = col_name {
+        assert_eq!(rows, ["application_name"]);
+    } else {
+        panic!("wrong message!, {col_name:?}");
+    };
+
+    if let WebSocketResponse::Row(row) = row_val {
+        let expected = serde_json::Value::String("billion_dollar_idea".to_string());
+        assert_eq!(row, [expected]);
+    } else {
+        panic!("wrong message!, {row_val:?}");
+    }
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_ws_notifies_for_bad_options() {
+    let server = util::start_server(util::Config::default()).unwrap();
+
+    // Create our WebSocket.
+    let ws_url = Url::parse(&format!(
+        "ws://{}/api/experimental/sql",
+        server.inner.http_local_addr()
+    ))
+    .unwrap();
+    let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
+    let options = BTreeMap::from([("bad_var_name".to_string(), "i_do_not_exist".to_string())]);
+    util::auth_with_ws(&mut ws, Some(options));
+
+    let mut read_msg = || -> WebSocketResponse {
+        let msg = ws.read_message().unwrap();
+        let msg = msg.into_text().expect("response should be text");
+        serde_json::from_str(&msg).unwrap()
+    };
+    let notice = read_msg();
+
+    // After startup, we should get a notice that our var name was not set.
+    if let WebSocketResponse::Notice(notice) = notice {
+        let msg = notice.message();
+        assert!(msg.starts_with("startup setting bad_var_name not set"));
+    } else {
+        panic!("wrong message!, {notice:?}");
+    };
 }

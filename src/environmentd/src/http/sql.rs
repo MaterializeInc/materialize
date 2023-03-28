@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use anyhow::anyhow;
@@ -68,8 +69,15 @@ pub async fn handle_sql_ws(
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(untagged)]
 pub enum WebSocketAuth {
-    Basic { user: String, password: String },
-    Bearer { token: String },
+    Basic {
+        user: String,
+        password: String,
+        options: Option<BTreeMap<String, String>>,
+    },
+    Bearer {
+        token: String,
+        options: Option<BTreeMap<String, String>>,
+    },
 }
 
 async fn run_ws(state: &WsState, mut ws: WebSocket) {
@@ -98,6 +106,28 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
             .expect("must serialize"),
         ))
         .await;
+
+    // Send any notices that might have been generated on startup.
+    let notices = client
+        .0
+        .session()
+        .drain_notices()
+        .into_iter()
+        .map(|notice| {
+            WebSocketResponse::Notice(Notice {
+                message: notice.to_string(),
+                severity: Severity::for_adapter_notice(&notice)
+                    .as_str()
+                    .to_lowercase(),
+            })
+        });
+    for notice in notices {
+        let msg = serde_json::to_string(&notice).unwrap();
+        if ws.send(Message::Text(msg)).await.is_err() {
+            // client disconnected
+            return;
+        }
+    }
 
     loop {
         let msg = match ws.recv().await {
@@ -293,6 +323,12 @@ pub enum WebSocketResponse {
 pub struct Notice {
     message: String,
     severity: String,
+}
+
+impl Notice {
+    pub fn message(&self) -> &str {
+        &self.message
+    }
 }
 
 /// Trait describing how to transmit a response to a client. HTTP clients

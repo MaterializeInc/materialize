@@ -75,6 +75,7 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::PathBuf;
@@ -665,11 +666,15 @@ pub fn wait_for_view_population(
     Ok(())
 }
 
-pub fn auth_with_ws(ws: &mut WebSocket<MaybeTlsStream<TcpStream>>) {
+pub fn auth_with_ws(
+    ws: &mut WebSocket<MaybeTlsStream<TcpStream>>,
+    options: Option<BTreeMap<String, String>>,
+) {
     ws.write_message(Message::Text(
         serde_json::to_string(&WebSocketAuth::Basic {
             user: "materialize".into(),
             password: "".into(),
+            options,
         })
         .unwrap(),
     ))
