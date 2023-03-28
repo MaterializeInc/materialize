@@ -453,7 +453,6 @@ async fn init_ws(
     for (key, val) in options {
         const LOCAL: bool = false;
         if let Err(err) = session.vars_mut().set(&key, VarInput::Flat(&val), LOCAL) {
-            println!("bad val");
             session.add_notice(AdapterNotice::BadStartupSetting {
                 name: key,
                 reason: err.to_string(),
