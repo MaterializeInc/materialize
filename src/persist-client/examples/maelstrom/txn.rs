@@ -18,6 +18,7 @@ use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_persist_client::cache::StateCache;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::metrics::Metrics;
 use mz_persist_types::codec_impls::TodoSchema;
@@ -671,7 +672,15 @@ impl Service for TransactorService {
 
         // Wire up the TransactorService.
         let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
-        let client = PersistClient::new(config, blob, consensus, metrics, cpu_heavy_runtime)?;
+        let shared_states = Arc::new(StateCache::default());
+        let client = PersistClient::new(
+            config,
+            blob,
+            consensus,
+            metrics,
+            cpu_heavy_runtime,
+            shared_states,
+        )?;
         let transactor = Transactor::new(&client, handle.node_id(), shard_id).await?;
         let service = TransactorService(Arc::new(Mutex::new(transactor)));
         Ok(service)
