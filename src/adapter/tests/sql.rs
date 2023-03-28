@@ -160,7 +160,7 @@ async fn datadriven() {
                                             conn_id: None,
                                             depends_on: vec![],
                                             custom_logical_compaction_window: None,
-                                            is_retained_metrics_relation: false,
+                                            is_retained_metrics_object: false,
                                         }),
                                         owner_id: MZ_SYSTEM_ROLE_ID,
                                     }],

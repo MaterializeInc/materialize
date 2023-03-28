@@ -20,10 +20,11 @@
 //! `mz_ore` wrapper either.
 #![allow(clippy::disallowed_types)]
 
-use differential_dataflow::lattice::Lattice;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::Hash;
 
+use differential_dataflow::lattice::Lattice;
+use itertools::Itertools;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 
@@ -329,21 +330,39 @@ impl crate::coord::Coordinator {
         self.controller.storage.set_read_policy(policies)
     }
 
+    pub(crate) fn update_compute_base_read_policies(
+        &mut self,
+        mut base_policies: Vec<(ComputeInstanceId, GlobalId, ReadPolicy<mz_repr::Timestamp>)>,
+    ) {
+        base_policies.sort_by_key(|&(cluster_id, _, _)| cluster_id);
+        for (cluster_id, group) in &base_policies
+            .into_iter()
+            .group_by(|&(cluster_id, _, _)| cluster_id)
+        {
+            let group = group
+                .map(|(_, id, base_policy)| {
+                    let capability = self
+                        .compute_read_capabilities
+                        .get_mut(&id)
+                        .expect("coord out of sync");
+                    capability.base_policy = base_policy;
+                    (id, capability.policy())
+                })
+                .collect::<Vec<_>>();
+            self.controller
+                .active_compute()
+                .set_read_policy(cluster_id, group)
+                .unwrap_or_terminate("cannot fail to set read policy");
+        }
+    }
+
     pub(crate) fn update_compute_base_read_policy(
         &mut self,
         compute_instance: ComputeInstanceId,
         id: GlobalId,
         base_policy: ReadPolicy<mz_repr::Timestamp>,
     ) {
-        let capability = self
-            .compute_read_capabilities
-            .get_mut(&id)
-            .expect("coord out of sync");
-        capability.base_policy = base_policy;
-        self.controller
-            .active_compute()
-            .set_read_policy(compute_instance, vec![(id, capability.policy())])
-            .unwrap_or_terminate("cannot fail to set read policy");
+        self.update_compute_base_read_policies(vec![(compute_instance, id, base_policy)])
     }
 
     /// Drop read policy in STORAGE for `id`.
