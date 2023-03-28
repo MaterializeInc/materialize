@@ -2695,7 +2695,7 @@ impl Coordinator {
             })
         };
 
-        let dataflow = match from {
+        let (dataflow, as_of) = match from {
             SubscribeFrom::Id(from_id) => {
                 check_no_invalid_log_reads(
                     &self.catalog,
@@ -2714,9 +2714,13 @@ impl Coordinator {
                     .into_owned();
                 let sink_id = self.allocate_transient_id()?;
                 let sink_desc = make_sink_desc(self, session, from_id, from_desc, &[from_id][..])?;
+                let as_of = sink_desc.as_of.clone();
                 let sink_name = format!("subscribe-{}", sink_id);
-                self.dataflow_builder(cluster_id)
-                    .build_sink_dataflow(sink_name, sink_id, sink_desc)?
+                (
+                    self.dataflow_builder(cluster_id)
+                        .build_sink_dataflow(sink_name, sink_id, sink_desc)?,
+                    as_of,
+                )
             }
             SubscribeFrom::Query { expr, desc } => {
                 check_no_invalid_log_reads(
@@ -2729,11 +2733,12 @@ impl Coordinator {
                 let expr = self.view_optimizer.optimize(expr)?;
                 let desc = RelationDesc::new(expr.typ(), desc.iter_names());
                 let sink_desc = make_sink_desc(self, session, id, desc, &depends_on)?;
+                let as_of = sink_desc.as_of.clone();
                 let mut dataflow = DataflowDesc::new(format!("subscribe-{}", id));
                 let mut dataflow_builder = self.dataflow_builder(cluster_id);
                 dataflow_builder.import_view_into_dataflow(&id, &expr, &mut dataflow)?;
                 dataflow_builder.build_sink_dataflow_into(&mut dataflow, id, sink_desc)?;
-                dataflow
+                (dataflow, as_of)
             }
         };
 
@@ -2748,12 +2753,14 @@ impl Coordinator {
             conn_id: session.conn_id(),
             channel: tx,
             emit_progress,
+            as_of,
             arity: sink_desc.from_desc.arity(),
             cluster_id,
             depends_on: depends_on.into_iter().collect(),
             start_time: SYSTEM_TIME(),
             dropping: false,
         };
+        active_subscribe.initialize();
         self.add_active_subscribe(sink_id, active_subscribe).await;
 
         match self.ship_dataflow(dataflow, cluster_id).await {
