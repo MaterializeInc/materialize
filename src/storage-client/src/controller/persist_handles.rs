@@ -106,11 +106,13 @@ impl<T: Timestamp + Lattice + Codec64> PersistReadWorker<T> {
                             mz_ore::halt!("fenced by envd @ {other_epoch:?}. ours = {epoch:?}");
                         }
 
-                        // If we're not done we put the handle back
-                        if !since.is_empty() {
-                            Some((id, (since_handle)))
-                        } else {
+                        // If we're done, expire and drop the handle
+                        if since.is_empty() {
+                            since_handle.expire();
                             None
+                        } else {
+                            // Otherwise put it back
+                            Some((id, (since_handle)))
                         }
                     });
                 }
