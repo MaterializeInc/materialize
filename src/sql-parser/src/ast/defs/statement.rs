@@ -31,7 +31,7 @@ use crate::ast::{
     AstInfo, ColumnDef, CreateConnection, CreateSinkConnection, CreateSourceConnection,
     CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, DeferredObjectName, Envelope,
     Expr, Format, Ident, KeyConstraint, Query, SelectItem, SourceIncludeMetadata, TableAlias,
-    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
+    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedName, UnresolvedObjectName,
     UnresolvedSchemaName, Value,
 };
 
@@ -60,11 +60,7 @@ pub enum Statement<T: AstInfo> {
     CreateCluster(CreateClusterStatement<T>),
     CreateClusterReplica(CreateClusterReplicaStatement<T>),
     CreateSecret(CreateSecretStatement<T>),
-    AlterClusterOwner(AlterClusterOwnerStatement<T>),
-    AlterClusterReplicaOwner(AlterClusterReplicaOwnerStatement<T>),
-    AlterDatabaseOwner(AlterDatabaseOwnerStatement<T>),
-    AlterSchemaOwner(AlterSchemaOwnerStatement<T>),
-    AlterObjectOwner(AlterObjectOwnerStatement<T>),
+    AlterOwner(AlterOwnerStatement<T>),
     AlterObjectRename(AlterObjectRenameStatement),
     AlterIndex(AlterIndexStatement<T>),
     AlterSecret(AlterSecretStatement<T>),
@@ -125,11 +121,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateType(stmt) => f.write_node(stmt),
             Statement::CreateCluster(stmt) => f.write_node(stmt),
             Statement::CreateClusterReplica(stmt) => f.write_node(stmt),
-            Statement::AlterClusterOwner(stmt) => f.write_node(stmt),
-            Statement::AlterClusterReplicaOwner(stmt) => f.write_node(stmt),
-            Statement::AlterDatabaseOwner(stmt) => f.write_node(stmt),
-            Statement::AlterSchemaOwner(stmt) => f.write_node(stmt),
-            Statement::AlterObjectOwner(stmt) => f.write_node(stmt),
+            Statement::AlterOwner(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndex(stmt) => f.write_node(stmt),
             Statement::AlterSecret(stmt) => f.write_node(stmt),
@@ -1411,100 +1403,16 @@ impl<T: AstInfo> AstDisplay for CreateTypeMapOption<T> {
     }
 }
 
-/// `ALTER CLUSTER ... OWNER TO`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AlterClusterOwnerStatement<T: AstInfo> {
-    pub if_exists: bool,
-    pub name: Ident,
-    pub new_owner: T::RoleName,
-}
-
-impl<T: AstInfo> AstDisplay for AlterClusterOwnerStatement<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("ALTER CLUSTER ");
-        if self.if_exists {
-            f.write_str("IF EXISTS ");
-        }
-        f.write_node(&self.name);
-        f.write_str(" OWNER TO ");
-        f.write_node(&self.new_owner);
-    }
-}
-impl_display_t!(AlterClusterOwnerStatement);
-
-/// `ALTER CLUSTER REPLICA ... OWNER TO`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AlterClusterReplicaOwnerStatement<T: AstInfo> {
-    pub if_exists: bool,
-    pub name: QualifiedReplica,
-    pub new_owner: T::RoleName,
-}
-
-impl<T: AstInfo> AstDisplay for AlterClusterReplicaOwnerStatement<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("ALTER CLUSTER REPLICA ");
-        if self.if_exists {
-            f.write_str("IF EXISTS ");
-        }
-        f.write_node(&self.name);
-        f.write_str(" OWNER TO ");
-        f.write_node(&self.new_owner);
-    }
-}
-impl_display_t!(AlterClusterReplicaOwnerStatement);
-
-/// `ALTER DATABASE ... OWNER TO`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AlterDatabaseOwnerStatement<T: AstInfo> {
-    pub if_exists: bool,
-    pub name: UnresolvedDatabaseName,
-    pub new_owner: T::RoleName,
-}
-
-impl<T: AstInfo> AstDisplay for AlterDatabaseOwnerStatement<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("ALTER DATABASE ");
-        if self.if_exists {
-            f.write_str("IF EXISTS ");
-        }
-        f.write_node(&self.name);
-        f.write_str(" OWNER TO ");
-        f.write_node(&self.new_owner);
-    }
-}
-impl_display_t!(AlterDatabaseOwnerStatement);
-
-/// `ALTER SCHEMA ... OWNER TO`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AlterSchemaOwnerStatement<T: AstInfo> {
-    pub if_exists: bool,
-    pub name: UnresolvedSchemaName,
-    pub new_owner: T::RoleName,
-}
-
-impl<T: AstInfo> AstDisplay for AlterSchemaOwnerStatement<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("ALTER SCHEMA ");
-        if self.if_exists {
-            f.write_str("IF EXISTS ");
-        }
-        f.write_node(&self.name);
-        f.write_str(" OWNER TO ");
-        f.write_node(&self.new_owner);
-    }
-}
-impl_display_t!(AlterSchemaOwnerStatement);
-
 /// `ALTER <OBJECT> ... OWNER TO`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AlterObjectOwnerStatement<T: AstInfo> {
+pub struct AlterOwnerStatement<T: AstInfo> {
     pub object_type: ObjectType,
     pub if_exists: bool,
-    pub name: UnresolvedObjectName,
+    pub name: UnresolvedName,
     pub new_owner: T::RoleName,
 }
 
-impl<T: AstInfo> AstDisplay for AlterObjectOwnerStatement<T> {
+impl<T: AstInfo> AstDisplay for AlterOwnerStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("ALTER ");
         f.write_node(&self.object_type);
@@ -1517,7 +1425,7 @@ impl<T: AstInfo> AstDisplay for AlterObjectOwnerStatement<T> {
         f.write_node(&self.new_owner);
     }
 }
-impl_display_t!(AlterObjectOwnerStatement);
+impl_display_t!(AlterOwnerStatement);
 
 /// `ALTER <OBJECT> ... RENAME TO`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

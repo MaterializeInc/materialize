@@ -1013,3 +1013,29 @@ COMPLETE 0
 
 statement ok
 DROP ROLE owner
+
+# Prevent altering the owner of system resources
+
+statement error system cluster 'mz_system' cannot be modified
+ALTER CLUSTER mz_system OWNER TO materialize
+
+statement error system cluster 'mz_system' cannot be modified
+ALTER CLUSTER REPLICA mz_system.r1 OWNER TO materialize
+
+statement error cannot alter schema mz_catalog because it is required by the database system
+ALTER SCHEMA mz_catalog OWNER TO materialize
+
+statement error cannot alter item mz_internal.mz_dataflow_operators because it is required by the database system
+ALTER SOURCE mz_internal.mz_dataflow_operators OWNER TO materialize
+
+statement error cannot alter item mz_catalog.mz_views because it is required by the database system
+ALTER TABLE mz_views OWNER TO materialize
+
+statement error cannot alter item mz_catalog.mz_relations because it is required by the database system
+ALTER VIEW mz_relations OWNER TO materialize
+
+statement error cannot alter item pg_catalog.int4 because it is required by the database system
+ALTER TYPE int4 OWNER TO materialize
+
+statement error cannot alter item mz_internal.mz_show_databases_ind because it is required by the database system
+ALTER INDEX mz_internal.mz_show_databases_ind OWNER TO materialize

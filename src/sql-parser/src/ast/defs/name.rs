@@ -21,7 +21,7 @@
 use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::AstInfo;
+use crate::ast::{AstInfo, QualifiedReplica};
 use crate::keywords::Keyword;
 
 /// An identifier.
@@ -103,6 +103,10 @@ impl AstDisplay for Ident {
 impl_display!(Ident);
 
 /// A name of a table, view, custom type, etc., possibly multi-part, i.e. db.schema.obj
+/// TODO(jkosh44) There still seems to be some confusion as to what the definition of "Object" is
+///  in the parser and planner. This struct is only used for items that live in a schema, which in
+///  other parts of the code we refer to as "Item" or "Entry". "Object" tends to include clusters,
+///  replicas, databases, and schemas, which have their own struct for names.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct UnresolvedObjectName(pub Vec<Ident>);
 
@@ -180,3 +184,25 @@ impl<T: AstInfo> AstDisplay for DeferredObjectName<T> {
     }
 }
 impl_display_t!(DeferredObjectName);
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub enum UnresolvedName {
+    Cluster(Ident),
+    ClusterReplica(QualifiedReplica),
+    Database(UnresolvedDatabaseName),
+    Schema(UnresolvedSchemaName),
+    Item(UnresolvedObjectName),
+}
+
+impl AstDisplay for UnresolvedName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            UnresolvedName::Cluster(n) => f.write_node(n),
+            UnresolvedName::ClusterReplica(n) => f.write_node(n),
+            UnresolvedName::Database(n) => f.write_node(n),
+            UnresolvedName::Schema(n) => f.write_node(n),
+            UnresolvedName::Item(n) => f.write_node(n),
+        }
+    }
+}
+impl_display!(UnresolvedName);

@@ -48,9 +48,8 @@ use mz_sql::catalog::{
 use mz_sql::catalog::{CatalogItem as SqlCatalogItem, CatalogRole};
 use mz_sql::names::{QualifiedObjectName, RoleId};
 use mz_sql::plan::{
-    AlterClusterOwnerPlan, AlterClusterReplicaOwnerPlan, AlterDatabaseOwnerPlan,
-    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemOwnerPlan, AlterItemRenamePlan,
-    AlterOptionParameter, AlterRolePlan, AlterSchemaOwnerPlan, AlterSecretPlan, AlterSinkPlan,
+    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
+    AlterOptionParameter, AlterOwnerPlan, AlterRolePlan, AlterSecretPlan, AlterSinkPlan,
     AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, CopyFormat,
     CreateClusterPlan, CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
     CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
@@ -3668,78 +3667,16 @@ impl Coordinator {
             .map(|_| ExecuteResponse::RevokedRole)
     }
 
-    pub(super) async fn sequence_alter_cluster_owner(
+    pub(super) async fn sequence_alter_owner(
         &mut self,
         session: &mut Session,
-        AlterClusterOwnerPlan { id, new_owner }: AlterClusterOwnerPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        self.catalog_transact(Some(session), vec![Op::ClusterOwner { id, new_owner }])
-            .await
-            .map(|_| ExecuteResponse::AlteredObject(ObjectType::Cluster))
-    }
-
-    pub(super) async fn sequence_alter_cluster_replica_owner(
-        &mut self,
-        session: &mut Session,
-        AlterClusterReplicaOwnerPlan {
-            cluster_id,
-            replica_id,
-            new_owner,
-        }: AlterClusterReplicaOwnerPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        self.catalog_transact(
-            Some(session),
-            vec![Op::ClusterReplicaOwner {
-                cluster_id,
-                replica_id,
-                new_owner,
-            }],
-        )
-        .await
-        .map(|_| ExecuteResponse::AlteredObject(ObjectType::ClusterReplica))
-    }
-
-    pub(super) async fn sequence_alter_database_owner(
-        &mut self,
-        session: &mut Session,
-        AlterDatabaseOwnerPlan { id, new_owner }: AlterDatabaseOwnerPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        self.catalog_transact(Some(session), vec![Op::DatabaseOwner { id, new_owner }])
-            .await
-            .map(|_| ExecuteResponse::AlteredObject(ObjectType::Database))
-    }
-
-    pub(super) async fn sequence_alter_schema_owner(
-        &mut self,
-        session: &mut Session,
-        AlterSchemaOwnerPlan {
-            database_id,
-            schema_id,
-            new_owner,
-        }: AlterSchemaOwnerPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        self.catalog_transact(
-            Some(session),
-            vec![Op::SchemaOwner {
-                database_id,
-                schema_id,
-                new_owner,
-            }],
-        )
-        .await
-        .map(|_| ExecuteResponse::AlteredObject(ObjectType::Schema))
-    }
-
-    pub(super) async fn sequence_alter_item_owner(
-        &mut self,
-        session: &mut Session,
-        AlterItemOwnerPlan {
+        AlterOwnerPlan {
             id,
             object_type,
             new_owner,
-        }: AlterItemOwnerPlan,
+        }: AlterOwnerPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.catalog_transact(Some(session), vec![Op::ItemOwner { id, new_owner }])
+        self.catalog_transact(Some(session), vec![Op::UpdateOwner { id, new_owner }])
             .await
             .map(|_| ExecuteResponse::AlteredObject(object_type))
     }

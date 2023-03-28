@@ -60,8 +60,8 @@ use crate::ast::{
 };
 use crate::catalog::{CatalogType, IdReference, RoleAttributes};
 use crate::names::{
-    Aug, DatabaseId, FullObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier, RoleId,
-    SchemaId,
+    Aug, DatabaseId, FullObjectName, ObjectId, QualifiedObjectName, ResolvedDatabaseSpecifier,
+    RoleId, SchemaId,
 };
 
 pub use self::expr::{
@@ -135,11 +135,7 @@ pub enum Plan {
     AlterSystemReset(AlterSystemResetPlan),
     AlterSystemResetAll(AlterSystemResetAllPlan),
     AlterRole(AlterRolePlan),
-    AlterClusterOwner(AlterClusterOwnerPlan),
-    AlterClusterReplicaOwner(AlterClusterReplicaOwnerPlan),
-    AlterDatabaseOwner(AlterDatabaseOwnerPlan),
-    AlterSchemaOwner(AlterSchemaOwnerPlan),
-    AlterItemOwner(AlterItemOwnerPlan),
+    AlterOwner(AlterOwnerPlan),
     Declare(DeclarePlan),
     Fetch(FetchPlan),
     Close(ClosePlan),
@@ -178,19 +174,7 @@ impl Plan {
                 vec![PlanKind::AlterNoop, PlanKind::AlterSystemResetAll]
             }
             StatementKind::AlterSystemSet => vec![PlanKind::AlterNoop, PlanKind::AlterSystemSet],
-            StatementKind::AlterClusterOwner => {
-                vec![PlanKind::AlterNoop, PlanKind::AlterClusterOwner]
-            }
-            StatementKind::AlterClusterReplicaOwner => {
-                vec![PlanKind::AlterNoop, PlanKind::AlterClusterReplicaOwner]
-            }
-            StatementKind::AlterDatabaseOwner => {
-                vec![PlanKind::AlterNoop, PlanKind::AlterDatabaseOwner]
-            }
-            StatementKind::AlterSchemaOwner => {
-                vec![PlanKind::AlterNoop, PlanKind::AlterSchemaOwner]
-            }
-            StatementKind::AlterObjectOwner => vec![PlanKind::AlterNoop, PlanKind::AlterItemOwner],
+            StatementKind::AlterOwner => vec![PlanKind::AlterNoop, PlanKind::AlterOwner],
             StatementKind::Close => vec![PlanKind::Close],
             StatementKind::Commit => vec![PlanKind::CommitTransaction],
             StatementKind::Copy => vec![PlanKind::CopyFrom, PlanKind::Peek, PlanKind::Subscribe],
@@ -327,11 +311,7 @@ impl Plan {
             Plan::AlterSystemReset(_) => "alter system",
             Plan::AlterSystemResetAll(_) => "alter system",
             Plan::AlterRole(_) => "alter role",
-            Plan::AlterClusterOwner(_) => "alter cluster owner",
-            Plan::AlterClusterReplicaOwner(_) => "alter cluster replica owner",
-            Plan::AlterDatabaseOwner(_) => "alter database owner",
-            Plan::AlterSchemaOwner(_) => "alter schema owner",
-            Plan::AlterItemOwner(plan) => match plan.object_type {
+            Plan::AlterOwner(plan) => match plan.object_type {
                 ObjectType::Table => "alter table owner",
                 ObjectType::View => "alter view owner",
                 ObjectType::MaterializedView => "alter materialized view owner",
@@ -793,34 +773,8 @@ pub struct AlterRolePlan {
 }
 
 #[derive(Debug)]
-pub struct AlterClusterOwnerPlan {
-    pub id: ClusterId,
-    pub new_owner: RoleId,
-}
-
-#[derive(Debug)]
-pub struct AlterClusterReplicaOwnerPlan {
-    pub cluster_id: ClusterId,
-    pub replica_id: ReplicaId,
-    pub new_owner: RoleId,
-}
-
-#[derive(Debug)]
-pub struct AlterDatabaseOwnerPlan {
-    pub id: DatabaseId,
-    pub new_owner: RoleId,
-}
-
-#[derive(Debug)]
-pub struct AlterSchemaOwnerPlan {
-    pub database_id: DatabaseId,
-    pub schema_id: SchemaId,
-    pub new_owner: RoleId,
-}
-
-#[derive(Debug)]
-pub struct AlterItemOwnerPlan {
-    pub id: GlobalId,
+pub struct AlterOwnerPlan {
+    pub id: ObjectId,
     pub object_type: ObjectType,
     pub new_owner: RoleId,
 }

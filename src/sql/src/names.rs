@@ -18,7 +18,7 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use uncased::UncasedStr;
 
-use mz_controller::clusters::ClusterId;
+use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::LocalId;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
@@ -744,6 +744,15 @@ impl AstDisplay for RoleId {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(format!("{}", self));
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub enum ObjectId {
+    Cluster(ClusterId),
+    ClusterReplica((ClusterId, ReplicaId)),
+    Database(DatabaseId),
+    Schema((DatabaseId, SchemaId)),
+    Item(GlobalId),
 }
 
 #[derive(Debug)]

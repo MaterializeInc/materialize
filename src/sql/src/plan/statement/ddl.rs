@@ -33,13 +33,12 @@ use mz_repr::strconv;
 use mz_repr::{ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
-    AlterClusterOwnerStatement, AlterClusterReplicaOwnerStatement, AlterDatabaseOwnerStatement,
-    AlterObjectOwnerStatement, AlterRoleStatement, AlterSchemaOwnerStatement, AlterSinkAction,
-    AlterSinkStatement, AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
+    AlterOwnerStatement, AlterRoleStatement, AlterSinkAction, AlterSinkStatement,
+    AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
     AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
     CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredObjectName,
-    GrantRoleStatement, RevokeRoleStatement, SshConnectionOption, UnresolvedObjectName,
-    UnresolvedSchemaName, Value,
+    GrantRoleStatement, RevokeRoleStatement, SshConnectionOption, UnresolvedName,
+    UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -92,9 +91,9 @@ use crate::catalog::{
 };
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
-    Aug, DatabaseId, FullSchemaName, PartialObjectName, QualifiedObjectName, RawDatabaseSpecifier,
-    ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedObjectName, RoleId,
-    SchemaId, SchemaSpecifier,
+    Aug, DatabaseId, FullSchemaName, ObjectId, PartialObjectName, QualifiedObjectName,
+    RawDatabaseSpecifier, ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier,
+    ResolvedObjectName, RoleId, SchemaId, SchemaSpecifier,
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
@@ -105,19 +104,17 @@ use crate::plan::statement::{scl, StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
-    plan_utils, query, transform_ast, AlterClusterOwnerPlan, AlterClusterReplicaOwnerPlan,
-    AlterDatabaseOwnerPlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemOwnerPlan, AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter, AlterRolePlan,
-    AlterSchemaOwnerPlan, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
-    AlterSystemResetPlan, AlterSystemSetPlan, ComputeReplicaConfig,
-    ComputeReplicaIntrospectionConfig, CreateClusterPlan, CreateClusterReplicaPlan,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropClusterReplicasPlan,
-    DropClustersPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
-    FullObjectName, GrantRolePlan, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
-    QueryContext, ReplicaConfig, RevokeRolePlan, RotateKeysPlan, Secret, Sink, Source,
-    SourceSinkClusterConfig, Table, Type, View,
+    plan_utils, query, transform_ast, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
+    AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter, AlterOwnerPlan, AlterRolePlan,
+    AlterSecretPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
+    AlterSystemSetPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, CreateClusterPlan,
+    CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
+    DropClusterReplicasPlan, DropClustersPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
+    DropSchemaPlan, FullObjectName, GrantRolePlan, HirScalarExpr, Index, Ingestion,
+    MaterializedView, Params, Plan, QueryContext, ReplicaConfig, RevokeRolePlan, RotateKeysPlan,
+    Secret, Sink, Source, SourceSinkClusterConfig, Table, Type, View,
 };
 
 pub fn describe_create_database(
@@ -3613,27 +3610,70 @@ pub fn plan_alter_index_options(
     }
 }
 
-pub fn describe_alter_cluster_owner(
+pub fn describe_alter_owner(
     _: &StatementContext,
-    _: AlterClusterOwnerStatement<Aug>,
+    _: AlterOwnerStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
 
-pub fn plan_alter_cluster_owner(
+pub fn plan_alter_owner(
     scx: &StatementContext,
-    AlterClusterOwnerStatement {
+    AlterOwnerStatement {
+        object_type,
         if_exists,
         name,
         new_owner,
-    }: AlterClusterOwnerStatement<Aug>,
+    }: AlterOwnerStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    match (object_type, name) {
+        (ObjectType::Cluster, UnresolvedName::Cluster(name)) => {
+            plan_alter_cluster_owner(scx, if_exists, name, new_owner.id)
+        }
+        (ObjectType::ClusterReplica, UnresolvedName::ClusterReplica(name)) => {
+            plan_alter_cluster_replica_owner(scx, if_exists, name, new_owner.id)
+        }
+        (ObjectType::Database, UnresolvedName::Database(name)) => {
+            plan_alter_database_owner(scx, if_exists, name, new_owner.id)
+        }
+        (ObjectType::Schema, UnresolvedName::Schema(name)) => {
+            plan_alter_schema_owner(scx, if_exists, name, new_owner.id)
+        }
+        (
+            object_type @ ObjectType::Cluster
+            | object_type @ ObjectType::ClusterReplica
+            | object_type @ ObjectType::Database
+            | object_type @ ObjectType::Schema,
+            name,
+        )
+        | (
+            object_type,
+            name @ UnresolvedName::Cluster(_)
+            | name @ UnresolvedName::ClusterReplica(_)
+            | name @ UnresolvedName::Database(_)
+            | name @ UnresolvedName::Schema(_),
+        ) => {
+            unreachable!("parser set the wrong object type '{object_type:?}' for name {name:?}")
+        }
+        (object_type, UnresolvedName::Item(name)) => {
+            plan_alter_item_owner(scx, object_type, if_exists, name, new_owner.id)
+        }
+    }
+}
+
+fn plan_alter_cluster_owner(
+    scx: &StatementContext,
+    if_exists: bool,
+    name: Ident,
+    new_owner: RoleId,
 ) -> Result<Plan, PlanError> {
     match resolve_cluster(scx, &name, if_exists)? {
         Some(cluster) => {
-            validate_alter_owner(scx, &new_owner.id)?;
-            Ok(Plan::AlterClusterOwner(AlterClusterOwnerPlan {
-                id: cluster.id(),
-                new_owner: new_owner.id,
+            validate_alter_owner(scx, &new_owner)?;
+            Ok(Plan::AlterOwner(AlterOwnerPlan {
+                id: ObjectId::Cluster(cluster.id()),
+                object_type: ObjectType::Cluster,
+                new_owner,
             }))
         }
         None => Ok(Plan::AlterNoop(AlterNoopPlan {
@@ -3642,31 +3682,20 @@ pub fn plan_alter_cluster_owner(
     }
 }
 
-pub fn describe_alter_cluster_replica_owner(
-    _: &StatementContext,
-    _: AlterClusterReplicaOwnerStatement<Aug>,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn plan_alter_cluster_replica_owner(
+fn plan_alter_cluster_replica_owner(
     scx: &StatementContext,
-    AlterClusterReplicaOwnerStatement {
-        if_exists,
-        name,
-        new_owner,
-    }: AlterClusterReplicaOwnerStatement<Aug>,
+    if_exists: bool,
+    name: QualifiedReplica,
+    new_owner: RoleId,
 ) -> Result<Plan, PlanError> {
     match resolve_cluster_replica(scx, &name, if_exists)? {
         Some((cluster_id, replica_id)) => {
-            validate_alter_owner(scx, &new_owner.id)?;
-            Ok(Plan::AlterClusterReplicaOwner(
-                AlterClusterReplicaOwnerPlan {
-                    cluster_id,
-                    replica_id,
-                    new_owner: new_owner.id,
-                },
-            ))
+            validate_alter_owner(scx, &new_owner)?;
+            Ok(Plan::AlterOwner(AlterOwnerPlan {
+                id: ObjectId::ClusterReplica((cluster_id, replica_id)),
+                object_type: ObjectType::ClusterReplica,
+                new_owner,
+            }))
         }
         None => Ok(Plan::AlterNoop(AlterNoopPlan {
             object_type: ObjectType::ClusterReplica,
@@ -3674,27 +3703,19 @@ pub fn plan_alter_cluster_replica_owner(
     }
 }
 
-pub fn describe_alter_database_owner(
-    _: &StatementContext,
-    _: AlterDatabaseOwnerStatement<Aug>,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn plan_alter_database_owner(
+fn plan_alter_database_owner(
     scx: &StatementContext,
-    AlterDatabaseOwnerStatement {
-        if_exists,
-        name,
-        new_owner,
-    }: AlterDatabaseOwnerStatement<Aug>,
+    if_exists: bool,
+    name: UnresolvedDatabaseName,
+    new_owner: RoleId,
 ) -> Result<Plan, PlanError> {
     match resolve_database(scx, &name, if_exists)? {
         Some(database) => {
-            validate_alter_owner(scx, &new_owner.id)?;
-            Ok(Plan::AlterDatabaseOwner(AlterDatabaseOwnerPlan {
-                id: database.id(),
-                new_owner: new_owner.id,
+            validate_alter_owner(scx, &new_owner)?;
+            Ok(Plan::AlterOwner(AlterOwnerPlan {
+                id: ObjectId::Database(database.id()),
+                object_type: ObjectType::Database,
+                new_owner,
             }))
         }
         None => Ok(Plan::AlterNoop(AlterNoopPlan {
@@ -3703,28 +3724,19 @@ pub fn plan_alter_database_owner(
     }
 }
 
-pub fn describe_alter_schema_owner(
-    _: &StatementContext,
-    _: AlterSchemaOwnerStatement<Aug>,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn plan_alter_schema_owner(
+fn plan_alter_schema_owner(
     scx: &StatementContext,
-    AlterSchemaOwnerStatement {
-        if_exists,
-        name,
-        new_owner,
-    }: AlterSchemaOwnerStatement<Aug>,
+    if_exists: bool,
+    name: UnresolvedSchemaName,
+    new_owner: RoleId,
 ) -> Result<Plan, PlanError> {
     match resolve_schema(scx, name, if_exists, "alter")? {
         Some((database_id, schema_id, _)) => {
-            validate_alter_owner(scx, &new_owner.id)?;
-            Ok(Plan::AlterSchemaOwner(AlterSchemaOwnerPlan {
-                database_id,
-                schema_id,
-                new_owner: new_owner.id,
+            validate_alter_owner(scx, &new_owner)?;
+            Ok(Plan::AlterOwner(AlterOwnerPlan {
+                id: ObjectId::Schema((database_id, schema_id)),
+                object_type: ObjectType::Schema,
+                new_owner,
             }))
         }
         None => Ok(Plan::AlterNoop(AlterNoopPlan {
@@ -3733,30 +3745,16 @@ pub fn plan_alter_schema_owner(
     }
 }
 
-pub fn describe_alter_object_owner(
-    _: &StatementContext,
-    _: AlterObjectOwnerStatement<Aug>,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn plan_alter_object_owner(
+fn plan_alter_item_owner(
     scx: &StatementContext,
-    AlterObjectOwnerStatement {
-        object_type,
-        if_exists,
-        name,
-        new_owner,
-    }: AlterObjectOwnerStatement<Aug>,
+    object_type: ObjectType,
+    if_exists: bool,
+    name: UnresolvedObjectName,
+    new_owner: RoleId,
 ) -> Result<Plan, PlanError> {
-    assert!(
-        object_type.lives_in_schema(),
-        "{object_type}s handled through their respective plan_alter functions"
-    );
-
     match resolve_object(scx, name, if_exists)? {
         Some(item) => {
-            validate_alter_owner(scx, &new_owner.id)?;
+            validate_alter_owner(scx, &new_owner)?;
             if item.id().is_system() {
                 sql_bail!(
                     "cannot alter item {} because it is required by the database system",
@@ -3780,10 +3778,10 @@ pub fn plan_alter_object_owner(
                     format!("{object_type}").to_lowercase(),
                 );
             }
-            Ok(Plan::AlterItemOwner(AlterItemOwnerPlan {
-                id: item.id(),
+            Ok(Plan::AlterOwner(AlterOwnerPlan {
+                id: ObjectId::Item(item.id()),
                 object_type,
-                new_owner: new_owner.id,
+                new_owner,
             }))
         }
         None => Ok(Plan::AlterNoop(AlterNoopPlan { object_type })),

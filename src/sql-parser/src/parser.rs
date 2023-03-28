@@ -3611,10 +3611,10 @@ impl<'a> Parser<'a> {
                     }
                     OWNER => {
                         let new_owner = self.parse_identifier()?;
-                        Ok(Statement::AlterObjectOwner(AlterObjectOwnerStatement {
+                        Ok(Statement::AlterOwner(AlterOwnerStatement {
                             object_type,
                             if_exists,
-                            name,
+                            name: UnresolvedName::Item(name),
                             new_owner,
                         }))
                     }
@@ -3623,10 +3623,10 @@ impl<'a> Parser<'a> {
             }
             ObjectType::Type => {
                 let if_exists = self.parse_if_exists()?;
-                let name = self.parse_object_name()?;
+                let name = UnresolvedName::Item(self.parse_object_name()?);
                 self.expect_keywords(&[OWNER, TO])?;
                 let new_owner = self.parse_identifier()?;
-                Ok(Statement::AlterObjectOwner(AlterObjectOwnerStatement {
+                Ok(Statement::AlterOwner(AlterOwnerStatement {
                     object_type,
                     if_exists,
                     name,
@@ -3635,10 +3635,11 @@ impl<'a> Parser<'a> {
             }
             ObjectType::Cluster => {
                 let if_exists = self.parse_if_exists()?;
-                let name = self.parse_identifier()?;
+                let name = UnresolvedName::Cluster(self.parse_identifier()?);
                 self.expect_keywords(&[OWNER, TO])?;
                 let new_owner = self.parse_identifier()?;
-                Ok(Statement::AlterClusterOwner(AlterClusterOwnerStatement {
+                Ok(Statement::AlterOwner(AlterOwnerStatement {
+                    object_type,
                     if_exists,
                     name,
                     new_owner,
@@ -3646,23 +3647,23 @@ impl<'a> Parser<'a> {
             }
             ObjectType::ClusterReplica => {
                 let if_exists = self.parse_if_exists()?;
-                let name = self.parse_cluster_replica_name()?;
+                let name = UnresolvedName::ClusterReplica(self.parse_cluster_replica_name()?);
                 self.expect_keywords(&[OWNER, TO])?;
                 let new_owner = self.parse_identifier()?;
-                Ok(Statement::AlterClusterReplicaOwner(
-                    AlterClusterReplicaOwnerStatement {
-                        if_exists,
-                        name,
-                        new_owner,
-                    },
-                ))
+                Ok(Statement::AlterOwner(AlterOwnerStatement {
+                    object_type,
+                    if_exists,
+                    name,
+                    new_owner,
+                }))
             }
             ObjectType::Database => {
                 let if_exists = self.parse_if_exists()?;
-                let name = self.parse_database_name()?;
+                let name = UnresolvedName::Database(self.parse_database_name()?);
                 self.expect_keywords(&[OWNER, TO])?;
                 let new_owner = self.parse_identifier()?;
-                Ok(Statement::AlterDatabaseOwner(AlterDatabaseOwnerStatement {
+                Ok(Statement::AlterOwner(AlterOwnerStatement {
+                    object_type,
                     if_exists,
                     name,
                     new_owner,
@@ -3670,10 +3671,11 @@ impl<'a> Parser<'a> {
             }
             ObjectType::Schema => {
                 let if_exists = self.parse_if_exists()?;
-                let name = self.parse_schema_name()?;
+                let name = UnresolvedName::Schema(self.parse_schema_name()?);
                 self.expect_keywords(&[OWNER, TO])?;
                 let new_owner = self.parse_identifier()?;
-                Ok(Statement::AlterSchemaOwner(AlterSchemaOwnerStatement {
+                Ok(Statement::AlterOwner(AlterOwnerStatement {
+                    object_type,
                     if_exists,
                     name,
                     new_owner,
@@ -3725,10 +3727,10 @@ impl<'a> Parser<'a> {
                     self.expect_keyword(TO)?;
                     let new_owner = self.parse_identifier()?;
 
-                    Statement::AlterObjectOwner(AlterObjectOwnerStatement {
+                    Statement::AlterOwner(AlterOwnerStatement {
                         object_type: ObjectType::Source,
                         if_exists,
-                        name,
+                        name: UnresolvedName::Item(name),
                         new_owner,
                     })
                 }
@@ -3780,10 +3782,10 @@ impl<'a> Parser<'a> {
                     self.expect_keyword(TO)?;
                     let new_owner = self.parse_identifier()?;
 
-                    Statement::AlterObjectOwner(AlterObjectOwnerStatement {
+                    Statement::AlterOwner(AlterOwnerStatement {
                         object_type: ObjectType::Index,
                         if_exists,
-                        name,
+                        name: UnresolvedName::Item(name),
                         new_owner,
                     })
                 }
@@ -3820,10 +3822,10 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(TO)?;
                 let new_owner = self.parse_identifier()?;
 
-                Statement::AlterObjectOwner(AlterObjectOwnerStatement {
+                Statement::AlterOwner(AlterOwnerStatement {
                     object_type: ObjectType::Secret,
                     if_exists,
-                    name,
+                    name: UnresolvedName::Item(name),
                     new_owner,
                 })
             }
@@ -3876,10 +3878,10 @@ impl<'a> Parser<'a> {
                     self.expect_keyword(TO)?;
                     let new_owner = self.parse_identifier()?;
 
-                    Statement::AlterObjectOwner(AlterObjectOwnerStatement {
+                    Statement::AlterOwner(AlterOwnerStatement {
                         object_type: ObjectType::Sink,
                         if_exists,
-                        name,
+                        name: UnresolvedName::Item(name),
                         new_owner,
                     })
                 }
@@ -3942,10 +3944,10 @@ impl<'a> Parser<'a> {
                     self.expect_keyword(TO)?;
                     let new_owner = self.parse_identifier()?;
 
-                    Statement::AlterObjectOwner(AlterObjectOwnerStatement {
+                    Statement::AlterOwner(AlterOwnerStatement {
                         object_type: ObjectType::Connection,
                         if_exists,
-                        name,
+                        name: UnresolvedName::Item(name),
                         new_owner,
                     })
                 }

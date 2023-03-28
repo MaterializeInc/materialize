@@ -450,36 +450,8 @@ impl Coordinator {
             Plan::RevokeRole(plan) => {
                 tx.send(self.sequence_revoke_role(&mut session, plan).await, session);
             }
-            Plan::AlterClusterOwner(plan) => {
-                tx.send(
-                    self.sequence_alter_cluster_owner(&mut session, plan).await,
-                    session,
-                );
-            }
-            Plan::AlterClusterReplicaOwner(plan) => {
-                tx.send(
-                    self.sequence_alter_cluster_replica_owner(&mut session, plan)
-                        .await,
-                    session,
-                );
-            }
-            Plan::AlterDatabaseOwner(plan) => {
-                tx.send(
-                    self.sequence_alter_database_owner(&mut session, plan).await,
-                    session,
-                );
-            }
-            Plan::AlterSchemaOwner(plan) => {
-                tx.send(
-                    self.sequence_alter_schema_owner(&mut session, plan).await,
-                    session,
-                );
-            }
-            Plan::AlterItemOwner(plan) => {
-                tx.send(
-                    self.sequence_alter_item_owner(&mut session, plan).await,
-                    session,
-                );
+            Plan::AlterOwner(plan) => {
+                tx.send(self.sequence_alter_owner(&mut session, plan).await, session);
             }
         }
     }
@@ -630,11 +602,7 @@ impl Coordinator {
             | Plan::AlterSystemSet(_)
             | Plan::AlterSystemReset(_)
             | Plan::AlterSystemResetAll(_)
-            | Plan::AlterClusterOwner(_)
-            | Plan::AlterClusterReplicaOwner(_)
-            | Plan::AlterDatabaseOwner(_)
-            | Plan::AlterSchemaOwner(_)
-            | Plan::AlterItemOwner(_)
+            | Plan::AlterOwner(_)
             | Plan::ReadThenWrite(_)
             | Plan::Raise(_)
             | Plan::RotateKeys(_)

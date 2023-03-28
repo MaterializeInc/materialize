@@ -927,11 +927,7 @@ impl Coordinator {
                 | Op::DropTimeline(_)
                 | Op::GrantRole { .. }
                 | Op::RenameItem { .. }
-                | Op::ClusterOwner { .. }
-                | Op::ClusterReplicaOwner { .. }
-                | Op::DatabaseOwner { .. }
-                | Op::SchemaOwner { .. }
-                | Op::ItemOwner { .. }
+                | Op::UpdateOwner { .. }
                 | Op::RevokeRole { .. }
                 | Op::UpdateClusterReplicaStatus { .. }
                 | Op::UpdateStorageUsage { .. }
