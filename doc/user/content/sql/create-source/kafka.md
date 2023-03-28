@@ -288,7 +288,7 @@ FROM
       -- Cast partition to u64, which is more ergonomic
       upper(partition)::uint8 AS partition, "offset"
     FROM
-      data_progress
+      <src_name>_progress
   )
 WHERE
   -- Remove all non-partition rows

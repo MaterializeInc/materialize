@@ -402,7 +402,7 @@ async fn migrate(
                 RoleValue {
                     role: SerializedRole {
                         name: PUBLIC_ROLE_NAME.as_str().to_lowercase(),
-                        attributes: RoleAttributes::new(),
+                        attributes: Some(RoleAttributes::new()),
                         membership: Some(RoleMembership::new()),
                     },
                 },
@@ -460,7 +460,7 @@ async fn migrate(
                 None => {
                     let role_id = txn.insert_user_role(SerializedRole {
                         name: default_owner_name.to_string(),
-                        attributes: RoleAttributes::new(),
+                        attributes: Some(RoleAttributes::new()),
                         membership: Some(RoleMembership::new()),
                     })?;
                     let audit_id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
@@ -937,7 +937,7 @@ impl Connection {
         // is removed.
         let cutoff_ts = match retention_period {
             None => u128::MIN,
-            Some(period) => u128::from(self.boot_ts) - period.as_millis(),
+            Some(period) => u128::from(self.boot_ts).saturating_sub(period.as_millis()),
         };
         Ok(self
             .stash

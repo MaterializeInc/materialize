@@ -22,6 +22,7 @@ from scenarios import *  # noqa: F401 F403
 from scenarios import Scenario
 from scenarios_concurrency import *  # noqa: F401 F403
 from scenarios_optbench import *  # noqa: F401 F403
+from scenarios_subscribe import *  # noqa: F401 F403
 
 from materialize.feature_benchmark.aggregation import Aggregation, MinAggregation
 from materialize.feature_benchmark.benchmark import Benchmark, Report, SingleReport
@@ -49,6 +50,7 @@ from materialize.mzcompose.services import (
     Testdrive,
     Zookeeper,
 )
+from materialize.util import released_materialize_versions
 
 #
 # Global feature benchmark thresholds and termination conditions
@@ -86,10 +88,7 @@ SERVICES = [
     KafkaService(),
     SchemaRegistry(),
     Redpanda(),
-    # We are going to override the service definitions during the actual benchmark
-    # we put "unstable" here so that we fetch some image from Docker Hub and thus
-    # avoid recompiling the current source unless we will actually be benchmarking it.
-    Materialized(image="materialize/materialized:unstable"),
+    Materialized(),
     Testdrive(
         default_timeout=default_timeout,
     ),
@@ -178,8 +177,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--other-tag",
         metavar="TAG",
         type=str,
-        default=os.getenv("OTHER_TAG", None),
-        help="'Other' Materialize container tag to benchmark. If not provided, the current source will be used.",
+        default=os.getenv("OTHER_TAG", str(released_materialize_versions()[0])),
+        help="'Other' Materialize container tag to benchmark. If not provided, the last released Mz version will be used.",
     )
 
     parser.add_argument(

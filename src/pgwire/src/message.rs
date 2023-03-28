@@ -430,6 +430,7 @@ impl ErrorResponse {
             AdapterNotice::RbacDisabled => SqlState::WARNING,
             AdapterNotice::RoleMembershipAlreadyExists { .. } => SqlState::WARNING,
             AdapterNotice::RoleMembershipDoesNotExists { .. } => SqlState::WARNING,
+            AdapterNotice::AutoRunOnIntrospectionCluster => SqlState::WARNING,
         };
         ErrorResponse {
             severity: Severity::for_adapter_notice(&notice),
@@ -590,6 +591,7 @@ impl Severity {
             AdapterNotice::RbacDisabled => Severity::Notice,
             AdapterNotice::RoleMembershipAlreadyExists { .. } => Severity::Notice,
             AdapterNotice::RoleMembershipDoesNotExists { .. } => Severity::Warning,
+            AdapterNotice::AutoRunOnIntrospectionCluster => Severity::Debug,
         }
     }
 }

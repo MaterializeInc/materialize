@@ -127,14 +127,14 @@ class Report:
 
     def dump(self) -> None:
         print(
-            f"{'NAME':<25} | {'THIS':^11} | {'OTHER':^11} | {'Regression?':^13} | 'THIS' is:"
+            f"{'NAME':<35} | {'THIS':^11} | {'OTHER':^11} | {'Regression?':^13} | 'THIS' is:"
         )
         print("-" * 100)
 
         for comparison in self._comparisons:
             regression = "!!YES!!" if comparison.is_regression() else "no"
             print(
-                f"{comparison.name():<25} | {comparison.this():>11.3f} | {comparison.other():>11.3f} | {regression:^13} | {comparison.human_readable()}"
+                f"{comparison.name():<35} | {comparison.this():>11.3f} | {comparison.other():>11.3f} | {regression:^13} | {comparison.human_readable()}"
             )
 
 

@@ -44,26 +44,27 @@ mz_catalog
 mz_internal
 pg_catalog
 $ psql-execute command=\dn
-\   List of schemas
-    Name     | Owner
--------------+-------
- mz_catalog  |
- mz_internal |
- public      |
+\     List of schemas
+    Name     |   Owner
+-------------+-----------
+ mz_catalog  | mz_system
+ mz_internal | mz_system
+ public      | mz_system
+
 
 $ psql-execute command="\dn mz_catalog"
-\  List of schemas
-    Name    | Owner
-------------+-------
- mz_catalog |
+\    List of schemas
+    Name    |   Owner
+------------+-----------
+ mz_catalog | mz_system
 
 
 $ psql-execute command="\dn mz_*"
-\   List of schemas
-    Name     | Owner
--------------+-------
- mz_catalog  |
- mz_internal |
+\     List of schemas
+    Name     |   Owner
+-------------+-----------
+ mz_catalog  | mz_system
+ mz_internal | mz_system
 
 # What objects do we have by default?
 > SHOW OBJECTS
@@ -120,11 +121,12 @@ materialize
 
 # ...and also in `\l`
 $ psql-execute command="\l"
-\                          List of databases
-    Name     | Owner | Encoding | Collate | Ctype | Access privileges
--------------+-------+----------+---------+-------+-------------------
- d           |       | UTF8     | C       | C     |
- materialize |       | UTF8     | C       | C     |
+\                             List of databases
+    Name     |    Owner    | Encoding | Collate | Ctype | Access privileges
+-------------+-------------+----------+---------+-------+-------------------
+ d           | materialize | UTF8     | C       | C     |
+ materialize | mz_system   | UTF8     | C       | C     |
+
 
 
 > SELECT name FROM mz_databases
@@ -539,6 +541,7 @@ mz_cluster_replica_metrics
 mz_cluster_replica_sizes
 mz_cluster_replica_statuses
 mz_postgres_sources
+mz_sessions
 mz_storage_usage_by_shard
 mz_subscriptions
 mz_view_foreign_keys
@@ -586,11 +589,11 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-42
+43
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-75
+78
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2
@@ -615,3 +618,14 @@ $ psql-execute command="\dt *.test_table"
 ---------+------------+-------+-------------
  tester  | test_table | table | materialize
  tester2 | test_table | table | materialize
+
+> CREATE TYPE type1 AS LIST (ELEMENT TYPE = text)
+
+> SHOW TYPES
+type1
+
+$ psql-execute command="\dT"
+\      List of data types
+ Schema | Name  | Description
+--------+-------+-------------
+ public | type1 |

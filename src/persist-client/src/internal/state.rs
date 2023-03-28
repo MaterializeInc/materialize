@@ -46,6 +46,11 @@ include!(concat!(
     "/mz_persist_client.internal.state.rs"
 ));
 
+include!(concat!(
+    env!("OUT_DIR"),
+    "/mz_persist_client.internal.diff.rs"
+));
+
 /// A token to disambiguate state commands that could not otherwise be
 /// idempotent.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

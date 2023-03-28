@@ -512,6 +512,7 @@ async fn postgres_replication_loop_inner(
         let publication_tables = mz_postgres_util::publication_info(
             &task_info.connection_config,
             &task_info.publication,
+            None,
         )
         .await
         .err_indefinite()?;
@@ -801,12 +802,18 @@ fn validate_tables(
     for (id, info) in source_tables.iter() {
         match pub_tables.get(id) {
             Some(pub_schema) => {
+                // Keep this method in sync with the check in response to
+                // Relation messages in the replication stream.
                 if pub_schema != &info.desc {
                     warn!(
                         "Error validating table in publication. Expected: {:?} Actual: {:?}",
                         &info.desc, pub_schema
                     );
-                    bail!("Schema for table {} differs, recreate Materialize source to use new schema", info.desc.name)
+                    bail!(
+                        "source table {} with oid {} has been altered",
+                        info.desc.name,
+                        info.desc.oid
+                    )
                 }
             }
             None => {
@@ -815,9 +822,9 @@ fn validate_tables(
                     info.desc.name, id
                 );
                 bail!(
-                    "Publication missing expected table {} with oid {}",
+                    "source table {} with oid {} has been dropped",
                     info.desc.name,
-                    id
+                    info.desc.oid
                 )
             }
         }
@@ -1114,6 +1121,7 @@ async fn produce_replication<'a>(
                         Relation(relation) => {
                             last_data_message = Instant::now();
                             let rel_id = relation.rel_id();
+                            let mut valid_schema_change = true;
                             if let Some(info) = source_tables.get(&rel_id) {
                                 // Start with the cheapest check first, this will catch the majority of alters
                                 if info.desc.columns.len() != relation.columns().len() {
@@ -1121,11 +1129,7 @@ async fn produce_replication<'a>(
                                         "alter table detected on {} with id {}",
                                         info.desc.name, info.desc.oid
                                     );
-                                    return Err(Definite(anyhow!(
-                                        "source table {} with oid {} has been altered",
-                                        info.desc.name,
-                                        info.desc.oid
-                                    )))?;
+                                    valid_schema_change = false;
                                 }
                                 let same_name = info.desc.name == relation.name().unwrap();
                                 let same_namespace =
@@ -1139,12 +1143,9 @@ async fn produce_replication<'a>(
                                         relation.namespace().unwrap(),
                                         relation.name().unwrap()
                                     );
-                                    return Err(Definite(anyhow!(
-                                        "source table {} with oid {} has been altered",
-                                        info.desc.name,
-                                        info.desc.oid
-                                    )))?;
+                                    valid_schema_change = false;
                                 }
+
                                 // Relation messages do not include nullability/primary_key data so we
                                 // check the name, type_oid, and type_mod explicitly and error if any
                                 // of them differ
@@ -1162,12 +1163,55 @@ async fn produce_replication<'a>(
                                             info.desc.columns,
                                             relation.columns()
                                         );
-                                        return Err(Definite(anyhow!(
-                                            "source table {} with oid {} has been altered",
-                                            info.desc.name,
-                                            info.desc.oid
-                                        )))?;
+
+                                        valid_schema_change = false;
                                     }
+                                }
+
+                                if valid_schema_change {
+                                    // Because the replication stream doesn't
+                                    // include columns' attnums, we need to check
+                                    // the current local schema against the current
+                                    // remote schema to ensure e.g. we haven't
+                                    // received a schema update with the same
+                                    // terminal column name which is actually a
+                                    // different column.
+                                    let current_publication_info =
+                                        mz_postgres_util::publication_info(
+                                            &client_config,
+                                            publication,
+                                            Some(rel_id),
+                                        )
+                                        .await
+                                        .err_indefinite()?;
+
+                                    let remote_schema_eq =
+                                        Some(&info.desc) == current_publication_info.get(0);
+                                    if !remote_schema_eq {
+                                        warn!(
+                                        "alter table error: name {}, oid {}, current local schema {:?}, current remote schema {:?}",
+                                        info.desc.name,
+                                        info.desc.oid,
+                                        info.desc.columns,
+                                        current_publication_info.get(0)
+                                    );
+
+                                        valid_schema_change = false;
+                                    }
+                                }
+
+                                if !valid_schema_change {
+                                    return Err(Definite(anyhow!(
+                                        "source table {} with oid {} has been altered",
+                                        info.desc.name,
+                                        info.desc.oid
+                                    )))?;
+                                } else {
+                                    warn!(
+                                        "source table {} with oid {} has been altered, but we could not determine how",
+                                        info.desc.name,
+                                        info.desc.oid
+                                    )
                                 }
                             }
                         }

@@ -33,7 +33,7 @@ from typing import IO, Any, Dict, Iterable, Iterator, List, Optional, Sequence, 
 
 import yaml
 
-from materialize import cargo, git, spawn, ui, xcompile
+from materialize import cargo, git, rustc_flags, spawn, ui, xcompile
 from materialize.xcompile import Arch
 
 
@@ -230,9 +230,7 @@ class CargoBuild(CargoPreImage):
         self.rustflags = config.pop("rustflags", [])
         self.channel = None
         if rd.coverage:
-            self.rustflags += [
-                "-Cinstrument-coverage",
-            ]
+            self.rustflags += rustc_flags.coverage
         if len(self.bins) == 0 and len(self.examples) == 0:
             raise ValueError("mzbuild config is missing pre-build target")
 

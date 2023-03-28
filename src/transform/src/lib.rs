@@ -135,6 +135,20 @@ use mz_ore::stack::RecursionLimitError;
 #[macro_use]
 extern crate num_derive;
 
+/// Compute the conjunction of a variadic number of expressions.
+#[macro_export]
+macro_rules! all {
+    ($x:expr) => ($x);
+    ($($x:expr,)+) => ( $($x)&&+ )
+}
+
+/// Compute the disjunction of a variadic number of expressions.
+#[macro_export]
+macro_rules! any {
+    ($x:expr) => ($x);
+    ($($x:expr,)+) => ( $($x)||+ )
+}
+
 /// Arguments that get threaded through all transforms.
 #[derive(Debug)]
 pub struct TransformArgs<'a> {
@@ -359,6 +373,10 @@ impl Default for FuseAndCollapse {
 }
 
 impl Transform for FuseAndCollapse {
+    fn recursion_safe(&self) -> bool {
+        self.transforms.iter().all(|t| t.recursion_safe())
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

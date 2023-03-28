@@ -101,7 +101,7 @@ use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
 use crate::{AdapterError, DUMMY_AVAILABILITY_ZONE};
 
-use self::builtin::BuiltinSource;
+use self::builtin::{BuiltinCluster, BuiltinSource};
 
 mod builtin_table_updates;
 mod config;
@@ -696,6 +696,8 @@ impl CatalogState {
                     conn_id: None,
                     depends_on: vec![log_id],
                     cluster_id: id,
+                    is_retained_metrics_object: false,
+                    custom_logical_compaction_window: None,
                 }),
                 MZ_SYSTEM_ROLE_ID,
             );
@@ -1058,6 +1060,16 @@ impl CatalogState {
             .get(name)
             .ok_or_else(|| SqlCatalogError::UnknownCluster(name.to_string()))?;
         Ok(&self.clusters_by_id[id])
+    }
+
+    pub fn resolve_builtin_cluster(&self, cluster: &BuiltinCluster) -> &Cluster {
+        let id = self
+            .clusters_by_name
+            .get(cluster.name)
+            .expect("failed to lookup BuiltinCluster by name");
+        self.clusters_by_id
+            .get(id)
+            .expect("failed to lookup BuiltinCluster by ID")
     }
 
     /// Resolves [`PartialObjectName`] into a [`CatalogEntry`].
@@ -1498,7 +1510,7 @@ pub struct Table {
     pub custom_logical_compaction_window: Option<Duration>,
     /// Whether the table's logical compaction window is controlled by
     /// METRICS_RETENTION
-    pub is_retained_metrics_relation: bool,
+    pub is_retained_metrics_object: bool,
 }
 
 impl Table {
@@ -1531,7 +1543,7 @@ pub struct Source {
     pub custom_logical_compaction_window: Option<Duration>,
     /// Whether the source's logical compaction window is controlled by
     /// METRICS_RETENTION
-    pub is_retained_metrics_relation: bool,
+    pub is_retained_metrics_object: bool,
 }
 
 impl Source {
@@ -1698,6 +1710,8 @@ pub struct Index {
     pub conn_id: Option<ConnectionId>,
     pub depends_on: Vec<GlobalId>,
     pub cluster_id: ClusterId,
+    pub custom_logical_compaction_window: Option<Duration>,
+    pub is_retained_metrics_object: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1933,7 +1947,29 @@ impl CatalogItem {
         }
     }
 
-    fn cluster_id(&self) -> Option<ClusterId> {
+    /// If the object is considered a "compute object"
+    /// (i.e., it is managed by the compute controller),
+    /// this function returns its cluster ID. Otherwise, it returns nothing.
+    ///
+    /// This function differs from `cluster_id` because while all
+    /// compute objects run on a cluster, the converse is not true.
+    pub fn is_compute_object_on_cluster(&self) -> Option<ClusterId> {
+        match self {
+            CatalogItem::Index(index) => Some(index.cluster_id),
+            CatalogItem::Table(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => None,
+        }
+    }
+
+    pub fn cluster_id(&self) -> Option<ClusterId> {
         match self {
             CatalogItem::MaterializedView(mv) => Some(mv.cluster_id),
             CatalogItem::Index(index) => Some(index.cluster_id),
@@ -1958,7 +1994,7 @@ impl CatalogItem {
         let custom_logical_compaction_window = match self {
             CatalogItem::Table(table) => table.custom_logical_compaction_window,
             CatalogItem::Source(source) => source.custom_logical_compaction_window,
-            CatalogItem::Index(_) => None,
+            CatalogItem::Index(index) => index.custom_logical_compaction_window,
             CatalogItem::MaterializedView(_) => None,
             CatalogItem::Log(_)
             | CatalogItem::View(_)
@@ -1974,15 +2010,15 @@ impl CatalogItem {
     /// Whether the item's logical compaction window
     /// is controlled by the METRICS_RETENTION
     /// system var.
-    pub fn is_retained_metrics_relation(&self) -> bool {
+    pub fn is_retained_metrics_object(&self) -> bool {
         match self {
-            CatalogItem::Table(table) => table.is_retained_metrics_relation,
-            CatalogItem::Source(source) => source.is_retained_metrics_relation,
+            CatalogItem::Table(table) => table.is_retained_metrics_object,
+            CatalogItem::Source(source) => source.is_retained_metrics_object,
+            CatalogItem::Index(index) => index.is_retained_metrics_object,
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Sink(_)
-            | CatalogItem::Index(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
@@ -2410,7 +2446,9 @@ impl Catalog {
                     name: role.name,
                     id,
                     oid,
-                    attributes: role.attributes,
+                    attributes: role
+                        .attributes
+                        .expect("serialized role was not properly migrated"),
                     membership: role
                         .membership
                         .expect("serialized role was not properly migrated"),
@@ -2505,9 +2543,9 @@ impl Catalog {
                                 conn_id: None,
                                 depends_on: vec![],
                                 custom_logical_compaction_window: table
-                                    .is_retained_metrics_relation
+                                    .is_retained_metrics_object
                                     .then(|| catalog.state.system_config().metrics_retention()),
-                                is_retained_metrics_relation: table.is_retained_metrics_relation,
+                                is_retained_metrics_object: table.is_retained_metrics_object,
                             }),
                             MZ_SYSTEM_ROLE_ID,
                         );
@@ -2569,9 +2607,9 @@ impl Catalog {
                                 timeline: Timeline::EpochMilliseconds,
                                 depends_on: vec![],
                                 custom_logical_compaction_window: coll
-                                    .is_retained_metrics_relation
+                                    .is_retained_metrics_object
                                     .then(|| catalog.state.system_config().metrics_retention()),
-                                is_retained_metrics_relation: coll.is_retained_metrics_relation,
+                                is_retained_metrics_object: coll.is_retained_metrics_object,
                             }),
                             MZ_SYSTEM_ROLE_ID,
                         );
@@ -2656,7 +2694,7 @@ impl Catalog {
             };
             match builtin {
                 Builtin::Index(index) => {
-                    let item = catalog
+                    let mut item = catalog
                         .parse_item(
                             id,
                             index.sql.into(),
@@ -2672,6 +2710,15 @@ impl Catalog {
                                 index.name, e
                             )
                         });
+                    let CatalogItem::Index(catalog_index) = &mut item else {
+                        panic!("internal error: builtin index {}'s SQL does not begin with \"CREATE INDEX\".", index.name);
+                    };
+                    if index.is_retained_metrics_object {
+                        catalog_index.is_retained_metrics_object = true;
+                        catalog_index.custom_logical_compaction_window =
+                            Some(catalog.state.system_config().metrics_retention());
+                    }
+
                     let oid = catalog.allocate_oid()?;
                     catalog
                         .state
@@ -2712,13 +2759,15 @@ impl Catalog {
             .unwrap_or_else(|| "new".to_string());
 
         if !config.skip_migrations {
-            migrate::migrate(&mut catalog).await.map_err(|e| {
-                Error::new(ErrorKind::FailedMigration {
-                    last_seen_version: last_seen_version.clone(),
-                    this_version: catalog.config().build_info.version,
-                    cause: e.to_string(),
-                })
-            })?;
+            migrate::migrate(&mut catalog, config.connection_context)
+                .await
+                .map_err(|e| {
+                    Error::new(ErrorKind::FailedMigration {
+                        last_seen_version: last_seen_version.clone(),
+                        this_version: catalog.config().build_info.version,
+                        cause: e.to_string(),
+                    })
+                })?;
             catalog
                 .storage()
                 .await
@@ -3597,6 +3646,7 @@ impl Catalog {
             system_parameter_frontend: None,
             // when debugging, no reaping
             storage_usage_retention_period: None,
+            connection_context: None,
         })
         .await?;
         Ok(catalog)
@@ -3831,6 +3881,15 @@ impl Catalog {
 
     pub fn resolve_cluster(&self, name: &str) -> Result<&Cluster, SqlCatalogError> {
         self.state.resolve_cluster(name)
+    }
+
+    /// Resolves a [`Cluster`] for a [`BuiltinCluster`]
+    ///
+    /// # Panics
+    /// * If the [`BuiltinCluster`] doesn't exist.
+    ///
+    pub fn resolve_builtin_cluster(&self, cluster: &BuiltinCluster) -> &Cluster {
+        self.state.resolve_builtin_cluster(cluster)
     }
 
     pub fn active_cluster(&self, session: &Session) -> Result<&Cluster, AdapterError> {
@@ -4716,7 +4775,7 @@ impl Catalog {
                     let membership = RoleMembership::new();
                     let serialized_role = SerializedRole {
                         name: name.clone(),
-                        attributes: attributes.clone(),
+                        attributes: Some(attributes.clone()),
                         membership: Some(membership.clone()),
                     };
                     let id = tx.insert_user_role(serialized_role)?;
@@ -5738,7 +5797,7 @@ impl Catalog {
                 conn_id: None,
                 depends_on,
                 custom_logical_compaction_window: None,
-                is_retained_metrics_relation: false,
+                is_retained_metrics_object: false,
             }),
             Plan::CreateSource(CreateSourcePlan {
                 source,
@@ -5770,7 +5829,7 @@ impl Catalog {
                 timeline,
                 depends_on,
                 custom_logical_compaction_window: None,
-                is_retained_metrics_relation: false,
+                is_retained_metrics_object: false,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let optimizer = Optimizer::logical_optimizer();
@@ -5805,6 +5864,8 @@ impl Catalog {
                 conn_id: None,
                 depends_on,
                 cluster_id: index.cluster_id,
+                custom_logical_compaction_window: None,
+                is_retained_metrics_object: false,
             }),
             Plan::CreateSink(CreateSinkPlan {
                 sink,
@@ -6262,7 +6323,8 @@ impl From<ReplicaLocation> for SerializedReplicaLocation {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct SerializedRole {
     pub name: String,
-    pub attributes: RoleAttributes,
+    // TODO(jkosh44): Remove Option when stash consolidation bug is fixed
+    pub attributes: Option<RoleAttributes>,
     // TODO(jkosh44): Remove Option in v0.49.0
     pub membership: Option<RoleMembership>,
 }
@@ -6271,7 +6333,7 @@ impl From<Role> for SerializedRole {
     fn from(role: Role) -> Self {
         SerializedRole {
             name: role.name,
-            attributes: role.attributes,
+            attributes: Some(role.attributes),
             membership: Some(role.membership),
         }
     }
@@ -6281,7 +6343,7 @@ impl From<&BuiltinRole> for SerializedRole {
     fn from(role: &BuiltinRole) -> Self {
         SerializedRole {
             name: role.name.to_string(),
-            attributes: role.attributes.clone(),
+            attributes: Some(role.attributes.clone()),
             membership: Some(RoleMembership::new()),
         }
     }
@@ -7083,7 +7145,7 @@ mod tests {
                         conn_id: None,
                         depends_on: vec![],
                         custom_logical_compaction_window: None,
-                        is_retained_metrics_relation: false,
+                        is_retained_metrics_object: false,
                     }),
                     SimplifiedItem::MaterializedView { depends_on } => {
                         let table_list = depends_on.iter().join(",");
@@ -7115,6 +7177,8 @@ mod tests {
                             conn_id: None,
                             depends_on: vec![on_id],
                             cluster_id: ClusterId::User(1),
+                            custom_logical_compaction_window: None,
+                            is_retained_metrics_object: false,
                         })
                     }
                 };

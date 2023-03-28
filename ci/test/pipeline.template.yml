@@ -590,6 +590,16 @@ steps:
     agents:
       queue: linux-x86_64
 
+  - id: feature-benchmark-kafka-only
+    label: "Feature benchmark (Kafka only)"
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: feature-benchmark
+          args: [--scenario=KafkaUpsertUnique]
+
   - wait: ~
     continue_on_failure: true
 

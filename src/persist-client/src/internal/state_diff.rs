@@ -11,6 +11,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 
+use bytes::BytesMut;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
@@ -242,7 +243,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
 }
 
 impl<T: Timestamp + Lattice + Codec64> State<T> {
-    pub fn apply_encoded_diffs<'a, I: IntoIterator<Item = &'a VersionedData>>(
+    pub fn apply_encoded_diffs<I: IntoIterator<Item = VersionedData>>(
         &mut self,
         cfg: &PersistConfig,
         metrics: &Metrics,
@@ -257,7 +258,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
             let diff = metrics
                 .codecs
                 .state_diff
-                .decode(|| StateDiff::decode(&cfg.build_version, &x.data));
+                .decode(|| StateDiff::decode(&cfg.build_version, x.data));
             assert_eq!(diff.seqno_from, state_seqno);
             state_seqno = diff.seqno_to;
             Some(diff)
@@ -538,7 +539,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
     if let Some(insert) = sniff_insert(&mut diffs, trace.upper()) {
         // Ignore merge_reqs because whichever process generated this diff is
         // assigned the work.
-        let _merge_reqs = trace.push_batch(insert);
+        let () = trace.push_batch_no_merge_reqs(insert);
         // If this insert was the only thing in diffs, then return now instead
         // of falling through to the "no diffs" case in the match so we can inc
         // the apply_spine_fast_path metric.
@@ -569,7 +570,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
             {
                 // Ignore merge_reqs because whichever process generated this diff is
                 // assigned the work.
-                let _merge_reqs = trace.push_batch(HollowBatch {
+                let () = trace.push_batch_no_merge_reqs(HollowBatch {
                     desc: Description::new(
                         del.desc.upper().clone(),
                         ins.desc.upper().clone(),
@@ -621,7 +622,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
                 for batch in batches {
                     // Ignore merge_reqs because whichever process generated
                     // this diff is assigned the work.
-                    let _merge_reqs = new_trace.push_batch(batch.clone());
+                    let () = new_trace.push_batch_no_merge_reqs(batch.clone());
                 }
                 *trace = new_trace;
                 metrics.state.apply_spine_slow_path_lenient.inc();
@@ -667,7 +668,9 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
             // batches.
             let mut reconstructed_spine = Trace::default();
             trace.map_batches(|b| {
-                let _merge_reqs = reconstructed_spine.push_batch(b.clone());
+                // Ignore merge_reqs because whichever process generated this
+                // diff is assigned the work.
+                let () = reconstructed_spine.push_batch_no_merge_reqs(b.clone());
             });
 
             let mut batches = BTreeMap::new();
@@ -682,7 +685,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
     for (batch, ()) in batches {
         // Ignore merge_reqs because whichever process generated this diff is
         // assigned the work.
-        let _merge_reqs = new_trace.push_batch(batch);
+        let () = new_trace.push_batch_no_merge_reqs(batch);
     }
     *trace = new_trace;
     Ok(())
@@ -864,20 +867,84 @@ fn apply_compaction_lenient<'a, T: Timestamp + Lattice>(
     Ok(trace)
 }
 
-impl ProtoStateFieldDiffs {
+/// A type that facilitates the proto encoding of a [`ProtoStateFieldDiffs`]
+///
+/// [`ProtoStateFieldDiffs`] is a columnar encoding of [`StateFieldDiff`]s, see
+/// its doc comment for more info. The underlying buffer for a [`ProtoStateFieldDiffs`]
+/// is a [`Bytes`] struct, which is an immutable, shared, reference counted,
+/// buffer of data. Using a [`Bytes`] struct is a very efficient way to manage data
+/// becuase multiple [`Bytes`] can reference different parts of the same underlying
+/// portion of memory. See its doc comment for more info.
+///
+/// A [`ProtoStateFieldDiffsWriter`] maintains a mutable, unique, data buffer, i.e.
+/// a [`BytesMut`], which we use when encoding a [`StateFieldDiff`]. And when
+/// finished encoding, we convert it into a [`ProtoStateFieldDiffs`] by "freezing" the
+/// underlying buffer, converting it into a [`Bytes`] struct, so it can be shared.
+///
+/// [`Bytes`]: bytes::Bytes
+#[derive(Debug)]
+pub struct ProtoStateFieldDiffsWriter {
+    data_buf: BytesMut,
+    proto: ProtoStateFieldDiffs,
+}
+
+impl ProtoStateFieldDiffsWriter {
+    /// Record a [`ProtoStateField`] for our columnar encoding.
+    pub fn push_field(&mut self, field: ProtoStateField) {
+        self.proto.fields.push(i32::from(field));
+    }
+
+    /// Record a [`ProtoStateFieldDiffType`] for our columnar encoding.
+    pub fn push_diff_type(&mut self, diff_type: ProtoStateFieldDiffType) {
+        self.proto.diff_types.push(i32::from(diff_type));
+    }
+
+    /// Encode a message for our columnar encoding.
     pub fn encode_proto<M: prost::Message>(&mut self, msg: &M) {
-        let len_before = self.data_bytes.len();
-        self.data_bytes.reserve(msg.encoded_len());
+        let len_before = self.data_buf.len();
+        self.data_buf.reserve(msg.encoded_len());
 
         // Note: we use `encode_raw` as opposed to `encode` because all `encode` does is
         // check to make sure there's enough bytes in the buffer to fit our message
         // which we know there are because we just reserved the space. When benchmarking
         // `encode_raw` does offer a slight performance improvement over `encode`.
-        msg.encode_raw(&mut self.data_bytes);
+        msg.encode_raw(&mut self.data_buf);
 
         // Record exactly how many bytes were written.
-        let written_len = self.data_bytes.len() - len_before;
-        self.data_lens.push(u64::cast_from(written_len));
+        let written_len = self.data_buf.len() - len_before;
+        self.proto.data_lens.push(u64::cast_from(written_len));
+    }
+
+    pub fn into_proto(self) -> ProtoStateFieldDiffs {
+        let ProtoStateFieldDiffsWriter {
+            data_buf,
+            mut proto,
+        } = self;
+
+        // Assert we didn't write into the proto's data_bytes field
+        assert!(proto.data_bytes.is_empty());
+
+        // Move our buffer into the proto
+        let data_bytes = data_buf.freeze();
+        proto.data_bytes = data_bytes;
+
+        proto
+    }
+}
+
+impl ProtoStateFieldDiffs {
+    pub fn into_writer(mut self) -> ProtoStateFieldDiffsWriter {
+        // Create a new buffer which we'll encode data into.
+        let mut data_buf = BytesMut::with_capacity(self.data_bytes.len());
+
+        // Take our existing data, and copy it into our buffer.
+        let existing_data = std::mem::take(&mut self.data_bytes);
+        data_buf.extend(existing_data);
+
+        ProtoStateFieldDiffsWriter {
+            data_buf,
+            proto: self,
+        }
     }
 
     pub fn iter<'a>(&'a self) -> ProtoStateFieldDiffsIter<'a> {

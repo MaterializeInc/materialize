@@ -660,6 +660,7 @@ pub struct CompactionMetrics {
     pub(crate) not_all_prefetched: IntCounter,
     pub(crate) parts_prefetched: IntCounter,
     pub(crate) parts_waited: IntCounter,
+    pub(crate) fast_path_eligible: IntCounter,
 
     pub(crate) applied_exact_match: IntCounter,
     pub(crate) applied_subset_match: IntCounter,
@@ -747,6 +748,10 @@ impl CompactionMetrics {
             parts_waited: registry.register(metric!(
                 name: "mz_persist_compaction_parts_waited",
                 help: "count of compaction parts that had to be waited on",
+            )),
+            fast_path_eligible: registry.register(metric!(
+                name: "mz_persist_compaction_fast_path_eligible",
+                help: "count of compaction requests that could have used the fast-path optimization",
             )),
             applied_exact_match: registry.register(metric!(
                 name: "mz_persist_compaction_applied_exact_match",

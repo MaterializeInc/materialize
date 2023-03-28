@@ -24,7 +24,7 @@ use mz_ore::task::spawn;
 use mz_persist::location::Blob;
 use mz_persist_types::codec_impls::VecU8Schema;
 use mz_persist_types::{Codec, Codec64};
-use timely::progress::Timestamp;
+use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{mpsc, oneshot, TryAcquireError};
@@ -410,6 +410,31 @@ where
         schemas: Schemas<K, V>,
     ) -> Result<CompactRes<T>, anyhow::Error> {
         let () = Self::validate_req(&req)?;
+
+        // We introduced a fast-path optimization in https://github.com/MaterializeInc/materialize/pull/15363
+        // but had to revert it due to a very scary bug. Here we count how many of our compaction reqs
+        // could be eligible for the optimization to better understand whether it's worth trying to
+        // reintroduce it.
+        let mut single_nonempty_batch = None;
+        for batch in &req.inputs {
+            if batch.len > 0 {
+                match single_nonempty_batch {
+                    None => single_nonempty_batch = Some(batch),
+                    Some(_previous_nonempty_batch) => {
+                        single_nonempty_batch = None;
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(single_nonempty_batch) = single_nonempty_batch {
+            if single_nonempty_batch.runs.len() == 0
+                && single_nonempty_batch.desc.since() != &Antichain::from_elem(T::minimum())
+            {
+                metrics.compaction.fast_path_eligible.inc();
+            }
+        }
+
         // compaction needs memory enough for at least 2 runs and 2 in-progress parts
         assert!(cfg.compaction_memory_bound_bytes >= 4 * cfg.batch.blob_target_size);
         // reserve space for the in-progress part to be held in-mem representation and columnar
@@ -924,7 +949,9 @@ mod tests {
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
     use timely::progress::Antichain;
 
-    use crate::tests::{all_ok, expect_fetch_part, new_test_client, new_test_client_cache};
+    use crate::tests::{
+        all_ok, expect_fetch_part, new_test_client, new_test_client_cache, CodecProduct,
+    };
 
     use super::*;
 
@@ -998,6 +1025,93 @@ mod tests {
         .await;
         assert_eq!(part.desc, res.output.desc);
         assert_eq!(updates, all_ok(&data, 10));
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    async fn compaction_partial_order() {
+        mz_ore::test::init_logging();
+
+        let data = vec![
+            (
+                ("0".to_owned(), "zero".to_owned()),
+                CodecProduct::new(0, 10),
+                1,
+            ),
+            (
+                ("1".to_owned(), "one".to_owned()),
+                CodecProduct::new(10, 0),
+                1,
+            ),
+        ];
+
+        let cache = new_test_client_cache();
+        cache.cfg.dynamic.set_blob_target_size(100);
+        let (mut write, _) = cache
+            .open(PersistLocation {
+                blob_uri: "mem://".to_owned(),
+                consensus_uri: "mem://".to_owned(),
+            })
+            .await
+            .expect("client construction failed")
+            .expect_open::<String, String, CodecProduct, i64>(ShardId::new())
+            .await;
+        let b0 = write
+            .batch(
+                &data[..1],
+                Antichain::from_elem(CodecProduct::new(0, 0)),
+                Antichain::from_iter([CodecProduct::new(0, 11), CodecProduct::new(10, 0)]),
+            )
+            .await
+            .expect("invalid usage")
+            .into_hollow_batch();
+
+        let b1 = write
+            .batch(
+                &data[1..],
+                Antichain::from_iter([CodecProduct::new(0, 11), CodecProduct::new(10, 0)]),
+                Antichain::from_elem(CodecProduct::new(10, 1)),
+            )
+            .await
+            .expect("invalid usage")
+            .into_hollow_batch();
+
+        let req = CompactReq {
+            shard_id: write.machine.shard_id(),
+            desc: Description::new(
+                b0.desc.lower().clone(),
+                b1.desc.upper().clone(),
+                Antichain::from_elem(CodecProduct::new(10, 0)),
+            ),
+            inputs: vec![b0, b1],
+        };
+        let schemas = Schemas {
+            key: Arc::new(StringSchema),
+            val: Arc::new(UnitSchema),
+        };
+        let res = Compactor::<String, (), CodecProduct, i64>::compact(
+            CompactConfig::from(&write.cfg),
+            Arc::clone(&write.blob),
+            Arc::clone(&write.metrics),
+            Arc::new(CpuHeavyRuntime::new()),
+            req.clone(),
+            write.writer_id.clone(),
+            schemas,
+        )
+        .await
+        .expect("compaction failed");
+
+        assert_eq!(res.output.desc, req.desc);
+        assert_eq!(res.output.len, 2);
+        assert_eq!(res.output.parts.len(), 1);
+        let part = &res.output.parts[0];
+        let (part, updates) = expect_fetch_part(
+            write.blob.as_ref(),
+            &part.key.complete(&write.machine.shard_id()),
+        )
+        .await;
+        assert_eq!(part.desc, res.output.desc);
+        assert_eq!(updates, all_ok(&data, CodecProduct::new(10, 0)));
     }
 
     #[tokio::test]

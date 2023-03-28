@@ -493,14 +493,19 @@ pub mod topk_agg {
                         false
                     }
                 });
-                // By the end of the loop above `limit` will be less than or equal to zero. The
-                // case where it goes negative is when the last record we retained had more copies
-                // than necessary. For this reason we need to do one final adjustment of the diff
-                // field of the last record so that the total sum of the diffs in the batch is K.
-                if let Some(item) = self.updates.last_mut() {
-                    // We are subtracting the limit *negated*, therefore we are subtracting a value
-                    // that is *greater* than or equal to zero, which represents the excess.
-                    item.1 -= -limit;
+                // By the end of the loop above `limit` will either be:
+                // (a) Positive, in which case all updates were retained;
+                // (b) Zero, in which case we discarded all updates after limit became zero;
+                // (c) Negative, in which case the last record we retained had more copies
+                // than necessary. In this latter case, we need to do one final adjustment
+                // of the diff field of the last record so that the total sum of the diffs
+                // in the batch is K.
+                if limit < 0 {
+                    if let Some(item) = self.updates.last_mut() {
+                        // We are subtracting the limit *negated*, therefore we are subtracting a value
+                        // that is *greater* than or equal to zero, which represents the excess.
+                        item.1 -= -limit;
+                    }
                 }
             }
             self.clean = self.updates.len();

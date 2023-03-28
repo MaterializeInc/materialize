@@ -509,20 +509,21 @@ where
 }
 
 impl ReadPolicy<mz_repr::Timestamp> {
-    /// Creates a read policy that lags the write frontier by the indicated amount, rounded down to a multiple of that amount.
-    ///
-    /// The rounding down is done to reduce the number of changes the capability undergoes, with the thinking
-    /// being that if you are ok with `lag`, then getting something between `lag` and `2 x lag` should be ok.
-    pub fn lag_writes_by(lag: mz_repr::Timestamp) -> Self {
+    /// Creates a read policy that lags the write frontier by the indicated amount, rounded down to (at most) the specified value.
+    /// The rounding down is done to reduce the number of changes the capability undergoes.
+    pub fn lag_writes_by(lag: mz_repr::Timestamp, max_granularity: mz_repr::Timestamp) -> Self {
         Self::LagWriteFrontier(Arc::new(move |upper| {
             if upper.is_empty() {
                 Antichain::from_elem(Timestamp::minimum())
             } else {
-                // Subtract the lag from the time, and then round down to a multiple thereof to cut chatter.
+                // Subtract the lag from the time, and then round down to a multiple of `granularity` to cut chatter.
                 let mut time = upper[0];
                 if lag != mz_repr::Timestamp::default() {
                     time = time.saturating_sub(lag);
-                    time = time.saturating_sub(time % lag);
+                    // It makes little sense to refuse to compact if the user genuinely
+                    // sets a smaller compaction window than the default, so honor it here.
+                    let granularity = std::cmp::min(lag, max_granularity);
+                    time = time.saturating_sub(time % granularity);
                 }
                 Antichain::from_elem(time)
             }
@@ -2050,31 +2051,9 @@ where
             Some(StorageResponse::FrontierUppers(updates)) => {
                 self.update_write_frontiers(&updates);
             }
-            Some(StorageResponse::DroppedIds(ids)) => {
-                // TODO(petrosagg): It looks like the storage controller never
-                // cleans up GlobalIds from its state. It should probably be
-                // done as a reaction to this response. Note that this should
-                // not be done until we know for certain that the shards
-                // associated with this ID are finalized.
-
-                let shards_to_finalize: Vec<_> = ids
-                    .into_iter()
-                    .filter_map(|id| {
-                        self.state.collections.get(&id).map(
-                            |CollectionState {
-                                 collection_metadata: CollectionMetadata { data_shard, .. },
-                                 ..
-                             }| *data_shard,
-                        )
-                    })
-                    .collect();
-
-                // Ensure we don't leak any shards by tracking all of them we intend to
-                // finalize.
-                self.register_shards_for_finalization(shards_to_finalize.iter().cloned())
-                    .await;
-
-                self.finalize_shards(shards_to_finalize).await;
+            Some(StorageResponse::DroppedIds(_ids)) => {
+                // TODO(petrosagg): It looks like the storage controller never cleans up GlobalIds
+                // from its state. It should probably be done as a reaction to this response.
             }
             Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {
                 // Note we only hold the locks while moving some plain-old-data around here.
@@ -2702,7 +2681,7 @@ where
         let this = &*self;
 
         use futures::stream::StreamExt;
-        let finalized_shards: BTreeSet<ShardId> = futures::stream::iter(shards)
+        let finalized_shards: BTreeSet<_> = futures::stream::iter(shards)
             .map(|shard_id| async move {
                 let (mut write, mut critical_since_handle) = this
                     .open_data_handles(
@@ -2736,25 +2715,14 @@ where
                         .expect("failed to connect")
                         .expect("failed to truncate write handle");
                 }
-
-                // We only want to  clear shards from the finalization register
-                // if the since if actually empty.
-                if critical_since_handle.since().is_empty() {
-                    Some(shard_id)
-                } else {
-                    // TODO: periodically check shards that have not been successfully finalized.
-                    None
-                }
+                shard_id
             })
             // Poll each future for each collection concurrently, maximum of 10 at a time.
             .buffer_unordered(10)
             // HERE BE DRAGONS: see warning on other uses of buffer_unordered
             // before any changes to `collect`
-            .collect::<BTreeSet<Option<ShardId>>>()
-            .await
-            .into_iter()
-            .filter_map(|shard| shard)
-            .collect();
+            .collect()
+            .await;
 
         self.clear_from_shard_finalization_register(finalized_shards)
             .await;
@@ -2870,7 +2838,8 @@ mod tests {
 
     #[test]
     fn lag_writes_by_zero() {
-        let policy = ReadPolicy::lag_writes_by(mz_repr::Timestamp::default());
+        let policy =
+            ReadPolicy::lag_writes_by(mz_repr::Timestamp::default(), mz_repr::Timestamp::default());
         let write_frontier = Antichain::from_elem(mz_repr::Timestamp::from(5));
         assert_eq!(policy.frontier(write_frontier.borrow()), write_frontier);
     }

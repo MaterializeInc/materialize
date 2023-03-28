@@ -64,7 +64,7 @@ The `mz_cluster_replicas` table contains a row for each cluster replica in the s
 
 Field               | Type      | Meaning
 --------------------|-----------|--------
-`id`                | [`uint8`] | Materialize's unique ID for the cluster replica.
+`id`                | [`text`]  | Materialize's unique ID for the cluster replica.
 `name`              | [`text`]  | The name of the cluster replica.
 `cluster_id`        | [`text`]  | The ID of the cluster to which the replica belongs. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
 `size`              | [`text`]  | The cluster replica's size, selected during creation.

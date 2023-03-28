@@ -43,6 +43,7 @@ use crate::telemetry::SegmentClientExt;
 use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterError, AdapterNotice};
 
+use super::read_policy::SINCE_GRANULARITY;
 use super::timeline::{TimelineContext, TimelineState};
 
 /// State provided to a catalog transaction closure.
@@ -645,19 +646,38 @@ impl Coordinator {
 
     fn update_metrics_retention(&mut self) {
         let duration = self.catalog().system_config().metrics_retention();
-        let policy = ReadPolicy::lag_writes_by(Timestamp::new(
-            u64::try_from(duration.as_millis()).unwrap_or_else(|_e| {
+        let policy = ReadPolicy::lag_writes_by(
+            Timestamp::new(u64::try_from(duration.as_millis()).unwrap_or_else(|_e| {
                 tracing::error!("Absurd metrics retention duration: {duration:?}.");
                 u64::MAX
-            }),
-        ));
-        let policies = self
+            })),
+            SINCE_GRANULARITY,
+        );
+        let storage_policies = self
             .catalog()
             .entries()
-            .filter(|entry| entry.item().is_retained_metrics_relation())
+            .filter(|entry| {
+                entry.item().is_retained_metrics_object()
+                    && entry.item().is_compute_object_on_cluster().is_none()
+            })
             .map(|entry| (entry.id(), policy.clone()))
             .collect::<Vec<_>>();
-        self.update_storage_base_read_policies(policies)
+        let compute_policies = self
+            .catalog()
+            .entries()
+            .filter_map(|entry| {
+                if let (true, Some(cluster_id)) = (
+                    entry.item().is_retained_metrics_object(),
+                    entry.item().is_compute_object_on_cluster(),
+                ) {
+                    Some((cluster_id, entry.id(), policy.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        self.update_storage_base_read_policies(storage_policies);
+        self.update_compute_base_read_policies(compute_policies);
     }
 
     async fn create_storage_export(

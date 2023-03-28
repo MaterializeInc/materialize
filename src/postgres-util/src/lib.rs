@@ -188,9 +188,12 @@ pub fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, Pos
     Ok(tls_connector)
 }
 
-/// Fetches table schema information from an upstream Postgres source for all
+/// Fetches table schema information from an upstream Postgres source for
 /// tables that are part of a publication, given a connection string and the
 /// publication name.
+///
+/// If `oid_filter` is `None`, returns all tables, otherwise returns only the
+/// details for the identified oid.
 ///
 /// # Errors
 ///
@@ -199,6 +202,7 @@ pub fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, Pos
 pub async fn publication_info(
     config: &Config,
     publication: &str,
+    oid_filter: Option<u32>,
 ) -> Result<Vec<PostgresTableDesc>, PostgresError> {
     let client = config.connect("postgres_publication_info").await?;
 
@@ -221,8 +225,9 @@ pub async fn publication_info(
                 JOIN pg_publication_tables AS p ON
                         c.relname = p.tablename AND n.nspname = p.schemaname
             WHERE
-                p.pubname = $1",
-            &[&publication],
+                p.pubname = $1
+                AND ($2::oid IS NULL OR c.oid = $2::oid)",
+            &[&publication, &oid_filter],
         )
         .await?;
 
@@ -235,6 +240,7 @@ pub async fn publication_info(
                 "SELECT
                         a.attname AS name,
                         a.atttypid AS typoid,
+                        a.attnum AS colnum,
                         a.atttypmod AS typmod,
                         a.attnotnull AS not_null,
                         b.oid IS NOT NULL AS primary_key
@@ -254,11 +260,17 @@ pub async fn publication_info(
             .map(|row| {
                 let name: String = row.get("name");
                 let type_oid = row.get("typoid");
+                let col_num = Some(
+                    row.get::<_, i16>("colnum")
+                        .try_into()
+                        .expect("non-negative values"),
+                );
                 let type_mod: i32 = row.get("typmod");
                 let not_null: bool = row.get("not_null");
                 let primary_key = row.get("primary_key");
                 Ok(PostgresColumnDesc {
                     name,
+                    col_num,
                     type_oid,
                     type_mod,
                     nullable: !not_null,
