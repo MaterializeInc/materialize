@@ -982,7 +982,7 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 [[package]]
 name = "chrono"
 version = "0.4.24"
-source = "git+https://github.com/chronotope/chrono.git?branch=0.4.x#daa86a77d36d74f474913fd3b560a40f1424bd77"
+source = "git+https://github.com/chronotope/chrono.git?branch=0.4.x#1f1e2f8ff0e166ffd80ae95218a80b54fe26e003"
 dependencies = [
  "iana-time-zone",
  "num-integer",
@@ -3874,6 +3874,7 @@ dependencies = [
  "once_cell",
  "reqwest",
  "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "tracing",
@@ -6636,9 +6637,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.89"
+version = "1.0.95"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "020ff22c755c2ed3f8cf162dbb41a7268d934702f3ed3631656ea597e08fc3db"
+checksum = "d721eca97ac802aa7777b701877c8004d950fc142651367300d21c1cc0194744"
 dependencies = [
  "indexmap",
  "itoa",

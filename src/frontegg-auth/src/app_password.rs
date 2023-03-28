@@ -11,6 +11,7 @@ use std::error::Error;
 use std::fmt;
 use std::str::FromStr;
 
+use serde::Deserialize;
 use uuid::Uuid;
 
 /// The prefix that identifies an app password as a Materialize password.
@@ -33,13 +34,16 @@ pub const PREFIX: &str = "mzp_";
 ///     This format allows for the UUIDs to be formatted with hyphens, or
 ///     not.
 ///
-#[derive(Debug)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AppPassword {
     /// The client ID embedded in the app password.
     pub client_id: Uuid,
     /// The secret key embedded in the app password.
+    #[serde(rename = "secret")]
     pub secret_key: Uuid,
 }
+// TODO: Ask if this serde is ok.
 
 impl fmt::Display for AppPassword {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

@@ -93,6 +93,7 @@ pub mod app_password;
 pub mod config;
 pub mod client;
 pub mod error;
+pub mod cparse;
 
 pub struct FronteggConfig {
     /// URL for the token endpoint, including full path.

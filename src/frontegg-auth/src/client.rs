@@ -7,8 +7,13 @@ use url::Url;
 use crate::{error::Error, error::ApiError, config::{ClientConfig, ClientBuilder}, app_password::AppPassword};
 
 const AUTH_PATH: [&str; 5] = ["identity", "resources", "auth", "v1", "api-token"];
+const USERS_PATH: [&str; 4] = ["identity", "resources", "users", "v3"];
+const CREATE_USERS_PATH: [&str; 5] = ["frontegg", "identity", "resources", "users", "v2"];
 const APP_PASSWORDS_PATH: [&str; 5] = ["identity", "resources", "users", "api-tokens", "v1"];
-const PAGE_SIZE: &str = "50";
+const CREATE_APP_PASSWORDS_PATH: [&str; 6] =  ["frontegg", "identity", "resources", "users", "api-tokens", "v1"];
+
+pub mod user;
+pub mod app_password;
 
 /// An API client for Frontegg.
 ///
@@ -23,19 +28,6 @@ pub struct Client {
     pub(crate) app_password: AppPassword,
     pub(crate) endpoint: Url,
     pub(crate) auth: Mutex<Option<Auth>>,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct FronteggAppPassword {
-    description: String,
-    created_at: String,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct FronteggUser {
-    description: String,
 }
 
 impl Client {
@@ -145,20 +137,6 @@ impl Client {
         });
         Ok(res.access_token)
     }
-
-    /// Lists all existing app passwords.
-    pub async fn list_app_passwords(&self) -> Result<Vec<FronteggAppPassword>, Error> {
-        let req = self.build_request(Method::GET, APP_PASSWORDS_PATH);
-        let passwords: Vec<FronteggAppPassword> = self.send_request(req).await?;
-        Ok(passwords)
-    }
-
-    // Lists all existing app passwords.
-    // pub async fn list_users(&self) -> Result<Vec<User>, Error> {
-    //     let req = self.build_request(Method::GET, APP_PASSWORDS_PATH);
-    //     let passwords: Vec<User> = self.send_request(req).await?;
-    //     Ok(passwords)
-    // }
 }
 
 #[derive(Debug, Clone)]
@@ -190,8 +168,22 @@ mod tests {
             let client = client_builder.build(ClientConfig {
                 app_password: tc.app_password
             });
-            let app_passwords = client.list_app_passwords().await;
-            println!("Output: {:?}", app_passwords);
+            // let app_passwords = client.list_app_passwords().await;
+            // println!("Output: {:?}", app_passwords);
+            // let users = client.list_users().await;
+            // println!("Output: {:?}", users);
+            // let app_password = client.create_app_password("description".to_string()).await;
+            // println!("Output: {:?}", app_password);
+            // let new_user = client.create_user(NewUser {
+            //     email: String::from("joaquin+3@materialize.com"),
+            //     name: String::from("joaquin"),
+            //     provider: String::from("local"),
+            //     role_ids: vec![
+            //         String::from("15f29149-d2c7-49b3-a67e-4f10d36ffed6"),
+            //         String::from("0a4d54f7-05d0-4f7a-8f57-6a2c2474b2c1")
+            //     ]
+            // }).await;
+            // println!("Output: {:?}", new_user);
         }
     }
 }
