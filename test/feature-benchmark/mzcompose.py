@@ -88,10 +88,7 @@ SERVICES = [
     KafkaService(),
     SchemaRegistry(),
     Redpanda(),
-    # We are going to override the service definitions during the actual benchmark
-    # we put "unstable" here so that we fetch some image from Docker Hub and thus
-    # avoid recompiling the current source unless we will actually be benchmarking it.
-    Materialized(image="materialize/materialized:unstable"),
+    Materialized(),
     Testdrive(
         default_timeout=default_timeout,
     ),
