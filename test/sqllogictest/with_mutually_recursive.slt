@@ -216,11 +216,10 @@ Explained Query:
       Project (#0)
         Distinct group_by=[#0, #1]
           Union
-            Map (1, 2)
-              Constant
-                - ()
             Map (7)
               Get l0
+            Constant
+              - (1, 2)
 
 EOF
 

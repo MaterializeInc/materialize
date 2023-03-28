@@ -32,6 +32,10 @@ pub struct FoldConstants {
 }
 
 impl crate::Transform for FoldConstants {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
@@ -80,9 +84,9 @@ impl FoldConstants {
         match relation {
             MirRelationExpr::Constant { .. } => { /* handled after match */ }
             MirRelationExpr::Get { .. } => {}
-            MirRelationExpr::Let { .. } => { /* constant prop done in NormalizeLets */ }
-            MirRelationExpr::LetRec { .. } => {
-                Err(crate::TransformError::LetRecUnsupported)?;
+            MirRelationExpr::Let { .. } | MirRelationExpr::LetRec { .. } => {
+                // Constant propagation through bindings is currently handled by in NormalizeLets.
+                // Maybe we should move it / replicate it here (see #18180 for context)?
             }
             MirRelationExpr::Reduce {
                 input,
