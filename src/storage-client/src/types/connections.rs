@@ -1102,7 +1102,7 @@ impl<C> DynamicBrokerRewritingClientContext<C> {
 
     /// Returns a reference to the wrapped context.
     pub fn inner(&self) -> &C {
-        &self.inner.inner()
+        self.inner.inner()
     }
 
     /// Returns any errors that occurred when setting up
@@ -1155,6 +1155,11 @@ where
 
                 match res {
                     Ok((local_port, token)) => {
+                        // This could do nothing if we are racing, and another
+                        // thread has overridden the broker already. Instead of
+                        // using some complicated locking scheme to avoid this,
+                        // we just accept that we may do duplicate work setting
+                        // up an extra tunnel above.
                         self.inner.add_broker_rewrite_with_token(
                             &format!("{}:{}", addr.host, addr.port),
                             "127.0.0.1",

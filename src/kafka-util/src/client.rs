@@ -95,12 +95,17 @@ impl<C> BrokerRewritingClientContext<C> {
     /// Connections to the specified `broker` will be rewritten to connect to
     /// `rewrite_host` and `rewrite_port` instead. If `rewrite_port` is omitted,
     /// only the host is rewritten.
+    ///
+    /// Note that this will not override an existing rewrite.
     pub fn add_broker_rewrite(&self, broker: &str, rewrite_host: &str, rewrite_port: Option<u16>) {
         self.add_broker_rewrite_inner(broker, rewrite_host, rewrite_port, None)
     }
 
     /// The same as `add_broker_rewrite`, but holds onto a token that may perform
     /// some shutdown on drop.
+    ///
+    /// Note that this will not override an existing rewrite, and will drop the
+    /// `token` if this occurs.
     pub fn add_broker_rewrite_with_token<T: Any + Send + Sync>(
         &self,
         broker: &str,
@@ -141,9 +146,11 @@ impl<C> BrokerRewritingClientContext<C> {
         };
 
         let mut overrides = self.overrides.write().expect("poisoned");
-        // TODO(guswynn): HANDLE RACE HERE
-        overrides.0.insert(broker, rewrite);
+        if overrides.0.contains_key(&broker) {
+            return;
+        }
 
+        overrides.0.insert(broker, rewrite);
         if let Some(token) = token {
             overrides.1.push(token)
         }
