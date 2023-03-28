@@ -246,6 +246,7 @@ Order
 Ordinality
 Outer
 Over
+Owner
 Partition
 Password
 Physical

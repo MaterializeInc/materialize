@@ -239,6 +239,7 @@ fn generate_plan_attribute(plan: &Plan) -> Option<Attribute> {
         | Plan::AlterSystemSet(_)
         | Plan::AlterSystemReset(_)
         | Plan::AlterSystemResetAll(_)
+        | Plan::AlterOwner(_)
         | Plan::Declare(_)
         | Plan::Fetch(_)
         | Plan::Close(_)

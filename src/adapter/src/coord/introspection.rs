@@ -157,6 +157,7 @@ pub fn user_privilege_hack(
         | Plan::AlterSystemSet(_)
         | Plan::AlterSystemReset(_)
         | Plan::AlterSystemResetAll(_)
+        | Plan::AlterOwner(_)
         | Plan::ReadThenWrite(_)
         | Plan::Raise(_)
         | Plan::RotateKeys(_)

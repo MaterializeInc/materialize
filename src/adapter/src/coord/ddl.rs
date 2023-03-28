@@ -947,6 +947,7 @@ impl Coordinator {
                 | Op::DropTimeline(_)
                 | Op::GrantRole { .. }
                 | Op::RenameItem { .. }
+                | Op::UpdateOwner { .. }
                 | Op::RevokeRole { .. }
                 | Op::UpdateClusterReplicaStatus { .. }
                 | Op::UpdateStorageUsage { .. }

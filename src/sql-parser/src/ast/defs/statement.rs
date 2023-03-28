@@ -31,7 +31,7 @@ use crate::ast::{
     AstInfo, ColumnDef, CreateConnection, CreateSinkConnection, CreateSourceConnection,
     CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, DeferredObjectName, Envelope,
     Expr, Format, Ident, KeyConstraint, Query, SelectItem, SourceIncludeMetadata, TableAlias,
-    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
+    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedName, UnresolvedObjectName,
     UnresolvedSchemaName, Value,
 };
 
@@ -60,6 +60,7 @@ pub enum Statement<T: AstInfo> {
     CreateCluster(CreateClusterStatement<T>),
     CreateClusterReplica(CreateClusterReplicaStatement<T>),
     CreateSecret(CreateSecretStatement<T>),
+    AlterOwner(AlterOwnerStatement<T>),
     AlterObjectRename(AlterObjectRenameStatement),
     AlterIndex(AlterIndexStatement<T>),
     AlterSecret(AlterSecretStatement<T>),
@@ -120,6 +121,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateType(stmt) => f.write_node(stmt),
             Statement::CreateCluster(stmt) => f.write_node(stmt),
             Statement::CreateClusterReplica(stmt) => f.write_node(stmt),
+            Statement::AlterOwner(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndex(stmt) => f.write_node(stmt),
             Statement::AlterSecret(stmt) => f.write_node(stmt),
@@ -1401,6 +1403,30 @@ impl<T: AstInfo> AstDisplay for CreateTypeMapOption<T> {
     }
 }
 
+/// `ALTER <OBJECT> ... OWNER TO`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterOwnerStatement<T: AstInfo> {
+    pub object_type: ObjectType,
+    pub if_exists: bool,
+    pub name: UnresolvedName,
+    pub new_owner: T::RoleName,
+}
+
+impl<T: AstInfo> AstDisplay for AlterOwnerStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER ");
+        f.write_node(&self.object_type);
+        f.write_str(" ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&self.name);
+        f.write_str(" OWNER TO ");
+        f.write_node(&self.new_owner);
+    }
+}
+impl_display_t!(AlterOwnerStatement);
+
 /// `ALTER <OBJECT> ... RENAME TO`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlterObjectRenameStatement {
@@ -1753,7 +1779,7 @@ impl AstDisplay for DropClustersStatement {
 }
 impl_display!(DropClustersStatement);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct QualifiedReplica {
     pub cluster: Ident,
     pub replica: Ident,

@@ -24,7 +24,10 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::GlobalId;
-use mz_sql::catalog::{CatalogError as SqlCatalogError, CatalogItemType, RoleAttributes};
+use mz_sql::catalog::{
+    CatalogCluster, CatalogDatabase, CatalogError as SqlCatalogError, CatalogItemType,
+    CatalogSchema, RoleAttributes,
+};
 use mz_sql::names::{
     DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, RoleId, SchemaId,
     SchemaSpecifier, PUBLIC_ROLE_NAME,
@@ -39,7 +42,8 @@ use crate::catalog::builtin::{
 };
 use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::{
-    is_public_role, is_reserved_name, RoleMembership, SerializedRole, SystemObjectMapping,
+    is_public_role, is_reserved_name, Cluster, ClusterReplica, Database, RoleMembership, Schema,
+    SerializedRole, SystemObjectMapping,
 };
 use crate::catalog::{SerializedReplicaConfig, DEFAULT_CLUSTER_REPLICA_NAME};
 use crate::coord::timeline;
@@ -1838,6 +1842,120 @@ impl<'a> Transaction<'a> {
         }
 
         Ok(())
+    }
+
+    /// Updates cluster `id` in the transaction to `cluster`.
+    ///
+    /// Returns an error if `id` is not found.
+    ///
+    /// Runtime is linear with respect to the total number of clusters in the stash.
+    /// DO NOT call this function in a loop.
+    pub fn update_cluster(&mut self, id: ClusterId, cluster: &Cluster) -> Result<(), Error> {
+        let n = self.clusters.update(|k, _v| {
+            if k.id == id {
+                Some(ClusterValue {
+                    name: cluster.name().to_string(),
+                    linked_object_id: cluster.linked_object_id(),
+                    owner_id: Some(cluster.owner_id),
+                })
+            } else {
+                None
+            }
+        })?;
+        assert!(n <= 1);
+        if n == 1 {
+            Ok(())
+        } else {
+            Err(SqlCatalogError::UnknownCluster(id.to_string()).into())
+        }
+    }
+
+    /// Updates cluster replica `replica_id` in the transaction to `replica`.
+    ///
+    /// Returns an error if `replica_id` is not found.
+    ///
+    /// Runtime is linear with respect to the total number of cluster replicas in the stash.
+    /// DO NOT call this function in a loop.
+    pub fn update_cluster_replica(
+        &mut self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+        replica: &ClusterReplica,
+    ) -> Result<(), Error> {
+        let n = self.cluster_replicas.update(|k, _v| {
+            if k.id == replica_id {
+                Some(ClusterReplicaValue {
+                    cluster_id,
+                    name: replica.name.clone(),
+                    config: replica.config.clone().into(),
+                    owner_id: Some(replica.owner_id),
+                })
+            } else {
+                None
+            }
+        })?;
+        assert!(n <= 1);
+        if n == 1 {
+            Ok(())
+        } else {
+            Err(SqlCatalogError::UnknownClusterReplica(replica_id.to_string()).into())
+        }
+    }
+
+    /// Updates database `id` in the transaction to `database`.
+    ///
+    /// Returns an error if `id` is not found.
+    ///
+    /// Runtime is linear with respect to the total number of databases in the stash.
+    /// DO NOT call this function in a loop.
+    pub fn update_database(&mut self, id: DatabaseId, database: &Database) -> Result<(), Error> {
+        let n = self.databases.update(|k, _v| {
+            if k.id == id.0 {
+                Some(DatabaseValue {
+                    name: database.name().to_string(),
+                    owner_id: Some(database.owner_id),
+                })
+            } else {
+                None
+            }
+        })?;
+        assert!(n <= 1);
+        if n == 1 {
+            Ok(())
+        } else {
+            Err(SqlCatalogError::UnknownDatabase(id.to_string()).into())
+        }
+    }
+
+    /// Updates schema `schema_id` in the transaction to `schema`.
+    ///
+    /// Returns an error if `schema_id` is not found.
+    ///
+    /// Runtime is linear with respect to the total number of schemas in the stash.
+    /// DO NOT call this function in a loop.
+    pub fn update_schema(
+        &mut self,
+        database_id: Option<DatabaseId>,
+        schema_id: SchemaId,
+        schema: &Schema,
+    ) -> Result<(), Error> {
+        let n = self.schemas.update(|k, _v| {
+            if k.id == schema_id.0 {
+                Some(SchemaValue {
+                    database_id: database_id.map(|id| id.0),
+                    name: schema.name().schema.clone(),
+                    owner_id: Some(schema.owner_id),
+                })
+            } else {
+                None
+            }
+        })?;
+        assert!(n <= 1);
+        if n == 1 {
+            Ok(())
+        } else {
+            Err(SqlCatalogError::UnknownSchema(schema_id.to_string()).into())
+        }
     }
 
     /// Upserts persisted system configuration `name` to `value`.

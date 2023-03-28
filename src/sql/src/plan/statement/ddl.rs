@@ -20,7 +20,7 @@ use prost::Message;
 use regex::Regex;
 use tracing::warn;
 
-use mz_controller::clusters::DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS;
+use mz_controller::clusters::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::AvroSchemaGenerator;
 use mz_ore::cast::{self, CastFrom, TryCastFrom};
@@ -33,11 +33,12 @@ use mz_repr::strconv;
 use mz_repr::{ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
-    AlterRoleStatement, AlterSinkAction, AlterSinkStatement, AlterSourceAction,
-    AlterSourceStatement, AlterSystemResetAllStatement, AlterSystemResetStatement,
-    AlterSystemSetStatement, CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption,
-    CreateTypeMapOptionName, DeferredObjectName, GrantRoleStatement, RevokeRoleStatement,
-    SshConnectionOption, UnresolvedObjectName, Value,
+    AlterOwnerStatement, AlterRoleStatement, AlterSinkAction, AlterSinkStatement,
+    AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
+    AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
+    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredObjectName,
+    GrantRoleStatement, RevokeRoleStatement, SshConnectionOption, UnresolvedName,
+    UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -85,13 +86,14 @@ use crate::ast::{
     TableConstraint, UnresolvedDatabaseName, ViewDefinition,
 };
 use crate::catalog::{
-    CatalogCluster, CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails,
+    CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, CatalogType,
+    CatalogTypeDetails,
 };
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
-    Aug, FullSchemaName, PartialObjectName, QualifiedObjectName, RawDatabaseSpecifier,
-    ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedObjectName,
-    SchemaSpecifier,
+    Aug, DatabaseId, FullSchemaName, ObjectId, PartialObjectName, QualifiedObjectName,
+    RawDatabaseSpecifier, ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier,
+    ResolvedObjectName, RoleId, SchemaId, SchemaSpecifier,
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
@@ -103,8 +105,8 @@ use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, transform_ast, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter, AlterRolePlan, AlterSecretPlan,
-    AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
+    AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter, AlterOwnerPlan, AlterRolePlan,
+    AlterSecretPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
     AlterSystemSetPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, CreateClusterPlan,
     CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
     CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
@@ -3236,20 +3238,16 @@ pub fn plan_drop_database(
         if_exists,
     }: DropDatabaseStatement,
 ) -> Result<Plan, PlanError> {
-    let id = match scx.resolve_database(&name) {
-        Ok(database) => {
-            if restrict && database.has_schemas() {
-                sql_bail!(
-                    "database '{}' cannot be dropped with RESTRICT while it contains schemas",
-                    name,
-                );
-            }
-            Some(database.id())
+    let database = resolve_database(scx, &name, if_exists)?;
+    if let Some(database) = database {
+        if restrict && database.has_schemas() {
+            sql_bail!(
+                "database '{}' cannot be dropped with RESTRICT while it contains schemas",
+                name,
+            );
         }
-        // TODO(benesch/jkosh44): generate a notice indicating that the database does not exist.
-        Err(_) if if_exists => None,
-        Err(e) => return Err(e),
-    };
+    }
+    let id = database.map(|database| database.id());
     Ok(Plan::DropDatabase(DropDatabasePlan { id }))
 }
 
@@ -3269,36 +3267,22 @@ pub fn plan_drop_objects(
         if_exists,
     }: DropObjectsStatement,
 ) -> Result<Plan, PlanError> {
-    let mut items = vec![];
+    assert!(
+        object_type.lives_in_schema(),
+        "{object_type}s handled through their respective plan_drop functions"
+    );
+
+    let mut ids = vec![];
     for name in names {
-        let name = normalize::unresolved_object_name(name)?;
-        match scx.catalog.resolve_item(&name) {
-            Ok(item) => items.push(item),
-            Err(_) if if_exists => {
-                // TODO(benesch/jkosh44): generate a notice indicating items do not exist.
-            }
-            Err(e) => return Err(e.into()),
+        if let Some(item) = resolve_object(scx, name, if_exists)? {
+            ids.extend(plan_drop_item(scx, object_type, item, cascade)?);
         }
     }
 
-    match object_type {
-        ObjectType::Source
-        | ObjectType::Table
-        | ObjectType::View
-        | ObjectType::MaterializedView
-        | ObjectType::Index
-        | ObjectType::Sink
-        | ObjectType::Type
-        | ObjectType::Secret
-        | ObjectType::Connection => plan_drop_items(scx, object_type, &items, cascade),
-        ObjectType::Role
-        | ObjectType::Cluster
-        | ObjectType::ClusterReplica
-        | ObjectType::Database
-        | ObjectType::Schema => {
-            unreachable!("handled through their respective plan_drop functions")
-        }
-    }
+    Ok(Plan::DropItems(DropItemsPlan {
+        items: ids,
+        ty: object_type,
+    }))
 }
 
 pub fn describe_drop_schema(
@@ -3316,15 +3300,8 @@ pub fn plan_drop_schema(
         if_exists,
     }: DropSchemaStatement,
 ) -> Result<Plan, PlanError> {
-    match scx.resolve_schema(name) {
-        Ok(schema) => {
-            let database_id = match schema.database() {
-                ResolvedDatabaseSpecifier::Ambient => sql_bail!(
-                    "cannot drop schema {} because it is required by the database system",
-                    schema.name().schema
-                ),
-                ResolvedDatabaseSpecifier::Id(id) => id,
-            };
+    match resolve_schema(scx, name, if_exists, "drop")? {
+        Some((database_id, schema_id, schema)) => {
             if !cascade && schema.has_items() {
                 let full_schema_name = FullSchemaName {
                     database: match schema.name().database {
@@ -3340,25 +3317,11 @@ pub fn plan_drop_schema(
                     full_schema_name
                 );
             }
-            let schema_id = match schema.id() {
-                // This branch should be unreachable because the temporary schema is in the ambient
-                // database, but this is just to protect against the case that ever changes.
-                SchemaSpecifier::Temporary => sql_bail!(
-                    "cannot drop schema {} because it is a temporary schema",
-                    schema.name().schema,
-                ),
-                SchemaSpecifier::Id(id) => id,
-            };
             Ok(Plan::DropSchema(DropSchemaPlan {
-                id: Some((database_id.clone(), schema_id.clone())),
+                id: Some((database_id, schema_id)),
             }))
         }
-        Err(_) if if_exists => {
-            // TODO(benesch/jkosh44): generate a notice indicating that the
-            // schema does not exist.
-            Ok(Plan::DropSchema(DropSchemaPlan { id: None }))
-        }
-        Err(e) => Err(e),
+        None => Ok(Plan::DropSchema(DropSchemaPlan { id: None })),
     }
 }
 
@@ -3420,18 +3383,11 @@ pub fn plan_drop_cluster(
         } else {
             sql_bail!("invalid cluster name {}", name.to_string().quoted())
         };
-        match scx.catalog.resolve_cluster(Some(name.as_str())) {
-            Ok(cluster) => {
-                if !cascade && !cluster.bound_objects().is_empty() {
-                    sql_bail!("cannot drop cluster with active objects");
-                }
-                ids.push(cluster.id());
+        if let Some(cluster) = resolve_cluster(scx, &name, if_exists)? {
+            if !cascade && !cluster.bound_objects().is_empty() {
+                sql_bail!("cannot drop cluster with active objects");
             }
-            Err(_) if if_exists => {
-                // TODO(benesch): generate a notice indicating that the
-                // cluster does not exist.
-            }
-            Err(e) => return Err(e.into()),
+            ids.push(cluster.id());
         }
     }
     Ok(Plan::DropClusters(DropClustersPlan { ids }))
@@ -3458,48 +3414,13 @@ pub fn plan_drop_cluster_replica(
     DropClusterReplicasStatement { if_exists, names }: DropClusterReplicasStatement,
 ) -> Result<Plan, PlanError> {
     let mut ids = vec![];
-    for QualifiedReplica { cluster, replica } in names {
-        let cluster = match scx.catalog.resolve_cluster(Some(cluster.as_str())) {
-            Ok(cluster) => cluster,
-            Err(_) if if_exists => continue,
-            Err(e) => return Err(e.into()),
-        };
-        let replica_name = replica.into_string();
-        // Check to see if name exists
-        if let Some(replica_id) = cluster.replicas().get(&replica_name) {
-            ids.push((cluster.id(), *replica_id));
-        } else {
-            // If "IF EXISTS" supplied, names allowed to be missing,
-            // otherwise error.
-            if !if_exists {
-                // TODO(benesch): generate a notice indicating that the
-                // replica does not exist.
-                sql_bail!(
-                    "CLUSTER {} has no CLUSTER REPLICA named {}",
-                    cluster.name(),
-                    replica_name.quoted(),
-                )
-            }
+    for name in names {
+        if let Some(id) = resolve_cluster_replica(scx, &name, if_exists)? {
+            ids.push(id);
         }
     }
 
     Ok(Plan::DropClusterReplicas(DropClusterReplicasPlan { ids }))
-}
-
-pub fn plan_drop_items(
-    scx: &StatementContext,
-    object_type: ObjectType,
-    items: &[&dyn CatalogItem],
-    cascade: bool,
-) -> Result<Plan, PlanError> {
-    let mut ids = vec![];
-    for item in items {
-        ids.extend(plan_drop_item(scx, object_type, *item, cascade)?);
-    }
-    Ok(Plan::DropItems(DropItemsPlan {
-        items: ids,
-        ty: object_type,
-    }))
 }
 
 pub fn plan_drop_item(
@@ -3689,6 +3610,197 @@ pub fn plan_alter_index_options(
     }
 }
 
+pub fn describe_alter_owner(
+    _: &StatementContext,
+    _: AlterOwnerStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_owner(
+    scx: &StatementContext,
+    AlterOwnerStatement {
+        object_type,
+        if_exists,
+        name,
+        new_owner,
+    }: AlterOwnerStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    match (object_type, name) {
+        (ObjectType::Cluster, UnresolvedName::Cluster(name)) => {
+            plan_alter_cluster_owner(scx, if_exists, name, new_owner.id)
+        }
+        (ObjectType::ClusterReplica, UnresolvedName::ClusterReplica(name)) => {
+            plan_alter_cluster_replica_owner(scx, if_exists, name, new_owner.id)
+        }
+        (ObjectType::Database, UnresolvedName::Database(name)) => {
+            plan_alter_database_owner(scx, if_exists, name, new_owner.id)
+        }
+        (ObjectType::Schema, UnresolvedName::Schema(name)) => {
+            plan_alter_schema_owner(scx, if_exists, name, new_owner.id)
+        }
+        (
+            object_type @ ObjectType::Cluster
+            | object_type @ ObjectType::ClusterReplica
+            | object_type @ ObjectType::Database
+            | object_type @ ObjectType::Schema,
+            name,
+        )
+        | (
+            object_type,
+            name @ UnresolvedName::Cluster(_)
+            | name @ UnresolvedName::ClusterReplica(_)
+            | name @ UnresolvedName::Database(_)
+            | name @ UnresolvedName::Schema(_),
+        ) => {
+            unreachable!("parser set the wrong object type '{object_type:?}' for name {name:?}")
+        }
+        (object_type, UnresolvedName::Item(name)) => {
+            plan_alter_item_owner(scx, object_type, if_exists, name, new_owner.id)
+        }
+    }
+}
+
+fn plan_alter_cluster_owner(
+    scx: &StatementContext,
+    if_exists: bool,
+    name: Ident,
+    new_owner: RoleId,
+) -> Result<Plan, PlanError> {
+    match resolve_cluster(scx, &name, if_exists)? {
+        Some(cluster) => {
+            validate_alter_owner(scx, &new_owner)?;
+            Ok(Plan::AlterOwner(AlterOwnerPlan {
+                id: ObjectId::Cluster(cluster.id()),
+                object_type: ObjectType::Cluster,
+                new_owner,
+            }))
+        }
+        None => Ok(Plan::AlterNoop(AlterNoopPlan {
+            object_type: ObjectType::Cluster,
+        })),
+    }
+}
+
+fn plan_alter_cluster_replica_owner(
+    scx: &StatementContext,
+    if_exists: bool,
+    name: QualifiedReplica,
+    new_owner: RoleId,
+) -> Result<Plan, PlanError> {
+    match resolve_cluster_replica(scx, &name, if_exists)? {
+        Some((cluster_id, replica_id)) => {
+            validate_alter_owner(scx, &new_owner)?;
+            Ok(Plan::AlterOwner(AlterOwnerPlan {
+                id: ObjectId::ClusterReplica((cluster_id, replica_id)),
+                object_type: ObjectType::ClusterReplica,
+                new_owner,
+            }))
+        }
+        None => Ok(Plan::AlterNoop(AlterNoopPlan {
+            object_type: ObjectType::ClusterReplica,
+        })),
+    }
+}
+
+fn plan_alter_database_owner(
+    scx: &StatementContext,
+    if_exists: bool,
+    name: UnresolvedDatabaseName,
+    new_owner: RoleId,
+) -> Result<Plan, PlanError> {
+    match resolve_database(scx, &name, if_exists)? {
+        Some(database) => {
+            validate_alter_owner(scx, &new_owner)?;
+            Ok(Plan::AlterOwner(AlterOwnerPlan {
+                id: ObjectId::Database(database.id()),
+                object_type: ObjectType::Database,
+                new_owner,
+            }))
+        }
+        None => Ok(Plan::AlterNoop(AlterNoopPlan {
+            object_type: ObjectType::Database,
+        })),
+    }
+}
+
+fn plan_alter_schema_owner(
+    scx: &StatementContext,
+    if_exists: bool,
+    name: UnresolvedSchemaName,
+    new_owner: RoleId,
+) -> Result<Plan, PlanError> {
+    match resolve_schema(scx, name, if_exists, "alter")? {
+        Some((database_id, schema_id, _)) => {
+            validate_alter_owner(scx, &new_owner)?;
+            Ok(Plan::AlterOwner(AlterOwnerPlan {
+                id: ObjectId::Schema((database_id, schema_id)),
+                object_type: ObjectType::Schema,
+                new_owner,
+            }))
+        }
+        None => Ok(Plan::AlterNoop(AlterNoopPlan {
+            object_type: ObjectType::Database,
+        })),
+    }
+}
+
+fn plan_alter_item_owner(
+    scx: &StatementContext,
+    object_type: ObjectType,
+    if_exists: bool,
+    name: UnresolvedObjectName,
+    new_owner: RoleId,
+) -> Result<Plan, PlanError> {
+    match resolve_object(scx, name, if_exists)? {
+        Some(item) => {
+            validate_alter_owner(scx, &new_owner)?;
+            if item.id().is_system() {
+                sql_bail!(
+                    "cannot alter item {} because it is required by the database system",
+                    scx.catalog.resolve_full_name(item.name()),
+                );
+            }
+            let item_type = item.item_type();
+
+            // Return a more helpful error on `ALTER VIEW <materialized-view>`.
+            if object_type == ObjectType::View && item_type == CatalogItemType::MaterializedView {
+                let name = scx.catalog.resolve_full_name(item.name()).to_string();
+                return Err(PlanError::AlterViewOnMaterializedView(name));
+            } else if object_type != item_type {
+                sql_bail!(
+                    "{} is a {} not a {}",
+                    scx.catalog
+                        .resolve_full_name(item.name())
+                        .to_string()
+                        .quoted(),
+                    item.item_type(),
+                    format!("{object_type}").to_lowercase(),
+                );
+            }
+            Ok(Plan::AlterOwner(AlterOwnerPlan {
+                id: ObjectId::Item(item.id()),
+                object_type,
+                new_owner,
+            }))
+        }
+        None => Ok(Plan::AlterNoop(AlterNoopPlan { object_type })),
+    }
+}
+
+fn validate_alter_owner(scx: &StatementContext, new_owner: &RoleId) -> Result<(), PlanError> {
+    let session_membership = scx
+        .catalog
+        .collect_role_membership(scx.catalog.active_role_id());
+    if session_membership.contains(new_owner) {
+        Ok(())
+    } else {
+        Err(PlanError::AlterOwnerMembership {
+            role_name: scx.catalog.get_role(new_owner).name().to_string(),
+        })
+    }
+}
+
 pub fn describe_alter_object_rename(
     _: &StatementContext,
     _: AlterObjectRenameStatement,
@@ -3705,9 +3817,8 @@ pub fn plan_alter_object_rename(
         if_exists,
     }: AlterObjectRenameStatement,
 ) -> Result<Plan, PlanError> {
-    let name = normalize::unresolved_object_name(name)?;
-    match scx.catalog.resolve_item(&name) {
-        Ok(entry) => {
+    match resolve_object(scx, name, if_exists)? {
+        Some(entry) => {
             let full_name = scx.catalog.resolve_full_name(entry.name());
             let item_type = entry.item_type();
 
@@ -3738,12 +3849,7 @@ pub fn plan_alter_object_rename(
                 object_type,
             }))
         }
-        Err(_) if if_exists => {
-            // TODO(benesch/jkosh44): generate a notice indicating this
-            // item does not exist.
-            Ok(Plan::AlterNoop(AlterNoopPlan { object_type }))
-        }
-        Err(e) => Err(e.into()),
+        None => Ok(Plan::AlterNoop(AlterNoopPlan { object_type })),
     }
 }
 
@@ -4087,4 +4193,103 @@ pub fn plan_revoke_role(
             .map(|member_name| member_name.id)
             .collect(),
     }))
+}
+
+fn resolve_cluster<'a>(
+    scx: &'a StatementContext,
+    name: &'a Ident,
+    if_exists: bool,
+) -> Result<Option<&'a dyn CatalogCluster<'a>>, PlanError> {
+    match scx.resolve_cluster(Some(name)) {
+        Ok(cluster) => Ok(Some(cluster)),
+        // TODO(benesch): generate a notice indicating that the
+        // cluster does not exist.
+        Err(_) if if_exists => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+fn resolve_cluster_replica(
+    scx: &StatementContext,
+    name: &QualifiedReplica,
+    if_exists: bool,
+) -> Result<Option<(ClusterId, ReplicaId)>, PlanError> {
+    match scx.resolve_cluster(Some(&name.cluster)) {
+        Ok(cluster) => match cluster.replicas().get(name.replica.as_str()) {
+            Some(replica_id) => Ok(Some((cluster.id(), *replica_id))),
+            // TODO(benesch): generate a notice indicating that the
+            // replica does not exist.
+            None if if_exists => Ok(None),
+            None => Err(sql_err!(
+                "CLUSTER {} has no CLUSTER REPLICA named {}",
+                cluster.name(),
+                name.replica.as_str().quoted(),
+            )),
+        },
+        // TODO(benesch): generate a notice indicating that the
+        // cluster does not exist.
+        Err(_) if if_exists => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+fn resolve_database<'a>(
+    scx: &'a StatementContext,
+    name: &'a UnresolvedDatabaseName,
+    if_exists: bool,
+) -> Result<Option<&'a dyn CatalogDatabase>, PlanError> {
+    match scx.resolve_database(name) {
+        Ok(database) => Ok(Some(database)),
+        // TODO(benesch): generate a notice indicating that the
+        // cluster does not exist.
+        Err(_) if if_exists => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+fn resolve_schema<'a>(
+    scx: &'a StatementContext,
+    name: UnresolvedSchemaName,
+    if_exists: bool,
+    action: &str,
+) -> Result<Option<(DatabaseId, SchemaId, &'a dyn CatalogSchema)>, PlanError> {
+    match scx.resolve_schema(name) {
+        Ok(schema) => {
+            let database_id = match schema.database() {
+                ResolvedDatabaseSpecifier::Ambient => sql_bail!(
+                    "cannot {action} schema {} because it is required by the database system",
+                    schema.name().schema
+                ),
+                ResolvedDatabaseSpecifier::Id(id) => id,
+            };
+            let schema_id = match schema.id() {
+                // This branch should be unreachable because the temporary schema is in the ambient
+                // database, but this is just to protect against the case that ever changes.
+                SchemaSpecifier::Temporary => sql_bail!(
+                    "cannot {action} schema {} because it is a temporary schema",
+                    schema.name().schema,
+                ),
+                SchemaSpecifier::Id(id) => id,
+            };
+            Ok(Some((*database_id, *schema_id, schema)))
+        }
+        // TODO(benesch/jkosh44): generate a notice indicating that the
+        // schema does not exist.
+        Err(_) if if_exists => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+fn resolve_object<'a>(
+    scx: &'a StatementContext,
+    name: UnresolvedObjectName,
+    if_exists: bool,
+) -> Result<Option<&'a dyn CatalogItem>, PlanError> {
+    let name = normalize::unresolved_object_name(name)?;
+    match scx.catalog.resolve_item(&name) {
+        Ok(item) => Ok(Some(item)),
+        // TODO(benesch/jkosh44): generate a notice indicating items do not exist.
+        Err(_) if if_exists => Ok(None),
+        Err(e) => Err(e.into()),
+    }
 }

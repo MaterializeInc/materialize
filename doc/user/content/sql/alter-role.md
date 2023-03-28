@@ -63,3 +63,4 @@ rj  true  false
 - [DROP USER](../drop-user)
 - [GRANT ROLE](../grant-role)
 - [REVOKE ROLE](../revoke-role)
+- [ALTER OWNER](../alter-owner)

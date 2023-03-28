@@ -3317,15 +3317,17 @@ impl<'a> Parser<'a> {
         &mut self,
         if_exists: bool,
     ) -> Result<Statement<Raw>, ParserError> {
-        let names = self.parse_comma_separated(|p| {
-            let cluster = p.parse_identifier()?;
-            p.expect_token(&Token::Dot)?;
-            let replica = p.parse_identifier()?;
-            Ok(QualifiedReplica { cluster, replica })
-        })?;
+        let names = self.parse_comma_separated(|p| p.parse_cluster_replica_name())?;
         Ok(Statement::DropClusterReplicas(
             DropClusterReplicasStatement { if_exists, names },
         ))
+    }
+
+    fn parse_cluster_replica_name(&mut self) -> Result<QualifiedReplica, ParserError> {
+        let cluster = self.parse_identifier()?;
+        self.expect_token(&Token::Dot)?;
+        let replica = self.parse_identifier()?;
+        Ok(QualifiedReplica { cluster, replica })
     }
 
     fn parse_create_table(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -3595,24 +3597,90 @@ impl<'a> Parser<'a> {
             ObjectType::View | ObjectType::MaterializedView | ObjectType::Table => {
                 let if_exists = self.parse_if_exists()?;
                 let name = self.parse_object_name()?;
-                self.expect_keywords(&[RENAME, TO])?;
-                let to_item_name = self.parse_identifier()?;
-                Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
+                let action = self.expect_one_of_keywords(&[RENAME, OWNER])?;
+                self.expect_keyword(TO)?;
+                match action {
+                    RENAME => {
+                        let to_item_name = self.parse_identifier()?;
+                        Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
+                            object_type,
+                            if_exists,
+                            name,
+                            to_item_name,
+                        }))
+                    }
+                    OWNER => {
+                        let new_owner = self.parse_identifier()?;
+                        Ok(Statement::AlterOwner(AlterOwnerStatement {
+                            object_type,
+                            if_exists,
+                            name: UnresolvedName::Item(name),
+                            new_owner,
+                        }))
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            ObjectType::Type => {
+                let if_exists = self.parse_if_exists()?;
+                let name = UnresolvedName::Item(self.parse_object_name()?);
+                self.expect_keywords(&[OWNER, TO])?;
+                let new_owner = self.parse_identifier()?;
+                Ok(Statement::AlterOwner(AlterOwnerStatement {
                     object_type,
                     if_exists,
                     name,
-                    to_item_name,
+                    new_owner,
                 }))
             }
-            ObjectType::Type
-            | ObjectType::Cluster
-            | ObjectType::ClusterReplica
-            | ObjectType::Database
-            | ObjectType::Schema => parser_err!(
-                self,
-                self.peek_prev_pos(),
-                format!("Unsupported ALTER on {object_type}")
-            ),
+            ObjectType::Cluster => {
+                let if_exists = self.parse_if_exists()?;
+                let name = UnresolvedName::Cluster(self.parse_identifier()?);
+                self.expect_keywords(&[OWNER, TO])?;
+                let new_owner = self.parse_identifier()?;
+                Ok(Statement::AlterOwner(AlterOwnerStatement {
+                    object_type,
+                    if_exists,
+                    name,
+                    new_owner,
+                }))
+            }
+            ObjectType::ClusterReplica => {
+                let if_exists = self.parse_if_exists()?;
+                let name = UnresolvedName::ClusterReplica(self.parse_cluster_replica_name()?);
+                self.expect_keywords(&[OWNER, TO])?;
+                let new_owner = self.parse_identifier()?;
+                Ok(Statement::AlterOwner(AlterOwnerStatement {
+                    object_type,
+                    if_exists,
+                    name,
+                    new_owner,
+                }))
+            }
+            ObjectType::Database => {
+                let if_exists = self.parse_if_exists()?;
+                let name = UnresolvedName::Database(self.parse_database_name()?);
+                self.expect_keywords(&[OWNER, TO])?;
+                let new_owner = self.parse_identifier()?;
+                Ok(Statement::AlterOwner(AlterOwnerStatement {
+                    object_type,
+                    if_exists,
+                    name,
+                    new_owner,
+                }))
+            }
+            ObjectType::Schema => {
+                let if_exists = self.parse_if_exists()?;
+                let name = UnresolvedName::Schema(self.parse_schema_name()?);
+                self.expect_keywords(&[OWNER, TO])?;
+                let new_owner = self.parse_identifier()?;
+                Ok(Statement::AlterOwner(AlterOwnerStatement {
+                    object_type,
+                    if_exists,
+                    name,
+                    new_owner,
+                }))
+            }
         }
     }
 
@@ -3620,89 +3688,117 @@ impl<'a> Parser<'a> {
         let if_exists = self.parse_if_exists()?;
         let name = self.parse_object_name()?;
 
-        Ok(match self.expect_one_of_keywords(&[RESET, SET, RENAME])? {
-            RESET => {
-                self.expect_token(&Token::LParen)?;
-                let reset_options = self.parse_comma_separated(Parser::parse_source_option_name)?;
-                self.expect_token(&Token::RParen)?;
+        Ok(
+            match self.expect_one_of_keywords(&[RESET, SET, RENAME, OWNER])? {
+                RESET => {
+                    self.expect_token(&Token::LParen)?;
+                    let reset_options =
+                        self.parse_comma_separated(Parser::parse_source_option_name)?;
+                    self.expect_token(&Token::RParen)?;
 
-                Statement::AlterSource(AlterSourceStatement {
-                    source_name: name,
-                    if_exists,
-                    action: AlterSourceAction::ResetOptions(reset_options),
-                })
-            }
-            SET => {
-                self.expect_token(&Token::LParen)?;
-                let set_options = self.parse_comma_separated(Parser::parse_source_option)?;
-                self.expect_token(&Token::RParen)?;
-                Statement::AlterSource(AlterSourceStatement {
-                    source_name: name,
-                    if_exists,
-                    action: AlterSourceAction::SetOptions(set_options),
-                })
-            }
-            RENAME => {
-                self.expect_keyword(TO)?;
-                let to_item_name = self.parse_identifier()?;
+                    Statement::AlterSource(AlterSourceStatement {
+                        source_name: name,
+                        if_exists,
+                        action: AlterSourceAction::ResetOptions(reset_options),
+                    })
+                }
+                SET => {
+                    self.expect_token(&Token::LParen)?;
+                    let set_options = self.parse_comma_separated(Parser::parse_source_option)?;
+                    self.expect_token(&Token::RParen)?;
+                    Statement::AlterSource(AlterSourceStatement {
+                        source_name: name,
+                        if_exists,
+                        action: AlterSourceAction::SetOptions(set_options),
+                    })
+                }
+                RENAME => {
+                    self.expect_keyword(TO)?;
+                    let to_item_name = self.parse_identifier()?;
 
-                Statement::AlterObjectRename(AlterObjectRenameStatement {
-                    object_type: ObjectType::Source,
-                    if_exists,
-                    name,
-                    to_item_name,
-                })
-            }
-            _ => unreachable!(),
-        })
+                    Statement::AlterObjectRename(AlterObjectRenameStatement {
+                        object_type: ObjectType::Source,
+                        if_exists,
+                        name,
+                        to_item_name,
+                    })
+                }
+                OWNER => {
+                    self.expect_keyword(TO)?;
+                    let new_owner = self.parse_identifier()?;
+
+                    Statement::AlterOwner(AlterOwnerStatement {
+                        object_type: ObjectType::Source,
+                        if_exists,
+                        name: UnresolvedName::Item(name),
+                        new_owner,
+                    })
+                }
+                _ => unreachable!(),
+            },
+        )
     }
 
     fn parse_alter_index(&mut self) -> Result<Statement<Raw>, ParserError> {
         let if_exists = self.parse_if_exists()?;
         let name = self.parse_object_name()?;
 
-        Ok(match self.expect_one_of_keywords(&[RESET, SET, RENAME])? {
-            RESET => {
-                self.expect_token(&Token::LParen)?;
-                let reset_options = self.parse_comma_separated(Parser::parse_index_option_name)?;
-                self.expect_token(&Token::RParen)?;
+        Ok(
+            match self.expect_one_of_keywords(&[RESET, SET, RENAME, OWNER])? {
+                RESET => {
+                    self.expect_token(&Token::LParen)?;
+                    let reset_options =
+                        self.parse_comma_separated(Parser::parse_index_option_name)?;
+                    self.expect_token(&Token::RParen)?;
 
-                Statement::AlterIndex(AlterIndexStatement {
-                    index_name: name,
-                    if_exists,
-                    action: AlterIndexAction::ResetOptions(reset_options),
-                })
-            }
-            SET => {
-                self.expect_token(&Token::LParen)?;
-                let set_options = self.parse_comma_separated(Parser::parse_index_option)?;
-                self.expect_token(&Token::RParen)?;
-                Statement::AlterIndex(AlterIndexStatement {
-                    index_name: name,
-                    if_exists,
-                    action: AlterIndexAction::SetOptions(set_options),
-                })
-            }
-            RENAME => {
-                self.expect_keyword(TO)?;
-                let to_item_name = self.parse_identifier()?;
+                    Statement::AlterIndex(AlterIndexStatement {
+                        index_name: name,
+                        if_exists,
+                        action: AlterIndexAction::ResetOptions(reset_options),
+                    })
+                }
+                SET => {
+                    self.expect_token(&Token::LParen)?;
+                    let set_options = self.parse_comma_separated(Parser::parse_index_option)?;
+                    self.expect_token(&Token::RParen)?;
+                    Statement::AlterIndex(AlterIndexStatement {
+                        index_name: name,
+                        if_exists,
+                        action: AlterIndexAction::SetOptions(set_options),
+                    })
+                }
+                RENAME => {
+                    self.expect_keyword(TO)?;
+                    let to_item_name = self.parse_identifier()?;
 
-                Statement::AlterObjectRename(AlterObjectRenameStatement {
-                    object_type: ObjectType::Index,
-                    if_exists,
-                    name,
-                    to_item_name,
-                })
-            }
-            _ => unreachable!(),
-        })
+                    Statement::AlterObjectRename(AlterObjectRenameStatement {
+                        object_type: ObjectType::Index,
+                        if_exists,
+                        name,
+                        to_item_name,
+                    })
+                }
+                OWNER => {
+                    self.expect_keyword(TO)?;
+                    let new_owner = self.parse_identifier()?;
+
+                    Statement::AlterOwner(AlterOwnerStatement {
+                        object_type: ObjectType::Index,
+                        if_exists,
+                        name: UnresolvedName::Item(name),
+                        new_owner,
+                    })
+                }
+                _ => unreachable!(),
+            },
+        )
     }
 
     fn parse_alter_secret(&mut self) -> Result<Statement<Raw>, ParserError> {
         let if_exists = self.parse_if_exists()?;
         let name = self.parse_object_name()?;
 
-        Ok(match self.expect_one_of_keywords(&[AS, RENAME])? {
+        Ok(match self.expect_one_of_keywords(&[AS, RENAME, OWNER])? {
             AS => {
                 let value = self.parse_expr()?;
                 Statement::AlterSecret(AlterSecretStatement {
@@ -3722,6 +3818,17 @@ impl<'a> Parser<'a> {
                     to_item_name,
                 })
             }
+            OWNER => {
+                self.expect_keyword(TO)?;
+                let new_owner = self.parse_identifier()?;
+
+                Statement::AlterOwner(AlterOwnerStatement {
+                    object_type: ObjectType::Secret,
+                    if_exists,
+                    name: UnresolvedName::Item(name),
+                    new_owner,
+                })
+            }
             _ => unreachable!(),
         })
     }
@@ -3731,42 +3838,56 @@ impl<'a> Parser<'a> {
         let if_exists = self.parse_if_exists()?;
         let name = self.parse_object_name()?;
 
-        Ok(match self.expect_one_of_keywords(&[RESET, SET, RENAME])? {
-            RESET => {
-                self.expect_token(&Token::LParen)?;
-                let reset_options =
-                    self.parse_comma_separated(Parser::parse_create_sink_option_name)?;
-                self.expect_token(&Token::RParen)?;
+        Ok(
+            match self.expect_one_of_keywords(&[RESET, SET, RENAME, OWNER])? {
+                RESET => {
+                    self.expect_token(&Token::LParen)?;
+                    let reset_options =
+                        self.parse_comma_separated(Parser::parse_create_sink_option_name)?;
+                    self.expect_token(&Token::RParen)?;
 
-                Statement::AlterSink(AlterSinkStatement {
-                    sink_name: name,
-                    if_exists,
-                    action: AlterSinkAction::ResetOptions(reset_options),
-                })
-            }
-            SET => {
-                self.expect_token(&Token::LParen)?;
-                let set_options = self.parse_comma_separated(Parser::parse_create_sink_option)?;
-                self.expect_token(&Token::RParen)?;
-                Statement::AlterSink(AlterSinkStatement {
-                    sink_name: name,
-                    if_exists,
-                    action: AlterSinkAction::SetOptions(set_options),
-                })
-            }
-            RENAME => {
-                self.expect_keyword(TO)?;
-                let to_item_name = self.parse_identifier()?;
+                    Statement::AlterSink(AlterSinkStatement {
+                        sink_name: name,
+                        if_exists,
+                        action: AlterSinkAction::ResetOptions(reset_options),
+                    })
+                }
+                SET => {
+                    self.expect_token(&Token::LParen)?;
+                    let set_options =
+                        self.parse_comma_separated(Parser::parse_create_sink_option)?;
+                    self.expect_token(&Token::RParen)?;
+                    Statement::AlterSink(AlterSinkStatement {
+                        sink_name: name,
+                        if_exists,
+                        action: AlterSinkAction::SetOptions(set_options),
+                    })
+                }
+                RENAME => {
+                    self.expect_keyword(TO)?;
+                    let to_item_name = self.parse_identifier()?;
 
-                Statement::AlterObjectRename(AlterObjectRenameStatement {
-                    object_type: ObjectType::Sink,
-                    if_exists,
-                    name,
-                    to_item_name,
-                })
-            }
-            _ => unreachable!(),
-        })
+                    Statement::AlterObjectRename(AlterObjectRenameStatement {
+                        object_type: ObjectType::Sink,
+                        if_exists,
+                        name,
+                        to_item_name,
+                    })
+                }
+                OWNER => {
+                    self.expect_keyword(TO)?;
+                    let new_owner = self.parse_identifier()?;
+
+                    Statement::AlterOwner(AlterOwnerStatement {
+                        object_type: ObjectType::Sink,
+                        if_exists,
+                        name: UnresolvedName::Item(name),
+                        new_owner,
+                    })
+                }
+                _ => unreachable!(),
+            },
+        )
     }
 
     /// Parse an ALTER SYSTEM statement.
@@ -3801,25 +3922,38 @@ impl<'a> Parser<'a> {
         let if_exists = self.parse_if_exists()?;
         let name = self.parse_object_name()?;
 
-        Ok(match self.expect_one_of_keywords(&[RENAME, ROTATE])? {
-            RENAME => {
-                self.expect_keyword(TO)?;
-                let to_item_name = self.parse_identifier()?;
+        Ok(
+            match self.expect_one_of_keywords(&[RENAME, ROTATE, OWNER])? {
+                RENAME => {
+                    self.expect_keyword(TO)?;
+                    let to_item_name = self.parse_identifier()?;
 
-                Statement::AlterObjectRename(AlterObjectRenameStatement {
-                    object_type: ObjectType::Connection,
+                    Statement::AlterObjectRename(AlterObjectRenameStatement {
+                        object_type: ObjectType::Connection,
 
-                    if_exists,
-                    name,
-                    to_item_name,
-                })
-            }
-            ROTATE => {
-                self.expect_keyword(KEYS)?;
-                Statement::AlterConnection(AlterConnectionStatement { name, if_exists })
-            }
-            _ => unreachable!(),
-        })
+                        if_exists,
+                        name,
+                        to_item_name,
+                    })
+                }
+                ROTATE => {
+                    self.expect_keyword(KEYS)?;
+                    Statement::AlterConnection(AlterConnectionStatement { name, if_exists })
+                }
+                OWNER => {
+                    self.expect_keyword(TO)?;
+                    let new_owner = self.parse_identifier()?;
+
+                    Statement::AlterOwner(AlterOwnerStatement {
+                        object_type: ObjectType::Connection,
+                        if_exists,
+                        name: UnresolvedName::Item(name),
+                        new_owner,
+                    })
+                }
+                _ => unreachable!(),
+            },
+        )
     }
 
     fn parse_alter_role(&mut self) -> Result<Statement<Raw>, ParserError> {

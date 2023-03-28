@@ -149,6 +149,9 @@ pub enum PlanError {
         name: String,
         item_type: CatalogItemType,
     },
+    AlterOwnerMembership {
+        role_name: String,
+    },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -390,6 +393,7 @@ impl fmt::Display for PlanError {
             Self::InvalidPrivatelinkAvailabilityZone { name, ..} => write!(f, "invalid AWS PrivateLink availability zone {}", name.quoted()),
             Self::InvalidSchemaName => write!(f, "no schema has been selected to create in"),
             Self::ItemAlreadyExists { name, item_type } => write!(f, "{item_type} {} already exists", name.quoted()),
+            Self::AlterOwnerMembership {role_name} => write!(f, "must be a member of {}", role_name.quoted()),
         }
     }
 }

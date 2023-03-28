@@ -448,6 +448,9 @@ impl Coordinator {
             Plan::RevokeRole(plan) => {
                 tx.send(self.sequence_revoke_role(&mut session, plan).await, session);
             }
+            Plan::AlterOwner(plan) => {
+                tx.send(self.sequence_alter_owner(&mut session, plan).await, session);
+            }
         }
     }
 
