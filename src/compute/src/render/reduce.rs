@@ -95,7 +95,11 @@ where
             err_collection = err_collection.concat(&errs);
             arranged_output.into()
         }
-        ReducePlan::DistinctNegated => build_distinct_retractions(debug_name, collection).into(),
+        ReducePlan::DistinctNegated => {
+            let (output, errs) = build_distinct_retractions(debug_name, collection);
+            err_collection = err_collection.concat(&errs);
+            output.into()
+        }
         ReducePlan::Accumulable(expr) => {
             let (arranged_output, errs) = build_accumulable(debug_name, collection, expr);
             err_collection = err_collection.concat(&errs);
@@ -483,35 +487,56 @@ where
 ///
 /// This implementation maintains the rows that don't appear in the output.
 fn build_distinct_retractions<G, T>(
-    _debug_name: &str,
+    debug_name: &str,
     collection: Collection<G, (Row, Row), Diff>,
-) -> Collection<G, Row, Diff>
+) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
 {
-    let negated_result = collection
+    let debug_name = debug_name.to_string();
+    let (negated_result, errs) = collection
         .arrange_named::<RowSpine<Row, _, _, _>>("Arranged DistinctBy Retractions input")
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("Reduce DistinctBy Retractions", {
-            |key, input, output| {
-                output.push((key.clone(), -1));
+            move |key, input, output| {
+                for (row, count) in input.iter() {
+                    if count.is_positive() {
+                        continue;
+                    }
+                    let message = "Non-positive multiplicity in DistinctBy Retractions";
+                    warn!(?row, ?count, debug_name, "[customer-data] {message}");
+                    error!("{message}");
+                    output.push((Err(message.to_string()), 1));
+                    return;
+                }
+
+                output.push((Ok(key.clone()), -1));
                 output.extend(
                     input
                         .iter()
-                        .map(|(values, count)| ((*values).clone(), *count)),
+                        .map(|(values, count)| (Ok((*values).clone()), *count)),
                 );
             }
         })
-        .as_collection(|k, v| (k.clone(), v.clone()));
+        .as_collection(|k, v| (k.clone(), v.clone()))
+        .map_fallible("Demux Errors", |(key, result)| match result {
+            Ok(row) => Ok((key, row)),
+            Err(message) => Err(DataflowError::EvalError(
+                EvalError::Internal(message).into(),
+            )),
+        });
     use timely::dataflow::operators::Map;
-    negated_result
-        .negate()
-        .concat(&collection)
-        .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated DistinctBy Retractions")
-        .inner
-        .map(|((k, _), time, count)| (k, time, count))
-        .as_collection()
+    (
+        negated_result
+            .negate()
+            .concat(&collection)
+            .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated DistinctBy Retractions")
+            .inner
+            .map(|((k, _), time, count)| (k, time, count))
+            .as_collection(),
+        errs,
+    )
 }
 
 /// Build the dataflow to compute and arrange multiple non-accumulable,
