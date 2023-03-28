@@ -101,6 +101,7 @@
 //! if/when the errors are retracted.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::hash::Hash;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -108,8 +109,9 @@ use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::reduce::ReduceCore;
-use differential_dataflow::AsCollection;
+use differential_dataflow::{AsCollection, ExchangeData};
 use timely::communication::Allocate;
+use timely::container::columnation::Columnation;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
@@ -917,5 +919,47 @@ impl<T: Timestamp + Lattice> RenderTimestamp for Product<mz_repr::Timestamp, T> 
     }
     fn step_back(&self) -> Self {
         Product::new(self.outer.saturating_sub(1), self.inner.clone())
+    }
+}
+
+/// Used to make possibly-validating code generic: think of this as a kind of `MaybeResult`,
+/// specialized for use in compute.  Validation code will only run when the error constructor is
+/// Some.
+trait MaybeValidatingRow<T, E>: ExchangeData + Columnation + Hash {
+    fn ok(t: T) -> Self;
+    fn into_error() -> Option<fn(E) -> Self>;
+}
+
+impl<E> MaybeValidatingRow<Row, E> for Row {
+    fn ok(t: Row) -> Self {
+        t
+    }
+    fn into_error() -> Option<fn(E) -> Self> {
+        None
+    }
+}
+
+impl<E, R> MaybeValidatingRow<Vec<R>, E> for Vec<R>
+where
+    R: ExchangeData + Columnation + Hash,
+{
+    fn ok(t: Vec<R>) -> Self {
+        t
+    }
+    fn into_error() -> Option<fn(E) -> Self> {
+        None
+    }
+}
+
+impl<T, E> MaybeValidatingRow<T, E> for Result<T, E>
+where
+    T: ExchangeData + Columnation + Hash,
+    E: ExchangeData + Columnation + Hash,
+{
+    fn ok(row: T) -> Self {
+        Ok(row)
+    }
+    fn into_error() -> Option<fn(E) -> Self> {
+        Some(Err)
     }
 }
