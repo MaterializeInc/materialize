@@ -979,7 +979,7 @@ fn test_ws_passes_options() {
 
     // Query to make sure we get back the correct session var, which should be
     // set from the options map we passed with the auth.
-    let json = "{{\"query\":\"SHOW application_name;\"}}";
+    let json = "{\"query\":\"SHOW application_name;\"}";
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
     ws.write_message(Message::Text(json.to_string())).unwrap();
 
