@@ -29,6 +29,9 @@ pub struct DataGenerator {
     pub record_size_bytes: usize,
     /// The maximum number of records included in a generated batch of records.
     pub batch_max_count: usize,
+    /// Maximum number of unique keys that we will produce. If the key size (depending on the record
+    /// size) is too small, the number of unique keys could be smaller.
+    pub num_keys: usize,
     // TODO: unique: bool,
     key_buf: Vec<u8>,
     val_buf: Vec<u8>,
@@ -92,7 +95,12 @@ impl Default for DataGenerator {
 
 impl DataGenerator {
     /// Returns a new [DataGenerator].
-    pub fn new(record_count: usize, record_size_bytes: usize, batch_max_count: usize) -> Self {
+    pub fn new_with_key_cardinality(
+        num_keys: usize,
+        record_count: usize,
+        record_size_bytes: usize,
+        batch_max_count: usize,
+    ) -> Self {
         // NB: Strict greater so we have at least one byte for key.
         assert!(record_size_bytes > TS_DIFF_GOODPUT_SIZE);
         assert!(batch_max_count > 0);
@@ -100,9 +108,20 @@ impl DataGenerator {
             record_count,
             record_size_bytes,
             batch_max_count,
+            num_keys,
             key_buf: Vec::new(),
             val_buf: Vec::new(),
         }
+    }
+
+    /// Returns a new [DataGenerator].
+    pub fn new(record_count: usize, record_size_bytes: usize, batch_max_count: usize) -> Self {
+        Self::new_with_key_cardinality(
+            record_count,
+            record_count,
+            record_size_bytes,
+            batch_max_count,
+        )
     }
 
     /// Returns a new [DataGenerator] specifically for testing small data volumes.
@@ -186,7 +205,8 @@ impl DataGenerator {
         }
         // This format `record_idx` as an integer and, if necessary, left-pads
         // it with 0s to be `key_len` chars long.
-        write!(&mut self.key_buf, "{:01$}", record_idx, key_len)
+        let mut record_key = record_idx % self.num_keys;
+        write!(&mut self.key_buf, "{:01$}", record_key, key_len)
             .expect("write to Vec is infallible");
         self.key_buf.truncate(key_len);
         assert_eq!(self.key_buf.len(), key_len);
