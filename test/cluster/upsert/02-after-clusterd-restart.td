@@ -73,3 +73,17 @@ id creature
 -----------
 1  dragon
 2  cow
+
+# Verify that we still can't query, because of the NULL-key error.
+! select * from upsert_nullkey
+contains: record with NULL key in UPSERT source
+
+# Ingest a NULL value for our null key, to retract it.
+$ kafka-ingest format=bytes topic=upsert-nullkey key-format=bytes key-terminator=:
+:
+
+# Now we should be able to query the source.
+> select * from upsert_nullkey
+key           text
+-------------------
+bird1         goose
