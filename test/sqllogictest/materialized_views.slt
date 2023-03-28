@@ -256,6 +256,13 @@ SHOW CREATE MATERIALIZED VIEW mv
 name                  create_sql
 materialize.public.mv CREATE␠MATERIALIZED␠VIEW␠"materialize"."public"."mv"␠IN␠CLUSTER␠"default"␠AS␠SELECT␠1
 
+# Test: SHOW CREATE MATERIALIZED VIEW as mz_introspection
+
+simple conn=mz_introspection,user=mz_introspection
+SHOW CREATE MATERIALIZED VIEW mv
+----
+materialize.public.mv,CREATE MATERIALIZED VIEW "materialize"."public"."mv" IN CLUSTER "default" AS SELECT 1
+COMPLETE 1
 
 # Test: SHOW MATERIALIZED VIEWS
 
