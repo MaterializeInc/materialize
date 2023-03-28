@@ -710,15 +710,12 @@ where
                     cap.downgrade(&ts);
                 }
                 GeneratorEvent::Data(batch) => {
-                    // TODO(aljoscha): Work with the diff field.
-                    for record in batch
+                    let mut batch = batch
                         .iter()
                         .map(|((key, value), _ts, _diff)| (key.to_vec(), value.to_vec()))
-                    {
-                        // TODO(aljoscha): Is this the most efficient way of emitting all those
-                        // records?
-                        output.give(&cap, record).await;
-                    }
+                        .collect_vec();
+
+                    output.give_container(&cap, &mut batch).await;
                 }
             }
         }
