@@ -614,7 +614,7 @@ async fn run_benchmark(
 
         // Step until our sources shut down.
         while probe.less_than(&u64::MAX) {
-            timely_worker.step();
+            timely_worker.step_or_park(None);
         }
     })
     .unwrap();
