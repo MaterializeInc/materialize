@@ -1874,7 +1874,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Returns an error if `replica_id` is not found.
     ///
-    /// Runtime is linear with respect to the total number of items in the stash.
+    /// Runtime is linear with respect to the total number of cluster replicas in the stash.
     /// DO NOT call this function in a loop.
     pub fn update_cluster_replica(
         &mut self,
@@ -1906,7 +1906,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Returns an error if `id` is not found.
     ///
-    /// Runtime is linear with respect to the total number of items in the stash.
+    /// Runtime is linear with respect to the total number of databases in the stash.
     /// DO NOT call this function in a loop.
     pub fn update_database(&mut self, id: DatabaseId, database: &Database) -> Result<(), Error> {
         let n = self.databases.update(|k, _v| {
@@ -1931,7 +1931,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Returns an error if `schema_id` is not found.
     ///
-    /// Runtime is linear with respect to the total number of items in the stash.
+    /// Runtime is linear with respect to the total number of schemas in the stash.
     /// DO NOT call this function in a loop.
     pub fn update_schema(
         &mut self,
