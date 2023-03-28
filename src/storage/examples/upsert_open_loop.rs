@@ -599,7 +599,7 @@ async fn run_benchmark(
             shared_source_time.store(new_time, Ordering::SeqCst);
         }
 
-        tokio::time::sleep(Duration::from_millis(1000)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
     for handle in generator_handles {
