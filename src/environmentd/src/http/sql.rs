@@ -866,3 +866,69 @@ fn is_txn_exit_stmt(stmt: &Statement<Raw>) -> bool {
         Statement::Commit(_) | Statement::Rollback(_) | Statement::Prepare(_)
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::WebSocketAuth;
+
+    #[test]
+    fn smoke_test_websocket_auth_parse() {
+        let basic = "{ \"user\": \"mz\", \"password\": \"1234\" }";
+        let basic: WebSocketAuth = serde_json::from_str(basic).unwrap();
+        if let WebSocketAuth::Basic {
+            user,
+            password,
+            options: None,
+        } = basic
+        {
+            assert_eq!(user, "mz");
+            assert_eq!(password, "1234");
+        } else {
+            panic!("wrong type! {basic:?}");
+        }
+
+        let basic_with_empty_options =
+            "{ \"user\": \"mz\", \"password\": \"1234\", \"options\": {} }";
+        let basic_with_empty_options: WebSocketAuth =
+            serde_json::from_str(basic_with_empty_options).unwrap();
+        if let WebSocketAuth::Basic {
+            user,
+            password,
+            options: Some(options),
+        } = basic_with_empty_options
+        {
+            assert_eq!(user, "mz");
+            assert_eq!(password, "1234");
+            assert!(options.is_empty());
+        } else {
+            panic!("wrong type! {basic_with_empty_options:?}");
+        }
+
+        let bearer = "{ \"token\": \"i_am_a_token\" }";
+        let bearer: WebSocketAuth = serde_json::from_str(bearer).unwrap();
+        if let WebSocketAuth::Bearer {
+            token,
+            options: None,
+        } = bearer
+        {
+            assert_eq!(token, "i_am_a_token");
+        } else {
+            panic!("wrong type! {bearer:?}");
+        }
+
+        let bearer_with_options =
+            "{ \"token\": \"i_am_a_token\", \"options\": { \"foo\": \"bar\" } }";
+        let bearer_with_options: WebSocketAuth = serde_json::from_str(bearer_with_options).unwrap();
+        if let WebSocketAuth::Bearer {
+            token,
+            options: Some(options),
+        } = bearer_with_options
+        {
+            assert_eq!(token, "i_am_a_token");
+            assert_eq!(options.len(), 1);
+            assert_eq!(options.get("foo"), Some(&"bar".to_string()));
+        } else {
+            panic!("wrong type! {bearer_with_options:?}");
+        }
+    }
+}
