@@ -720,8 +720,12 @@ where
                 upsert_core_pre_reduce(scope, &source_stream, source_id, BTreeMap::new())
             }
             KeyValueStore::RocksDB => {
-                let rocksdb =
-                    IoThreadRocksDB::new(&instance_dir, scope.index(), args.rocksdb_use_wal);
+                let rocksdb = IoThreadRocksDB::new(
+                    &instance_dir,
+                    scope.index(),
+                    source_id,
+                    args.rocksdb_use_wal,
+                );
 
                 upsert_core_pre_reduce(scope, &source_stream, source_id, rocksdb)
             }
@@ -736,8 +740,12 @@ where
                 upsert_core(scope, &source_stream, source_id, BTreeMap::new())
             }
             KeyValueStore::RocksDB => {
-                let rocksdb =
-                    IoThreadRocksDB::new(&instance_dir, scope.index(), args.rocksdb_use_wal);
+                let rocksdb = IoThreadRocksDB::new(
+                    &instance_dir,
+                    scope.index(),
+                    source_id,
+                    args.rocksdb_use_wal,
+                );
 
                 upsert_core(scope, &source_stream, source_id, rocksdb)
             }
@@ -969,13 +977,18 @@ struct IoThreadRocksDB {
 }
 
 impl IoThreadRocksDB {
-    fn new(temp_dir: &Path, index: usize, use_wal: bool) -> Self {
+    fn new(temp_dir: &Path, worker_id: usize, source_id: usize, use_wal: bool) -> Self {
         // bounded??
         let (tx, rx): (
             _,
             crossbeam_channel::Receiver<(Vec<Batch>, Sender<Result<Batch<KVAndPrevious>, Error>>)>,
         ) = crossbeam_channel::unbounded();
-        let db: DB = DB::open_default(temp_dir.join(index.to_string())).unwrap();
+
+        let instance_path = temp_dir
+            .join(worker_id.to_string())
+            .join(source_id.to_string());
+
+        let db: DB = DB::open_default(instance_path).unwrap();
         std::thread::spawn(move || {
             let mut wo = rocksdb::WriteOptions::new();
             wo.disable_wal(!use_wal);
@@ -1021,7 +1034,7 @@ impl IoThreadRocksDB {
                         continue 'batch;
                     }
                 }
-                debug!("finished writing batch size({size}) for worker {index}");
+                debug!("finished writing batch size({size}) for worker {worker_id}, source {source_id}");
 
                 let _ = resp.send(Ok(previous));
             }
