@@ -943,7 +943,7 @@ impl IoThreadRocksDB {
                         continue 'batch;
                     }
                 }
-                info!("finished writing batch size({size}) for worker {index}");
+                debug!("finished writing batch size({size}) for worker {index}");
 
                 let _ = resp.send(Ok(previous));
             }
