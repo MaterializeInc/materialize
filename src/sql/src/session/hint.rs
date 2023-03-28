@@ -26,7 +26,7 @@ const WEB_CONSOLE_LABEL: &str = "web_console";
 /// labels we need to be conscious of the cardinality, so please be careful with how many
 /// variants we add to this enum.
 ///
-/// Note: each enum variant contains an [`internal::Private`] to prevent creating this enum
+/// Note: each enum variant contains an `internal::Private` to prevent creating this enum
 /// directly. To create an instance of [`ApplicationNameHint`] please see
 /// [`ApplicationNameHint::from_str`].
 #[derive(Debug, Copy, Clone)]
