@@ -66,6 +66,8 @@ CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     telnet <POSTGRES_HOST> <POSTGRES_PORT>
     ```
 
+    If the command hangs, the security group or firewall rules are likely not configured correctly, and you need to double-check your settings. If the connection is successful, you can proceed to the next step.
+
 1. Verify that you can create SSH tunnels.
 
     ```bash
@@ -73,7 +75,15 @@ CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     ssh -L 9092:kafka-broker:9092 <SSH_BASTION_USER>@<SSH_BASTION_HOST>
     ```
 
-    If you are unable to start the tunnel, enable `AllowTcpForwarding` and `PermitTunnel` in the SSH config file.
+    Once you have successfully created the tunnel, verify that you can connect to the Kafka broker or PostgreSQL instance via the tunnel:
+
+    ```bash
+    telnet localhost 9092
+    ```
+
+    If the connection is successful, you can proceed to the next step.
+
+    If you are unable to connect using the `telnet` command, you will have to enable `AllowTcpForwarding` and `PermitTunnel` in the SSH config file.
     On your SSH bastion host, open the SSH config file (usually located at `/etc/ssh/sshd_config`) using a text editor:
 
     ```bash
