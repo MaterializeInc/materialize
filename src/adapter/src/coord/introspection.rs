@@ -102,6 +102,19 @@ pub fn user_privilege_hack(
     }
 
     match plan {
+        // **Special Cases**
+        //
+        // Generally we want to prevent the mz_introspection user from being able to
+        // access user objects. But there are a few special cases where we permit
+        // limited access, which are:
+        //   * SHOW CREATE ... commands, which are very useful for debugging, see
+        //     <https://github.com/MaterializeInc/materialize/issues/18027> for more
+        //     details.
+        //
+        Plan::ShowCreate(_) => {
+            return Ok(());
+        }
+
         Plan::Subscribe(_)
         | Plan::Peek(_)
         | Plan::CopyFrom(_)

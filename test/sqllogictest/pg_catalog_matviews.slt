@@ -35,3 +35,9 @@ SHOW CREATE VIEW pg_matviews
 ----
 pg_catalog.pg_matviews
 CREATE VIEW "pg_catalog"."pg_matviews" AS SELECT "s"."name" AS "schemaname", "m"."name" AS "matviewname", "role_owner"."oid" AS "matviewowner", "m"."definition" AS "definition" FROM "mz_catalog"."mz_materialized_views" AS "m" LEFT JOIN "mz_catalog"."mz_schemas" AS "s" ON "s"."id" = "m"."schema_id" LEFT JOIN "mz_catalog"."mz_databases" AS "d" ON "d"."id" = "s"."database_id" JOIN "mz_catalog"."mz_roles" AS "role_owner" ON "role_owner"."id" = "m"."owner_id" WHERE "s"."database_id" IS NULL OR "d"."name" = "pg_catalog"."current_database"()
+
+simple conn=mz_introspection,user=mz_introspection
+SHOW CREATE VIEW pg_matviews
+----
+pg_catalog.pg_matviews,CREATE VIEW "pg_catalog"."pg_matviews" AS SELECT "s"."name" AS "schemaname", "m"."name" AS "matviewname", "role_owner"."oid" AS "matviewowner", "m"."definition" AS "definition" FROM "mz_catalog"."mz_materialized_views" AS "m" LEFT JOIN "mz_catalog"."mz_schemas" AS "s" ON "s"."id" = "m"."schema_id" LEFT JOIN "mz_catalog"."mz_databases" AS "d" ON "d"."id" = "s"."database_id" JOIN "mz_catalog"."mz_roles" AS "role_owner" ON "role_owner"."id" = "m"."owner_id" WHERE "s"."database_id" IS NULL OR "d"."name" = "pg_catalog"."current_database"()
+COMPLETE 1

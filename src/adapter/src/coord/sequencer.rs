@@ -262,7 +262,7 @@ impl Coordinator {
                     session,
                 );
             }
-            Plan::SendRows(plan) => {
+            Plan::ShowCreate(plan) | Plan::SendRows(plan) => {
                 tx.send(Ok(send_immediate_rows(plan.rows)), session);
             }
             Plan::CopyFrom(plan) => {

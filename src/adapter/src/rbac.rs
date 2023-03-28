@@ -216,6 +216,7 @@ fn generate_plan_attribute(plan: &Plan) -> Option<Attribute> {
         | Plan::DropItems(_)
         | Plan::EmptyQuery
         | Plan::ShowAllVariables
+        | Plan::ShowCreate(_)
         | Plan::ShowVariable(_)
         | Plan::SetVariable(_)
         | Plan::ResetVariable(_)
