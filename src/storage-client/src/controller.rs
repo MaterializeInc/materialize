@@ -47,6 +47,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::read::ReadHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
@@ -2073,6 +2074,8 @@ where
                 self.update_write_frontiers(&updates);
             }
             Some(StorageResponse::DroppedIds(ids)) => {
+                // TODO(petrosagg): It looks like the storage controller never cleans up GlobalIds
+                // from its state. It should probably be done as a reaction to this response.
                 let shards_to_finalize: Vec<_> = ids
                     .iter()
                     .filter_map(|id| {
@@ -2712,53 +2715,61 @@ where
             .unwrap();
 
         let persist_client = &persist_client;
-        // Reborrow the `&mut self` as immutable, as all the concurrent work to be processed in
-        // this stream cannot all have exclusive access.
-        let this = &*self;
 
         use futures::stream::StreamExt;
-        let finalized_shards: BTreeSet<_> = futures::stream::iter(shards)
+        let finalized_shards: BTreeSet<ShardId> = futures::stream::iter(shards)
             .map(|shard_id| async move {
-                let (mut write, mut critical_since_handle) = this
-                    .open_data_handles(
-                        "finalizing shards",
+                // Open read handle, whose since is the global since.
+                let read_handle: ReadHandle<SourceData, (), T, Diff> = persist_client
+                    .open_leased_reader(
                         shard_id,
-                        RelationDesc::empty(),
-                        persist_client,
+                        "finalizing shards",
+                        Arc::new(RelationDesc::empty()),
+                        Arc::new(UnitSchema),
                     )
-                    .await;
-
-                let our_epoch = PersistEpoch::from(this.state.envd_epoch);
-
-                match critical_since_handle
-                    .compare_and_downgrade_since(&our_epoch, (&our_epoch, &Antichain::new()))
                     .await
-                {
-                    Ok(_) => info!("successfully finalized read handle for shard {shard_id:?}"),
-                    Err(e) => mz_ore::halt!("fenced by envd @ {e:?}. ours = {our_epoch:?}"),
-                }
+                    .expect("invalid persist usage");
 
-                if write.upper().is_empty() {
-                    info!("write handle for shard {:?} already finalized", shard_id);
-                } else {
-                    write
-                        .append(
-                            Vec::<((crate::types::sources::SourceData, ()), T, Diff)>::new(),
-                            write.upper().clone(),
-                            Antichain::new(),
+                // If global since is empty, we can close shard because no one has an outstanding
+                // read hold.
+                if read_handle.since().is_empty() {
+                    let mut write_handle: WriteHandle<SourceData, (), T, Diff> = persist_client
+                        .open_writer(
+                            shard_id,
+                            "finalizing shards",
+                            Arc::new(RelationDesc::empty()),
+                            Arc::new(UnitSchema),
                         )
                         .await
-                        .expect("failed to connect")
-                        .expect("failed to truncate write handle");
+                        .expect("invalid persist usage");
+
+                    if !write_handle.upper().is_empty() {
+                        write_handle
+                            .append(
+                                Vec::<((crate::types::sources::SourceData, ()), T, Diff)>::new(),
+                                write_handle.upper().clone(),
+                                Antichain::new(),
+                            )
+                            .await
+                            // Rather than error, just leave this shard as one to finalize later.
+                            .ok()?
+                            .ok()?;
+                    }
+
+                    Some(shard_id)
+                } else {
+                    None
                 }
-                shard_id
             })
             // Poll each future for each collection concurrently, maximum of 10 at a time.
             .buffer_unordered(10)
             // HERE BE DRAGONS: see warning on other uses of buffer_unordered
             // before any changes to `collect`
-            .collect()
-            .await;
+            .collect::<BTreeSet<Option<ShardId>>>()
+            .await
+            .into_iter()
+            .filter_map(|shard| shard)
+            .collect();
 
         if !finalized_shards.is_empty() {
             self.clear_from_shard_finalization_register(finalized_shards)
