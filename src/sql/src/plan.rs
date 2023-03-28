@@ -220,6 +220,7 @@ impl Plan {
                 PlanKind::Peek,
                 PlanKind::SendRows,
                 PlanKind::ShowVariable,
+                PlanKind::ShowCreate,
                 PlanKind::ShowAllVariables,
             ],
             StatementKind::StartTransaction => vec![PlanKind::StartTransaction],
