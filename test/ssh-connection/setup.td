@@ -15,11 +15,3 @@
     USER 'mz',
     PORT 22
   );
-
-# We don't authorize this connection's keys, so we
-# can test error handling.
-> CREATE CONNECTION IF NOT EXISTS keyless TO SSH TUNNEL (
-    HOST 'ssh-bastion-host',
-    USER 'mz',
-    PORT 22
-  );

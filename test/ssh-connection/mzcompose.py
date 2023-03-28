@@ -69,26 +69,34 @@ def workflow_pg_via_ssh_tunnel(c: Composition) -> None:
 
 
 def workflow_kafka(c: Composition) -> None:
-    c.up("zookeeper", "kafka", "schema-registry", "materialized", "ssh-bastion-host")
+    with c.override(Testdrive(consistent_seed=True)):
+        c.up(
+            "zookeeper", "kafka", "schema-registry", "materialized", "ssh-bastion-host"
+        )
 
-    c.run("testdrive", "setup.td")
+        c.run("testdrive", "setup.td")
 
-    public_key = c.sql_query("select public_key_1 from mz_ssh_tunnel_connections;")[0][
-        0
-    ]
+        # Ensure we don't select the `keyless` key.
+        thancred_id = c.sql_query(
+            "select id from mz_connections where name = 'thancred';"
+        )[0][0]
+        public_key = c.sql_query(
+            f"select public_key_1 from mz_ssh_tunnel_connections where id = '{thancred_id}';"
+        )[0][0]
 
-    c.exec(
-        "ssh-bastion-host",
-        "bash",
-        "-c",
-        f"echo '{public_key}' > /etc/authorized_keys/mz",
-    )
+        c.exec(
+            "ssh-bastion-host",
+            "bash",
+            "-c",
+            f"echo '{public_key}' > /etc/authorized_keys/mz",
+        )
 
-    c.run("testdrive", "--no-reset", "kafka-source.td")
+        c.run("testdrive", "--no-reset", "kafka-source.td")
+        c.run("testdrive", "--no-reset", "kafka-sink.td")
 
-    c.kill("ssh-bastion-host")
+        c.kill("ssh-bastion-host")
 
-    c.run("testdrive", "--no-reset", "kafka-source-restart.td")
+        c.run("testdrive", "--no-reset", "kafka-after-ssh-fails.td")
 
 
 # Test that if we restart the bastion AND change its server keys(s), we can

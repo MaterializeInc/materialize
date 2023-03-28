@@ -22,6 +22,14 @@ one
 > CREATE CONNECTION kafka_conn_dynamic
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SSH TUNNEL thancred);
 
+# We don't authorize this connection's keys, so we
+# can test error handling.
+> CREATE CONNECTION IF NOT EXISTS keyless TO SSH TUNNEL (
+    HOST 'ssh-bastion-host',
+    USER 'mz',
+    PORT 22
+  );
+
 > CREATE CONNECTION kafka_conn_keyless
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SSH TUNNEL keyless);
 
