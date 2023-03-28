@@ -29,6 +29,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{adt::jsonb::Jsonb, Datum, Diff, GlobalId, Row};
+use mz_ssh_util::tunnel::SshTunnelStatus;
 use mz_storage_types::connections::{ConnectionContext, StringOrSecret};
 use mz_storage_types::sources::{
     KafkaMetadataKind, KafkaSourceConnection, MzOffset, SourceTimestamp,
@@ -57,6 +58,12 @@ use crate::source::types::{SourceReaderMetrics, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 mod metrics;
+
+#[derive(Default)]
+struct HealthStatus {
+    kafka: Option<HealthStatusUpdate>,
+    ssh: Option<HealthStatusUpdate>,
+}
 
 /// Contains all information necessary to ingest data from Kafka
 pub struct KafkaSourceReader {
@@ -93,7 +100,7 @@ pub struct KafkaSourceReader {
     /// The metadata columns requested by the user
     metadata_columns: Vec<KafkaMetadataKind>,
     /// The latest status detected by the metadata refresh thread.
-    health_status: Arc<Mutex<Option<HealthStatusUpdate>>>,
+    health_status: Arc<Mutex<HealthStatus>>,
     /// Per partition capabilities used to produce messages
     partition_capabilities: BTreeMap<PartitionId, PartitionCapability>,
 }
@@ -162,10 +169,10 @@ impl SourceRender for KafkaSourceConnection {
 
             // Start offsets is a map from partition to the next offset to read from.
             let mut start_offsets: BTreeMap<_, i64> = self
-                .start_offsets.clone()
+                .start_offsets
+                .clone()
                 .into_iter()
-                .filter(|(pid, _offset)| config.responsible_for(pid)
-                        )
+                .filter(|(pid, _offset)| config.responsible_for(pid))
                 .map(|(k, v)| (k, v))
                 .collect();
 
@@ -213,7 +220,7 @@ impl SourceRender for KafkaSourceConnection {
                 connection, topic, ..
             } = self;
             let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
-            let health_status = Arc::new(Mutex::new(None));
+            let health_status = Arc::new(Mutex::new(Default::default()));
             let notificator = Arc::new(Notify::new());
             let consumer: Result<BaseConsumer<_>, _> = connection
                 .create_with_context(
@@ -270,20 +277,22 @@ impl SourceRender for KafkaSourceConnection {
                 Ok(consumer) => Arc::new(consumer),
                 Err(e) => {
                     let update = HealthStatusUpdate::halting(
-                       format!(
+                        format!(
                             "failed creating kafka consumer: {}",
                             e.display_with_causes()
                         ),
-                        None
+                        None,
                     );
-                    health_output.give(
-                        &health_cap,
-                        HealthStatusMessage {
-                            index:0,
-                            namespace: Self::STATUS_NAMESPACE.clone(),
-                            update
-                        }
-                    ).await;
+                    health_output
+                        .give(
+                            &health_cap,
+                            HealthStatusMessage {
+                                index: 0,
+                                namespace: Self::STATUS_NAMESPACE.clone(),
+                                update,
+                            },
+                        )
+                        .await;
                     // IMPORTANT: wedge forever until the `SuspendAndRestart` is processed.
                     // Returning would incorrectly present to the remap operator as progress to the
                     // empty frontier which would be incorrectly recorded to the remap shard.
@@ -328,6 +337,7 @@ impl SourceRender for KafkaSourceConnection {
 
                 let status_report = Arc::clone(&health_status);
 
+                let tokio_handle = tokio::runtime::Handle::current();
                 thread::Builder::new()
                     .name("kafka-metadata".to_string())
                     .spawn(move || {
@@ -356,14 +366,36 @@ impl SourceRender for KafkaSourceConnection {
                                         num_workers = config.worker_count,
                                         "kafka metadata thread: updated partition metadata info",
                                     );
-                                    *status_report.lock().unwrap() = Some(HealthStatusUpdate::running());
+
+                                    // Clear all the health namespaces we know about.
+                                    // Note that many kafka sources's don't have an ssh tunnel, but
+                                    // the `health_operator` handles this fine.
+                                    *status_report.lock().unwrap() = HealthStatus {
+                                        kafka: Some(HealthStatusUpdate::running()),
+                                        ssh: Some(HealthStatusUpdate::running()),
+                                    };
                                 }
                                 Err(e) => {
-                                    *status_report.lock().unwrap() =
-                                        Some(HealthStatusUpdate::stalled(
-                                            format!("{}", e.display_with_causes()),
-                                            None,
-                                        ));
+                                    let kafka_status = Some(HealthStatusUpdate::stalled(
+                                        format!("{}", e.display_with_causes()),
+                                        None,
+                                    ));
+
+                                    let ssh_status = tokio_handle
+                                        .block_on(consumer.client().context().tunnel_statuses());
+                                    let ssh_status = match ssh_status {
+                                        SshTunnelStatus::Running => {
+                                            Some(HealthStatusUpdate::running())
+                                        }
+                                        SshTunnelStatus::Errored(e) => {
+                                            Some(HealthStatusUpdate::stalled(e, None))
+                                        }
+                                    };
+
+                                    *status_report.lock().unwrap() = HealthStatus {
+                                        kafka: kafka_status,
+                                        ssh: ssh_status,
+                                    }
                                 }
                             }
                             thread::park_timeout(metadata_refresh_frequency);
@@ -395,7 +427,11 @@ impl SourceRender for KafkaSourceConnection {
                 start_offsets,
                 stats_rx,
                 partition_info,
-                metadata_columns: self.metadata_columns.into_iter().map(|(_name, kind)| kind).collect(),
+                metadata_columns: self
+                    .metadata_columns
+                    .into_iter()
+                    .map(|(_name, kind)| kind)
+                    .collect(),
                 _metadata_thread_handle: metadata_thread_handle,
                 partition_metrics: KafkaPartitionMetrics::new(
                     config.base_metrics.clone(),
@@ -452,9 +488,10 @@ impl SourceRender for KafkaSourceConnection {
                     if !PartialOrder::less_equal(data_cap.time(), &future_ts) {
                         let prev_pid_count = prev_pid_info.map(|info| info.len()).unwrap_or(0);
                         let pid_count = partitions.len();
-                        let err = SourceReaderError::other_definite(
-                            anyhow!( "topic was recreated: partition count regressed from {prev_pid_count} to {pid_count}")
-                        );
+                        let err = SourceReaderError::other_definite(anyhow!(
+                            "topic was recreated: partition \
+                                     count regressed from {prev_pid_count} to {pid_count}"
+                        ));
                         let time = data_cap.time().clone();
                         data_output.give(&data_cap, ((0, Err(err)), time, 1)).await;
                         return;
@@ -465,12 +502,12 @@ impl SourceRender for KafkaSourceConnection {
                         for (pid, prev_watermarks) in prev_pid_info {
                             let watermarks = &partitions[&pid];
                             if !(prev_watermarks.high <= watermarks.high) {
-                                let err = SourceReaderError::other_definite(
-                                    anyhow!(
-                                        "topic was recreated: high watermark of partition {pid} regressed from {} to {}",
-                                        prev_watermarks.high, watermarks.high
-                                    )
-                                );
+                                let err = SourceReaderError::other_definite(anyhow!(
+                                    "topic was recreated: high watermark of \
+                                        partition {pid} regressed from {} to {}",
+                                    prev_watermarks.high,
+                                    watermarks.high
+                                ));
                                 let time = data_cap.time().clone();
                                 data_output.give(&data_cap, ((0, Err(err)), time, 1)).await;
                                 return;
@@ -487,8 +524,12 @@ impl SourceRender for KafkaSourceConnection {
                                     None => 0u64,
                                 };
                                 let start_offset = std::cmp::max(start_offset, watermarks.low);
-                                let part_since_ts = Partitioned::with_partition(pid, MzOffset::from(start_offset));
-                                let part_upper_ts = Partitioned::with_partition(pid, MzOffset::from(watermarks.high));
+                                let part_since_ts =
+                                    Partitioned::with_partition(pid, MzOffset::from(start_offset));
+                                let part_upper_ts = Partitioned::with_partition(
+                                    pid,
+                                    MzOffset::from(watermarks.high),
+                                );
 
                                 // This is the moment at which we have discovered a new partition
                                 // and we need to make sure we produce its initial snapshot at a,
@@ -525,18 +566,17 @@ impl SourceRender for KafkaSourceConnection {
                                 "kafka error when polling consumer for source: {} topic: {} : {}",
                                 reader.source_name, reader.topic_name, e
                             );
-                            let status = HealthStatusUpdate::stalled(
-                                error,
-                                None,
-                            );
-                            health_output.give(
-                                &health_cap,
-                                HealthStatusMessage {
-                                    index:0,
-                                    namespace: Self::STATUS_NAMESPACE.clone(),
-                                    update: status,
-                                }
-                            ).await;
+                            let status = HealthStatusUpdate::stalled(error, None);
+                            health_output
+                                .give(
+                                    &health_cap,
+                                    HealthStatusMessage {
+                                        index: 0,
+                                        namespace: Self::STATUS_NAMESPACE.clone(),
+                                        update: status,
+                                    },
+                                )
+                                .await;
                         }
                         Ok(message) => {
                             let (message, ts) =
@@ -583,11 +623,14 @@ impl SourceRender for KafkaSourceConnection {
                                     None,
                                 );
                                 health_output
-                                    .give(&health_cap, HealthStatusMessage{
-                                        index: 0,
-                                        namespace: Self::STATUS_NAMESPACE.clone(),
-                                        update: status,
-                                    })
+                                    .give(
+                                        &health_cap,
+                                        HealthStatusMessage {
+                                            index: 0,
+                                            namespace: Self::STATUS_NAMESPACE.clone(),
+                                            update: status,
+                                        },
+                                    )
                                     .await;
                             }
                         }
@@ -617,14 +660,32 @@ impl SourceRender for KafkaSourceConnection {
                     }
                 }
 
-                let status = reader.health_status.lock().unwrap().take();
-                if let Some(status) = status {
+                let (kafka_status, ssh_status) = {
+                    let mut health_status = reader.health_status.lock().unwrap();
+                    (health_status.kafka.take(), health_status.ssh.take())
+                };
+                if let Some(status) = kafka_status {
                     health_output
-                        .give(&health_cap, HealthStatusMessage{
-                            index: 0,
-                            namespace: Self::STATUS_NAMESPACE.clone(),
-                            update: status,
-                        })
+                        .give(
+                            &health_cap,
+                            HealthStatusMessage {
+                                index: 0,
+                                namespace: Self::STATUS_NAMESPACE.clone(),
+                                update: status,
+                            },
+                        )
+                        .await;
+                }
+                if let Some(status) = ssh_status {
+                    health_output
+                        .give(
+                            &health_cap,
+                            HealthStatusMessage {
+                                index: 0,
+                                namespace: StatusNamespace::Ssh,
+                                update: status,
+                            },
+                        )
                         .await;
                 }
 

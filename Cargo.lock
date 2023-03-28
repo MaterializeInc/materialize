@@ -4351,6 +4351,7 @@ dependencies = [
  "clap",
  "crossbeam",
  "fancy-regex",
+ "futures",
  "mz-avro",
  "mz-ccsr",
  "mz-ore",
@@ -5365,6 +5366,7 @@ name = "mz-ssh-util"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "futures",
  "mz-ore",
  "openssh",
  "openssh-mux-client",
@@ -5375,7 +5377,9 @@ dependencies = [
  "serde_json",
  "ssh-key",
  "tempfile",
+ "thiserror",
  "tokio",
+ "tokio-stream",
  "tracing",
  "workspace-hack",
  "zeroize",

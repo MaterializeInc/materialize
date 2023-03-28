@@ -186,15 +186,11 @@ struct PerWorkerHealthStatus {
 impl PerWorkerHealthStatus {
     fn merge_update(
         &mut self,
-        mut worker: usize,
+        worker: usize,
         namespace: StatusNamespace,
         update: HealthStatusUpdate,
         only_greater: bool,
     ) {
-        if namespace.is_sidechannel() {
-            worker = 0;
-        }
-
         let errors = &mut self.errors_by_worker[worker];
         match errors.entry(namespace) {
             Entry::Vacant(v) => {
@@ -578,7 +574,7 @@ where
             }
         }
 
-        let mut outputs_seen = BTreeSet::new();
+        let mut outputs_seen = BTreeMap::<usize, BTreeSet<_>>::new();
         while let Some(event) = input.next_mut().await {
             if let AsyncEvent::Data(_cap, rows) = event {
                 for (
@@ -603,7 +599,12 @@ where
                         None => continue,
                     };
 
-                    let new_round = outputs_seen.insert(output_index);
+                    // Its important to track `new_round` per-namespace, so namespaces are reasoned
+                    // about in `merge_update` independently.
+                    let new_round = outputs_seen
+                        .entry(output_index)
+                        .or_insert_with(BTreeSet::new)
+                        .insert(ns.clone());
 
                     if !is_active_worker {
                         error!(
@@ -621,7 +622,7 @@ where
 
                 let mut halt_with_outer = None;
 
-                while let Some(output_index) = outputs_seen.pop_first() {
+                while let Some((output_index, _)) = outputs_seen.pop_first() {
                     let HealthState {
                         id,
                         healths,
@@ -986,10 +987,8 @@ mod tests {
                     errors: Some("ssh: uhoh".to_string()),
                     ..Default::default()
                 }]),
-                // Note this is from a different work, but it merges as if its from
-                // the same worker.
                 Update(TestUpdate {
-                    worker_id: 1,
+                    worker_id: 0,
                     namespace: StatusNamespace::Ssh,
                     input_index: 0,
                     update: HealthStatusUpdate::stalled("uhoh2".to_string(), None),

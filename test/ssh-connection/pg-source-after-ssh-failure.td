@@ -11,5 +11,5 @@
 
 > SELECT status FROM mz_internal.mz_source_statuses st
   JOIN mz_sources s ON st.id = s.id
-  WHERE s.name = 'mz_source' AND error LIKE '%connection closed%'
+  WHERE s.name = 'mz_source' AND error LIKE 'ssh:%'
 stalled

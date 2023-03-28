@@ -22,6 +22,8 @@ use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 use openssh::{ForwardType, Session};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::oneshot::{Receiver, Sender};
 use tokio::time;
 use tracing::{info, warn};
 
@@ -45,7 +47,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const KEEPALIVE_IDLE: Duration = Duration::from_secs(10);
 
 /// Specifies an SSH tunnel.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SshTunnelConfig {
     /// The hostname of the SSH bastion server.
     pub host: String,
@@ -68,6 +70,14 @@ impl fmt::Debug for SshTunnelConfig {
     }
 }
 
+#[derive(Clone)]
+pub enum SshTunnelStatus {
+    Running,
+    Errored(String),
+}
+
+pub type SshStatusChannel = Receiver<SshTunnelStatus>;
+
 impl SshTunnelConfig {
     /// Establishes a connection to the specified host and port via the
     /// configured SSH tunnel.
@@ -84,6 +94,13 @@ impl SshTunnelConfig {
             remote_host, remote_port, self.user, self.host, self.port,
         );
 
+        let (status_tx, mut status_rx): (_, UnboundedReceiver<Sender<SshTunnelStatus>>) =
+            unbounded_channel();
+
+        // N.B.
+        //
+        // We could probably move this into the look and use the above channel to report this
+        // initial connection error, but this is simpler and easier to read!
         info!(%tunnel_id, "connecting to ssh tunnel");
         let mut session = match connect(self).await {
             Ok(s) => s,
@@ -110,14 +127,39 @@ impl SshTunnelConfig {
                 scopeguard::defer! {
                     info!(%tunnel_id, "terminating ssh tunnel");
                 }
+                let mut interval = time::interval(CHECK_INTERVAL);
+                // Just in case checking takes a long time.
+                interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+                // The first tick happens immediately.
+                interval.tick().await;
                 loop {
-                    time::sleep(CHECK_INTERVAL).await;
+                    let closed = matches!(
+                        status_rx.try_recv(),
+                        Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
+                    );
+
+                    use mz_ore::channel::ReceiverExt;
+                    let interested_in_status = tokio::select! {
+                        _ = interval.tick() => {
+                            Vec::new()
+                        }
+                        Some(senders) = status_rx.recv_many(100), if !closed => {
+                            senders
+                        }
+                    };
+
                     if let Err(e) = session.check().await {
                         warn!(%tunnel_id, "ssh tunnel unhealthy: {}", e.display_with_causes());
                         let s = match connect(&config).await {
                             Ok(s) => s,
                             Err(e) => {
                                 warn!(%tunnel_id, "reconnection to ssh tunnel failed: {}", e.display_with_causes());
+
+                                for interested in interested_in_status {
+                                    let _ = interested
+                                        .send(SshTunnelStatus::Errored(e.to_string_with_causes()));
+                                }
+
                                 continue;
                             }
                         };
@@ -125,11 +167,18 @@ impl SshTunnelConfig {
                             Ok(lp) => lp,
                             Err(e) => {
                                 warn!(%tunnel_id, "reconnection to ssh tunnel failed: {}", e.display_with_causes());
+                                for interested in interested_in_status {
+                                    let _ = interested
+                                        .send(SshTunnelStatus::Errored(e.to_string_with_causes()));
+                                }
                                 continue;
                             }
                         };
                         session = s;
-                        local_port.store(lp, Ordering::SeqCst)
+                        local_port.store(lp, Ordering::SeqCst);
+                    }
+                    for interested in interested_in_status {
+                        let _ = interested.send(SshTunnelStatus::Running);
                     }
                 }
             }
@@ -137,6 +186,7 @@ impl SshTunnelConfig {
 
         Ok(SshTunnelHandle {
             local_port,
+            status_request_sender: status_tx,
             _join_handle: join_handle.abort_on_drop(),
         })
     }
@@ -153,6 +203,7 @@ impl SshTunnelConfig {
 #[derive(Debug)]
 pub struct SshTunnelHandle {
     local_port: Arc<AtomicU16>,
+    pub(crate) status_request_sender: UnboundedSender<Sender<SshTunnelStatus>>,
     _join_handle: AbortOnDropHandle<()>,
 }
 

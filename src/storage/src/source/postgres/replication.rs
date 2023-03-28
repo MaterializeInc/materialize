@@ -178,8 +178,11 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 .config(&*context.secrets_reader)
                 .await?
                 .tcp_timeouts(config.params.pg_source_tcp_timeouts.clone());
+
             let slot = &connection.publication_details.slot;
-            let replication_client = connection_config.connect_replication(&context.ssh_tunnel_manager).await?;
+            let replication_client = connection_config.connect_replication(
+                &context.ssh_tunnel_manager,
+            ).await?;
             super::ensure_replication_slot(&replication_client, slot).await?;
             let slot_lsn = super::fetch_slot_resume_lsn(&replication_client, slot).await?;
 
@@ -216,7 +219,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
             let mut committed_uppers = pin!(committed_uppers);
 
-            let client = connection_config.connect("replication metadata", &context.ssh_tunnel_manager).await?;
+            let client = connection_config.connect(
+                "replication metadata",
+                &context.ssh_tunnel_manager,
+            ).await?;
             if let Err(err) = ensure_publication_exists(&client, &connection.publication).await? {
                 // If the publication gets deleted there is nothing else to do. These errors
                 // are not retractable.
@@ -241,7 +247,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 &config,
                 &context.ssh_tunnel_manager,
                 &connection_config,
-                &client,
+                client,
                 slot,
                 &connection.publication,
                 *data_cap.time(),
@@ -355,7 +361,7 @@ fn raw_stream<'a>(
     config: &'a RawSourceCreationConfig,
     ssh_tunnel_manager: &'a SshTunnelManager,
     connection_config: &'a mz_postgres_util::Config,
-    metadata_client: &'a Client,
+    metadata_client: Client,
     slot: &'a str,
     publication: &'a str,
     resume_lsn: MzOffset,
@@ -388,7 +394,7 @@ fn raw_stream<'a>(
         // to avoid a TOCTOU issue we must do this check after starting the replication stream. We
         // cannot use the replication client to do that because it's already in CopyBoth mode.
         // [1] https://www.postgresql.org/docs/15/protocol-replication.html#PROTOCOL-REPLICATION-START-REPLICATION-SLOT-LOGICAL
-        let min_resume_lsn = super::fetch_slot_resume_lsn(metadata_client, slot).await?;
+        let min_resume_lsn = super::fetch_slot_resume_lsn(&metadata_client, slot).await?;
         if !(resume_lsn == MzOffset::from(0) || min_resume_lsn <= resume_lsn) {
             let err = TransientError::OvercompactedReplicationSlot {
                 available_lsn: min_resume_lsn,
