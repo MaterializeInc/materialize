@@ -50,6 +50,7 @@ from materialize.mzcompose.services import (
     Testdrive,
     Zookeeper,
 )
+from materialize.util import released_materialize_versions
 
 #
 # Global feature benchmark thresholds and termination conditions
@@ -179,8 +180,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--other-tag",
         metavar="TAG",
         type=str,
-        default=os.getenv("OTHER_TAG", None),
-        help="'Other' Materialize container tag to benchmark. If not provided, the current source will be used.",
+        default=os.getenv("OTHER_TAG", str(released_materialize_versions()[0])),
+        help="'Other' Materialize container tag to benchmark. If not provided, the last released Mz version will be used.",
     )
 
     parser.add_argument(
