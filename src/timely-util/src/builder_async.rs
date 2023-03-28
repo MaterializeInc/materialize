@@ -529,6 +529,11 @@ impl<G: Scope> OperatorBuilder<G> {
     pub fn operator_info(&self) -> OperatorInfo {
         self.builder.operator_info()
     }
+
+    /// Returns the activator for the operator.
+    pub fn activator(&self) -> &Activator {
+        &self.activator
+    }
 }
 
 #[cfg(test)]
