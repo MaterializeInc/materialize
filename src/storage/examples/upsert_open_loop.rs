@@ -137,7 +137,6 @@ use mz_ore::cast::CastFrom;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::indexed::columnar::ColumnarRecords;
-use mz_persist::workload::DataGenerator;
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 
 // TODO(aljoscha): Make workload configurable: cardinality of keyspace, hot vs. cold keys, the
@@ -171,6 +170,10 @@ pub struct Args {
     /// How many records writers should emit per second.
     #[clap(long, value_name = "R", default_value_t = 10000)]
     records_per_second: usize,
+
+    /// How many unique keys we should generate, that is, the cardinality of the key space.
+    #[clap(long, value_name = "R", default_value_t = 1000)]
+    num_keys: usize,
 
     /// Size of records (goodbytes) in bytes.
     #[clap(long, value_name = "B", default_value_t = 64)]
@@ -298,12 +301,16 @@ async fn run_benchmark(
     num_workers: usize,
 ) -> Result<(), anyhow::Error> {
     let num_records_total = args.records_per_second * usize::cast_from(args.runtime.as_secs());
-    let data_generator =
-        DataGenerator::new(num_records_total, args.record_size_bytes, args.batch_size);
+    let data_generator = workload::DataGenerator::new_with_key_cardinality(
+        args.num_keys,
+        num_records_total,
+        args.record_size_bytes,
+        args.batch_size,
+    );
 
     let benchmark_description = format!(
-        "key-value-backend={} num-sources={} num-async-workers={} num-timely-workers={} runtime={:?} num_records_total={} records-per-second={} record-size-bytes={} batch-size={}",
-        args.key_value_store, args.num_sources, args.num_async_workers, args.num_timely_workers, args.runtime, num_records_total, args.records_per_second,
+        "key-value-backend={} num-sources={} num-async-workers={} num-timely-workers={} runtime={:?} num_records_total={} records-per-second={} num-keys={} record-size-bytes={} batch-size={}",
+        args.key_value_store, args.num_sources, args.num_async_workers, args.num_timely_workers, args.runtime, num_records_total, args.records_per_second, args.num_keys,
         args.record_size_bytes, args.batch_size);
 
     info!("starting benchmark: {}", benchmark_description);
