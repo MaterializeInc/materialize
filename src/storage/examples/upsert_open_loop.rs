@@ -202,6 +202,11 @@ pub struct Args {
     #[clap(arg_enum, long, default_value_t = KeyValueStore::Noop)]
     key_value_store: KeyValueStore,
 
+    /// Wether to buffer (and reduce) batches of records in the UPSERT operator. The materialize
+    /// production UPSERT operator does this, and it hammers the state backend less.
+    #[clap(long)]
+    upsert_pre_reduce: bool,
+
     /// Whether or not to use the WAL in rocksdb.
     #[clap(long)]
     rocksdb_use_wal: bool,
@@ -309,8 +314,8 @@ async fn run_benchmark(
     );
 
     let benchmark_description = format!(
-        "key-value-backend={} num-sources={} num-async-workers={} num-timely-workers={} runtime={:?} num_records_total={} records-per-second={} num-keys={} record-size-bytes={} batch-size={}",
-        args.key_value_store, args.num_sources, args.num_async_workers, args.num_timely_workers, args.runtime, num_records_total, args.records_per_second, args.num_keys,
+        "key-value-backend={} upsert-pre-reduce={} num-sources={} num-async-workers={} num-timely-workers={} runtime={:?} num_records_total={} records-per-second={} num-keys={} record-size-bytes={} batch-size={}",
+        args.key_value_store, args.upsert_pre_reduce, args.num_sources, args.num_async_workers, args.num_timely_workers, args.runtime, num_records_total, args.records_per_second, args.num_keys,
         args.record_size_bytes, args.batch_size);
 
     info!("starting benchmark: {}", benchmark_description);
@@ -514,7 +519,7 @@ async fn run_benchmark(
                             });
 
                             if input.frontier().is_empty() && active_worker {
-                                assert!(num_additions == num_records_total);
+                                assert_eq!(num_records_total, num_additions);
                                 info!(
                                     "Processing {} finished \
                                     after {} ms and processed {num_additions} additions and \
@@ -702,25 +707,45 @@ fn upsert<G>(
 where
     G: Scope<Timestamp = u64>,
 {
-    let upsert_stream = match args.key_value_store {
-        KeyValueStore::Noop => upsert_core(scope, &source_stream, source_id, NoopMap),
-        KeyValueStore::InMemoryHashMap => {
-            upsert_core(scope, &source_stream, source_id, HashMap::new())
-        }
-        KeyValueStore::InMemoryBTreeMap => {
-            upsert_core(scope, &source_stream, source_id, BTreeMap::new())
-        }
-        KeyValueStore::RocksDB => {
-            let rocksdb = IoThreadRocksDB::new(&instance_dir, scope.index(), args.rocksdb_use_wal);
+    // TODO(aljoscha): Not liking this duplications...!
+    if args.upsert_pre_reduce {
+        match args.key_value_store {
+            KeyValueStore::Noop => {
+                upsert_core_pre_reduce(scope, &source_stream, source_id, NoopMap)
+            }
+            KeyValueStore::InMemoryHashMap => {
+                upsert_core_pre_reduce(scope, &source_stream, source_id, HashMap::new())
+            }
+            KeyValueStore::InMemoryBTreeMap => {
+                upsert_core_pre_reduce(scope, &source_stream, source_id, BTreeMap::new())
+            }
+            KeyValueStore::RocksDB => {
+                let rocksdb =
+                    IoThreadRocksDB::new(&instance_dir, scope.index(), args.rocksdb_use_wal);
 
-            upsert_core(scope, &source_stream, source_id, rocksdb)
+                upsert_core_pre_reduce(scope, &source_stream, source_id, rocksdb)
+            }
         }
-    };
+    } else {
+        match args.key_value_store {
+            KeyValueStore::Noop => upsert_core(scope, &source_stream, source_id, NoopMap),
+            KeyValueStore::InMemoryHashMap => {
+                upsert_core(scope, &source_stream, source_id, HashMap::new())
+            }
+            KeyValueStore::InMemoryBTreeMap => {
+                upsert_core(scope, &source_stream, source_id, BTreeMap::new())
+            }
+            KeyValueStore::RocksDB => {
+                let rocksdb =
+                    IoThreadRocksDB::new(&instance_dir, scope.index(), args.rocksdb_use_wal);
 
-    upsert_stream
+                upsert_core(scope, &source_stream, source_id, rocksdb)
+            }
+        }
+    }
 }
 
-fn upsert_core<G, M: Map + 'static>(
+fn upsert_core_pre_reduce<G, M: Map + 'static>(
     scope: &G,
     source_stream: &Stream<G, (Vec<u8>, Vec<u8>)>,
     source_id: usize,
@@ -811,6 +836,52 @@ where
             // Discard entries, capabilities for complete times.
             for time in removed_times {
                 pending_values.remove(&time);
+            }
+        }
+    });
+
+    source_stream
+}
+
+fn upsert_core<G, M: Map + 'static>(
+    scope: &G,
+    source_stream: &Stream<G, (Vec<u8>, Vec<u8>)>,
+    source_id: usize,
+    mut current_values: M,
+) -> Stream<G, (Vec<u8>, Vec<u8>, i32)>
+where
+    G: Scope<Timestamp = u64>,
+{
+    let mut upsert_op =
+        AsyncOperatorBuilder::new(format!("source-{source_id}-upsert"), scope.clone());
+
+    let mut input = upsert_op.new_input(
+        source_stream,
+        Exchange::new(|d: &(Vec<u8>, Vec<u8>)| d.0.hashed()),
+    );
+    let (mut output, source_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) =
+        upsert_op.new_output();
+
+    upsert_op.build(move |capabilities| async move {
+        drop(capabilities);
+
+        while let Some(event) = input.next_mut().await {
+            match event {
+                AsyncEvent::Data(cap, buffer) => {
+                    let mut batch = Vec::new();
+                    batch.extend(buffer.drain(..));
+
+                    for (k, v, previous_v) in current_values.ingest(vec![batch]).await {
+                        if let Some(previous_v) = previous_v {
+                            // we might be able to avoid this extra key clone here,
+                            // if we really tried
+                            output.give(&cap, (k.clone(), previous_v, -1)).await;
+                        }
+                        // we don't do deletes right now
+                        output.give(&cap, (k, v, 1)).await;
+                    }
+                }
+                AsyncEvent::Progress(_new_frontier) => (),
             }
         }
     });
