@@ -293,7 +293,7 @@ pub async fn purify_create_source(
             let config = connection
                 .config(&*connection_context.secrets_reader)
                 .await?;
-            let publication_tables =
+            let (database_system_id, publication_tables) =
                 mz_postgres_util::publication_info(&config, &publication, None)
                     .await
                     .map_err(|cause| PlanError::FetchingPostgresPublicationInfoFailed {
@@ -543,6 +543,7 @@ pub async fn purify_create_source(
                     "materialize_{}",
                     Uuid::new_v4().to_string().replace('-', "")
                 ),
+                database_system_id: Some(database_system_id),
             };
             options.push(PgConfigOption {
                 name: PgConfigOptionName::Details,

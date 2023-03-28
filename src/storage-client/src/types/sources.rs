@@ -2040,6 +2040,10 @@ impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
 pub struct PostgresSourcePublicationDetails {
     pub tables: Vec<mz_postgres_util::desc::PostgresTableDesc>,
     pub slot: String,
+    /// Uniquely identifies the WAL that the publication is reading from. For more details, see
+    /// [pgPedia](https://pgpedia.info/d/database-system-identifier.html).
+    // TODO(migration): Remove optional in v0.51 (introduced v0.49 + 1 version)
+    pub database_system_id: Option<i64>,
 }
 
 impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicationDetails {
@@ -2047,6 +2051,7 @@ impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicati
         ProtoPostgresSourcePublicationDetails {
             tables: self.tables.iter().map(|t| t.into_proto()).collect(),
             slot: self.slot.clone(),
+            database_system_id: self.database_system_id,
         }
     }
 
@@ -2058,6 +2063,7 @@ impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicati
                 .map(mz_postgres_util::desc::PostgresTableDesc::from_proto)
                 .collect::<Result<_, _>>()?,
             slot: proto.slot,
+            database_system_id: proto.database_system_id,
         })
     }
 }

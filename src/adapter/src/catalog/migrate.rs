@@ -224,7 +224,7 @@ async fn pg_source_table_metadata_rewrite(
             .expect("valid config");
 
         // Get the current publication tables from the upstream PG source.
-        let mut current_publication_tables =
+        let (_database_system_id, mut current_publication_tables) =
             match mz_postgres_util::publication_info(&config, publication, None).await {
                 Ok(v) => v,
                 Err(_) => {

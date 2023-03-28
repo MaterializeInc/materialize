@@ -509,7 +509,7 @@ async fn postgres_replication_loop_inner(
 ) -> Result<(), ReplicationError> {
     if task_info.replication_lsn == PgLsn::from(0) {
         // Get all the relevant tables for this publication
-        let publication_tables = mz_postgres_util::publication_info(
+        let (_database_system_id, publication_tables) = mz_postgres_util::publication_info(
             &task_info.connection_config,
             &task_info.publication,
             None,
@@ -1000,7 +1000,7 @@ async fn produce_replication<'a>(
             tracing::trace!("starting replication slot");
             let query = format!(
                 r#"START_REPLICATION SLOT "{name}" LOGICAL {lsn}
-                  ("proto_version" '1', "publication_names" '{publication}')"#,
+                      ("proto_version" '1', "publication_names" '{publication}')"#,
                 name = &slot,
                 lsn = last_commit_lsn,
                 publication = publication
@@ -1053,10 +1053,10 @@ async fn produce_replication<'a>(
                             let info = source_tables.get(&rel_id).unwrap();
                             let err = || {
                                 anyhow!(
-                                    "Old row missing from replication stream for table with OID = {}.
-                                     Did you forget to set REPLICA IDENTITY to FULL for your table?",
-                                    rel_id
-                                )
+                                        "Old row missing from replication stream for table with OID = {}.
+                                         Did you forget to set REPLICA IDENTITY to FULL for your table?",
+                                        rel_id
+                                    )
                             };
                             let old_tuple = update
                                 .old_tuple()
@@ -1095,10 +1095,10 @@ async fn produce_replication<'a>(
                             let info = source_tables.get(&rel_id).unwrap();
                             let err = || {
                                 anyhow!(
-                                    "Old row missing from replication stream for table with OID = {}.
-                                     Did you forget to set REPLICA IDENTITY to FULL for your table?",
-                                    rel_id
-                                )
+                                        "Old row missing from replication stream for table with OID = {}.
+                                         Did you forget to set REPLICA IDENTITY to FULL for your table?",
+                                        rel_id
+                                    )
                             };
                             let old_tuple = delete
                                 .old_tuple()
@@ -1133,13 +1133,14 @@ async fn produce_replication<'a>(
                                 // the current remote schema to ensure e.g. we haven't received
                                 // a schema update with the same terminal column name which is
                                 // actually a different column.
-                                let current_publication_info = mz_postgres_util::publication_info(
-                                    &client_config,
-                                    publication,
-                                    Some(rel_id),
-                                )
-                                .await
-                                .err_indefinite()?;
+                                let (_database_system_id, current_publication_info) =
+                                    mz_postgres_util::publication_info(
+                                        &client_config,
+                                        publication,
+                                        Some(rel_id),
+                                    )
+                                    .await
+                                    .err_indefinite()?;
 
                                 match current_publication_info.get(0) {
                                     Some(desc) => {
@@ -1151,11 +1152,12 @@ async fn produce_replication<'a>(
                                     }
                                     None => {
                                         warn!(
-                                            "alter table error, table removed from upstream source: name {}, oid {}, old_schema {:?}",
-                                            info.desc.name,
-                                            info.desc.oid,
-                                            info.desc.columns,
-                                        );
+                                                "alter table error, table removed from upstream source: name {}, oid {}, old_schema {:?}",
+                                                info.desc.name,
+                                                info.desc.oid,
+                                                info.desc.columns,
+                                            );
+
                                         return Err(Definite(anyhow!(
                                             "source table {} with oid {} has been dropped",
                                             info.desc.name,

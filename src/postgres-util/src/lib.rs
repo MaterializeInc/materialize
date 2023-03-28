@@ -203,7 +203,7 @@ pub async fn publication_info(
     config: &Config,
     publication: &str,
     oid_filter: Option<u32>,
-) -> Result<Vec<PostgresTableDesc>, PostgresError> {
+) -> Result<(i64, Vec<PostgresTableDesc>), PostgresError> {
     let client = config.connect("postgres_publication_info").await?;
 
     client
@@ -354,7 +354,12 @@ pub async fn publication_info(
         });
     }
 
-    Ok(table_infos)
+    let id = client
+        .query_one("SELECT system_identifier FROM pg_control_system()", &[])
+        .await?;
+    let id = id.get("system_identifier");
+
+    Ok((id, table_infos))
 }
 
 pub async fn drop_replication_slots(config: Config, slots: &[&str]) -> Result<(), PostgresError> {

@@ -202,6 +202,8 @@ message ProtoPostgresSourceConnection {
 message ProtoPostgresSourcePublicationDetails {
     repeated mz_postgres_util.desc.ProtoPostgresTableDesc tables = 1;
     string slot = 2;
+    // TODO(migration): Remove optional in v0.51 (introduced v0.49 + 1 version)
+    optional int64 database_system_id = 3;
 }
 
 message ProtoLoadGeneratorSourceConnection {
