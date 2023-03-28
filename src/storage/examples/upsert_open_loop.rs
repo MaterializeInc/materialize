@@ -112,7 +112,7 @@
 
 #![allow(clippy::cast_precision_loss)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -150,7 +150,7 @@ mod workload;
 const BUILD_INFO: BuildInfo = build_info!();
 
 /// Open-loop benchmark for persistence.
-#[derive(Debug, clap::Parser)]
+#[derive(Debug, Clone, clap::Parser)]
 pub struct Args {
     /// Number of sources.
     #[clap(long, value_name = "W", default_value_t = 1)]
@@ -191,24 +191,47 @@ pub struct Args {
     #[clap(flatten)]
     tracing: TracingCliArgs,
 
-    // RocksDB settings
-    /// Whether or not to use rocksdb. Defaults to using an in-memory hashmap.
-    #[clap(long)]
-    use_rocksdb: bool,
+    /// The type of key-value store to use.
+    #[clap(arg_enum, long, default_value_t = KeyValueStore::Noop)]
+    key_value_store: KeyValueStore,
 
     /// Whether or not to use the WAL in rocksdb.
     #[clap(long)]
-    use_wal: bool,
+    rocksdb_use_wal: bool,
 
     /// Whether or not to cleanup the rocksdb instances
     /// in the temporary directory.
     #[clap(long)]
-    dont_cleanup_rocksdb: bool,
+    rocksdb_no_cleanup: bool,
     /*
     /// Use rocksdb transactional db
     #[clap(long)]
     use_rocksb_transactions: bool,
     */
+}
+
+/// Different key-value stores under examination.
+#[derive(clap::ArgEnum, Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
+enum KeyValueStore {
+    /// Pass data straight through, without running any upsert logic.
+    Noop,
+    /// Use an in-memory [`HashMap`] as the key-value store.
+    InMemoryHashMap,
+    /// Use an in-memory [`BTreeMap`] as the key-value store.
+    InMemoryBTreeMap,
+    /// Use an on-disk RocksDB as the key-value store.
+    RocksDB,
+}
+
+impl std::fmt::Display for KeyValueStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            KeyValueStore::Noop => write!(f, "noop"),
+            KeyValueStore::InMemoryHashMap => write!(f, "hash-map"),
+            KeyValueStore::InMemoryBTreeMap => write!(f, "btree-map"),
+            KeyValueStore::RocksDB => write!(f, "rocksdb"),
+        }
+    }
 }
 
 fn main() {
@@ -277,8 +300,8 @@ async fn run_benchmark(
         DataGenerator::new(num_records_total, args.record_size_bytes, args.batch_size);
 
     let benchmark_description = format!(
-        "num-sources={} num-workers={} runtime={:?} num_records_total={} records-per-second={} record-size-bytes={} batch-size={}",
-        args.num_sources, args.num_workers, args.runtime, num_records_total, args.records_per_second,
+        "key-value-backend={} num-sources={} num-workers={} runtime={:?} num_records_total={} records-per-second={} record-size-bytes={} batch-size={}",
+        args.key_value_store, args.num_sources, args.num_workers, args.runtime, num_records_total, args.records_per_second,
         args.record_size_bytes, args.batch_size);
 
     info!("starting benchmark: {}", benchmark_description);
@@ -428,16 +451,18 @@ async fn run_benchmark(
         dir_path.display()
     );
 
-    if args.dont_cleanup_rocksdb {
+    if args.rocksdb_no_cleanup {
         std::mem::forget(rocks_dir);
     }
 
     let timely_config = timely::Config::process(num_workers);
+    let args_cloned = args.clone();
     let timely_guards = timely::execute::execute(timely_config, move |timely_worker| {
         let progress_tx = Arc::clone(&progress_tx);
         let source_rxs = Arc::clone(&source_rxs);
 
         let dir_path = dir_path.clone();
+        let args = args_cloned.clone();
 
         let probe = timely_worker.dataflow::<u64, _, _>(move |scope| {
             let mut source_streams = Vec::new();
@@ -447,13 +472,8 @@ async fn run_benchmark(
 
                 let source_stream = generator_source(scope, source_id, source_rxs);
 
-                let upsert_stream = upsert(
-                    scope,
-                    &source_stream,
-                    source_id,
-                    args.use_rocksdb
-                        .then(|| IoThreadRocksDB::new(&dir_path, scope.index(), args.use_wal)),
-                );
+                let upsert_stream =
+                    upsert(scope, &source_stream, source_id, &dir_path, args.clone());
 
                 // Choose a different worker for the counting.
                 // TODO(aljoscha): Factor out into function.
@@ -467,21 +487,29 @@ async fn run_benchmark(
                     Exchange::new(move |_| u64::cast_from(chosen_worker)),
                     &format!("source-{source_id}-counter"),
                     move |_caps, _info| {
-                        let mut count = 0;
+                        let mut num_additions = 0;
+                        let mut num_retractions = 0;
                         let mut buffer = Vec::new();
                         move |input, _output| {
                             input.for_each(|_time, data| {
                                 data.swap(&mut buffer);
-                                for _record in buffer.drain(..) {
-                                    count += 1;
+                                for (_k, _v, diff) in buffer.drain(..) {
+                                    if diff == 1 {
+                                        num_additions += 1;
+                                    } else if diff == -1 {
+                                        num_retractions += 1;
+                                    } else {
+                                        panic!("unexpected record diff: {diff}");
+                                    }
                                 }
                             });
 
                             if input.frontier().is_empty() && active_worker {
-                                assert!(count == num_records_total);
+                                assert!(num_additions == num_records_total);
                                 info!(
                                     "Processing {} finished \
-                                    after {} ms and processed {count} records",
+                                    after {} ms and processed {num_additions} additions and \
+                                    {num_retractions} retractions",
                                     source_id,
                                     start.elapsed().as_millis(),
                                 );
@@ -659,16 +687,28 @@ fn upsert<G>(
     scope: &G,
     source_stream: &Stream<G, (Vec<u8>, Vec<u8>)>,
     source_id: usize,
-    rocksdb: Option<IoThreadRocksDB>,
+    instance_dir: &PathBuf,
+    args: Args,
 ) -> Stream<G, (Vec<u8>, Vec<u8>, i32)>
 where
     G: Scope<Timestamp = u64>,
 {
-    if let Some(rocksdb) = rocksdb {
-        upsert_core(scope, source_stream, source_id, rocksdb)
-    } else {
-        upsert_core(scope, source_stream, source_id, BTreeMap::new())
-    }
+    let upsert_stream = match args.key_value_store {
+        KeyValueStore::Noop => upsert_core(scope, &source_stream, source_id, NoopMap),
+        KeyValueStore::InMemoryHashMap => {
+            upsert_core(scope, &source_stream, source_id, HashMap::new())
+        }
+        KeyValueStore::InMemoryBTreeMap => {
+            upsert_core(scope, &source_stream, source_id, BTreeMap::new())
+        }
+        KeyValueStore::RocksDB => {
+            let rocksdb = IoThreadRocksDB::new(&instance_dir, scope.index(), args.rocksdb_use_wal);
+
+            upsert_core(scope, &source_stream, source_id, rocksdb)
+        }
+    };
+
+    upsert_stream
 }
 
 fn upsert_core<G, M: Map + 'static>(
@@ -785,6 +825,44 @@ trait Map {
     async fn ingest(&mut self, batches: Vec<Batch>) -> Batch<KVAndPrevious>;
 }
 
+/// A [`Map`] that simply passes through values, emitting the new value as both new and current, to
+/// keep the number of emitted updates roughly similar to the other implementations which run real
+/// UPSERT logic.
+struct NoopMap;
+
+#[async_trait::async_trait]
+impl Map for NoopMap {
+    async fn ingest(&mut self, batches: Vec<Batch>) -> Batch<KVAndPrevious> {
+        let mut out = Vec::new();
+        for batch in batches {
+            for (k, v) in batch {
+                // TODO(guswynn): reduce clones.
+                // NOTE: Keep similar number of clones to HashMap and BTreeMap impl.
+                let _in_k = k.clone();
+                let in_v = v.clone();
+                out.push((k, v, Some(in_v)))
+            }
+        }
+        out
+    }
+}
+
+#[async_trait::async_trait]
+impl Map for HashMap<Vec<u8>, Vec<u8>> {
+    async fn ingest(&mut self, batches: Vec<Batch>) -> Batch<KVAndPrevious> {
+        let mut out = Vec::new();
+        for batch in batches {
+            for (k, v) in batch {
+                // TODO(guswynn): reduce clones.
+                let in_k = k.clone();
+                let in_v = v.clone();
+                out.push((k, v, self.insert(in_k, in_v)))
+            }
+        }
+        out
+    }
+}
+
 #[async_trait::async_trait]
 impl Map for BTreeMap<Vec<u8>, Vec<u8>> {
     async fn ingest(&mut self, batches: Vec<Batch>) -> Batch<KVAndPrevious> {
@@ -802,7 +880,7 @@ impl Map for BTreeMap<Vec<u8>, Vec<u8>> {
 }
 
 use rocksdb::{Error, DB};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::sync::oneshot::{channel, Sender};
 
 #[derive(Clone)]
