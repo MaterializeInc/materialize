@@ -156,9 +156,13 @@ pub struct Args {
     #[clap(long, value_name = "W", default_value_t = 1)]
     num_sources: usize,
 
+    /// Number of async (tokio) workers/threads.
+    #[clap(long, value_name = "R", default_value_t = 1)]
+    num_async_workers: usize,
+
     /// Number of (timely) workers/threads.
     #[clap(long, value_name = "R", default_value_t = 1)]
-    num_workers: usize,
+    num_timely_workers: usize,
 
     /// Runtime in a whole number of seconds
     #[clap(long, parse(try_from_str = humantime::parse_duration), value_name = "S", default_value = "60s")]
@@ -237,10 +241,8 @@ impl std::fmt::Display for KeyValueStore {
 fn main() {
     let args: Args = cli::parse_args(CliConfig::default());
 
-    // Mirror the tokio Runtime configuration in our production binaries.
-    let ncpus_useful = usize::max(1, std::cmp::min(num_cpus::get(), num_cpus::get_physical()));
     let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(ncpus_useful)
+        .worker_threads(args.num_timely_workers)
         .enable_all()
         .build()
         .expect("Failed building the Runtime");
@@ -285,7 +287,7 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
     }
 
     let num_sources = args.num_sources;
-    let num_workers = args.num_workers;
+    let num_workers = args.num_timely_workers;
     run_benchmark(args, metrics_registry, num_sources, num_workers).await
 }
 
@@ -300,8 +302,8 @@ async fn run_benchmark(
         DataGenerator::new(num_records_total, args.record_size_bytes, args.batch_size);
 
     let benchmark_description = format!(
-        "key-value-backend={} num-sources={} num-workers={} runtime={:?} num_records_total={} records-per-second={} record-size-bytes={} batch-size={}",
-        args.key_value_store, args.num_sources, args.num_workers, args.runtime, num_records_total, args.records_per_second,
+        "key-value-backend={} num-sources={} num-async-workers={} num-timely-workers={} runtime={:?} num_records_total={} records-per-second={} record-size-bytes={} batch-size={}",
+        args.key_value_store, args.num_sources, args.num_async_workers, args.num_timely_workers, args.runtime, num_records_total, args.records_per_second,
         args.record_size_bytes, args.batch_size);
 
     info!("starting benchmark: {}", benchmark_description);
