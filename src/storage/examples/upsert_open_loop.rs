@@ -130,7 +130,7 @@ use timely::PartialOrder;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
-use tracing::{debug, error, info, info_span, trace, Instrument};
+use tracing::{debug, error, info, info_span, trace, warn, Instrument};
 
 use mz_build_info::{build_info, BuildInfo};
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
@@ -374,74 +374,79 @@ async fn run_benchmark(
 
                 let mut current_source_time = shared_source_time_rx.borrow().clone();
 
+
+                // Sleep so this doesn't busy wait if it's ahead of schedule.
+                let mut elapsed = start.elapsed();
+                let mut next_batch_time = time_per_batch * (batch_idx);
+
+                // We make sure that we downgrade the timestamp when there's a new one,
+                // otherwise we wait, so that we're trottled.
                 loop {
+                    if elapsed.as_millis() > next_batch_time.as_millis() {
+                        warn!(next_batch_time = ?next_batch_time, elapsed = ?elapsed, "data generator for source {source_id} is not keeping up!");
+                    }
+
+                    let sleep = next_batch_time.saturating_sub(elapsed);
+                    debug!(next_batch_time = ?next_batch_time, elapsed = ?elapsed, "Data generator ahead of schedule, sleeping for {:?}", sleep);
+
                     // Data generation can be CPU expensive, so generate it
                     // in a spawn_blocking to play nicely with the rest of
                     // the async code.
-                    let mut data_generator = data_generator.clone();
+                    let mut data_generator_cloned = data_generator.clone();
 
-                    // Intentionally create the span outside the task to set the
-                    // parent.
-                    let batch_span = info_span!("batch", batch_idx);
-                    let batch = mz_ore::task::spawn_blocking(
-                        || "data_generator-batch",
-                        move || {
-                            batch_span
-                                .in_scope(|| data_generator.gen_batch(usize::cast_from(batch_idx)))
-                        },
-                    )
-                    .await
-                    .expect("task failed");
-                    trace!("data generator {} made a batch", source_id);
-                    let batch = match batch {
-                        Some(x) => x,
-                        None => {
-                            let records_sent = usize::cast_from(batch_idx) * args.batch_size;
-                            let finished = format!(
-                                "Data generator {} finished after {} ms and sent {} records",
-                                source_id,
-                                start.elapsed().as_millis(),
-                                records_sent
-                            );
-                            return Ok(finished);
-                        }
-                    };
-                    batch_idx += 1;
+                    tokio::select! {
+                        _res = tokio::time::sleep(sleep) => {
 
-                    // send will only error if the matching receiver has been dropped.
-                    if let Err(SendError(_)) = generator_tx.send(GeneratorEvent::Data(batch)) {
-                        bail!("receiver unexpectedly dropped");
-                    }
-                    debug!("data generator {} wrote a batch", source_id);
-
-                    // Sleep so this doesn't busy wait if it's ahead of schedule.
-                    let mut elapsed = start.elapsed();
-                    let next_batch_time = time_per_batch * (batch_idx);
-
-                    // We make sure that we downgrade the timestamp when there's a new one,
-                    // otherwise we wait, so that we're trottled.
-                    while next_batch_time.as_millis() > elapsed.as_millis() {
-                        let sleep = next_batch_time.saturating_sub(elapsed);
-                        debug!(next_batch_time = ?next_batch_time, elapsed = ?elapsed, "Data generator ahead of schedule, sleeping for {:?}", sleep);
-
-                        tokio::select! {
-                            _res = tokio::time::sleep(sleep) => {
-                                debug!("throttle sleep elapsed");
-                            }
-                            Ok(()) = shared_source_time_rx.changed() => {
-                                let new_source_time = shared_source_time_rx.borrow().clone();
-                                assert!(new_source_time > current_source_time);
-                                current_source_time = new_source_time;
-                                if let Err(SendError(_)) =
-                                    generator_tx.send(GeneratorEvent::Progress(current_source_time))
-                                {
-                                    bail!("receiver unexpectedly dropped");
+                            // Intentionally create the span outside the task to set the
+                            // parent.
+                            let batch_span = info_span!("batch", batch_idx);
+                            let batch = mz_ore::task::spawn_blocking(
+                                || "data_generator-batch",
+                                move || {
+                                    batch_span
+                                        .in_scope(|| data_generator_cloned.gen_batch(usize::cast_from(batch_idx)))
+                                },
+                            )
+                            .await
+                            .expect("task failed");
+                            trace!("data generator {} made a batch", source_id);
+                            let batch = match batch {
+                                Some(x) => x,
+                                None => {
+                                    let records_sent = usize::cast_from(batch_idx) * args.batch_size;
+                                    let finished = format!(
+                                        "Data generator {} finished after {} ms and sent {} records",
+                                        source_id,
+                                        start.elapsed().as_millis(),
+                                        records_sent
+                                    );
+                                    return Ok(finished);
                                 }
-                                debug!("data generator {source_id} downgraded to {current_source_time}");
+                            };
+                            batch_idx += 1;
+
+                            // send will only error if the matching receiver has been dropped.
+                            if let Err(SendError(_)) = generator_tx.send(GeneratorEvent::Data(batch)) {
+                                bail!("receiver unexpectedly dropped");
                             }
+                            debug!("data generator {} wrote a batch", source_id);
+
+                            next_batch_time = time_per_batch * (batch_idx);
                         }
-                        elapsed = start.elapsed();
+                        Ok(()) = shared_source_time_rx.changed() => {
+                            let new_source_time = shared_source_time_rx.borrow().clone();
+                            assert!(new_source_time > current_source_time);
+                            current_source_time = new_source_time;
+                            if let Err(SendError(_)) =
+                                generator_tx.send(GeneratorEvent::Progress(current_source_time))
+                            {
+                                bail!("receiver unexpectedly dropped");
+                            }
+                            debug!("data generator {source_id} downgraded to {current_source_time}");
+                        }
                     }
+
+                    elapsed = start.elapsed();
 
                     if elapsed - prev_log > args.logging_granularity {
                         let records_sent = usize::cast_from(batch_idx) * args.batch_size;
@@ -454,6 +459,7 @@ async fn run_benchmark(
                         prev_log = elapsed;
                     }
                 }
+
             }
             .instrument(generator_span),
         );
