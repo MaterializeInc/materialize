@@ -1848,7 +1848,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Returns an error if `id` is not found.
     ///
-    /// Runtime is linear with respect to the total number of items in the stash.
+    /// Runtime is linear with respect to the total number of clusters in the stash.
     /// DO NOT call this function in a loop.
     pub fn update_cluster(&mut self, id: ClusterId, cluster: &Cluster) -> Result<(), Error> {
         let n = self.clusters.update(|k, _v| {
