@@ -105,8 +105,9 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// minimum time until the subscribe advances to the empty frontier or is
     /// dropped. The time intervals of consecutive [`Batch`]es must be increasing, contiguous,
     /// non-overlapping, and non-empty. All updates transmitted in a batch must have times within
-    /// that batch’s time interval. The `upper` of the first [`Batch`] of a subscribe must
-    /// exactly the subscribe's initial `as_of` frontier, and it must be empty.
+    /// that batch’s time interval. All updates' times must be greater than or equal to `as_of`.
+    /// The `upper` of the first [`Batch`] of a subscribe must not be less than that subscribe's
+    /// initial `as_of` frontier.
     ///
     /// The replica must send [`DroppedAt`] responses if the subscribe was dropped in response to
     /// an [`AllowCompaction` command] that advanced its read frontier to the empty frontier. The
