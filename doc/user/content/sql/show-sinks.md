@@ -20,7 +20,7 @@ aliases:
 
 Field | Use
 ------|-----
-_schema&lowbar;name_ | The schema to show sinks from. Defaults to `public` in the current database. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+_schema&lowbar;name_ | The schema to show sinks from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 
 ### Output format
 
