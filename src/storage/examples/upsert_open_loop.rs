@@ -253,7 +253,7 @@ fn main() {
     let args: Args = cli::parse_args(CliConfig::default());
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(args.num_timely_workers)
+        .worker_threads(args.num_async_workers)
         .enable_all()
         .build()
         .expect("Failed building the Runtime");
