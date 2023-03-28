@@ -114,12 +114,12 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use differential_dataflow::Hashable;
+use itertools::Itertools;
 use mz_ore::task;
 use mz_timely_util::probe::{Handle, ProbeNotify};
 use timely::dataflow::channels::pact::Exchange;
@@ -335,9 +335,7 @@ async fn run_benchmark(
 
     // This controls the time that data generators (and in turn sources) downgrade to. We know this,
     // and probe the time at the end of the pipeline to figure out the lag.
-    let shared_source_time = Arc::new(AtomicU64::new(
-        start.elapsed().as_millis().try_into().unwrap(),
-    ));
+    let (shared_source_time_tx, shared_source_time_rx) = tokio::sync::watch::channel(0u64);
 
     // The batch interarrival time. We'll use this quantity to rate limit the
     // data generation.
@@ -358,7 +356,7 @@ async fn run_benchmark(
         let (generator_tx, generator_rx) = tokio::sync::mpsc::unbounded_channel();
         source_rxs.insert(source_id, generator_rx);
 
-        let shared_source_time = Arc::clone(&shared_source_time);
+        let mut shared_source_time_rx = shared_source_time_rx.clone();
 
         // Intentionally create the span outside the task to set the parent.
         let generator_span = info_span!("generator", source_id);
@@ -374,13 +372,14 @@ async fn run_benchmark(
                 // as a relative duration from start.
                 let mut prev_log = Duration::from_millis(0);
 
-                let mut current_source_time = shared_source_time.load(Ordering::SeqCst);
+                let mut current_source_time = shared_source_time_rx.borrow().clone();
 
                 loop {
                     // Data generation can be CPU expensive, so generate it
                     // in a spawn_blocking to play nicely with the rest of
                     // the async code.
                     let mut data_generator = data_generator.clone();
+
                     // Intentionally create the span outside the task to set the
                     // parent.
                     let batch_span = info_span!("batch", batch_idx);
@@ -409,36 +408,39 @@ async fn run_benchmark(
                     };
                     batch_idx += 1;
 
-                    // Sleep so this doesn't busy wait if it's ahead of
-                    // schedule.
-                    let elapsed = start.elapsed();
-                    let next_batch_time = time_per_batch * (batch_idx);
-                    let sleep = next_batch_time.saturating_sub(elapsed);
-                    if sleep > Duration::ZERO {
-                        async {
-                            debug!("Data generator ahead of schedule, sleeping for {:?}", sleep);
-                            tokio::time::sleep(sleep).await
-                        }
-                        .instrument(info_span!("throttle"))
-                        .await;
-                    }
-
                     // send will only error if the matching receiver has been dropped.
                     if let Err(SendError(_)) = generator_tx.send(GeneratorEvent::Data(batch)) {
                         bail!("receiver unexpectedly dropped");
                     }
-                    trace!("data generator {} wrote a batch", source_id);
+                    debug!("data generator {} wrote a batch", source_id);
 
-                    let new_source_time =
-                        shared_source_time.load(std::sync::atomic::Ordering::SeqCst);
-                    if new_source_time > current_source_time {
-                        current_source_time = new_source_time;
-                        if let Err(SendError(_)) =
-                            generator_tx.send(GeneratorEvent::Progress(current_source_time))
-                        {
-                            bail!("receiver unexpectedly dropped");
+                    // Sleep so this doesn't busy wait if it's ahead of schedule.
+                    let mut elapsed = start.elapsed();
+                    let next_batch_time = time_per_batch * (batch_idx);
+
+                    // We make sure that we downgrade the timestamp when there's a new one,
+                    // otherwise we wait, so that we're trottled.
+                    while next_batch_time.as_millis() > elapsed.as_millis() {
+                        let sleep = next_batch_time.saturating_sub(elapsed);
+                        debug!(next_batch_time = ?next_batch_time, elapsed = ?elapsed, "Data generator ahead of schedule, sleeping for {:?}", sleep);
+
+                        tokio::select! {
+                            _res = tokio::time::sleep(sleep) => {
+                                debug!("throttle sleep elapsed");
+                            }
+                            Ok(()) = shared_source_time_rx.changed() => {
+                                let new_source_time = shared_source_time_rx.borrow().clone();
+                                assert!(new_source_time > current_source_time);
+                                current_source_time = new_source_time;
+                                if let Err(SendError(_)) =
+                                    generator_tx.send(GeneratorEvent::Progress(current_source_time))
+                                {
+                                    bail!("receiver unexpectedly dropped");
+                                }
+                                debug!("data generator {source_id} downgraded to {current_source_time}");
+                            }
                         }
-                        trace!("data generator {source_id} downgraded to {current_source_time}");
+                        elapsed = start.elapsed();
                     }
 
                     if elapsed - prev_log > args.logging_granularity {
@@ -531,10 +533,9 @@ async fn run_benchmark(
                             if input.frontier().is_empty() {
                                 assert_eq!(num_records_total, num_additions);
                                 info!(
-                                    "Processing {} finished \
+                                    "Processing source {source_id} finished \
                                     after {} ms and processed {num_additions} additions and \
                                     {num_retractions} retractions",
-                                    source_id,
                                     start.elapsed().as_millis(),
                                 );
                             } else if PartialOrder::less_than(
@@ -634,12 +635,17 @@ async fn run_benchmark(
         trace!("progress channel closed!");
     });
 
-    while start.elapsed() < args.runtime {
-        let current_time = shared_source_time.load(Ordering::SeqCst);
+    let mut current_time = 0u64;
+    drop(shared_source_time_rx);
+    loop {
         let new_time: u64 = start.elapsed().as_millis().try_into().unwrap();
 
         if new_time > current_time + 1000 {
-            shared_source_time.store(new_time, Ordering::SeqCst);
+            current_time = new_time;
+            if let Err(_err) = shared_source_time_tx.send(new_time) {
+                // All source generators finished!
+                break;
+            }
         }
 
         tokio::time::sleep(Duration::from_millis(100)).await;
