@@ -15,14 +15,35 @@
 $ kafka-ingest topic=thetopic format=bytes
 three
 
-> SELECT * FROM mz_source
+> SELECT * FROM fixed_text
 text
 ----
 one
 two
 three
 
+> SELECT * FROM dynamic_text
+text
+----
+one
+two
+three
+
+> SELECT * FROM fixed_plus_csr
+f1    f2
+----------
+fish  1000
+
+> SELECT * FROM dynamic_plus_csr
+f1    f2
+----------
+fish  1000
+
+# ensure they all were marked as running correctly
 > SELECT status FROM mz_internal.mz_source_statuses st
   JOIN mz_sources s ON st.id = s.id
-  WHERE s.name = 'mz_source'
+  WHERE s.name in ('fixed_text', 'dynamic_text', 'fixed_plus_csr', 'dynamic_plus_csr')
+running
+running
+running
 running

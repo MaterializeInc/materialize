@@ -195,13 +195,26 @@ impl SourceRender for PostgresSourceConnection {
             (output, res)
         });
 
+        // N.B. Note that we don't check ssh tunnel statuses here. We could, but immediately on
+        // restart we are going to set the status to an ssh error correctly, so we don't do this
+        // extra work.
+
         let health = snapshot_err.concat(&repl_err).flat_map(move |err| {
             // This update will cause the dataflow to restart
             let err_string = err.display_with_causes().to_string();
             let update = HealthStatusUpdate::halting(err_string.clone(), None);
+            let namespace = if matches!(
+                &*err,
+                TransientError::PostgresError(PostgresError::Ssh(_))
+                    | TransientError::PostgresError(PostgresError::SshIo(_))
+            ) {
+                StatusNamespace::Ssh
+            } else {
+                Self::STATUS_NAMESPACE.clone()
+            };
             let mut statuses = vec![HealthStatusMessage {
                 index: 0,
-                namespace: Self::STATUS_NAMESPACE.clone(),
+                namespace: namespace.clone(),
                 update,
             }];
 
@@ -210,7 +223,7 @@ impl SourceRender for PostgresSourceConnection {
                 let status = HealthStatusUpdate::stalled(err_string.clone(), None);
                 HealthStatusMessage {
                     index: *index,
-                    namespace: Self::STATUS_NAMESPACE.clone(),
+                    namespace,
                     update: status,
                 }
             }));

@@ -24,10 +24,11 @@ use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
 use scopeguard::ScopeGuard;
+use tokio::sync::oneshot::channel;
 use tokio::sync::watch;
 use tracing::info;
 
-use crate::tunnel::{SshTunnelConfig, SshTunnelHandle};
+use crate::tunnel::{SshTunnelConfig, SshTunnelHandle, SshTunnelStatus};
 
 /// Thread-safe manager of SSH tunnel connections.
 #[derive(Debug, Clone, Default)]
@@ -148,11 +149,11 @@ impl SshTunnelManager {
 }
 
 /// Identifies a connection to a remote host via an SSH tunnel.
-#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
-struct SshTunnelKey {
-    config: SshTunnelConfig,
-    remote_host: String,
-    remote_port: u16,
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
+pub struct SshTunnelKey {
+    pub config: SshTunnelConfig,
+    pub remote_host: String,
+    pub remote_port: u16,
 }
 
 /// The state of an SSH tunnel connection.
@@ -182,7 +183,7 @@ enum SshTunnelState {
 pub struct ManagedSshTunnelHandle {
     handle: Arc<SshTunnelHandle>,
     manager: SshTunnelManager,
-    key: SshTunnelKey,
+    pub key: SshTunnelKey,
 }
 
 impl Deref for ManagedSshTunnelHandle {
@@ -190,6 +191,21 @@ impl Deref for ManagedSshTunnelHandle {
 
     fn deref(&self) -> &SshTunnelHandle {
         &self.handle
+    }
+}
+
+impl ManagedSshTunnelHandle {
+    /// Return the current status of the `SshTunnelStatus`, by communicating with the
+    /// task running the ssh session.
+    pub async fn check_status(&self) -> SshTunnelStatus {
+        let (tx, rx) = channel();
+
+        let _ = self.handle.status_request_sender.send(tx);
+
+        // We default to `Running` here for simplicity, as the existence of `self`
+        // means that the ssh tunnel task must be alive (unless it panicked, which means
+        // we are aborting anyways).
+        rx.await.unwrap_or(SshTunnelStatus::Running)
     }
 }
 

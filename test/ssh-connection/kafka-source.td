@@ -18,8 +18,8 @@ $ kafka-create-topic topic=thetopic
 $ kafka-ingest topic=thetopic format=bytes
 one
 
-# Create a dedicated cluster for the source, so we can easily restart the
-# source by dropping and recreating the cluster's replica.
+# Create a dedicated cluster for the sources, so we can easily restart the
+# sources by dropping and recreating the cluster's replica.
 #
 # We also use a large number of worker threads to protect against past behavior
 # in which we opened one SSH tunnel per worker thread per broker, which
@@ -27,43 +27,39 @@ one
 > DROP CLUSTER IF EXISTS sc;
 > CREATE CLUSTER sc REPLICAS (r1 (SIZE '32'))
 
-> CREATE CONNECTION kafka_conn
+# Test the various types of tunnels
+
+> CREATE CONNECTION kafka_conn_using
   TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred);
 
-# Test that we can create, validate, and use a dynamic kafka connection
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_default_kafka_ssh_tunnel = true
-
-> CREATE CONNECTION kafka_conn_top_level
+> CREATE CONNECTION kafka_conn_dynamic
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SSH TUNNEL thancred);
 
-> CREATE SOURCE mz_source_top_level IN CLUSTER sc
-  FROM KAFKA CONNECTION kafka_conn_top_level (
-    TOPIC 'testdrive-thetopic-${testdrive.seed}',
-    TOPIC METADATA REFRESH INTERVAL MS 1000
-  )
-  FORMAT TEXT
-  ENVELOPE NONE
+# TODO(guswynn): this should be correctly namespaced as an ssh error
+! CREATE CONNECTION kafka_conn_keyless
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SSH TUNNEL keyless);
+contains:Failed to resolve hostname
 
-> SELECT * FROM mz_source_top_level
-text
-----
-one
 
 # Create source with a faster metadata refresh interval so
 # errors are detected every second instead of every minute.
-> CREATE SOURCE mz_source IN CLUSTER sc
-  FROM KAFKA CONNECTION kafka_conn (
+> CREATE SOURCE fixed_text IN CLUSTER sc
+  FROM KAFKA CONNECTION kafka_conn_using (
     TOPIC 'testdrive-thetopic-${testdrive.seed}',
     TOPIC METADATA REFRESH INTERVAL MS 1000
   )
   FORMAT TEXT
   ENVELOPE NONE
 
-> SHOW SUBSOURCES ON mz_source
-mz_source_progress progress
+> CREATE SOURCE dynamic_text  IN CLUSTER sc
+  FROM KAFKA CONNECTION kafka_conn_dynamic (
+    TOPIC 'testdrive-thetopic-${testdrive.seed}',
+    TOPIC METADATA REFRESH INTERVAL MS 1000
+  )
+  FORMAT TEXT
+  ENVELOPE NONE
 
-> SELECT * FROM mz_source
+> SELECT * FROM fixed_text
 text
 ----
 one
@@ -71,7 +67,14 @@ one
 $ kafka-ingest topic=thetopic format=bytes
 two
 
-> SELECT * FROM mz_source
+# Ensure both types of tunnels work
+> SELECT * FROM fixed_text
+text
+----
+one
+two
+
+> SELECT * FROM dynamic_text
 text
 ----
 one
@@ -96,13 +99,34 @@ $ kafka-create-topic topic=avroavro
 $ kafka-ingest format=avro topic=avroavro schema=${schema}
 {"f1": "fish", "f2": 1000}
 
-> CREATE SOURCE csr_source
+> CREATE SOURCE fixed_plus_csr
   IN CLUSTER sc
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avroavro-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_conn_using (TOPIC 'testdrive-avroavro-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
-> SELECT * FROM csr_source
+> SELECT * FROM fixed_plus_csr
 f1    f2
 ----------
 fish  1000
+
+# Test csr sources for dynamic connections as well.
+> CREATE SOURCE dynamic_plus_csr
+  IN CLUSTER sc
+  FROM KAFKA CONNECTION kafka_conn_dynamic (TOPIC 'testdrive-avroavro-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE NONE
+
+> SELECT * FROM dynamic_plus_csr
+f1    f2
+----------
+fish  1000
+
+# ensure they all were marked as running correctly
+> SELECT status FROM mz_internal.mz_source_statuses st
+  JOIN mz_sources s ON st.id = s.id
+  WHERE s.name in ('fixed_text', 'dynamic_text', 'fixed_plus_csr', 'dynamic_plus_csr')
+running
+running
+running
+running

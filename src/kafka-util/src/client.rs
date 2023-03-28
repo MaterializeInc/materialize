@@ -10,7 +10,7 @@
 //! Helpers for working with Kafka's client API.
 
 use fancy_regex::Regex;
-use std::collections::BTreeMap;
+use std::collections::{btree_map, BTreeMap};
 use std::error::Error;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -21,7 +21,7 @@ use anyhow::{bail, Context};
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
-use mz_ssh_util::tunnel::SshTunnelConfig;
+use mz_ssh_util::tunnel::{SshTunnelConfig, SshTunnelStatus};
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
 use rdkafka::client::{BrokerAddr, Client, NativeClient, OAuthToken};
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
@@ -180,6 +180,9 @@ impl FromStr for MzKafkaError {
             Ok(Self::AllBrokersDown)
         } else if s.contains("Unknown topic or partition") || s.contains("Unknown partition") {
             Ok(Self::UnknownTopicOrPartition)
+        } else if s.contains("failed to connect to the remote host") {
+            // This is an error logged synthesized by `DynamicBrokerRewritingClientContext`
+            Ok(Self::Internal(s.to_string()))
         } else {
             Err(())
         }
@@ -247,6 +250,9 @@ enum BrokerRewriteHandle {
         // This ensures the ssh tunnel is not shutdown.
         ManagedSshTunnelHandle,
     ),
+    /// For _default_ ssh tunnels, we store an error if _creation_
+    /// of the tunnel failed, so that `tunnel_statuses` can return it.
+    FailedDefaultSshTunnel(String),
 }
 
 /// A client context that supports rewriting broker addresses.
@@ -323,6 +329,57 @@ impl<C> TunnelingClientContext<C> {
     pub fn inner(&self) -> &C {
         &self.inner
     }
+
+    /// Returns a _consolidated_ `SshTunnelStatus` that communicates the status
+    /// of all active ssh tunnels `self` knows about.
+    pub async fn tunnel_statuses(&self) -> SshTunnelStatus {
+        // Pull out all the rewrites, temporarily.
+        let current_rewrites: Vec<_> = self
+            .rewrites
+            .lock()
+            .expect("poisoned")
+            .iter()
+            .map(|(broker, status)| (broker.clone(), status.clone()))
+            .collect();
+
+        // First, get the statuses from broken _creation_ of ssh tunnels.
+        let mut ssh_statuses: Vec<_> = current_rewrites
+            .iter()
+            .filter_map(|(_, status)| match status {
+                BrokerRewriteHandle::FailedDefaultSshTunnel(e) => {
+                    Some(SshTunnelStatus::Errored(e.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+
+        // Then check the statuses of all the existing tunnels.
+        ssh_statuses.extend(
+            futures::future::join_all(current_rewrites.iter().filter_map(
+                |(_, status)| match status {
+                    BrokerRewriteHandle::SshTunnel(s) => Some(async { s.check_status().await }),
+                    _ => None,
+                },
+            ))
+            .await,
+        );
+
+        // Then consolidate them.
+        let mut status_to_emit = SshTunnelStatus::Running;
+        for status in ssh_statuses {
+            match (&mut status_to_emit, status) {
+                (SshTunnelStatus::Running, SshTunnelStatus::Errored(e)) => {
+                    status_to_emit = SshTunnelStatus::Errored(e);
+                }
+                (SshTunnelStatus::Errored(ref mut error), SshTunnelStatus::Errored(e)) => {
+                    error.push_str(&format!(", {}", e));
+                }
+                _ => {}
+            }
+        }
+
+        status_to_emit
+    }
 }
 
 impl<C> ClientContext for TunnelingClientContext<C>
@@ -344,6 +401,9 @@ where
                         port: Some(addr.port()),
                     }
                 }
+                BrokerRewriteHandle::FailedDefaultSshTunnel(_) => {
+                    unreachable!()
+                }
             };
 
             let new_addr = BrokerAddr {
@@ -363,30 +423,43 @@ where
         let rewrite = self.rewrites.lock().expect("poisoned").get(&addr).cloned();
 
         match rewrite {
-            None => {
+            None | Some(BrokerRewriteHandle::FailedDefaultSshTunnel(_)) => {
                 match &self.default_tunnel {
                     Some(default_tunnel) => {
-                        let broker = addr.clone();
-                        let default_tunnel = default_tunnel.clone();
-                        let ssh_tunnel_manager = self.ssh_tunnel_manager.clone();
-                        let runtime = self.runtime.clone();
-
                         // Multiple users could all run `connect` at the same time; only one ssh
                         // tunnel will ever be connected, and only one will be inserted into the
                         // map.
-                        let ssh_tunnel = runtime.block_on(async {
-                            ssh_tunnel_manager
-                                .connect(default_tunnel, &broker.host, broker.port.parse().unwrap())
+                        let ssh_tunnel = self.runtime.block_on(async {
+                            self.ssh_tunnel_manager
+                                .connect(
+                                    default_tunnel.clone(),
+                                    &addr.host,
+                                    addr.port.parse().unwrap(),
+                                )
                                 .await
                         });
                         match ssh_tunnel {
                             Ok(ssh_tunnel) => {
                                 let mut rewrites = self.rewrites.lock().expect("poisoned");
-                                let rewrite = rewrites.entry(addr.clone()).or_insert_with(|| {
-                                    BrokerRewriteHandle::SshTunnel(ssh_tunnel.clone())
-                                });
+                                let rewrite = match rewrites.entry(addr.clone()) {
+                                    btree_map::Entry::Occupied(mut o)
+                                        if matches!(
+                                            o.get(),
+                                            BrokerRewriteHandle::FailedDefaultSshTunnel(_)
+                                        ) =>
+                                    {
+                                        o.insert(BrokerRewriteHandle::SshTunnel(
+                                            ssh_tunnel.clone(),
+                                        ));
+                                        o.into_mut()
+                                    }
+                                    btree_map::Entry::Occupied(o) => o.into_mut(),
+                                    btree_map::Entry::Vacant(v) => {
+                                        v.insert(BrokerRewriteHandle::SshTunnel(ssh_tunnel.clone()))
+                                    }
+                                };
 
-                                return_rewrite(&*rewrite)
+                                return_rewrite(rewrite)
                             }
                             Err(e) => {
                                 warn!(
@@ -394,6 +467,15 @@ where
                                     addr,
                                     e.display_with_causes()
                                 );
+
+                                // Write an error if no one else has already written one.
+                                let mut rewrites = self.rewrites.lock().expect("poisoned");
+                                rewrites.entry(addr.clone()).or_insert_with(|| {
+                                    BrokerRewriteHandle::FailedDefaultSshTunnel(
+                                        e.to_string_with_causes(),
+                                    )
+                                });
+
                                 // We have to give rdkafka an address, as this callback can't fail,
                                 // we just give it a random one that will never resolve.
                                 BrokerAddr {

@@ -119,7 +119,7 @@ pub const DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT: Duration = Duration::ZERO;
 ///
 /// This wraps [`tokio_postgres::Config`] to allow the configuration of a
 /// tunnel via a [`TunnelConfig`].
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     inner: tokio_postgres::Config,
     tunnel: TunnelConfig,
@@ -161,7 +161,7 @@ impl Config {
         task_name: &str,
         ssh_tunnel_manager: &SshTunnelManager,
     ) -> Result<Client, PostgresError> {
-        self.connect_traced(task_name, ssh_tunnel_manager, |_| ())
+        self.connect_traced(task_name, |_| (), ssh_tunnel_manager)
             .await
     }
 
@@ -172,10 +172,10 @@ impl Config {
     ) -> Result<Client, PostgresError> {
         self.connect_traced(
             "postgres_connect_replication",
-            ssh_tunnel_manager,
             |config| {
                 config.replication_mode(ReplicationMode::Logical);
             },
+            ssh_tunnel_manager,
         )
         .await
     }
@@ -190,8 +190,8 @@ impl Config {
     async fn connect_traced<F>(
         &self,
         task_name: &str,
-        ssh_tunnel_manager: &SshTunnelManager,
         configure: F,
+        ssh_tunnel_manager: &SshTunnelManager,
     ) -> Result<Client, PostgresError>
     where
         F: FnOnce(&mut tokio_postgres::Config),
@@ -206,7 +206,7 @@ impl Config {
         );
         info!(%task_name, %address, "connecting");
         match self
-            .connect_internal(task_name, ssh_tunnel_manager, configure)
+            .connect_internal(task_name, configure, ssh_tunnel_manager)
             .await
         {
             Ok(t) => {
@@ -223,8 +223,8 @@ impl Config {
     async fn connect_internal<F>(
         &self,
         task_name: &str,
-        ssh_tunnel_manager: &SshTunnelManager,
         configure: F,
+        ssh_tunnel_manager: &SshTunnelManager,
     ) -> Result<Client, PostgresError>
     where
         F: FnOnce(&mut tokio_postgres::Config),
@@ -247,12 +247,17 @@ impl Config {
                 let (host, port) = self.address()?;
                 let tunnel = ssh_tunnel_manager
                     .connect(config.clone(), host, port)
-                    .await?;
+                    .await
+                    .map_err(PostgresError::Ssh)?;
+
                 let tls = MakeTlsConnect::<TokioTcpStream>::make_tls_connect(&mut tls, host)?;
-                let tcp_stream = TokioTcpStream::connect(tunnel.local_addr()).await?;
+                let tcp_stream = TokioTcpStream::connect(tunnel.local_addr())
+                    .await
+                    .map_err(PostgresError::SshIo)?;
                 let (client, connection) = postgres_config.connect_raw(tcp_stream, tls).await?;
                 task::spawn(|| task_name, async {
                     let _tunnel = tunnel; // Keep SSH tunnel alive for duration of connection.
+
                     if let Err(e) = connection.await {
                         warn!("postgres connection failed: {e}");
                     }
