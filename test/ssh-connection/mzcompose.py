@@ -68,7 +68,7 @@ def workflow_pg_via_ssh_tunnel(c: Composition) -> None:
     c.run("testdrive", "--no-reset", "pg-source.td")
 
 
-def workflow_kafka_csr_via_ssh_tunnel(c: Composition) -> None:
+def workflow_kafka(c: Composition) -> None:
     c.up("zookeeper", "kafka", "schema-registry", "materialized", "ssh-bastion-host")
 
     c.run("testdrive", "setup.td")
@@ -85,6 +85,10 @@ def workflow_kafka_csr_via_ssh_tunnel(c: Composition) -> None:
     )
 
     c.run("testdrive", "--no-reset", "kafka-source.td")
+
+    c.kill("ssh-bastion-host")
+
+    c.run("testdrive", "--no-reset", "kafka-source-restart.td")
 
 
 # Test that if we restart the bastion AND change its server keys(s), we can
@@ -229,7 +233,7 @@ def workflow_rotated_ssh_key_after_restart(c: Composition) -> None:
 
 def workflow_default(c: Composition) -> None:
     workflow_basic_ssh_features(c)
-    workflow_kafka_csr_via_ssh_tunnel(c)
+    workflow_kafka(c)
     workflow_ssh_key_after_restart(c)
     workflow_rotated_ssh_key_after_restart(c)
     workflow_pg_via_ssh_tunnel(c)

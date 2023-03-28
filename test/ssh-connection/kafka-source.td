@@ -14,13 +14,33 @@ $ kafka-create-topic topic=thetopic
 $ kafka-ingest topic=thetopic format=bytes
 one
 
-> CREATE CONNECTION kafka_conn
+# Test the various types of tunnels
+
+> CREATE CONNECTION kafka_conn_using
+  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred);
+
+> CREATE CONNECTION kafka_conn_dynamic
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SSH TUNNEL thancred);
 
+> CREATE CONNECTION kafka_conn_keyless
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SSH TUNNEL keyless);
+
 > CREATE SOURCE mz_source
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-thetopic-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_conn_using (TOPIC 'testdrive-thetopic-${testdrive.seed}')
   FORMAT TEXT
   ENVELOPE NONE
+
+> CREATE SOURCE mz_source_dynamic
+  FROM KAFKA CONNECTION kafka_conn_dynamic (TOPIC 'testdrive-thetopic-${testdrive.seed}')
+  FORMAT TEXT
+  ENVELOPE NONE
+
+# Ensure error reporting works.
+! CREATE SOURCE mz_source_broken
+  FROM KAFKA CONNECTION kafka_conn_keyless (TOPIC 'testdrive-thetopic-${testdrive.seed}')
+  FORMAT TEXT
+  ENVELOPE NONE
+contains:failed to connect to the remote host
 
 > SELECT * FROM mz_source
 text
@@ -30,7 +50,14 @@ one
 $ kafka-ingest topic=thetopic format=bytes
 two
 
+# Ensure both types of tunnels work
 > SELECT * FROM mz_source
+text
+----
+one
+two
+
+> SELECT * FROM mz_source_dynamic
 text
 ----
 one
@@ -56,11 +83,22 @@ $ kafka-ingest format=avro topic=avroavro schema=${schema}
 {"f1": "fish", "f2": 1000}
 
 > CREATE SOURCE csr_source
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avroavro-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_conn_using (TOPIC 'testdrive-avroavro-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
 > SELECT * FROM csr_source
+f1    f2
+----------
+fish  1000
+
+# Test csr sources for dynamic connections as well.
+> CREATE SOURCE csr_source_dynamic
+  FROM KAFKA CONNECTION kafka_conn_dynamic (TOPIC 'testdrive-avroavro-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE NONE
+
+> SELECT * FROM csr_source_dynamic
 f1    f2
 ----------
 fish  1000
