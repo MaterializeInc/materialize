@@ -154,8 +154,8 @@ See the [examples](#examples) for details.
 ### `SNAPSHOT`
 
 By default, `SUBSCRIBE` begins by emitting a snapshot of the subscribed relation, which
-consists of a series of updates describing the contents of the relation at its
-[`AS OF`](#as-of) timestamp. After the snapshot, `SUBSCRIBE` emits further updates as
+consists of a series of updates at its [`AS OF`](#as-of) timestamp describing the
+contents of the relation. After the snapshot, `SUBSCRIBE` emits further updates as
 they occur.
 
 For updates in the snapshot, the `mz_timestamp` field will be fast-forwarded to the `AS OF` timestamp.
@@ -169,8 +169,8 @@ If the `PROGRESS` option is specified via `WITH (PROGRESS)`:
 
   * An additional `mz_progressed` column appears in the output. When the column
     is `false`, the rest of the row is a valid update. When the column is `true`
-    the rest of the row is not a valid update and its content should be ignored;
-    the row exists only to communicate that timestamps have advanced.
+    everything in the row except for `mz_timestamp` is not a valid update and its
+    content should be ignored; the row exists only to communicate that timestamps have advanced.
 
   * The first update emitted by the `SUBSCRIBE` is guaranteed to be a progress
     message indicating the subscribe's [`AS OF`](#as-of) timestamp.

@@ -101,7 +101,7 @@ use serde_json::json;
 use timely::order::PartialOrder;
 use tokio::sync::{mpsc, oneshot};
 use tokio_postgres::error::{DbError, SqlState};
-use tracing::info;
+use tracing::{debug, info};
 
 use mz_adapter::{TimestampContext, TimestampExplanation};
 use mz_ore::assert_contains;
@@ -665,76 +665,112 @@ fn test_subscribe_basic() {
 fn test_subscribe_progress() {
     mz_ore::test::init_logging();
 
-    let config = util::Config::default().workers(2);
-    let server = util::start_server(config).unwrap();
-    let mut client_writes = server.connect(postgres::NoTls).unwrap();
-    let mut client_reads = server.connect(postgres::NoTls).unwrap();
+    for has_initial_data in [false, true] {
+        for has_index in [false, true] {
+            for has_snapshot in [false, true] {
+                let config = util::Config::default().workers(2);
+                let server = util::start_server(config).unwrap();
+                let mut client_writes = server.connect(postgres::NoTls).unwrap();
+                let mut client_reads = server.connect(postgres::NoTls).unwrap();
 
-    client_writes
-        .batch_execute("CREATE TABLE t1 (data text)")
-        .unwrap();
-    client_writes
-        .batch_execute("INSERT INTO t1 VALUES ('snapdata')")
-        .unwrap();
-    client_reads
-        .batch_execute(
-            "COMMIT; BEGIN;
-             DECLARE c1 CURSOR FOR SUBSCRIBE t1 WITH (PROGRESS)",
-        )
-        .unwrap();
+                info!(
+                    msg = "Running test",
+                    has_initial_data, has_index, has_snapshot
+                );
 
-    // Asserts that the next data message is `data`. Ignores any progress
-    // messages that occur first.
-    //
-    // Returns the timestamp at which that data arrived.
-    fn await_data(client: &mut postgres::Client, data: &str) -> u64 {
-        // We have to try several times. It might be that the FETCH gets a a
-        // progress statements rather than data. We retry until we get the batch
-        // that has the data.
-        loop {
-            let rows = client
-                .query("FETCH 1 c1", &[])
-                .unwrap();
-            info!(row = ?rows.first());
-            let data_row = match rows.first() {
-                Some(row) if row.try_get::<_, String>("data").is_ok() => row,
-                _ => continue, // retry
-            };
-            assert_eq!(data_row.get::<_, bool>("mz_progressed"), false);
-            assert_eq!(data_row.get::<_, i64>("mz_diff"), 1);
-            assert_eq!(data_row.get::<_, String>("data"), data);
-            return data_row.get::<_, MzTimestamp>("mz_timestamp").0;
-        };
-    }
+                client_writes
+                    .batch_execute("CREATE TABLE t1 (data text)")
+                    .unwrap();
+                if has_index {
+                    client_writes
+                        .batch_execute("CREATE INDEX i1 on t1(data)")
+                        .unwrap();
+                }
+                if has_initial_data {
+                    client_writes
+                        .batch_execute("INSERT INTO t1 VALUES ('snapdata')")
+                        .unwrap();
+                }
+                client_reads
+                    .batch_execute(&format!(
+                        "COMMIT; BEGIN;
+                DECLARE c1 CURSOR FOR SUBSCRIBE t1 WITH (PROGRESS, SNAPSHOT = {})",
+                        has_snapshot
+                    ))
+                    .unwrap();
 
-    // Asserts that the next progress message is at least `ts`.
-    //
-    // Returns the timestamp of the progress message.
-    fn await_progress(client: &mut postgres::Client, ts: u64) -> u64 {
-        let row = client.query_one("FETCH 1 c1", &[]).unwrap();
-        info!(?row);
-        assert_eq!(row.get::<_, bool>("mz_progressed"), true);
-        assert_eq!(row.get::<_, Option<i64>>("mz_diff"), None);
-        assert_eq!(row.get::<_, Option<String>>("data"), None);
-        let progress_ts = row.get::<_, MzTimestamp>("mz_timestamp").0;
-        assert!(progress_ts >= ts);
-        progress_ts
-    }
+                // Asserts that the next data message is `data`. Ignores any progress
+                // messages that occur first.
+                //
+                // Returns the timestamp at which that data arrived.
+                fn await_data(
+                    client: &mut postgres::Client,
+                    last_seen_ts: &mut u64,
+                    data: &str,
+                ) -> u64 {
+                    // We have to try several times. It might be that the FETCH gets a
+                    // progress statements rather than data. We retry until we get the batch
+                    // that has the data.
+                    debug!("awaiting data: {data}");
+                    loop {
+                        let rows = client.query("FETCH 1 c1", &[]).unwrap();
+                        debug!(row = ?rows.first());
+                        let data_row = match rows.first() {
+                            Some(row) if row.try_get::<_, String>("data").is_ok() => row,
+                            _ => continue, // retry
+                        };
+                        assert_eq!(data_row.get::<_, bool>("mz_progressed"), false);
+                        assert_eq!(data_row.get::<_, i64>("mz_diff"), 1);
+                        assert_eq!(data_row.get::<_, String>("data"), data);
+                        let ts = data_row.get::<_, MzTimestamp>("mz_timestamp").0;
+                        assert!(ts >= *last_seen_ts);
+                        *last_seen_ts = ts;
+                        return ts;
+                    }
+                }
 
-    // The first message should always be a progress message indicating the
-    // snapshot time, followed by the data in the snapshot at that time,
-    // followed by an progress message indicating the end of the snapshot.
-    let snapshot_ts = await_progress(&mut client_reads, 0);
-    await_data(&mut client_reads, "snapdata");
-    await_progress(&mut client_reads, snapshot_ts + 1);
+                // Asserts that the next message has a timestamp of at least `ts` and is a progress message.
+                //
+                // Returns the timestamp of the progress message.
+                fn await_progress(
+                    client: &mut postgres::Client,
+                    last_seen_ts: &mut u64,
+                    ts: u64,
+                ) -> u64 {
+                    debug!("awaiting progress");
+                    let row = client.query_one("FETCH 1 c1", &[]).unwrap();
+                    debug!(?row);
+                    assert_eq!(row.get::<_, bool>("mz_progressed"), true);
+                    assert_eq!(row.get::<_, Option<i64>>("mz_diff"), None);
+                    assert_eq!(row.get::<_, Option<String>>("data"), None);
+                    let progress_ts = row.get::<_, MzTimestamp>("mz_timestamp").0;
+                    assert!(progress_ts >= ts);
+                    assert!(progress_ts >= *last_seen_ts);
+                    *last_seen_ts = progress_ts;
+                    progress_ts
+                }
 
-    for i in 1..=3 {
-        let data = format!("line {}", i);
-        client_writes
-            .execute("INSERT INTO t1 VALUES ($1)", &[&data])
-            .unwrap();
-        let data_ts = await_data(&mut client_reads, &data);
-        await_progress(&mut client_reads, data_ts + 1);
+                let mut last_seen_ts = 0;
+
+                // The first message should always be a progress message indicating the
+                // snapshot time, followed by the data in the snapshot at that time,
+                // followed by an progress message indicating the end of the snapshot.
+                let snapshot_ts = await_progress(&mut client_reads, &mut last_seen_ts, 0);
+                if has_initial_data && has_snapshot {
+                    await_data(&mut client_reads, &mut last_seen_ts, "snapdata");
+                }
+                await_progress(&mut client_reads, &mut last_seen_ts, snapshot_ts + 1);
+
+                for i in 1..=3 {
+                    let data = format!("line {}", i);
+                    client_writes
+                        .execute("INSERT INTO t1 VALUES ($1)", &[&data])
+                        .unwrap();
+                    let data_ts = await_data(&mut client_reads, &mut last_seen_ts, &data);
+                    await_progress(&mut client_reads, &mut last_seen_ts, data_ts + 1);
+                }
+            }
+        }
     }
 }
 

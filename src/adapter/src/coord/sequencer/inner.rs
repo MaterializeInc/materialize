@@ -2391,12 +2391,14 @@ impl Coordinator {
             conn_id: session.conn_id(),
             channel: tx,
             emit_progress,
+            as_of,
             arity: sink_desc.from_desc.arity(),
             cluster_id,
             depends_on: uses.into_iter().collect(),
             start_time: SYSTEM_TIME(),
             dropping: false,
         };
+        active_subscribe.initialize();
         self.add_active_subscribe(sink_id, active_subscribe).await;
 
         match self.ship_dataflow(dataflow, cluster_id).await {
