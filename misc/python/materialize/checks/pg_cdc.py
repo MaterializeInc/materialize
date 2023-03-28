@@ -34,10 +34,10 @@ class PgCdc(Check):
 
                 DROP TABLE IF EXISTS postgres_source_table;
 
-                CREATE TABLE postgres_source_table (f1 TEXT, f2 INTEGER, f3 TEXT);
+                CREATE TABLE postgres_source_table (f1 TEXT, f2 INTEGER, f3 TEXT UNIQUE NOT NULL, PRIMARY KEY(f1, f2));
                 ALTER TABLE postgres_source_table REPLICA IDENTITY FULL;
 
-                INSERT INTO postgres_source_table SELECT 'A', 1, REPEAT('X', 1024) FROM generate_series(1,100);
+                INSERT INTO postgres_source_table SELECT 'A', i, REPEAT('A', 1024 - i) FROM generate_series(1,100) AS i;
 
                 CREATE PUBLICATION postgres_source FOR ALL TABLES;
                 """
@@ -54,9 +54,11 @@ class PgCdc(Check):
                   (PUBLICATION 'postgres_source')
                   FOR TABLES (postgres_source_table AS postgres_source_tableA);
 
+                > CREATE DEFAULT INDEX ON postgres_source_tableA;
+
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table SELECT 'B', 1, REPEAT('X', 1024) FROM generate_series(1,100);
-                UPDATE postgres_source_table SET f2 = f2 + 1;
+                INSERT INTO postgres_source_table SELECT 'B', i, REPEAT('B', 1024 - i) FROM generate_series(1,100) AS i;
+                UPDATE postgres_source_table SET f2 = f2 + 100;
 
                 > CREATE SECRET pgpass2 AS 'postgres';
 
@@ -67,14 +69,14 @@ class PgCdc(Check):
                   PASSWORD SECRET pgpass1
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table SELECT 'C', 1, REPEAT('X', 1024) FROM generate_series(1,100);
-                UPDATE postgres_source_table SET f2 = f2 + 1;
+                INSERT INTO postgres_source_table SELECT 'C', i, REPEAT('C', 1024 - i) FROM generate_series(1,100) AS i;
+                UPDATE postgres_source_table SET f2 = f2 + 100;
                 """,
                 """
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table SELECT 'D', 1, REPEAT('X', 1024) FROM generate_series(1,100);
-                UPDATE postgres_source_table SET f2 = f2 + 1;
+                INSERT INTO postgres_source_table SELECT 'D', i, REPEAT('D', 1024 - i) FROM generate_series(1,100) AS i;
+                UPDATE postgres_source_table SET f2 = f2 + 100;
 
                 > CREATE SOURCE postgres_source2
                   FROM POSTGRES CONNECTION pg2
@@ -82,12 +84,12 @@ class PgCdc(Check):
                   FOR TABLES (postgres_source_table AS postgres_source_tableB);
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table SELECT 'E', 1, REPEAT('X', 1024) FROM generate_series(1,100);
-                UPDATE postgres_source_table SET f2 = f2 + 1;
+                INSERT INTO postgres_source_table SELECT 'E', i, REPEAT('E', 1024 - i) FROM generate_series(1,100) AS i;
+                UPDATE postgres_source_table SET f2 = f2 + 100;
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table SELECT 'F', 1, REPEAT('X', 1024) FROM generate_series(1,100);
-                UPDATE postgres_source_table SET f2 = f2 + 1;
+                INSERT INTO postgres_source_table SELECT 'F', i, REPEAT('F', 1024 - i) FROM generate_series(1,100) AS i;
+                UPDATE postgres_source_table SET f2 = f2 + 100;
 
                 > CREATE SECRET pgpass3 AS 'postgres';
 
@@ -103,13 +105,13 @@ class PgCdc(Check):
                   FOR TABLES (postgres_source_table AS postgres_source_tableC);
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table SELECT 'G', 1, REPEAT('X', 1024) FROM generate_series(1,100);
-                UPDATE postgres_source_table SET f2 = f2 + 1;
+                INSERT INTO postgres_source_table SELECT 'G', i, REPEAT('G', 1024 - i) FROM generate_series(1,100) AS i;
+                UPDATE postgres_source_table SET f2 = f2 + 100;
 
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table SELECT 'H', 1, REPEAT('X', 1024) FROM generate_series(1,100);
-                UPDATE postgres_source_table SET f2 = f2 + 1;
+                INSERT INTO postgres_source_table SELECT 'H', i, REPEAT('X', 1024 - i) FROM generate_series(1,100) AS i;
+                UPDATE postgres_source_table SET f2 = f2 + 100;
                 """,
             ]
         ]
@@ -118,36 +120,47 @@ class PgCdc(Check):
         return Testdrive(
             dedent(
                 """
-                > SELECT f1, f2, SUM(LENGTH(f3)) FROM postgres_source_tableA GROUP BY f1, f2;
-                A 8 102400
-                B 8 102400
-                C 7 102400
-                D 6 102400
-                E 5 102400
-                F 4 102400
-                G 3 102400
-                H 2 102400
+                > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM postgres_source_tableA GROUP BY f1;
+                A 800 97350
+                B 800 97350
+                C 700 97350
+                D 600 97350
+                E 500 97350
+                F 400 97350
+                G 300 97350
+                H 200 97350
 
-                > SELECT f1, f2, SUM(LENGTH(f3)) FROM postgres_source_tableB GROUP BY f1, f2;
-                A 8 102400
-                B 8 102400
-                C 7 102400
-                D 6 102400
-                E 5 102400
-                F 4 102400
-                G 3 102400
-                H 2 102400
+                > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM postgres_source_tableB GROUP BY f1;
+                A 800 97350
+                B 800 97350
+                C 700 97350
+                D 600 97350
+                E 500 97350
+                F 400 97350
+                G 300 97350
+                H 200 97350
 
-                > SELECT f1, f2, SUM(LENGTH(f3)) FROM postgres_source_tableC GROUP BY f1, f2;
-                A 8 102400
-                B 8 102400
-                C 7 102400
-                D 6 102400
-                E 5 102400
-                F 4 102400
-                G 3 102400
-                H 2 102400
-           """
+                > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM postgres_source_tableC GROUP BY f1;
+                A 800 97350
+                B 800 97350
+                C 700 97350
+                D 600 97350
+                E 500 97350
+                F 400 97350
+                G 300 97350
+                H 200 97350
+
+                > SELECT key FROM (SHOW INDEXES ON postgres_source_tableA);
+                {f1,f2}
+
+                ? EXPLAIN SELECT DISTINCT f1, f2 FROM postgres_source_tableA;
+                Explained Query (fast path):
+                  Project (#0, #1)
+                    ReadExistingIndex materialize.public.postgres_source_tablea_primary_idx
+
+                Used Indexes:
+                  - materialize.public.postgres_source_tablea_primary_idx
+                """
             )
         )
 
