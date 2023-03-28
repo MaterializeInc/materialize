@@ -69,6 +69,7 @@ known_errors = [
     "violates not-null constraint",
     "division by zero",
     "operator does not exist",  # For list types
+    "length must be nonnegative",
     "is only defined for finite arguments",
     "more than one record produced in subquery",
     "invalid range bound flags",
