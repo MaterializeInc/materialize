@@ -25,8 +25,10 @@ use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 pub struct DataGenerator {
     /// The total number of records to produce.
     pub record_count: usize,
-    /// The number of "goodput" bytes to make each record.
-    pub record_size_bytes: usize,
+    /// The number of "goodput" bytes to make each record's key.
+    pub key_record_size_bytes: usize,
+    /// The number of "goodput" bytes to make each record's value.
+    pub value_record_size_bytes: usize,
     /// The maximum number of records included in a generated batch of records.
     pub batch_max_count: usize,
     /// Maximum number of unique keys that we will produce. If the key size (depending on the record
@@ -37,11 +39,13 @@ pub struct DataGenerator {
     val_buf: Vec<u8>,
 }
 
-const RECORD_SIZE_BYTES_KEY: &str = "MZ_PERSIST_RECORD_SIZE_BYTES";
+const KEY_RECORD_SIZE_BYTES_KEY: &str = "MZ_PERSIST_KEY_RECORD_SIZE_BYTES";
+const VALUE_RECORD_SIZE_BYTES_KEY: &str = "MZ_PERSIST_VALUE_RECORD_SIZE_BYTES";
 const RECORD_COUNT_KEY: &str = "MZ_PERSIST_RECORD_COUNT";
 const BATCH_MAX_COUNT_KEY: &str = "MZ_PERSIST_BATCH_MAX_COUNT";
 
-const RECORD_SIZE_BYTES_KEY_SMALL: &str = "MZ_PERSIST_RECORD_SIZE_BYTES_SMALL";
+const KEY_RECORD_SIZE_BYTES_KEY_SMALL: &str = "MZ_PERSIST_KEY_RECORD_SIZE_BYTES_SMALL";
+const VALUE_RECORD_SIZE_BYTES_KEY_SMALL: &str = "MZ_PERSIST_VALUE_RECORD_SIZE_BYTES_SMALL";
 const RECORD_COUNT_KEY_SMALL: &str = "MZ_PERSIST_RECORD_COUNT_SMALL";
 const BATCH_MAX_COUNT_KEY_SMALL: &str = "MZ_PERSIST_BATCH_MAX_COUNT_SMALL";
 
@@ -77,19 +81,29 @@ fn read_env_usize(key: &str, default: usize) -> usize {
 impl Default for DataGenerator {
     fn default() -> Self {
         let record_count = read_env_usize(RECORD_COUNT_KEY, DEFAULT_RECORD_COUNT);
-        let record_size_bytes = read_env_usize(RECORD_SIZE_BYTES_KEY, DEFAULT_RECORD_SIZE_BYTES);
+        let key_record_size_bytes =
+            read_env_usize(KEY_RECORD_SIZE_BYTES_KEY, DEFAULT_RECORD_SIZE_BYTES);
+        let value_record_size_bytes =
+            read_env_usize(VALUE_RECORD_SIZE_BYTES_KEY, DEFAULT_RECORD_SIZE_BYTES);
         let batch_max_count = read_env_usize(BATCH_MAX_COUNT_KEY, DEFAULT_BATCH_MAX_COUNT);
 
         eprintln!(
-            "{}={} {}={} {}={}",
+            "{}={} {}={} {}={} {}={}",
             RECORD_COUNT_KEY,
             record_count,
-            RECORD_SIZE_BYTES_KEY,
-            record_size_bytes,
+            KEY_RECORD_SIZE_BYTES_KEY,
+            key_record_size_bytes,
+            VALUE_RECORD_SIZE_BYTES_KEY,
+            value_record_size_bytes,
             BATCH_MAX_COUNT_KEY,
             batch_max_count,
         );
-        DataGenerator::new(record_count, record_size_bytes, batch_max_count)
+        DataGenerator::new(
+            record_count,
+            key_record_size_bytes,
+            value_record_size_bytes,
+            batch_max_count,
+        )
     }
 }
 
@@ -98,15 +112,18 @@ impl DataGenerator {
     pub fn new_with_key_cardinality(
         num_keys: usize,
         record_count: usize,
-        record_size_bytes: usize,
+        key_record_size_bytes: usize,
+        value_record_size_bytes: usize,
         batch_max_count: usize,
     ) -> Self {
         // NB: Strict greater so we have at least one byte for key.
-        assert!(record_size_bytes > TS_DIFF_GOODPUT_SIZE);
+        assert!(key_record_size_bytes > TS_DIFF_GOODPUT_SIZE);
+        assert!(value_record_size_bytes > TS_DIFF_GOODPUT_SIZE);
         assert!(batch_max_count > 0);
         DataGenerator {
             record_count,
-            record_size_bytes,
+            key_record_size_bytes,
+            value_record_size_bytes,
             batch_max_count,
             num_keys,
             key_buf: Vec::new(),
@@ -115,11 +132,17 @@ impl DataGenerator {
     }
 
     /// Returns a new [DataGenerator].
-    pub fn new(record_count: usize, record_size_bytes: usize, batch_max_count: usize) -> Self {
+    pub fn new(
+        record_count: usize,
+        key_record_size_bytes: usize,
+        value_record_size_bytes: usize,
+        batch_max_count: usize,
+    ) -> Self {
         Self::new_with_key_cardinality(
             record_count,
             record_count,
-            record_size_bytes,
+            key_record_size_bytes,
+            value_record_size_bytes,
             batch_max_count,
         )
     }
@@ -127,23 +150,32 @@ impl DataGenerator {
     /// Returns a new [DataGenerator] specifically for testing small data volumes.
     pub fn small() -> Self {
         let record_count_small = read_env_usize(RECORD_COUNT_KEY_SMALL, DEFAULT_RECORD_COUNT_SMALL);
-        let record_size_bytes_small =
-            read_env_usize(RECORD_SIZE_BYTES_KEY_SMALL, DEFAULT_RECORD_SIZE_BYTES_SMALL);
+        let key_record_size_bytes_small = read_env_usize(
+            KEY_RECORD_SIZE_BYTES_KEY_SMALL,
+            DEFAULT_RECORD_SIZE_BYTES_SMALL,
+        );
+        let value_record_size_bytes_small = read_env_usize(
+            VALUE_RECORD_SIZE_BYTES_KEY_SMALL,
+            DEFAULT_RECORD_SIZE_BYTES_SMALL,
+        );
         let batch_max_count_small =
             read_env_usize(BATCH_MAX_COUNT_KEY_SMALL, DEFAULT_BATCH_MAX_COUNT_SMALL);
 
         eprintln!(
-            "{}={} {}={} {}={}",
+            "{}={} {}={} {}={} {}={}",
             RECORD_COUNT_KEY_SMALL,
             record_count_small,
-            RECORD_SIZE_BYTES_KEY_SMALL,
-            record_size_bytes_small,
+            KEY_RECORD_SIZE_BYTES_KEY_SMALL,
+            key_record_size_bytes_small,
+            VALUE_RECORD_SIZE_BYTES_KEY_SMALL,
+            value_record_size_bytes_small,
             BATCH_MAX_COUNT_KEY_SMALL,
             batch_max_count_small,
         );
         DataGenerator::new(
             record_count_small,
-            record_size_bytes_small,
+            key_record_size_bytes_small,
+            value_record_size_bytes_small,
             batch_max_count_small,
         )
     }
@@ -151,7 +183,9 @@ impl DataGenerator {
     /// Returns the number of "goodput" bytes represented by the entire dataset
     /// produced by this generator.
     pub fn goodput_bytes(&self) -> u64 {
-        u64::cast_from(self.record_count * self.record_size_bytes)
+        u64::cast_from(
+            self.record_count * (self.key_record_size_bytes + self.value_record_size_bytes),
+        )
     }
 
     /// Returns a more easily human readable version of [Self::goodput_bytes].
@@ -181,7 +215,7 @@ impl DataGenerator {
         let mut batch = ColumnarRecordsBuilder::default();
         batch.reserve(
             batch_end - batch_start,
-            self.record_size_bytes - TS_DIFF_GOODPUT_SIZE,
+            self.key_record_size_bytes + self.value_record_size_bytes - TS_DIFF_GOODPUT_SIZE,
             0,
         );
         for record_idx in batch_start..batch_end {
@@ -196,10 +230,11 @@ impl DataGenerator {
 
     fn gen_record(&mut self, record_idx: usize) -> ((&[u8], &[u8]), u64, i64) {
         assert!(record_idx < self.record_count);
-        assert!(self.record_size_bytes > TS_DIFF_GOODPUT_SIZE);
+        assert!(self.key_record_size_bytes > TS_DIFF_GOODPUT_SIZE);
+        assert!(self.value_record_size_bytes > TS_DIFF_GOODPUT_SIZE);
 
         self.key_buf.clear();
-        let key_len = self.record_size_bytes - TS_DIFF_GOODPUT_SIZE;
+        let key_len = self.key_record_size_bytes - TS_DIFF_GOODPUT_SIZE;
         if self.key_buf.capacity() < key_len {
             self.key_buf.reserve(key_len);
         }
@@ -212,6 +247,16 @@ impl DataGenerator {
         assert_eq!(self.key_buf.len(), key_len);
 
         self.val_buf.clear();
+        // we don't subtract the ts and diff here
+        let val_len = self.value_record_size_bytes;
+        if self.val_buf.capacity() < val_len {
+            self.val_buf.reserve(val_len);
+        }
+        // There is no fixed cardinality of the values.
+        write!(&mut self.val_buf, "{:01$}", record_idx, val_len)
+            .expect("write to Vec is infallible");
+        self.val_buf.truncate(val_len);
+        assert_eq!(self.val_buf.len(), val_len);
 
         let ts = u64::cast_from(record_idx);
         let diff = 1;

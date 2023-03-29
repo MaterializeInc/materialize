@@ -142,8 +142,6 @@ use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as Asyn
 
 // TODO(aljoscha): Make workload configurable: cardinality of keyspace, hot vs. cold keys, the
 // works.
-//
-// Note that this module is currently unused.
 #[path = "upsert_open_loop/workload.rs"]
 mod workload;
 
@@ -178,9 +176,13 @@ pub struct Args {
     #[clap(long, value_name = "R", default_value_t = 1000)]
     num_keys: usize,
 
-    /// Size of records (goodbytes) in bytes.
+    /// Size of keys (goodbytes) in bytes.
     #[clap(long, value_name = "B", default_value_t = 64)]
-    record_size_bytes: usize,
+    key_record_size_bytes: usize,
+
+    /// Size of values (goodbytes) in bytes.
+    #[clap(long, value_name = "B", default_value_t = 64)]
+    value_record_size_bytes: usize,
 
     /// Batch size in number of records (if applicable).
     #[clap(long, env = "", value_name = "R", default_value_t = 100)]
@@ -312,14 +314,28 @@ async fn run_benchmark(
     let data_generator = workload::DataGenerator::new_with_key_cardinality(
         args.num_keys,
         num_records_total,
-        args.record_size_bytes,
+        args.key_record_size_bytes,
+        args.value_record_size_bytes,
         args.batch_size,
     );
 
     let benchmark_description = format!(
-        "key-value-backend={} upsert-pre-reduce={} num-sources={} num-async-workers={} num-timely-workers={} runtime={:?} num_records_total={} records-per-second={} num-keys={} record-size-bytes={} batch-size={}",
-        args.key_value_store, args.upsert_pre_reduce, args.num_sources, args.num_async_workers, args.num_timely_workers, args.runtime, num_records_total, args.records_per_second, args.num_keys,
-        args.record_size_bytes, args.batch_size);
+        "key-value-backend={} upsert-pre-reduce={} num-sources={} num-async-workers={} \
+        num-timely-workers={} runtime={:?} num_records_total={} records-per-second={} \
+        num-keys={} key-record-size-bytes={} value-record-size-bytes={} batch-size={}",
+        args.key_value_store,
+        args.upsert_pre_reduce,
+        args.num_sources,
+        args.num_async_workers,
+        args.num_timely_workers,
+        args.runtime,
+        num_records_total,
+        args.records_per_second,
+        args.num_keys,
+        args.key_record_size_bytes,
+        args.value_record_size_bytes,
+        args.batch_size
+    );
 
     info!("starting benchmark: {}", benchmark_description);
 
@@ -555,15 +571,23 @@ async fn run_benchmark(
                                 let lag = elapsed.as_millis() as u64 - data_timestamp;
                                 max_lag = std::cmp::max(max_lag, lag);
                                 let elapsed_seconds = elapsed.as_secs();
-                                let mb_read =
-                                    (num_additions * args.record_size_bytes) as f64 / MIB as f64;
+                                let key_mb_read = (num_additions * args.key_record_size_bytes)
+                                    as f64
+                                    / MIB as f64;
+                                let mb_read = (num_additions
+                                    * (args.key_record_size_bytes + args.value_record_size_bytes))
+                                    as f64
+                                    / MIB as f64;
+                                let key_throughput = key_mb_read / elapsed_seconds as f64;
                                 let throughput = mb_read / elapsed_seconds as f64;
                                 info!(
                                     "After {} ms, source {source_id} has read {num_additions} \
-                                    records (throughput {:.3} MiB/s). Max processing \
+                                    records (throughput {:.3} MiB/s, key throughput {:.3} MiB/s). \
+                                    Max processing \
                                     lag {max_lag}ms, most recent processing lag {lag}ms.",
                                     elapsed.as_millis(),
                                     throughput,
+                                    key_throughput,
                                 );
                             }
                         }
