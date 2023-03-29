@@ -13,7 +13,7 @@
 use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::ops::ControlFlow::{Break, Continue};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
 use bytes::Bytes;
@@ -392,7 +392,7 @@ impl StateVersions {
     /// back to fetching all of them when necessary.
     pub async fn fetch_and_update_to_current<K, V, T, D>(
         &self,
-        state: &Arc<Mutex<TypedState<K, V, T, D>>>,
+        state: &Arc<RwLock<TypedState<K, V, T, D>>>,
         seqno_before: SeqNo,
     ) -> Result<SeqNo, Box<CodecMismatch>>
     where
@@ -402,7 +402,7 @@ impl StateVersions {
         D: Semigroup + Codec64,
     {
         let (shard_id, seqno) = {
-            let state = state.lock().expect("lock poisoned");
+            let state = state.read().expect("lock poisoned");
             (state.shard_id(), state.seqno())
         };
 
@@ -420,7 +420,7 @@ impl StateVersions {
             .await;
 
         {
-            let mut state = state.lock().expect("lock poisoned");
+            let mut state = state.write().expect("lock poisoned");
             state.apply_encoded_diffs(&self.cfg, &self.metrics, diffs_to_current);
             // whether the seqno advanced from diffs and/or because another handle
             // already updated it, we can assume it is now up-to-date
@@ -437,7 +437,7 @@ impl StateVersions {
             .await
             .check_codecs(&shard_id)?;
 
-        let mut state = state.lock().expect("lock poisoned");
+        let mut state = state.write().expect("lock poisoned");
         state.try_replace_state(new_state);
         Ok(state.seqno)
     }

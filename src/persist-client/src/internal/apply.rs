@@ -11,7 +11,7 @@
 
 use std::fmt::Debug;
 use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -45,11 +45,11 @@ pub struct Applier<K, V, T, D> {
     pub(crate) state_versions: Arc<StateVersions>,
 
     // Access to the shard's state, shared across all handles created by the same
-    // PersistClientCache. The state is wrapped in a std::sync::Mutex, disallowing
+    // PersistClientCache. The state is wrapped in a std::sync::RwLock, disallowing
     // access across await points. Access should be always be kept brief, and it
     // is expected that other handles may advance the state at any time this Applier
     // is not holding the lock.
-    state: Arc<Mutex<TypedState<K, V, T, D>>>,
+    state: Arc<RwLock<TypedState<K, V, T, D>>>,
 }
 
 // Impl Clone regardless of the type params.
@@ -105,13 +105,13 @@ where
     }
 
     pub fn read_locked_state<R, F: Fn(&TypedState<K, V, T, D>) -> R>(&self, f: F) -> R {
-        let state = self.state.lock().expect("lock poisoned");
+        let state = self.state.read().expect("lock poisoned");
         f(&state)
     }
 
     pub fn all_fueled_merge_reqs(&self) -> Vec<FueledMergeReq<T>> {
         self.state
-            .lock()
+            .read()
             .expect("lock poisoned")
             .collections
             .trace
@@ -122,26 +122,26 @@ where
         &self,
         as_of: &Antichain<T>,
     ) -> Result<Result<Vec<HollowBatch<T>>, Upper<T>>, Since<T>> {
-        self.state.lock().expect("lock poisoned").snapshot(as_of)
+        self.state.read().expect("lock poisoned").snapshot(as_of)
     }
 
     pub fn verify_listen(&self, as_of: &Antichain<T>) -> Result<Result<(), Upper<T>>, Since<T>> {
         self.state
-            .lock()
+            .read()
             .expect("lock poisoned")
             .verify_listen(as_of)
     }
 
     pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Option<HollowBatch<T>> {
         self.state
-            .lock()
+            .read()
             .expect("lock poisoned")
             .next_listen_batch(frontier)
     }
 
     pub async fn write_rollup_blob(&self, rollup_id: &RollupId) -> EncodedRollup {
         let rollup = {
-            let state = self.state.lock().expect("lock poisoned");
+            let state = self.state.read().expect("lock poisoned");
             let key = PartialRollupKey::new(state.seqno, rollup_id);
             self.state_versions
                 .encode_rollup_blob(&self.shard_metrics, &state, key)
@@ -195,7 +195,7 @@ where
         E,
         WorkFn: FnMut(SeqNo, &PersistConfig, &mut StateCollections<T>) -> ControlFlow<E, R>,
     >(
-        state: &Arc<Mutex<TypedState<K, V, T, D>>>,
+        state: &Arc<RwLock<TypedState<K, V, T, D>>>,
         cmd: &CmdMetrics,
         work_fn: &mut WorkFn,
         cfg: &PersistConfig,
@@ -216,7 +216,7 @@ where
         let is_write = cmd.name == metrics.cmds.compare_and_append.name;
         let is_rollup = cmd.name == metrics.cmds.add_and_remove_rollups.name;
         let (expected, diff, new_state, expiry_metrics, garbage_collection, work_ret) = {
-            let state = state.lock().expect("lock poisoned");
+            let state = state.read().expect("lock poisoned");
             let expected = state.seqno;
             let was_tombstone_before = state.collections.is_tombstone();
 
@@ -331,10 +331,13 @@ where
     }
 
     pub fn update_state(&mut self, new_state: TypedState<K, V, T, D>) {
-        let mut state = self.state.lock().expect("lock poisoned");
-        let seqno_before = state.seqno;
-        state.try_replace_state(new_state);
-        let seqno_after = state.seqno;
+        let (seqno_before, seqno_after) = {
+            let mut state = self.state.write().expect("lock poisoned");
+            let seqno_before = state.seqno;
+            state.try_replace_state(new_state);
+            let seqno_after = state.seqno;
+            (seqno_before, seqno_after)
+        };
 
         assert!(
             seqno_before <= seqno_after,
@@ -349,7 +352,7 @@ where
     /// without making any calls to Consensus or Blob.
     pub async fn fetch_and_update_state(&mut self, seqno_hint: Option<SeqNo>) {
         let seqno_before =
-            seqno_hint.unwrap_or_else(|| self.state.lock().expect("lock poisoned").seqno);
+            seqno_hint.unwrap_or_else(|| self.state.read().expect("lock poisoned").seqno);
         let seqno_after = self
             .state_versions
             .fetch_and_update_to_current(&self.state, seqno_before)
