@@ -408,7 +408,7 @@ If your sink reports a status of `starting` for more than a few minutes,
 ## How do I monitor sink ingestion progress?
 
 Repeatedly query the
-[`mz_sink_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics)
+[`mz_sink_statistics`](/sql/system-catalog/mz_internal/#mz_sink_statistics)
 table and look for ingestion statistics that advance over time:
 
 ```sql
