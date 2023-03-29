@@ -1038,14 +1038,12 @@ async fn handle_message<K, V, T, D>(
                 )),
             )
         }
-        Err(err) => {
+        Err(SourceReaderError { output, inner }) => {
             let err = SourceError {
                 source_id,
-                error: err.inner,
+                error: inner,
             };
-            // XXX(petrosagg): errors should be attributed to a specific output by the source impl
-            // instead of hardcoding it to output zero
-            (0, Err(err))
+            (output, Err(err))
         }
     };
 

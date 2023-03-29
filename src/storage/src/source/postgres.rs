@@ -514,6 +514,7 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
                     .row_sender
                     .sender
                     .send(InternalMessage::Err(SourceReaderError {
+                        output: 0,
                         inner: SourceErrorDetails::Initialization(e.to_string()),
                     }))
                     .await;
