@@ -215,7 +215,59 @@ and `REVOKE <group_role> FROM <role>`.
 - The `PUBLIC` role will be added to the catalog with an id of `RoleId::Public`.
 - The sequencer/catalog will reject the `RoleId::Public` variant in all disallowed operations.
 
-### Phase 4 - Privileges
+### Phase 4 - Ownership
+
+See [Privileges](https://www.postgresql.org/docs/current/ddl-priv.html) for PostgreSQL ownership.
+
+When any object is created, the creating role is assigned as the owner of that object. Only the
+owner (and superusers) can destroy or alter that object.
+
+Below is a summary of the default ownership of all builtin objects:
+
+- The `mz_system` cluster will be owned by the `mz_system` role.
+- The `mz_introspection` cluster will be owned by the `mz_system` role.
+- The `default` cluster will be owned by the `mz_system` role.
+- The `materialize` database will be owned by the `mz_system` role.
+- The `materialize.public` schema will be owned by the `mz_system` role.
+- The `mz_system` role will own all catalog schemas [`pg_catalog`, `mz_catalog`, `mz_internal`, `information_schema`].
+
+We will add the following SQL commands:
+
+- `ALTER <object_type> <object_name> OWNER TO <new_owner>`
+    - Transfers ownership of `<object_name>` to `<new_owner>`.
+    - Can only be run by the current owner (or member of owning role) or a superuser.
+    - Requires membership of `<new_owner>`.
+
+We will update `DROP ROLE` so that roles cannot be dropped unless no objects are owned by the role.
+
+#### Implementation Details
+
+- The following catalog tables/views will have an additional column called "owner_id" of type string. It will be the
+  role ID of the owner of the object. Additionally, the corresponding stash collections will have an "owner_id"
+  field. We will also update any system views over these tables to include the "owner_id" column.
+  - mz_sinks
+  - mz_indexes
+  - mz_connections
+  - mz_types
+  - mz_functions
+  - mz_secrets
+  - mz_relations
+  - mz_tables
+  - mz_sources
+  - mz_views
+  - mz_materialized_views
+  - mz_databases
+  - mz_clusters
+  - mz_cluster_replica
+  - mz_schemas
+- Ownership will be checked before operations in the sequencer.
+
+#### Out of Scope for Phase
+
+- `REASSIGN OWNED`
+- `DROP OWNED`
+
+### Phase 5 - Privileges
 
 See [Privileges](https://www.postgresql.org/docs/current/ddl-priv.html) for PostgreSQL privileges.
 
@@ -249,27 +301,20 @@ We will support the following object types:
 | `SECRET`             | U              | No              |
 | `CLUSTER`            | UC             | No              |
 
-When any of these objects are created, the creating role is assigned as the owner of that object. Only the owner (and
-superusers) can destroy or alter that object. The owner is given all privileges on an object by default, though these
-privileges can be revoked.
+The object owner is given all privileges on an object by default, though these privileges can be
+revoked.
 
 PostgreSQL allows arwd privileges on all table like objects (view, materialized view, etc.) even though they aren't
 useful. We remove privileges that don't make sense.
 
-Below is a summary of the default owners and privileges of all builtin objects:
+Below is a summary of the default privileges of all builtin objects:
 
-- The `mz_system` cluster will be owned by the `mz_system` role.
 - The `mz_system` role will have `UC` privileges on the `mz_system` cluster.
-- The `mz_introspection` cluster will be owned by the `mz_system` role.
 - The `mz_introspection` role will have `UC` privileges on the `mz_introspection` cluster.
-- All roles will have `U` privileges on the `mz_introspection` cluster.
-- The `default` cluster will be owned by the `mz_system` role.
 - The `mz_system` role will have `UC` privileges on the `default` cluster.
-- The `materialize` database will be owned by the `mz_system` role.
 - The `mz_system` role will have `UC` privileges on the `materialize` database.
-- The `materialize.public` schema will be owned by the `mz_system` role.
 - The `mz_system` role will have `UC` privileges on the `materialize.public` schema.
-- The `mz_system` role will own all catalog schemas [`pg_catalog`, `mz_catalog`, `mz_internal`, `information_schema`].
+- The `PUBLIC` pseudo-role will have `U` privileges on the `mz_introspection` cluster.
 - The `PUBLIC` pseudo-role will have `U` privileges on all catalog schemas.
 - The `PUBLIC` pseudo-role will have `r` privileges on all objects within all catalog schemas.
 - The `PUBLIC` psuedo-role will have `U` privileges on all type.
@@ -337,40 +382,20 @@ We will add the following SQL commands:
         - Rationale is that this is equivalent to `DROP` then `CREATE`.
     - Requires `CREATE` privilege on the database where `<object_name>` resides if the object is a database.
 
-We will update `DROP ROLE` so that roles cannot be dropped until it meets the following criteria:
+We will update `ALTER <object_type> <object_name> OWNER TO <new_owner>` such that it:
 
-- No objects are owned by the role.
-- The role contains no privileges.
+- Requires `CREATE` privilege on the schema where `<object_name>` resides if the object resides in a schema.
+  - Rationale is that this is equivalent to `DROP` then `CREATE`.
+- Requires `CREATE` privilege on the database where `<object_name>` resides if the object is a database.
+
+We will update `DROP ROLE` so that roles cannot be dropped unless it the role contains no privileges.
 
 We will update `DROP <object>` so that it revokes all privileges on `<object>`.
 
 #### Implementation Details
 
-- The following catalog tables/views will have an additional column called "owner_id" of type string. It will be the
-  role ID of the owner of the object. Additionally, the corresponding stash collections will have an "owner_id"
-  field.
-    - mz_sinks
-    - mz_indexes
-    - mz_connections
-    - mz_types
-    - mz_functions
-    - mz_secrets
-    - mz_relations
-    - mz_tables
-    - mz_sources
-    - mz_views
-    - mz_materialized_views
-    - mz_databases
-    - mz_clusters
-    - mz_cluster_replica
-    - mz_schemas
 - Privileges will be stored in the catalog.
 - Privileges will be checked before operations in the sequencer.
-
-#### Out of Scope for Phase
-
-- `REASSIGN OWNED`
-- `DROP OWNED`
 
 #### Out of Scope for Project
 
@@ -399,7 +424,7 @@ We will update `DROP <object>` so that it revokes all privileges on `<object>`.
     - `TABLESPACE`
 - Adding the necessary pg views to support all role based `psql` meta-commands.
 
-### Phase 5 - Utility Commands/Syntactic Sugar (Optional)
+### Phase 6 - Utility Commands/Syntactic Sugar (Optional)
 
 This is an optional phase to add some utility commands and syntactic sugar present in PostgreSQL. We will add the
 following SQL commands and options to existing commands:
