@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use std::mem;
 
 use crate::TransformArgs;
+use itertools::zip_eq;
 use mz_expr::{Id, MirRelationExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
@@ -39,6 +40,10 @@ impl CheckedRecursion for ProjectionLifting {
 }
 
 impl crate::Transform for ProjectionLifting {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
@@ -91,9 +96,29 @@ impl ProjectionLifting {
                     gets.remove(&id);
                     Ok(())
                 }
-                MirRelationExpr::LetRec { .. } => {
-                    // TODO
-                    Err(crate::TransformError::LetRecUnsupported)?
+                MirRelationExpr::LetRec { ids, values, body } => {
+                    let recursive_ids = MirRelationExpr::recursive_ids(ids, values)?;
+
+                    for (local_id, value) in zip_eq(ids.iter(), values.iter_mut()) {
+                        self.action(value, gets)?;
+                        if !recursive_ids.contains(local_id) {
+                            if let MirRelationExpr::Project { input, outputs } = value {
+                                let id = Id::Local(*local_id);
+                                let typ = input.typ();
+                                let prior = gets.insert(id, (typ, outputs.clone()));
+                                assert!(!prior.is_some());
+                                *value = input.take_dangerous();
+                            }
+                        }
+                    }
+
+                    self.action(body, gets)?;
+
+                    for local_id in ids.iter().filter(|id| !recursive_ids.contains(id)) {
+                        gets.remove(&Id::Local(*local_id));
+                    }
+
+                    Ok(())
                 }
                 MirRelationExpr::Project { input, outputs } => {
                     self.action(input, gets)?;
