@@ -178,7 +178,10 @@ pub fn user_privilege_hack(
         | Plan::RevokeRole(_)
         | Plan::CopyRows(_) => {
             return Err(AdapterError::Unauthorized(
-                rbac::UnauthorizedError::privilege(plan.name().to_string(), None),
+                rbac::UnauthorizedError::Privilege {
+                    action: plan.name().to_string(),
+                    reason: None,
+                },
             ))
         }
     }
@@ -188,10 +191,10 @@ pub fn user_privilege_hack(
         let full_name = catalog.resolve_full_name(item.name());
         if !catalog.is_system_schema(&full_name.schema) {
             return Err(AdapterError::Unauthorized(
-                rbac::UnauthorizedError::privilege(
-                    format!("interact with object {full_name}"),
-                    None,
-                ),
+                rbac::UnauthorizedError::Privilege {
+                    action: format!("interact with object {full_name}"),
+                    reason: None,
+                },
             ));
         }
     }

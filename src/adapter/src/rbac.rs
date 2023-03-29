@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeSet;
-use std::error::Error;
 use std::fmt;
 use std::fmt::Formatter;
 
@@ -49,9 +47,13 @@ impl Attribute {
     }
 
     /// Reports whether any role has the privilege granted by the attribute.
-    fn check_roles(&self, role_ids: &BTreeSet<RoleId>, catalog: &impl SessionCatalog) -> bool {
+    fn check_roles<'a>(
+        &self,
+        role_ids: impl IntoIterator<Item = &'a RoleId>,
+        catalog: &impl SessionCatalog,
+    ) -> bool {
         role_ids
-            .iter()
+            .into_iter()
             .any(|role_id| self.check_role(role_id, catalog))
     }
 }
@@ -95,26 +97,34 @@ impl Ownership {
     }
 
     /// Reports whether any role has ownership over an object.
-    fn check_roles(&self, role_ids: &BTreeSet<RoleId>, catalog: &impl SessionCatalog) -> bool {
+    fn check_roles<'a>(
+        &self,
+        role_ids: impl IntoIterator<Item = &'a RoleId>,
+        catalog: &impl SessionCatalog,
+    ) -> bool {
         role_ids
-            .iter()
+            .into_iter()
             .any(|role_id| self.check_role(role_id, catalog))
     }
 }
 
 /// Errors that can occur due to an unauthorized action.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum UnauthorizedError {
     /// The action can only be performed by a superuser.
+    #[error("permission denied to {action}")]
     Superuser { action: String },
     /// The action requires a specific attribute.
+    #[error("permission denied to {action}")]
     Attribute {
         action: String,
         attribute: Attribute,
     },
     /// The action requires ownership of an object.
+    #[error("must be owner of {}", objects.iter().map(|(object_type, object_name)| format!("{object_type} {object_name}")).join(", "))]
     Ownership { objects: Vec<(ObjectType, String)> },
     /// The action requires one or more privileges.
+    #[error("permission denied to {action}")]
     Privilege {
         action: String,
         reason: Option<String>,
@@ -122,22 +132,6 @@ pub enum UnauthorizedError {
 }
 
 impl UnauthorizedError {
-    pub fn superuser(action: String) -> UnauthorizedError {
-        UnauthorizedError::Superuser { action }
-    }
-
-    pub fn attribute(action: String, attribute: Attribute) -> UnauthorizedError {
-        UnauthorizedError::Attribute { action, attribute }
-    }
-
-    pub fn ownership(objects: Vec<(ObjectType, String)>) -> UnauthorizedError {
-        UnauthorizedError::Ownership { objects }
-    }
-
-    pub fn privilege(action: String, reason: Option<String>) -> UnauthorizedError {
-        UnauthorizedError::Privilege { action, reason }
-    }
-
     pub fn detail(&self) -> Option<String> {
         match &self {
             UnauthorizedError::Superuser { action } => {
@@ -155,26 +149,6 @@ impl UnauthorizedError {
     }
 }
 
-impl Error for UnauthorizedError {}
-
-impl fmt::Display for UnauthorizedError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            UnauthorizedError::Superuser { action }
-            | UnauthorizedError::Attribute { action, .. }
-            | UnauthorizedError::Privilege { action, .. } => {
-                write!(f, "permission denied to {}", action)
-            }
-            UnauthorizedError::Ownership { objects } => {
-                let mut objects = objects
-                    .iter()
-                    .map(|(object_type, object_name)| format!("{object_type} {object_name}"));
-                write!(f, "must be owner of {}", objects.join(", "))
-            }
-        }
-    }
-}
-
 /// Checks if a session is authorized to execute a command. If not, an error is returned.
 ///
 /// Note: The session and role ID are stored in the command itself.
@@ -188,7 +162,9 @@ pub fn check_command(catalog: &Catalog, cmd: &Command) -> Result<(), Unauthorize
             if session.is_superuser() {
                 Ok(())
             } else {
-                Err(UnauthorizedError::superuser("dump catalog".into()))
+                Err(UnauthorizedError::Superuser {
+                    action: "dump catalog".into(),
+                })
             }
         }
         Command::Startup { .. }
@@ -234,10 +210,10 @@ pub fn check_plan(
     // Validate that the current session has the required attributes to execute the provided plan.
     if let Some(required_attribute) = generate_required_plan_attribute(plan) {
         if !required_attribute.check_roles(&role_membership, catalog) {
-            return Err(AdapterError::Unauthorized(UnauthorizedError::attribute(
-                plan.name().to_string(),
-                required_attribute,
-            )));
+            return Err(AdapterError::Unauthorized(UnauthorizedError::Attribute {
+                action: plan.name().to_string(),
+                attribute: required_attribute,
+            }));
         }
     }
 
@@ -284,9 +260,9 @@ pub fn check_plan(
                 }
             })
             .collect();
-        return Err(AdapterError::Unauthorized(UnauthorizedError::ownership(
+        return Err(AdapterError::Unauthorized(UnauthorizedError::Ownership {
             objects,
-        )));
+        }));
     }
 
     Ok(())
