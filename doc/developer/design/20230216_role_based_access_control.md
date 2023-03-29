@@ -400,22 +400,22 @@ We will update `DROP <object>` so that it revokes all privileges on `<object>`.
         - `privs: AclMode`
     - We will encode it as text using the following format: `"<grantee>=<privs>/<grantor>"`
         - `"<grantee>"` is the raw RoleId of `grantee`.
-            - This will be left empty for the PUBLIC role (to match PostgreSQL). 
+            - This will be left empty for the PUBLIC role (to match PostgreSQL).
         - `"<grantor>"` is the raw RoleId of `grantor`.
         - `"<privs>"` is the letter codes of all the granted privileges concatenated together.
         - NOTE: This is not the same as PostgreSQL. PostgreSQL encodes `aclitem` to text using human
-        read-able names instead of IDs. We are unable to do this because our encoder does not have 
+        read-able names instead of IDs. We are unable to do this because our encoder does not have
         access to the catalog. We have the same issue with the `regtype` and `regproc` types.
     - We will encode it as binary matching PostgreSQL's binary encoding for `aclitem`, except
-    swapping out `oid`s for `RoleId`s. 
+    swapping out `oid`s for `RoleId`s.
     - The reason we need a custom type instead of reusing the PostgreSQL's `aclitem` type is because
     `aclitem` uses `oid` types, which Materialize does not use as a persistent identifier.
-- We will also add an array type with `maclitem` elements. 
+- We will also add an array type with `maclitem` elements.
 - We will add the following operators for `maclitem`:
     - `maclitem = maclitem → boolean`: Are `maclitems` equal?
     - `maclitem[] @> maclitem → boolean`: Does array contain the specified privileges?
 - We will support to following casts involving `maclitem`:
-    - From `maclitem` to `text`. 
+    - From `maclitem` to `text`.
 - The following catalog table/views will have an additional column called "acl" of type `maclitem[]`.
 that stores all privileges belonging to an object.
     - mz_sinks
