@@ -29,23 +29,23 @@ include!(concat!(
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct DecodeError {
     pub kind: DecodeErrorKind,
-    pub raw: Vec<u8>,
+    pub raw: Option<Vec<u8>>,
 }
 
 impl RustType<ProtoDecodeError> for DecodeError {
     fn into_proto(&self) -> ProtoDecodeError {
         ProtoDecodeError {
             kind: Some(RustType::into_proto(&self.kind)),
-            raw: Some(self.raw.clone()),
+            raw: self.raw.clone(),
         }
     }
 
     fn from_proto(proto: ProtoDecodeError) -> Result<Self, TryFromProtoError> {
-        let kind = match proto.kind {
+        let ProtoDecodeError { kind, raw } = proto;
+        let kind = match kind {
             Some(kind) => RustType::from_proto(kind)?,
             None => return Err(TryFromProtoError::missing_field("ProtoDecodeError::kind")),
         };
-        let raw = proto.raw.into_rust_if_some("raw")?;
         Ok(Self { kind, raw })
     }
 }
@@ -68,7 +68,10 @@ impl DecodeError {
 
 impl Display for DecodeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} (original bytes: {:x?})", self.kind, self.raw)
+        match &self.raw {
+            None => write!(f, "{}", self.kind),
+            Some(raw) => write!(f, "{} (original bytes: {:x?})", self.kind, raw),
+        }
     }
 }
 
@@ -475,7 +478,7 @@ mod tests {
     fn test_decode_error_codec_roundtrip() -> Result<(), String> {
         let original = DecodeError {
             kind: DecodeErrorKind::Text("ciao".to_string()),
-            raw: b"oaic".to_vec(),
+            raw: Some(b"oaic".to_vec()),
         };
         let mut encoded = Vec::new();
         original.encode(&mut encoded);
