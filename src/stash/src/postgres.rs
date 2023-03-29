@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::num::NonZeroI64;
 use std::sync::{Arc, Mutex};
@@ -991,7 +991,7 @@ impl Stash {
             .await
     }
 
-    pub async fn collections(&mut self) -> Result<BTreeSet<String>, StashError> {
+    pub async fn collections(&mut self) -> Result<BTreeMap<Id, String>, StashError> {
         self.with_transaction(move |tx| Box::pin(async move { tx.collections().await }))
             .await
     }
@@ -1203,7 +1203,7 @@ impl Consolidator {
                     .collect::<Vec<_>>();
                 let deleted = rows.len();
                 // Perform the consolidation in Rust.
-                let rows = crate::consolidate(rows);
+                let rows = crate::consolidate(&rows);
                 // Then for any items that have a positive diff, INSERT them
                 // back into the database. Our current production stash usage
                 // will never have any results here (all consolidations sum to
