@@ -39,7 +39,7 @@ use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::reduce::ReduceExt;
 
-use crate::render::context::{Arrangement, CollectionBundle, Context};
+use crate::render::context::{Arrangement, CollectionBundle, Context, KeyArrangement};
 use crate::render::reduce::monoids::ReductionMonoid;
 use crate::render::{ArrangementFlavor, MaybeValidatingRow};
 use crate::typedefs::{ErrValSpine, RowKeySpine, RowSpine};
@@ -119,10 +119,15 @@ where
             output
         }
         ReducePlan::Basic(BasicPlan::Single(index, aggr)) => {
-            build_basic_aggregate(debug_name, collection, index, &aggr)
+            let (output, errs) = build_basic_aggregate(debug_name, collection, index, &aggr, true);
+            err_collection = err_collection
+                .concat(&errs.expect("validation should have occurred as it was requested"));
+            output
         }
         ReducePlan::Basic(BasicPlan::Multiple(aggrs)) => {
-            build_basic_aggregates(debug_name, collection, aggrs)
+            let (output, errs) = build_basic_aggregates(debug_name, collection, aggrs);
+            err_collection = err_collection.concat(&errs);
+            output
         }
         // Otherwise, we need to render something different for each type of
         // reduction, and then stitch them together.
@@ -507,7 +512,7 @@ fn build_basic_aggregates<G>(
     debug_name: &str,
     input: Collection<G, (Row, Row), Diff>,
     aggrs: Vec<(usize, AggregateExpr)>,
-) -> Arrangement<G, Row>
+) -> (Arrangement<G, Row>, Collection<G, DataflowError, Diff>)
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -518,12 +523,22 @@ where
         warn!("Unexpectedly computing {} basic aggregations together, but we expected to be doing more than one in dataflow {debug_name}", aggrs.len());
         soft_assert_or_log!(false, "Too few aggregations when building basic aggregates");
     }
+    let mut err_output = None;
     let mut to_collect = Vec::new();
     for (index, aggr) in aggrs {
-        let result = build_basic_aggregate(debug_name, input.clone(), index, &aggr);
+        let (result, errs) = build_basic_aggregate(
+            debug_name,
+            input.clone(),
+            index,
+            &aggr,
+            err_output.is_none(),
+        );
+        if errs.is_some() {
+            err_output = errs
+        }
         to_collect.push(result.as_collection(move |key, val| (key.clone(), (index, val.clone()))));
     }
-    differential_dataflow::collection::concatenate(&mut input.scope(), to_collect)
+    let output = differential_dataflow::collection::concatenate(&mut input.scope(), to_collect)
         .arrange_named::<RowSpine<_, _, _, _>>("Arranged ReduceFuseBasic input")
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceFuseBasic", {
             let mut row_buf = Row::default();
@@ -535,7 +550,11 @@ where
                 }
                 output.push((row_buf.clone(), 1));
             }
-        })
+        });
+    (
+        output,
+        err_output.expect("expected to validate in at least one aggregate"),
+    )
 }
 
 /// Build the dataflow to compute a single basic aggregation.
@@ -546,7 +565,11 @@ fn build_basic_aggregate<G>(
     input: Collection<G, (Row, Row), Diff>,
     index: usize,
     aggr: &AggregateExpr,
-) -> Arrangement<G, Row>
+    validating: bool,
+) -> (
+    Arrangement<G, Row>,
+    Option<Collection<G, DataflowError, Diff>>,
+)
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -565,47 +588,105 @@ where
         (key, row_buf.clone())
     });
 
+    let mut err_output = None;
+
     // If `distinct` is set, we restrict ourselves to the distinct `(key, val)`.
     if distinct {
-        partial = partial
-            .arrange_named::<RowSpine<(Row, Row), _, _, _>>("Arranged ReduceInaccumulable")
-            .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceInaccumulable", move |_, _, t| {
-                t.push(((), 1))
-            })
-            .as_collection(|k, _| k.clone())
+        if validating {
+            let (oks, errs) =
+                build_reduce_inaccumulable_distinct::<_, Result<(), String>>(debug_name, partial)
+                    .as_collection(|k, v| (k.clone(), v.clone()))
+                    .map_fallible("Demux Errors", move |(key, result)| match result {
+                        Ok(()) => Ok(key),
+                        Err(m) => Err(DataflowError::from(EvalError::Internal(m))),
+                    });
+            err_output = Some(errs);
+            partial = oks;
+        } else {
+            partial = build_reduce_inaccumulable_distinct::<_, ()>(debug_name, partial)
+                .as_collection(|k, _| k.clone());
+        }
     }
 
-    let debug_name = debug_name.to_string();
-    partial
-        .arrange_named::<RowSpine<_, Row, _, _>>("Arranged ReduceInaccumulable")
-        .reduce_abelian("ReduceInaccumulable", {
+    let arranged = partial.arrange_named::<RowSpine<_, Row, _, _>>("Arranged ReduceInaccumulable");
+    let oks = arranged.reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceInaccumulable", {
         let mut row_buf = Row::default();
         move |_key, source, target| {
-            // Negative counts would be surprising, but until we are 100% certain we wont
-            // see them, we should report when we do. We may want to bake even more info
-            // in here in the future.
-            if source.iter().any(|(_val, cnt)| cnt < &0) {
-                // XXX: This reports user data, which we perhaps should not do!
-                for (val, cnt) in source.iter() {
-                    if *cnt < 0 {
-                        warn!("[customer-data] Negative accumulation in ReduceInaccumulable: {val:?} with count {cnt:?} in dataflow {debug_name}");
-                        soft_assert_or_log!(false, "Negative accumulation in ReduceInaccumulable");
-                    }
-                }
-            } else {
-                // We respect the multiplicity here (unlike in hierarchical aggregation)
-                // because we don't know that the aggregation method is not sensitive
-                // to the number of records.
-                // TODO(benesch): remove potentially dangerous usage of `as`.
-                #[allow(clippy::as_conversions)]
-                let iter = source.iter().flat_map(|(v, w)| {
-                    std::iter::repeat(v.iter().next().unwrap()).take(*w as usize)
-                });
-                row_buf.packer().push(func.eval(iter, &RowArena::new()));
-                target.push((row_buf.clone(), 1));
-            }
+            // We respect the multiplicity here (unlike in hierarchical aggregation)
+            // because we don't know that the aggregation method is not sensitive
+            // to the number of records.
+            let iter = source.iter().flat_map(|(v, w)| {
+                // Note that in the non-positive case, this is wrong, but harmless because
+                // our other reduction will produce an error.
+                let count = usize::try_from(*w).unwrap_or(0);
+                std::iter::repeat(v.iter().next().unwrap()).take(count)
+            });
+            row_buf.packer().push(func.eval(iter, &RowArena::new()));
+            target.push((row_buf.clone(), 1));
         }
-    })
+    });
+
+    // Note that we would prefer to use `mz_timely_util::reduce::ReduceExt::reduce_pair` here, but
+    // we then wouldn't be able to do this error check conditionally.  See its documentation for the
+    // rationale around using a second reduction here.
+    if validating && err_output.is_none() {
+        let debug_name = debug_name.to_string();
+        let errs = arranged.reduce_abelian::<_, ErrValSpine<_, _, _>>(
+            "ReduceInaccumulable Error Check",
+            move |_key, source, target| {
+                // Negative counts would be surprising, but until we are 100% certain we won't
+                // see them, we should report when we do. We may want to bake even more info
+                // in here in the future.
+                for (value, count) in source.iter() {
+                    if count.is_positive() {
+                        continue;
+                    }
+
+                    let message = "Non-positive accumulation in ReduceInaccumulable";
+                    warn!(?value, ?count, debug_name, "[customer-data] {message}");
+                    error!("{message}");
+                    target.push((
+                        DataflowError::from(EvalError::Internal(message.to_string())),
+                        1,
+                    ));
+                    return;
+                }
+            },
+        );
+        (oks, Some(errs.as_collection(|_, v| v.clone())))
+    } else {
+        (oks, err_output)
+    }
+}
+
+fn build_reduce_inaccumulable_distinct<G, R>(
+    debug_name: &str,
+    input: Collection<G, (Row, Row), Diff>,
+) -> KeyArrangement<G, (Row, Row), R>
+where
+    G: Scope,
+    G::Timestamp: Lattice,
+    R: MaybeValidatingRow<(), String>,
+{
+    let debug_name = debug_name.to_string();
+    input
+        .arrange_named::<RowSpine<(Row, Row), _, _, _>>("Arranged ReduceInaccumulable")
+        .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceInaccumulable", move |_, source, t| {
+            if let Some(err) = R::into_error() {
+                for (value, count) in source.iter() {
+                    if count.is_positive() {
+                        continue;
+                    }
+
+                    let message = "Non-positive accumulation in ReduceInaccumulable DISTINCT";
+                    warn!(?value, ?count, debug_name, "[customer-data] {message}");
+                    error!("{message}");
+                    t.push((err(message.to_string()), 1));
+                    return;
+                }
+            }
+            t.push((R::ok(()), 1))
+        })
 }
 
 /// Build the dataflow to compute and arrange multiple hierarchical aggregations

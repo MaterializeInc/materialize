@@ -39,8 +39,9 @@ use mz_timely_util::operator::CollectionExt;
 use crate::typedefs::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
 
 // Local type definition to avoid the horror in signatures.
-pub(crate) type Arrangement<S, V> =
-    Arranged<S, TraceRowHandle<V, V, <S as ScopeParent>::Timestamp, Diff>>;
+pub(crate) type KeyArrangement<S, K, V> =
+    Arranged<S, TraceRowHandle<K, V, <S as ScopeParent>::Timestamp, Diff>>;
+pub(crate) type Arrangement<S, V> = KeyArrangement<S, V, V>;
 pub(crate) type ErrArrangement<S> =
     Arranged<S, TraceErrHandle<DataflowError, <S as ScopeParent>::Timestamp, Diff>>;
 pub(crate) type ArrangementImport<S, V, T> = Arranged<

@@ -939,6 +939,15 @@ impl<E> MaybeValidatingRow<Row, E> for Row {
     }
 }
 
+impl<E> MaybeValidatingRow<(), E> for () {
+    fn ok(t: ()) -> Self {
+        t
+    }
+    fn into_error() -> Option<fn(E) -> Self> {
+        None
+    }
+}
+
 impl<E, R> MaybeValidatingRow<Vec<R>, E> for Vec<R>
 where
     R: ExchangeData + Columnation + Hash,
