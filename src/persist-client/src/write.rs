@@ -198,8 +198,8 @@ where
         // TODO: Do we even need to track self.upper on WriteHandle or could
         // WriteHandle::upper just get the one out of machine?
         let fresh_upper = self.machine.fetch_upper().await;
-        self.upper.clone_from(fresh_upper);
-        fresh_upper
+        self.upper.clone_from(&fresh_upper);
+        &self.upper
     }
 
     /// Applies `updates` to this shard and downgrades this handle's upper to
@@ -612,7 +612,7 @@ where
                 .machine
                 .heartbeat_writer(&self.writer_id, heartbeat_ts)
                 .await;
-            if !existed && !self.machine.applier.cached_state().is_tombstone {
+            if !existed && !self.machine.is_tombstone() {
                 // It's probably surprising to the caller that the shard
                 // becoming a tombstone expired this writer. Possibly the right
                 // thing to do here is pass up a bool to the caller indicating

@@ -387,7 +387,10 @@ where
         seqno: SeqNo,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
-    ) -> ControlFlow<NoOpStateTransition<LeasedReaderState<T>>, LeasedReaderState<T>> {
+    ) -> ControlFlow<
+        NoOpStateTransition<(LeasedReaderState<T>, SeqNo)>,
+        (LeasedReaderState<T>, SeqNo),
+    > {
         let reader_state = LeasedReaderState {
             debug: HandleDebugState {
                 hostname: hostname.to_owned(),
@@ -405,13 +408,13 @@ where
         // served. Optimize this by no-op-ing reader registration so that we can
         // settle the shard into a final unchanging tombstone state.
         if self.is_tombstone() {
-            return Break(NoOpStateTransition(reader_state));
+            return Break(NoOpStateTransition((reader_state, self.seqno_since(seqno))));
         }
 
         // TODO: Handle if the reader or writer already exists.
         self.leased_readers
             .insert(reader_id.clone(), reader_state.clone());
-        Continue(reader_state)
+        Continue((reader_state, self.seqno_since(seqno)))
     }
 
     pub fn register_critical_reader<O: Opaque + Codec64>(
@@ -888,6 +891,15 @@ where
             since.meet_assign(s);
         }
         self.trace.downgrade_since(&since);
+    }
+
+    fn seqno_since(&self, seqno: SeqNo) -> SeqNo {
+        let mut seqno_since = seqno;
+        for cap in self.leased_readers.values() {
+            seqno_since = std::cmp::min(seqno_since, cap.seqno);
+        }
+        // critical_readers don't hold a seqno capability.
+        seqno_since
     }
 
     fn tombstone_batch() -> HollowBatch<T> {

@@ -394,7 +394,7 @@ impl StateVersions {
         &self,
         state: &Arc<Mutex<TypedState<K, V, T, D>>>,
         seqno_before: SeqNo,
-    ) -> Result<(), Box<CodecMismatch>>
+    ) -> Result<SeqNo, Box<CodecMismatch>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -408,7 +408,7 @@ impl StateVersions {
 
         // another handle has already updated state
         if seqno_before < seqno {
-            return Ok(());
+            return Ok(seqno);
         }
 
         let path = shard_id.to_string();
@@ -426,7 +426,7 @@ impl StateVersions {
             // already updated it, we can assume it is now up-to-date
             if seqno_before < state.seqno {
                 self.metrics.state.update_state_fast_path.inc();
-                return Ok(());
+                return Ok(state.seqno);
             }
         }
 
@@ -436,12 +436,10 @@ impl StateVersions {
             .fetch_current_state(&shard_id, recent_live_diffs.0)
             .await
             .check_codecs(&shard_id)?;
-        {
-            let mut state = state.lock().expect("lock poisoned");
-            state.try_replace_state(new_state);
-        }
 
-        Ok(())
+        let mut state = state.lock().expect("lock poisoned");
+        state.try_replace_state(new_state);
+        Ok(state.seqno)
     }
 
     /// Returns an iterator over all live states for the requested shard.

@@ -50,6 +50,7 @@ use crate::{PersistConfig, ShardId};
 
 #[derive(Debug)]
 pub struct Machine<K, V, T, D> {
+    shard_id: ShardId,
     pub(crate) applier: Applier<K, V, T, D>,
 }
 
@@ -57,6 +58,7 @@ pub struct Machine<K, V, T, D> {
 impl<K, V, T: Clone, D> Clone for Machine<K, V, T, D> {
     fn clone(&self) -> Self {
         Self {
+            shard_id: self.shard_id,
             applier: self.applier.clone(),
         }
     }
@@ -77,29 +79,45 @@ where
         shared_states: &StateCache,
     ) -> Result<Self, Box<CodecMismatch>> {
         let applier = Applier::new(cfg, shard_id, metrics, state_versions, shared_states).await?;
-        Ok(Machine { applier })
+        Ok(Machine { shard_id, applier })
     }
 
     pub fn shard_id(&self) -> ShardId {
-        self.applier.cached_state().shard_id
+        self.shard_id
     }
 
-    pub async fn fetch_upper(&mut self) -> &Antichain<T> {
-        self.applier.fetch_and_update_state().await;
+    pub async fn fetch_upper(&mut self) -> Antichain<T> {
+        self.applier.fetch_and_update_state(None).await;
         self.upper()
     }
 
-    pub fn upper(&self) -> &Antichain<T> {
-        &self.applier.cached_state().upper
-    }
-
-    pub fn seqno(&self) -> SeqNo {
-        self.applier.cached_state().seqno
+    pub fn upper(&self) -> Antichain<T> {
+        self.applier
+            .read_locked_state(|state| state.upper().clone())
     }
 
     #[cfg(test)]
+    pub fn since(&self) -> Antichain<T> {
+        self.applier
+            .read_locked_state(|state| state.since().clone())
+    }
+
+    pub fn seqno(&self) -> SeqNo {
+        self.applier.read_locked_state(|state| state.seqno)
+    }
+
+    pub fn is_tombstone(&self) -> bool {
+        self.applier
+            .read_locked_state(|state| state.collections.is_tombstone())
+    }
+
     pub fn seqno_since(&self) -> SeqNo {
-        self.applier.cached_state().seqno_since
+        self.applier.read_locked_state(|state| state.seqno_since())
+    }
+
+    pub fn since_and_upper(&self) -> (Antichain<T>, Antichain<T>) {
+        self.applier
+            .read_locked_state(|state| (state.since().clone(), state.upper().clone()))
     }
 
     pub async fn add_rollup_for_current_seqno(&mut self) -> RoutineMaintenance {
@@ -147,7 +165,7 @@ where
         heartbeat_timestamp_ms: u64,
     ) -> (LeasedReaderState<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
-        let (_seqno, reader_state, maintenance) = self
+        let (_seqno, (reader_state, seqno_since), maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |seqno, cfg, state| {
                 state.register_leased_reader(
                     &cfg.hostname,
@@ -160,16 +178,12 @@ where
             })
             .await;
 
-        if !self.applier.cached_state().is_tombstone
-            && !self
-                .applier
-                .state()
-                .lock()
-                .expect("lock poisoned")
-                .collections
-                .leased_readers
-                .contains_key(reader_id)
-        {
+        let reader_already_expired = self.applier.read_locked_state(|state| {
+            !state.collections.is_tombstone()
+                && !state.collections.leased_readers.contains_key(reader_id)
+        });
+
+        if reader_already_expired {
             error!("Reader {reader_id} was registered at timestamp {heartbeat_timestamp_ms} but immediately expired.\
                     This implies {lease_duration:?} passed between the call and its completion, which should be rare.");
         }
@@ -182,10 +196,10 @@ where
         // hold is >= the seqno_since, so validate that instead of anything more
         // specific.
         debug_assert!(
-            reader_state.seqno >= self.applier.cached_state().seqno_since,
+            reader_state.seqno >= seqno_since,
             "{} vs {}",
             reader_state.seqno,
-            self.applier.cached_state().seqno_since
+            seqno_since,
         );
         (reader_state, maintenance)
     }
@@ -223,16 +237,10 @@ where
                 )
             })
             .await;
-        if !self.applier.cached_state().is_tombstone
-            && !self
-                .applier
-                .state()
-                .lock()
-                .expect("lock poisoned")
-                .collections
-                .writers
-                .contains_key(writer_id)
-        {
+        let writer_already_expired = self.applier.read_locked_state(|state| {
+            !state.collections.is_tombstone() && !state.collections.writers.contains_key(writer_id)
+        });
+        if writer_already_expired {
             error!("Writer {writer_id} was registered at timestamp {heartbeat_timestamp_ms} but immediately expired.\
                     This implies {lease_duration:?} passed between the call and its completion, which should be rare.");
         }
@@ -265,8 +273,8 @@ where
                     // side-channel that didn't update our local cache of the
                     // machine state. So, fetch the latest state and try again
                     // if we indeed get something different.
-                    self.applier.fetch_and_update_state().await;
-                    let current_upper = self.upper();
+                    self.applier.fetch_and_update_state(None).await;
+                    let current_upper = &self.upper();
 
                     // We tried to to a compare_and_append with the wrong
                     // expected upper, that won't work.
@@ -665,9 +673,8 @@ where
     }
 
     pub async fn maybe_become_tombstone(&mut self) -> Option<RoutineMaintenance> {
-        if !self.applier.cached_state().upper.is_empty()
-            || !self.applier.cached_state().since.is_empty()
-        {
+        let (since, upper) = self.since_and_upper();
+        if !since.is_empty() || !upper.is_empty() {
             return None;
         }
 
@@ -753,7 +760,7 @@ where
                     retry.sleep().await
                 }
             });
-            self.applier.fetch_and_update_state().await;
+            self.applier.fetch_and_update_state(None).await;
         }
     }
 
@@ -1145,8 +1152,8 @@ pub mod datadriven {
     ) -> Result<String, anyhow::Error> {
         Ok(format!(
             "since={:?} upper={:?}\n",
-            datadriven.machine.applier.cached_state().since.elements(),
-            datadriven.machine.applier.cached_state().upper.elements()
+            datadriven.machine.since().elements(),
+            datadriven.machine.upper().elements()
         ))
     }
 
@@ -1692,7 +1699,11 @@ pub mod datadriven {
             let () = maintenance
                 .perform(&datadriven.machine, &datadriven.gc)
                 .await;
-            let () = datadriven.machine.applier.fetch_and_update_state().await;
+            let () = datadriven
+                .machine
+                .applier
+                .fetch_and_update_state(None)
+                .await;
             write!(s, "{} ok\n", datadriven.machine.seqno());
         }
         Ok(s)

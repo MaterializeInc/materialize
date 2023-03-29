@@ -18,7 +18,6 @@ use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
 use tracing::debug;
 
 use mz_persist::location::{CaSResult, Indeterminate, SeqNo};
@@ -33,116 +32,6 @@ use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::{EncodedRollup, StateVersions};
 use crate::internal::trace::FueledMergeReq;
 use crate::{PersistConfig, ShardId};
-
-#[derive(Debug, Clone)]
-pub struct CachedState<T> {
-    pub shard_id: ShardId,
-    pub seqno: SeqNo,
-    pub upper: Antichain<T>,
-    pub since: Antichain<T>,
-    pub seqno_since: SeqNo,
-    pub is_tombstone: bool,
-}
-
-impl<K, V, T: Timestamp + Lattice + Codec64, D> From<&TypedState<K, V, T, D>> for CachedState<T> {
-    fn from(value: &TypedState<K, V, T, D>) -> Self {
-        CachedState {
-            shard_id: value.shard_id,
-            seqno: value.seqno,
-            upper: value.upper().clone(),
-            since: value.since().clone(),
-            seqno_since: value.seqno_since(),
-            is_tombstone: value.collections.is_tombstone(),
-        }
-    }
-}
-
-impl<T: Timestamp + Lattice + Codec64> CachedState<T> {
-    fn validate_cached_version_of<K, V, D>(
-        &self,
-        state: &TypedState<K, V, T, D>,
-    ) -> Result<(), String> {
-        // destructure to ensure we validate each field
-        let Self {
-            shard_id,
-            seqno,
-            upper,
-            since,
-            seqno_since,
-            is_tombstone,
-        } = self;
-        if *shard_id != state.shard_id {
-            return Err(format!(
-                "shard_id didn't match {} vs {}",
-                shard_id, state.shard_id
-            ));
-        }
-        if !(*seqno <= state.seqno) {
-            return Err(format!(
-                "seqno unexpectedly not leq {} vs {}",
-                seqno, state.seqno
-            ));
-        }
-        if !(*seqno_since <= state.seqno_since()) {
-            return Err(format!(
-                "seqno since unexpectedly not leq {} vs {}",
-                seqno_since,
-                state.seqno_since()
-            ));
-        }
-        if !PartialOrder::less_equal(since, state.since()) {
-            return Err(format!(
-                "since unexpectedly not leq {:?} vs {:?}",
-                since.elements(),
-                state.since().elements()
-            ));
-        }
-        if !PartialOrder::less_equal(upper, state.upper()) {
-            return Err(format!(
-                "upper unexpectedly not leq {:?} vs {:?}",
-                upper.elements(),
-                state.upper().elements()
-            ));
-        }
-        if *is_tombstone && !state.collections.is_tombstone() {
-            return Err(format!(
-                "is_tombstone unexpectedly not true {:?} vs {:?}",
-                is_tombstone,
-                state.collections.is_tombstone()
-            ));
-        }
-        Ok(())
-    }
-
-    fn try_update<K, V, D>(&mut self, state: &TypedState<K, V, T, D>) {
-        if self.seqno < state.seqno {
-            debug_assert_eq!(self.validate_cached_version_of(state), Ok(()));
-            // destructure to ensure we set each field
-            let Self {
-                shard_id: _shard_id,
-                seqno,
-                upper,
-                since,
-                seqno_since,
-                is_tombstone,
-            } = self;
-
-            *seqno = state.seqno;
-            if upper != state.upper() {
-                upper.clone_from(state.upper());
-            }
-            if since != state.since() {
-                since.clone_from(state.since());
-            }
-            if *seqno_since != state.seqno_since() {
-                *seqno_since = state.seqno_since();
-            }
-            if *is_tombstone != state.collections.is_tombstone() {
-                *is_tombstone = state.collections.is_tombstone();
-            }
-        }
-    }
-}
 
 /// An applier of persist commands.
 ///
@@ -161,10 +50,6 @@ pub struct Applier<K, V, T, D> {
     // is expected that other handles may advance the state at any time this Applier
     // is not holding the lock.
     state: Arc<Mutex<TypedState<K, V, T, D>>>,
-    // An Applier-local cache of several of the most frequently accessed (and cheapest
-    // to copy) values of the latest state, used to reduce lock contention. The cached
-    // state should always be updated after attempting to update the shared state.
-    cached_state: CachedState<T>,
 }
 
 // Impl Clone regardless of the type params.
@@ -176,13 +61,12 @@ impl<K, V, T: Clone, D> Clone for Applier<K, V, T, D> {
             shard_metrics: Arc::clone(&self.shard_metrics),
             state_versions: Arc::clone(&self.state_versions),
             state: Arc::clone(&self.state),
-            cached_state: self.cached_state.clone(),
         }
     }
 }
 
 #[derive(Debug)]
-struct ExpectationMismatch;
+struct ExpectationMismatch(SeqNo);
 
 impl<K, V, T, D> Applier<K, V, T, D>
 where
@@ -211,26 +95,18 @@ where
                     })
             })
             .await?;
-        let cached_state = {
-            let state = state.lock().expect("lock poisoned");
-            CachedState::from(&*state)
-        };
         Ok(Applier {
             cfg,
             metrics,
             shard_metrics,
             state_versions,
             state,
-            cached_state,
         })
     }
 
-    pub fn state(&self) -> Arc<Mutex<TypedState<K, V, T, D>>> {
-        Arc::clone(&self.state)
-    }
-
-    pub fn cached_state(&self) -> &CachedState<T> {
-        &self.cached_state
+    pub fn read_locked_state<R, F: Fn(&TypedState<K, V, T, D>) -> R>(&self, f: F) -> R {
+        let state = self.state.lock().expect("lock poisoned");
+        f(&state)
     }
 
     pub fn all_fueled_merge_reqs(&self) -> Vec<FueledMergeReq<T>> {
@@ -264,12 +140,12 @@ where
     }
 
     pub async fn write_rollup_blob(&self, rollup_id: &RollupId) -> EncodedRollup {
-        let key = PartialRollupKey::new(self.cached_state.seqno, rollup_id);
-        let rollup = self.state_versions.encode_rollup_blob(
-            &self.shard_metrics,
-            &self.state.lock().expect("lock poisoned"),
-            key,
-        );
+        let rollup = {
+            let state = self.state.lock().expect("lock poisoned");
+            let key = PartialRollupKey::new(state.seqno, rollup_id);
+            self.state_versions
+                .encode_rollup_blob(&self.shard_metrics, &state, key)
+        };
         let () = self.state_versions.write_rollup_blob(&rollup).await;
         rollup
     }
@@ -306,9 +182,9 @@ where
                 Ok(Err(err)) => {
                     return Err(err);
                 }
-                Err(ExpectationMismatch) => {
+                Err(ExpectationMismatch(seqno)) => {
                     cmd.cas_mismatch.inc();
-                    self.fetch_and_update_state().await;
+                    self.fetch_and_update_state(Some(seqno)).await;
                 }
             }
         }
@@ -449,7 +325,7 @@ where
                     maintenance,
                 )))
             }
-            Ok(CaSResult::ExpectationMismatch) => Err(ExpectationMismatch),
+            Ok(CaSResult::ExpectationMismatch) => Err(ExpectationMismatch(expected)),
             Err(err) => Ok(Err(err)),
         }
     }
@@ -458,28 +334,32 @@ where
         let mut state = self.state.lock().expect("lock poisoned");
         let seqno_before = state.seqno;
         state.try_replace_state(new_state);
-        self.cached_state.try_update(&state);
+        let seqno_after = state.seqno;
+
         assert!(
-            seqno_before <= self.cached_state.seqno,
+            seqno_before <= seqno_after,
             "state seqno regressed: {} vs {}",
             seqno_before,
-            self.cached_state.seqno
+            seqno_after
         );
     }
 
-    pub async fn fetch_and_update_state(&mut self) {
-        let seqno_before = self.cached_state.seqno;
-        self.state_versions
+    /// Fetches and updates to the latest state. Uses an optional hint to early-out if
+    /// any more recent version of state is observed (e.g. updated by another handle),
+    /// without making any calls to Consensus or Blob.
+    pub async fn fetch_and_update_state(&mut self, seqno_hint: Option<SeqNo>) {
+        let seqno_before =
+            seqno_hint.unwrap_or_else(|| self.state.lock().expect("lock poisoned").seqno);
+        let seqno_after = self
+            .state_versions
             .fetch_and_update_to_current(&self.state, seqno_before)
             .await
             .expect("shard codecs should not change");
-        self.cached_state
-            .try_update(&self.state.lock().expect("lock poisoned"));
         assert!(
-            seqno_before <= self.cached_state.seqno,
+            seqno_before <= seqno_after,
             "state seqno regressed: {} vs {}",
             seqno_before,
-            self.cached_state.seqno
+            seqno_after
         );
     }
 }

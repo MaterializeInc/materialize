@@ -109,7 +109,7 @@ impl RoutineMaintenance {
             futures.push(
                 mz_ore::task::spawn(|| "persist::write_rollup", async move {
                     if machine.seqno() < rollup_seqno {
-                        machine.applier.fetch_and_update_state().await;
+                        machine.applier.fetch_and_update_state(None).await;
                     }
                     // We don't have to write at exactly rollup_seqno, just need
                     // something recent.
