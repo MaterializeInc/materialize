@@ -527,7 +527,7 @@ mod tests {
                 0,
             )
         }
-        async fn assert_same<K, V, T, D>(
+        fn assert_same<K, V, T, D>(
             state1: &Arc<std::sync::Mutex<TypedState<K, V, T, D>>>,
             state2: &Arc<std::sync::Mutex<TypedState<K, V, T, D>>>,
         ) {
@@ -596,7 +596,7 @@ mod tests {
         assert_eq!(did_work.load(Ordering::SeqCst), false);
         assert_eq!(states.initialized_count().await, 1);
         assert_eq!(states.strong_count().await, 1);
-        assert_same(&s1_state1, &s1_state2).await;
+        assert_same(&s1_state1, &s1_state2);
 
         // Trying to initialize with different types doesn't work.
         let did_work = Arc::new(AtomicBool::new(false));
@@ -629,7 +629,7 @@ mod tests {
             .get::<String, (), u64, i64, _, _>(s2, || async { Ok(new_state(s2)) })
             .await
             .expect("should successfully initialize");
-        assert_same(&s2_state1, &s2_state2).await;
+        assert_same(&s2_state1, &s2_state2);
 
         // The cache holds weak references to State so we reclaim memory if the
         // shards stops being used.
