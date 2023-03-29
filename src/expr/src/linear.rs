@@ -2007,7 +2007,9 @@ pub mod plan {
                     // preserves_uniqueness to mark an inverse function safe for
                     // applying on both sides of an inequality.
                     func:
-                        UnaryFunc::CastUint64ToNumeric(..) | UnaryFunc::CastUint64ToMzTimestamp(..),
+                        UnaryFunc::CastUint64ToNumeric(..)
+                        | UnaryFunc::CastUint64ToMzTimestamp(..)
+                        | UnaryFunc::CastTimestampToMzTimestamp(..),
                     expr,
                 } => Self::one_column_reference(expr),
                 _ => None,
