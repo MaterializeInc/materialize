@@ -1,7 +1,7 @@
 use reqwest::Method;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
-use crate::{error::Error, client::CREATE_USERS_PATH, cparse::Paginated};
+use crate::{client::CREATE_USERS_PATH, cparse::Paginated, error::Error};
 
 use super::{Client, USERS_PATH};
 
@@ -10,7 +10,7 @@ pub struct NewUser {
     email: String,
     name: String,
     provider: String,
-    #[serde(rename="roleIds")]
+    #[serde(rename = "roleIds")]
     role_ids: Vec<String>,
 }
 
@@ -20,7 +20,7 @@ pub struct User {
     id: String,
     name: String,
     email: String,
-    sub: String
+    sub: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -60,10 +60,7 @@ impl Client {
 
         loop {
             let req = self.build_request(Method::GET, USERS_PATH);
-            let req = req.query(&[
-                ("_limit", "50"),
-                ("_offset", &*page.to_string())
-            ]);
+            let req = req.query(&[("_limit", "50"), ("_offset", &*page.to_string())]);
             let res: Paginated<User> = self.send_request(req).await?;
             for user in res.items {
                 users.push(user);
@@ -81,7 +78,6 @@ impl Client {
         let req = self.build_request(Method::POST, CREATE_USERS_PATH);
 
         let req = req.json(&new_user);
-
 
         println!("Output: {:?}", req);
         let new_user: CreateUser = self.send_request(req).await?;

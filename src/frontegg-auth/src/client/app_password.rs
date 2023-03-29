@@ -3,9 +3,9 @@ use std::collections::BTreeMap;
 use reqwest::Method;
 use serde::Deserialize;
 
-use crate::{error::Error, app_password::AppPassword};
+use crate::{app_password::AppPassword, error::Error};
 
-use super::{Client, CREATE_APP_PASSWORDS_PATH, APP_PASSWORDS_PATH};
+use super::{Client, APP_PASSWORDS_PATH, CREATE_APP_PASSWORDS_PATH};
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]

@@ -474,13 +474,9 @@ async fn auth(
         // client cert, it must match that of the JWT.
         (Some(frontegg), creds) => {
             let (user, token) = match creds {
-                Credentials::Password { username, password } => (
-                    Some(username),
-                    frontegg
-                        .auth(&password)
-                        .await?
-                        .token,
-                ),
+                Credentials::Password { username, password } => {
+                    (Some(username), frontegg.auth(&password).await?.token)
+                }
                 Credentials::Token { token } => (None, token),
                 Credentials::User(_) => return Err(AuthError::MissingHttpAuthentication),
             };

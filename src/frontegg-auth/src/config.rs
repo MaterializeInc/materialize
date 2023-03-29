@@ -28,7 +28,7 @@ pub static DEFAULT_ENDPOINT: Lazy<Url> = Lazy::new(|| {
 
 /// Configures the required parameters of a [`Client`].
 pub struct ClientConfig {
-    pub(crate) app_password: AppPassword
+    pub(crate) app_password: AppPassword,
 }
 
 /// A builder for a [`Client`].
@@ -45,6 +45,12 @@ impl Default for ClientBuilder {
 }
 
 impl ClientBuilder {
+    /// Overrides the default endpoint.
+    pub fn endpoint(mut self, endpoint: Url) -> ClientBuilder {
+        self.endpoint = endpoint;
+        self
+    }
+
     /// Creates a [`Client`] that incorporates the optional parameters
     /// configured on the builder and the specified required parameters.
     pub fn build(self, config: ClientConfig) -> Client {

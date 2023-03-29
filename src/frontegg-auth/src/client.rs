@@ -1,19 +1,31 @@
 use reqwest::{Method, RequestBuilder};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::time::{Duration, SystemTime};
 use tokio::sync::Mutex;
-use std::{time::{SystemTime, Duration}};
 use url::Url;
 
-use crate::{error::Error, error::ApiError, config::{ClientConfig, ClientBuilder}, app_password::AppPassword, Claims};
+use crate::{
+    app_password::AppPassword,
+    config::{ClientBuilder, ClientConfig},
+    error::ApiError,
+    error::Error,
+};
 
 const AUTH_PATH: [&str; 5] = ["identity", "resources", "auth", "v1", "api-token"];
 const USERS_PATH: [&str; 4] = ["identity", "resources", "users", "v3"];
 const CREATE_USERS_PATH: [&str; 5] = ["frontegg", "identity", "resources", "users", "v2"];
 const APP_PASSWORDS_PATH: [&str; 5] = ["identity", "resources", "users", "api-tokens", "v1"];
-const CREATE_APP_PASSWORDS_PATH: [&str; 6] =  ["frontegg", "identity", "resources", "users", "api-tokens", "v1"];
+const CREATE_APP_PASSWORDS_PATH: [&str; 6] = [
+    "frontegg",
+    "identity",
+    "resources",
+    "users",
+    "api-tokens",
+    "v1",
+];
 
-pub mod user;
 pub mod app_password;
+pub mod user;
 
 /// An API client for Frontegg.
 ///
@@ -156,23 +168,24 @@ pub struct Auth {
 
 #[cfg(test)]
 mod tests {
-    use crate::{config::{ClientBuilder, ClientConfig}, app_password::AppPassword};
+    use crate::{
+        app_password::AppPassword,
+        config::{ClientBuilder, ClientConfig},
+    };
     use std::env;
 
     #[tokio::test]
     async fn test_app_password() {
         struct TestCase {
-            app_password: AppPassword
+            app_password: AppPassword,
         }
 
-        for tc in [
-            TestCase {
-                app_password: AppPassword {
-                    client_id: env::var("MZP_CLIENT_ID").unwrap().parse().unwrap(),
-                    secret_key: env::var("MZP_SECRET_KEY").unwrap().parse().unwrap()
-                }
-            }
-        ] {
+        for tc in [TestCase {
+            app_password: AppPassword {
+                client_id: env::var("MZP_CLIENT_ID").unwrap().parse().unwrap(),
+                secret_key: env::var("MZP_SECRET_KEY").unwrap().parse().unwrap(),
+            },
+        }] {
             // let client_builder = ClientBuilder::default();
             // let client = client_builder.build(ClientConfig {
             //     app_password: tc.app_password

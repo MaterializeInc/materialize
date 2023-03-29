@@ -78,25 +78,28 @@
 use std::future::Future;
 use std::time::Duration;
 
-use client::{Auth};
+use client::Auth;
 use config::{ClientBuilder, ClientConfig};
 use derivative::Derivative;
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use thiserror::Error;
 use tracing::warn;
+use url::Url;
 use uuid::Uuid;
 
-use mz_ore::{now::NowFn};
+use mz_ore::now::NowFn;
 
-use crate::app_password::{AppPasswordParseError};
+use crate::app_password::AppPasswordParseError;
 
 pub mod app_password;
-pub mod config;
 pub mod client;
-pub mod error;
+pub mod config;
 pub mod cparse;
+pub mod error;
 
 pub struct FronteggConfig {
+    /// URL for the token endpoint, including full path.
+    pub admin_endpoint: String,
     /// JWK used to validate JWTs.
     pub decoding_key: DecodingKey,
     /// Tenant id used to validate JWTs.
@@ -112,6 +115,7 @@ pub struct FronteggConfig {
 #[derive(Clone, Derivative)]
 #[derivative(Debug)]
 pub struct FronteggAuthentication {
+    admin_endpoint: String,
     #[derivative(Debug = "ignore")]
     decoding_key: DecodingKey,
     tenant_id: Uuid,
@@ -132,6 +136,7 @@ impl FronteggAuthentication {
         // We validate with our own now function.
         validation.validate_exp = false;
         Self {
+            admin_endpoint: config.admin_endpoint,
             decoding_key: config.decoding_key,
             tenant_id: config.tenant_id,
             now: config.now,
@@ -141,14 +146,13 @@ impl FronteggAuthentication {
         }
     }
 
-    pub async fn auth (
-        &self,
-        password: &str,
-    ) ->  Result<Auth, FronteggError> {
+    pub async fn auth(&self, password: &str) -> Result<Auth, FronteggError> {
         // Do an initial full validity check of the token.
-        let client = ClientBuilder::default().build(ClientConfig {
-            app_password: password.parse()?
-        });
+        let client = ClientBuilder::default()
+            .endpoint(self.admin_endpoint.parse().unwrap())
+            .build(ClientConfig {
+                app_password: password.parse()?,
+            });
         Ok(client.auth().await.unwrap())
     }
 
@@ -190,9 +194,11 @@ impl FronteggAuthentication {
         mut claims_processor: impl FnMut(Claims),
     ) -> Result<impl Future<Output = ()>, FronteggError> {
         // Do an initial full validity check of the token.
-        let client = ClientBuilder::default().build(ClientConfig {
-            app_password: password.parse()?
-        });
+        let client = ClientBuilder::default()
+            .endpoint(self.admin_endpoint.parse().unwrap())
+            .build(ClientConfig {
+                app_password: password.parse()?,
+            });
         let auth = client.auth().await.unwrap();
         let mut claims = self.validate_token(auth.token.clone(), Some(&expected_email))?;
         claims_processor(claims.clone());
@@ -210,10 +216,8 @@ impl FronteggAuthentication {
                     loop {
                         let resp = async {
                             let auth = client.auth().await.unwrap();
-                            let claims = frontegg.validate_token(
-                                auth.token.clone(),
-                                Some(&expected_email),
-                            )?;
+                            let claims = frontegg
+                                .validate_token(auth.token.clone(), Some(&expected_email))?;
                             Ok::<(Auth, Claims), anyhow::Error>((auth, claims))
                         };
                         match resp.await {

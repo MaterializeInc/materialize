@@ -179,11 +179,14 @@ where
         };
         let admin_role = frontegg.admin_role();
         let external_metadata_rx = session.retain_external_metadata_transmitter();
-        match frontegg.continuously_validate(&password, user.clone(), move |claims| {
-            let external_metadata = convert_claims_to_external_metadata(claims, admin_role);
-            // Ignore error if client has hung up.
-            let _ = external_metadata_rx.send(external_metadata);
-        }).await {
+        match frontegg
+            .continuously_validate(&password, user.clone(), move |claims| {
+                let external_metadata = convert_claims_to_external_metadata(claims, admin_role);
+                // Ignore error if client has hung up.
+                let _ = external_metadata_rx.send(external_metadata);
+            })
+            .await
+        {
             Ok(is_expired) => {
                 // Make sure to apply the initial claims.
                 session.apply_external_metadata_updates();
