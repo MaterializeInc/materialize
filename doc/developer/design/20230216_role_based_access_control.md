@@ -244,14 +244,13 @@ We will update `DROP ROLE` so that roles cannot be dropped unless no objects are
 
 - The following catalog tables/views will have an additional column called "owner_id" of type string. It will be the
   role ID of the owner of the object. Additionally, the corresponding stash collections will have an "owner_id"
-  field. We will also update any system views over these tables to include the "owner_id" column.
+  field.
   - mz_sinks
   - mz_indexes
   - mz_connections
   - mz_types
   - mz_functions
   - mz_secrets
-  - mz_relations
   - mz_tables
   - mz_sources
   - mz_views
@@ -260,6 +259,8 @@ We will update `DROP ROLE` so that roles cannot be dropped unless no objects are
   - mz_clusters
   - mz_cluster_replica
   - mz_schemas
+  - mz_relations
+  - mz_objects
 - Ownership will be checked before operations in the sequencer.
 
 #### Out of Scope for Phase
@@ -374,13 +375,6 @@ We will add the following SQL commands:
 - `REVOKE ALL [ PRIVILEGES ] ON <object> FROM [ GROUP ] <role>`
     - Same as revoke above but for all privileges.
     - `PRIVILEGES` is ignored.
-- `ALTER <object_type> <object_name> OWNER TO <new_owner>`
-    - Transfers ownership of `<object_name>` to `<new_owner>`.
-    - Can only be run by the current owner (or member of owning role) or a superuser.
-    - Requires membership of `<new_owner>`.
-    - Requires `CREATE` privilege on the schema where `<object_name>` resides if the object resides in a schema.
-        - Rationale is that this is equivalent to `DROP` then `CREATE`.
-    - Requires `CREATE` privilege on the database where `<object_name>` resides if the object is a database.
 
 We will update `ALTER <object_type> <object_name> OWNER TO <new_owner>` such that it:
 
@@ -394,7 +388,36 @@ We will update `DROP <object>` so that it revokes all privileges on `<object>`.
 
 #### Implementation Details
 
-- Privileges will be stored in the catalog.
+- We will create a new Rust struct called `AclMode` that is a bit flag containing all privileges.
+    - See https://github.com/postgres/postgres/blob/3aa961378b4e517908a4400cdc476ca299693de9/src/include/nodes/parsenodes.h#L74-L101
+    for PostgreSQL's implementation.
+- We will create a new datatype called `maclitem` in the `mz_internal` schema to represent a single privilege.
+    - This is modeled after the `aclitem` item in PostgreSQL, see
+    https://github.com/postgres/postgres/blob/3aa961378b4e517908a4400cdc476ca299693de9/src/include/utils/acl.h#L48-L59.
+    - It will include the following fields:
+        - `grantee: ObjectId`
+        - `grantor: RoleId`
+        - `privs: AclMode`
+    - The reason we need a custom type instead of reusing the PostgreSQL's `aclitem` type is because
+    `aclitem` uses `oid` types, which Materialize does not use as a persistent identifier.
+- The following catalog table/views will have an additional column called "acl" of type `maclitem[]`.
+that stores all privileges belonging to an object.
+  - mz_sinks
+  - mz_indexes
+  - mz_connections
+  - mz_types
+  - mz_functions
+  - mz_secrets
+  - mz_tables
+  - mz_sources
+  - mz_views
+  - mz_materialized_views
+  - mz_databases
+  - mz_clusters
+  - mz_cluster_replica
+  - mz_schemas
+  - mz_relations
+  - mz_objects
 - Privileges will be checked before operations in the sequencer.
 
 #### Out of Scope for Project
