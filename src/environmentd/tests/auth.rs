@@ -815,7 +815,6 @@ fn test_auth_expiry() {
     )
     .unwrap();
     let frontegg_auth = FronteggAuthentication::new(FronteggConfig {
-        admin_api_token_url: frontegg_server.url.clone(),
         decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
         tenant_id,
         now: SYSTEM_TIME.clone(),
@@ -955,7 +954,6 @@ fn test_auth_base() {
     )
     .unwrap();
     let frontegg_auth = FronteggAuthentication::new(FronteggConfig {
-        admin_api_token_url: frontegg_server.url,
         decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
         tenant_id,
         now,
@@ -1583,7 +1581,6 @@ fn test_auth_admin() {
     .unwrap();
     let password_prefix = "mzp_";
     let frontegg_auth = FronteggAuthentication::new(FronteggConfig {
-        admin_api_token_url: frontegg_server.url.clone(),
         decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
         tenant_id,
         now,

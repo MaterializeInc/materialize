@@ -4,7 +4,7 @@ use tokio::sync::Mutex;
 use std::{time::{SystemTime, Duration}};
 use url::Url;
 
-use crate::{error::Error, error::ApiError, config::{ClientConfig, ClientBuilder}, app_password::AppPassword};
+use crate::{error::Error, error::ApiError, config::{ClientConfig, ClientBuilder}, app_password::AppPassword, Claims};
 
 const AUTH_PATH: [&str; 5] = ["identity", "resources", "auth", "v1", "api-token"];
 const USERS_PATH: [&str; 4] = ["identity", "resources", "users", "v3"];
@@ -28,6 +28,15 @@ pub struct Client {
     pub(crate) app_password: AppPassword,
     pub(crate) endpoint: Url,
     pub(crate) auth: Mutex<Option<Auth>>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiTokenResponse {
+    pub expires: String,
+    pub expires_in: i64,
+    pub access_token: String,
+    pub refresh_token: String,
 }
 
 impl Client {
@@ -59,7 +68,7 @@ impl Client {
     where
         T: DeserializeOwned,
     {
-        let token = self.auth_token().await?;
+        let token = self.auth().await?.token;
         let req = req.bearer_auth(token);
         self.send_unauthenticated_request(req).await
     }
@@ -101,7 +110,7 @@ impl Client {
 
     /// Authenticates with the server, if not already authenticated,
     /// and returns the authentication token.
-    async fn auth_token(&self) -> Result<String, Error> {
+    pub async fn auth(&self) -> Result<Auth, Error> {
         #[derive(Debug, Clone, Serialize)]
         #[serde(rename_all = "camelCase")]
         struct AuthenticationRequest<'a> {
@@ -119,7 +128,7 @@ impl Client {
         let mut auth = self.auth.lock().await;
         match &*auth {
             Some(auth) if SystemTime::now() < auth.refresh_at => {
-                return Ok(auth.token.clone());
+                return Ok(auth.clone());
             }
             _ => (),
         }
@@ -135,14 +144,14 @@ impl Client {
             // Refresh twice as frequently as we need to, to be safe.
             refresh_at: SystemTime::now() + (Duration::from_secs(res.expires_in) / 2),
         });
-        Ok(res.access_token)
+        Ok(auth.clone().unwrap())
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct Auth {
-    token: String,
-    refresh_at: SystemTime,
+    pub token: String,
+    pub refresh_at: SystemTime,
 }
 
 #[cfg(test)]
@@ -164,10 +173,10 @@ mod tests {
                 }
             }
         ] {
-            let client_builder = ClientBuilder::default();
-            let client = client_builder.build(ClientConfig {
-                app_password: tc.app_password
-            });
+            // let client_builder = ClientBuilder::default();
+            // let client = client_builder.build(ClientConfig {
+            //     app_password: tc.app_password
+            // });
             // let app_passwords = client.list_app_passwords().await;
             // println!("Output: {:?}", app_passwords);
             // let users = client.list_users().await;

@@ -601,14 +601,12 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     };
     let frontegg = match (
         args.frontegg_tenant,
-        args.frontegg_api_token_url,
         args.frontegg_jwk,
         args.frontegg_admin_role,
     ) {
-        (None, None, None, None) => None,
-        (Some(tenant_id), Some(admin_api_token_url), Some(jwk), Some(admin_role)) => {
+        (None, None, None) => None,
+        (Some(tenant_id), Some(jwk), Some(admin_role)) => {
             Some(FronteggAuthentication::new(FronteggConfig {
-                admin_api_token_url,
                 decoding_key: DecodingKey::from_rsa_pem(jwk.as_bytes())?,
                 tenant_id,
                 now: mz_ore::now::SYSTEM_TIME.clone(),

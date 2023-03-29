@@ -477,14 +477,14 @@ async fn auth(
                 Credentials::Password { username, password } => (
                     Some(username),
                     frontegg
-                        .exchange_password_for_token(&password)
+                        .auth(&password)
                         .await?
-                        .access_token,
+                        .token,
                 ),
                 Credentials::Token { token } => (None, token),
                 Credentials::User(_) => return Err(AuthError::MissingHttpAuthentication),
             };
-            let claims = frontegg.validate_access_token(&token, user.as_deref())?;
+            let claims = frontegg.validate_token(token, user.as_deref())?;
             User {
                 external_metadata: Some(ExternalUserMetadata {
                     user_id: claims.best_user_id(),
