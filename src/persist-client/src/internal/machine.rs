@@ -81,7 +81,7 @@ where
     }
 
     pub fn shard_id(&self) -> ShardId {
-        self.applier.state().shard_id()
+        self.applier.cached_state().shard_id
     }
 
     pub async fn fetch_upper(&mut self) -> &Antichain<T> {
@@ -90,16 +90,16 @@ where
     }
 
     pub fn upper(&self) -> &Antichain<T> {
-        self.applier.state().upper()
+        &self.applier.cached_state().upper
     }
 
     pub fn seqno(&self) -> SeqNo {
-        self.applier.state().seqno()
+        self.applier.cached_state().seqno
     }
 
     #[cfg(test)]
     pub fn seqno_since(&self) -> SeqNo {
-        self.applier.state().seqno_since()
+        self.applier.cached_state().seqno_since
     }
 
     pub async fn add_rollup_for_current_seqno(&mut self) -> RoutineMaintenance {
@@ -160,10 +160,12 @@ where
             })
             .await;
 
-        if !self.applier.state().collections.is_tombstone()
+        if !self.applier.cached_state().is_tombstone
             && !self
                 .applier
                 .state()
+                .lock()
+                .expect("lock poisoned")
                 .collections
                 .leased_readers
                 .contains_key(reader_id)
@@ -180,10 +182,10 @@ where
         // hold is >= the seqno_since, so validate that instead of anything more
         // specific.
         debug_assert!(
-            reader_state.seqno >= self.applier.state().seqno_since(),
+            reader_state.seqno >= self.applier.cached_state().seqno_since,
             "{} vs {}",
             reader_state.seqno,
-            self.applier.state().seqno_since()
+            self.applier.cached_state().seqno_since
         );
         (reader_state, maintenance)
     }
@@ -221,10 +223,12 @@ where
                 )
             })
             .await;
-        if !self.applier.state().collections.is_tombstone()
+        if !self.applier.cached_state().is_tombstone
             && !self
                 .applier
                 .state()
+                .lock()
+                .expect("lock poisoned")
                 .collections
                 .writers
                 .contains_key(writer_id)
@@ -661,7 +665,9 @@ where
     }
 
     pub async fn maybe_become_tombstone(&mut self) -> Option<RoutineMaintenance> {
-        if !self.applier.state().upper().is_empty() || !self.applier.state().since().is_empty() {
+        if !self.applier.cached_state().upper.is_empty()
+            || !self.applier.cached_state().since.is_empty()
+        {
             return None;
         }
 
@@ -1139,8 +1145,8 @@ pub mod datadriven {
     ) -> Result<String, anyhow::Error> {
         Ok(format!(
             "since={:?} upper={:?}\n",
-            datadriven.machine.applier.state().since().elements(),
-            datadriven.machine.applier.state().upper().elements()
+            datadriven.machine.applier.cached_state().since.elements(),
+            datadriven.machine.applier.cached_state().upper.elements()
         ))
     }
 

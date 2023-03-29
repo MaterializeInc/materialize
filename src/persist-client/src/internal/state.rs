@@ -1094,6 +1094,13 @@ where
         };
         Continue((work_ret, new_state))
     }
+
+    /// Replaces self with `new_state` if `new_state` is more recent.
+    pub fn try_replace_state(&mut self, new_state: Self) {
+        if self.seqno < new_state.seqno {
+            *self = new_state;
+        }
+    }
 }
 
 impl<T> State<T>

@@ -13,7 +13,7 @@
 use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::ops::ControlFlow::{Break, Continue};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use bytes::Bytes;
@@ -392,7 +392,8 @@ impl StateVersions {
     /// back to fetching all of them when necessary.
     pub async fn fetch_and_update_to_current<K, V, T, D>(
         &self,
-        state: &mut TypedState<K, V, T, D>,
+        state: &Arc<Mutex<TypedState<K, V, T, D>>>,
+        seqno_before: SeqNo,
     ) -> Result<(), Box<CodecMismatch>>
     where
         K: Debug + Codec,
@@ -400,32 +401,47 @@ impl StateVersions {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64,
     {
-        let path = state.shard_id.to_string();
-        let diffs_to_current =
+        let (shard_id, seqno) = {
+            let state = state.lock().expect("lock poisoned");
+            (state.shard_id(), state.seqno())
+        };
+
+        // another handle has already updated state
+        if seqno_before < seqno {
+            return Ok(());
+        }
+
+        let path = shard_id.to_string();
+        let diffs_to_current: Vec<VersionedData> =
             retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
-                self.consensus
-                    .scan(&path, state.seqno.next(), SCAN_ALL)
-                    .await
+                self.consensus.scan(&path, seqno.next(), SCAN_ALL).await
             })
             .instrument(debug_span!("fetch_state::scan"))
             .await;
-        let seqno_before = state.seqno;
-        let diffs_apply = diffs_to_current
-            .first()
-            .map_or(true, |x| x.seqno == seqno_before.next());
-        if diffs_apply {
-            self.metrics.state.update_state_fast_path.inc();
+
+        {
+            let mut state = state.lock().expect("lock poisoned");
             state.apply_encoded_diffs(&self.cfg, &self.metrics, diffs_to_current);
-            Ok(())
-        } else {
-            self.metrics.state.update_state_slow_path.inc();
-            let recent_live_diffs = self.fetch_recent_live_diffs::<T>(&state.shard_id).await;
-            *state = self
-                .fetch_current_state(&state.shard_id, recent_live_diffs.0)
-                .await
-                .check_codecs(&state.shard_id)?;
-            Ok(())
+            // whether the seqno advanced from diffs and/or because another handle
+            // already updated it, we can assume it is now up-to-date
+            if seqno_before < state.seqno {
+                self.metrics.state.update_state_fast_path.inc();
+                return Ok(());
+            }
         }
+
+        self.metrics.state.update_state_slow_path.inc();
+        let recent_live_diffs = self.fetch_recent_live_diffs::<T>(&shard_id).await;
+        let new_state = self
+            .fetch_current_state(&shard_id, recent_live_diffs.0)
+            .await
+            .check_codecs(&shard_id)?;
+        {
+            let mut state = state.lock().expect("lock poisoned");
+            state.try_replace_state(new_state);
+        }
+
+        Ok(())
     }
 
     /// Returns an iterator over all live states for the requested shard.

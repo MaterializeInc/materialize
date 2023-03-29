@@ -267,7 +267,7 @@ trait DynState: Debug + Send + Sync {
     fn as_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
 }
 
-impl<K, V, T, D> DynState for Mutex<TypedState<K, V, T, D>>
+impl<K, V, T, D> DynState for std::sync::Mutex<TypedState<K, V, T, D>>
 where
     K: Codec,
     V: Codec,
@@ -317,7 +317,7 @@ impl StateCache {
         &self,
         shard_id: ShardId,
         mut init_fn: InitFn,
-    ) -> Result<Arc<Mutex<TypedState<K, V, T, D>>>, Box<CodecMismatch>>
+    ) -> Result<Arc<std::sync::Mutex<TypedState<K, V, T, D>>>, Box<CodecMismatch>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -348,11 +348,11 @@ impl StateCache {
             let state = match init {
                 StateCacheInit::Init(x) => x,
                 StateCacheInit::NeedInit(init_once) => {
-                    let mut did_init: Option<Arc<Mutex<TypedState<K, V, T, D>>>> = None;
+                    let mut did_init: Option<Arc<std::sync::Mutex<TypedState<K, V, T, D>>>> = None;
                     let state = init_once
                         .get_or_try_init::<Box<CodecMismatch>, _, _>(|| async {
                             let init_res = init_fn().await;
-                            let state = Arc::new(Mutex::new(init_res?));
+                            let state = Arc::new(std::sync::Mutex::new(init_res?));
                             let ret = Arc::downgrade(&state);
                             did_init = Some(state);
                             let ret: Weak<dyn DynState> = ret;
@@ -379,7 +379,7 @@ impl StateCache {
 
             match Arc::clone(&state)
                 .as_any()
-                .downcast::<Mutex<TypedState<K, V, T, D>>>()
+                .downcast::<std::sync::Mutex<TypedState<K, V, T, D>>>()
             {
                 Ok(x) => return Ok(x),
                 Err(_) => {
@@ -528,11 +528,11 @@ mod tests {
             )
         }
         async fn assert_same<K, V, T, D>(
-            state1: &Mutex<TypedState<K, V, T, D>>,
-            state2: &Mutex<TypedState<K, V, T, D>>,
+            state1: &Arc<std::sync::Mutex<TypedState<K, V, T, D>>>,
+            state2: &Arc<std::sync::Mutex<TypedState<K, V, T, D>>>,
         ) {
-            let pointer1 = format!("{:p}", state1.lock().await.deref());
-            let pointer2 = format!("{:p}", state2.lock().await.deref());
+            let pointer1 = format!("{:p}", state1.lock().expect("lock").deref());
+            let pointer2 = format!("{:p}", state2.lock().expect("lock").deref());
             assert_eq!(pointer1, pointer2);
         }
 

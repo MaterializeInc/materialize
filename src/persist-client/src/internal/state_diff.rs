@@ -251,7 +251,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
     ) {
         let mut state_seqno = self.seqno;
         let diffs = diffs.into_iter().filter_map(move |x| {
-            if x.seqno == state_seqno {
+            if x.seqno <= state_seqno {
                 // No-op.
                 return None;
             }
