@@ -51,6 +51,21 @@ class EnvironmentdService(K8sService):
         )
 
 
+class MaterializedAliasService(K8sService):
+    """Some testdrive tests expect that Mz is accessible as 'materialized'"""
+
+    def __init__(self) -> None:
+        self.service = V1Service(
+            api_version="v1",
+            kind="Service",
+            metadata=V1ObjectMeta(name="materialized"),
+            spec=V1ServiceSpec(
+                type="ExternalName",
+                external_name="environmentd.default.svc.cluster.local",
+            ),
+        )
+
+
 class EnvironmentdStatefulSet(K8sStatefulSet):
     def __init__(
         self,
