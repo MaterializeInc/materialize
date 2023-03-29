@@ -216,6 +216,13 @@ pub struct Args {
     #[clap(long)]
     rocksdb_use_wal: bool,
 
+    /// Whether or not to use a global `Env` in rocksdb.
+    ///
+    /// On a laptop, this appears to have very little
+    /// effect.
+    #[clap(long)]
+    rocksdb_global_env: bool,
+
     /// Whether or not to cleanup the rocksdb instances
     /// in the temporary directory.
     #[clap(long)]
@@ -503,6 +510,8 @@ async fn run_benchmark(
         std::mem::forget(rocks_dir);
     }
 
+    let global_rocks_env = rocksdb::Env::new().unwrap();
+
     let timely_config = timely::Config::process(num_workers);
     let args_cloned = args.clone();
     let timely_guards = timely::execute::execute(timely_config, move |timely_worker| {
@@ -511,6 +520,7 @@ async fn run_benchmark(
 
         let dir_path = dir_path.clone();
         let args = args_cloned.clone();
+        let global_rocks_env = global_rocks_env.clone();
 
         let probe = timely_worker.dataflow::<u64, _, _>(move |scope| {
             let mut source_streams = Vec::new();
@@ -520,8 +530,18 @@ async fn run_benchmark(
 
                 let source_stream = generator_source(scope, source_id, source_rxs);
 
-                let upsert_stream =
-                    upsert(scope, &source_stream, source_id, &dir_path, args.clone());
+                let upsert_stream = upsert(
+                    scope,
+                    &source_stream,
+                    source_id,
+                    &dir_path,
+                    args.clone(),
+                    if args.rocksdb_global_env {
+                        Some(global_rocks_env.clone())
+                    } else {
+                        None
+                    },
+                );
 
                 // Choose a different worker for the counting.
                 // TODO(aljoscha): Factor out into function.
@@ -774,6 +794,7 @@ fn upsert<G>(
     source_id: usize,
     instance_dir: &PathBuf,
     args: Args,
+    global_env: Option<rocksdb::Env>,
 ) -> Stream<G, (Vec<u8>, Vec<u8>, i32)>
 where
     G: Scope<Timestamp = u64>,
@@ -793,6 +814,7 @@ where
             KeyValueStore::RocksDB => {
                 let rocksdb = IoThreadRocksDB::new(
                     &instance_dir,
+                    global_env.clone(),
                     scope.index(),
                     source_id,
                     args.rocksdb_use_wal,
@@ -814,6 +836,7 @@ where
             KeyValueStore::RocksDB => {
                 let rocksdb = IoThreadRocksDB::new(
                     &instance_dir,
+                    global_env.clone(),
                     scope.index(),
                     source_id,
                     args.rocksdb_use_wal,
@@ -1052,6 +1075,7 @@ struct IoThreadRocksDB {
 impl IoThreadRocksDB {
     fn new(
         temp_dir: &Path,
+        global_env: Option<rocksdb::Env>,
         worker_id: usize,
         source_id: usize,
         use_wal: bool,
@@ -1074,6 +1098,10 @@ impl IoThreadRocksDB {
             rocks_options.set_memtable_factory(rocksdb::MemtableFactory::Vector);
             // Required to use the vector memtable.
             rocks_options.set_allow_concurrent_memtable_write(false);
+        }
+
+        if let Some(global_env) = global_env {
+            rocks_options.set_env(&global_env);
         }
 
         let db: DB = DB::open(&rocks_options, instance_path).unwrap();
