@@ -220,6 +220,13 @@ pub struct Args {
     /// in the temporary directory.
     #[clap(long)]
     rocksdb_no_cleanup: bool,
+
+    /// Whether or not to use the rocksdb `Vector`
+    /// memtable. Currently this seems to use
+    /// so much cpu that the data generators
+    /// fall behind.
+    #[clap(long)]
+    rocksdb_use_vector_memtable: bool,
     /*
     /// Use rocksdb transactional db
     #[clap(long)]
@@ -789,6 +796,7 @@ where
                     scope.index(),
                     source_id,
                     args.rocksdb_use_wal,
+                    args.rocksdb_use_vector_memtable,
                 );
 
                 upsert_core_pre_reduce(scope, &source_stream, source_id, rocksdb)
@@ -809,6 +817,7 @@ where
                     scope.index(),
                     source_id,
                     args.rocksdb_use_wal,
+                    args.rocksdb_use_vector_memtable,
                 );
 
                 upsert_core(scope, &source_stream, source_id, rocksdb)
@@ -1041,7 +1050,13 @@ struct IoThreadRocksDB {
 }
 
 impl IoThreadRocksDB {
-    fn new(temp_dir: &Path, worker_id: usize, source_id: usize, use_wal: bool) -> Self {
+    fn new(
+        temp_dir: &Path,
+        worker_id: usize,
+        source_id: usize,
+        use_wal: bool,
+        use_vector_memtable: bool,
+    ) -> Self {
         // bounded??
         let (tx, rx): (
             _,
@@ -1049,10 +1064,19 @@ impl IoThreadRocksDB {
         ) = crossbeam_channel::unbounded();
 
         let instance_path = temp_dir
-            .join(worker_id.to_string())
-            .join(source_id.to_string());
+            .join(format!("worker_id:{}", worker_id.to_string()))
+            .join(format!("source_id:{}", source_id.to_string()));
 
-        let db: DB = DB::open_default(instance_path).unwrap();
+        let mut rocks_options = rocksdb::Options::default();
+        rocks_options.create_if_missing(true);
+
+        if use_vector_memtable {
+            rocks_options.set_memtable_factory(rocksdb::MemtableFactory::Vector);
+            // Required to use the vector memtable.
+            rocks_options.set_allow_concurrent_memtable_write(false);
+        }
+
+        let db: DB = DB::open(&rocks_options, instance_path).unwrap();
         std::thread::spawn(move || {
             let mut wo = rocksdb::WriteOptions::new();
             wo.disable_wal(!use_wal);
