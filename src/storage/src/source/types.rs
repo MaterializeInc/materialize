@@ -213,6 +213,11 @@ pub struct DecodeResult {
 /// A structured error for `SourceReader::get_next_message` implementors.
 #[derive(Debug, Clone)]
 pub struct SourceReaderError {
+    /// The target output for this error.
+    ///
+    /// This should be 0 to output an error for the primary source; however, you will need to
+    /// determine a numbering scheme to output errors for subsources.
+    pub output: usize,
     pub inner: SourceErrorDetails,
 }
 
@@ -220,8 +225,9 @@ impl SourceReaderError {
     /// This is an unclassified but definite error. This is typically only appropriate
     /// when the error is permanently fatal for the source... some critical invariant
     /// is violated or data is corrupted, for example.
-    pub fn other_definite(e: anyhow::Error) -> SourceReaderError {
+    pub fn other_definite(output: usize, e: anyhow::Error) -> SourceReaderError {
         SourceReaderError {
+            output,
             inner: SourceErrorDetails::Other(format!("{}", e)),
         }
     }
