@@ -9,6 +9,8 @@
 
 //! `EXPLAIN ... AS TEXT` support for structures defined in this crate.
 
+use itertools::Itertools;
+use std::cell::RefCell;
 use std::fmt;
 
 use mz_ore::soft_assert;
@@ -17,12 +19,13 @@ use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
 use mz_repr::explain::{
     CompactScalarSeq, ExprHumanizer, Indices, PlanRenderingContext, RenderingContext,
 };
-use mz_repr::{GlobalId, Row};
+use mz_repr::stats::PersistSourceDataStats;
+use mz_repr::{Datum, GlobalId, Row, RowArena};
 
 use super::{ExplainMultiPlan, ExplainSinglePlan};
 use crate::{
-    AggregateExpr, Id, JoinImplementation, JoinInputCharacteristics, MapFilterProject,
-    MirRelationExpr, MirScalarExpr, RowSetFinishing,
+    AggregateExpr, Id, JoinImplementation, JoinInputCharacteristics, MapFilterProject, MfpPlan,
+    MfpPushdown, MirRelationExpr, MirScalarExpr, RowSetFinishing,
 };
 
 impl<'a, T: 'a> DisplayText for ExplainSinglePlan<'a, T>
@@ -102,8 +105,46 @@ where
                 writeln!(f, "{}Source {}", ctx.indent, id)?;
                 ctx.indented(|ctx| op.fmt_text(f, ctx))?;
                 if self.context.config.mfp_pushdown {
-                    let pushdown = "?"; // TODO: extract this info from the MFP!
-                    ctx.indented(|ctx| writeln!(f, "{}mfp_pushdown={pushdown}", ctx.indent))?;
+                    // Placeholder! Runs through the pushdown process with a mocked stats impl to
+                    // figure out which columns have pushdown-able predicates.
+                    #[derive(Debug)]
+                    struct Tracker(RefCell<Vec<bool>>);
+
+                    impl PersistSourceDataStats for Tracker {
+                        fn col_min<'a>(
+                            &'a self,
+                            idx: usize,
+                            _arena: &'a RowArena,
+                        ) -> Option<Datum<'a>> {
+                            self.0.borrow_mut()[idx] = true;
+                            None
+                        }
+
+                        fn col_max<'a>(
+                            &'a self,
+                            idx: usize,
+                            _arena: &'a RowArena,
+                        ) -> Option<Datum<'a>> {
+                            self.0.borrow_mut()[idx] = true;
+                            None
+                        }
+                    }
+                    if let Ok(plan) = MfpPlan::create_from((*op).clone()) {
+                        let mfp_pushdown = MfpPushdown::new(&plan);
+                        let tracker = Tracker(RefCell::new(vec![false; op.input_arity]));
+                        let _ = mfp_pushdown.should_fetch(&tracker);
+                        let referenced = tracker
+                            .0
+                            .into_inner()
+                            .into_iter()
+                            .enumerate()
+                            .filter(|(_, referenced)| *referenced)
+                            .map(|(id, _)| id)
+                            .join(", #");
+                        ctx.indented(|ctx| {
+                            writeln!(f, "{}mfp_pushdown=(#{referenced})", ctx.indent)
+                        })?;
+                    }
                 }
             }
         }
