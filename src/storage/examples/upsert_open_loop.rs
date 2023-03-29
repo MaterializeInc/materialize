@@ -85,22 +85,12 @@
 //! Notes from @guswynn's testing, and remaining work before this
 //! benchmark can be trusted:
 //!
-//! - Reduce some extraneous clones.
-//! - Make the data-generator actually generate new values for previous keys (right now, all keys
-//! are unique)
 //! - Ensure that rocksb has read-your-writes, in-process, without "transactions" (docs are unclear here)
 //! - Limit the size of write batches (and possibly multi-gets, based on
 //!     <https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ#basic-readwrite>).
-//!     - Make it possible to configure the MemTable type (we probably want `Vector` for this
-//!     workload).
 //! - Ensure sst files are actually being written, from all workers.
 //! - Figure out why this workload has large numbers of empty batches (???)
-//! - Have at least a few people sign off on this being a reasonable benchmark.
-//!     - In debug mode on a laptop, it seems to sometimes be cpu-bound, not storage-bound.
-//! - Figure out if the code is broken, of its just macos that causes multi-second (sometimes 10+
-//! second) stalls.
 //! - Sort values before writing them.
-//! - Improve the metrics we write. Currently `lag` is very opaque.
 //!
 //! Additional notes:
 //! - Its unclear if the single-thread-per-rocksdb-instance model is performant, or considered a
@@ -1119,7 +1109,7 @@ impl IoThreadRocksDB {
             wo.disable_wal(!use_wal);
 
             'batch: while let Ok((batches, resp)) = rx.recv() {
-                let size: usize = batches.iter().map(|b| b.len()).sum();
+                let size: usize = batches.iter().map(|b| b.len()).sum::<usize>();
 
                 // TODO(guswynn): this should probably be lifted into the upsert operator.
                 if size == 0 {
