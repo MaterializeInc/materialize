@@ -398,11 +398,11 @@ We will update `DROP <object>` so that it revokes all privileges on `<object>`.
         - `grantee: RoleId`
         - `grantor: RoleId`
         - `privs: AclMode`
-    - We will encode it as text using the following format: "<grantee>=<privs>/<grantor>"
-        - "<grantee>" is the raw RoleId of `grantee`.
+    - We will encode it as text using the following format: `"<grantee>=<privs>/<grantor>"`
+        - `"<grantee>"` is the raw RoleId of `grantee`.
             - This will be left empty for the PUBLIC role (to match PostgreSQL). 
-        - "<grantor>" is the raw RoleId of `grantor`.
-        - "<privs>" is the letter codes of all the granted privileges concatenated together.
+        - `"<grantor>"` is the raw RoleId of `grantor`.
+        - `"<privs>"` is the letter codes of all the granted privileges concatenated together.
         - NOTE: This is not the same as PostgreSQL. PostgreSQL encodes `aclitem` to text using human
         read-able names instead of IDs. We are unable to do this because our encoder does not have 
         access to the catalog. We have the same issue with the `regtype` and `regproc` types.
