@@ -15,6 +15,8 @@
 
 > CREATE MATERIALIZED VIEW table_view1 AS SELECT COUNT(*) FROM table1;
 
+> CREATE DEFAULT INDEX ON table_view1;
+
 > INSERT INTO table1 VALUES (2);
 
 > SELECT * FROM table_view1;

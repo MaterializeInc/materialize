@@ -25,6 +25,8 @@ cluster1 replica2 3xsmall true
 
 > CREATE MATERIALIZED VIEW cluster_view1 AS SELECT COUNT(*) AS cnt FROM mz_tables;
 
+> CREATE DEFAULT INDEX ON cluster_view1;
+
 > SELECT cnt > 0 FROM cluster_view1;
 true
 
