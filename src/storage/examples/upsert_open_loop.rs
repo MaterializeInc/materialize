@@ -239,6 +239,10 @@ pub struct Args {
     #[clap(long)]
     use_rocksb_transactions: bool,
     */
+    /// What directory to place the rocksdb instances.
+    /// Default is a tempdir.
+    #[clap(long)]
+    rocksdb_instance_dir: Option<PathBuf>,
 }
 
 /// Different key-value stores under examination.
@@ -499,15 +503,20 @@ async fn run_benchmark(
 
     let source_rxs = Arc::new(Mutex::new(source_rxs));
 
-    let rocks_dir = tempfile::tempdir().unwrap();
-    let dir_path = rocks_dir.path().to_owned();
+    let (dir_path, temp_dir_to_drop) = if let Some(rocks_dir) = &args.rocksdb_instance_dir {
+        (rocks_dir.clone(), None)
+    } else {
+        let rocks_dir = tempfile::tempdir().unwrap();
+        let path = rocks_dir.path().to_owned();
+        (path, Some(rocks_dir))
+    };
     info!(
         "RocksDB instances will be hosted at: {}",
         dir_path.display()
     );
 
     if args.rocksdb_no_cleanup {
-        std::mem::forget(rocks_dir);
+        std::mem::forget(temp_dir_to_drop);
     }
 
     let global_rocks_env = rocksdb::Env::new().unwrap();
