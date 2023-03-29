@@ -3911,6 +3911,7 @@ dependencies = [
  "anyhow",
  "byteorder",
  "chrono",
+ "clap",
  "criterion",
  "differential-dataflow",
  "itertools",
