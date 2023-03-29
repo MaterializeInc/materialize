@@ -233,6 +233,11 @@ pub struct Args {
     /// Default is a tempdir.
     #[clap(long)]
     rocksdb_instance_dir: Option<PathBuf>,
+
+    /// Whether or not to cleanup the rocksdb instances
+    /// before using them.
+    #[clap(long)]
+    rocksdb_clear_before_use: bool,
 }
 
 /// Different key-value stores under examination.
@@ -818,6 +823,7 @@ where
                     source_id,
                     args.rocksdb_use_wal,
                     args.rocksdb_use_vector_memtable,
+                    args.rocksdb_clear_before_use,
                 );
 
                 upsert_core_pre_reduce(scope, &source_stream, source_id, rocksdb)
@@ -840,6 +846,7 @@ where
                     source_id,
                     args.rocksdb_use_wal,
                     args.rocksdb_use_vector_memtable,
+                    args.rocksdb_clear_before_use,
                 );
 
                 upsert_core(scope, &source_stream, source_id, rocksdb)
@@ -1079,6 +1086,7 @@ impl IoThreadRocksDB {
         source_id: usize,
         use_wal: bool,
         use_vector_memtable: bool,
+        destroy_before_use: bool,
     ) -> Self {
         // bounded??
         let (tx, rx): (
@@ -1089,6 +1097,10 @@ impl IoThreadRocksDB {
         let instance_path = temp_dir
             .join(format!("worker_id:{}", worker_id.to_string()))
             .join(format!("source_id:{}", source_id.to_string()));
+
+        if destroy_before_use {
+            DB::destroy(&rocksdb::Options::default(), &*instance_path).unwrap();
+        }
 
         let mut rocks_options = rocksdb::Options::default();
         rocks_options.create_if_missing(true);
