@@ -11,6 +11,12 @@ mode cockroach
 
 reset-server
 
+# Enable rbac checks.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO true;
+----
+COMPLETE 0
+
 simple conn=mz_system,user=mz_system
 ALTER ROLE materialize CREATEDB CREATECLUSTER CREATEROLE;
 ----
@@ -150,6 +156,12 @@ SELECT mz_roles.name
 ----
 group_materialize
 
+statement ok
+ALTER TABLE mt RENAME TO ICs
+
+statement ok
+DROP TABLE ICs
+
 simple conn=joe,user=joe
 CREATE TABLE jt (a INT);
 ----
@@ -171,7 +183,19 @@ SELECT mz_roles.name
 ----
 joe
 
+statement error must be owner of TABLE materialize.public.jt
+DROP TABLE jt
+
+statement error must be owner of TABLE materialize.public.jt
+ALTER TABLE jt RENAME TO cool
+
+statement error must be owner of TABLE materialize.public.jt
+ALTER TABLE jt OWNER TO group_materialize
+
 ## Indexes
+
+statement ok
+CREATE TABLE mt (a INT);
 
 statement ok
 CREATE INDEX mt_ind ON mt(a);
@@ -198,6 +222,15 @@ SELECT mz_roles.name
 ----
 group_materialize
 
+statement ok
+ALTER INDEX mt_ind SET (LOGICAL COMPACTION WINDOW = 0)
+
+statement ok
+ALTER INDEX mt_ind RENAME TO ICs
+
+statement ok
+DROP INDEX ICs
+
 simple conn=joe,user=joe
 CREATE INDEX jt_ind ON jt(a);
 ----
@@ -210,6 +243,18 @@ SELECT mz_roles.name
   WHERE mz_indexes.name = 'jt_ind'
 ----
 joe
+
+statement error must be owner of INDEX materialize.public.jt_ind
+DROP INDEX jt_ind
+
+statement error must be owner of INDEX materialize.public.jt_ind
+ALTER INDEX jt_ind RENAME TO cool
+
+statement error must be owner of INDEX materialize.public.jt_ind
+ALTER INDEX jt_ind OWNER TO group_materialize
+
+statement error must be owner of INDEX materialize.public.jt_ind
+ALTER INDEX jt_ind SET (LOGICAL COMPACTION WINDOW = 0)
 
 ## Sources
 
@@ -246,6 +291,15 @@ SELECT mz_roles.name
 ----
 group_materialize
 
+statement ok
+ALTER SOURCE ms SET (SIZE = '4')
+
+statement ok
+ALTER SOURCE ms RENAME TO ICs
+
+statement ok
+DROP SOURCE ICs
+
 simple conn=joe,user=joe
 CREATE SOURCE js FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
 ----
@@ -266,6 +320,18 @@ SELECT mz_roles.name
   WHERE mz_relations.name = 'js'
 ----
 joe
+
+statement error must be owner of SOURCE materialize.public.js
+DROP SOURCE js
+
+statement error must be owner of SOURCE materialize.public.js
+ALTER SOURCE js RENAME TO cool
+
+statement error must be owner of SOURCE materialize.public.js
+ALTER SOURCE js OWNER TO group_materialize
+
+statement error must be owner of SOURCE materialize.public.js
+ALTER SOURCE js SET (SIZE = '4')
 
 ## Views
 
@@ -302,6 +368,12 @@ SELECT mz_roles.name
 ----
 group_materialize
 
+statement ok
+ALTER VIEW mv RENAME TO ICs
+
+statement ok
+DROP VIEW ICs
+
 simple conn=joe,user=joe
 CREATE VIEW jv AS SELECT 1;
 ----
@@ -322,6 +394,15 @@ SELECT mz_roles.name
   WHERE mz_relations.name = 'jv'
 ----
 joe
+
+statement error must be owner of VIEW materialize.public.jv
+DROP VIEW jv
+
+statement error must be owner of VIEW materialize.public.jv
+ALTER VIEW jv RENAME TO cool
+
+statement error must be owner of VIEW materialize.public.jv
+ALTER VIEW jv OWNER TO group_materialize
 
 ## Materialized Views
 
@@ -358,6 +439,12 @@ SELECT mz_roles.name
 ----
 group_materialize
 
+statement ok
+ALTER MATERIALIZED VIEW mmv RENAME TO ICs
+
+statement ok
+DROP MATERIALIZED VIEW ICs
+
 simple conn=joe,user=joe
 CREATE MATERIALIZED VIEW jmv AS SELECT 1;
 ----
@@ -378,6 +465,15 @@ SELECT mz_roles.name
   WHERE mz_relations.name = 'jmv'
 ----
 joe
+
+statement error must be owner of MATERIALIZED VIEW materialize.public.jmv
+DROP MATERIALIZED VIEW jmv
+
+statement error must be owner of MATERIALIZED VIEW materialize.public.jmv
+ALTER MATERIALIZED VIEW jmv RENAME TO cool
+
+statement error must be owner of MATERIALIZED VIEW materialize.public.jmv
+ALTER MATERIALIZED VIEW jmv OWNER TO group_materialize
 
 ## Connections
 
@@ -406,6 +502,18 @@ SELECT mz_roles.name
 ----
 group_materialize
 
+statement ok
+ALTER CONNECTION mc RENAME TO ICs
+
+statement ok
+DROP CONNECTION ICs
+
+statement ok
+CREATE CONNECTION mssh TO SSH TUNNEL (HOST 'ssh-bastion-host', USER 'mz', PORT 22);
+
+statement ok
+ALTER CONNECTION mssh ROTATE KEYS
+
 simple conn=joe,user=joe
 CREATE CONNECTION jc TO KAFKA (BROKER 'localhost:9092');
 ----
@@ -418,6 +526,23 @@ SELECT mz_roles.name
   WHERE mz_connections.name = 'jc'
 ----
 joe
+
+statement error must be owner of CONNECTION materialize.public.jc
+DROP CONNECTION jc
+
+statement error must be owner of CONNECTION materialize.public.jc
+ALTER CONNECTION jc RENAME TO cool
+
+statement error must be owner of CONNECTION materialize.public.jc
+ALTER CONNECTION jc OWNER TO group_materialize
+
+simple conn=joe,user=joe
+CREATE CONNECTION jssh TO SSH TUNNEL (HOST 'ssh-bastion-host', USER 'mz', PORT 22);
+----
+COMPLETE 0
+
+statement error must be owner of CONNECTION materialize.public.jssh
+ALTER CONNECTION jssh ROTATE KEYS
 
 ## Types
 
@@ -446,6 +571,9 @@ SELECT mz_roles.name
 ----
 group_materialize
 
+statement ok
+DROP TYPE mty
+
 simple conn=joe,user=joe
 CREATE TYPE jty AS LIST (ELEMENT TYPE=bool);
 ----
@@ -458,6 +586,12 @@ SELECT mz_roles.name
   WHERE mz_types.name = 'jty'
 ----
 joe
+
+statement error must be owner of TYPE materialize.public.jty
+DROP TYPE jty
+
+statement error must be owner of TYPE materialize.public.jty
+ALTER TYPE jty OWNER TO group_materialize
 
 ## Secrets
 
@@ -486,6 +620,15 @@ SELECT mz_roles.name
 ----
 group_materialize
 
+statement ok
+ALTER SECRET mse AS decode('c2VjcmV0Cg==', 'base64');
+
+statement ok
+ALTER SECRET mse RENAME TO ICs
+
+statement ok
+DROP SECRET ICs
+
 simple conn=joe,user=joe
 CREATE SECRET jse AS decode('c2VjcmV0Cg==', 'base64');
 ----
@@ -498,6 +641,18 @@ SELECT mz_roles.name
   WHERE mz_secrets.name = 'jse'
 ----
 joe
+
+statement error must be owner of SECRET materialize.public.jse
+DROP SECRET jse
+
+statement error must be owner of SECRET materialize.public.jse
+ALTER SECRET jse RENAME TO cool
+
+statement error must be owner of SECRET materialize.public.jse
+ALTER SECRET jse OWNER TO group_materialize
+
+statement error must be owner of SECRET materialize.public.jse
+ALTER SECRET jse AS decode('c2VjcmV0Cg==', 'base64');
 
 ## Databases
 
@@ -526,6 +681,9 @@ SELECT mz_roles.name
 ----
 group_materialize
 
+statement ok
+DROP DATABASE mdb
+
 simple conn=joe,user=joe
 CREATE DATABASE jdb;
 ----
@@ -538,6 +696,12 @@ SELECT mz_roles.name
   WHERE mz_databases.name = 'jdb'
 ----
 joe
+
+statement error must be owner of DATABASE jdb
+DROP DATABASE jdb
+
+statement error must be owner of DATABASE jdb
+ALTER DATABASE jdb OWNER TO group_materialize
 
 ## Schemas
 
@@ -566,6 +730,9 @@ SELECT mz_roles.name
 ----
 group_materialize
 
+statement ok
+DROP SCHEMA msc
+
 simple conn=joe,user=joe
 CREATE SCHEMA jsc;
 ----
@@ -578,6 +745,12 @@ SELECT mz_roles.name
   WHERE mz_schemas.name = 'jsc'
 ----
 joe
+
+statement error must be owner of SCHEMA materialize.jsc
+DROP SCHEMA jsc
+
+statement error must be owner of SCHEMA materialize.jsc
+ALTER SCHEMA jsc OWNER TO group_materialize
 
 statement ok
 CREATE SCHEMA jdb.msc_cross;
@@ -633,6 +806,9 @@ SELECT mz_roles.name
 ----
 materialize
 
+statement ok
+DROP CLUSTER mclus
+
 simple conn=joe,user=joe
 CREATE CLUSTER jclus REPLICAS (jr1 (SIZE '1'));
 ----
@@ -653,6 +829,12 @@ SELECT mz_roles.name
   WHERE mz_cluster_replicas.name = 'jr1'
 ----
 joe
+
+statement error must be owner of CLUSTER jclus
+DROP CLUSTER jclus
+
+statement error must be owner of CLUSTER jclus
+ALTER CLUSTER jclus OWNER TO group_materialize
 
 ## Cluster Replicas
 
@@ -681,6 +863,9 @@ SELECT mz_roles.name
 ----
 group_materialize
 
+statement ok
+DROP CLUSTER REPLICA default.mr2
+
 simple conn=joe,user=joe
 CREATE CLUSTER REPLICA default.jr2 SIZE '1';
 ----
@@ -693,6 +878,12 @@ SELECT mz_roles.name
   WHERE mz_cluster_replicas.name = 'jr2'
 ----
 joe
+
+statement error must be owner of CLUSTER REPLICA default.jr2
+DROP CLUSTER REPLICA default.jr2
+
+statement error must be owner of CLUSTER REPLICA default.jr2
+ALTER CLUSTER REPLICA default.jr2 OWNER TO group_materialize
 
 statement ok
 CREATE CLUSTER REPLICA jclus.mr_cross SIZE '1';
@@ -707,6 +898,17 @@ materialize
 
 # Renaming does not change owner
 
+statement ok
+CREATE TABLE old_table ();
+
+query T
+SELECT mz_roles.name
+  FROM mz_tables
+  LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
+  WHERE mz_tables.name = 'old_table'
+----
+materialize
+
 simple conn=mz_system,user=mz_system
 ALTER TABLE mt RENAME TO new_table;
 ----
@@ -718,7 +920,7 @@ SELECT mz_roles.name
   LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
   WHERE mz_tables.name = 'new_table'
 ----
-group_materialize
+materialize
 
 # Prevent dropping roles while owned objects exist
 
@@ -1016,26 +1218,48 @@ DROP ROLE owner
 
 # Prevent altering the owner of system resources
 
-statement error system cluster 'mz_system' cannot be modified
-ALTER CLUSTER mz_system OWNER TO materialize
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER mz_system OWNER TO mz_system
+----
+db error: ERROR: system cluster 'mz_system' cannot be modified
 
-statement error system cluster 'mz_system' cannot be modified
-ALTER CLUSTER REPLICA mz_system.r1 OWNER TO materialize
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER REPLICA mz_system.r1 OWNER TO mz_system
+----
+db error: ERROR: system cluster 'mz_system' cannot be modified
 
-statement error cannot alter schema mz_catalog because it is required by the database system
-ALTER SCHEMA mz_catalog OWNER TO materialize
+simple conn=mz_system,user=mz_system
+ALTER SCHEMA mz_catalog OWNER TO mz_system
+----
+db error: ERROR: cannot alter schema mz_catalog because it is required by the database system
 
-statement error cannot alter item mz_internal.mz_dataflow_operators because it is required by the database system
-ALTER SOURCE mz_internal.mz_dataflow_operators OWNER TO materialize
+simple conn=mz_system,user=mz_system
+ALTER SOURCE mz_internal.mz_dataflow_operators OWNER TO mz_system
+----
+db error: ERROR: cannot alter item mz_internal.mz_dataflow_operators because it is required by the database system
 
-statement error cannot alter item mz_catalog.mz_views because it is required by the database system
-ALTER TABLE mz_views OWNER TO materialize
+simple conn=mz_system,user=mz_system
+ALTER TABLE mz_views OWNER TO mz_system
+----
+db error: ERROR: cannot alter item mz_catalog.mz_views because it is required by the database system
 
-statement error cannot alter item mz_catalog.mz_relations because it is required by the database system
-ALTER VIEW mz_relations OWNER TO materialize
+simple conn=mz_system,user=mz_system
+ALTER VIEW mz_relations OWNER TO mz_system
+----
+db error: ERROR: cannot alter item mz_catalog.mz_relations because it is required by the database system
 
-statement error cannot alter item pg_catalog.int4 because it is required by the database system
-ALTER TYPE int4 OWNER TO materialize
+simple conn=mz_system,user=mz_system
+ALTER TYPE int4 OWNER TO mz_system
+----
+db error: ERROR: cannot alter item pg_catalog.int4 because it is required by the database system
 
-statement error cannot alter item mz_internal.mz_show_databases_ind because it is required by the database system
-ALTER INDEX mz_internal.mz_show_databases_ind OWNER TO materialize
+simple conn=mz_system,user=mz_system
+ALTER INDEX mz_internal.mz_show_databases_ind OWNER TO mz_system
+----
+db error: ERROR: cannot alter item mz_internal.mz_show_databases_ind because it is required by the database system
+
+# Disable rbac checks.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0

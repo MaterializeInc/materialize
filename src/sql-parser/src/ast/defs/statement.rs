@@ -2295,6 +2295,7 @@ pub enum ObjectType {
     Connection,
     Database,
     Schema,
+    Func,
 }
 
 impl ObjectType {
@@ -2308,7 +2309,8 @@ impl ObjectType {
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Secret
-            | ObjectType::Connection => true,
+            | ObjectType::Connection
+            | ObjectType::Func => true,
             ObjectType::Database
             | ObjectType::Schema
             | ObjectType::Cluster
@@ -2335,6 +2337,7 @@ impl AstDisplay for ObjectType {
             ObjectType::Connection => "CONNECTION",
             ObjectType::Database => "DATABASE",
             ObjectType::Schema => "SCHEMA",
+            ObjectType::Func => "FUNCTION",
         })
     }
 }

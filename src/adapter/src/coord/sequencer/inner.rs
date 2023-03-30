@@ -1589,6 +1589,7 @@ impl Coordinator {
             | ObjectType::Schema => {
                 unreachable!("handled through their respective sequence_drop functions")
             }
+            ObjectType::Func => unreachable!("rejected by the parser"),
         })
     }
 
@@ -3586,17 +3587,19 @@ impl Coordinator {
             Ok(())
         } else if var_name == Some(ENABLE_RBAC_CHECKS.name()) {
             Err(AdapterError::Unauthorized(
-                rbac::UnauthorizedError::superuser(format!(
-                    "toggle the '{}' system configuration parameter",
-                    ENABLE_RBAC_CHECKS.name()
-                )),
+                rbac::UnauthorizedError::Superuser {
+                    action: format!(
+                        "toggle the '{}' system configuration parameter",
+                        ENABLE_RBAC_CHECKS.name()
+                    ),
+                },
             ))
         } else {
             Err(AdapterError::Unauthorized(
-                rbac::UnauthorizedError::privilege(
-                    "alter system".into(),
-                    Some(format!("You must be the '{}' role", SYSTEM_USER.name)),
-                ),
+                rbac::UnauthorizedError::Privilege {
+                    action: "alter system".into(),
+                    reason: Some(format!("You must be the '{}' role", SYSTEM_USER.name)),
+                },
             ))
         }
     }

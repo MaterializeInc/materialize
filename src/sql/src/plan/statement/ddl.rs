@@ -3271,6 +3271,7 @@ pub fn plan_drop_objects(
         object_type.lives_in_schema(),
         "{object_type}s handled through their respective plan_drop functions"
     );
+    assert!(object_type != ObjectType::Func, "rejected in parser");
 
     let mut ids = vec![];
     for name in names {

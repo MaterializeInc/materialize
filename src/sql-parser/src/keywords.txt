@@ -144,6 +144,7 @@ Forward
 From
 Full
 Fullname
+Function
 Generator
 Grant
 Greatest
