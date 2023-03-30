@@ -74,7 +74,7 @@ pub struct Ownership(ObjectId);
 
 impl Ownership {
     /// Reports whether any role has ownership over an object.
-    fn check_roles<'a>(&self, role_ids: &BTreeSet<RoleId>, catalog: &impl SessionCatalog) -> bool {
+    fn check_roles(&self, role_ids: &BTreeSet<RoleId>, catalog: &impl SessionCatalog) -> bool {
         let owner_id = catalog.get_owner_id(&self.0);
         role_ids.contains(&owner_id)
     }
