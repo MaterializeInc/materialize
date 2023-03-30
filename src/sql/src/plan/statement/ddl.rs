@@ -56,10 +56,11 @@ use mz_storage_client::types::sources::encoding::{
     ProtobufEncoding, RegexEncoding, SourceDataEncoding, SourceDataEncodingInner,
 };
 use mz_storage_client::types::sources::{
-    GenericSourceConnection, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope, LoadGenerator,
-    LoadGeneratorSourceConnection, PostgresSourceConnection, PostgresSourcePublicationDetails,
-    ProtoPostgresSourcePublicationDetails, SourceConnection, SourceDesc, SourceEnvelope,
-    TestScriptSourceConnection, Timeline, UnplannedSourceEnvelope, UpsertStyle,
+    GenericSourceConnection, IncludedColumnPos, IncludedColumnSource, KafkaSourceConnection,
+    KeyEnvelope, LoadGenerator, LoadGeneratorSourceConnection, PostgresSourceConnection,
+    PostgresSourcePublicationDetails, ProtoPostgresSourcePublicationDetails, SourceConnection,
+    SourceDesc, SourceEnvelope, TestScriptSourceConnection, Timeline, UnplannedSourceEnvelope,
+    UpsertOrderBy, UpsertStyle,
 };
 
 use crate::ast::display::AstDisplay;
@@ -508,7 +509,7 @@ pub fn plan_create_source(
                 })
             };
 
-            if !matches!(envelope, Envelope::Upsert | Envelope::None)
+            if !matches!(envelope, Envelope::Upsert { .. } | Envelope::None)
                 && include_metadata
                     .iter()
                     .any(|sic| sic.ty == SourceIncludeMetadataType::Headers)
@@ -878,6 +879,9 @@ pub fn plan_create_source(
 
     let mut key_envelope = get_key_envelope(include_metadata, &envelope, &encoding)?;
 
+    let metadata_columns = external_connection.metadata_columns();
+    let metadata_column_types = external_connection.metadata_column_types();
+
     // Not all source envelopes are compatible with all source connections.
     // Whoever constructs the source ingestion pipeline is responsible for
     // choosing compatible envelopes and connections.
@@ -894,12 +898,13 @@ pub fn plan_create_source(
             let (_before_idx, after_idx) = typecheck_debezium(&value_desc)?;
 
             match mode {
-                DbzMode::Plain => {
-                    UnplannedSourceEnvelope::Upsert(UpsertStyle::Debezium { after_idx })
-                }
+                DbzMode::Plain => UnplannedSourceEnvelope::Upsert {
+                    style: UpsertStyle::Debezium { after_idx },
+                    order_by: None,
+                },
             }
         }
-        mz_sql_parser::ast::Envelope::Upsert => {
+        mz_sql_parser::ast::Envelope::Upsert { order_by } => {
             let key_encoding = match encoding.key_ref() {
                 None => {
                     bail_unsupported!(format!("upsert requires a key/value format: {:?}", format))
@@ -911,7 +916,39 @@ pub fn plan_create_source(
             if key_envelope == KeyEnvelope::None {
                 key_envelope = get_unnamed_key_envelope(key_encoding)?;
             }
-            UnplannedSourceEnvelope::Upsert(UpsertStyle::Default(key_envelope))
+
+            let order_by = match order_by {
+                Some(order_col) => {
+                    scx.require_unsafe_mode("ENVELOPE UPSERT ORDER BY")?;
+
+                    let metadata_col = metadata_columns
+                        .iter()
+                        .find_position(|(col_name, _)| *col_name == order_col.as_str());
+
+                    if let Some((pos, _)) = metadata_col {
+                        let included_col = metadata_column_types
+                            .get(pos)
+                            .expect("metadata index calculation error");
+
+                        if included_col != &IncludedColumnSource::Timestamp {
+                            sql_bail!("Only TIMESTAMP is supported as an order by column")
+                        }
+
+                        Ok::<std::option::Option<UpsertOrderBy>, PlanError>(Some(UpsertOrderBy {
+                            metadata_index: pos,
+                            metadata_arity: metadata_columns.len(),
+                        }))
+                    } else {
+                        sql_bail!("Could not find {} in included metadata", order_col)
+                    }
+                }
+                None => Ok(None),
+            }?;
+
+            UnplannedSourceEnvelope::Upsert {
+                style: UpsertStyle::Default(key_envelope),
+                order_by,
+            }
         }
         mz_sql_parser::ast::Envelope::CdcV2 => {
             scx.require_unsafe_mode("ENVELOPE MATERIALIZE")?;
@@ -924,8 +961,6 @@ pub fn plan_create_source(
         }
     };
 
-    let metadata_columns = external_connection.metadata_columns();
-    let metadata_column_types = external_connection.metadata_column_types();
     let metadata_desc = included_column_desc(metadata_columns.clone());
     let (envelope, mut desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
 
@@ -1372,7 +1407,7 @@ fn get_encoding(
 
     let requires_keyvalue = matches!(
         envelope,
-        Envelope::Debezium(DbzMode::Plain) | Envelope::Upsert
+        Envelope::Debezium(DbzMode::Plain) | Envelope::Upsert { .. }
     );
     let is_keyvalue = matches!(encoding, SourceDataEncoding::KeyValue { .. });
     if requires_keyvalue && !is_keyvalue {
@@ -1934,7 +1969,7 @@ pub fn plan_create_sink(
     let envelope = match envelope {
         None => sql_bail!("ENVELOPE clause is required"),
         Some(Envelope::Debezium(mz_sql_parser::ast::DbzMode::Plain)) => SinkEnvelope::Debezium,
-        Some(Envelope::Upsert) => SinkEnvelope::Upsert,
+        Some(Envelope::Upsert { .. }) => SinkEnvelope::Upsert,
         Some(Envelope::CdcV2) => bail_unsupported!("CDCv2 sinks"),
         Some(Envelope::None) => bail_unsupported!("\"ENVELOPE NONE\" sinks"),
     };

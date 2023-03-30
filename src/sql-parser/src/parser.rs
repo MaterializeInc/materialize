@@ -1960,7 +1960,16 @@ impl<'a> Parser<'a> {
             let debezium_mode = DbzMode::Plain;
             Envelope::Debezium(debezium_mode)
         } else if self.parse_keyword(UPSERT) {
-            Envelope::Upsert
+            let order_by = if self.consume_token(&Token::LParen) {
+                self.expect_keywords(&[ORDER, BY])?;
+                let order_by_col = Some(self.parse_identifier()?);
+                self.expect_token(&Token::RParen)?;
+                order_by_col
+            } else {
+                None
+            };
+
+            Envelope::Upsert { order_by }
         } else if self.parse_keyword(MATERIALIZE) {
             Envelope::CdcV2
         } else {

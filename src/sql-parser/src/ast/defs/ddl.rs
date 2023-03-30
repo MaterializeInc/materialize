@@ -414,7 +414,7 @@ impl_display!(SourceIncludeMetadata);
 pub enum Envelope {
     None,
     Debezium(DbzMode),
-    Upsert,
+    Upsert { order_by: Option<Ident> },
     CdcV2,
 }
 
@@ -427,7 +427,7 @@ impl Envelope {
             // TODO[btv] - Adjust this if we change Dbz semantics
             // (why is this a parser-level concept, anyway? Should it be moved?)
             Envelope::Debezium(DbzMode::Plain) => false,
-            Envelope::Upsert => false,
+            Envelope::Upsert { .. } => false,
             Envelope::CdcV2 => true,
         }
     }
@@ -444,8 +444,14 @@ impl AstDisplay for Envelope {
                 f.write_str("DEBEZIUM");
                 f.write_node(mode);
             }
-            Self::Upsert => {
+            Envelope::Upsert { order_by } => {
                 f.write_str("UPSERT");
+                if let Some(order) = order_by {
+                    f.write_str("(");
+                    f.write_str(" ORDER BY ");
+                    f.write_node(order);
+                    f.write_str(")");
+                }
             }
             Self::CdcV2 => {
                 f.write_str("MATERIALIZE");

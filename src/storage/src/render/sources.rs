@@ -385,6 +385,7 @@ where
                     let upsert = crate::render::upsert::upsert(
                         &upsert_input,
                         upsert_envelope.key_indices.clone(),
+                        upsert_envelope.order_by_index,
                         resume_upper,
                         previous,
                         previous_token,
@@ -466,10 +467,27 @@ fn append_metadata_to_value<G: Scope>(
 fn upsert_commands<G: Scope>(
     input: Collection<G, DecodeResult, Diff>,
     upsert_envelope: UpsertEnvelope,
-) -> Collection<G, (UpsertKey, Option<Result<Row, UpsertError>>, MzOffset), Diff> {
+) -> Collection<G, (UpsertKey, Option<Result<Row, UpsertError>>, i128), Diff> {
     let mut row_buf = Row::default();
     input.map(move |result| {
-        let order = result.position;
+        let metadata = result.metadata;
+
+        let order = match upsert_envelope.order_by_index {
+            Some(absolute_pos) => {
+                // Getting the order by column always from metadata
+                // For tombstones, the value will be null
+                let key_value_arity = upsert_envelope.source_arity - metadata.iter().count();
+                let metadata_index = absolute_pos - key_value_arity;
+
+                crate::render::upsert::get_order(&Ok(metadata.clone()), Some(metadata_index))
+                    .expect("expected order by value from metadata")
+            }
+            None => result
+                .position
+                .offset
+                .try_into()
+                .expect("Unexpected overflow converting u64 offset to i128"),
+        };
 
         let key = match result.key {
             Some(Ok(key)) => Ok(key),
@@ -504,7 +522,6 @@ fn upsert_commands<G: Scope>(
 
         let key = UpsertKey::from_key(Ok(&key_row));
 
-        let metadata = result.metadata;
         let value = match result.value {
             Some(Ok(ref row)) => match upsert_envelope.style {
                 UpsertStyle::Debezium { after_idx } => match row.iter().nth(after_idx).unwrap() {

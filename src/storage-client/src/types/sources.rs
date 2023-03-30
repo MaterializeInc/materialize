@@ -873,8 +873,20 @@ impl RustType<ProtoSourceEnvelope> for SourceEnvelope {
 pub enum UnplannedSourceEnvelope {
     None(KeyEnvelope),
     Debezium(DebeziumEnvelope),
-    Upsert(UpsertStyle),
+    Upsert {
+        style: UpsertStyle,
+        // Optional order by information
+        order_by: Option<UpsertOrderBy>,
+    },
     CdcV2,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct UpsertOrderBy {
+    // index of the order by field in the metadata row
+    pub metadata_index: usize,
+    // total number of columns in the metadata
+    // will be used to convert position in metadata to absolute source col position
+    pub metadata_arity: usize,
 }
 
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -910,6 +922,9 @@ pub struct UpsertEnvelope {
     /// The indices of the keys in the full value row, used
     /// to deduplicate data in `upsert_core`
     pub key_indices: Vec<usize>,
+    /// Optional index of the column in the full value row
+    /// to be used for custom order by
+    pub order_by_index: Option<usize>,
 }
 
 impl Arbitrary for UpsertEnvelope {
@@ -921,11 +936,13 @@ impl Arbitrary for UpsertEnvelope {
             any::<usize>(),
             any::<UpsertStyle>(),
             proptest::collection::vec(any::<usize>(), 1..4),
+            proptest::option::of(any::<usize>()),
         )
-            .prop_map(|(source_arity, style, key_indices)| Self {
+            .prop_map(|(source_arity, style, key_indices, order_by_index)| Self {
                 source_arity,
                 style,
                 key_indices,
+                order_by_index,
             })
             .boxed()
     }
@@ -937,6 +954,7 @@ impl RustType<ProtoUpsertEnvelope> for UpsertEnvelope {
             source_arity: self.source_arity.into_proto(),
             style: Some(self.style.into_proto()),
             key_indices: self.key_indices.into_proto(),
+            order_by_index: self.order_by_index.into_proto(),
         }
     }
 
@@ -947,6 +965,7 @@ impl RustType<ProtoUpsertEnvelope> for UpsertEnvelope {
                 .style
                 .into_rust_if_some("ProtoUpsertEnvelope::style")?,
             key_indices: proto.key_indices.into_rust()?,
+            order_by_index: proto.order_by_index.into_rust()?,
         })
     }
 }
@@ -1224,16 +1243,24 @@ impl UnplannedSourceEnvelope {
         source_arity: Option<usize>,
     ) -> SourceEnvelope {
         match self {
-            UnplannedSourceEnvelope::Upsert(upsert_style) => {
+            UnplannedSourceEnvelope::Upsert {
+                style: upsert_style,
+                order_by: upsert_order_by,
+            } => {
+                let source_arity = source_arity.expect("into_source_envelope to be passed correct parameters for UnplannedSourceEnvelope::Upsert");
+
+                // getting absolute position of order by in source columns
+                let order_by_index = upsert_order_by.map(|order_by| {
+                    order_by.metadata_index + (source_arity - order_by.metadata_arity)
+                });
                 SourceEnvelope::Upsert(UpsertEnvelope {
                     style: upsert_style,
                     key_indices: key.expect("into_source_envelope to be passed correct parameters for UnplannedSourceEnvelope::Upsert"),
-                    source_arity: source_arity.expect("into_source_envelope to be passed correct parameters for UnplannedSourceEnvelope::Upsert"),
+                    source_arity,
+                    order_by_index,
                 })
-            },
-            UnplannedSourceEnvelope::Debezium(inner) => {
-                SourceEnvelope::Debezium(inner)
             }
+            UnplannedSourceEnvelope::Debezium(inner) => SourceEnvelope::Debezium(inner),
             UnplannedSourceEnvelope::None(key_envelope) => SourceEnvelope::None(NoneEnvelope {
                 key_envelope,
                 key_arity: key_arity.unwrap_or(0),
@@ -1252,7 +1279,10 @@ impl UnplannedSourceEnvelope {
     ) -> anyhow::Result<(SourceEnvelope, RelationDesc)> {
         Ok(match &self {
             UnplannedSourceEnvelope::None(key_envelope)
-            | UnplannedSourceEnvelope::Upsert(UpsertStyle::Default(key_envelope)) => {
+            | UnplannedSourceEnvelope::Upsert {
+                style: UpsertStyle::Default(key_envelope),
+                ..
+            } => {
                 let key_desc = match key_desc {
                     Some(desc) => desc,
                     None => {
@@ -1305,31 +1335,32 @@ impl UnplannedSourceEnvelope {
                 )
             }
             UnplannedSourceEnvelope::Debezium(DebeziumEnvelope { after_idx, .. })
-            | UnplannedSourceEnvelope::Upsert(UpsertStyle::Debezium { after_idx }) => {
-                match &value_desc.typ().column_types[*after_idx].scalar_type {
-                    ScalarType::Record { fields, .. } => {
-                        let mut desc = RelationDesc::from_names_and_types(fields.clone());
-                        let key = key_desc.map(|k| match_key_indices(&k, &desc)).transpose()?;
-                        if let Some(key) = key.clone() {
-                            desc = desc.with_key(key);
-                        }
-
-                        let desc = match self {
-                            UnplannedSourceEnvelope::Upsert(_) => desc.concat(metadata_desc),
-                            _ => desc,
-                        };
-
-                        (
-                            self.into_source_envelope(key, None, Some(desc.arity())),
-                            desc,
-                        )
+            | UnplannedSourceEnvelope::Upsert {
+                style: UpsertStyle::Debezium { after_idx },
+                ..
+            } => match &value_desc.typ().column_types[*after_idx].scalar_type {
+                ScalarType::Record { fields, .. } => {
+                    let mut desc = RelationDesc::from_names_and_types(fields.clone());
+                    let key = key_desc.map(|k| match_key_indices(&k, &desc)).transpose()?;
+                    if let Some(key) = key.clone() {
+                        desc = desc.with_key(key);
                     }
-                    ty => bail!(
-                        "Incorrect type for Debezium value, expected Record, got {:?}",
-                        ty
-                    ),
+
+                    let desc = match self {
+                        UnplannedSourceEnvelope::Upsert { .. } => desc.concat(metadata_desc),
+                        _ => desc,
+                    };
+
+                    (
+                        self.into_source_envelope(key, None, Some(desc.arity())),
+                        desc,
+                    )
                 }
-            }
+                ty => bail!(
+                    "Incorrect type for Debezium value, expected Record, got {:?}",
+                    ty
+                ),
+            },
             UnplannedSourceEnvelope::CdcV2 => {
                 // the correct types
 

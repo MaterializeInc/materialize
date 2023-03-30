@@ -103,11 +103,43 @@ impl<H: Digest> Hasher for DigestHasher<H> {
     }
 }
 
+/// A tuple of the row or error, and the order by value
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+struct State(Result<Row, UpsertError>, Option<i128>);
+
+/// Gets the field to compare the records by and returns the value
+/// Currently it expects the field to be only of timestamp type
+pub(crate) fn get_order(
+    row_or_error: &Result<Row, UpsertError>,
+    order_by_index: Option<usize>,
+) -> Option<i128> {
+    match (row_or_error, order_by_index) {
+        (Ok(row), Some(index)) => {
+            let datum = row
+                .iter()
+                .nth(index)
+                .expect("Expected a valid order by index");
+
+            match datum {
+                Datum::Timestamp(ts) => Some(
+                    ts.timestamp_millis()
+                        .try_into()
+                        .expect("Unexpected overflow converting i64 timestamp to i128"),
+                ),
+                _ => panic!("Only timestamp is supported for order by"),
+            }
+        }
+        (_, None) => None,
+        (Err(_), _) => None,
+    }
+}
+
 /// Resumes an upsert computation at `resume_upper` given as inputs a collection of upsert commands
 /// and the collection of the previous output of this operator.
-pub(crate) fn upsert<G: Scope, O: timely::ExchangeData + Ord>(
-    input: &Collection<G, (UpsertKey, Option<Result<Row, UpsertError>>, O), Diff>,
+pub(crate) fn upsert<G: Scope>(
+    input: &Collection<G, (UpsertKey, Option<Result<Row, UpsertError>>, i128), Diff>,
     mut key_indices: Vec<usize>,
+    order_by_index: Option<usize>,
     resume_upper: Antichain<G::Timestamp>,
     previous: Collection<G, Result<Row, DataflowError>, Diff>,
     previous_token: Option<Rc<dyn Any>>,
@@ -171,7 +203,6 @@ where
             // Exchaust the previous input. It is expected to immediately reach the empty
             // antichain since we have dropped its token.
         }
-
         consolidation::consolidate(&mut snapshot);
 
         // The main key->value used to store previous values.
@@ -184,7 +215,8 @@ where
 
         for ((key, value), diff) in snapshot {
             assert_eq!(diff, 1, "invalid upsert state");
-            state.insert(key, value);
+            let order = get_order(&value, order_by_index);
+            state.insert(key, State(value, order));
         }
 
         // Now can can resume consuming the collection
@@ -228,21 +260,52 @@ where
 
                     // Upsert the values into `commands_state`, by recording the latest
                     // value (or deletion). These will be synced at the end to the `state`.
-                    while let Some((ts, key, _, value)) = commands.next() {
+                    while let Some((ts, key, Reverse(new_order), value)) = commands.next() {
                         let command_state = commands_state
                             .get_mut(&key)
                             .expect("key missing from commands_state");
-                        match value {
-                            Some(value) => {
-                                if let Some(old_value) = command_state.replace(value.clone()) {
-                                    output_updates.push((old_value, ts.clone(), -1));
+                        match (&command_state, value) {
+                            (Some(State(old_value, old_order)), Some(new_value)) => {
+                                match old_order {
+                                    Some(old_order) if new_order.cmp(old_order).is_gt() => {
+                                        // replace if old_order is present and new_order is gt old_order value
+                                        output_updates.push((old_value.to_owned(), ts.clone(), -1));
+                                        output_updates.push((new_value.clone(), ts, 1));
+                                        command_state.replace(State(new_value, Some(new_order)));
+                                    }
+                                    None => {
+                                        // also replace if no order by to compare in state
+                                        // this will be implicit offset ordering and assumes new_order is latest
+                                        output_updates.push((old_value.to_owned(), ts.clone(), -1));
+                                        output_updates.push((new_value.clone(), ts, 1));
+                                        command_state.replace(State(new_value, Some(new_order)));
+                                    }
+                                    _ => {}
                                 }
-                                output_updates.push((value, ts, 1));
                             }
-                            None => {
-                                if let Some(old_value) = command_state.take() {
-                                    output_updates.push((old_value, ts, -1));
+                            (None, Some(new_value)) => {
+                                // No previous state exists, insert new value
+                                output_updates.push((new_value.clone(), ts, 1));
+                                command_state.replace(State(new_value, Some(new_order)));
+                            }
+                            (Some(State(old_value, old_order)), None) => {
+                                match old_order {
+                                    Some(old_order) if new_order.cmp(old_order).is_gt() => {
+                                        output_updates.push((old_value.to_owned(), ts, -1));
+                                        command_state.take();
+                                    }
+                                    None => {
+                                        // there's no old order, assume this is latest tombstone
+                                        // this is implicitly ordering by offset
+                                        output_updates.push((old_value.to_owned(), ts, -1));
+                                        command_state.take();
+                                    }
+                                    _ => {}
                                 }
+                            }
+                            (None, None) => {
+                                // Trying to remove a key which does not exist in state
+                                // TODO(mouli): Should this panic! instead? What if the tombstones are not in order?
                             }
                         }
                     }

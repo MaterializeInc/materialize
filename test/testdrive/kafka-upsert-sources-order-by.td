@@ -1,0 +1,93 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# This testdrive file is testing the order by clause with envelope upsert
+
+> CREATE CONNECTION kafka_conn
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+
+$ kafka-create-topic topic=textbytes
+
+> CREATE SOURCE texttext
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
+  KEY FORMAT TEXT
+  VALUE FORMAT TEXT
+  INCLUDE OFFSET, TIMESTAMP as ts
+  ENVELOPE UPSERT ( ORDER BY ts )
+  WITH (SIZE = '1')
+
+$ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: timestamp=185
+fish:fish_185
+bird:bird_185
+fruit:fruit_185
+
+> select key, text, ts from texttext
+key           text        ts
+------------------------------------------------
+fish         fish_185     "1970-01-01 00:00:00.185"
+bird         bird_185     "1970-01-01 00:00:00.185"
+fruit        fruit_185    "1970-01-01 00:00:00.185"
+
+$ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: timestamp=278
+fish:fish_278
+mammal:mammal_278
+bird:
+
+> select key, text, ts from texttext
+key           text          ts
+------------------------------------------------
+fruit         fruit_185    "1970-01-01 00:00:00.185"
+fish          fish_278     "1970-01-01 00:00:00.278"
+mammal        mammal_278   "1970-01-01 00:00:00.278"
+
+# ingesting again with same timestamp, will not override previous value
+# TODO(mouli): should this be the other way round
+$ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: timestamp=278
+mammal:
+fish:new_fish_278
+
+> select key, text, ts from texttext
+key           text      ts
+------------------------------------------------
+fruit         fruit_185    "1970-01-01 00:00:00.185"
+fish          fish_278     "1970-01-01 00:00:00.278"
+mammal        mammal_278   "1970-01-01 00:00:00.278"
+
+$ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: timestamp=191
+fish:fish_191
+bird:bird_191
+
+> select key, text, ts from texttext
+key           text      ts
+------------------------------------------------
+fruit         fruit_185      "1970-01-01 00:00:00.185"
+mammal        mammal_278     "1970-01-01 00:00:00.278"
+fish          fish_278       "1970-01-01 00:00:00.278"
+bird          bird_191       "1970-01-01 00:00:00.191"
+
+# Invalid source definitions
+! CREATE SOURCE bad_def FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
+  KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP
+  ENVELOPE UPSERT (ORDER BY KEY) WITH (SIZE = '1')
+contains:Could not find key in included metadata
+
+! CREATE SOURCE bad_def FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
+  KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP, PARTITION as p
+  ENVELOPE UPSERT (ORDER BY p) WITH (SIZE = '1')
+contains:Only TIMESTAMP is supported as an order by column
+
+! CREATE SOURCE bad_def FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
+  KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP, PARTITION as p
+  ENVELOPE UPSERT ORDER BY p WITH (SIZE = '1')
+contains:Expected end of statement
+
+! CREATE SOURCE bad_def FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
+  KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP, PARTITION as p
+  ENVELOPE NONE (ORDER BY p) WITH (SIZE = '1')
+contains:Expected end of statement
