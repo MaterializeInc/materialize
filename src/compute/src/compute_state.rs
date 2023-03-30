@@ -112,11 +112,13 @@ pub struct ActiveComputeState<'a, A: Allocate> {
 }
 
 /// A token that keeps a sink alive.
-pub struct SinkToken {
-    /// The underlying token.
-    pub token: Box<dyn Any>,
-    /// Whether the sink token is keeping a subscribe alive.
-    pub is_subscribe: bool,
+pub struct SinkToken(Box<dyn Any>);
+
+impl SinkToken {
+    /// Create a new `SinkToken`.
+    pub fn new(t: Box<dyn Any>) -> Self {
+        Self(t)
+    }
 }
 
 impl<'a, A: Allocate> ActiveComputeState<'a, A> {
