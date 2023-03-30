@@ -599,6 +599,13 @@ impl<T: TimestampManipulation> Session<T> {
         self.vars.user()
     }
 
+    /// Returns the [application_name] that created this session.
+    /// 
+    /// [application_name]: (https://www.postgresql.org/docs/current/runtime-config-logging.html#GUC-APPLICATION-NAME)
+    pub fn application_name(&self) -> &str {
+        self.vars.application_name()
+    }
+
     /// Returns a reference to the variables in this session.
     pub fn vars(&self) -> &SessionVars {
         &self.vars

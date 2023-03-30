@@ -44,15 +44,15 @@ pub enum ApplicationNameHint {
 }
 
 impl ApplicationNameHint {
-    pub fn from_str(s: Option<&str>) -> Self {
-        match s.map(|s| s.to_lowercase()).as_deref() {
-            Some("psql") => ApplicationNameHint::Psql(Private),
-            Some("dbt") => ApplicationNameHint::Dbt(Private),
-            Some("web_console") => ApplicationNameHint::WebConsole(Private),
-            None | Some("") => ApplicationNameHint::Unspecified(Private),
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "psql" => ApplicationNameHint::Psql(Private),
+            "dbt" => ApplicationNameHint::Dbt(Private),
+            "web_console" => ApplicationNameHint::WebConsole(Private),
+            "" => ApplicationNameHint::Unspecified(Private),
             // TODO(parkertimmerman): We should keep some record of these "unrecognized"
             // names, and possibly support more popular ones in the future.
-            Some(_) => ApplicationNameHint::Unrecognized(Private),
+            _ => ApplicationNameHint::Unrecognized(Private),
         }
     }
 

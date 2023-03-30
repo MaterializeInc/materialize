@@ -987,7 +987,7 @@ fn test_auth_base() {
                 auth: &WebSocketAuth::Basic {
                     user: frontegg_user.to_string(),
                     password: frontegg_password.to_string(),
-                    options: None,
+                    options: BTreeMap::default(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
@@ -995,7 +995,7 @@ fn test_auth_base() {
             TestCase::Ws {
                 auth: &WebSocketAuth::Bearer {
                     token: frontegg_jwt.clone(),
-                    options: None,
+                    options: BTreeMap::default(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
@@ -1004,7 +1004,7 @@ fn test_auth_base() {
                 auth: &WebSocketAuth::Basic {
                     user: "bad user".to_string(),
                     password: frontegg_password.to_string(),
-                    options: Some(BTreeMap::default()),
+                    options: BTreeMap::default(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
@@ -1248,7 +1248,7 @@ fn test_auth_base() {
                 auth: &WebSocketAuth::Basic {
                     user: (&*SYSTEM_USER.name).into(),
                     password: frontegg_system_password.to_string(),
-                    options: Some(BTreeMap::default()),
+                    options: BTreeMap::default(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
@@ -1280,7 +1280,7 @@ fn test_auth_base() {
                 auth: &WebSocketAuth::Basic {
                     user: (PUBLIC_ROLE_NAME.as_str()).into(),
                     password: frontegg_system_password.to_string(),
-                    options: None,
+                    options: BTreeMap::default(),
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
@@ -1632,7 +1632,7 @@ fn test_auth_admin() {
                     auth: &WebSocketAuth::Basic {
                         user: frontegg_user.to_string(),
                         password: frontegg_password.to_string(),
-                        options: Some(BTreeMap::default()),
+                        options: BTreeMap::default(),
                     },
                     configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                     assert: Assert::SuccessSuperuserCheck(false),
@@ -1669,7 +1669,7 @@ fn test_auth_admin() {
                     auth: &WebSocketAuth::Basic {
                         user: admin_frontegg_user.to_string(),
                         password: admin_frontegg_password.to_string(),
-                        options: Some(BTreeMap::default()),
+                        options: BTreeMap::default(),
                     },
                     configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                     assert: Assert::SuccessSuperuserCheck(true),

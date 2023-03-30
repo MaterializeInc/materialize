@@ -25,10 +25,11 @@ use tracing::warn;
 use tungstenite::protocol::frame::coding::CloseCode;
 
 use mz_adapter::session::{EndTransactionAction, RowBatchStream, TransactionStatus};
-use mz_adapter::{ExecuteResponse, ExecuteResponseKind, PeekResponseUnary, SessionClient};
+use mz_adapter::{
+    AdapterNotice, ExecuteResponse, ExecuteResponseKind, PeekResponseUnary, SessionClient,
+};
 use mz_interchange::encode::TypedDatum;
 use mz_interchange::json::ToJson;
-use mz_ore::iter::IteratorExt;
 use mz_ore::result::ResultExt;
 use mz_pgwire::Severity;
 use mz_repr::{Datum, RelationDesc, RowArena};
@@ -66,17 +67,19 @@ pub async fn handle_sql_ws(
         .on_upgrade(|ws| async move { run_ws(&state, ws).await })
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum WebSocketAuth {
     Basic {
         user: String,
         password: String,
-        options: Option<BTreeMap<String, String>>,
+        #[serde(default)]
+        options: BTreeMap<String, String>,
     },
     Bearer {
         token: String,
-        options: Option<BTreeMap<String, String>>,
+        #[serde(default)]
+        options: BTreeMap<String, String>,
     },
 }
 
@@ -108,25 +111,10 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
         .await;
 
     // Send any notices that might have been generated on startup.
-    let notices = client
-        .0
-        .session()
-        .drain_notices()
-        .into_iter()
-        .map(|notice| {
-            WebSocketResponse::Notice(Notice {
-                message: notice.to_string(),
-                severity: Severity::for_adapter_notice(&notice)
-                    .as_str()
-                    .to_lowercase(),
-            })
-        });
-    for notice in notices {
-        let msg = serde_json::to_string(&notice).unwrap();
-        if ws.send(Message::Text(msg)).await.is_err() {
-            // client disconnected
-            return;
-        }
+    let notices = client.0.session().drain_notices();
+    if let Err(err) = forward_notices(&mut ws, notices).await {
+        tracing::error!("failed to forward notices to WebSocket, {err:?}");
+        return;
     }
 
     loop {
@@ -158,33 +146,34 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
             Ok(()) => None,
             Err(err) => Some(WebSocketResponse::Error(err.to_string())),
         };
-        let notices = client
-            .0
-            .session()
-            .drain_notices()
-            .into_iter()
-            .map(|notice| {
-                WebSocketResponse::Notice(Notice {
-                    message: notice.to_string(),
-                    severity: Severity::for_adapter_notice(&notice)
-                        .as_str()
-                        .to_lowercase(),
-                })
-            });
 
-        for msg in err
-            .into_iter()
-            .chain(notices)
-            .chain_one(WebSocketResponse::ReadyForQuery(
-                client.0.session().transaction_code().into(),
-            ))
-        {
-            let msg = serde_json::to_string(&msg).unwrap();
-            let msg = Message::Text(msg);
-            if ws.send(msg).await.is_err() {
-                // client disconnected
-                return;
+        // After running our request, there are several messages we need to send in a
+        // specific order.
+        //
+        // Note: we nest these into a closure so we can centralize our error handling
+        // for when sending over the WebSocket fails. We could also use a try {} block
+        // here, but those aren't stabilized yet.
+        let ws_response = || async {
+            // First respond with any error that might have occurred.
+            if let Some(e_resp) = err {
+                send_ws_response(&mut ws, e_resp).await?;
             }
+
+            // Then forward along any notices we generated.
+            let notices = client.0.session().drain_notices();
+            forward_notices(&mut ws, notices).await?;
+
+            // Finally, respond that we're ready for the next query.
+            let ready =
+                WebSocketResponse::ReadyForQuery(client.0.session().transaction_code().into());
+            send_ws_response(&mut ws, ready).await?;
+
+            Ok::<_, anyhow::Error>(())
+        };
+
+        if let Err(err) = ws_response().await {
+            tracing::error!("failed to send respond over WebSocket, {err:?}");
+            return;
         }
     }
 }
@@ -196,6 +185,39 @@ async fn run_ws_request(
 ) -> Result<(), anyhow::Error> {
     let req = req?;
     execute_request(client, req, ws).await
+}
+
+/// Sends a single [`WebSocketResponse`] over the provided [`WebSocket`].
+async fn send_ws_response(
+    ws: &mut WebSocket,
+    resp: WebSocketResponse,
+) -> Result<(), anyhow::Error> {
+    let msg = serde_json::to_string(&resp).unwrap();
+    let msg = Message::Text(msg);
+    ws.send(msg).await?;
+
+    Ok(())
+}
+
+/// Forwards a collection of Notices to the provided [`WebSocket`].
+async fn forward_notices(
+    ws: &mut WebSocket,
+    notices: impl IntoIterator<Item = AdapterNotice>,
+) -> Result<(), anyhow::Error> {
+    let ws_notices = notices.into_iter().map(|notice| {
+        WebSocketResponse::Notice(Notice {
+            message: notice.to_string(),
+            severity: Severity::for_adapter_notice(&notice)
+                .as_str()
+                .to_lowercase(),
+        })
+    });
+
+    for notice in ws_notices {
+        send_ws_response(ws, notice).await?;
+    }
+
+    Ok(())
 }
 
 /// A request to execute SQL over HTTP.
@@ -869,66 +891,57 @@ fn is_txn_exit_stmt(stmt: &Statement<Raw>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::WebSocketAuth;
 
     #[test]
     fn smoke_test_websocket_auth_parse() {
-        let basic = "{ \"user\": \"mz\", \"password\": \"1234\" }";
-        let basic: WebSocketAuth = serde_json::from_str(basic).unwrap();
-        if let WebSocketAuth::Basic {
-            user,
-            password,
-            options: None,
-        } = basic
-        {
-            assert_eq!(user, "mz");
-            assert_eq!(password, "1234");
-        } else {
-            panic!("wrong type! {basic:?}");
+        struct TestCase {
+            json: &'static str,
+            expected: WebSocketAuth,
         }
 
-        let basic_with_empty_options =
-            "{ \"user\": \"mz\", \"password\": \"1234\", \"options\": {} }";
-        let basic_with_empty_options: WebSocketAuth =
-            serde_json::from_str(basic_with_empty_options).unwrap();
-        if let WebSocketAuth::Basic {
-            user,
-            password,
-            options: Some(options),
-        } = basic_with_empty_options
-        {
-            assert_eq!(user, "mz");
-            assert_eq!(password, "1234");
-            assert!(options.is_empty());
-        } else {
-            panic!("wrong type! {basic_with_empty_options:?}");
+        let test_cases = vec![
+            TestCase {
+                json: r#"{ "user": "mz", "password": "1234" }"#,
+                expected: WebSocketAuth::Basic {
+                    user: "mz".to_string(),
+                    password: "1234".to_string(),
+                    options: BTreeMap::default(),
+                },
+            },
+            TestCase {
+                json: r#"{ "user": "mz", "password": "1234", "options": {} }"#,
+                expected: WebSocketAuth::Basic {
+                    user: "mz".to_string(),
+                    password: "1234".to_string(),
+                    options: BTreeMap::default(),
+                },
+            },
+            TestCase {
+                json: r#"{ "token": "i_am_a_token" }"#,
+                expected: WebSocketAuth::Bearer {
+                    token: "i_am_a_token".to_string(),
+                    options: BTreeMap::default(),
+                },
+            },
+            TestCase {
+                json: r#"{ "token": "i_am_a_token", "options": { "foo": "bar" } }"#,
+                expected: WebSocketAuth::Bearer {
+                    token: "i_am_a_token".to_string(),
+                    options: BTreeMap::from([("foo".to_string(), "bar".to_string())]),
+                },
+            },
+        ];
+
+        fn assert_parse(json: &'static str, expected: WebSocketAuth) {
+            let parsed: WebSocketAuth = serde_json::from_str(json).unwrap();
+            assert_eq!(parsed, expected);
         }
 
-        let bearer = "{ \"token\": \"i_am_a_token\" }";
-        let bearer: WebSocketAuth = serde_json::from_str(bearer).unwrap();
-        if let WebSocketAuth::Bearer {
-            token,
-            options: None,
-        } = bearer
-        {
-            assert_eq!(token, "i_am_a_token");
-        } else {
-            panic!("wrong type! {bearer:?}");
-        }
-
-        let bearer_with_options =
-            "{ \"token\": \"i_am_a_token\", \"options\": { \"foo\": \"bar\" } }";
-        let bearer_with_options: WebSocketAuth = serde_json::from_str(bearer_with_options).unwrap();
-        if let WebSocketAuth::Bearer {
-            token,
-            options: Some(options),
-        } = bearer_with_options
-        {
-            assert_eq!(token, "i_am_a_token");
-            assert_eq!(options.len(), 1);
-            assert_eq!(options.get("foo"), Some(&"bar".to_string()));
-        } else {
-            panic!("wrong type! {bearer_with_options:?}");
+        for TestCase { json, expected } in test_cases {
+            assert_parse(json, expected)
         }
     }
 }

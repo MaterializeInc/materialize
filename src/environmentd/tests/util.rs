@@ -668,7 +668,7 @@ pub fn wait_for_view_population(
 
 pub fn auth_with_ws(
     ws: &mut WebSocket<MaybeTlsStream<TcpStream>>,
-    options: Option<BTreeMap<String, String>>,
+    options: BTreeMap<String, String>,
 ) {
     ws.write_message(Message::Text(
         serde_json::to_string(&WebSocketAuth::Basic {

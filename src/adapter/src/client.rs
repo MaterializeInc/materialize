@@ -484,8 +484,8 @@ impl SessionClient {
     {
         let session = self.session.take().expect("session invariant violated");
         let mut typ = None;
-        let application_name = session.vars().application_name();
-        let name_hint = ApplicationNameHint::from_str(Some(application_name));
+        let application_name = session.application_name();
+        let name_hint = ApplicationNameHint::from_str(application_name);
         let res = self
             .inner_mut()
             .send(|tx| {

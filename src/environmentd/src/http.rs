@@ -448,7 +448,6 @@ async fn init_ws(
     let mut client = AuthedClient::new(adapter_client, user).await?;
 
     // Assign any options we got from our WebSocket startup.
-    let options = options.unwrap_or_default();
     let session = client.0.session();
     for (key, val) in options {
         const LOCAL: bool = false;
