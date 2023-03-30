@@ -119,7 +119,6 @@ pub mod normalize_lets;
 pub mod normalize_ops;
 pub mod ordering;
 pub mod predicate_pushdown;
-pub mod projection_pushdown;
 pub mod reduce_elision;
 pub mod reduction_pushdown;
 pub mod redundant_join;

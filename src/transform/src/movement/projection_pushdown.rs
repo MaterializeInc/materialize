@@ -38,7 +38,7 @@ use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 use crate::{TransformArgs, TransformError};
 
 /// Pushes projections down through other operators.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ProjectionPushdown;
 
 impl crate::Transform for ProjectionPushdown {
