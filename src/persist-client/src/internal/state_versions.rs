@@ -385,6 +385,37 @@ impl StateVersions {
         }
     }
 
+    pub async fn fetch_state_updates_fast_path<K, V, T, D>(
+        &self,
+        shard_id: &ShardId,
+        current_seqno: SeqNo,
+    ) -> Vec<VersionedData> {
+        let path = shard_id.to_string();
+        retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
+            self.consensus
+                .scan(&path, current_seqno.next(), SCAN_ALL)
+                .await
+        })
+        .instrument(debug_span!("fetch_state::scan"))
+        .await
+    }
+
+    pub async fn fetch_state_updates_slow_path<K, V, T, D>(
+        &self,
+        shard_id: &ShardId,
+    ) -> Result<TypedState<K, V, T, D>, Box<CodecMismatch>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64,
+    {
+        let recent_live_diffs = self.fetch_recent_live_diffs::<T>(&shard_id).await;
+        self.fetch_current_state(&shard_id, recent_live_diffs.0)
+            .await
+            .check_codecs(&shard_id)
+    }
+
     /// Updates the provided state to current.
     ///
     /// This method differs from [Self::fetch_current_state] in that it

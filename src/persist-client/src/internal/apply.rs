@@ -46,12 +46,16 @@ pub struct Applier<K, V, T, D> {
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) shard_metrics: Arc<ShardMetrics>,
     pub(crate) state_versions: Arc<StateVersions>,
+    pub(crate) shard_id: ShardId,
 
     // Access to the shard's state, shared across all handles created by the same
     // PersistClientCache. The state is wrapped in a std::sync::RwLock, disallowing
     // access across await points. Access should be always be kept brief, and it
     // is expected that other handles may advance the state at any time this Applier
     // is not holding the lock.
+    //
+    // NB: This is very intentionally not pub(crate) so that it's easy to reason
+    //     very locally about the duration of locks.
     state: Arc<RwLock<TypedState<K, V, T, D>>>,
 }
 
@@ -63,6 +67,7 @@ impl<K, V, T: Clone, D> Clone for Applier<K, V, T, D> {
             metrics: Arc::clone(&self.metrics),
             shard_metrics: Arc::clone(&self.shard_metrics),
             state_versions: Arc::clone(&self.state_versions),
+            shard_id: self.shard_id,
             state: Arc::clone(&self.state),
         }
     }
@@ -103,6 +108,7 @@ where
             metrics,
             shard_metrics,
             state_versions,
+            shard_id,
             state,
         })
     }
@@ -110,6 +116,11 @@ where
     fn read_locked_state<R, F: Fn(&TypedState<K, V, T, D>) -> R>(&self, f: F) -> R {
         let state = self.state.read().expect("lock poisoned");
         f(&state)
+    }
+
+    fn write_locked_state<R, F: FnOnce(&mut TypedState<K, V, T, D>) -> R>(&self, mut f: F) -> R {
+        let mut state = self.state.write().expect("lock poisoned");
+        f(&mut state)
     }
 
     pub async fn fetch_upper(&mut self) -> Antichain<T> {
@@ -384,16 +395,42 @@ where
     pub async fn fetch_and_update_state(&mut self, seqno_hint: Option<SeqNo>) {
         let seqno_before =
             seqno_hint.unwrap_or_else(|| self.read_locked_state(|state| state.seqno));
-        let seqno_after = self
+
+        let diffs = self
             .state_versions
-            .fetch_and_update_to_current(&self.state, seqno_before)
+            .fetch_state_updates_fast_path::<K, V, T, D>(&self.shard_id, seqno_before)
+            .await;
+        let diff_iter = diffs.as_slice();
+
+        let new_seqno = self.write_locked_state(|state| {
+            state.apply_encoded_diffs(&self.cfg, &self.metrics, diff_iter);
+            state.seqno
+        });
+
+        // whether the seqno advanced from diffs and/or because another handle
+        // already updated it, we can assume it is now up-to-date
+        if seqno_before < new_seqno {
+            self.metrics.state.update_state_fast_path.inc();
+            return;
+        }
+
+        let new_state = self
+            .state_versions
+            .fetch_current_state(&self.shard_id, diffs)
             .await
+            .check_codecs::<K, V, D>(&self.shard_id)
             .expect("shard codecs should not change");
+
+        let new_seqno = self.write_locked_state(|state| {
+            state.try_replace_state(new_state);
+            state.seqno
+        });
+
         assert!(
-            seqno_before <= seqno_after,
+            seqno_before <= new_seqno,
             "state seqno regressed: {} vs {}",
             seqno_before,
-            seqno_after
+            new_seqno
         );
     }
 }
