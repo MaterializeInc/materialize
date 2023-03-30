@@ -11,11 +11,12 @@
 
 use std::collections::BTreeMap;
 
-use itertools::Itertools;
+use itertools::{zip_eq, Itertools};
 
 use mz_expr::visit::Visit;
 use mz_expr::JoinImplementation::IndexedFilter;
 use mz_expr::{func, EvalError, MirRelationExpr, MirScalarExpr, UnaryFunc, RECURSION_LIMIT};
+use mz_ore::soft_panic_or_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::{ColumnType, RelationType, ScalarType};
 use mz_repr::{Datum, Row};
@@ -43,6 +44,10 @@ impl CheckedRecursion for ColumnKnowledge {
 }
 
 impl crate::Transform for ColumnKnowledge {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     /// Transforms an expression through accumulated knowledge.
     #[tracing::instrument(
         target = "optimizer"
@@ -75,7 +80,7 @@ impl ColumnKnowledge {
         knowledge_stack: &mut Vec<DatumKnowledge>,
     ) -> Result<Vec<DatumKnowledge>, TransformError> {
         self.checked_recur(|_| {
-            match expr {
+            let result = match expr {
                 MirRelationExpr::ArrangeBy { input, .. } => {
                     self.harvest(input, knowledge, knowledge_stack)
                 }
@@ -85,14 +90,10 @@ impl ColumnKnowledge {
                     }))
                 }
                 MirRelationExpr::Constant { rows, typ } => {
+                    // TODO: handle multi-row cases with some constant columns.
                     if let Ok([(row, _diff)]) = rows.as_deref() {
-                        let knowledge = row
-                            .iter()
-                            .zip(typ.column_types.iter())
-                            .map(|(datum, typ)| DatumKnowledge {
-                                value: Some((Ok(Row::pack_slice(&[datum.clone()])), typ.clone())),
-                                nullable: datum == Datum::Null,
-                            })
+                        let knowledge = std::iter::zip(row.iter(), typ.column_types.iter())
+                            .map(DatumKnowledge::from)
                             .collect();
                         Ok(knowledge)
                     } else {
@@ -110,7 +111,97 @@ impl ColumnKnowledge {
                     }
                     Ok(body_knowledge)
                 }
-                MirRelationExpr::LetRec { .. } => Err(crate::TransformError::LetRecUnsupported)?,
+                MirRelationExpr::LetRec { ids, values, body } => {
+                    // Set knowledge[i][j] = DatumKnowledge::bottom() for each
+                    // column j and CTE i. This corresponds to the normal
+                    // evaluation semantics where each recursive CTE is
+                    // initialized to the empty collection.
+                    for (id, value) in zip_eq(ids.iter(), values.iter()) {
+                        let id = mz_expr::Id::Local(id.clone());
+                        let knowledge_new = vec![DatumKnowledge::bottom(); value.arity()];
+                        let knowledge_old = knowledge.insert(id, knowledge_new);
+                        assert!(knowledge_old.is_none());
+                    }
+
+                    // Sum up the arity of all ids in the enclosing LetRec node.
+                    let let_rec_arity = ids.iter().fold(0_usize, |acc, id| {
+                        let id = mz_expr::Id::Local(id.clone());
+                        acc + knowledge[&id].len()
+                    });
+
+                    // Sequentially union knowledge[i][j] with the result of
+                    // descending into a clone of values[i]. Repeat until one of
+                    // the following conditions is met:
+                    //
+                    // 1. The knowledge bindings have stabilized at a fixpoint.
+                    // 2. No fixpoint was found after `max_iterations`. If this
+                    //    is the case reset the knowledge vectors for all
+                    //    recursive CTEs to DatumKnowledge::top().
+                    let max_iterations = 100;
+                    let mut curr_iteration = 0;
+                    loop {
+                        // TODO(#16800): This should respect the soft and hard max
+                        // iteration counts that will be enforced when actually
+                        // evaluating the loop.
+
+                        // Check for condition (2).
+                        if curr_iteration >= max_iterations {
+                            if curr_iteration > 3 * let_rec_arity {
+                                soft_panic_or_log!(
+                                    "LetRec loop in ColumnKnowledge has not converged in 3 * |{}|",
+                                    let_rec_arity
+                                );
+                            }
+
+                            for (id, value) in zip_eq(ids.iter(), values.iter()) {
+                                let id = mz_expr::Id::Local(id.clone());
+                                let knowledge_new = vec![DatumKnowledge::top(); value.arity()];
+                                knowledge.insert(id, knowledge_new);
+                            }
+                            break;
+                        }
+
+                        // Check for condition (1).
+                        let mut change = false;
+                        for (id, mut value) in zip_eq(ids.iter(), values.iter().cloned()) {
+                            let id = mz_expr::Id::Local(id.clone());
+                            let value = &mut value;
+                            let next_knowledge = self.harvest(value, knowledge, knowledge_stack)?;
+                            let curr_knowledge = knowledge.get_mut(&id).unwrap();
+                            for (curr, next) in zip_eq(curr_knowledge.iter_mut(), next_knowledge) {
+                                let prev = curr.clone();
+                                curr.join_assign(&next);
+                                change |= prev != *curr;
+                            }
+                        }
+                        if !change {
+                            break;
+                        }
+
+                        curr_iteration += 1;
+                    }
+
+                    // Descend into the values with the inferred knowledge.
+                    for value in values.iter_mut() {
+                        self.harvest(value, knowledge, knowledge_stack)?;
+                    }
+
+                    // Descend and return the knowledge from the body.
+                    let body_knowledge = self.harvest(body, knowledge, knowledge_stack)?;
+
+                    // Remove shadowed bindings. This is good hygiene, as
+                    // otherwise with nested LetRec blocks the `loop { ... }`
+                    // above will carry inner LetRec IDs across outer LetRec
+                    // iterations. As a consequence, the "no shadowing"
+                    // assertion at the beginning of this block will fail at the
+                    // inner LetRec for the second outer LetRec iteration.
+                    for id in ids.iter() {
+                        let id = mz_expr::Id::Local(id.clone());
+                        knowledge.remove(&id);
+                    }
+
+                    Ok(body_knowledge)
+                }
                 MirRelationExpr::Project { input, outputs } => {
                     let input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
                     Ok(outputs
@@ -161,27 +252,35 @@ impl ColumnKnowledge {
                     // If any predicate tests a column for equality, truth, or is_null, we learn stuff.
                     for predicate in predicates.iter() {
                         // Equality tests allow us to unify the column knowledge of each input.
-                        if let MirScalarExpr::CallBinary { func, expr1, expr2 } = predicate {
-                            if func == &mz_expr::BinaryFunc::Eq {
-                                // Collect knowledge about the inputs (for columns and literals).
-                                let mut knowledge = DatumKnowledge::default();
-                                if let MirScalarExpr::Column(c) = &**expr1 {
-                                    knowledge.absorb(&input_knowledge[*c]);
-                                }
-                                if let MirScalarExpr::Column(c) = &**expr2 {
-                                    knowledge.absorb(&input_knowledge[*c]);
-                                }
-                                // Absorb literal knowledge about columns.
-                                knowledge.absorb(&DatumKnowledge::from(&**expr1));
-                                knowledge.absorb(&DatumKnowledge::from(&**expr2));
+                        if let MirScalarExpr::CallBinary {
+                            func: mz_expr::BinaryFunc::Eq,
+                            expr1,
+                            expr2,
+                        } = predicate
+                        {
+                            // Collect knowledge about the inputs (for columns and literals).
+                            let mut knowledge = DatumKnowledge::top();
+                            if let MirScalarExpr::Column(c) = &**expr1 {
+                                knowledge.meet_assign(&input_knowledge[*c]);
+                            }
+                            if let MirScalarExpr::Column(c) = &**expr2 {
+                                knowledge.meet_assign(&input_knowledge[*c]);
+                            }
 
-                                // Write back unified knowledge to each column.
-                                if let MirScalarExpr::Column(c) = &**expr1 {
-                                    input_knowledge[*c].absorb(&knowledge);
-                                }
-                                if let MirScalarExpr::Column(c) = &**expr2 {
-                                    input_knowledge[*c].absorb(&knowledge);
-                                }
+                            // Absorb literal knowledge about columns.
+                            if let MirScalarExpr::Literal(..) = &**expr1 {
+                                knowledge.meet_assign(&DatumKnowledge::from(&**expr1));
+                            }
+                            if let MirScalarExpr::Literal(..) = &**expr2 {
+                                knowledge.meet_assign(&DatumKnowledge::from(&**expr2));
+                            }
+
+                            // Write back unified knowledge to each column.
+                            if let MirScalarExpr::Column(c) = &**expr1 {
+                                input_knowledge[*c].meet_assign(&knowledge);
+                            }
+                            if let MirScalarExpr::Column(c) = &**expr2 {
+                                input_knowledge[*c].meet_assign(&knowledge);
                             }
                         }
                         if let MirScalarExpr::CallUnary {
@@ -195,7 +294,7 @@ impl ColumnKnowledge {
                             } = &**expr
                             {
                                 if let MirScalarExpr::Column(c) = &**expr {
-                                    input_knowledge[*c].nullable = false;
+                                    input_knowledge[*c].meet_assign(&DatumKnowledge::any(false));
                                 }
                             }
                         }
@@ -216,8 +315,8 @@ impl ColumnKnowledge {
                             // Do not propagate error literals beyond join inputs, since that may result
                             // in them being propagated to other inputs of the join and evaluated when
                             // they should not.
-                            if let Some((Err(_), _)) = knowledge.value {
-                                knowledge.value = None;
+                            if let DatumKnowledge::Lit { value: Err(_), .. } = knowledge {
+                                knowledge.join_assign(&DatumKnowledge::any(false));
                             }
                             knowledges.push(knowledge);
                         }
@@ -228,13 +327,13 @@ impl ColumnKnowledge {
                     // of the inputs since input keys are unnecessary for reducing
                     // `MirScalarExpr`s.
                     let folded_inputs_typ =
-                        inputs.iter().fold(RelationType::empty(), |mut typ, i| {
-                            typ.column_types.append(&mut i.typ().column_types);
+                        inputs.iter().fold(RelationType::empty(), |mut typ, input| {
+                            typ.column_types.append(&mut input.typ().column_types);
                             typ
                         });
 
                     for equivalence in equivalences.iter_mut() {
-                        let mut knowledge = DatumKnowledge::default();
+                        let mut knowledge = DatumKnowledge::top();
 
                         // We can produce composite knowledge for everything in the equivalence class.
                         for expr in equivalence.iter_mut() {
@@ -247,9 +346,11 @@ impl ColumnKnowledge {
                                 )?;
                             }
                             if let MirScalarExpr::Column(c) = expr {
-                                knowledge.absorb(&knowledges[*c]);
+                                knowledge.meet_assign(&knowledges[*c]);
                             }
-                            knowledge.absorb(&DatumKnowledge::from(&*expr));
+                            if let MirScalarExpr::Literal(..) = expr {
+                                knowledge.meet_assign(&DatumKnowledge::from(&*expr));
+                            }
                         }
                         for expr in equivalence.iter_mut() {
                             if let MirScalarExpr::Column(c) = expr {
@@ -323,16 +424,14 @@ impl ColumnKnowledge {
                                 // These methods propagate constant values exactly.
                                 knowledge
                             }
-                            AggregateFunc::Count => DatumKnowledge {
-                                value: None,
-                                nullable: false,
-                            },
+                            AggregateFunc::Count => DatumKnowledge::any(false),
                             _ => {
-                                // The remaining aggregates are non-null if their inputs are non-null.
-                                DatumKnowledge {
-                                    value: None,
-                                    nullable: knowledge.nullable,
-                                }
+                                // The remaining aggregates are non-null if
+                                // their inputs are non-null. This is correct
+                                // because in Mir~ we reduce an empty collection
+                                // to an empty collection (in Hir~ the result
+                                // often is singleton null collection).
+                                DatumKnowledge::any(knowledge.nullable())
                             }
                         };
                         output.push(knowledge);
@@ -355,71 +454,268 @@ impl ColumnKnowledge {
                             .into_iter()
                             .zip_eq(self.harvest(input, knowledge, knowledge_stack)?)
                             .map(|(mut k1, k2)| {
-                                k1.union(&k2);
+                                k1.join_assign(&k2);
                                 k1
                             })
                             .collect();
                     }
                     Ok(know)
                 }
-            }
+            }?;
+
+            // println!("# Plan");
+            // println!("{}", expr.pretty());
+            // println!("# Knowledge");
+            // print_knowledge_vec(&result);
+            // println!("---");
+
+            Ok(result)
         })
     }
 }
 
 /// Information about a specific column.
-#[derive(Clone, Debug)]
-pub struct DatumKnowledge {
-    /// If set, a specific value for the column.
-    value: Option<(Result<mz_repr::Row, EvalError>, ColumnType)>,
-    /// If false, the value is not `Datum::Null`.
-    nullable: bool,
-}
-
-impl DatumKnowledge {
-    // Intersects the possible states of a column.
-    fn absorb(&mut self, other: &Self) {
-        self.nullable &= other.nullable;
-        if self.value.is_none() {
-            self.value = other.value.clone()
-        }
-    }
-    // Unions (weakens) the possible states of a column.
-    fn union(&mut self, other: &Self) {
-        self.nullable |= other.nullable;
-        if self.value != other.value {
-            self.value = None;
-        }
-    }
-}
-
-impl Default for DatumKnowledge {
-    fn default() -> Self {
-        Self {
-            value: None,
-            nullable: true,
-        }
-    }
+///
+/// The values should form a [complete lattice].
+///
+/// [complete lattice]: https://en.wikipedia.org/wiki/Complete_lattice
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum DatumKnowledge {
+    // Any possible value, optionally known to be NOT NULL.
+    Any {
+        nullable: bool,
+    },
+    // A known literal value of a specific type.
+    Lit {
+        value: Result<mz_repr::Row, EvalError>,
+        typ: ScalarType,
+    },
+    // A value that cannot exist.
+    Nothing,
 }
 
 impl From<&MirScalarExpr> for DatumKnowledge {
     fn from(expr: &MirScalarExpr) -> Self {
         if let MirScalarExpr::Literal(l, t) = expr {
-            Self {
-                value: Some((l.clone(), t.clone())),
-                nullable: expr.is_literal_null(),
-            }
+            let value = l.clone();
+            let typ = t.scalar_type.clone();
+            Self::Lit { value, typ }
         } else {
-            Self::default()
+            Self::top()
         }
+    }
+}
+
+impl From<(Datum<'_>, &ColumnType)> for DatumKnowledge {
+    fn from((d, t): (Datum<'_>, &ColumnType)) -> Self {
+        let value = Ok(Row::pack_slice(&[d.clone()]));
+        let typ = t.scalar_type.clone();
+        Self::Lit { value, typ }
     }
 }
 
 impl From<&ColumnType> for DatumKnowledge {
     fn from(typ: &ColumnType) -> Self {
-        Self {
-            value: None,
-            nullable: typ.nullable,
+        let nullable = typ.nullable;
+        Self::Any { nullable }
+    }
+}
+
+impl DatumKnowledge {
+    /// The most general possible knowledge (the top of the complete lattice).
+    fn top() -> Self {
+        Self::Any { nullable: true }
+    }
+
+    /// The strictest possible knowledge (the bottom of the complete lattice).
+    #[allow(dead_code)]
+    fn bottom() -> Self {
+        Self::Nothing
+    }
+
+    /// Create a [`DatumKnowledge::Any`] instance with the given nullable flag.
+    fn any(nullable: bool) -> Self {
+        DatumKnowledge::Any { nullable }
+    }
+
+    /// Unions (weakens) the possible states of a column.
+    fn join_assign(&mut self, other: &Self) {
+        use DatumKnowledge::*;
+
+        // Each of the following `if` statements handles the cases marked with
+        // `x` of the (self x other) cross product (depicted as a rows x cols
+        // table where Self::bottom() is the UL and Self::top() the LR corner).
+        // Cases that are already handled are marked with `+` and cases that are
+        // yet to be handled marked with `-`.
+        //
+        // The order of handling (crossing out) of cases ensures that
+        // `*.clone()` is not called unless necessary.
+        //
+        // The final case after the ifs can assert that both sides are Lit
+        // variants.
+
+        // x - - - : Nothing
+        // x - - - : Lit { _, _ }
+        // x - - - : Any { false }
+        // x x x x : Any { true }
+        if crate::any![
+            matches!(self, Any { nullable: true }),
+            matches!(other, Nothing),
+        ] {
+            // Nothing to do.
+        }
+        // + x x x : Nothing
+        // + - - x : Lit { _, _ }
+        // + - - x : Any { false }
+        // + + + + : Any { true }
+        else if crate::any![
+            matches!(self, Nothing),
+            matches!(other, Any { nullable: true }),
+        ] {
+            *self = other.clone();
+        }
+        // + + + + : Nothing
+        // + - - + : Lit { _, _ }
+        // + x x + : Any { false }
+        // + + + + : Any { true }
+        else if matches!(self, Any { nullable: false }) {
+            if !other.nullable() {
+                // Nothing to do.
+            } else {
+                *self = Self::top() // other: Lit { null, _ }
+            }
+            // Nothing to do.
+        }
+        // + + + + : Nothing
+        // + - x + : Lit { _, _ }
+        // + + + + : Any { false }
+        // + + + + : Any { true }
+        else if matches!(other, Any { nullable: false }) {
+            if !self.nullable() {
+                *self = other.clone();
+            } else {
+                *self = Self::top() // other: Lit { null, _ }
+            }
+        }
+        // + + + + : Nothing
+        // + x + + : Lit { _, _ }
+        // + + + + : Any { false }
+        // + + + + : Any { true }
+        else {
+            let Lit { value: s_val, typ: s_typ} = self else {
+                unreachable!();
+            };
+            let Lit { value: o_val, typ: o_typ} = other else {
+                unreachable!();
+            };
+
+            if s_typ != o_typ {
+                soft_panic_or_log!("Undefined join of non-equal types ({s_typ:?} != {o_typ:?})");
+                *self = Self::top();
+            } else if s_val != o_val {
+                let nullable = self.nullable() || other.nullable();
+                *self = Any { nullable }
+            } else {
+                // Value and type coincide - do nothing!
+            }
+        }
+    }
+
+    /// Intersects (strengthens) the possible states of a column.
+    fn meet_assign(&mut self, other: &Self) {
+        use DatumKnowledge::*;
+
+        // Each of the following `if` statements handles the cases marked with
+        // `x` of the (self x other) cross product (depicted as a rows x cols
+        // table where Self::bottom() is the UL and Self::top() the LR corner).
+        // Cases that are already handled are marked with `+` and cases that are
+        // yet to be handled marked with `-`.
+        //
+        // The order of handling (crossing out) of cases ensures that
+        // `*.clone()` is not called unless necessary.
+        //
+        // The final case after the ifs can assert that both sides are Lit
+        // variants.
+
+        // x x x x : Nothing
+        // - - - x : Lit { _, _ }
+        // - - - x : Any { false }
+        // - - - x : Any { true }
+        if crate::any![
+            matches!(self, Nothing),
+            matches!(other, Any { nullable: true }),
+        ] {
+            // Nothing to do.
+        }
+        // + + + + : Nothing
+        // x - - + : Lit { _, _ }
+        // x - - + : Any { false }
+        // x x x + : Any { true }
+        else if crate::any![
+            matches!(self, Any { nullable: true }),
+            matches!(other, Nothing),
+        ] {
+            *self = other.clone();
+        }
+        // + + + + : Nothing
+        // + - - + : Lit { _, _ }
+        // + x x + : Any { false }
+        // + + + + : Any { true }
+        else if matches!(self, Any { nullable: false }) {
+            match other {
+                Any { .. } => {
+                    // Nothing to do.
+                }
+                Lit { .. } => {
+                    if other.nullable() {
+                        *self = Nothing; // other: Lit { null, _ }
+                    } else {
+                        *self = other.clone();
+                    }
+                }
+                Nothing => unreachable!(),
+            }
+        }
+        // + + + + : Nothing
+        // + - x + : Lit { _, _ }
+        // + + + + : Any { false }
+        // + + + + : Any { true }
+        else if matches!(other, Any { nullable: false }) {
+            if self.nullable() {
+                *self = Nothing // self: Lit { null, _ }
+            }
+        }
+        // + + + + : Nothing
+        // + x + + : Lit { _, _ }
+        // + + + + : Any { false }
+        // + + + + : Any { true }
+        else {
+            let Lit { value: s_val, typ: s_typ} = self else {
+                unreachable!();
+            };
+            let Lit { value: o_val, typ: o_typ} = other else {
+                unreachable!();
+            };
+
+            if s_typ != o_typ {
+                soft_panic_or_log!("Undefined meet of non-equal types ({s_typ:?} != {o_typ:?})");
+                *self = Self::top(); // this really should be Nothing
+            } else if s_val != o_val {
+                *self = Nothing;
+            } else {
+                // Value and type coincide - do nothing!
+            }
+        }
+    }
+
+    fn nullable(&self) -> bool {
+        match self {
+            DatumKnowledge::Any { nullable } => *nullable,
+            DatumKnowledge::Lit { value, .. } => match value {
+                Ok(value) => value.iter().next().unwrap().is_null(),
+                Err(_) => false,
+            },
+            DatumKnowledge::Nothing => false,
         }
     }
 }
@@ -427,7 +723,7 @@ impl From<&ColumnType> for DatumKnowledge {
 /// Attempts to optimize
 ///
 /// `knowledge_stack` is a pre-allocated vector but is expected not to contain any elements.
-pub fn optimize(
+fn optimize(
     expr: &mut MirScalarExpr,
     column_types: &[ColumnType],
     column_knowledge: &[DatumKnowledge],
@@ -456,8 +752,9 @@ pub fn optimize(
             let result = match e {
                 MirScalarExpr::Column(index) => {
                     let index = *index;
-                    if let Some((datum, typ)) = &column_knowledge[index].value {
-                        *e = MirScalarExpr::Literal(datum.clone(), typ.clone());
+                    if let DatumKnowledge::Lit { value, typ } = &column_knowledge[index] {
+                        let nullable = column_knowledge[index].nullable();
+                        *e = MirScalarExpr::Literal(value.clone(), typ.clone().nullable(nullable));
                     }
                     column_knowledge[index].clone()
                 }
@@ -466,9 +763,9 @@ pub fn optimize(
                 }
                 MirScalarExpr::CallUnary { func, expr: _ } => {
                     let knowledge = knowledge_stack.pop().unwrap();
-                    if knowledge.value.is_some() {
+                    if matches!(&knowledge, DatumKnowledge::Lit { .. }) {
                         e.reduce(column_types);
-                    } else if func == &UnaryFunc::IsNull(func::IsNull) && !knowledge.nullable {
+                    } else if func == &UnaryFunc::IsNull(func::IsNull) && !knowledge.nullable() {
                         *e = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool);
                     };
                     DatumKnowledge::from(&*e)
@@ -480,17 +777,20 @@ pub fn optimize(
                 } => {
                     let knowledge2 = knowledge_stack.pop().unwrap();
                     let knowledge1 = knowledge_stack.pop().unwrap();
-                    if knowledge1.value.is_some() || knowledge2.value.is_some() {
+                    if crate::any![
+                        matches!(knowledge1, DatumKnowledge::Lit { .. }),
+                        matches!(knowledge2, DatumKnowledge::Lit { .. }),
+                    ] {
                         e.reduce(column_types);
                     }
                     DatumKnowledge::from(&*e)
                 }
                 MirScalarExpr::CallVariadic { func: _, exprs } => {
-                    // Drain the last `exprs.len()` knowledge, and reduce if any is `Some(_)`.
+                    // Drain the last `exprs.len()` knowledge, and reduce if any is `Lit`.
                     assert!(knowledge_stack.len() >= exprs.len());
                     if knowledge_stack
                         .drain(knowledge_stack.len() - exprs.len()..)
-                        .any(|k| k.value.is_some())
+                        .any(|k| matches!(k, DatumKnowledge::Lit { .. }))
                     {
                         e.reduce(column_types);
                     }
@@ -510,7 +810,7 @@ pub fn optimize(
                     // can union the states of their columns.
                     let know2 = knowledge_stack.pop().unwrap();
                     let mut know1 = knowledge_stack.pop().unwrap();
-                    know1.union(&know2);
+                    know1.join_assign(&know2);
                     know1
                 }
             };
@@ -522,4 +822,26 @@ pub fn optimize(
     knowledge_datum.ok_or_else(|| {
         TransformError::Internal(String::from("unexpectedly empty stack in optimize"))
     })
+}
+
+#[allow(dead_code)] // keep debugging method around
+fn print_knowledge_map<'a>(
+    knowledge: &BTreeMap<mz_expr::Id, Vec<DatumKnowledge>>,
+    ids: impl Iterator<Item = &'a mz_expr::LocalId>,
+) {
+    for id in ids {
+        let id = mz_expr::Id::Local(id.clone());
+        for (i, k) in knowledge.get(&id).unwrap().iter().enumerate() {
+            println!("{id}.#{i}: {k:?}");
+        }
+    }
+    println!("");
+}
+
+#[allow(dead_code)] // keep debugging method around
+fn print_knowledge_vec(knowledge: &Vec<DatumKnowledge>) {
+    for (i, k) in knowledge.iter().enumerate() {
+        println!("#{i}: {k:?}");
+    }
+    println!("");
 }
