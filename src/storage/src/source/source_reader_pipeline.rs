@@ -345,7 +345,7 @@ where
         if source_upper.is_empty() {
             return;
         }
-        let (source_reader, offset_committer) = source_connection
+        let (source_reader, offset_committer) = match source_connection
             .into_reader(
                 name.clone(),
                 id,
@@ -358,8 +358,12 @@ where
                 encoding,
                 base_metrics,
                 connection_context.clone(),
-            )
-            .expect("Failed to create source");
+            ) {
+                Ok(res) => res,
+                Err(e) => {
+                    panic!("Failed to create source: {:#}", e);
+                }
+            };
 
         let source_stream = source_reader.into_stream(timestamp_interval).peekable();
         tokio::pin!(source_stream);

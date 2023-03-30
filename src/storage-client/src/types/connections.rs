@@ -13,6 +13,7 @@ use std::any::Any;
 use std::collections::BTreeMap;
 use std::ops::Deref;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use itertools::Itertools;
@@ -262,6 +263,39 @@ pub struct KafkaConnection {
 impl KafkaConnection {
     /// Creates a Kafka client for the connection.
     pub async fn create_with_context<C, T>(
+        &self,
+        connection_context: &ConnectionContext,
+        context: C,
+        extra_options: &BTreeMap<&str, String>,
+    ) -> Result<T, anyhow::Error>
+    where
+        C: ClientContext + Clone,
+        T: FromClientConfigAndContext<BrokerRewritingClientContext<C>>,
+    {
+        let retry = if self
+            .brokers
+            .iter()
+            .any(|b| matches!(b.tunnel, Tunnel::Ssh(_)))
+        {
+            // This is a temporary workaround until
+            // <https://github.com/MaterializeInc/materialize/issues/18491>
+            // happens. This can slow down ddl statements.
+            mz_ore::retry::Retry::default().max_duration(Duration::from_secs(30))
+        } else {
+            mz_ore::retry::Retry::default().max_tries(1)
+        };
+
+        retry
+            .retry_async(|_| async {
+                let context = context.clone();
+                self.create_with_context_inner(connection_context, context, extra_options)
+                    .await
+            })
+            .await
+    }
+
+    /// Creates a Kafka client for the connection.
+    pub async fn create_with_context_inner<C, T>(
         &self,
         connection_context: &ConnectionContext,
         context: C,
@@ -1016,13 +1050,26 @@ impl SshTunnel {
 
         // ...record it in the broker lookup, with a task that
         // will shutdown the session on drop.
-        let (tx, rx) = channel();
+        let (tx, mut rx) = channel::<()>();
         mz_ore::task::spawn(|| format!("{}_ssh_session", debug_str), async move {
-            let _: Result<(), _> = rx.await;
+            loop {
+                match tokio::time::timeout(Duration::from_secs(30), &mut rx).await {
+                    Ok(_) => break,
+                    Err(_) => {
+                        if let Err(e) = session.check().await {
+                            warn!(
+                                "ssh tunnel at port {local_port} failed to check: {:#}",
+                                anyhow!(e)
+                            );
+                        }
+                    }
+                }
+            }
             if let Err(e) = session.close().await {
                 // Convert to `anyhow::Error` to include error source via the
                 // alternate `Display` implementation, which can contain key
                 // details about the nature of the failure.
+                // TODO(guswynn): abstract this out to `mz_ore`.
                 warn!("failed to close ssh tunnel: {:#}", anyhow!(e));
             }
         });

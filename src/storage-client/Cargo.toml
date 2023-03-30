@@ -41,6 +41,7 @@ mz-service = { path = "../service" }
 mz-ssh-util = { path = "../ssh-util" }
 mz-stash = { path = "../stash" }
 mz-timely-util = { path = "../timely-util" }
+openssh = { version = "0.9.8", default-features = false, features = ["native-mux"] }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
 prometheus = { version = "0.13.3", default-features = false }
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git", features = ["boxed_union"]}

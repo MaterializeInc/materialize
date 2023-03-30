@@ -891,6 +891,7 @@ impl PartitionConsumer {
 
 /// An implementation of [`ConsumerContext`] that forwards statistics to the
 /// worker
+#[derive(Clone)]
 struct GlueConsumerContext {
     activator: SyncActivator,
     stats_tx: crossbeam_channel::Sender<Jsonb>,
