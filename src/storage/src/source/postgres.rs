@@ -621,9 +621,10 @@ async fn postgres_replication_loop_inner_snapshot(
             }
             e => e?,
         };
+        let (row, diff) = row.expect("todo: subsource errors");
         task_info
             .row_sender
-            .send_row(output, row, slot_lsn, 1)
+            .send_row(output, row, slot_lsn, diff)
             .await;
     }
 
@@ -680,10 +681,11 @@ async fn postgres_replication_loop_inner_snapshot(
 
         while let Some(event) = replication_stream.next().await {
             match event {
-                Ok(Event::Message(lsn, (output, row, diff))) => {
+                Ok(Event::Message(lsn, (output, row))) => {
                     // Here we ignore the lsn that this row actually happened at and we
                     // forcefully emit it at the slot_lsn with a negated diff.
                     if lsn <= snapshot_lsn {
+                        let (row, diff) = row.expect("todo subsource errors");
                         task_info
                             .row_sender
                             .send_row(output, row, slot_lsn, -diff)
@@ -748,7 +750,8 @@ async fn postgres_replication_loop_inner(
     // a way to encode this in the type signature
     while let Some(event) = replication_stream.next().await.transpose()? {
         match event {
-            Event::Message(lsn, (output, row, diff)) => {
+            Event::Message(lsn, (output, row)) => {
+                let (row, diff) = row.expect("todo subsource errors");
                 task_info.row_sender.send_row(output, row, lsn, diff).await;
             }
             Event::Progress([lsn]) => {
@@ -836,6 +839,7 @@ impl RowSender {
                 let _ = self
                     .sender
                     .send(InternalMessage::Status(HealthStatusUpdate {
+                        output_index: 0,
                         update: HealthStatus::Running,
                         should_halt: false,
                     }))
@@ -933,7 +937,8 @@ fn produce_snapshot<'a>(
     client: &'a Client,
     metrics: &'a PgSourceMetrics,
     source_tables: &'a BTreeMap<u32, SourceTable>,
-) -> impl futures::Stream<Item = Result<(usize, Row), ReplicationError>> + 'a {
+) -> impl futures::Stream<Item = Result<(usize, Result<(Row, Diff), anyhow::Error>), ReplicationError>>
+       + 'a {
     async_stream::try_stream! {
         // Scratch space to use while evaluating casts
         let mut datum_vec = DatumVec::new();
@@ -977,7 +982,7 @@ fn produce_snapshot<'a>(
 
                 let row = cast_row(&info.casts, &datums).err_definite()?;
 
-                yield (info.output_index, row);
+                yield (info.output_index, Ok((row, 1)));
             }
 
             metrics.tables.inc();
@@ -1033,8 +1038,9 @@ async fn produce_replication<'a>(
     committed_lsn: Arc<AtomicU64>,
     metrics: &'a PgSourceMetrics,
     source_tables: &'a BTreeMap<u32, SourceTable>,
-) -> impl futures::Stream<Item = Result<Event<[PgLsn; 1], (usize, Row, Diff)>, ReplicationError>> + 'a
-{
+) -> impl futures::Stream<
+    Item = Result<Event<[PgLsn; 1], (usize, Result<(Row, Diff), anyhow::Error>)>, ReplicationError>,
+> + 'a {
     use ReplicationError::*;
     use ReplicationMessage::*;
     async_stream::try_stream!({
@@ -1231,10 +1237,10 @@ async fn produce_replication<'a>(
                             last_commit_lsn = PgLsn::from(commit.end_lsn());
 
                             for (output, row) in deletes.drain(..) {
-                                yield Event::Message(last_commit_lsn, (output, row, -1));
+                                yield Event::Message(last_commit_lsn, (output, Ok((row, -1))));
                             }
                             for (output, row) in inserts.drain(..) {
-                                yield Event::Message(last_commit_lsn, (output, row, 1));
+                                yield Event::Message(last_commit_lsn, (output, Ok((row, 1))));
                             }
                             yield Event::Progress([PgLsn::from(u64::from(last_commit_lsn) + 1)]);
                             metrics.lsn.set(last_commit_lsn.into());
