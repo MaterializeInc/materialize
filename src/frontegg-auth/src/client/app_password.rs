@@ -16,8 +16,9 @@ use crate::{app_password::AppPassword, error::Error};
 
 use super::{Client, APP_PASSWORDS_PATH, CREATE_APP_PASSWORDS_PATH};
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct FronteggAppPassword {
     description: String,
     created_at: String,

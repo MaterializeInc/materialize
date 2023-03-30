@@ -50,6 +50,12 @@ pub struct AuthenticationRequest<'a> {
     pub secret: &'a str,
 }
 
+#[derive(Debug, Clone)]
+pub struct Auth {
+    pub token: String,
+    pub refresh_at: SystemTime,
+}
+
 /// An API client for Frontegg.
 ///
 /// The API client is designed to be wrapped in an [`Arc`] and used from
@@ -157,55 +163,5 @@ impl Client {
             refresh_at: SystemTime::now() + (Duration::from_secs(res.expires_in) / 2),
         });
         Ok(auth.clone().unwrap())
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Auth {
-    pub token: String,
-    pub refresh_at: SystemTime,
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::{
-        app_password::AppPassword,
-        config::{ClientBuilder, ClientConfig},
-    };
-    use std::env;
-
-    #[tokio::test]
-    async fn test_app_password() {
-        struct TestCase {
-            app_password: AppPassword,
-        }
-
-        for tc in [TestCase {
-            app_password: AppPassword {
-                client_id: env::var("MZP_CLIENT_ID").unwrap().parse().unwrap(),
-                secret_key: env::var("MZP_SECRET_KEY").unwrap().parse().unwrap(),
-            },
-        }] {
-            // let client_builder = ClientBuilder::default();
-            // let client = client_builder.build(ClientConfig {
-            //     app_password: tc.app_password
-            // });
-            // let app_passwords = client.list_app_passwords().await;
-            // println!("Output: {:?}", app_passwords);
-            // let users = client.list_users().await;
-            // println!("Output: {:?}", users);
-            // let app_password = client.create_app_password("description".to_string()).await;
-            // println!("Output: {:?}", app_password);
-            // let new_user = client.create_user(NewUser {
-            //     email: String::from("joaquin+3@materialize.com"),
-            //     name: String::from("joaquin"),
-            //     provider: String::from("local"),
-            //     role_ids: vec![
-            //         String::from("15f29149-d2c7-49b3-a67e-4f10d36ffed6"),
-            //         String::from("0a4d54f7-05d0-4f7a-8f57-6a2c2474b2c1")
-            //     ]
-            // }).await;
-            // println!("Output: {:?}", new_user);
-        }
     }
 }

@@ -93,7 +93,7 @@ pub mod app_password;
 pub mod claims;
 pub mod client;
 pub mod config;
-pub mod cparse;
+pub mod parse;
 pub mod error;
 
 pub struct FronteggConfig {
@@ -192,7 +192,7 @@ impl FronteggAuthentication {
             .build(ClientConfig {
                 app_password: password.parse()?,
             });
-        let auth = client.auth().await.unwrap();
+        let mut auth = client.auth().await.unwrap();
         let mut claims = self.validate_token(auth.token.clone(), Some(&expected_email))?;
         claims_processor(claims.clone());
         let frontegg = self.clone();
@@ -234,7 +234,8 @@ impl FronteggAuthentication {
 
                 tokio::select! {
                     _ = expire_in => return (),
-                    (_, refresh_claims) = refresh_request => {
+                    (refresh_auth, refresh_claims) = refresh_request => {
+                        auth = refresh_auth;
                         claims = refresh_claims;
                         claims_processor(claims.clone());
                     },

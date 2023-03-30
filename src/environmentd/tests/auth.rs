@@ -85,8 +85,6 @@ use std::io::{Read, Write};
 use std::iter;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -624,7 +622,6 @@ fn start_mzcloud(
     expires_in_secs: i64,
 ) -> Result<MzCloudServer, anyhow::Error> {
     let refreshes = Arc::new(Mutex::new(0u64));
-    let enable_refresh = Arc::new(AtomicBool::new(true));
     #[derive(Clone)]
     struct Context {
         encoding_key: EncodingKey,
@@ -637,7 +634,6 @@ fn start_mzcloud(
         // Uuid -> email
         refresh_tokens: Arc<Mutex<BTreeMap<String, String>>>,
         refreshes: Arc<Mutex<u64>>,
-        enable_refresh: Arc<AtomicBool>,
     }
     let context = Context {
         encoding_key,
@@ -649,7 +645,6 @@ fn start_mzcloud(
         expires_in_secs,
         refresh_tokens: Arc::new(Mutex::new(BTreeMap::new())),
         refreshes: Arc::clone(&refreshes),
-        enable_refresh: Arc::clone(&enable_refresh),
     };
     async fn handle(context: Context, req: Request<Body>) -> Result<Response<Body>, Infallible> {
         let (_, body) = req.into_parts();
@@ -719,7 +714,6 @@ fn start_mzcloud(
     Ok(MzCloudServer {
         url,
         refreshes,
-        enable_refresh,
         _runtime: runtime,
     })
 }
@@ -727,7 +721,6 @@ fn start_mzcloud(
 struct MzCloudServer {
     url: String,
     refreshes: Arc<Mutex<u64>>,
-    enable_refresh: Arc<AtomicBool>,
     _runtime: Arc<Runtime>,
 }
 
@@ -780,7 +773,6 @@ fn test_auth_expiry() {
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
 
     const EXPIRES_IN_SECS: u64 = 20;
-    const REFRESH_BEFORE_SECS: u64 = 10;
     let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
     let frontegg_server = start_mzcloud(
         encoding_key,
