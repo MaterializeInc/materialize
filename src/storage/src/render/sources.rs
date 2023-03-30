@@ -32,7 +32,7 @@ use mz_storage_client::types::sources::{encoding::*, *};
 use mz_timely_util::operator::CollectionExt;
 
 use crate::decode::{render_decode_cdcv2, render_decode_delimited};
-use crate::render::upsert::UpsertCommand;
+use crate::render::upsert::UpsertKey;
 use crate::source::types::{DecodeResult, SourceOutput};
 use crate::source::{self, RawSourceCreationConfig};
 
@@ -453,9 +453,11 @@ fn append_metadata_to_value<G: Scope>(
 fn upsert_commands<G: Scope>(
     input: Collection<G, DecodeResult, Diff>,
     upsert_envelope: UpsertEnvelope,
-) -> Collection<G, (UpsertCommand, MzOffset), Diff> {
+) -> Collection<G, (UpsertKey, Option<Result<Row, UpsertError>>, MzOffset), Diff> {
     let mut row_buf = Row::default();
     input.map(move |result| {
+        let order = result.position;
+
         let key = match result.key {
             Some(Ok(key)) => Ok(key),
             None => Err(UpsertError::NullKey(UpsertNullKeyError::with_partition_id(
@@ -467,14 +469,14 @@ fn upsert_commands<G: Scope>(
         // If we have a well-formed key we can continue, otherwise we're upserting an error
         let key = match key {
             Ok(key) => key,
-            Err(err) => match result.value {
-                Some(_) => return (UpsertCommand::Insert(Err(err)), result.position),
-                None => return (UpsertCommand::Remove(Err(err)), result.position),
+            err @ Err(_) => match result.value {
+                Some(_) => return (UpsertKey::from_key(err.as_ref()), Some(err), order),
+                None => return (UpsertKey::from_key(err.as_ref()), None, order),
             },
         };
 
         // We can now apply the key envelope
-        let key = match upsert_envelope.style {
+        let key_row = match upsert_envelope.style {
             UpsertStyle::Debezium { .. } | UpsertStyle::Default(KeyEnvelope::Flattened) => key,
             UpsertStyle::Default(KeyEnvelope::Named(_)) => {
                 if key.iter().nth(1).is_none() {
@@ -487,39 +489,33 @@ fn upsert_commands<G: Scope>(
             UpsertStyle::Default(KeyEnvelope::None) => unreachable!(),
         };
 
-        // If we have a well-formed value we can continue, otherwise we're upserting an error
+        let key = UpsertKey::from_key(Ok(&key_row));
+
         let metadata = result.metadata;
         let value = match result.value {
             Some(Ok(ref row)) => match upsert_envelope.style {
                 UpsertStyle::Debezium { after_idx } => match row.iter().nth(after_idx).unwrap() {
                     Datum::List(after) => {
                         row_buf.packer().extend(after.iter().chain(metadata.iter()));
-                        Some(row_buf.clone())
+                        Some(Ok(row_buf.clone()))
                     }
                     Datum::Null => None,
                     d => panic!("type error: expected record, found {:?}", d),
                 },
                 UpsertStyle::Default(_) => {
                     let mut packer = row_buf.packer();
-                    packer.extend(key.iter().chain(row.iter()).chain(metadata.iter()));
-                    Some(row_buf.clone())
+                    packer.extend(key_row.iter().chain(row.iter()).chain(metadata.iter()));
+                    Some(Ok(row_buf.clone()))
                 }
             },
+            Some(Err(err)) => Some(Err(UpsertError::Value(UpsertValueError {
+                for_key: key_row,
+                inner: Box::new(DataflowError::DecodeError(Box::new(err))),
+            }))),
             None => None,
-            Some(Err(err)) => {
-                let cmd = UpsertCommand::Insert(Err(UpsertError::Value(UpsertValueError {
-                    for_key: key,
-                    inner: Box::new(DataflowError::DecodeError(Box::new(err))),
-                })));
-                return (cmd, result.position);
-            }
         };
 
-        let command = match value {
-            Some(value) => UpsertCommand::Insert(Ok(value)),
-            None => UpsertCommand::Remove(Ok(key)),
-        };
-        (command, result.position)
+        (key, value, order)
     })
 }
 
