@@ -9,6 +9,8 @@
 
 //! `EXPLAIN` support for structures defined in this crate.
 
+
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -17,9 +19,12 @@ use mz_repr::explain::{
     AnnotatedPlan, Explain, ExplainConfig, ExplainError, ExprHumanizer, ScalarOps,
     UnsupportedFormat, UsedIndexes,
 };
+use mz_repr::stats::PersistSourceDataStats;
+use mz_repr::{Datum, RowArena};
 
 use crate::{
-    visit::Visit, Id, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
+    visit::Visit, Id, LocalId, MapFilterProject, MfpPlan, MfpPushdown, MirRelationExpr,
+    MirScalarExpr, RowSetFinishing,
 };
 
 mod json;
@@ -49,7 +54,10 @@ pub struct ExplainSinglePlan<'a, T> {
 /// Carries metadata about the possibility of MFP pushdown for a source.
 /// (Likely to change, and only emitted when a context flag is enabled.)
 #[allow(missing_debug_implementations)]
-pub struct PushdownInfo {}
+pub struct PushdownInfo {
+    /// Pushdown-able columns in the source.
+    pub cols: Vec<usize>,
+}
 
 #[allow(missing_debug_implementations)]
 pub struct ExplainMultiPlanSource<'a> {
@@ -60,14 +68,53 @@ pub struct ExplainMultiPlanSource<'a> {
 
 impl<'a> ExplainMultiPlanSource<'a> {
     pub fn new(
-        name: String,
-        mfp: &'a MapFilterProject,
-        _context: &ExplainContext<'a>,
+        id: String,
+        op: &'a MapFilterProject,
+        context: &ExplainContext<'a>,
     ) -> ExplainMultiPlanSource<'a> {
+        let pushdown_info = if context.config.mfp_pushdown {
+            // Placeholder! Runs through the pushdown process with a mocked stats impl to
+            // figure out which columns have pushdown-able predicates.
+            #[derive(Debug)]
+            struct Tracker(RefCell<Vec<bool>>);
+
+            impl PersistSourceDataStats for Tracker {
+                fn col_min<'a>(&'a self, idx: usize, _arena: &'a RowArena) -> Option<Datum<'a>> {
+                    self.0.borrow_mut()[idx] = true;
+                    None
+                }
+
+                fn col_max<'a>(&'a self, idx: usize, _arena: &'a RowArena) -> Option<Datum<'a>> {
+                    self.0.borrow_mut()[idx] = true;
+                    None
+                }
+            }
+            if let Ok(plan) = MfpPlan::create_from((*op).clone()) {
+                let mfp_pushdown = MfpPushdown::new(&plan);
+                let tracker = Tracker(RefCell::new(vec![false; op.input_arity]));
+                let _ = mfp_pushdown.should_fetch(&tracker);
+                let mut cols: Vec<_> = tracker
+                    .0
+                    .into_inner()
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(_, referenced)| *referenced)
+                    .map(|(id, _)| id)
+                    .collect();
+
+                cols.sort();
+                Some(PushdownInfo { cols })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         ExplainMultiPlanSource {
-            id: name,
-            op: mfp,
-            pushdown_info: None,
+            id,
+            op,
+            pushdown_info,
         }
     }
 }
