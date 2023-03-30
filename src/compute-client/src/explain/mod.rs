@@ -13,7 +13,9 @@ pub(crate) mod text;
 
 use std::collections::BTreeMap;
 
-use mz_expr::explain::{enforce_linear_chains, ExplainContext, ExplainMultiPlan};
+use mz_expr::explain::{
+    enforce_linear_chains, ExplainContext, ExplainMultiPlan, ExplainMultiPlanSource,
+};
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::explain::{AnnotatedPlan, Explain, ExplainError, UnsupportedFormat};
 
@@ -69,7 +71,7 @@ impl<'a> DataflowDescription<Plan> {
                         .humanizer
                         .humanize_id(*id)
                         .unwrap_or_else(|| id.to_string());
-                    (id, op)
+                    ExplainMultiPlanSource::new(id, op, context)
                 })
             })
             .collect::<Vec<_>>();
@@ -137,7 +139,7 @@ impl<'a> DataflowDescription<OptimizedMirRelationExpr> {
                         .humanizer
                         .humanize_id(*id)
                         .unwrap_or_else(|| id.to_string());
-                    (id, op)
+                    ExplainMultiPlanSource::new(id, op, context)
                 })
             })
             .collect::<Vec<_>>();

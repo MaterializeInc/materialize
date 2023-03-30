@@ -46,6 +46,32 @@ pub struct ExplainSinglePlan<'a, T> {
     pub plan: AnnotatedPlan<'a, T>,
 }
 
+/// Carries metadata about the possibility of MFP pushdown for a source.
+/// (Likely to change, and only emitted when a context flag is enabled.)
+#[allow(missing_debug_implementations)]
+pub struct PushdownInfo {}
+
+#[allow(missing_debug_implementations)]
+pub struct ExplainMultiPlanSource<'a> {
+    pub id: String,
+    pub op: &'a MapFilterProject,
+    pub pushdown_info: Option<PushdownInfo>,
+}
+
+impl<'a> ExplainMultiPlanSource<'a> {
+    pub fn new(
+        name: String,
+        mfp: &'a MapFilterProject,
+        _context: &ExplainContext<'a>,
+    ) -> ExplainMultiPlanSource<'a> {
+        ExplainMultiPlanSource {
+            id: name,
+            op: mfp,
+            pushdown_info: None,
+        }
+    }
+}
+
 /// A structure produced by the `explain_$format` methods in
 /// [`mz_repr::explain::Explain`] implementations at points
 /// in the optimization pipeline identified with a
@@ -55,7 +81,7 @@ pub struct ExplainMultiPlan<'a, T> {
     pub context: &'a ExplainContext<'a>,
     // Maps the names of the sources to the linear operators that will be
     // on them.
-    pub sources: Vec<(String, &'a MapFilterProject)>,
+    pub sources: Vec<ExplainMultiPlanSource<'a>>,
     // elements of the vector are in topological order
     pub plans: Vec<(String, AnnotatedPlan<'a, T>)>,
 }
