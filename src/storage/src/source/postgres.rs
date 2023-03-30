@@ -638,7 +638,7 @@ async fn postgres_replication_loop_inner_snapshot(
     }
 
     let mut stream = Box::pin(
-        produce_snapshot(&client, &task_info.metrics, &task_info.source_tables).enumerate(),
+        produce_snapshot(&client, &task_info.metrics, &mut task_info.source_tables).enumerate(),
     );
 
     while let Some((i, event)) = stream.as_mut().next().await {
@@ -969,14 +969,15 @@ fn parse_single_row<T: FromStr>(
 fn produce_snapshot<'a>(
     client: &'a Client,
     metrics: &'a PgSourceMetrics,
-    source_tables: &'a BTreeMap<u32, SourceTable>,
+    source_tables: &'a mut BTreeMap<u32, SourceTable>,
 ) -> impl futures::Stream<Item = Result<(usize, Result<(Row, Diff), anyhow::Error>), ReplicationError>>
        + 'a {
     async_stream::try_stream! {
         // Scratch space to use while evaluating casts
         let mut datum_vec = DatumVec::new();
+        let mut subsources_to_remove = vec![];
 
-        for info in source_tables.values() {
+        'tables: for (id, info) in source_tables.iter() {
             let reader = client
                 .copy_out_simple(
                     format!(
@@ -995,30 +996,43 @@ fn produce_snapshot<'a>(
                 .await?
                 .transpose()?
             {
-                let mut packer = text_row.packer();
-                // Convert raw rows from COPY into repr:Row. Each Row is a relation_id
-                // and list of string-encoded values, e.g. Row{ 16391 , ["1", "2"] }
-                let parser = mz_pgcopy::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
+                // Try catch
+                let mut pack_row = || -> Result<(Row, Diff), anyhow::Error> {
+                    let mut packer = text_row.packer();
+                    // Convert raw rows from COPY into repr:Row. Each Row is a relation_id
+                    // and list of string-encoded values, e.g. Row{ 16391 , ["1", "2"] }
+                    let parser = mz_pgcopy::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
 
-                let mut raw_values = parser.iter_raw_truncating(info.desc.columns.len());
-                while let Some(raw_value) = raw_values.next() {
-                    match raw_value.err_definite()? {
-                        Some(value) => {
-                            packer.push(Datum::String(std::str::from_utf8(value).err_definite()?))
+                    let mut raw_values = parser.iter_raw_truncating(info.desc.columns.len());
+                    while let Some(raw_value) = raw_values.next() {
+                        match raw_value? {
+                            Some(value) => {
+                                packer.push(Datum::String(std::str::from_utf8(value)?))
+                            }
+                            None => packer.push(Datum::Null),
                         }
-                        None => packer.push(Datum::Null),
                     }
+
+                    let mut datums = datum_vec.borrow();
+                    datums.extend(text_row.iter());
+
+                    Ok((cast_row(&info.casts, &datums)?, 1))
+                };
+
+                let row = pack_row();
+                let is_err = row.is_err();
+                yield (info.output_index, row);
+                if is_err {
+                    subsources_to_remove.push(*id);
+                    continue 'tables;
                 }
-
-                let mut datums = datum_vec.borrow();
-                datums.extend(text_row.iter());
-
-                let row = cast_row(&info.casts, &datums).err_definite()?;
-
-                yield (info.output_index, Ok((row, 1)));
             }
 
             metrics.tables.inc();
+        }
+
+        for id in subsources_to_remove {
+            source_tables.remove(&id);
         }
     }
 }
