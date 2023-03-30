@@ -113,42 +113,30 @@ where
     }
 
     pub fn all_fueled_merge_reqs(&self) -> Vec<FueledMergeReq<T>> {
-        self.state
-            .read()
-            .expect("lock poisoned")
-            .collections
-            .trace
-            .all_fueled_merge_reqs()
+        self.read_locked_state(|state| state.collections.trace.all_fueled_merge_reqs())
     }
 
     pub fn snapshot(
         &self,
         as_of: &Antichain<T>,
     ) -> Result<Result<Vec<HollowBatch<T>>, Upper<T>>, Since<T>> {
-        self.state.read().expect("lock poisoned").snapshot(as_of)
+        self.read_locked_state(|state| state.snapshot(as_of))
     }
 
     pub fn verify_listen(&self, as_of: &Antichain<T>) -> Result<Result<(), Upper<T>>, Since<T>> {
-        self.state
-            .read()
-            .expect("lock poisoned")
-            .verify_listen(as_of)
+        self.read_locked_state(|state| state.verify_listen(as_of))
     }
 
     pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Option<HollowBatch<T>> {
-        self.state
-            .read()
-            .expect("lock poisoned")
-            .next_listen_batch(frontier)
+        self.read_locked_state(|state| state.next_listen_batch(frontier))
     }
 
     pub async fn write_rollup_blob(&self, rollup_id: &RollupId) -> EncodedRollup {
-        let rollup = {
-            let state = self.state.read().expect("lock poisoned");
+        let rollup = self.read_locked_state(|state| {
             let key = PartialRollupKey::new(state.seqno, rollup_id);
             self.state_versions
                 .encode_rollup_blob(&self.shard_metrics, &state, key)
-        };
+        });
         let () = self.state_versions.write_rollup_blob(&rollup).await;
         rollup
     }
@@ -175,17 +163,17 @@ where
             .await;
 
             match ret {
-                Ok(Ok((seqno, Ok((res, new_state)), maintenance))) => {
+                ApplyCmdResult::Committed((seqno, new_state, res, maintenance)) => {
                     self.update_state(new_state);
                     return Ok((seqno, Ok(res), maintenance));
                 }
-                Ok(Ok((seqno, Err(err), maintenance))) => {
+                ApplyCmdResult::SkippedStateTransition((seqno, err, maintenance)) => {
                     return Ok((seqno, Err(err), maintenance));
                 }
-                Ok(Err(err)) => {
+                ApplyCmdResult::Indeterminate(err) => {
                     return Err(err);
                 }
-                Err(ExpectationMismatch(seqno)) => {
+                ApplyCmdResult::ExpectationMismatch(seqno) => {
                     cmd.cas_mismatch.inc();
                     self.fetch_and_update_state(Some(seqno)).await;
                 }
@@ -205,20 +193,16 @@ where
         metrics: &Metrics,
         shard_metrics: &ShardMetrics,
         state_versions: &StateVersions,
-    ) -> Result<
-        Result<
-            (
-                SeqNo,
-                Result<(R, TypedState<K, V, T, D>), E>,
-                RoutineMaintenance,
-            ),
-            Indeterminate,
-        >,
-        ExpectationMismatch,
-    > {
+    ) -> ApplyCmdResult<K, V, T, D, R, E> {
         let next_state = match Self::compute_next_state_locked(state, work_fn, metrics, cmd, cfg) {
             Ok(x) => x,
-            Err((seqno, err)) => return Ok(Ok((seqno, Err(err), RoutineMaintenance::default()))),
+            Err((seqno, err)) => {
+                return ApplyCmdResult::SkippedStateTransition((
+                    seqno,
+                    err,
+                    RoutineMaintenance::default(),
+                ))
+            }
         };
 
         let NextState {
@@ -262,10 +246,10 @@ where
                     write_rollup: state.need_rollup(),
                 };
 
-                Ok(Ok((state.seqno, Ok((work_ret, state)), maintenance)))
+                ApplyCmdResult::Committed((state.seqno, state, work_ret, maintenance))
             }
-            Ok(CaSResult::ExpectationMismatch) => Err(ExpectationMismatch(expected)),
-            Err(err) => Ok(Err(err)),
+            Ok(CaSResult::ExpectationMismatch) => ApplyCmdResult::ExpectationMismatch(expected),
+            Err(err) => ApplyCmdResult::Indeterminate(err),
         }
     }
 
@@ -369,7 +353,7 @@ where
     /// without making any calls to Consensus or Blob.
     pub async fn fetch_and_update_state(&mut self, seqno_hint: Option<SeqNo>) {
         let seqno_before =
-            seqno_hint.unwrap_or_else(|| self.state.read().expect("lock poisoned").seqno);
+            seqno_hint.unwrap_or_else(|| self.read_locked_state(|state| state.seqno));
         let seqno_after = self
             .state_versions
             .fetch_and_update_to_current(&self.state, seqno_before)
@@ -382,6 +366,13 @@ where
             seqno_after
         );
     }
+}
+
+enum ApplyCmdResult<K, V, T, D, R, E> {
+    Committed((SeqNo, TypedState<K, V, T, D>, R, RoutineMaintenance)),
+    SkippedStateTransition((SeqNo, E, RoutineMaintenance)),
+    Indeterminate(Indeterminate),
+    ExpectationMismatch(SeqNo),
 }
 
 struct NextState<K, V, T, D, R> {
