@@ -92,10 +92,11 @@ INSERT INTO irrelevant_table VALUES ('bc', 'de');
 ab
 bc
 
-# Alter in an incompatible way and ensure replication errors occur
+# Alter in an incompatible way and ensure replication error does not occur
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE irrelevant_table DROP COLUMN f2;
 INSERT INTO irrelevant_table VALUES ('gh');
 
-! SELECT * FROM base_table;
-contains:irrelevant_table
+> SELECT * FROM base_table;
+1
+2

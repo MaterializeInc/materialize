@@ -475,6 +475,16 @@ impl PgOffsetCommitter {
 #[allow(clippy::or_fun_call)]
 async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
     loop {
+        // Signal that the primary source is running.
+        let _ = task_info
+            .sender
+            .send(InternalMessage::Status(HealthStatusUpdate {
+                output_index: 0,
+                update: HealthStatus::Running,
+                should_halt: false,
+            }))
+            .await;
+
         match postgres_replication_loop_inner(&mut task_info).await {
             Ok(()) => {}
             Err(ReplicationError::Indefinite(e)) => {
@@ -482,18 +492,23 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
                     "replication for source {} interrupted, retrying: {e}",
                     task_info.source_id
                 );
-                // If the channel is shutting down, so is the source.
-                let _ = task_info
-                    .sender
-                    .send(InternalMessage::Status(HealthStatusUpdate {
-                        output_index: 0,
-                        update: HealthStatus::StalledWithError {
-                            error: e.to_string_with_causes(),
-                            hint: None,
-                        },
-                        should_halt: false,
-                    }))
-                    .await;
+                // Indefinite errors affect all subsources.
+                for output_index in std::iter::once(0)
+                    .chain(task_info.source_tables.values().map(|t| t.output_index))
+                {
+                    // If the channel is shutting down, so is the source.
+                    let _ = task_info
+                        .sender
+                        .send(InternalMessage::Status(HealthStatusUpdate {
+                            output_index,
+                            update: HealthStatus::StalledWithError {
+                                error: e.to_string_with_causes(),
+                                hint: None,
+                            },
+                            should_halt: false,
+                        }))
+                        .await;
+                }
             }
             Err(ReplicationError::Irrecoverable(e)) => {
                 warn!(
@@ -502,24 +517,29 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
                     e,
                     e.source().unwrap_or(anyhow::anyhow!("unknown").as_ref())
                 );
-                // If the channel is shutting down, so is the source.
-                let _ = task_info
-                    .sender
-                    .send(InternalMessage::Status(HealthStatusUpdate {
-                        output_index: 0,
-                        update: HealthStatus::StalledWithError {
-                            error: e.to_string_with_causes(),
-                            hint: None,
-                        },
-                        // TODO: In the future we probably want to handle this more gracefully,
-                        // but for now halting is the easiest way to dump the data in the pipe.
-                        // The restarted clusterd instance will restart the snapshot fresh, which will
-                        // avoid any inconsistencies. Note that if the same lsn is chosen in the
-                        // next snapshotting, the remapped timestamp chosen will be the same for
-                        // both instances of clusterd.
-                        should_halt: true,
-                    }))
-                    .await;
+                // Irrecoverable errors affect all subsources.
+                for output_index in std::iter::once(0)
+                    .chain(task_info.source_tables.values().map(|t| t.output_index))
+                {
+                    // If the channel is shutting down, so is the source.
+                    let _ = task_info
+                        .sender
+                        .send(InternalMessage::Status(HealthStatusUpdate {
+                            output_index,
+                            update: HealthStatus::StalledWithError {
+                                error: e.to_string_with_causes(),
+                                hint: None,
+                            },
+                            // TODO: In the future we probably want to handle this more gracefully,
+                            // but for now halting is the easiest way to dump the data in the pipe.
+                            // The restarted clusterd instance will restart the snapshot fresh, which will
+                            // avoid any inconsistencies. Note that if the same lsn is chosen in the
+                            // next snapshotting, the remapped timestamp chosen will be the same for
+                            // both instances of clusterd.
+                            should_halt: true,
+                        }))
+                        .await;
+                }
 
                 future::pending().await
             }
@@ -530,6 +550,26 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
                     e,
                     e.source().unwrap_or(anyhow::anyhow!("unknown").as_ref())
                 );
+
+                // Definite errors affect all subsources in a way that they should be errored out.
+                for output_index in task_info.source_tables.values().map(|t| t.output_index) {
+                    // If the channel is shutting down, so is the source.
+                    let _ = task_info
+                        .row_sender
+                        .send_row(
+                            task_info.replication_lsn,
+                            output_index,
+                            Err(anyhow!(e.to_string())),
+                        )
+                        .await;
+                }
+
+                // Close the LSN to "commit" the messages we just sent.
+                task_info
+                    .row_sender
+                    .close_lsn(task_info.replication_lsn)
+                    .await;
+
                 // Drop the send error, as we have no way of communicating back to the
                 // source operator if the channel is gone.
                 let _ = task_info
@@ -638,7 +678,13 @@ async fn postgres_replication_loop_inner_snapshot(
     }
 
     let mut stream = Box::pin(
-        produce_snapshot(&client, &task_info.metrics, &mut task_info.source_tables).enumerate(),
+        produce_snapshot(
+            &client,
+            &task_info.metrics,
+            &mut task_info.source_tables,
+            task_info.source_id,
+        )
+        .enumerate(),
     );
 
     while let Some((i, event)) = stream.as_mut().next().await {
@@ -709,6 +755,7 @@ async fn postgres_replication_loop_inner_snapshot(
             Arc::clone(&task_info.resume_lsn),
             &task_info.metrics,
             &mut task_info.source_tables,
+            task_info.source_id,
         )
         .await;
         tokio::pin!(replication_stream);
@@ -774,6 +821,7 @@ async fn postgres_replication_loop_inner(
         Arc::clone(&task_info.resume_lsn),
         &task_info.metrics,
         &mut task_info.source_tables,
+        task_info.source_id,
     )
     .await;
     tokio::pin!(replication_stream);
@@ -970,6 +1018,7 @@ fn produce_snapshot<'a>(
     client: &'a Client,
     metrics: &'a PgSourceMetrics,
     source_tables: &'a mut BTreeMap<u32, SourceTable>,
+    source_id: GlobalId,
 ) -> impl futures::Stream<Item = Result<(usize, Result<(Row, Diff), anyhow::Error>), ReplicationError>>
        + 'a {
     async_stream::try_stream! {
@@ -1020,7 +1069,18 @@ fn produce_snapshot<'a>(
                 };
 
                 let row = pack_row();
-                let is_err = row.is_err();
+                let is_err = if let Err(e) = &row {
+                    warn!(
+                        "definite error for subsource of {} with oid {}: {}, cause: {}",
+                        source_id,
+                        id,
+                        e,
+                        e.source().unwrap_or(anyhow::anyhow!("unknown").as_ref())
+                    );
+                    true
+                } else {
+                    false
+                };
                 yield (info.output_index, row);
                 if is_err {
                     subsources_to_remove.push(*id);
@@ -1085,6 +1145,7 @@ async fn produce_replication<'a>(
     committed_lsn: Arc<AtomicU64>,
     metrics: &'a PgSourceMetrics,
     source_tables: &'a mut BTreeMap<u32, SourceTable>,
+    source_id: GlobalId,
 ) -> impl futures::Stream<
     Item = Result<Event<[PgLsn; 1], (usize, Result<(Row, Diff), anyhow::Error>)>, ReplicationError>,
 > + 'a {
@@ -1168,6 +1229,13 @@ async fn produce_replication<'a>(
                 // annoyingly long because we can't capture anything.
                 macro_rules! handle_subsource_err {
                     ($errors:expr, $source_tables:expr, $output_index:expr, $err:expr, $rel_id:expr) => {{
+                        warn!(
+                            "definite error for subsource of {} with oid {}: {}, cause: {}",
+                            source_id,
+                            $rel_id,
+                            $err,
+                            $err.source().unwrap_or(anyhow::anyhow!("unknown").as_ref())
+                        );
                         $errors.push(($output_index, $err));
                         $source_tables.remove(&$rel_id);
                     }};
@@ -1348,9 +1416,14 @@ async fn produce_replication<'a>(
                                     std::iter::once((&rel_id, info)),
                                     current_publication_info,
                                 );
-                                for (id, output, err) in incompatible_tables {
-                                    errors.push((output, err));
-                                    source_tables.remove(&id);
+                                for (rel_id, output_index, err) in incompatible_tables {
+                                    handle_subsource_err!(
+                                        errors,
+                                        source_tables,
+                                        output_index,
+                                        err,
+                                        rel_id
+                                    );
                                 }
                             }
                         }
@@ -1363,9 +1436,10 @@ async fn produce_replication<'a>(
                                 .rel_ids()
                                 .iter()
                                 // Filter here makes option handling in map "safe"
-                                .filter_map(|id| source_tables.get(id))
-                                .map(|info| {
+                                .filter_map(|id| source_tables.get(id).map(|info| (id, info)))
+                                .map(|(id, info)| {
                                     (
+                                        id,
                                         info.output_index,
                                         anyhow!(
                                             "source table truncated: name: {} id: {}",
@@ -1376,9 +1450,14 @@ async fn produce_replication<'a>(
                                 })
                                 .collect::<Vec<_>>();
 
-                            errors.extend(truncated_tables);
-                            for id in truncate.rel_ids() {
-                                source_tables.remove(id);
+                            for (rel_id, output_index, err) in truncated_tables {
+                                handle_subsource_err!(
+                                    errors,
+                                    source_tables,
+                                    output_index,
+                                    err,
+                                    rel_id
+                                );
                             }
                         }
                         // The enum is marked as non_exhaustive. Better to be conservative here in
