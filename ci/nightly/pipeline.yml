@@ -48,6 +48,8 @@ steps:
           - { value: checks-upgrade-entire-mz }
           - { value: checks-upgrade-entire-mz-previous-version }
           - { value: checks-upgrade-entire-mz-two-versions }
+          - { value: checks-upgrade-entire-mz-skip-version }
+          - { value: checks-upgrade-entire-mz-four-versions }
           - { value: checks-upgrade-clusterd-compute-first }
           - { value: checks-upgrade-clusterd-compute-last }
           - { value: cloudtest-upgrade }
@@ -442,6 +444,28 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=UpgradeEntireMzTwoVersions]
+
+  - id: checks-upgrade-entire-mz-skip-version
+    label: "Checks upgrade from X-2 directly to HEAD"
+    timeout_in_minutes: 60
+    agents:
+      queue: linux-x86_64
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=UpgradeEntireMzSkipVersion]
+
+  - id: checks-upgrade-entire-mz-four-versions
+    label: "Checks upgrade across four versions"
+    timeout_in_minutes: 60
+    agents:
+      queue: linux-x86_64
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=UpgradeEntireMzFourVersions]
 
   - id: checks-upgrade-clusterd-compute-first
     label: "Platform checks upgrade, restarting compute clusterd first"
