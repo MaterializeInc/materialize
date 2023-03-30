@@ -3746,14 +3746,11 @@ fn plan_alter_cluster_owner(
     new_owner: RoleId,
 ) -> Result<Plan, PlanError> {
     match resolve_cluster(scx, &name, if_exists)? {
-        Some(cluster) => {
-            validate_alter_owner(scx, &new_owner)?;
-            Ok(Plan::AlterOwner(AlterOwnerPlan {
-                id: ObjectId::Cluster(cluster.id()),
-                object_type: ObjectType::Cluster,
-                new_owner,
-            }))
-        }
+        Some(cluster) => Ok(Plan::AlterOwner(AlterOwnerPlan {
+            id: ObjectId::Cluster(cluster.id()),
+            object_type: ObjectType::Cluster,
+            new_owner,
+        })),
         None => Ok(Plan::AlterNoop(AlterNoopPlan {
             object_type: ObjectType::Cluster,
         })),
@@ -3767,14 +3764,11 @@ fn plan_alter_cluster_replica_owner(
     new_owner: RoleId,
 ) -> Result<Plan, PlanError> {
     match resolve_cluster_replica(scx, &name, if_exists)? {
-        Some((cluster_id, replica_id)) => {
-            validate_alter_owner(scx, &new_owner)?;
-            Ok(Plan::AlterOwner(AlterOwnerPlan {
-                id: ObjectId::ClusterReplica((cluster_id, replica_id)),
-                object_type: ObjectType::ClusterReplica,
-                new_owner,
-            }))
-        }
+        Some((cluster_id, replica_id)) => Ok(Plan::AlterOwner(AlterOwnerPlan {
+            id: ObjectId::ClusterReplica((cluster_id, replica_id)),
+            object_type: ObjectType::ClusterReplica,
+            new_owner,
+        })),
         None => Ok(Plan::AlterNoop(AlterNoopPlan {
             object_type: ObjectType::ClusterReplica,
         })),
@@ -3788,14 +3782,11 @@ fn plan_alter_database_owner(
     new_owner: RoleId,
 ) -> Result<Plan, PlanError> {
     match resolve_database(scx, &name, if_exists)? {
-        Some(database) => {
-            validate_alter_owner(scx, &new_owner)?;
-            Ok(Plan::AlterOwner(AlterOwnerPlan {
-                id: ObjectId::Database(database.id()),
-                object_type: ObjectType::Database,
-                new_owner,
-            }))
-        }
+        Some(database) => Ok(Plan::AlterOwner(AlterOwnerPlan {
+            id: ObjectId::Database(database.id()),
+            object_type: ObjectType::Database,
+            new_owner,
+        })),
         None => Ok(Plan::AlterNoop(AlterNoopPlan {
             object_type: ObjectType::Database,
         })),
@@ -3809,14 +3800,11 @@ fn plan_alter_schema_owner(
     new_owner: RoleId,
 ) -> Result<Plan, PlanError> {
     match resolve_schema(scx, name, if_exists, "alter")? {
-        Some((database_id, schema_id, _)) => {
-            validate_alter_owner(scx, &new_owner)?;
-            Ok(Plan::AlterOwner(AlterOwnerPlan {
-                id: ObjectId::Schema((database_id, schema_id)),
-                object_type: ObjectType::Schema,
-                new_owner,
-            }))
-        }
+        Some((database_id, schema_id, _)) => Ok(Plan::AlterOwner(AlterOwnerPlan {
+            id: ObjectId::Schema((database_id, schema_id)),
+            object_type: ObjectType::Schema,
+            new_owner,
+        })),
         None => Ok(Plan::AlterNoop(AlterNoopPlan {
             object_type: ObjectType::Database,
         })),
@@ -3832,7 +3820,6 @@ fn plan_alter_item_owner(
 ) -> Result<Plan, PlanError> {
     match resolve_object(scx, name, if_exists)? {
         Some(item) => {
-            validate_alter_owner(scx, &new_owner)?;
             if item.id().is_system() {
                 sql_bail!(
                     "cannot alter item {} because it is required by the database system",
@@ -3863,19 +3850,6 @@ fn plan_alter_item_owner(
             }))
         }
         None => Ok(Plan::AlterNoop(AlterNoopPlan { object_type })),
-    }
-}
-
-fn validate_alter_owner(scx: &StatementContext, new_owner: &RoleId) -> Result<(), PlanError> {
-    let session_membership = scx
-        .catalog
-        .collect_role_membership(scx.catalog.active_role_id());
-    if session_membership.contains(new_owner) {
-        Ok(())
-    } else {
-        Err(PlanError::AlterOwnerMembership {
-            role_name: scx.catalog.get_role(new_owner).name().to_string(),
-        })
     }
 }
 
