@@ -429,6 +429,18 @@ Field       | Type       | Meaning
 `id`        | [`bigint`] | The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
 `parent_id` | [`bigint`] | The ID of the operator's parent operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
 
+### `mz_dataflow_arrangement_sizes`
+
+The `mz_dataflow_arrangement_sizes` view describes how many records and batches
+are contained in operators under each dataflow.
+
+Field         | Type       | Meaning
+--------------|------------|--------
+`operator_id` | [`bigint`] | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+`worker_id`   | [`bigint`] | The ID of the worker thread hosting the arrangement.
+`records`     | [`bigint`] | The number of records in the arrangement.
+`batches`     | [`bigint`] | The number of batches in the arrangement.
+
 ### `mz_message_counts`
 
 The `mz_message_counts` view describes the messages sent and received over the [dataflow] channels in the system.
