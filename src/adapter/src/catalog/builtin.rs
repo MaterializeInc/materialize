@@ -2831,20 +2831,22 @@ WHERE worker_id = 0",
 pub const MZ_DATAFLOW_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
     name: "mz_dataflow_arrangement_sizes",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_dataflow_arrangement_sizes AS
-SELECT mdod.dataflow_id AS id, mi.name, sum(mas.records) AS records, sum(mas.batches) AS batches
-FROM
-    mz_internal.mz_dataflow_operators AS mdo
-        JOIN
-            mz_internal.mz_arrangement_sizes AS mas
-            ON mdo.id = mas.operator_id
-        JOIN mz_internal.mz_dataflow_addresses AS mda ON mda.id = mdo.id
-        JOIN
-            mz_internal.mz_compute_exports AS mce
-            ON mce.dataflow_id = mda.address[1]
-        JOIN mz_indexes AS mi ON mi.id = mce.export_id
-        JOIN mz_internal.mz_dataflow_operator_dataflows AS mdod ON mdo.id = mdod.id
-GROUP BY mi.name, mdod.dataflow_id",
+    sql: "CREATE VIEW
+    mz_internal.mz_dataflow_arrangement_sizes
+    AS
+        SELECT
+            mdod.dataflow_id AS id,
+            mo.name,
+            COALESCE(sum(mas.records), 0) AS records,
+            COALESCE(sum(mas.batches), 0) AS batches
+        FROM
+            mz_internal.mz_dataflow_operators AS mdo
+                LEFT JOIN mz_internal.mz_arrangement_sizes AS mas ON mdo.id = mas.operator_id
+                JOIN mz_internal.mz_dataflow_addresses AS mda ON mda.id = mdo.id
+                JOIN mz_internal.mz_compute_exports AS mce ON mce.dataflow_id = mda.address[1]
+                JOIN mz_objects AS mo ON mo.id = mce.export_id
+                JOIN mz_internal.mz_dataflow_operator_dataflows AS mdod ON mdo.id = mdod.id
+        GROUP BY mo.name, mdod.dataflow_id",
 };
 
 // NOTE: If you add real data to this implementation, then please update

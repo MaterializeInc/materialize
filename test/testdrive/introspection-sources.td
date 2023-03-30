@@ -282,5 +282,17 @@ mv1_primary_idx mv1
 
 > CREATE DEFAULT INDEX ii2 ON vv2
 
-> SELECT records FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii2'
-303
+> CREATE MATERIALIZED VIEW mv2 AS SELECT * FROM vv2
+
+> SELECT records >= 300 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii2' OR name='mv2'
+true
+true
+
+# Test that non-arranging dataflows show up in `mz_dataflow_arrangement_sizes`
+
+> CREATE VIEW vv_empty AS SELECT 1 LIMIT 0
+
+> CREATE DEFAULT INDEX ii_empty ON vv_empty
+
+> SELECT records, batches FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_empty'
+0 0
