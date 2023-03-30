@@ -11,7 +11,8 @@
 
 use std::fmt::Debug;
 use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, TryLockError};
+use std::time::Instant;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -26,7 +27,7 @@ use crate::cache::StateCache;
 use crate::error::CodecMismatch;
 use crate::internal::gc::GcReq;
 use crate::internal::maintenance::RoutineMaintenance;
-use crate::internal::metrics::{CmdMetrics, Metrics, ShardMetrics};
+use crate::internal::metrics::{CmdMetrics, LockMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
     ExpiryMetrics, HollowBatch, Since, StateCollections, TypedState, Upper,
@@ -56,7 +57,7 @@ pub struct Applier<K, V, T, D> {
     //
     // NB: This is very intentionally not pub(crate) so that it's easy to reason
     //     very locally about the duration of locks.
-    state: Arc<RwLock<TypedState<K, V, T, D>>>,
+    state: LockingTypedState<K, V, T, D>,
 }
 
 // Impl Clone regardless of the type params.
@@ -68,7 +69,7 @@ impl<K, V, T: Clone, D> Clone for Applier<K, V, T, D> {
             shard_metrics: Arc::clone(&self.shard_metrics),
             state_versions: Arc::clone(&self.state_versions),
             shard_id: self.shard_id,
-            state: Arc::clone(&self.state),
+            state: self.state.clone(),
         }
     }
 }
@@ -109,18 +110,8 @@ where
             shard_metrics,
             state_versions,
             shard_id,
-            state,
+            state: LockingTypedState(state),
         })
-    }
-
-    fn read_locked_state<R, F: Fn(&TypedState<K, V, T, D>) -> R>(&self, f: F) -> R {
-        let state = self.state.read().expect("lock poisoned");
-        f(&state)
-    }
-
-    fn write_locked_state<R, F: FnOnce(&mut TypedState<K, V, T, D>) -> R>(&self, f: F) -> R {
-        let mut state = self.state.write().expect("lock poisoned");
-        f(&mut state)
     }
 
     pub async fn fetch_upper(&mut self) -> Antichain<T> {
@@ -129,55 +120,87 @@ where
     }
 
     pub fn upper(&self) -> Antichain<T> {
-        self.read_locked_state(|state| state.upper().clone())
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
+                state.upper().clone()
+            })
     }
 
     #[cfg(test)]
     pub fn since(&self) -> Antichain<T> {
-        self.read_locked_state(|state| state.since().clone())
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
+                state.since().clone()
+            })
     }
 
     pub fn seqno(&self) -> SeqNo {
-        self.read_locked_state(|state| state.seqno)
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
+                state.seqno
+            })
     }
 
     pub fn is_tombstone(&self) -> bool {
-        self.read_locked_state(|state| state.collections.is_tombstone())
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
+                state.collections.is_tombstone()
+            })
     }
 
     pub fn seqno_since(&self) -> SeqNo {
-        self.read_locked_state(|state| state.seqno_since())
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
+                state.seqno_since()
+            })
     }
 
     pub fn since_and_upper(&self) -> (Antichain<T>, Antichain<T>) {
-        self.read_locked_state(|state| (state.since().clone(), state.upper().clone()))
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
+                (state.since().clone(), state.upper().clone())
+            })
     }
 
     pub fn all_fueled_merge_reqs(&self) -> Vec<FueledMergeReq<T>> {
-        self.read_locked_state(|state| state.collections.trace.all_fueled_merge_reqs())
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
+                state.collections.trace.all_fueled_merge_reqs()
+            })
     }
 
     pub fn snapshot(
         &self,
         as_of: &Antichain<T>,
     ) -> Result<Result<Vec<HollowBatch<T>>, Upper<T>>, Since<T>> {
-        self.read_locked_state(|state| state.snapshot(as_of))
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
+                state.snapshot(as_of)
+            })
     }
 
     pub fn verify_listen(&self, as_of: &Antichain<T>) -> Result<Result<(), Upper<T>>, Since<T>> {
-        self.read_locked_state(|state| state.verify_listen(as_of))
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
+                state.verify_listen(as_of)
+            })
     }
 
     pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Option<HollowBatch<T>> {
-        self.read_locked_state(|state| state.next_listen_batch(frontier))
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
+                state.next_listen_batch(frontier)
+            })
     }
 
     pub async fn write_rollup_blob(&self, rollup_id: &RollupId) -> EncodedRollup {
-        let rollup = self.read_locked_state(|state| {
-            let key = PartialRollupKey::new(state.seqno, rollup_id);
-            self.state_versions
-                .encode_rollup_blob(&self.shard_metrics, state, key)
-        });
+        let rollup = self
+            .state
+            .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
+                let key = PartialRollupKey::new(state.seqno, rollup_id);
+                self.state_versions
+                    .encode_rollup_blob(&self.shard_metrics, state, key)
+            });
         let () = self.state_versions.write_rollup_blob(&rollup).await;
         rollup
     }
@@ -227,7 +250,7 @@ where
         E,
         WorkFn: FnMut(SeqNo, &PersistConfig, &mut StateCollections<T>) -> ControlFlow<E, R>,
     >(
-        state: &Arc<RwLock<TypedState<K, V, T, D>>>,
+        state: &LockingTypedState<K, V, T, D>,
         cmd: &CmdMetrics,
         work_fn: &mut WorkFn,
         cfg: &PersistConfig,
@@ -235,15 +258,21 @@ where
         shard_metrics: &ShardMetrics,
         state_versions: &StateVersions,
     ) -> ApplyCmdResult<K, V, T, D, R, E> {
-        let next_state = match Self::compute_next_state_locked(state, work_fn, metrics, cmd, cfg) {
+        let computed_next_state =
+            state.read_lock(&metrics.locks.applier_read_noncacheable, |state| {
+                match Self::compute_next_state_locked(state, work_fn, metrics, cmd, cfg) {
+                    Ok(x) => Ok(x),
+                    Err((seqno, err)) => Err(ApplyCmdResult::SkippedStateTransition((
+                        seqno,
+                        err,
+                        RoutineMaintenance::default(),
+                    ))),
+                }
+            });
+
+        let next_state = match computed_next_state {
             Ok(x) => x,
-            Err((seqno, err)) => {
-                return ApplyCmdResult::SkippedStateTransition((
-                    seqno,
-                    err,
-                    RoutineMaintenance::default(),
-                ))
-            }
+            Err(err) => return err,
         };
 
         let NextState {
@@ -299,7 +328,7 @@ where
         E,
         WorkFn: FnMut(SeqNo, &PersistConfig, &mut StateCollections<T>) -> ControlFlow<E, R>,
     >(
-        state: &Arc<RwLock<TypedState<K, V, T, D>>>,
+        state: &TypedState<K, V, T, D>,
         work_fn: &mut WorkFn,
         metrics: &Metrics,
         cmd: &CmdMetrics,
@@ -308,7 +337,6 @@ where
         let is_write = cmd.name == metrics.cmds.compare_and_append.name;
         let is_rollup = cmd.name == metrics.cmds.add_and_remove_rollups.name;
 
-        let state = state.read().expect("lock poisoned");
         let expected = state.seqno;
         let was_tombstone_before = state.collections.is_tombstone();
 
@@ -373,13 +401,14 @@ where
     }
 
     pub fn update_state(&mut self, new_state: TypedState<K, V, T, D>) {
-        let (seqno_before, seqno_after) = {
-            let mut state = self.state.write().expect("lock poisoned");
-            let seqno_before = state.seqno;
-            state.try_replace_state(new_state);
-            let seqno_after = state.seqno;
-            (seqno_before, seqno_after)
-        };
+        let (seqno_before, seqno_after) =
+            self.state
+                .write_lock(&self.metrics.locks.applier_write, |state| {
+                    let seqno_before = state.seqno;
+                    state.try_replace_state(new_state);
+                    let seqno_after = state.seqno;
+                    (seqno_before, seqno_after)
+                });
 
         assert!(
             seqno_before <= seqno_after,
@@ -393,8 +422,12 @@ where
     /// any more recent version of state is observed (e.g. updated by another handle),
     /// without making any calls to Consensus or Blob.
     pub async fn fetch_and_update_state(&mut self, seqno_hint: Option<SeqNo>) {
-        let seqno_before =
-            seqno_hint.unwrap_or_else(|| self.read_locked_state(|state| state.seqno));
+        let seqno_before = seqno_hint.unwrap_or_else(|| {
+            self.state
+                .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
+                    state.seqno
+                })
+        });
 
         let diffs_to_current = self
             .state_versions
@@ -406,10 +439,12 @@ where
             return;
         }
 
-        let new_seqno = self.write_locked_state(|state| {
-            state.apply_encoded_diffs(&self.cfg, &self.metrics, &diffs_to_current);
-            state.seqno
-        });
+        let new_seqno = self
+            .state
+            .write_lock(&self.metrics.locks.applier_write, |state| {
+                state.apply_encoded_diffs(&self.cfg, &self.metrics, &diffs_to_current);
+                state.seqno
+            });
 
         // whether the seqno advanced from diffs and/or because another handle
         // already updated it, we can assume it is now up-to-date
@@ -427,10 +462,12 @@ where
             .check_codecs::<K, V, D>(&self.shard_id)
             .expect("shard codecs should not change");
 
-        let new_seqno = self.write_locked_state(|state| {
-            state.try_replace_state(new_state);
-            state.seqno
-        });
+        let new_seqno = self
+            .state
+            .write_lock(&self.metrics.locks.applier_write, |state| {
+                state.try_replace_state(new_state);
+                state.seqno
+            });
 
         self.metrics.state.update_state_slow_path.inc();
         assert!(
@@ -439,6 +476,61 @@ where
             seqno_before,
             new_seqno
         );
+    }
+}
+
+#[derive(Debug)]
+struct LockingTypedState<K, V, T, D>(Arc<RwLock<TypedState<K, V, T, D>>>);
+
+impl<K, V, T, D> Clone for LockingTypedState<K, V, T, D> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl<K, V, T, D> LockingTypedState<K, V, T, D> {
+    pub(crate) fn read_lock<R, F: FnMut(&TypedState<K, V, T, D>) -> R>(
+        &self,
+        metrics: &LockMetrics,
+        mut f: F,
+    ) -> R {
+        let start = Instant::now();
+        metrics.acquire_count.inc();
+        let state = match self.0.try_read() {
+            Ok(x) => x,
+            Err(TryLockError::WouldBlock) => {
+                metrics.blocking_acquire_count.inc();
+                let state = self.0.read().expect("lock poisoned");
+                metrics
+                    .blocking_seconds
+                    .inc_by(start.elapsed().as_secs_f64());
+                state
+            }
+            Err(TryLockError::Poisoned(err)) => panic!("state read lock poisoned: {}", err),
+        };
+        f(&state)
+    }
+
+    pub(crate) fn write_lock<R, F: FnOnce(&mut TypedState<K, V, T, D>) -> R>(
+        &self,
+        metrics: &LockMetrics,
+        f: F,
+    ) -> R {
+        let start = Instant::now();
+        metrics.acquire_count.inc();
+        let mut state = match self.0.try_write() {
+            Ok(x) => x,
+            Err(TryLockError::WouldBlock) => {
+                metrics.blocking_acquire_count.inc();
+                let state = self.0.write().expect("lock poisoned");
+                metrics
+                    .blocking_seconds
+                    .inc_by(start.elapsed().as_secs_f64());
+                state
+            }
+            Err(TryLockError::Poisoned(err)) => panic!("state read lock poisoned: {}", err),
+        };
+        f(&mut state)
     }
 }
 
