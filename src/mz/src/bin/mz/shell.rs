@@ -16,6 +16,10 @@ use reqwest::Client;
 use mz::api::{get_provider_region_environment, CloudProviderRegion, Environment};
 use mz::configuration::ValidProfile;
 
+/// The [application_name](https://www.postgresql.org/docs/current/runtime-config-logging.html#GUC-APPLICATION-NAME)
+/// which gets reported to the Postgres server we're connecting to.
+const PG_APPLICATION_NAME: &str = "mz_psql";
+
 /// ----------------------------
 /// Shell command
 /// ----------------------------
@@ -25,6 +29,7 @@ fn run_psql_shell(valid_profile: ValidProfile<'_>, environment: &Environment) ->
     let error = Command::new("psql")
         .arg(environment.sql_url(&valid_profile).to_string())
         .env("PGPASSWORD", valid_profile.app_password)
+        .env("PGAPPNAME", PG_APPLICATION_NAME)
         .exec();
 
     Err(error).context("failed to spawn psql")
