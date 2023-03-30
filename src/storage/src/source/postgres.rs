@@ -181,15 +181,20 @@ impl<T, E: Into<anyhow::Error>> ResultExt<T, E> for Result<T, E> {
     }
 }
 
-// Message used to communicate between `get_next_message` and the tokio task
+/// Message used to communicate between `get_next_message` and the tokio task
 enum InternalMessage {
+    /// A definite error for the source, i.e. not a subsource error.
     Err(SourceReaderError),
     Status(HealthStatusUpdate),
+    /// A value meant for a subsource.
     Value {
-        output: usize,
-        value: Row,
         lsn: PgLsn,
-        diff: Diff,
+        output: usize,
+        /// Errors sent here are meant to express a subsource error that occurred in the process of
+        /// decoding values, i.e. it is in lieu of a value. This contrasts with
+        /// `InternalEssage::Err`, which signals an error in the source itself, e.g. a programming
+        /// error.
+        value: Result<(Row, Diff), anyhow::Error>,
         end: bool,
     },
 }
@@ -380,19 +385,29 @@ impl SourceRender for PostgresSourceConnection {
                 tokio::select! {
                     message = reader.receiver_stream.recv() => match message {
                         Some(InternalMessage::Value {
+                            lsn,
                             output,
                             value,
-                            diff,
-                            lsn,
                             end,
                         }) => {
+                            mz_ore::soft_assert!(
+                                output != 0,
+                                "InternalMessage::Value is meant only for subsources"
+                            );
+
                             reader.last_lsn = lsn;
-                            let msg = SourceMessage {
-                                output,
-                                upstream_time_millis: None,
-                                key: (),
-                                value,
-                                headers: None,
+                            let (msg, diff) = match value {
+                                Ok((row, diff)) => (
+                                    Ok(SourceMessage {
+                                        output,
+                                        upstream_time_millis: None,
+                                        key: (),
+                                        value: row,
+                                        headers: None,
+                                    }),
+                                    diff,
+                                ),
+                                Err(err) => (Err(SourceReaderError::other_definite(output, err)), 1),
                             };
 
                             let ts = lsn.into();
@@ -402,12 +417,17 @@ impl SourceRender for PostgresSourceConnection {
                             if end {
                                 reader.data_capability.downgrade(&next_ts);
                             }
-                            data_output.give(&cap, (Ok(msg), *cap.time(), diff)).await;
+                            data_output.give(&cap, (msg, *cap.time(), diff)).await;
                         }
                         Some(InternalMessage::Status(update)) => {
                             health_output.give(&health_capability, update).await;
                         }
                         Some(InternalMessage::Err(err)) => {
+                            mz_ore::soft_assert!(
+                                err.output == 0,
+                                "InternalMessage::Err is meant only for the primary source"
+                            );
+
                             // XXX(petrosagg): we are fabricating a timestamp here!!
                             let non_definite_ts = MzOffset::from(reader.last_lsn) + 1;
 
@@ -614,28 +634,25 @@ async fn postgres_replication_loop_inner_snapshot(
                 )))
             });
         }
-        let (output, row) = match event {
+        let (output_index, value) = match event {
             Ok(event) => event,
-            Err(ReplicationError::Indefinite(err)) => {
+            Err(err @ ReplicationError::Definite(_)) => return Err(err),
+            Err(ReplicationError::Indefinite(err) | ReplicationError::Irrecoverable(err)) => {
                 return Err(ReplicationError::Irrecoverable(err))
             }
-            e => e?,
         };
-        let (row, diff) = row.expect("todo: subsource errors");
         task_info
             .row_sender
-            .send_row(output, row, slot_lsn, diff)
-            .await;
+            .send_row(slot_lsn, output_index, value)
+            .await
     }
 
     if let Some(temp_slot) = temp_slot {
         let _ = client
             .simple_query(&format!("DROP_REPLICATION_SLOT {temp_slot:?}"))
-            .await
-            .err_irrecoverable()?;
+            .await;
     }
-
-    client.simple_query("COMMIT;").await.err_irrecoverable()?;
+    client.simple_query("COMMIT;").await?;
 
     // Drop the stream and the client, to ensure that the future `produce_replication` don't
     // conflict with the above processing.
@@ -681,14 +698,13 @@ async fn postgres_replication_loop_inner_snapshot(
 
         while let Some(event) = replication_stream.next().await {
             match event {
-                Ok(Event::Message(lsn, (output, row))) => {
+                Ok(Event::Message(lsn, (output_index, row))) => {
                     // Here we ignore the lsn that this row actually happened at and we
                     // forcefully emit it at the slot_lsn with a negated diff.
                     if lsn <= snapshot_lsn {
-                        let (row, diff) = row.expect("todo subsource errors");
                         task_info
                             .row_sender
-                            .send_row(output, row, slot_lsn, -diff)
+                            .send_row(slot_lsn, output_index, row.map(|(row, diff)| (row, -diff)))
                             .await;
                     }
                 }
@@ -750,9 +766,8 @@ async fn postgres_replication_loop_inner(
     // a way to encode this in the type signature
     while let Some(event) = replication_stream.next().await.transpose()? {
         match event {
-            Event::Message(lsn, (output, row)) => {
-                let (row, diff) = row.expect("todo subsource errors");
-                task_info.row_sender.send_row(output, row, lsn, diff).await;
+            Event::Message(lsn, (output_index, row)) => {
+                task_info.row_sender.send_row(lsn, output_index, row).await;
             }
             Event::Progress([lsn]) => {
                 // The lsn passed to `START_REPLICATION_SLOT` produces all transactions that
@@ -769,10 +784,9 @@ async fn postgres_replication_loop_inner(
 }
 
 struct RowMessage {
-    output_index: usize,
-    row: Row,
     lsn: PgLsn,
-    diff: i64,
+    output_index: usize,
+    value: Result<(Row, Diff), anyhow::Error>,
 }
 
 /// A type that makes it easy to correctly send inserts and deletes.
@@ -796,24 +810,22 @@ impl RowSender {
     }
 
     /// Send a triplet for the specific output
-    pub async fn send_row(&mut self, output_index: usize, row: Row, lsn: PgLsn, diff: Diff) {
+    pub async fn send_row(
+        &mut self,
+        lsn: PgLsn,
+        output_index: usize,
+        value: Result<(Row, Diff), anyhow::Error>,
+    ) {
         if let Some(buffered) = self.buffered_message.take() {
             assert_eq!(buffered.lsn, lsn);
-            self.send_row_inner(
-                buffered.output_index,
-                buffered.row,
-                buffered.lsn,
-                buffered.diff,
-                false,
-            )
-            .await;
+            self.send_row_inner(buffered.lsn, buffered.output_index, buffered.value, false)
+                .await;
         }
 
         self.buffered_message = Some(RowMessage {
-            output_index,
-            row,
             lsn,
-            diff,
+            output_index,
+            value,
         });
     }
 
@@ -824,14 +836,8 @@ impl RowSender {
         match self.buffered_message.take() {
             Some(buffered) => {
                 assert!(buffered.lsn <= lsn);
-                self.send_row_inner(
-                    buffered.output_index,
-                    buffered.row,
-                    buffered.lsn,
-                    buffered.diff,
-                    true,
-                )
-                .await;
+                self.send_row_inner(buffered.lsn, buffered.output_index, buffered.value, true)
+                    .await;
             }
             // We should still announce that we're running even if nothing else.
             None => {
@@ -848,12 +854,17 @@ impl RowSender {
         }
     }
 
-    async fn send_row_inner(&self, output: usize, row: Row, lsn: PgLsn, diff: i64, end: bool) {
+    async fn send_row_inner(
+        &self,
+        lsn: PgLsn,
+        output: usize,
+        value: Result<(Row, Diff), anyhow::Error>,
+        end: bool,
+    ) {
         let message = InternalMessage::Value {
-            output,
-            value: row,
             lsn,
-            diff,
+            output,
+            value,
             end,
         };
         // a closed receiver means the source has been shutdown (dropped or the process is dying),
