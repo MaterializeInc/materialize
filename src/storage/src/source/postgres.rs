@@ -565,7 +565,15 @@ async fn postgres_replication_loop_inner_snapshot(
     .err_indefinite()?;
 
     // Validate publication tables against the state snapshot
-    determine_table_compatibility(&task_info.source_tables, publication_tables).err_definite()?;
+    let incompatible_tables =
+        determine_table_compatibility(task_info.source_tables.iter(), publication_tables);
+    for (id, output, err) in incompatible_tables {
+        task_info.source_tables.remove(&id);
+        task_info
+            .row_sender
+            .send_row(task_info.replication_lsn, output, Err(err))
+            .await;
+    }
 
     let client = task_info
         .connection_config
@@ -619,6 +627,15 @@ async fn postgres_replication_loop_inner_snapshot(
             (slot_lsn, slot_lsn, None)
         }
     };
+
+    // If we sent any messages earlier, we need to close that LSN to send the next messages from
+    // the slot.
+    if task_info.replication_lsn < slot_lsn {
+        task_info
+            .row_sender
+            .close_lsn(task_info.replication_lsn)
+            .await;
+    }
 
     let mut stream = Box::pin(
         produce_snapshot(&client, &task_info.metrics, &task_info.source_tables).enumerate(),
@@ -873,49 +890,54 @@ impl RowSender {
     }
 }
 
-/// Determines if a set of [`SourceTable`]s and a set of [`PostgresTableDesc`]
-/// are compatible with one another in a way that Materialize can handle.
+/// Determines if a set of [`SourceTable`]s and a set of [`PostgresTableDesc`] are compatible with
+/// one another in a way that Materialize can handle.
 ///
-/// The returned `BTreeMap` represents the order in which ingested data from
-/// tables must be projected to recover the expected ordering (i.e. their
-/// schemas have changed). Tables without an entry in the returned `BTreeMap` do
-/// not require projection (i.e. their schemas have not changed).
-///
-/// # Errors
-/// - If `source_tables` is not a strict subset of `tables`, based on the
-///   tables' OIDs.
-/// - If any object in `tables` is incompatible with its representation in
-///   `source_tables`, e.g. no longer contains all of the columns identified in
-///   `source_tables`.
-fn determine_table_compatibility(
-    source_tables: &BTreeMap<u32, SourceTable>,
+/// The returned tuples are `(a,b)`:
+/// - `a`: the ID of the incompatible table
+/// - `b`: the subsource error to propagate reflecting that the subsource is in an errored state
+fn determine_table_compatibility<'a, I>(
+    source_tables: I,
     tables: Vec<PostgresTableDesc>,
-) -> Result<(), anyhow::Error> {
+) -> Vec<(u32, usize, anyhow::Error)>
+where
+    I: Iterator<Item = (&'a u32, &'a SourceTable)>,
+{
     let pub_tables: BTreeMap<u32, PostgresTableDesc> =
         tables.into_iter().map(|t| (t.oid, t)).collect();
-
-    for (id, info) in source_tables.iter() {
+    let mut errors = vec![];
+    for (id, info) in source_tables {
         match pub_tables.get(id) {
-            Some(pub_schema) => {
-                // Keep this method in sync with the check in response to
-                // Relation messages in the replication stream.
-                info.desc.determine_compatibility(pub_schema)?;
+            Some(desc) => {
+                // Keep this method in sync with the Relation check in the replication stream.
+                if let Err(err) = info.desc.determine_compatibility(desc) {
+                    warn!(
+                        "Error validating table in publication. Expected: {:?} Actual: {:?}",
+                        &info.desc, desc
+                    );
+                    errors.push((*id, info.output_index, err));
+                }
             }
             None => {
                 warn!(
-                    "publication missing table: {} with id {}",
-                    info.desc.name, id
-                );
-                bail!(
-                    "source table {} with oid {} has been dropped",
+                    "alter table error, table removed from upstream source: name {}, oid {}, old_schema {:?}",
                     info.desc.name,
-                    info.desc.oid
-                )
+                    info.desc.oid,
+                    info.desc.columns,
+                );
+                errors.push((
+                    *id,
+                    info.output_index,
+                    anyhow!(
+                        "source table {} with oid {} has been dropped",
+                        info.desc.name,
+                        info.desc.oid
+                    ),
+                ));
             }
         }
     }
-
-    Ok(())
+    errors
 }
 
 /// Parses SQL results that are expected to be a single row into a Rust type
