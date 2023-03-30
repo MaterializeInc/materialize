@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::fmt::Formatter;
 
@@ -72,39 +73,10 @@ impl fmt::Display for Attribute {
 pub struct Ownership(ObjectId);
 
 impl Ownership {
-    /// Reports whether a role has ownership over an object.
-    fn check_role(&self, role_id: &RoleId, catalog: &impl SessionCatalog) -> bool {
-        match self.0 {
-            ObjectId::Cluster(id) => catalog.get_cluster(id).owner_id() == *role_id,
-            ObjectId::ClusterReplica((cluster_id, replica_id)) => {
-                catalog
-                    .get_cluster_replica(cluster_id, replica_id)
-                    .owner_id()
-                    == *role_id
-            }
-            ObjectId::Database(id) => catalog.get_database(&id).owner_id() == *role_id,
-            ObjectId::Schema((database_id, schema_id)) => {
-                catalog
-                    .get_schema(
-                        &ResolvedDatabaseSpecifier::Id(database_id),
-                        &SchemaSpecifier::Id(schema_id),
-                    )
-                    .owner_id()
-                    == *role_id
-            }
-            ObjectId::Item(id) => catalog.get_item(&id).owner_id() == *role_id,
-        }
-    }
-
     /// Reports whether any role has ownership over an object.
-    fn check_roles<'a>(
-        &self,
-        role_ids: impl IntoIterator<Item = &'a RoleId>,
-        catalog: &impl SessionCatalog,
-    ) -> bool {
-        role_ids
-            .into_iter()
-            .any(|role_id| self.check_role(role_id, catalog))
+    fn check_roles<'a>(&self, role_ids: &BTreeSet<RoleId>, catalog: &impl SessionCatalog) -> bool {
+        let owner_id = catalog.get_owner_id(&self.0);
+        role_ids.contains(&owner_id)
     }
 }
 

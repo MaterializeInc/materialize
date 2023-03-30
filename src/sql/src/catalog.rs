@@ -39,8 +39,8 @@ use mz_storage_client::types::sources::SourceDesc;
 
 use crate::func::Func;
 use crate::names::{
-    Aug, DatabaseId, FullObjectName, FullSchemaName, PartialObjectName, QualifiedObjectName,
-    QualifiedSchemaName, ResolvedDatabaseSpecifier, RoleId, SchemaSpecifier,
+    Aug, DatabaseId, FullObjectName, FullSchemaName, ObjectId, PartialObjectName,
+    QualifiedObjectName, QualifiedSchemaName, ResolvedDatabaseSpecifier, RoleId, SchemaSpecifier,
 };
 use crate::normalize;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
@@ -238,6 +238,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// for this method was ensuring that features are temporary turned on so
     /// catalog rehydration does not break due to unsupported SQL syntax.
     fn system_vars_mut(&mut self) -> &mut SystemVars;
+
+    /// Returns the [`RoleId`] of the owner of an object by its ID.
+    fn get_owner_id(&self, id: &ObjectId) -> RoleId;
 }
 
 /// Configuration associated with a catalog.

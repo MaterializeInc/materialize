@@ -6681,6 +6681,23 @@ impl SessionCatalog for ConnCatalog<'_> {
     fn system_vars_mut(&mut self) -> &mut SystemVars {
         &mut self.state.to_mut().system_configuration
     }
+
+    fn get_owner_id(&self, id: &ObjectId) -> RoleId {
+        match id {
+            ObjectId::Cluster(id) => self.get_cluster(*id).owner_id(),
+            ObjectId::ClusterReplica((cluster_id, replica_id)) => self
+                .get_cluster_replica(*cluster_id, *replica_id)
+                .owner_id(),
+            ObjectId::Database(id) => self.get_database(id).owner_id(),
+            ObjectId::Schema((database_id, schema_id)) => self
+                .get_schema(
+                    &ResolvedDatabaseSpecifier::Id(*database_id),
+                    &SchemaSpecifier::Id(*schema_id),
+                )
+                .owner_id(),
+            ObjectId::Item(id) => self.get_item(id).owner_id(),
+        }
+    }
 }
 
 impl mz_sql::catalog::CatalogDatabase for Database {
