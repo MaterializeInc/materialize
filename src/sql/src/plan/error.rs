@@ -18,7 +18,7 @@ use std::sync::Arc;
 use itertools::Itertools;
 use mz_expr::EvalError;
 use mz_ore::stack::RecursionLimitError;
-use mz_ore::str::StrExt;
+use mz_ore::str::{separated, StrExt};
 use mz_repr::adt::char::InvalidCharLengthError;
 use mz_repr::adt::numeric::InvalidNumericMaxScaleError;
 use mz_repr::adt::system::Oid;
@@ -122,7 +122,7 @@ pub enum PlanError {
         name: UnresolvedObjectName,
     },
     /// Declaration of a recursive type did not match the inferred type.
-    RecursiveTypeMismatch(String, mz_repr::RelationType, mz_repr::RelationType),
+    RecursiveTypeMismatch(String, Vec<String>, Vec<String>),
     UnknownFunction {
         name: String,
         arg_types: Vec<String>,
@@ -361,7 +361,10 @@ impl fmt::Display for PlanError {
             Self::InvalidOptionValue { option_name, err } => write!(f, "invalid {} option value: {}", option_name, err),
             Self::UnexpectedDuplicateReference { name } => write!(f, "unexpected multiple references to {}", name.to_ast_string()),
             Self::RecursiveTypeMismatch(name, declared, inferred) => {
-                write!(f, "declared type of WITH MUTUALLY RECURSIVE query {} did not match inferred type: {:?}, {:?}", name, declared, inferred)
+                let declared = separated(", ", declared);
+                let inferred = separated(", ", inferred);
+                let name = name.quoted();
+                write!(f, "declared type ({declared}) of WITH MUTUALLY RECURSIVE query {name} did not match inferred type ({inferred})")
             },
             Self::UnknownFunction {name, arg_types, ..} => {
                 write!(f, "function {}({}) does not exist", name, arg_types.join(", "))

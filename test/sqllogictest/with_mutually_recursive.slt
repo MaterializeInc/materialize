@@ -199,6 +199,14 @@ WITH MUTUALLY RECURSIVE
     bar (a int) as (SELECT a FROM foo)
 SELECT a FROM foo, bar;
 
+## Test incompatible declared and inferred types
+statement error db error: ERROR: declared type \(integer, text\) of WITH MUTUALLY RECURSIVE query "forever" did not match inferred type \(bigint, text\)
+WITH MUTUALLY RECURSIVE
+  forever (i int, y text) as (
+    SELECT COUNT(*), 'oops' FROM mz_views UNION (SELECT i + 1, 'oops' FROM forever)
+  )
+SELECT * FROM forever;
+
 # Tests for nested WITH MUTUALLY RECURSIVE
 
 statement ok
