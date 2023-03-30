@@ -590,8 +590,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
                 let maybe_ingestion = self.storage_state.ingestions.get(&id).cloned();
                 if let Some(ingestion_description) = maybe_ingestion {
-                    // Yank the token of the previously existing source
-                    // dataflow.
+                    // Yank the token of the previously existing source dataflow.Note that this
+                    // token also includes any source exports/subsources.
+
                     let maybe_token = self.storage_state.source_tokens.remove(&id);
 
                     if maybe_token.is_none() {
@@ -643,6 +644,17 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     }
 
                     // Continue with other commands.
+                    return;
+                }
+
+                // Suspensions might come in for source exports; they are suspended and
+                // restarted alongside their primary sources.
+                if self
+                    .storage_state
+                    .ingestions
+                    .values()
+                    .any(|v| v.source_exports.contains_key(&id))
+                {
                     return;
                 }
 
