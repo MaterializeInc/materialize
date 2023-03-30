@@ -43,7 +43,6 @@ pub struct AppPassword {
     #[serde(rename = "secret")]
     pub secret_key: Uuid,
 }
-// TODO: Ask if this serde is ok.
 
 impl fmt::Display for AppPassword {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

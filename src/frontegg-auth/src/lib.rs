@@ -93,8 +93,8 @@ pub mod app_password;
 pub mod claims;
 pub mod client;
 pub mod config;
-pub mod parse;
 pub mod error;
+pub mod parse;
 
 pub struct FronteggConfig {
     /// URL for the token endpoint, including full path.
@@ -139,13 +139,15 @@ impl FronteggAuthentication {
         }
     }
 
+    /// Authenticates to Frontegg using a Materialize app-password and returns
+    /// an access token with a target system time for renewal
     pub async fn auth(&self, password: &str) -> Result<Auth, FronteggError> {
-        // Do an initial full validity check of the token.
         let client = ClientBuilder::default()
             .endpoint(self.admin_endpoint.parse().unwrap())
             .build(ClientConfig {
                 app_password: password.parse()?,
             });
+
         Ok(client.auth().await.unwrap())
     }
 

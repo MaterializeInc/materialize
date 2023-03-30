@@ -10,7 +10,7 @@
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 
-use crate::{client::CREATE_USERS_PATH, parse::Paginated, error::Error};
+use crate::{client::CREATE_USERS_PATH, error::Error, parse::Paginated};
 
 use super::{Client, USERS_PATH};
 
@@ -84,7 +84,10 @@ impl Client {
     }
 
     /// Creates a new user in the authenticated organization.
-    pub async fn create_user(&self, new_user: UserCreationRequest) -> Result<UserCreationResponse, Error> {
+    pub async fn create_user(
+        &self,
+        new_user: UserCreationRequest,
+    ) -> Result<UserCreationResponse, Error> {
         let req = self.build_request(Method::POST, CREATE_USERS_PATH);
 
         let req = req.json(&new_user);

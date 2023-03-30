@@ -9,8 +9,6 @@
 
 use uuid::Uuid;
 
-// TODO: Do we care about the sub? Do we need to validate the sub or other
-// things, even if unused?
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Claims {

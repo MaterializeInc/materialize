@@ -83,6 +83,7 @@ impl Client {
         ClientBuilder::default()
     }
 
+    /// Builds a request towards the `Client`'s endpoint
     fn build_request<P>(&self, method: Method, path: P) -> RequestBuilder
     where
         P: IntoIterator,
@@ -96,6 +97,7 @@ impl Client {
         self.inner.request(method, url)
     }
 
+    /// Sends a requests and adds the authorization bearer token.
     async fn send_request<T>(&self, req: RequestBuilder) -> Result<T, Error>
     where
         T: DeserializeOwned,

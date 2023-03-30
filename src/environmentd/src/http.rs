@@ -43,7 +43,7 @@ use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
 use mz_adapter::{AdapterError, Client, SessionClient};
-use mz_frontegg_auth::{FronteggAuthentication};
+use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::cast::u64_to_usize;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::result::ResultExt;
