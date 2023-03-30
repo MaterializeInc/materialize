@@ -2843,7 +2843,7 @@ FROM
             mz_internal.mz_compute_exports AS mce
             ON mce.dataflow_id = mda.address[1]
         JOIN mz_indexes AS mi ON mi.id = mce.export_id
-GROUP BY mi.name",
+GROUP BY mi.name, mdo.id",
 };
 
 // NOTE: If you add real data to this implementation, then please update
