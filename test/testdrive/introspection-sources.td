@@ -282,5 +282,5 @@ mv1_primary_idx mv1
 
 > CREATE DEFAULT INDEX ii2 ON vv2
 
-> SELECT records FROM mz_internal.mz_dataflow_arrangement_records WHERE name='ii2'
+> SELECT records FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii2'
 303

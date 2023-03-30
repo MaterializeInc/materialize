@@ -2832,7 +2832,7 @@ pub const MZ_DATAFLOW_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
     name: "mz_dataflow_arrangement_sizes",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_dataflow_arrangement_sizes AS
-SELECT mdo.id, mi.name, sum(mas.records) AS records, sum(mas.batches) AS batches
+SELECT mdod.dataflow_id AS id, mi.name, sum(mas.records) AS records, sum(mas.batches) AS batches
 FROM
     mz_internal.mz_dataflow_operators AS mdo
         JOIN
@@ -2843,7 +2843,8 @@ FROM
             mz_internal.mz_compute_exports AS mce
             ON mce.dataflow_id = mda.address[1]
         JOIN mz_indexes AS mi ON mi.id = mce.export_id
-GROUP BY mi.name, mdo.id",
+        JOIN mz_internal.mz_dataflow_operator_dataflows AS mdod ON mdo.id = mdod.id
+GROUP BY mi.name, mdod.dataflow_id",
 };
 
 // NOTE: If you add real data to this implementation, then please update
