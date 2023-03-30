@@ -9,12 +9,15 @@
 
 //! `EXPLAIN` support for structures defined in this crate.
 
-
+use itertools::Itertools;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::fmt::Formatter;
 use std::time::Duration;
 
 use mz_ore::stack::RecursionLimitError;
+use mz_ore::str::Indent;
+use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{
     AnnotatedPlan, Explain, ExplainConfig, ExplainError, ExprHumanizer, ScalarOps,
     UnsupportedFormat, UsedIndexes,
@@ -57,6 +60,20 @@ pub struct ExplainSinglePlan<'a, T> {
 pub struct PushdownInfo {
     /// Pushdown-able columns in the source.
     pub cols: Vec<usize>,
+}
+
+impl<C: AsMut<Indent>> DisplayText<C> for PushdownInfo {
+    fn fmt_text(&self, f: &mut Formatter<'_>, ctx: &mut C) -> std::fmt::Result {
+        if !self.cols.is_empty() {
+            writeln!(
+                f,
+                "{}pushdown=(#{})",
+                ctx.as_mut(),
+                self.cols.iter().join(", #")
+            )?;
+        }
+        Ok(())
+    }
 }
 
 #[allow(missing_debug_implementations)]

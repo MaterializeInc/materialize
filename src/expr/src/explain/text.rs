@@ -103,13 +103,23 @@ where
             // render one blank line between the plans and sources
             writeln!(f, "")?;
             // render sources
-            for ExplainMultiPlanSource { id, op, .. } in self
+            for ExplainMultiPlanSource {
+                id,
+                op,
+                pushdown_info,
+            } in self
                 .sources
                 .iter()
                 .filter(|ExplainMultiPlanSource { op, .. }| !op.is_identity())
             {
                 writeln!(f, "{}Source {}", ctx.indent, id)?;
-                ctx.indented(|ctx| op.fmt_text(f, ctx))?;
+                ctx.indented(|ctx| {
+                    op.fmt_text(f, ctx)?;
+                    if let Some(info) = pushdown_info {
+                        info.fmt_text(f, ctx)?;
+                    }
+                    Ok(())
+                })?;
             }
         }
 
