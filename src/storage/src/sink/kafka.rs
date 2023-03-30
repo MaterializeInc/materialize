@@ -221,6 +221,7 @@ impl KafkaSinkSendRetryManager {
     }
 }
 
+#[derive(Clone)]
 pub struct SinkProducerContext {
     metrics: Arc<SinkMetrics>,
     status_tx: mpsc::Sender<SinkStatus>,
@@ -405,6 +406,7 @@ struct KafkaSinkState {
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
 }
 
+#[derive(Clone)]
 struct SinkConsumerContext {
     status_tx: mpsc::Sender<SinkStatus>,
 }
