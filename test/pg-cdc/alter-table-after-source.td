@@ -102,6 +102,14 @@ CREATE TABLE alter_table_supported (f1 int, f2 int);
 ALTER TABLE alter_table_supported REPLICA IDENTITY FULL;
 INSERT INTO alter_table_supported (f1, f2) VALUES (1, 1);
 
+CREATE TABLE truncate_table (f1 int, f2 int);
+ALTER TABLE truncate_table REPLICA IDENTITY FULL;
+INSERT INTO truncate_table (f1, f2) VALUES (1, 1);
+
+CREATE TABLE drop_table (f1 int, f2 int);
+ALTER TABLE drop_table REPLICA IDENTITY FULL;
+INSERT INTO drop_table (f1, f2) VALUES (1, 1);
+
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 
@@ -407,3 +415,32 @@ INSERT INTO alter_table_supported (f1) VALUES (1);
 
 ! SELECT * from alter_table_supported;
 contains:altered
+
+
+#
+# Truncate table
+
+> SELECT * from truncate_table;
+1 1
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+TRUNCATE truncate_table;
+
+# This should error but we use PG 10 in these tests, which doesn't
+# put truncate messages in the replication stream. #18518
+> SELECT * FROM truncate_table;
+1 1
+
+#
+# Drop table
+
+> SELECT * from drop_table;
+1 1
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+DROP TABLE drop_table;
+
+# This should error but we don't have a mechanism that does that yet.
+# #18519
+> SELECT * FROM drop_table;
+1 1
