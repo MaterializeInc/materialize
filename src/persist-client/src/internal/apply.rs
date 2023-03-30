@@ -107,9 +107,39 @@ where
         })
     }
 
-    pub fn read_locked_state<R, F: Fn(&TypedState<K, V, T, D>) -> R>(&self, f: F) -> R {
+    fn read_locked_state<R, F: Fn(&TypedState<K, V, T, D>) -> R>(&self, f: F) -> R {
         let state = self.state.read().expect("lock poisoned");
         f(&state)
+    }
+
+    pub async fn fetch_upper(&mut self) -> Antichain<T> {
+        self.fetch_and_update_state(None).await;
+        self.upper()
+    }
+
+    pub fn upper(&self) -> Antichain<T> {
+        self.read_locked_state(|state| state.upper().clone())
+    }
+
+    #[cfg(test)]
+    pub fn since(&self) -> Antichain<T> {
+        self.read_locked_state(|state| state.since().clone())
+    }
+
+    pub fn seqno(&self) -> SeqNo {
+        self.read_locked_state(|state| state.seqno)
+    }
+
+    pub fn is_tombstone(&self) -> bool {
+        self.read_locked_state(|state| state.collections.is_tombstone())
+    }
+
+    pub fn seqno_since(&self) -> SeqNo {
+        self.read_locked_state(|state| state.seqno_since())
+    }
+
+    pub fn since_and_upper(&self) -> (Antichain<T>, Antichain<T>) {
+        self.read_locked_state(|state| (state.since().clone(), state.upper().clone()))
     }
 
     pub fn all_fueled_merge_reqs(&self) -> Vec<FueledMergeReq<T>> {
@@ -135,7 +165,7 @@ where
         let rollup = self.read_locked_state(|state| {
             let key = PartialRollupKey::new(state.seqno, rollup_id);
             self.state_versions
-                .encode_rollup_blob(&self.shard_metrics, &state, key)
+                .encode_rollup_blob(&self.shard_metrics, state, key)
         });
         let () = self.state_versions.write_rollup_blob(&rollup).await;
         rollup

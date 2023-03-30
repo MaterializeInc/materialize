@@ -455,7 +455,7 @@ async fn force_gc(
     let mut machine = make_machine(&cfg, consensus, blob, metrics, shard_id, commit).await?;
     let gc_req = GcReq {
         shard_id,
-        new_seqno_since: machine.seqno_since(),
+        new_seqno_since: machine.applier.seqno_since(),
     };
     let maintenance = GarbageCollector::gc_and_truncate(&mut machine, gc_req).await;
     if !maintenance.is_empty() {

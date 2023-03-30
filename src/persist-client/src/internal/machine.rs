@@ -20,7 +20,7 @@ use mz_ore::task::spawn;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::task::JoinHandle;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use mz_ore::error::ErrorExt;
 #[allow(unused_imports)] // False positive.
@@ -86,38 +86,8 @@ where
         self.shard_id
     }
 
-    pub async fn fetch_upper(&mut self) -> Antichain<T> {
-        self.applier.fetch_and_update_state(None).await;
-        self.upper()
-    }
-
-    pub fn upper(&self) -> Antichain<T> {
-        self.applier
-            .read_locked_state(|state| state.upper().clone())
-    }
-
-    #[cfg(test)]
-    pub fn since(&self) -> Antichain<T> {
-        self.applier
-            .read_locked_state(|state| state.since().clone())
-    }
-
     pub fn seqno(&self) -> SeqNo {
-        self.applier.read_locked_state(|state| state.seqno)
-    }
-
-    pub fn is_tombstone(&self) -> bool {
-        self.applier
-            .read_locked_state(|state| state.collections.is_tombstone())
-    }
-
-    pub fn seqno_since(&self) -> SeqNo {
-        self.applier.read_locked_state(|state| state.seqno_since())
-    }
-
-    pub fn since_and_upper(&self) -> (Antichain<T>, Antichain<T>) {
-        self.applier
-            .read_locked_state(|state| (state.since().clone(), state.upper().clone()))
+        self.applier.seqno()
     }
 
     pub async fn add_rollup_for_current_seqno(&mut self) -> RoutineMaintenance {
@@ -177,16 +147,6 @@ where
                 )
             })
             .await;
-
-        let reader_already_expired = self.applier.read_locked_state(|state| {
-            !state.collections.is_tombstone()
-                && !state.collections.leased_readers.contains_key(reader_id)
-        });
-
-        if reader_already_expired {
-            error!("Reader {reader_id} was registered at timestamp {heartbeat_timestamp_ms} but immediately expired.\
-                    This implies {lease_duration:?} passed between the call and its completion, which should be rare.");
-        }
         // Usually, the reader gets an initial seqno hold of the seqno at which
         // it was registered. However, on a tombstone shard the seqno hold
         // happens to get computed as the tombstone seqno + 1
@@ -237,13 +197,6 @@ where
                 )
             })
             .await;
-        let writer_already_expired = self.applier.read_locked_state(|state| {
-            !state.collections.is_tombstone() && !state.collections.writers.contains_key(writer_id)
-        });
-        if writer_already_expired {
-            error!("Writer {writer_id} was registered at timestamp {heartbeat_timestamp_ms} but immediately expired.\
-                    This implies {lease_duration:?} passed between the call and its completion, which should be rare.");
-        }
         (shard_upper, writer_state, maintenance)
     }
 
@@ -273,13 +226,12 @@ where
                     // side-channel that didn't update our local cache of the
                     // machine state. So, fetch the latest state and try again
                     // if we indeed get something different.
-                    self.applier.fetch_and_update_state(None).await;
-                    let current_upper = &self.upper();
+                    let current_upper = self.applier.fetch_upper().await;
 
                     // We tried to to a compare_and_append with the wrong
                     // expected upper, that won't work.
-                    if current_upper != batch.desc.lower() {
-                        return Err(Upper(current_upper.clone()));
+                    if &current_upper != batch.desc.lower() {
+                        return Err(Upper(current_upper));
                     } else {
                         // The upper stored in state was outdated. Retry after
                         // updating.
@@ -673,7 +625,7 @@ where
     }
 
     pub async fn maybe_become_tombstone(&mut self) -> Option<RoutineMaintenance> {
-        let (since, upper) = self.since_and_upper();
+        let (since, upper) = self.applier.since_and_upper();
         if !since.is_empty() || !upper.is_empty() {
             return None;
         }
@@ -1152,8 +1104,8 @@ pub mod datadriven {
     ) -> Result<String, anyhow::Error> {
         Ok(format!(
             "since={:?} upper={:?}\n",
-            datadriven.machine.since().elements(),
-            datadriven.machine.upper().elements()
+            datadriven.machine.applier.since().elements(),
+            datadriven.machine.applier.upper().elements()
         ))
     }
 
