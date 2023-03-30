@@ -2818,6 +2818,7 @@ FROM parent_addrs AS pa
         AND pa.worker_id = oa.worker_id",
 };
 
+
 pub const MZ_DATAFLOW_OPERATOR_PARENTS: BuiltinView = BuiltinView {
     name: "mz_dataflow_operator_parents",
     schema: MZ_INTERNAL_SCHEMA,
@@ -2825,6 +2826,24 @@ pub const MZ_DATAFLOW_OPERATOR_PARENTS: BuiltinView = BuiltinView {
 SELECT id, parent_id
 FROM mz_internal.mz_dataflow_operator_parents_per_worker
 WHERE worker_id = 0",
+};
+
+pub const MZ_DATAFLOW_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
+    name: "mz_dataflow_arrangement_sizes",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_dataflow_arrangement_sizes AS
+SELECT mdo.id, mi.name, sum(mas.records) AS records, sum(mas.batches) AS batches
+FROM
+    mz_internal.mz_dataflow_operators AS mdo
+        JOIN
+            mz_internal.mz_arrangement_sizes AS mas
+            ON mdo.id = mas.operator_id
+        JOIN mz_internal.mz_dataflow_addresses AS mda ON mda.id = mdo.id
+        JOIN
+            mz_internal.mz_compute_exports AS mce
+            ON mce.dataflow_id = mda.address[1]
+        JOIN mz_indexes AS mi ON mi.id = mce.export_id
+GROUP BY mi.name",
 };
 
 // NOTE: If you add real data to this implementation, then please update
@@ -3530,6 +3549,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_DATAFLOW_OPERATOR_PARENTS),
         Builtin::View(&MZ_COMPUTE_EXPORTS),
         Builtin::View(&MZ_COMPUTE_DEPENDENCIES),
+        Builtin::View(&MZ_DATAFLOW_ARRANGEMENT_SIZES),
         Builtin::View(&MZ_COMPUTE_FRONTIERS),
         Builtin::View(&MZ_DATAFLOW_CHANNEL_OPERATORS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_CHANNEL_OPERATORS),

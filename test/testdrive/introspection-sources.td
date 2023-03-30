@@ -269,3 +269,18 @@ mv1_primary_idx mv1
   FROM mz_internal.mz_arrangement_sharing_per_worker
   GROUP BY operator_id, count
 16
+
+# Test that the roll-up of arrangement sizes is correct
+
+> CREATE TABLE t2 (a int)
+
+> INSERT INTO t SELECT * FROM generate_series(1, 100);
+
+> INSERT INTO t2 SELECT * FROM generate_series(1, 200);
+
+> CREATE VIEW vv2 AS SELECT sum(a) FROM t JOIN t2 USING (a);
+
+> CREATE DEFAULT INDEX ii2 ON vv2
+
+> SELECT records FROM mz_internal.mz_dataflow_arrangement_records WHERE name='ii2'
+303

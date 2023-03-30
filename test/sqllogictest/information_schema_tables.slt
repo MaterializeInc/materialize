@@ -337,6 +337,10 @@ mz_dataflow_operator_parents_per_worker
 VIEW
 materialize
 mz_internal
+mz_dataflow_arrangement_sizes
+VIEW
+materialize
+mz_internal
 mz_dataflow_operator_reachability
 VIEW
 materialize
