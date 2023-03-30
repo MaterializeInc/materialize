@@ -98,6 +98,8 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{body, Body, Request, Response, Server, StatusCode, Uri};
 use hyper_openssl::HttpsConnector;
 use jsonwebtoken::{self, DecodingKey, EncodingKey};
+use mz_frontegg_auth::claims::Claims;
+use mz_frontegg_auth::client::{AuthenticationRequest, AuthenticationResponse};
 use openssl::asn1::Asn1Time;
 use openssl::error::ErrorStack;
 use openssl::hash::MessageDigest;
@@ -120,10 +122,7 @@ use tungstenite::Message;
 use uuid::Uuid;
 
 use mz_environmentd::{TlsMode, WebSocketAuth, WebSocketResponse};
-use mz_frontegg_auth::{
-    ApiTokenArgs, ApiTokenResponse, Claims, FronteggAuthentication, FronteggConfig, RefreshToken,
-    REFRESH_SUFFIX,
-};
+use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
 use mz_ore::assert_contains;
 use mz_ore::now::NowFn;
 use mz_ore::now::SYSTEM_TIME;
@@ -653,30 +652,10 @@ fn start_mzcloud(
         enable_refresh: Arc::clone(&enable_refresh),
     };
     async fn handle(context: Context, req: Request<Body>) -> Result<Response<Body>, Infallible> {
-        let (parts, body) = req.into_parts();
+        let (_, body) = req.into_parts();
         let body = body::to_bytes(body).await.unwrap();
-        let email: String = if parts.uri.path().ends_with(REFRESH_SUFFIX) {
-            // Always count refresh attempts, even if enable_refresh is false.
-            *context.refreshes.lock().unwrap() += 1;
-            let args: RefreshToken = serde_json::from_slice(&body).unwrap();
-            match (
-                context
-                    .refresh_tokens
-                    .lock()
-                    .unwrap()
-                    .get(&args.refresh_token),
-                context.enable_refresh.load(Ordering::Relaxed),
-            ) {
-                (Some(email), true) => email.to_string(),
-                _ => {
-                    return Ok(Response::builder()
-                        .status(400)
-                        .body(Body::from("unknown refresh token"))
-                        .unwrap())
-                }
-            }
-        } else {
-            let args: ApiTokenArgs = serde_json::from_slice(&body).unwrap();
+        let email: String = {
+            let args: AuthenticationRequest = serde_json::from_slice(&body).unwrap();
             *context.refreshes.lock().unwrap() += 1;
             match context
                 .users
@@ -712,11 +691,9 @@ fn start_mzcloud(
             &context.encoding_key,
         )
         .unwrap();
-        let resp = ApiTokenResponse {
-            expires: "".to_string(),
+        let resp = AuthenticationResponse {
             expires_in: 10,
             access_token,
-            refresh_token,
         };
         Ok(Response::new(Body::from(
             serde_json::to_vec(&resp).unwrap(),
@@ -820,7 +797,6 @@ fn test_auth_expiry() {
         decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
         tenant_id,
         now: SYSTEM_TIME.clone(),
-        refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
         admin_role: "mzadmin".to_string(),
     });
     let frontegg_user = "user@_.com";
@@ -859,15 +835,6 @@ fn test_auth_expiry() {
             .get::<_, String>(0),
         frontegg_user
     );
-
-    // Disable giving out more refresh tokens.
-    // frontegg_server
-    //     .enable_refresh
-    //     .store(false, Ordering::Relaxed);
-    // wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
-    // // Sleep until the expiry future should resolve.
-    // std::thread::sleep(Duration::from_secs(EXPIRES_IN_SECS + 1));
-    // assert!(pg_client.query_one("SELECT current_user", &[]).is_err());
 }
 
 #[allow(clippy::unit_arg)]
@@ -960,7 +927,6 @@ fn test_auth_base() {
         decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
         tenant_id,
         now,
-        refresh_before_secs: 0,
         admin_role: "mzadmin".to_string(),
     });
     let frontegg_user = "user@_.com";
@@ -1570,7 +1536,6 @@ fn test_auth_admin() {
     let now = SYSTEM_TIME.clone();
 
     const EXPIRES_IN_SECS: u64 = 20;
-    const REFRESH_BEFORE_SECS: u64 = 10;
     let (role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
     let frontegg_server = start_mzcloud(
         encoding_key,
@@ -1588,7 +1553,6 @@ fn test_auth_admin() {
         decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
         tenant_id,
         now,
-        refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
         admin_role: admin_role.to_string(),
     });
 

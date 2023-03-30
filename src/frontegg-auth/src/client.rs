@@ -1,3 +1,12 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
 use reqwest::{Method, RequestBuilder};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::time::{Duration, SystemTime};
@@ -27,6 +36,20 @@ const CREATE_APP_PASSWORDS_PATH: [&str; 6] = [
 pub mod app_password;
 pub mod user;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthenticationResponse {
+    pub access_token: String,
+    pub expires_in: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthenticationRequest<'a> {
+    pub client_id: &'a str,
+    pub secret: &'a str,
+}
+
 /// An API client for Frontegg.
 ///
 /// The API client is designed to be wrapped in an [`Arc`] and used from
@@ -40,15 +63,6 @@ pub struct Client {
     pub(crate) app_password: AppPassword,
     pub(crate) endpoint: Url,
     pub(crate) auth: Mutex<Option<Auth>>,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApiTokenResponse {
-    pub expires: String,
-    pub expires_in: i64,
-    pub access_token: String,
-    pub refresh_token: String,
 }
 
 impl Client {
@@ -123,20 +137,6 @@ impl Client {
     /// Authenticates with the server, if not already authenticated,
     /// and returns the authentication token.
     pub async fn auth(&self) -> Result<Auth, Error> {
-        #[derive(Debug, Clone, Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct AuthenticationRequest<'a> {
-            client_id: &'a str,
-            secret: &'a str,
-        }
-
-        #[derive(Debug, Clone, Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct AuthenticationResponse {
-            access_token: String,
-            expires_in: u64,
-        }
-
         let mut auth = self.auth.lock().await;
         match &*auth {
             Some(auth) if SystemTime::now() < auth.refresh_at => {

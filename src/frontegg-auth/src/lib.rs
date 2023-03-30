@@ -75,23 +75,22 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::future::Future;
 use std::time::Duration;
+use std::{future::Future, time::SystemTime};
 
+use claims::Claims;
 use client::Auth;
 use config::{ClientBuilder, ClientConfig};
 use derivative::Derivative;
+use error::FronteggError;
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
-use thiserror::Error;
 use tracing::warn;
-use url::Url;
 use uuid::Uuid;
 
 use mz_ore::now::NowFn;
 
-use crate::app_password::AppPasswordParseError;
-
 pub mod app_password;
+pub mod claims;
 pub mod client;
 pub mod config;
 pub mod cparse;
@@ -106,8 +105,6 @@ pub struct FronteggConfig {
     pub tenant_id: Uuid,
     /// Function to provide system time to validate exp (expires at) field of JWTs.
     pub now: NowFn,
-    /// Number of seconds before which to attempt to renew an expiring token.
-    pub refresh_before_secs: i64,
     /// Name of admin role.
     pub admin_role: String,
 }
@@ -121,11 +118,8 @@ pub struct FronteggAuthentication {
     tenant_id: Uuid,
     now: NowFn,
     validation: Validation,
-    refresh_before_secs: i64,
     admin_role: String,
 }
-
-pub const REFRESH_SUFFIX: &str = "/token/refresh";
 
 impl FronteggAuthentication {
     /// Creates a new frontegg auth. `jwk_rsa_pem` is the RSA public key to
@@ -141,7 +135,6 @@ impl FronteggAuthentication {
             tenant_id: config.tenant_id,
             now: config.now,
             validation,
-            refresh_before_secs: config.refresh_before_secs,
             admin_role: config.admin_role,
         }
     }
@@ -208,9 +201,14 @@ impl FronteggAuthentication {
         // repeatedly attempt to refresh the token before it expires.
         let expire_future = async move {
             loop {
-                let expire_in = claims.exp - frontegg.now.as_secs();
-                let check_in = u64::try_from(expire_in - frontegg.refresh_before_secs).unwrap_or(0);
-                tokio::time::sleep(Duration::from_secs(check_in)).await;
+                let current_time = SystemTime::now();
+
+                match current_time.duration_since(auth.refresh_at) {
+                    Ok(sleep_time) => {
+                        tokio::time::sleep(sleep_time).await;
+                    }
+                    Err(_) => {}
+                }
 
                 let refresh_request = async {
                     loop {
@@ -253,70 +251,4 @@ impl FronteggAuthentication {
     pub fn admin_role(&self) -> &str {
         &self.admin_role
     }
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApiTokenArgs {
-    pub client_id: Uuid,
-    pub secret: Uuid,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RefreshToken {
-    pub refresh_token: String,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApiTokenResponse {
-    pub expires: String,
-    pub expires_in: i64,
-    pub access_token: String,
-    pub refresh_token: String,
-}
-
-// TODO: Do we care about the sub? Do we need to validate the sub or other
-// things, even if unused?
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Claims {
-    pub exp: i64,
-    pub email: String,
-    pub sub: Uuid,
-    pub user_id: Option<Uuid>,
-    pub tenant_id: Uuid,
-    pub roles: Vec<String>,
-    pub permissions: Vec<String>,
-}
-
-impl Claims {
-    /// Extracts the most specific user ID present in the token.
-    pub fn best_user_id(&self) -> Uuid {
-        self.user_id.unwrap_or(self.sub)
-    }
-
-    /// Returns true if the claims belong to a frontegg admin.
-    pub fn admin(&self, admin_name: &str) -> bool {
-        self.roles.iter().any(|role| role == admin_name)
-    }
-}
-
-#[derive(Error, Debug)]
-pub enum FronteggError {
-    #[error(transparent)]
-    InvalidPasswordFormat(#[from] AppPasswordParseError),
-    #[error("invalid token format: {0}")]
-    InvalidTokenFormat(#[from] jsonwebtoken::errors::Error),
-    #[error("authentication token exchange failed: {0}")]
-    ReqwestError(#[from] reqwest::Error),
-    #[error("authentication token expired")]
-    TokenExpired,
-    #[error("unauthorized organization")]
-    UnauthorizedTenant,
-    #[error("email in access token did not match the expected email")]
-    WrongEmail,
-    #[error("request timeout")]
-    Timeout(#[from] tokio::time::error::Elapsed),
 }

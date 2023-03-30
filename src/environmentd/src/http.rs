@@ -32,6 +32,7 @@ use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
+use mz_frontegg_auth::error::FronteggError;
 use openssl::ssl::{Ssl, SslContext};
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
@@ -42,7 +43,7 @@ use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
 use mz_adapter::{AdapterError, Client, SessionClient};
-use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
+use mz_frontegg_auth::{FronteggAuthentication};
 use mz_ore::cast::u64_to_usize;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::result::ResultExt;

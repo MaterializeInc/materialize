@@ -1,21 +1,17 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License in the LICENSE file at the
-// root of this repository, or online at
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-use std::fmt;
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
 
 use reqwest::StatusCode;
+use std::fmt;
+use thiserror::Error;
+
+use crate::app_password::AppPasswordParseError;
 
 /// An error returned by a [`Client`].
 ///
@@ -71,4 +67,22 @@ impl From<ApiError> for Error {
     fn from(e: ApiError) -> Error {
         Error::Api(e)
     }
+}
+
+#[derive(Error, Debug)]
+pub enum FronteggError {
+    #[error(transparent)]
+    InvalidPasswordFormat(#[from] AppPasswordParseError),
+    #[error("invalid token format: {0}")]
+    InvalidTokenFormat(#[from] jsonwebtoken::errors::Error),
+    #[error("authentication token exchange failed: {0}")]
+    ReqwestError(#[from] reqwest::Error),
+    #[error("authentication token expired")]
+    TokenExpired,
+    #[error("unauthorized organization")]
+    UnauthorizedTenant,
+    #[error("email in access token did not match the expected email")]
+    WrongEmail,
+    #[error("request timeout")]
+    Timeout(#[from] tokio::time::error::Elapsed),
 }

@@ -17,6 +17,7 @@ use std::mem;
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{pending, BoxFuture, FutureExt};
 use itertools::izip;
+use mz_frontegg_auth::claims::Claims;
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
@@ -27,7 +28,7 @@ use mz_adapter::session::{
     EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, TransactionStatus,
 };
 use mz_adapter::{AdapterNotice, ExecuteResponse, PeekResponseUnary, RowsFuture};
-use mz_frontegg_auth::{Claims, FronteggAuthentication};
+use mz_frontegg_auth::{FronteggAuthentication};
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::str::StrExt;
