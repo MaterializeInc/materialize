@@ -1616,7 +1616,7 @@ pub mod datadriven {
         Ok(format!(
             "{} {:?}\n",
             datadriven.machine.seqno(),
-            datadriven.machine.upper().elements(),
+            datadriven.machine.applier.upper().elements(),
         ))
     }
 

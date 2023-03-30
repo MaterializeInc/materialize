@@ -14,7 +14,7 @@ use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::future::Future;
-use std::sync::{Arc, RwLock, Weak};
+use std::sync::{Arc, RwLock, TryLockError, Weak};
 use std::time::{Duration, Instant};
 
 use differential_dataflow::difference::Semigroup;
@@ -33,7 +33,7 @@ use tracing::instrument;
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::{CodecConcreteType, CodecMismatch};
 use crate::internal::machine::retry_external;
-use crate::internal::metrics::{Metrics, MetricsBlob, MetricsConsensus};
+use crate::internal::metrics::{LockMetrics, Metrics, MetricsBlob, MetricsConsensus};
 use crate::internal::state::TypedState;
 use crate::{PersistClient, PersistConfig, PersistLocation, ShardId};
 
@@ -317,7 +317,7 @@ impl StateCache {
         &self,
         shard_id: ShardId,
         mut init_fn: InitFn,
-    ) -> Result<Arc<RwLock<TypedState<K, V, T, D>>>, Box<CodecMismatch>>
+    ) -> Result<LockingTypedState<K, V, T, D>, Box<CodecMismatch>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -362,7 +362,7 @@ impl StateCache {
                     if let Some(x) = did_init {
                         // We actually did the init work, don't bother casting back
                         // the type erased and weak version.
-                        return Ok(x);
+                        return Ok(LockingTypedState(x));
                     }
                     let Some(state) = state.upgrade() else {
                         // Race condition. Between when we first checked the
@@ -381,7 +381,7 @@ impl StateCache {
                 .as_any()
                 .downcast::<RwLock<TypedState<K, V, T, D>>>()
             {
-                Ok(x) => return Ok(x),
+                Ok(x) => return Ok(LockingTypedState(x)),
                 Err(_) => {
                     return Err(Box::new(CodecMismatch {
                         requested: (
@@ -428,6 +428,61 @@ impl StateCache {
             .values()
             .filter(|x| x.get().map_or(false, |x| x.upgrade().is_some()))
             .count()
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct LockingTypedState<K, V, T, D>(Arc<RwLock<TypedState<K, V, T, D>>>);
+
+impl<K, V, T, D> Clone for LockingTypedState<K, V, T, D> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl<K, V, T, D> LockingTypedState<K, V, T, D> {
+    pub(crate) fn read_lock<R, F: FnMut(&TypedState<K, V, T, D>) -> R>(
+        &self,
+        metrics: &LockMetrics,
+        mut f: F,
+    ) -> R {
+        let start = Instant::now();
+        metrics.acquire_count.inc();
+        let state = match self.0.try_read() {
+            Ok(x) => x,
+            Err(TryLockError::WouldBlock) => {
+                metrics.blocking_acquire_count.inc();
+                let state = self.0.read().expect("lock poisoned");
+                metrics
+                    .blocking_seconds
+                    .inc_by(start.elapsed().as_secs_f64());
+                state
+            }
+            Err(TryLockError::Poisoned(err)) => panic!("state read lock poisoned: {}", err),
+        };
+        f(&state)
+    }
+
+    pub(crate) fn write_lock<R, F: FnOnce(&mut TypedState<K, V, T, D>) -> R>(
+        &self,
+        metrics: &LockMetrics,
+        f: F,
+    ) -> R {
+        let start = Instant::now();
+        metrics.acquire_count.inc();
+        let mut state = match self.0.try_write() {
+            Ok(x) => x,
+            Err(TryLockError::WouldBlock) => {
+                metrics.blocking_acquire_count.inc();
+                let state = self.0.write().expect("lock poisoned");
+                metrics
+                    .blocking_seconds
+                    .inc_by(start.elapsed().as_secs_f64());
+                state
+            }
+            Err(TryLockError::Poisoned(err)) => panic!("state read lock poisoned: {}", err),
+        };
+        f(&mut state)
     }
 }
 
@@ -528,11 +583,11 @@ mod tests {
             )
         }
         fn assert_same<K, V, T, D>(
-            state1: &Arc<RwLock<TypedState<K, V, T, D>>>,
-            state2: &Arc<RwLock<TypedState<K, V, T, D>>>,
+            state1: &LockingTypedState<K, V, T, D>,
+            state2: &LockingTypedState<K, V, T, D>,
         ) {
-            let pointer1 = format!("{:p}", state1.read().expect("lock").deref());
-            let pointer2 = format!("{:p}", state2.read().expect("lock").deref());
+            let pointer1 = format!("{:p}", state1.0.read().expect("lock").deref());
+            let pointer2 = format!("{:p}", state2.0.read().expect("lock").deref());
             assert_eq!(pointer1, pointer2);
         }
 

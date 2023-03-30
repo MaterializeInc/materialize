@@ -11,8 +11,7 @@
 
 use std::fmt::Debug;
 use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
-use std::sync::{Arc, RwLock, TryLockError};
-use std::time::Instant;
+use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -23,11 +22,11 @@ use tracing::debug;
 
 use mz_persist::location::{CaSResult, Indeterminate, SeqNo};
 
-use crate::cache::StateCache;
+use crate::cache::{LockingTypedState, StateCache};
 use crate::error::CodecMismatch;
 use crate::internal::gc::GcReq;
 use crate::internal::maintenance::RoutineMaintenance;
-use crate::internal::metrics::{CmdMetrics, LockMetrics, Metrics, ShardMetrics};
+use crate::internal::metrics::{CmdMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
     ExpiryMetrics, HollowBatch, Since, StateCollections, TypedState, Upper,
@@ -110,7 +109,7 @@ where
             shard_metrics,
             state_versions,
             shard_id,
-            state: LockingTypedState(state),
+            state,
         })
     }
 
@@ -476,61 +475,6 @@ where
             seqno_before,
             new_seqno
         );
-    }
-}
-
-#[derive(Debug)]
-struct LockingTypedState<K, V, T, D>(Arc<RwLock<TypedState<K, V, T, D>>>);
-
-impl<K, V, T, D> Clone for LockingTypedState<K, V, T, D> {
-    fn clone(&self) -> Self {
-        Self(Arc::clone(&self.0))
-    }
-}
-
-impl<K, V, T, D> LockingTypedState<K, V, T, D> {
-    pub(crate) fn read_lock<R, F: FnMut(&TypedState<K, V, T, D>) -> R>(
-        &self,
-        metrics: &LockMetrics,
-        mut f: F,
-    ) -> R {
-        let start = Instant::now();
-        metrics.acquire_count.inc();
-        let state = match self.0.try_read() {
-            Ok(x) => x,
-            Err(TryLockError::WouldBlock) => {
-                metrics.blocking_acquire_count.inc();
-                let state = self.0.read().expect("lock poisoned");
-                metrics
-                    .blocking_seconds
-                    .inc_by(start.elapsed().as_secs_f64());
-                state
-            }
-            Err(TryLockError::Poisoned(err)) => panic!("state read lock poisoned: {}", err),
-        };
-        f(&state)
-    }
-
-    pub(crate) fn write_lock<R, F: FnOnce(&mut TypedState<K, V, T, D>) -> R>(
-        &self,
-        metrics: &LockMetrics,
-        f: F,
-    ) -> R {
-        let start = Instant::now();
-        metrics.acquire_count.inc();
-        let mut state = match self.0.try_write() {
-            Ok(x) => x,
-            Err(TryLockError::WouldBlock) => {
-                metrics.blocking_acquire_count.inc();
-                let state = self.0.write().expect("lock poisoned");
-                metrics
-                    .blocking_seconds
-                    .inc_by(start.elapsed().as_secs_f64());
-                state
-            }
-            Err(TryLockError::Poisoned(err)) => panic!("state read lock poisoned: {}", err),
-        };
-        f(&mut state)
     }
 }
 
