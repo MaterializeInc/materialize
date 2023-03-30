@@ -61,7 +61,7 @@ To authenticate using a username and password, send an initial text or binary me
 {
     "user": "<Your email to access Materialize>",
     "password": "<Your app password>",
-    "options": { <Optional map of run-time settings> }
+    "options": { <Optional map of session variables> }
 }
 ```
 
@@ -70,7 +70,7 @@ To authenticate using a token, send an initial text or binary message containing
 ```
 {
 	"token": "<Your access token>",
-    "options": { <Optional map of run-time settings> }
+    "options": { <Optional map of session variables> }
 }
 ```
 

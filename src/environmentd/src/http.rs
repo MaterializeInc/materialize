@@ -16,13 +16,14 @@
 // Axum handlers must use async, but often don't actually use `await`.
 #![allow(clippy::unused_async)]
 
+use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{DefaultBodyLimit, FromRequestParts};
+use axum::extract::{DefaultBodyLimit, FromRequestParts, Query};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::{routing, Extension, Router};
@@ -32,8 +33,10 @@ use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
+use mz_ore::str::StrExt;
 use mz_sql::session::vars::VarInput;
 use openssl::ssl::{Ssl, SslContext};
+use serde::Deserialize;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -289,8 +292,17 @@ where
 
     async fn from_request_parts(
         req: &mut http::request::Parts,
-        _state: &S,
+        state: &S,
     ) -> Result<Self, Self::Rejection> {
+        #[derive(Debug, Default, Deserialize)]
+        struct Params {
+            #[serde(default)]
+            options: String,
+        }
+        let params: Query<Params> = Query::from_request_parts(req, state)
+            .await
+            .unwrap_or_default();
+
         let user = req.extensions.get::<AuthedUser>().unwrap();
         let adapter_client = req
             .extensions
@@ -303,9 +315,38 @@ where
                 "adapter client missing".into(),
             )
         })?;
-        AuthedClient::new(&adapter_client, user.clone())
+        let mut client = AuthedClient::new(&adapter_client, user.clone())
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        // Apply options that were provided in query params.
+        let session = client.0.session();
+        let maybe_options = if params.options.is_empty() {
+            // It's possible 'options' simply wasn't provided, we don't want that to
+            // count as a failure to deserialize
+            Ok(BTreeMap::<String, String>::default())
+        } else {
+            serde_json::from_str(&params.options)
+        };
+
+        if let Ok(options) = maybe_options {
+            for (key, val) in options {
+                const LOCAL: bool = false;
+                if let Err(err) = session.vars_mut().set(&key, VarInput::Flat(&val), LOCAL) {
+                    session.add_notice(AdapterNotice::BadStartupSetting {
+                        name: key.to_string(),
+                        reason: err.to_string(),
+                    })
+                }
+            }
+        } else {
+            // If we fail to deserialize options, fail the request.
+            let code = StatusCode::BAD_REQUEST;
+            let msg = format!("Failed to deserialize {} map", "options".quoted());
+            return Err((code, msg));
+        }
+
+        Ok(client)
     }
 }
 

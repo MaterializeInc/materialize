@@ -3802,6 +3802,7 @@ dependencies = [
  "sentry-tracing",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "shell-words",
  "socket2",
  "sysctl",
