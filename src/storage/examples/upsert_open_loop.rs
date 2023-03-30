@@ -1162,12 +1162,15 @@ impl IoThreadRocksDB {
             .join(format!("worker_id:{}", worker_id.to_string()))
             .join(format!("source_id:{}", source_id.to_string()));
 
-        if destroy_before_use {
+        if destroy_before_use && instance_path.exists() {
             DB::destroy(&rocksdb::Options::default(), &*instance_path).unwrap();
         }
 
         let mut rocks_options = rocksdb::Options::default();
         rocks_options.create_if_missing(true);
+        // Dumped every 600 seconds.
+        rocks_options.enable_statistics();
+        rocks_options.set_report_bg_io_stats(true);
 
         if use_vector_memtable {
             rocks_options.set_memtable_factory(rocksdb::MemtableFactory::Vector);
