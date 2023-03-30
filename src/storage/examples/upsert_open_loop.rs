@@ -75,12 +75,75 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-//! Open-loop benchmark for measuring UPSERT performance. Run using
+//! Open-loop benchmark for measuring UPSERT performance.
+//!
+//! Run using
 //!
 //! ```
-//! $ cargo run --example upsert_open_loop -- --runtime 10sec
+//! $ cargo run --release --example upsert_open_loop -- --runtime 5sec \
+//!   --records-per-second 200000 --num-keys 200000 --batch-size 20000 \
+//!   --key-value-store in-memory-hash-map \
+//!   --num-async-workers 16 --num-timely-workers=16 --num-sources=16
 //! ```
 //!
+//! ## Description
+//!
+//! The benchmark emulates a source-ingestion pipeline and looks like this:
+//!
+//! ```
+//! generator(async task) ->(tokio channel) source(timely operator)
+//!   ->(exchange channel) upsert(timely operator) ->(exchange channel) stats(timely operator)
+//! ```
+//!
+//! The main part of the pipeline runs in a (configurable) timely cluster but we generate data
+//! outside (in async/blocking tokio tasks) and ship it to the pipeline via tokio channels. For each
+//! source, we have one generator task and we designate only one of the timely workers as the
+//! _active worker_, which listens on the other end of the channel and imports data into the timely
+//! cluster.
+//!
+//! The _upsert_ operator runs on all timely workers, so work (for example interacting with RocksDB)
+//! is distributed. The _stats_ operator is again only active on one worker, we ship all the
+//! updates/retractions for a given source to its active worker, where the operator prints stats
+//! (throughput, processing lag, etc).
+//!
+//! There are three types of configuration options (plus miscellaneous options, like runtime):
+//!  - _data_: These control record size, size of key space, number of records per second, batch
+//!  size
+//!  - scenario: These control how many threads we use for the data generators, how many timely
+//!  workers we use, and how many sources we use. The _data_ options are _per source_, meaning you
+//!  will get _num sources * records per second_ of throughput in total.
+//!  - _key-value store_: Most important parameter, controls what backend we're testing.
+//!
+//!  It's important to note that you will get one instance of an _upsert_ operator on each timely
+//!  worker, per source. For example, if you configure `4` workers and `4` sources, you will get
+//!  `16` operators instances that each have their own RocksDB instance (if configured).
+//!
+//! ## Usage
+//!
+//! We give a basic sets of steps that you can follow. However, coming up with a good set of
+//! parameters requires some finesse!
+//!
+//! The basic idea of the benchmark is: Dial in a set of parameters, then see if the data generators
+//! and upsert operators can keep up with the workload. We regularly print throughput and
+//! _processing lag_, the processing lag should stay low and not grow over time. If it does grow,
+//! that means the pipeline cannot keep up with the data volume and you either need to reduce the
+//! data volume or change how many timely workers you use (or both!).
+//!
+//! This way, you can find a sustainable upper limit for an in-memory key-value store, then switch
+//! to the RocksDB store and see how far we have to reduce the data volume to keep it from falling
+//! over.
+//!
+//! Steps:
+//!  1. Decide on the basic scenario: largely, how many timely workers and how many sources. For
+//!     example, pick a representative example from early customer data.
+//!  2. Use the `noop` key-value store or one of the in-memory backends to figure out a ceiling for
+//!     the data generators and the throughput you can sustain. The data generators will log
+//!     warnings if they cannot keep up with the requested parameters. And the stats operators will
+//!     print the processing lag, which should also stay low.
+//!  3. Switch to RocksDB and fiddle with data parameters while keeping the shape of the ingestion
+//!     pipeline constant.
+//!
+//! ## Notes
 //!
 //! Notes from @guswynn's testing, and remaining work before this
 //! benchmark can be trusted:
@@ -158,11 +221,12 @@ pub struct Args {
     #[clap(long, parse(try_from_str = humantime::parse_duration), value_name = "S", default_value = "60s")]
     runtime: Duration,
 
-    /// How many records writers should emit per second.
+    /// How many records writers should emit per second, per source.
     #[clap(long, value_name = "R", default_value_t = 10000)]
     records_per_second: usize,
 
-    /// How many unique keys we should generate, that is, the cardinality of the key space.
+    /// How many unique keys we should generate, that is, the cardinality of the key space. This
+    /// controls how large the upsert state will grow, at steady state.
     #[clap(long, value_name = "R", default_value_t = 1000)]
     num_keys: usize,
 
