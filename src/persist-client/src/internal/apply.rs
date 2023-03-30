@@ -24,10 +24,13 @@ use mz_persist::location::{CaSResult, Indeterminate, SeqNo};
 
 use crate::cache::StateCache;
 use crate::error::CodecMismatch;
+use crate::internal::gc::GcReq;
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{CmdMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartialRollupKey, RollupId};
-use crate::internal::state::{HollowBatch, Since, StateCollections, TypedState, Upper};
+use crate::internal::state::{
+    ExpiryMetrics, HollowBatch, Since, StateCollections, TypedState, Upper,
+};
 use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::{EncodedRollup, StateVersions};
 use crate::internal::trace::FueledMergeReq;
@@ -213,73 +216,19 @@ where
         >,
         ExpectationMismatch,
     > {
-        let is_write = cmd.name == metrics.cmds.compare_and_append.name;
-        let is_rollup = cmd.name == metrics.cmds.add_and_remove_rollups.name;
-        let (expected, diff, new_state, expiry_metrics, garbage_collection, work_ret) = {
-            let state = state.read().expect("lock poisoned");
-            let expected = state.seqno;
-            let was_tombstone_before = state.collections.is_tombstone();
-
-            let (work_ret, mut new_state) = match state.clone_apply(cfg, work_fn) {
-                Continue(x) => x,
-                Break(err) => {
-                    return Ok(Ok((expected, Err(err), RoutineMaintenance::default())));
-                }
-            };
-            let expiry_metrics = new_state.expire_at((cfg.now)());
-
-            // Sanity check that all state transitions have special case for
-            // being a tombstone. The ones that do will return a Break and
-            // return out of this method above. The one exception is adding
-            // a rollup, because we want to be able to add a rollup for the
-            // tombstone state.
-            //
-            // TODO: Even better would be to write the rollup in the
-            // tombstone transition so it's a single terminal state
-            // transition, but it'll be tricky to get right.
-            if was_tombstone_before && !is_rollup {
-                panic!(
-                    "cmd {} unexpectedly tried to commit a new state on a tombstone: {:?}",
-                    cmd.name, state
-                );
-            }
-
-            // Find out if this command has been selected to perform gc, so
-            // that it will fire off a background request to the
-            // GarbageCollector to delete eligible blobs and truncate the
-            // state history. This is dependant both on `maybe_gc` returning
-            // Some _and_ on this state being successfully compare_and_set.
-            //
-            // NB: Make sure this overwrites `garbage_collection` on every
-            // run though the loop (i.e. no `if let Some` here). When we
-            // lose a CaS race, we might discover that the winner got
-            // assigned the gc.
-            let garbage_collection = new_state.maybe_gc(is_write);
-
-            // NB: Make sure this is the very last thing before the
-            // `try_compare_and_set_current` call. (In particular, it needs
-            // to come after anything that might modify new_state, such as
-            // `maybe_gc`.)
-            let diff = StateDiff::from_diff(&state.state, &new_state);
-            // Sanity check that our diff logic roundtrips and adds back up
-            // correctly.
-            #[cfg(any(test, debug_assertions))]
-            {
-                if let Err(err) = StateDiff::validate_roundtrip(metrics, &state, &diff, &new_state)
-                {
-                    panic!("validate_roundtrips failed: {}", err);
-                }
-            }
-
-            (
-                expected,
-                diff,
-                new_state,
-                expiry_metrics,
-                garbage_collection,
-                work_ret,
-            )
+        let next_state = match Self::compute_next_state_locked(state, work_fn, metrics, cmd, cfg) {
+            Ok(x) => x,
+            Err((seqno, err)) => return Ok(Ok((seqno, Err(err), RoutineMaintenance::default()))),
         };
+
+        let NextState {
+            expected,
+            diff,
+            state,
+            expiry_metrics,
+            garbage_collection,
+            work_ret,
+        } = next_state;
 
         // SUBTLE! Unlike the other consensus and blob uses, we can't
         // automatically retry indeterminate ExternalErrors here. However,
@@ -287,22 +236,16 @@ where
         // retry even indeterminate errors. See
         // [Self::apply_unbatched_idempotent_cmd].
         let cas_res = state_versions
-            .try_compare_and_set_current(
-                &cmd.name,
-                shard_metrics,
-                Some(expected),
-                &new_state,
-                &diff,
-            )
+            .try_compare_and_set_current(&cmd.name, shard_metrics, Some(expected), &state, &diff)
             .await;
 
         match cas_res {
             Ok(CaSResult::Committed) => {
                 assert!(
-                    expected <= new_state.seqno,
+                    expected <= state.seqno,
                     "state seqno regressed: {} vs {}",
                     expected,
-                    new_state.seqno
+                    state.seqno
                 );
 
                 metrics
@@ -316,18 +259,92 @@ where
 
                 let maintenance = RoutineMaintenance {
                     garbage_collection,
-                    write_rollup: new_state.need_rollup(),
+                    write_rollup: state.need_rollup(),
                 };
 
-                Ok(Ok((
-                    new_state.seqno,
-                    Ok((work_ret, new_state)),
-                    maintenance,
-                )))
+                Ok(Ok((state.seqno, Ok((work_ret, state)), maintenance)))
             }
             Ok(CaSResult::ExpectationMismatch) => Err(ExpectationMismatch(expected)),
             Err(err) => Ok(Err(err)),
         }
+    }
+
+    fn compute_next_state_locked<
+        R,
+        E,
+        WorkFn: FnMut(SeqNo, &PersistConfig, &mut StateCollections<T>) -> ControlFlow<E, R>,
+    >(
+        state: &Arc<RwLock<TypedState<K, V, T, D>>>,
+        work_fn: &mut WorkFn,
+        metrics: &Metrics,
+        cmd: &CmdMetrics,
+        cfg: &PersistConfig,
+    ) -> Result<NextState<K, V, T, D, R>, (SeqNo, E)> {
+        let is_write = cmd.name == metrics.cmds.compare_and_append.name;
+        let is_rollup = cmd.name == metrics.cmds.add_and_remove_rollups.name;
+
+        let state = state.read().expect("lock poisoned");
+        let expected = state.seqno;
+        let was_tombstone_before = state.collections.is_tombstone();
+
+        let (work_ret, mut new_state) = match state.clone_apply(cfg, work_fn) {
+            Continue(x) => x,
+            Break(err) => {
+                return Err((expected, err));
+            }
+        };
+        let expiry_metrics = new_state.expire_at((cfg.now)());
+
+        // Sanity check that all state transitions have special case for
+        // being a tombstone. The ones that do will return a Break and
+        // return out of this method above. The one exception is adding
+        // a rollup, because we want to be able to add a rollup for the
+        // tombstone state.
+        //
+        // TODO: Even better would be to write the rollup in the
+        // tombstone transition so it's a single terminal state
+        // transition, but it'll be tricky to get right.
+        if was_tombstone_before && !is_rollup {
+            panic!(
+                "cmd {} unexpectedly tried to commit a new state on a tombstone: {:?}",
+                cmd.name, state
+            );
+        }
+
+        // Find out if this command has been selected to perform gc, so
+        // that it will fire off a background request to the
+        // GarbageCollector to delete eligible blobs and truncate the
+        // state history. This is dependant both on `maybe_gc` returning
+        // Some _and_ on this state being successfully compare_and_set.
+        //
+        // NB: Make sure this overwrites `garbage_collection` on every
+        // run though the loop (i.e. no `if let Some` here). When we
+        // lose a CaS race, we might discover that the winner got
+        // assigned the gc.
+        let garbage_collection = new_state.maybe_gc(is_write);
+
+        // NB: Make sure this is the very last thing before the
+        // `try_compare_and_set_current` call. (In particular, it needs
+        // to come after anything that might modify new_state, such as
+        // `maybe_gc`.)
+        let diff = StateDiff::from_diff(&state.state, &new_state);
+        // Sanity check that our diff logic roundtrips and adds back up
+        // correctly.
+        #[cfg(any(test, debug_assertions))]
+        {
+            if let Err(err) = StateDiff::validate_roundtrip(metrics, &state, &diff, &new_state) {
+                panic!("validate_roundtrips failed: {}", err);
+            }
+        }
+
+        Ok(NextState {
+            expected,
+            diff,
+            state: new_state,
+            expiry_metrics,
+            garbage_collection,
+            work_ret,
+        })
     }
 
     pub fn update_state(&mut self, new_state: TypedState<K, V, T, D>) {
@@ -365,4 +382,13 @@ where
             seqno_after
         );
     }
+}
+
+struct NextState<K, V, T, D, R> {
+    expected: SeqNo,
+    diff: StateDiff<T>,
+    state: TypedState<K, V, T, D>,
+    expiry_metrics: ExpiryMetrics,
+    garbage_collection: Option<GcReq>,
+    work_ret: R,
 }
