@@ -154,6 +154,7 @@
 //! - Ensure sst files are actually being written, from all workers.
 //! - Figure out why this workload has large numbers of empty batches (???)
 //! - Sort values before writing them.
+//! - Add deletes.
 //!
 //! Additional notes:
 //! - Its unclear if the single-thread-per-rocksdb-instance model is performant, or considered a
@@ -302,6 +303,11 @@ pub struct Args {
     /// before using them.
     #[clap(long)]
     rocksdb_clear_before_use: bool,
+
+    /// Print some additional stats from rocksdb, periodically.
+    /// Note that `LOG` in the rocksdb dirs have more information.
+    #[clap(long)]
+    rocksdb_print_stats: bool,
 }
 
 /// Different key-value stores under examination.
@@ -579,6 +585,26 @@ async fn run_benchmark(
     }
 
     let global_rocks_env = rocksdb::Env::new().unwrap();
+    let mut rocksdb_options = vec![];
+    for _ in 0..num_sources {
+        // One rocksdb options object so we can share stats.
+        let mut rocks_options = rocksdb::Options::default();
+        rocks_options.create_if_missing(true);
+        // Dumped every 600 seconds.
+        rocks_options.enable_statistics();
+        rocks_options.set_report_bg_io_stats(true);
+
+        if args.rocksdb_use_vector_memtable {
+            rocks_options.set_memtable_factory(rocksdb::MemtableFactory::Vector);
+            // Required to use the vector memtable.
+            rocks_options.set_allow_concurrent_memtable_write(false);
+        }
+        if args.rocksdb_global_env {
+            rocks_options.set_env(&global_rocks_env);
+        }
+
+        rocksdb_options.push(Arc::new(rocks_options))
+    }
 
     let timely_config = timely::Config::process(num_workers);
     let args_cloned = args.clone();
@@ -588,12 +614,12 @@ async fn run_benchmark(
 
         let dir_path = dir_path.clone();
         let args = args_cloned.clone();
-        let global_rocks_env = global_rocks_env.clone();
+        let rocksdb_options = rocksdb_options.clone();
 
         let probe = timely_worker.dataflow::<u64, _, _>(move |scope| {
             let mut source_streams = Vec::new();
 
-            for source_id in 0..num_sources {
+            for (source_id, rocks_options) in (0..num_sources).zip(rocksdb_options.iter()) {
                 let source_rxs = Arc::clone(&source_rxs);
 
                 let source_stream = generator_source(scope, source_id, source_rxs);
@@ -604,11 +630,7 @@ async fn run_benchmark(
                     source_id,
                     &dir_path,
                     args.clone(),
-                    if args.rocksdb_global_env {
-                        Some(global_rocks_env.clone())
-                    } else {
-                        None
-                    },
+                    &rocks_options,
                 );
 
                 // Choose a different worker for the counting.
@@ -619,6 +641,7 @@ async fn run_benchmark(
                     usize::cast_from((source_id + 1).hashed() % u64::cast_from(worker_count));
                 let active_worker = chosen_worker == worker_id;
 
+                let rocks_options = Arc::clone(&rocks_options);
                 let _output: Stream<_, ()> = upsert_stream.unary_frontier(
                     Exchange::new(move |_| u64::cast_from(chosen_worker)),
                     &format!("source-{source_id}-counter"),
@@ -679,10 +702,19 @@ async fn run_benchmark(
                                     "After {} ms, source {source_id} has read {num_additions} \
                                     records (throughput {:.3} MiB/s, key throughput {:.3} MiB/s). \
                                     Max processing \
-                                    lag {max_lag}ms, most recent processing lag {lag}ms.",
+                                    lag {max_lag}ms, most recent processing lag {lag}ms.{}",
                                     elapsed.as_millis(),
                                     throughput,
                                     key_throughput,
+                                    if args.rocksdb_print_stats {
+                                        calculate_rocksdb_stats(
+                                            Some(&rocks_options),
+                                            elapsed_seconds,
+                                        )
+                                        .unwrap_or_else(String::new)
+                                    } else {
+                                        "".to_string()
+                                    }
                                 );
                             }
                         }
@@ -862,7 +894,7 @@ fn upsert<G>(
     source_id: usize,
     instance_dir: &PathBuf,
     args: Args,
-    global_env: Option<rocksdb::Env>,
+    rocksdb_options: &rocksdb::Options,
 ) -> Stream<G, (Vec<u8>, Vec<u8>, i32)>
 where
     G: Scope<Timestamp = u64>,
@@ -882,11 +914,10 @@ where
             KeyValueStore::RocksDB => {
                 let rocksdb = IoThreadRocksDB::new(
                     &instance_dir,
-                    global_env.clone(),
+                    rocksdb_options,
                     scope.index(),
                     source_id,
                     args.rocksdb_use_wal,
-                    args.rocksdb_use_vector_memtable,
                     args.rocksdb_clear_before_use,
                 );
 
@@ -905,11 +936,10 @@ where
             KeyValueStore::RocksDB => {
                 let rocksdb = IoThreadRocksDB::new(
                     &instance_dir,
-                    global_env.clone(),
+                    rocksdb_options,
                     scope.index(),
                     source_id,
                     args.rocksdb_use_wal,
-                    args.rocksdb_use_vector_memtable,
                     args.rocksdb_clear_before_use,
                 );
 
@@ -1145,11 +1175,10 @@ struct IoThreadRocksDB {
 impl IoThreadRocksDB {
     fn new(
         temp_dir: &Path,
-        global_env: Option<rocksdb::Env>,
+        options: &rocksdb::Options,
         worker_id: usize,
         source_id: usize,
         use_wal: bool,
-        use_vector_memtable: bool,
         destroy_before_use: bool,
     ) -> Self {
         // bounded??
@@ -1166,23 +1195,7 @@ impl IoThreadRocksDB {
             DB::destroy(&rocksdb::Options::default(), &*instance_path).unwrap();
         }
 
-        let mut rocks_options = rocksdb::Options::default();
-        rocks_options.create_if_missing(true);
-        // Dumped every 600 seconds.
-        rocks_options.enable_statistics();
-        rocks_options.set_report_bg_io_stats(true);
-
-        if use_vector_memtable {
-            rocks_options.set_memtable_factory(rocksdb::MemtableFactory::Vector);
-            // Required to use the vector memtable.
-            rocks_options.set_allow_concurrent_memtable_write(false);
-        }
-
-        if let Some(global_env) = global_env {
-            rocks_options.set_env(&global_env);
-        }
-
-        let db: DB = DB::open(&rocks_options, instance_path).unwrap();
+        let db: DB = DB::open(&options, instance_path).unwrap();
         std::thread::spawn(move || {
             let mut wo = rocksdb::WriteOptions::new();
             wo.disable_wal(!use_wal);
@@ -1253,4 +1266,46 @@ impl Map for IoThreadRocksDB {
     async fn ingest(&mut self, batches: Vec<Batch>) -> Batch<KVAndPrevious> {
         self.ingest_inner(batches).await
     }
+}
+
+fn calculate_rocksdb_stats(
+    opts: Option<&rocksdb::Options>,
+    elapsed_seconds: u64,
+) -> Option<String> {
+    let mut read_rate: f64 = -1.0;
+    let mut write_rate: f64 = -1.0;
+    let mut compact_read_rate: f64 = -1.0;
+    let mut compact_write_rate: f64 = -1.0;
+    if let Some(opts) = opts {
+        if let Some(stats) = opts.get_statistics() {
+            // If the given variable is not there, the rate ends up being
+            // `-1`, to communicate to the user that something is wrong.
+            for line in stats.split('\n') {
+                for (stat, rate_var) in [
+                    ("rocksdb.number.multiget.bytes.read", &mut read_rate),
+                    ("rocksdb.bytes.written", &mut write_rate),
+                    ("rocksdb.compact.read.bytes", &mut compact_read_rate),
+                    ("rocksdb.compact.write.bytes", &mut compact_write_rate),
+                ] {
+                    if line.starts_with(stat) {
+                        let val: isize = line
+                            .strip_prefix(&format!("{stat} COUNT : "))
+                            .unwrap()
+                            .parse()
+                            .unwrap();
+                        *rate_var = ((val) as f64 / MIB as f64) / elapsed_seconds as f64;
+                    }
+                }
+            }
+
+            return Some(format!(
+                "\n\tRocksDB read throughput {:.3} MiB/s\n\
+                \tRocksDB write throughput {:.3} MiB/s\n\
+                \tRocksDB compact read throughput {:.3} MiB/s\n\
+                \tRocksDB write throughput {:.3} MiB/s",
+                read_rate, write_rate, compact_read_rate, compact_write_rate
+            ));
+        }
+    }
+    None
 }
