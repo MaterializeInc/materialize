@@ -118,7 +118,7 @@ where
         f(&state)
     }
 
-    fn write_locked_state<R, F: FnOnce(&mut TypedState<K, V, T, D>) -> R>(&self, mut f: F) -> R {
+    fn write_locked_state<R, F: FnOnce(&mut TypedState<K, V, T, D>) -> R>(&self, f: F) -> R {
         let mut state = self.state.write().expect("lock poisoned");
         f(&mut state)
     }
@@ -396,14 +396,18 @@ where
         let seqno_before =
             seqno_hint.unwrap_or_else(|| self.read_locked_state(|state| state.seqno));
 
-        let diffs = self
+        let diffs_to_current = self
             .state_versions
-            .fetch_state_updates_fast_path::<K, V, T, D>(&self.shard_id, seqno_before)
+            .fetch_all_live_diffs_from_seqno::<K, V, T, D>(&self.shard_id, seqno_before)
             .await;
-        let diff_iter = diffs.as_slice();
+
+        // no new diffs past our current seqno, nothing to do
+        if diffs_to_current.is_empty() {
+            return;
+        }
 
         let new_seqno = self.write_locked_state(|state| {
-            state.apply_encoded_diffs(&self.cfg, &self.metrics, diff_iter);
+            state.apply_encoded_diffs(&self.cfg, &self.metrics, &diffs_to_current);
             state.seqno
         });
 
@@ -414,9 +418,11 @@ where
             return;
         }
 
+        // looks like our state is so old there aren't any diffs we can use to
+        // catch up directly. fall back to fully refetching state.
         let new_state = self
             .state_versions
-            .fetch_current_state(&self.shard_id, diffs)
+            .fetch_current_state(&self.shard_id, diffs_to_current)
             .await
             .check_codecs::<K, V, D>(&self.shard_id)
             .expect("shard codecs should not change");
@@ -426,6 +432,7 @@ where
             state.seqno
         });
 
+        self.metrics.state.update_state_slow_path.inc();
         assert!(
             seqno_before <= new_seqno,
             "state seqno regressed: {} vs {}",

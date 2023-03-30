@@ -243,7 +243,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
 }
 
 impl<T: Timestamp + Lattice + Codec64> State<T> {
-    pub fn apply_encoded_diffs<I: IntoIterator<Item = VersionedData>>(
+    pub fn apply_encoded_diffs<'a, I: IntoIterator<Item = &'a VersionedData>>(
         &mut self,
         cfg: &PersistConfig,
         metrics: &Metrics,
@@ -259,7 +259,8 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
             let diff = metrics
                 .codecs
                 .state_diff
-                .decode(|| StateDiff::decode(&cfg.build_version, x.data));
+                // Note: `x.data` is a `Bytes`, so cloning just increments a ref count
+                .decode(|| StateDiff::decode(&cfg.build_version, x.data.clone()));
             assert_eq!(diff.seqno_from, state_seqno);
             state_seqno = diff.seqno_to;
             Some((diff, data))

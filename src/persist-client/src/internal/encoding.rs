@@ -559,7 +559,7 @@ impl<T: Timestamp + Lattice + Codec64> UntypedState<T> {
         &self.state.collections.rollups
     }
 
-    pub fn apply_encoded_diffs<I: IntoIterator<Item = VersionedData>>(
+    pub fn apply_encoded_diffs<'a, I: IntoIterator<Item = &'a VersionedData>>(
         &mut self,
         cfg: &PersistConfig,
         metrics: &Metrics,
