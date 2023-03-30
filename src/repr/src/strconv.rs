@@ -55,6 +55,7 @@ use crate::adt::date::Date;
 use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
+use crate::adt::macl_item::MaclItem;
 use crate::adt::numeric::{self, Numeric, NUMERIC_DATUM_MAX_PRECISION};
 use crate::adt::range::{Range, RangeBound, RangeInner};
 use crate::adt::timestamp::CheckedTimestamp;
@@ -1438,6 +1439,22 @@ where
         }
     }
     Ok(())
+}
+
+/// Writes an `maclitem` to `buf`.
+pub fn format_macl_item<F>(buf: &mut F, macl_item: MaclItem) -> Nestable
+where
+    F: FormatBuffer,
+{
+    write!(buf, "{macl_item}");
+    Nestable::Yes
+}
+
+/// Parses an MaclItem from `s`.
+pub fn parse_macl_item(s: &str) -> Result<MaclItem, ParseError> {
+    s.trim()
+        .parse()
+        .map_err(|e| ParseError::invalid_input_syntax("maclitem", s).with_details(e))
 }
 
 pub trait ElementEscaper {

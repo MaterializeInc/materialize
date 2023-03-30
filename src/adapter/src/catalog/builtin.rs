@@ -1183,6 +1183,28 @@ pub const TYPE_TSTZ_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
     },
 };
 
+pub const TYPE_MACL_ITEM: BuiltinType<NameReference> = BuiltinType {
+    name: "maclitem",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_MACL_ITEM_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::MaclItem,
+        array_id: None,
+    },
+};
+
+pub const TYPE_MACL_ITEM_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_maclitem",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_MACL_ITEM_ARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_MACL_ITEM.name,
+        },
+        array_id: None,
+    },
+};
+
 pub const MZ_DATAFLOW_OPERATORS_PER_WORKER: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_operators_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
@@ -3450,6 +3472,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Type(&TYPE_TS_RANGE_ARRAY),
         Builtin::Type(&TYPE_TSTZ_RANGE),
         Builtin::Type(&TYPE_TSTZ_RANGE_ARRAY),
+        Builtin::Type(&TYPE_MACL_ITEM),
+        Builtin::Type(&TYPE_MACL_ITEM_ARRAY),
     ];
     for (schema, funcs) in &[
         (PG_CATALOG_SCHEMA, &*mz_sql::func::PG_CATALOG_BUILTINS),
@@ -4049,7 +4073,8 @@ mod tests {
                         | typ @ ScalarType::UInt64
                         | typ @ ScalarType::MzTimestamp
                         | typ @ ScalarType::List { .. }
-                        | typ @ ScalarType::Map { .. } => {
+                        | typ @ ScalarType::Map { .. }
+                        | typ @ ScalarType::MaclItem => {
                             panic!("{typ:?} type found in {full_name}");
                         }
                         ScalarType::Bool

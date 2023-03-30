@@ -35,6 +35,7 @@ use crate::adt::char::{Char, CharLength};
 use crate::adt::date::Date;
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
+use crate::adt::macl_item::{AclMode, MaclItem};
 use crate::adt::numeric::{Numeric, NumericMaxScale};
 use crate::adt::range::{Range, RangeLowerBound, RangeUpperBound};
 use crate::adt::system::{Oid, PgLegacyChar, RegClass, RegProc, RegType};
@@ -45,6 +46,7 @@ use crate::{ColumnName, ColumnType, DatumList, DatumMap, GlobalId, Row, RowArena
 
 pub use crate::relation_and_scalar::proto_scalar_type::ProtoRecordField;
 pub use crate::relation_and_scalar::ProtoScalarType;
+use crate::role_id::RoleId;
 
 /// A single value.
 ///
@@ -126,6 +128,8 @@ pub enum Datum<'a> {
     MzTimestamp(crate::Timestamp),
     /// A range of values, e.g. [-1, 1).
     Range(Range<DatumNested<'a>>),
+    /// A list of privileges granted to a user.
+    MaclItem(MaclItem),
     /// A placeholder value.
     ///
     /// Dummy values are never meant to be observed. Many operations on `Datum`
@@ -741,6 +745,19 @@ impl<'a> Datum<'a> {
         }
     }
 
+    /// Unwraps the maclitem value within this datum.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the datum is not [`Datum::MaclItem`].
+    #[track_caller]
+    pub fn unwrap_macl_item(&self) -> MaclItem {
+        match self {
+            Datum::MaclItem(macl_item) => *macl_item,
+            _ => panic!("Datum::unwrap_macl_item called on {:?}", self),
+        }
+    }
+
     /// Reports whether this datum is an instance of the specified column type.
     pub fn is_instance_of(self, column_type: &ColumnType) -> bool {
         fn is_instance_of_scalar(datum: Datum, scalar_type: &ScalarType) -> bool {
@@ -856,6 +873,8 @@ impl<'a> Datum<'a> {
                         }
                     }
                     (Datum::Range(_), _) => false,
+                    (Datum::MaclItem(_), ScalarType::MaclItem) => true,
+                    (Datum::MaclItem(_), _) => false,
                 }
             }
         }
@@ -1137,6 +1156,7 @@ impl fmt::Display for Datum<'_> {
             Datum::JsonNull => f.write_str("json_null"),
             Datum::Dummy => f.write_str("dummy"),
             Datum::Range(i) => write!(f, "{}", i),
+            Datum::MaclItem(macl_item) => write!(f, "{macl_item}"),
         }
     }
 }
@@ -1272,6 +1292,8 @@ pub enum ScalarType {
     Range {
         element_type: Box<ScalarType>,
     },
+    /// The type of [`Datum::MaclItem`]
+    MaclItem,
 }
 
 impl RustType<ProtoRecordField> for (ColumnName, ColumnType) {
@@ -1357,6 +1379,7 @@ impl RustType<ProtoScalarType> for ScalarType {
                 ScalarType::Range { element_type } => Range(Box::new(ProtoRange {
                     element_type: Some(element_type.into_proto()),
                 })),
+                ScalarType::MaclItem => MaclItem(()),
             }),
         }
     }
@@ -1436,6 +1459,7 @@ impl RustType<ProtoScalarType> for ScalarType {
                         .into_rust_if_some("ProtoRange::element_type")?,
                 ),
             }),
+            MaclItem(()) => Ok(ScalarType::MaclItem),
         }
     }
 }
@@ -2582,6 +2606,40 @@ impl<'a> ScalarType {
             ])
         });
         static RANGE: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
+        static MACLITEM: Lazy<Row> = Lazy::new(|| {
+            Row::pack_slice(&[
+                Datum::MaclItem(MaclItem {
+                    grantee: RoleId::Public,
+                    grantor: RoleId::Public,
+                    acl_mode: AclMode::empty(),
+                }),
+                Datum::MaclItem(MaclItem {
+                    grantee: RoleId::Public,
+                    grantor: RoleId::Public,
+                    acl_mode: AclMode::all(),
+                }),
+                Datum::MaclItem(MaclItem {
+                    grantee: RoleId::User(42),
+                    grantor: RoleId::Public,
+                    acl_mode: AclMode::empty(),
+                }),
+                Datum::MaclItem(MaclItem {
+                    grantee: RoleId::User(42),
+                    grantor: RoleId::Public,
+                    acl_mode: AclMode::all(),
+                }),
+                Datum::MaclItem(MaclItem {
+                    grantee: RoleId::Public,
+                    grantor: RoleId::User(42),
+                    acl_mode: AclMode::empty(),
+                }),
+                Datum::MaclItem(MaclItem {
+                    grantee: RoleId::Public,
+                    grantor: RoleId::User(42),
+                    acl_mode: AclMode::all(),
+                }),
+            ])
+        });
 
         match self {
             ScalarType::Bool => (*BOOL).iter(),
@@ -2617,6 +2675,7 @@ impl<'a> ScalarType {
             ScalarType::Int2Vector => (*INT2VECTOR).iter(),
             ScalarType::MzTimestamp => (*MZTIMESTAMP).iter(),
             ScalarType::Range { .. } => (*RANGE).iter(),
+            ScalarType::MaclItem { .. } => (*MACLITEM).iter(),
         }
     }
 

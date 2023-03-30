@@ -48,6 +48,7 @@ use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::soft_assert;
 use mz_persist_client::cfg::{PersistParameters, RetryParameters};
 use mz_pgrepr::oid::FIRST_USER_OID;
+use mz_repr::role_id::RoleId;
 use mz_repr::{explain::ExprHumanizer, Diff, GlobalId, RelationDesc, ScalarType};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::display::AstDisplay;
@@ -62,7 +63,7 @@ use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
     Aug, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId, PartialItemName,
     QualifiedItemName, QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier,
-    RoleId, SchemaId, SchemaSpecifier, PUBLIC_ROLE_NAME,
+    SchemaId, SchemaSpecifier, PUBLIC_ROLE_NAME,
 };
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
@@ -3198,6 +3199,7 @@ impl Catalog {
             CatalogType::Uuid => CatalogType::Uuid,
             CatalogType::VarChar => CatalogType::VarChar,
             CatalogType::Int2Vector => CatalogType::Int2Vector,
+            CatalogType::MaclItem => CatalogType::MaclItem,
         };
 
         BuiltinType {

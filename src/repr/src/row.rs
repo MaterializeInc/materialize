@@ -34,6 +34,7 @@ use crate::adt::array::{
 };
 use crate::adt::date::Date;
 use crate::adt::interval::Interval;
+use crate::adt::macl_item::MaclItem;
 use crate::adt::numeric;
 use crate::adt::numeric::Numeric;
 use crate::adt::range::{
@@ -400,6 +401,7 @@ enum Tag {
     UInt64,
     MzTimestamp,
     Range,
+    MaclItem,
 }
 
 // --------------------------------------------------------------------------------
@@ -655,6 +657,11 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
                 inner: Some(RangeInner { lower, upper }),
             })
         }
+        Tag::MaclItem => {
+            let macl_item = MaclItem::decode_binary(&data[*offset..MaclItem::binary_size()])
+                .expect("invalid maclitem");
+            Datum::MaclItem(macl_item)
+        }
     }
 }
 
@@ -891,6 +898,10 @@ where
                 }
             }
         }
+        Datum::MaclItem(macl_item) => {
+            data.push(Tag::MaclItem.into());
+            data.extend_from_slice(&macl_item.encode_binary());
+        }
     }
 }
 
@@ -990,6 +1001,7 @@ pub fn datum_size(datum: &Datum) -> usize {
                     .sum(),
             }
         }
+        Datum::MaclItem(_) => 1 + MaclItem::binary_size(),
     }
 }
 

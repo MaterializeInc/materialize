@@ -39,6 +39,7 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_ore::result::ResultExt as OreResultExt;
 use mz_ore::task;
 use mz_repr::explain::{ExplainFormat, Explainee};
+use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
 use mz_sql::catalog::{
@@ -46,7 +47,7 @@ use mz_sql::catalog::{
     CatalogTypeDetails,
 };
 use mz_sql::catalog::{CatalogItem as SqlCatalogItem, CatalogRole};
-use mz_sql::names::{QualifiedItemName, RoleId};
+use mz_sql::names::QualifiedItemName;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
     AlterOptionParameter, AlterOwnerPlan, AlterRolePlan, AlterSecretPlan, AlterSinkPlan,
