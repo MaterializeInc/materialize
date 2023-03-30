@@ -219,20 +219,23 @@ pub async fn create_consumer(
             &BTreeMap::new(),
         )
         .await
-        .map_err(|e| sql_err!("{}", e))?;
+        .map_err(|e| sql_err!("{:#}", e))?;
     let consumer = Arc::new(consumer);
 
     let context = Arc::clone(consumer.context());
     let owned_topic = String::from(topic);
-    // Wait for a metadata request for up to one second. This greatly
+    // Wait for a metadata request for up to two seconds. This greatly
     // increases the probability that we'll see a connection error if
     // e.g. the hostname was mistyped. librdkafka doesn't expose a
     // better API for asking whether a connection succeeded or failed,
     // unfortunately.
+    //
+    // TODO(guswynn): this is temporary, and we should instead
+    // ensure that at least one metadata request succeeds.
     task::spawn_blocking(move || format!("kafka_get_metadata:{topic}"), {
         let consumer = Arc::clone(&consumer);
         move || {
-            let _ = consumer.fetch_metadata(Some(&owned_topic), Duration::from_secs(1));
+            let _ = consumer.fetch_metadata(Some(&owned_topic), Duration::from_secs(2));
         }
     })
     .await
@@ -356,9 +359,9 @@ where
 }
 
 /// Gets error strings from `rdkafka` when creating test consumers.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct KafkaErrCheckContext {
-    pub error: Mutex<Option<String>>,
+    pub error: Arc<Mutex<Option<String>>>,
 }
 
 impl ConsumerContext for KafkaErrCheckContext {}
@@ -376,7 +379,7 @@ impl ClientContext for KafkaErrCheckContext {
             // Do not allow logging to overwrite other values if
             // present.
             if error.is_none() {
-                *error = Some(log_message.to_string());
+                *error = Some(format!("error logged: {}", log_message));
             }
         }
         MzClientContext.log(level, fac, log_message)
@@ -385,7 +388,14 @@ impl ClientContext for KafkaErrCheckContext {
     fn error(&self, error: rdkafka::error::KafkaError, reason: &str) {
         // Allow error to overwrite value irrespective of other conditions
         // (i.e. logging).
-        *self.error.lock().expect("lock poisoned") = Some(reason.to_string());
+
+        *self.error.lock().expect("lock poisoned") = Some(format!(
+            "{:#}: reason: {}",
+            // anyhow printed with `:#` prints the full chain of errors.
+            // TODO(guswynn): abstract this out to `mz_ore`.
+            anyhow::anyhow!(error.clone()),
+            reason
+        ));
         MzClientContext.error(error, reason)
     }
 }
