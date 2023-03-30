@@ -99,16 +99,9 @@ where
                     needed_tokens.push(sink_token);
                 }
 
-                compute_state.sink_tokens.insert(
-                    sink_id,
-                    SinkToken {
-                        token: Box::new(needed_tokens),
-                        is_subscribe: matches!(
-                            sink.connection,
-                            ComputeSinkConnection::Subscribe(_)
-                        ),
-                    },
-                );
+                compute_state
+                    .sink_tokens
+                    .insert(sink_id, SinkToken::new(Box::new(needed_tokens)));
             });
     }
 }
