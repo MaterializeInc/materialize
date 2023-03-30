@@ -29,3 +29,11 @@ contains:Invalid data in source, saw retractions (1) for row that does not exist
 
 ! SELECT * FROM data
 contains:Invalid data in source, saw retractions (2) for row that does not exist: [Int64(1)]
+
+# regression scenario per #17963
+! SELECT grp.id, count(t.data) AS top_2_count,
+         (SELECT COUNT(d.data) FROM data d WHERE d.data % 2 = grp.id) AS total_count
+  FROM (SELECT generate_series(0,1) id) grp,
+         LATERAL (SELECT data FROM data WHERE data % 2 = grp.id ORDER BY data LIMIT 2) t
+  GROUP BY grp.id;
+contains:Negative multiplicities in TopK
