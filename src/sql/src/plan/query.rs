@@ -1212,10 +1212,22 @@ pub fn plan_ctes(
                 let typ = qcx.relation_type(&val);
                 // TODO: Use implicit casts to convert among types rather than error.
                 if !typ.subtypes(qcx.ctes[&cte.id].desc.typ()) {
+                    let declared_typ = qcx.ctes[&cte.id]
+                        .desc
+                        .typ()
+                        .column_types
+                        .iter()
+                        .map(|ty| qcx.humanize_scalar_type(&ty.scalar_type))
+                        .collect::<Vec<_>>();
+                    let inferred_typ = typ
+                        .column_types
+                        .iter()
+                        .map(|ty| qcx.humanize_scalar_type(&ty.scalar_type))
+                        .collect::<Vec<_>>();
                     Err(PlanError::RecursiveTypeMismatch(
                         cte_name,
-                        qcx.ctes[&cte.id].desc.typ().clone(),
-                        typ,
+                        declared_typ,
+                        inferred_typ,
                     ))?;
                 }
 
