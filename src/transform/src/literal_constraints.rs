@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! See if there are predicates of the form `<expr>=literal` that can be sped up using an index.
+//! See if there are predicates of the form `<expr> = literal` that can be sped up using an index.
 //! More specifically, look for an MFP on top of a Get, where the MFP has an appropriate filter, and
 //! the Get has a matching index. Convert these to `IndexedFilter` joins, which is a semi-join with
 //! a constant collection.
@@ -37,6 +37,10 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct LiteralConstraints;
 
 impl crate::Transform for LiteralConstraints {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
     target = "optimizer"
     level = "trace",
