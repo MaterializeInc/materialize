@@ -10,7 +10,7 @@
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 
-use crate::{client::CREATE_USERS_PATH, error::Error, parse::Paginated};
+use crate::{client::CREATE_USERS_PATH, error::{FronteggError}, parse::Paginated};
 
 use super::{Client, USERS_PATH};
 
@@ -64,7 +64,7 @@ pub struct UserCreationResponse {
 
 impl Client {
     // Lists all existing users.
-    pub async fn list_users(&self) -> Result<Vec<User>, Error> {
+    pub async fn list_users(&self) -> Result<Vec<User>, FronteggError> {
         let mut users = vec![];
         let mut page = 0;
 
@@ -87,7 +87,7 @@ impl Client {
     pub async fn create_user(
         &self,
         new_user: UserCreationRequest,
-    ) -> Result<UserCreationResponse, Error> {
+    ) -> Result<UserCreationResponse, FronteggError> {
         let req = self.build_request(Method::POST, CREATE_USERS_PATH);
 
         let req = req.json(&new_user);

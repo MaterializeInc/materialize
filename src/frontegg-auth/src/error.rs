@@ -13,28 +13,6 @@ use thiserror::Error;
 
 use crate::app_password::AppPasswordParseError;
 
-/// An error returned by a [`Client`].
-///
-/// [`Client`]: crate::Client
-#[derive(Debug)]
-pub enum Error {
-    /// An error in the underlying transport.
-    Transport(reqwest::Error),
-    /// An error returned by the API.
-    Api(ApiError),
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Error::Transport(e) => write!(f, "frontegg error: transport: {e}"),
-            Error::Api(e) => write!(f, "frontegg error: api: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for Error {}
-
 /// An error returned by the Frontegg API.
 #[derive(Debug, Clone)]
 pub struct ApiError {
@@ -57,26 +35,16 @@ impl fmt::Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
-impl From<reqwest::Error> for Error {
-    fn from(e: reqwest::Error) -> Error {
-        Error::Transport(e)
-    }
-}
-
-impl From<ApiError> for Error {
-    fn from(e: ApiError) -> Error {
-        Error::Api(e)
-    }
-}
-
 #[derive(Error, Debug)]
 pub enum FronteggError {
     #[error(transparent)]
     InvalidPasswordFormat(#[from] AppPasswordParseError),
     #[error("invalid token format: {0}")]
     InvalidTokenFormat(#[from] jsonwebtoken::errors::Error),
-    #[error("authentication token exchange failed: {0}")]
-    ReqwestError(#[from] reqwest::Error),
+    #[error("frontegg error: transport: {0}")]
+    Transport(#[from] reqwest::Error),
+    #[error("frontegg error: api: {0}")]
+    Api(#[from] ApiError),
     #[error("authentication token expired")]
     TokenExpired,
     #[error("unauthorized organization")]

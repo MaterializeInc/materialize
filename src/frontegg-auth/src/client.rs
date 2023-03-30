@@ -16,8 +16,7 @@ use url::Url;
 use crate::{
     app_password::AppPassword,
     config::{ClientBuilder, ClientConfig},
-    error::ApiError,
-    error::Error,
+    error::{ApiError, FronteggError},
 };
 
 const AUTH_PATH: [&str; 5] = ["identity", "resources", "auth", "v1", "api-token"];
@@ -98,7 +97,7 @@ impl Client {
     }
 
     /// Sends a requests and adds the authorization bearer token.
-    async fn send_request<T>(&self, req: RequestBuilder) -> Result<T, Error>
+    async fn send_request<T>(&self, req: RequestBuilder) -> Result<T, FronteggError>
     where
         T: DeserializeOwned,
     {
@@ -107,7 +106,7 @@ impl Client {
         self.send_unauthenticated_request(req).await
     }
 
-    async fn send_unauthenticated_request<T>(&self, req: RequestBuilder) -> Result<T, Error>
+    async fn send_unauthenticated_request<T>(&self, req: RequestBuilder) -> Result<T, FronteggError>
     where
         T: DeserializeOwned,
     {
@@ -129,12 +128,12 @@ impl Client {
                 Ok(e) => {
                     let mut messages = e.errors;
                     messages.extend(e.message);
-                    Err(Error::Api(ApiError {
+                    Err(FronteggError::Api(ApiError {
                         status_code,
                         messages,
                     }))
                 }
-                Err(_) => Err(Error::Api(ApiError {
+                Err(_) => Err(FronteggError::Api(ApiError  {
                     status_code,
                     messages: vec!["unable to decode error details".into()],
                 })),
@@ -144,7 +143,7 @@ impl Client {
 
     /// Authenticates with the server, if not already authenticated,
     /// and returns the authentication token.
-    pub async fn auth(&self) -> Result<Auth, Error> {
+    pub async fn auth(&self) -> Result<Auth, FronteggError> {
         let mut auth = self.auth.lock().await;
         match &*auth {
             Some(auth) if SystemTime::now() < auth.refresh_at => {

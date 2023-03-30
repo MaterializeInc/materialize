@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use reqwest::Method;
 use serde::Deserialize;
 
-use crate::{app_password::AppPassword, error::Error};
+use crate::{app_password::AppPassword, error::{FronteggError}};
 
 use super::{Client, APP_PASSWORDS_PATH, CREATE_APP_PASSWORDS_PATH};
 
@@ -26,14 +26,14 @@ pub struct FronteggAppPassword {
 
 impl Client {
     /// Lists all existing app passwords.
-    pub async fn list_app_passwords(&self) -> Result<Vec<FronteggAppPassword>, Error> {
+    pub async fn list_app_passwords(&self) -> Result<Vec<FronteggAppPassword>, FronteggError> {
         let req = self.build_request(Method::GET, APP_PASSWORDS_PATH);
         let passwords: Vec<FronteggAppPassword> = self.send_request(req).await?;
         Ok(passwords)
     }
 
     /// Lists all existing app passwords.
-    pub async fn create_app_password(&self, description: String) -> Result<AppPassword, Error> {
+    pub async fn create_app_password(&self, description: String) -> Result<AppPassword, FronteggError> {
         let req = self.build_request(Method::POST, CREATE_APP_PASSWORDS_PATH);
         let mut body = BTreeMap::new();
         body.insert("description", description);
