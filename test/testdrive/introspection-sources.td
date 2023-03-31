@@ -278,9 +278,9 @@ mv1_primary_idx mv1
 
 > CREATE VIEW vv_arr AS SELECT sum(a) FROM t JOIN t2 ON t.a = t2.b;
 
-> CREATE DEFAULT INDEX ii_arr ON vv_arr
-
 > CREATE MATERIALIZED VIEW mv_arr AS SELECT * FROM vv_arr
+
+> CREATE DEFAULT INDEX ii_arr ON vv_arr
 
 > SELECT records >= 300 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_arr' OR name='mv_arr'
 true
