@@ -45,7 +45,7 @@ use crate::typedefs::{KeysValsHandle, RowSpine};
 ///
 /// Returns a map from log variant to a tuple of a trace handle and a permutation to reconstruct
 /// the original rows.
-pub fn construct<A: Allocate>(
+pub(super) fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
     linked: std::rc::Rc<

@@ -50,7 +50,7 @@ use crate::typedefs::{KeysValsHandle, RowSpine};
 /// * `activator`: A handle to acknowledge activations.
 ///
 /// Returns a map from log variant to a tuple of a trace handle and a dataflow drop token.
-pub fn construct<A: Allocate>(
+pub(super) fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
     event_source: Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, TimelyEvent)>>,
