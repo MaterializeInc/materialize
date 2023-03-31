@@ -154,8 +154,7 @@ impl ProjectionPushdown {
 
                 // Recursively indicate the requirements.
                 for (input, inp_columns) in inputs.iter_mut().zip(new_columns) {
-                    let mut inp_columns = inp_columns.into_iter().collect::<Vec<_>>();
-                    inp_columns.sort();
+                    let inp_columns = inp_columns.into_iter().collect::<Vec<_>>();
                     self.action(input, &inp_columns, gets)?;
                 }
 
