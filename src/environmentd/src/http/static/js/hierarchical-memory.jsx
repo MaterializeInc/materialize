@@ -141,30 +141,27 @@ function Dataflows(props) {
       } = await query(`
                 SET cluster = ${formatNameForQuery(props.clusterName)};
                 SET cluster_replica = ${formatNameForQuery(props.replicaName)};
-                SELECT DISTINCT
+                SELECT
                     id, address
                 FROM
                     mz_internal.mz_dataflow_addresses;
 
-                SELECT DISTINCT
+                SELECT
                     id, name
                 FROM
                     mz_internal.mz_dataflow_operators;
 
                 SELECT
-                    id, from_index, to_index, from_port, to_port, sum(sent) as sent
+                    id, from_index, to_index, from_port, to_port, sent
                 FROM
                     mz_internal.mz_dataflow_channels AS channels
                     LEFT JOIN mz_internal.mz_message_counts AS counts
-                        ON channels.id = counts.channel_id AND channels.worker_id = counts.from_worker_id
-                GROUP BY id, from_index, to_index, from_port, to_port;
+                        ON channels.id = counts.channel_id;
 
                 SELECT
-                    operator_id as id, sum(records)
+                    operator_id as id, records
                 FROM
-                    mz_internal.mz_arrangement_sizes
-                GROUP BY
-                    id;
+                    mz_internal.mz_arrangement_sizes;
             `);
 
       // Map from id to address (array). {320: [11], 321: [11, 1]}.

@@ -15,13 +15,40 @@
 
 $ set-regex match=s\d+ replacement=SID
 
+> SELECT count(*) FROM (SELECT count(*) FROM mz_internal.mz_dataflow_addresses);
+1
+
+> SELECT count(*) FROM (SELECT count(*) FROM mz_internal.mz_dataflow_channel_operators);
+1
+
+> SELECT count(*) FROM (SELECT count(*) FROM mz_internal.mz_dataflow_channels);
+1
+
+> SELECT count(*) FROM (SELECT count(*) FROM mz_internal.mz_dataflow_operator_dataflows);
+1
+
+> SELECT count(*) FROM (SELECT count(*) FROM mz_internal.mz_dataflow_operator_parents);
+1
+
+> SELECT count(*) FROM (SELECT count(*) FROM mz_internal.mz_dataflow_operator_reachability);
+1
+
 > SELECT count(*) FROM (SELECT count(*) FROM mz_internal.mz_dataflow_operators);
+1
+
+> SELECT count(*) FROM (SELECT count(*) FROM mz_internal.mz_dataflows);
 1
 
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_scheduling_elapsed);
 1
 
+> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_scheduling_parks_histogram);
+1
+
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_compute_operator_durations_histogram);
+1
+
+> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_arrangement_sharing);
 1
 
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_arrangement_sizes);
@@ -36,16 +63,22 @@ $ set-regex match=s\d+ replacement=SID
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_compute_import_frontiers);
 1
 
-> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_worker_compute_delays_histogram);
+> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_compute_delays_histogram);
 1
 
-> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_worker_compute_dependencies);
+> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_compute_dependencies);
 1
 
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_active_peeks);
 1
 
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_peek_durations_histogram);
+1
+
+> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_records_per_dataflow);
+1
+
+> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_records_per_dataflow_operator);
 1
 
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_message_counts);
@@ -57,12 +90,12 @@ contains:cannot drop schema mz_internal because it is required by the database s
 ! DROP VIEW mz_internal.mz_compute_frontiers
 contains:cannot drop item mz_internal.mz_compute_frontiers because it is required by the database system
 
-! DROP SOURCE mz_internal.mz_worker_compute_delays_histogram_internal
-contains:cannot drop item mz_internal.mz_worker_compute_delays_histogram_internal because it is required by the database system
+! DROP SOURCE mz_internal.mz_compute_delays_histogram_raw
+contains:cannot drop item mz_internal.mz_compute_delays_histogram_raw because it is required by the database system
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)
-  WHERE mz_views.name = 'mz_peek_durations_histogram'
+  WHERE mz_views.name = 'mz_peek_durations_histogram_per_worker'
   ORDER BY position
 id      name        position    type
 --------------------------------------
@@ -72,7 +105,7 @@ SID   count       3           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)
-  WHERE mz_views.name = 'mz_scheduling_elapsed'
+  WHERE mz_views.name = 'mz_scheduling_elapsed_per_worker'
   ORDER BY position
 id      name        position    type
 --------------------------------------
@@ -82,7 +115,7 @@ SID   elapsed_ns  3           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)
-  WHERE mz_views.name = 'mz_compute_operator_durations_histogram'
+  WHERE mz_views.name = 'mz_compute_operator_durations_histogram_per_worker'
   ORDER BY position
 id      name        position    type
 --------------------------------------
@@ -93,7 +126,7 @@ SID   count       4           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)
-  WHERE mz_views.name = 'mz_scheduling_parks_histogram'
+  WHERE mz_views.name = 'mz_scheduling_parks_histogram_per_worker'
   ORDER BY position
 id      name           position    type
 -----------------------------------------
@@ -104,7 +137,7 @@ SID   count          4           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)
-  WHERE mz_views.name = 'mz_message_counts'
+  WHERE mz_views.name = 'mz_message_counts_per_worker'
   ORDER BY position
 id      name              position    type
 --------------------------------------------
@@ -116,7 +149,7 @@ SID   received          5           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)
-  WHERE mz_views.name = 'mz_dataflow_operator_reachability'
+  WHERE mz_views.name = 'mz_dataflow_operator_reachability_per_worker'
   ORDER BY position
 id      name        position    type
 --------------------------------------
@@ -129,7 +162,7 @@ SID   count       6           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)
-  WHERE mz_views.name = 'mz_arrangement_sizes'
+  WHERE mz_views.name = 'mz_arrangement_sizes_per_worker'
   ORDER BY position
 id      name        position    type
 --------------------------------------
@@ -140,7 +173,7 @@ SID   batches     4           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)
-  WHERE mz_views.name = 'mz_arrangement_sharing'
+  WHERE mz_views.name = 'mz_arrangement_sharing_per_worker'
   ORDER BY position
 id      name        position    type
 --------------------------------------
@@ -150,7 +183,7 @@ SID   count       3           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)
-  WHERE mz_views.name = 'mz_worker_compute_delays_histogram'
+  WHERE mz_views.name = 'mz_compute_delays_histogram_per_worker'
   ORDER BY position
 id      name        position    type
 --------------------------------------
@@ -162,7 +195,7 @@ SID   count       5           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, mz_columns.type
   FROM mz_sources JOIN mz_columns USING (id)
-  WHERE mz_sources.name = 'mz_worker_compute_import_frontiers'
+  WHERE mz_sources.name = 'mz_compute_import_frontiers_per_worker'
   ORDER BY position
 id      name        position    type
 --------------------------------------
