@@ -16,7 +16,7 @@ public keys needed to configure the bastion server.
 
 ## Create an SSH tunnel connection
 
-In Materialize, create an [SSH tunnel connection](/sql/create-connection/#ssh-tunnel) to the bastion server:
+In Materialize, create an [SSH tunnel connection](/sql/create-connection/#kafka-network-security) to the bastion server:
 
 ```sql
 CREATE CONNECTION ssh_connection TO SSH TUNNEL (
@@ -70,10 +70,11 @@ In Materialize, create a source connection that uses the SSH tunnel connection y
 {{< tab "Kafka">}}
 ```sql
 CREATE CONNECTION kafka_connection TO KAFKA (
-BROKERS (
-    'broker1:9092' USING SSH TUNNEL ssh_connection,
-    'broker2:9092' USING SSH TUNNEL ssh_connection
-    )
+  BROKERS (
+    'broker1:9092',
+    'broker2:9092'
+  ),
+  SSH TUNNEL ssh_connection
 );
 ```
 
