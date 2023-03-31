@@ -115,6 +115,11 @@ where
         self.upper()
     }
 
+    /// A point-in-time read of `upper` from the current state.
+    ///
+    /// Due to sharing state with other handles, successive reads to this fn or any other may
+    /// see a different version of state, even if this Applier has not explicitly fetched and
+    /// updated to the latest state.
     pub fn upper(&self) -> Antichain<T> {
         self.state
             .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
@@ -122,6 +127,11 @@ where
             })
     }
 
+    /// A point-in-time read of `since` from the current state.
+    ///
+    /// Due to sharing state with other handles, successive reads to this fn or any other may
+    /// see a different version of state, even if this Applier has not explicitly fetched and
+    /// updated to the latest state.
     #[cfg(test)]
     pub fn since(&self) -> Antichain<T> {
         self.state
@@ -130,6 +140,11 @@ where
             })
     }
 
+    /// A point-in-time read of `seqno` from the current state.
+    ///
+    /// Due to sharing state with other handles, successive reads to this fn or any other may
+    /// see a different version of state, even if this Applier has not explicitly fetched and
+    /// updated to the latest state.
     pub fn seqno(&self) -> SeqNo {
         self.state
             .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
@@ -137,6 +152,11 @@ where
             })
     }
 
+    /// A point-in-time read of `is_tombstone` from the current state.
+    ///
+    /// Due to sharing state with other handles, successive reads to this fn or any other may
+    /// see a different version of state, even if this Applier has not explicitly fetched and
+    /// updated to the latest state.
     pub fn is_tombstone(&self) -> bool {
         self.state
             .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
@@ -144,6 +164,11 @@ where
             })
     }
 
+    /// A point-in-time read of `seqno_since` from the current state.
+    ///
+    /// Due to sharing state with other handles, successive reads to this fn or any other may
+    /// see a different version of state, even if this Applier has not explicitly fetched and
+    /// updated to the latest state.
     pub fn seqno_since(&self) -> SeqNo {
         self.state
             .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
@@ -151,6 +176,11 @@ where
             })
     }
 
+    /// A point-in-time read of `since` and `upper` from the current state.
+    ///
+    /// Due to sharing state with other handles, successive reads to this fn or any other may
+    /// see a different version of state, even if this Applier has not explicitly fetched and
+    /// updated to the latest state.
     pub fn since_and_upper(&self) -> (Antichain<T>, Antichain<T>) {
         self.state
             .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
