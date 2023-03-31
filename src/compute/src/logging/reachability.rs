@@ -33,6 +33,11 @@ use crate::typedefs::{KeysValsHandle, RowSpine};
 
 use super::Plumbing;
 
+pub(super) type ReachabilityEvent = (
+    Vec<usize>,
+    Vec<(usize, usize, bool, Option<Timestamp>, Diff)>,
+);
+
 /// Constructs the logging dataflow for reachability logs.
 ///
 /// Params
@@ -45,10 +50,7 @@ use super::Plumbing;
 pub(super) fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
-    plumbing: Plumbing<(
-        Vec<usize>,
-        Vec<(usize, usize, bool, Option<Timestamp>, Diff)>,
-    )>,
+    plumbing: Plumbing<ReachabilityEvent>,
 ) -> BTreeMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
 

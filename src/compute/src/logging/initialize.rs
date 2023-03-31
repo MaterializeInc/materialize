@@ -10,8 +10,9 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use differential_dataflow::logging::DifferentialEvent;
 use timely::communication::Allocate;
-use timely::logging::Logger;
+use timely::logging::{Logger, TimelyEvent};
 use timely::progress::reachability::logging::TrackerEvent;
 
 use mz_compute_client::logging::{LogVariant, LoggingConfig};
@@ -19,6 +20,8 @@ use mz_repr::Timestamp;
 
 use crate::typedefs::KeysValsHandle;
 
+use super::compute::ComputeEvent;
+use super::reachability::ReachabilityEvent;
 use super::{BatchLogger, Plumbing};
 
 /// Initialize logging dataflows.
@@ -44,51 +47,109 @@ pub fn initialize<A: Allocate>(
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
         .expect("Failed to get duration since Unix epoch");
 
-    let t_plumbing = Plumbing::new("t");
-    let r_plumbing = Plumbing::new("r");
-    let d_plumbing = Plumbing::new("d");
-    let c_plumbing = Plumbing::new("c");
+    let mut context = LoggingContext {
+        worker,
+        config,
+        interval_ms,
+        now,
+        start_offset,
+        t_plumbing: Plumbing::new("t"),
+        r_plumbing: Plumbing::new("r"),
+        d_plumbing: Plumbing::new("d"),
+        c_plumbing: Plumbing::new("c"),
+    };
 
-    let mut traces = BTreeMap::new();
+    // Depending on whether we should log the creation of the logging dataflows, we register the
+    // loggers with timely either before or after creating them.
+    let traces = if config.log_logging {
+        context.register_loggers();
+        context.construct_dataflows()
+    } else {
+        let traces = context.construct_dataflows();
+        context.register_loggers();
+        traces
+    };
 
-    if !config.log_logging {
-        // Construct logging dataflows and endpoints before registering any.
-        traces.extend(super::timely::construct(worker, config, t_plumbing.clone()));
+    let logger = worker.log_register().get("materialize/compute").unwrap();
+    (logger, traces)
+}
+
+struct LoggingContext<'a, A: Allocate> {
+    worker: &'a mut timely::worker::Worker<A>,
+    config: &'a LoggingConfig,
+    interval_ms: u64,
+    now: Instant,
+    start_offset: Duration,
+    t_plumbing: Plumbing<TimelyEvent>,
+    r_plumbing: Plumbing<ReachabilityEvent>,
+    d_plumbing: Plumbing<DifferentialEvent>,
+    c_plumbing: Plumbing<ComputeEvent>,
+}
+
+impl<A: Allocate> LoggingContext<'_, A> {
+    fn construct_dataflows(&mut self) -> BTreeMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
+        let mut traces = BTreeMap::new();
+        traces.extend(super::timely::construct(
+            self.worker,
+            self.config,
+            self.t_plumbing.clone(),
+        ));
         traces.extend(super::reachability::construct(
-            worker,
-            config,
-            r_plumbing.clone(),
+            self.worker,
+            self.config,
+            self.r_plumbing.clone(),
         ));
         traces.extend(super::differential::construct(
-            worker,
-            config,
-            d_plumbing.clone(),
+            self.worker,
+            self.config,
+            self.d_plumbing.clone(),
         ));
         traces.extend(super::compute::construct(
-            worker,
-            config,
-            c_plumbing.clone(),
+            self.worker,
+            self.config,
+            self.c_plumbing.clone(),
         ));
+        traces
     }
 
-    // Register each logger endpoint.
-    let plumbing = t_plumbing.clone();
-    worker.log_register().insert_logger("timely", {
-        let mut logger = BatchLogger::new(plumbing.link, interval_ms);
-        Logger::new(now, start_offset, worker.index(), move |time, data| {
-            logger.publish_batch(time, data);
-            plumbing.activator.activate();
-        })
-    });
+    fn register_loggers(&self) {
+        self.worker
+            .log_register()
+            .insert_logger("timely", self.simple_logger(self.t_plumbing.clone()));
+        self.worker
+            .log_register()
+            .insert_logger("timely/reachability", self.reachability_logger());
+        self.worker.log_register().insert_logger(
+            "differential/arrange",
+            self.simple_logger(self.d_plumbing.clone()),
+        );
+        self.worker.log_register().insert_logger(
+            "materialize/compute",
+            self.simple_logger(self.c_plumbing.clone()),
+        );
+    }
 
-    let plumbing = r_plumbing.clone();
-    worker.log_register().insert_logger("timely/reachability", {
-        let mut logger = BatchLogger::new(plumbing.link, interval_ms);
+    fn simple_logger<E: 'static>(&self, plumbing: Plumbing<E>) -> Logger<E> {
+        let mut logger = BatchLogger::new(plumbing.link, self.interval_ms);
         Logger::new(
-            now,
-            start_offset,
-            worker.index(),
-            move |time, data: &mut Vec<(Duration, usize, TrackerEvent)>| {
+            self.now,
+            self.start_offset,
+            self.worker.index(),
+            move |time, data| {
+                logger.publish_batch(time, data);
+                plumbing.activator.activate();
+            },
+        )
+    }
+
+    fn reachability_logger(&self) -> Logger<TrackerEvent> {
+        let plumbing = self.r_plumbing.clone();
+        let mut logger = BatchLogger::new(plumbing.link, self.interval_ms);
+        Logger::new(
+            self.now,
+            self.start_offset,
+            self.worker.index(),
+            move |time, data| {
                 let mut converted_updates = Vec::new();
                 for event in data.drain(..) {
                     match event.2 {
@@ -132,38 +193,5 @@ pub fn initialize<A: Allocate>(
                 plumbing.activator.activate();
             },
         )
-    });
-
-    let plumbing = d_plumbing.clone();
-    worker
-        .log_register()
-        .insert_logger("differential/arrange", {
-            let mut logger = BatchLogger::new(plumbing.link, interval_ms);
-            Logger::new(now, start_offset, worker.index(), move |time, data| {
-                logger.publish_batch(time, data);
-                plumbing.activator.activate();
-            })
-        });
-
-    let plumbing = c_plumbing.clone();
-    worker.log_register().insert_logger("materialize/compute", {
-        let mut logger = BatchLogger::new(plumbing.link, interval_ms);
-        Logger::new(now, start_offset, worker.index(), move |time, data| {
-            logger.publish_batch(time, data);
-            plumbing.activator.activate();
-        })
-    });
-
-    let logger = worker.log_register().get("materialize/compute").unwrap();
-
-    if config.log_logging {
-        // Create log processing dataflows after registering logging so we can log the
-        // logging.
-        traces.extend(super::timely::construct(worker, config, t_plumbing));
-        traces.extend(super::reachability::construct(worker, config, r_plumbing));
-        traces.extend(super::differential::construct(worker, config, d_plumbing));
-        traces.extend(super::compute::construct(worker, config, c_plumbing));
     }
-
-    (logger, traces)
 }
