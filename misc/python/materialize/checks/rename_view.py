@@ -27,6 +27,21 @@ class RenameView(Check):
         )
 
     def manipulate(self) -> List[Testdrive]:
+        fix_ownership = (
+            dedent(
+                """
+                # When upgrading from old version without roles the views are
+                # owned by default_role, thus we have to change the owner
+                # before dropping them:
+                $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+                ALTER VIEW rename_view_viewB2 OWNER TO materialize;
+                ALTER VIEW rename_view_viewA2 OWNER TO materialize;
+                """
+            )
+            if self.base_version >= MzVersion.parse("0.46.0-dev")
+            else ""
+        )
+
         return [
             Testdrive(dedent(s))
             for s in [
@@ -36,7 +51,8 @@ class RenameView(Check):
                 > ALTER VIEW rename_view_viewB1 RENAME TO rename_view_viewB2;
                 > INSERT INTO rename_view_table VALUES (3,3);
                 """,
-                """
+                fix_ownership
+                + """
                 > INSERT INTO rename_view_table VALUES (4,4);
                 > ALTER VIEW rename_view_viewB2 RENAME TO rename_view_viewB3;
                 > ALTER VIEW rename_view_viewA2 RENAME TO rename_view_viewA3;

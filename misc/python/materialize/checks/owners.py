@@ -15,15 +15,6 @@ from materialize.util import MzVersion
 
 
 class Owners(Check):
-    def _enable_rbac_checks(self, value: bool) -> str:
-        return dedent(
-            f"""
-            $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
-            ALTER SYSTEM SET enable_rbac_checks TO {value};
-            ALTER ROLE materialize CREATEROLE CREATEDB CREATECLUSTER;
-            """
-        )
-
     def _create_objects(self, role: str, i: int, expensive: bool = False) -> str:
         s = dedent(
             f"""
@@ -91,25 +82,19 @@ class Owners(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(
-            self._enable_rbac_checks(True)
-            + "> CREATE ROLE owner_role_01 CREATEDB CREATECLUSTER"
+            "> CREATE ROLE owner_role_01 CREATEDB CREATECLUSTER"
             + self._create_objects("owner_role_01", 1, expensive=True)
-            + self._enable_rbac_checks(False)
         )
 
     def manipulate(self) -> List[Testdrive]:
         return [
             Testdrive(s)
             for s in [
-                self._enable_rbac_checks(True)
-                + self._create_objects("owner_role_01", 2)
-                + "> CREATE ROLE owner_role_02 CREATEDB CREATECLUSTER"
-                + self._enable_rbac_checks(False),
-                self._enable_rbac_checks(True)
-                + self._create_objects("owner_role_01", 3)
+                self._create_objects("owner_role_01", 2)
+                + "> CREATE ROLE owner_role_02 CREATEDB CREATECLUSTER",
+                self._create_objects("owner_role_01", 3)
                 + self._create_objects("owner_role_02", 4)
-                + "> CREATE ROLE owner_role_03 CREATEDB CREATECLUSTER"
-                + self._enable_rbac_checks(False),
+                + "> CREATE ROLE owner_role_03 CREATEDB CREATECLUSTER",
             ]
         ]
 
@@ -121,10 +106,9 @@ class Owners(Check):
         )
         # TODO: Fix owners in dbs, schemas, types after #18414 is fixed
         return Testdrive(
-            self._enable_rbac_checks(True)
             # materialize role is not allowed to drop the objects since it is
             # not the owner, verify this:
-            + self._drop_objects("materialize", 1, success=False, expensive=True)
+            self._drop_objects("materialize", 1, success=False, expensive=True)
             + self._drop_objects("materialize", 2, success=False)
             + self._drop_objects("materialize", 3, success=False)
             + self._drop_objects("materialize", 4, success=False)
@@ -239,5 +223,4 @@ class Owners(Check):
             + self._drop_objects("owner_role_01", 5)
             + self._drop_objects("owner_role_02", 6)
             + self._drop_objects("owner_role_03", 7)
-            + self._enable_rbac_checks(False)
         )

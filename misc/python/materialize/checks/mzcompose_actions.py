@@ -7,11 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from textwrap import dedent
 from typing import TYPE_CHECKING, List, Optional
 
 from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
 from materialize.mzcompose.services import Clusterd, Materialized
+from materialize.ui import UIError
 from materialize.util import MzVersion
 
 if TYPE_CHECKING:
@@ -43,19 +45,6 @@ class StartMz(MzcomposeAction):
         with c.override(mz):
             c.up("materialized")
 
-        for config_param in [
-            "max_tables",
-            "max_sinks",
-            "max_sources",
-            "max_materialized_views",
-            "max_secrets",
-        ]:
-            c.sql(
-                f"ALTER SYSTEM SET {config_param} TO 1000",
-                user="mz_system",
-                port=6877,
-            )
-
         mz_version = MzVersion.parse_sql(c)
         if self.tag:
             assert (
@@ -66,6 +55,48 @@ class StartMz(MzcomposeAction):
             assert (
                 version_cargo == mz_version
             ), f"Materialize version mismatch, expected {version_cargo}, but got {mz_version}"
+
+
+class ConfigureMz(Action):
+    def execute(self, e: Executor) -> None:
+        input = dedent(
+            """
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER SYSTEM SET max_tables = 1000;
+            ALTER SYSTEM SET max_sinks = 1000;
+            ALTER SYSTEM SET max_sources = 1000;
+            ALTER SYSTEM SET max_materialized_views = 1000;
+            ALTER SYSTEM SET max_objects_per_schema = 1000;
+            ALTER SYSTEM SET max_secrets = 1000;
+            """
+        )
+
+        if self.base_version >= MzVersion(0, 46, 0):
+            input += "ALTER SYSTEM SET enable_rbac_checks TO true;"
+
+        e.testdrive(input=input)
+
+        # Since we already test with RBAC enabled, we have to give materialize
+        # user the relevant permissions so the existing tests keep working.
+        # This is hacky since there is no CREATE ROLE IF NOT EXISTS.
+        try:
+            e.testdrive(
+                input=dedent(
+                    """
+                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                CREATE ROLE materialize CREATEROLE CREATEDB CREATECLUSTER;
+                """
+                )
+            )
+        except UIError:
+            e.testdrive(
+                input=dedent(
+                    """
+                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER ROLE materialize CREATEROLE CREATEDB CREATECLUSTER;
+                """
+                )
+            )
 
 
 class KillMz(MzcomposeAction):
@@ -96,7 +127,9 @@ class UseClusterdCompute(MzcomposeAction):
                 COMPUTECTL ADDRESSES ['clusterd_compute_1:2101'],
                 COMPUTE ADDRESSES ['clusterd_compute_1:2102'],
                 WORKERS 1;
-        """
+            """,
+            port=6877,
+            user="mz_system",
         )
 
 
@@ -169,5 +202,7 @@ class DropCreateDefaultReplica(MzcomposeAction):
             """
            DROP CLUSTER REPLICA default.r1;
            CREATE CLUSTER REPLICA default.r1 SIZE '1';
-        """
+            """,
+            port=6877,
+            user="mz_system",
         )

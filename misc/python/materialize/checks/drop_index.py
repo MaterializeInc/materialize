@@ -30,6 +30,21 @@ class DropIndex(Check):
         )
 
     def manipulate(self) -> List[Testdrive]:
+        fix_ownership = (
+            dedent(
+                """
+                # When upgrading from old version without roles the indexes are
+                # owned by default_role, thus we have to change the owner
+                # before dropping them:
+                $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+                ALTER INDEX drop_index_table_primary_idx OWNER TO materialize;
+                ALTER INDEX drop_index_index2 OWNER TO materialize;
+                """
+            )
+            if self.base_version >= MzVersion.parse("0.46.0-dev")
+            else ""
+        )
+
         return [
             Testdrive(dedent(s))
             for s in [
@@ -40,7 +55,8 @@ class DropIndex(Check):
                 > CREATE INDEX drop_index_index2 ON drop_index_table (f1, f2);
                 > INSERT INTO drop_index_table VALUES (6,6,6);
                 """,
-                """
+                fix_ownership
+                + """
                 > INSERT INTO drop_index_table VALUES (7,7,7);
                 > DROP INDEX drop_index_table_primary_idx;
                 > INSERT INTO drop_index_table VALUES (8,8,8);
