@@ -11,6 +11,7 @@
 
 pub mod compute;
 pub mod differential;
+pub mod initialize;
 pub mod reachability;
 pub mod timely;
 
@@ -21,6 +22,8 @@ use ::timely::progress::Timestamp as TimelyTimestamp;
 
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_repr::Timestamp;
+
+pub use initialize::initialize;
 
 /// Logs events as a timely stream, with progress statements.
 pub struct BatchLogger<T, E, P>
