@@ -609,12 +609,16 @@ impl DatumKnowledge {
                 unreachable!();
             };
 
-            if s_typ != o_typ {
-                soft_panic_or_log!("Undefined join of non-equal types ({s_typ:?} != {o_typ:?})");
+            if !s_typ.base_eq(o_typ) {
+                ::tracing::error!("Undefined join of non-equal base types {s_typ:?} != {o_typ:?}");
                 *self = Self::top();
             } else if s_val != o_val {
                 let nullable = self.nullable() || other.nullable();
                 *self = Any { nullable }
+            } else if s_typ != o_typ {
+                // Same value but different base types - strip all modifiers!
+                // This is identical to what ColumnType::union is doing.
+                *s_typ = s_typ.without_modifiers();
             } else {
                 // Value and type coincide - do nothing!
             }
@@ -698,7 +702,7 @@ impl DatumKnowledge {
             };
 
             if s_typ != o_typ {
-                soft_panic_or_log!("Undefined meet of non-equal types ({s_typ:?} != {o_typ:?})");
+                soft_panic_or_log!("Undefined meet of non-equal types {s_typ:?} != {o_typ:?}");
                 *self = Self::top(); // this really should be Nothing
             } else if s_val != o_val {
                 *self = Nothing;
