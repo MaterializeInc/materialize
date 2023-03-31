@@ -12,8 +12,12 @@
 > SELECT COUNT(*) FROM t2;
 500000
 
+# We can encounter different errors here:
+# - encounter an alter table error if the NOT NULL constraint dropped
+# - a NULL decoding failure if the NOT NULL constraint is re-instated
+#   after being dropped and MZ reboots.
 ! SELECT * FROM alter_fail_drop_constraint;
-contains:has been altered
+contains:Source error
 
 ! SELECT * FROM alter_fail_drop_col;
 contains:has been altered
