@@ -13,9 +13,10 @@ use std::fmt::Formatter;
 
 use itertools::Itertools;
 
+use mz_ore::str::StrExt;
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier, RoleId, SchemaSpecifier};
-use mz_sql::plan::Plan;
+use mz_sql::plan::{AlterOwnerPlan, Plan};
 use mz_sql_parser::ast::{ObjectType, QualifiedReplica};
 
 use crate::catalog::Catalog;
@@ -95,6 +96,9 @@ pub enum UnauthorizedError {
     /// The action requires ownership of an object.
     #[error("must be owner of {}", objects.iter().map(|(object_type, object_name)| format!("{object_type} {object_name}")).join(", "))]
     Ownership { objects: Vec<(ObjectType, String)> },
+    /// Altering an owner requires membership of the new owner role.
+    #[error("must be a member of {}", role_name.to_string().quoted())]
+    AlterOwnerMembership { role_name: String },
     /// The action requires one or more privileges.
     #[error("permission denied to {action}")]
     Privilege {
@@ -113,10 +117,11 @@ impl UnauthorizedError {
                 "You must have the {} attribute to {}",
                 attribute, action
             )),
-            UnauthorizedError::Ownership { .. } => None,
             UnauthorizedError::Privilege { action, reason } => reason
                 .as_ref()
                 .map(|reason| format!("{} to {}", reason, action)),
+            UnauthorizedError::Ownership { .. }
+            | UnauthorizedError::AlterOwnerMembership { .. } => None,
         }
     }
 }
@@ -178,6 +183,16 @@ pub fn check_plan(
 
     // Obtain all roles that the current session is a member of.
     let role_membership = catalog.collect_role_membership(role_id);
+
+    if let Plan::AlterOwner(AlterOwnerPlan { new_owner, .. }) = plan {
+        if !role_membership.contains(new_owner) {
+            return Err(AdapterError::Unauthorized(
+                UnauthorizedError::AlterOwnerMembership {
+                    role_name: catalog.get_role(new_owner).name().to_string(),
+                },
+            ));
+        }
+    }
 
     // Validate that the current session has the required attributes to execute the provided plan.
     if let Some(required_attribute) = generate_required_plan_attribute(plan) {

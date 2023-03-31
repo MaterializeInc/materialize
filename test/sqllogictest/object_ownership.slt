@@ -1258,6 +1258,29 @@ ALTER INDEX mz_internal.mz_show_databases_ind OWNER TO mz_system
 ----
 db error: ERROR: cannot alter item mz_internal.mz_show_databases_ind because it is required by the database system
 
+# Superusers can alter the owner to a role that they are not a member of
+
+statement ok
+CREATE TABLE t ()
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE group1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER TABLE t OWNER TO group1;
+----
+COMPLETE 0
+
+statement ok
+CREATE ROLE group2;
+
+simple conn=mz_system,user=mz_system
+ALTER TABLE t OWNER TO group2;
+----
+COMPLETE 0
+
 # Disable rbac checks.
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;
