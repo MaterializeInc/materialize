@@ -272,19 +272,17 @@ mv1_primary_idx mv1
 
 # Test that the roll-up of arrangement sizes is correct
 
-> CREATE TABLE t2 (a int)
-
 > INSERT INTO t SELECT * FROM generate_series(1, 100);
 
 > INSERT INTO t2 SELECT * FROM generate_series(1, 200);
 
-> CREATE VIEW vv2 AS SELECT sum(a) FROM t JOIN t2 USING (a);
+> CREATE VIEW vv_arr AS SELECT sum(a) FROM t JOIN t2 ON t.a = t2.b;
 
-> CREATE DEFAULT INDEX ii2 ON vv2
+> CREATE DEFAULT INDEX ii_arr ON vv_arr
 
-> CREATE MATERIALIZED VIEW mv2 AS SELECT * FROM vv2
+> CREATE MATERIALIZED VIEW mv_arr AS SELECT * FROM vv_arr
 
-> SELECT records >= 300 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii2' OR name='mv2'
+> SELECT records >= 300 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_arr' OR name='mv_arr'
 true
 true
 

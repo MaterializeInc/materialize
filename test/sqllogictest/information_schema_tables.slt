@@ -305,6 +305,10 @@ mz_dataflow_addresses_per_worker
 SOURCE
 materialize
 mz_internal
+mz_dataflow_arrangement_sizes
+VIEW
+materialize
+mz_internal
 mz_dataflow_channel_operators
 VIEW
 materialize
@@ -334,10 +338,6 @@ VIEW
 materialize
 mz_internal
 mz_dataflow_operator_parents_per_worker
-VIEW
-materialize
-mz_internal
-mz_dataflow_arrangement_sizes
 VIEW
 materialize
 mz_internal
