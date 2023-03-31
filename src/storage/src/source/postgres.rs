@@ -239,7 +239,19 @@ struct PostgresTaskInfo {
     /// Our cursor into the WAL
     replication_lsn: PgLsn,
     metrics: PgSourceMetrics,
-    /// A map of the table oid to its information
+    /// A map of the table oid to its information.
+    ///
+    /// Note that we populate this information with state from the catalog, but only remove it if we
+    /// encounter errors during execution. This means it is possible for items to be removed during
+    /// one execution cycle, only to have them re-appear on restart. For instance, if we remove a
+    /// table because of an issue with its schema, and the operator then "fixes" the issue with the
+    /// schema, we will not remove the table during the next execution cycle. This isn't a large
+    /// concern because the fact that we never retract errors from subsources means that the source
+    /// never return readable values, though it will start sending data along its Ok stream again.
+    ///
+    /// At the time of writing, the plan is to resolve the above issue when we track each source
+    /// table's frontier independently; in that world, we can close the source table's frontier so
+    /// we have a durable signal that it should never produce any data.
     source_tables: BTreeMap<u32, SourceTable>,
     row_sender: RowSender,
     sender: Sender<InternalMessage>,
@@ -595,7 +607,8 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
 async fn postgres_replication_loop_inner_snapshot(
     task_info: &mut PostgresTaskInfo,
 ) -> Result<(), ReplicationError> {
-    // Get all the relevant tables for this publication
+    // Verify relevant tables for this publication; we do this on every loop to cleanup source
+    // tables and very lazily detect dropped tables.
     let publication_tables = mz_postgres_util::publication_info(
         &task_info.connection_config,
         &task_info.publication,
@@ -1054,7 +1067,15 @@ fn produce_snapshot<'a>(
 
                     let mut raw_values = parser.iter_raw_truncating(info.desc.columns.len());
                     while let Some(raw_value) = raw_values.next() {
-                        match raw_value? {
+                        match raw_value.map_err(|e| if e.to_string() == "missing data for column" {
+                            anyhow!(
+                                "source table {} with oid {} has been altered",
+                                info.desc.name,
+                                id
+                            )
+                        } else {
+                             e.into()
+                        })? {
                             Some(value) => {
                                 packer.push(Datum::String(std::str::from_utf8(value)?))
                             }
