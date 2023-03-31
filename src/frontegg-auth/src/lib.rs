@@ -195,7 +195,7 @@ impl FronteggAuthentication {
                 app_password: password.parse()?,
             });
         let mut auth = client.auth().await.unwrap();
-        let mut claims = self.validate_token(auth.token.clone(), Some(&expected_email))?;
+        let claims = self.validate_token(auth.token.clone(), Some(&expected_email))?;
         claims_processor(claims.clone());
         let frontegg = self.clone();
 
@@ -205,12 +205,10 @@ impl FronteggAuthentication {
             loop {
                 let current_time = SystemTime::now();
 
-                match current_time.duration_since(auth.refresh_at) {
-                    Ok(sleep_time) => {
-                        tokio::time::sleep(sleep_time).await;
-                    }
-                    Err(_) => {}
-                }
+                let sleep_time = auth.refresh_at
+                    .duration_since(current_time)
+                    .unwrap_or(Duration::from_millis(0));
+                tokio::time::sleep(sleep_time).await;
 
                 let refresh_request = async {
                     loop {
@@ -231,15 +229,17 @@ impl FronteggAuthentication {
                         }
                     }
                 };
-                let expire_in = u64::try_from(claims.exp - frontegg.now.as_secs()).unwrap_or(0);
-                let expire_in = tokio::time::sleep(Duration::from_secs(expire_in));
+
+                let sleep_time = auth.refresh_at
+                    .duration_since(current_time)
+                    .unwrap_or(Duration::from_millis(0));
+                let expire_in = tokio::time::sleep(sleep_time);
 
                 tokio::select! {
                     _ = expire_in => return (),
                     (refresh_auth, refresh_claims) = refresh_request => {
                         auth = refresh_auth;
-                        claims = refresh_claims;
-                        claims_processor(claims.clone());
+                        claims_processor(refresh_claims.clone());
                     },
                 };
             }

@@ -10,7 +10,7 @@
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 
-use crate::{client::CREATE_USERS_PATH, error::{FronteggError}, parse::Paginated};
+use crate::{client::CREATE_USERS_PATH, error::FronteggError, parse::Paginated};
 
 use super::{Client, USERS_PATH};
 

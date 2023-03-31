@@ -133,7 +133,7 @@ impl Client {
                         messages,
                     }))
                 }
-                Err(_) => Err(FronteggError::Api(ApiError  {
+                Err(_) => Err(FronteggError::Api(ApiError {
                     status_code,
                     messages: vec!["unable to decode error details".into()],
                 })),

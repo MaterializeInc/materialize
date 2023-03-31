@@ -687,7 +687,7 @@ fn start_mzcloud(
         )
         .unwrap();
         let resp = AuthenticationResponse {
-            expires_in: 10,
+            expires_in: context.expires_in_secs.unsigned_abs(),
             access_token,
         };
         Ok(Response::new(Body::from(
@@ -772,7 +772,7 @@ fn test_auth_expiry() {
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
 
-    const EXPIRES_IN_SECS: u64 = 20;
+    const EXPIRES_IN_SECS: u64 = 10;
     let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
     let frontegg_server = start_mzcloud(
         encoding_key,
