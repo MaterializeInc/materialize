@@ -22,7 +22,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::jsonb::JsonbRef;
-use mz_repr::adt::macl_item::MaclItem;
+use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::adt::range::{Range, RangeInner};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::strconv::{self, Nestable};
@@ -109,7 +109,7 @@ pub enum Value {
     /// A contiguous range of values along a domain.
     Range(Range<Box<Value>>),
     /// A list of privileges granted to a role.
-    MaclItem(MaclItem),
+    MzAclItem(MzAclItem),
 }
 
 impl Value {
@@ -299,7 +299,7 @@ impl Value {
 
                 buf.make_datum(|packer| packer.push_range(range).unwrap())
             }
-            Value::MaclItem(macl_item) => Datum::MaclItem(macl_item),
+            Value::MzAclItem(mz_acl_item) => Datum::MzAclItem(mz_acl_item),
         }
     }
 
@@ -380,7 +380,7 @@ impl Value {
                 None => Ok::<_, ()>(buf.write_null()),
             })
             .expect("provided closure never fails"),
-            Value::MaclItem(macl_item) => strconv::format_macl_item(buf, *macl_item),
+            Value::MzAclItem(mz_acl_item) => strconv::format_mz_acl_item(buf, *mz_acl_item),
         }
     }
 
@@ -508,8 +508,8 @@ impl Value {
                 }
                 Ok(postgres_types::IsNull::No)
             }
-            Value::MaclItem(macl_item) => {
-                buf.extend_from_slice(&macl_item.encode_binary());
+            Value::MzAclItem(mz_acl_item) => {
+                buf.extend_from_slice(&mz_acl_item.encode_binary());
                 Ok(postgres_types::IsNull::No)
             }
         }
@@ -607,7 +607,7 @@ impl Value {
             Type::Range { element_type } => Value::Range(strconv::parse_range(s, |elem_text| {
                 Value::decode_text(element_type, elem_text.as_bytes()).map(Box::new)
             })?),
-            Type::MaclItem => Value::MaclItem(strconv::parse_macl_item(s)?),
+            Type::MzAclItem => Value::MzAclItem(strconv::parse_mz_acl_item(s)?),
         })
     }
 
@@ -666,9 +666,9 @@ impl Value {
                 Ok(Value::MzTimestamp(t))
             }
             Type::Range { .. } => Err("binary decoding of range types is not implemented".into()),
-            Type::MaclItem => {
-                let macl_item = MaclItem::decode_binary(raw)?;
-                Ok(Value::MaclItem(macl_item))
+            Type::MzAclItem => {
+                let mz_acl_item = MzAclItem::decode_binary(raw)?;
+                Ok(Value::MzAclItem(mz_acl_item))
             }
         }
     }

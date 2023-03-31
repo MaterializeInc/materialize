@@ -216,7 +216,7 @@ impl ToJson for TypedDatum<'_> {
                     // records.
                     json!(datum.unwrap_range().to_string())
                 }
-                ScalarType::MaclItem => json!(datum.unwrap_macl_item().to_string()),
+                ScalarType::MzAclItem => json!(datum.unwrap_mz_acl_item().to_string()),
             }
         }
     }
@@ -333,7 +333,7 @@ fn build_row_schema_field(
         ScalarType::MzTimestamp => json!("string"),
         // https://debezium.io/documentation/reference/stable/connectors/postgresql.html
         ScalarType::Range { .. } => json!("string"),
-        ScalarType::MaclItem => json!("string"),
+        ScalarType::MzAclItem => json!("string"),
     };
     if typ.nullable {
         field_type = json!(["null", field_type]);

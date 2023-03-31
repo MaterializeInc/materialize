@@ -685,7 +685,7 @@ pub enum CatalogType<T: TypeReference> {
     Uuid,
     VarChar,
     Int2Vector,
-    MaclItem,
+    MzAclItem,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

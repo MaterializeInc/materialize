@@ -11,13 +11,13 @@ syntax = "proto3";
 
 import "repr/src/role_id.proto";
 
-package mz_repr.adt.macl_item;
+package mz_repr.adt.mz_acl_item;
 
 message ProtoAclMode {
   uint64 acl_mode = 1;
 }
 
-message ProtoMaclItem {
+message ProtoMzAclItem {
     mz_repr.role_id.ProtoRoleId grantee = 1;
     mz_repr.role_id.ProtoRoleId grantor = 2;
     ProtoAclMode acl_mode = 3;

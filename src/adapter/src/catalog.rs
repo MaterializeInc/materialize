@@ -3199,7 +3199,7 @@ impl Catalog {
             CatalogType::Uuid => CatalogType::Uuid,
             CatalogType::VarChar => CatalogType::VarChar,
             CatalogType::Int2Vector => CatalogType::Int2Vector,
-            CatalogType::MaclItem => CatalogType::MaclItem,
+            CatalogType::MzAclItem => CatalogType::MzAclItem,
         };
 
         BuiltinType {

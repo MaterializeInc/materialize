@@ -5901,7 +5901,7 @@ where
             Some(d) => stringify_datum(buf.nonnull_buffer(), *d, element_type),
             None => Ok::<_, EvalError>(buf.write_null()),
         }),
-        MaclItem => Ok(strconv::format_macl_item(buf, d.unwrap_macl_item())),
+        MzAclItem => Ok(strconv::format_mz_acl_item(buf, d.unwrap_mz_acl_item())),
     }
 }
 

@@ -73,7 +73,7 @@ use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::PersistLocation;
 use mz_pgrepr::{oid, Interval, Jsonb, Numeric, UInt2, UInt4, UInt8, Value};
 use mz_repr::adt::date::Date;
-use mz_repr::adt::macl_item::MaclItem;
+use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::adt::numeric;
 use mz_repr::ColumnName;
 use mz_secrets::SecretsController;
@@ -455,7 +455,9 @@ impl<'a> FromSql<'a> for Slt {
                         let t: mz_repr::Timestamp = s.parse()?;
                         Self(Value::MzTimestamp(t))
                     }
-                    oid::TYPE_MACL_ITEM_OID => Self(Value::MaclItem(MaclItem::decode_binary(raw)?)),
+                    oid::TYPE_MZ_ACL_ITEM_OID => {
+                        Self(Value::MzAclItem(MzAclItem::decode_binary(raw)?))
+                    }
                     _ => unreachable!(),
                 },
             },

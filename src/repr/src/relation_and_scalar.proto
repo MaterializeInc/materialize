@@ -115,6 +115,6 @@ message ProtoScalarType {
         google.protobuf.Empty UInt64 = 31;
         google.protobuf.Empty MzTimestamp = 32;
         ProtoRange Range = 33;
-        google.protobuf.Empty MaclItem = 34;
+        google.protobuf.Empty MzAclItem = 34;
     }
 }

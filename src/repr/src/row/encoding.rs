@@ -542,7 +542,7 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
                     })
                 }),
             })),
-            Datum::MaclItem(x) => DatumType::MaclItem(x.into_proto()),
+            Datum::MzAclItem(x) => DatumType::MzAclItem(x.into_proto()),
         };
         ProtoDatum {
             datum_type: Some(datum_type),
@@ -690,7 +690,7 @@ impl RowPacker<'_> {
                     }
                 }
             }
-            Some(DatumType::MaclItem(x)) => self.push(Datum::MaclItem(x.clone().into_rust()?)),
+            Some(DatumType::MzAclItem(x)) => self.push(Datum::MzAclItem(x.clone().into_rust()?)),
             None => return Err("unknown datum type".into()),
         };
         Ok(())
