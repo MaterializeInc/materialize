@@ -59,7 +59,7 @@ class UpgradeEntireMzPreviousVersion(UpgradeEntireMz):
         return previous_version
 
 
-class UpgradeEntireMzTwoVersions(UpgradeEntireMz):
+class UpgradeEntireMzTwoVersions(Scenario):
     """Upgrade the entire Mz instance starting from the previous
     released version and passing through the last released version."""
 
@@ -84,6 +84,60 @@ class UpgradeEntireMzTwoVersions(UpgradeEntireMz):
             Manipulate(self, phase=2),
             Validate(self),
             # A second restart while already on the current source
+            KillMz(),
+            StartMz(tag=None),
+            Validate(self),
+        ]
+
+
+class UpgradeEntireMzSkipVersion(Scenario):
+    """Upgrade the entire Mz instance from the previous version directly to the current HEAD"""
+
+    def base_version(self) -> MzVersion:
+        return previous_version
+
+    def actions(self) -> List[Action]:
+        print(f"Upgrading starting from tag {self.base_version()} directly to HEAD")
+        return [
+            # Start with previous_version
+            StartMz(tag=previous_version),
+            Initialize(self),
+            Manipulate(self, phase=1),
+            # Upgrade directly to current source
+            KillMz(),
+            StartMz(tag=None),
+            Manipulate(self, phase=2),
+            Validate(self),
+            # A second restart while already on the current source
+            KillMz(),
+            StartMz(tag=None),
+            Validate(self),
+        ]
+
+
+class UpgradeEntireMzFourVersions(Scenario):
+    """Test upgrade X-4 -> X-3 -> X-2 -> X-1 -> X"""
+
+    def base_version(self) -> MzVersion:
+        return released_versions[3]
+
+    def actions(self) -> List[Action]:
+        print(f"Upgrading going through {released_versions[:3]}")
+        return [
+            StartMz(tag=released_versions[3]),
+            Initialize(self),
+            KillMz(),
+            StartMz(tag=released_versions[2]),
+            Manipulate(self, phase=1),
+            KillMz(),
+            StartMz(tag=released_versions[1]),
+            Manipulate(self, phase=2),
+            KillMz(),
+            StartMz(tag=released_versions[0]),
+            Validate(self),
+            KillMz(),
+            StartMz(tag=None),
+            Validate(self),
             KillMz(),
             StartMz(tag=None),
             Validate(self),
