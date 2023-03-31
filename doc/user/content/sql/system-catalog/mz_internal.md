@@ -434,12 +434,12 @@ Field       | Type       | Meaning
 The `mz_dataflow_arrangement_sizes` view describes how many records and batches
 are contained in operators under each dataflow.
 
-Field         | Type       | Meaning
---------------|------------|--------
-`operator_id` | [`bigint`] | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
-`worker_id`   | [`bigint`] | The ID of the worker thread hosting the arrangement.
-`records`     | [`bigint`] | The number of records in the arrangement.
-`batches`     | [`bigint`] | The number of batches in the arrangement.
+| Field     | Type       | Meaning                                                                      |
+|-----------|------------|------------------------------------------------------------------------------|
+| `id`      | [`bigint`] | The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows). |
+| `name`    | [`bigint`] | The name of the object (e.g., index) maintained by the dataflow.             |
+| `records` | [`bigint`] | The number of records in all arrangements in the dataflow.                   |
+| `batches` | [`bigint`] | The number of batches in all arrangements in the dataflow.                   |
 
 ### `mz_message_counts`
 
