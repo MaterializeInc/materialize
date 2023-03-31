@@ -14,9 +14,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use bytesize::ByteSize;
-use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::trace::TraceReader;
-use differential_dataflow::Collection;
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -34,10 +32,8 @@ use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cache::PersistClientCache;
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_repr::{GlobalId, Row, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::types::errors::DataflowError;
-use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::probe;
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
@@ -337,21 +333,10 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
         let (logger, traces) = logging::initialize(self.timely_worker, config);
 
-        // TODO: Construct error collection and trace bundles inside `logging::initialize`.
-        let errs = self
-            .timely_worker
-            .dataflow_named("Dataflow: logging", |scope| {
-                Collection::<_, DataflowError, Diff>::empty(scope)
-                    .arrange_named("Arrange logging err")
-                    .trace
-            });
-
         // Install traces as maintained indexes
-        for (log, (trace, token)) in traces {
+        for (log, trace) in traces {
             let id = config.index_logs[&log];
-            self.compute_state
-                .traces
-                .set(id, TraceBundle::new(trace, errs.clone()).with_drop(token));
+            self.compute_state.traces.set(id, trace);
         }
 
         // Initialize frontier reporting for all logging indexes.

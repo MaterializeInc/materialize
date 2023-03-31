@@ -5,20 +5,22 @@
 
 //! Initialization of logging dataflows.
 
-use std::any::Any;
 use std::collections::BTreeMap;
-use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use differential_dataflow::logging::DifferentialEvent;
+use differential_dataflow::operators::arrange::Arrange;
+use differential_dataflow::Collection;
 use timely::communication::Allocate;
 use timely::logging::{Logger, TimelyEvent};
 use timely::progress::reachability::logging::TrackerEvent;
 
 use mz_compute_client::logging::{LogVariant, LoggingConfig};
-use mz_repr::Timestamp;
+use mz_repr::{Diff, Timestamp};
+use mz_storage_client::types::errors::DataflowError;
+use mz_timely_util::operator::CollectionExt;
 
-use crate::typedefs::KeysValsHandle;
+use crate::arrangement::manager::TraceBundle;
 
 use super::compute::ComputeEvent;
 use super::reachability::ReachabilityEvent;
@@ -26,15 +28,12 @@ use super::{BatchLogger, Plumbing};
 
 /// Initialize logging dataflows.
 ///
-/// Returns a logger for compute events, and for each `LogVariant` a trace handle and a dataflow
-/// drop token.
+/// Returns a logger for compute events, and for each `LogVariant` a trace bundle usable for
+/// retrieving logged records.
 pub fn initialize<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
-) -> (
-    super::compute::Logger,
-    BTreeMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)>,
-) {
+) -> (super::compute::Logger, BTreeMap<LogVariant, TraceBundle>) {
     let interval_ms = std::cmp::max(1, config.interval.as_millis())
         .try_into()
         .expect("must fit");
@@ -87,7 +86,7 @@ struct LoggingContext<'a, A: Allocate> {
 }
 
 impl<A: Allocate> LoggingContext<'_, A> {
-    fn construct_dataflows(&mut self) -> BTreeMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
+    fn construct_dataflows(&mut self) -> BTreeMap<LogVariant, TraceBundle> {
         let mut traces = BTreeMap::new();
         traces.extend(super::timely::construct(
             self.worker,
@@ -109,7 +108,22 @@ impl<A: Allocate> LoggingContext<'_, A> {
             self.config,
             self.c_plumbing.clone(),
         ));
+
+        let errs = self
+            .worker
+            .dataflow_named("Dataflow: logging errors", |scope| {
+                Collection::<_, DataflowError, Diff>::empty(scope)
+                    .arrange_named("Arrange logging err")
+                    .trace
+            });
+
         traces
+            .into_iter()
+            .map(|(log, (trace, token))| {
+                let bundle = TraceBundle::new(trace, errs.clone()).with_drop(token);
+                (log, bundle)
+            })
+            .collect()
     }
 
     fn register_loggers(&self) {
