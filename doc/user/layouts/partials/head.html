@@ -144,22 +144,22 @@ toCSS | fingerprint }}
 <script>
   $(document).ready(function () {
     // make nav-tab lists from tab-panes
-    $(".tab-content")
-      .find(".tab-pane")
-      .each(function (idx, item) {
-        var navTabs = $(this).closest(".code-tabs").find(".nav-tabs"),
-          title = $(this).attr("title");
-        navTabs.append('<li><a href="#">' + title + "</a></li");
-      });
+    $(".tab-content").each(function (idx, tab) {
+      $(tab)
+        .find(".tab-pane")
+        .each(function (item) {
+          var navTabs = $(this).closest(".code-tabs").find(".nav-tabs"),
+            title = $(this).attr("title"),
+            id = title
+              .toLowerCase()
+              .replace(/ /g, "-")
+              .replace(/[^\w-]+/g, "");
+          navTabs.append(`<li><a href="#${id}-t${idx}">${title}</a></li>`);
+        });
+    });
 
-    // activate first tab and tab-pane
-    $(".nav-tabs li:first-child").addClass("active").click();
-    $(".tab-content div:first-child").addClass("active").click();
-
-    // click
+    // handle click events
     $(".nav-tabs a").click(function (e) {
-      e.preventDefault();
-
       var tab = $(this).parent(),
         tabIndex = tab.index(),
         tabPanel = $(this).closest(".code-tabs"),
@@ -168,5 +168,11 @@ toCSS | fingerprint }}
       tab.addClass("active");
       tabPane.addClass("active");
     });
+
+    // activate first tab
+    $(".nav-tabs li:first-child a").click();
+    // if the url anchor matches the id of a tab, activate that tab
+    var deeplinkedTab = $(`.nav-tabs a[href='${document.location.hash}']`);
+    if (deeplinkedTab) deeplinkedTab.click().get(0).scrollIntoView();
   });
 </script>
