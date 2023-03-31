@@ -431,6 +431,9 @@ impl StateCache {
     }
 }
 
+/// A locked decorator for TypedState that abstracts out the specific lock implementation used.
+/// Guards the private lock with public accessor fns to make locking scopes more explicit and
+/// simpler to reason about.
 #[derive(Debug)]
 pub(crate) struct LockingTypedState<K, V, T, D>(Arc<RwLock<TypedState<K, V, T, D>>>);
 

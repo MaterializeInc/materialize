@@ -1298,7 +1298,7 @@ mod tests {
             seqno: SeqNo(5),
             data: diff_proto.encode_to_vec().into(),
         };
-        state.apply_encoded_diffs(cache.cfg(), &cache.metrics, std::iter::once(encoded_diff));
+        state.apply_encoded_diffs(cache.cfg(), &cache.metrics, std::iter::once(&encoded_diff));
         assert_eq!(
             state
                 .state

@@ -384,7 +384,7 @@ where
         // correctly.
         #[cfg(any(test, debug_assertions))]
         {
-            if let Err(err) = StateDiff::validate_roundtrip(metrics, &state, &diff, &new_state) {
+            if let Err(err) = StateDiff::validate_roundtrip(metrics, state, &diff, &new_state) {
                 panic!("validate_roundtrips failed: {}", err);
             }
         }
@@ -421,12 +421,19 @@ where
     /// any more recent version of state is observed (e.g. updated by another handle),
     /// without making any calls to Consensus or Blob.
     pub async fn fetch_and_update_state(&mut self, seqno_hint: Option<SeqNo>) {
-        let seqno_before = seqno_hint.unwrap_or_else(|| {
-            self.state
-                .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
-                    state.seqno
-                })
-        });
+        let current_seqno = self.seqno();
+        let seqno_before = match seqno_hint {
+            None => current_seqno,
+            Some(hint) => {
+                // state is already more recent than our hint due to
+                // advancement by another handle to the same shard.
+                if hint < current_seqno {
+                    self.metrics.state.update_state_noop_path.inc();
+                    return;
+                }
+                current_seqno
+            }
+        };
 
         let diffs_to_current = self
             .state_versions
@@ -435,6 +442,7 @@ where
 
         // no new diffs past our current seqno, nothing to do
         if diffs_to_current.is_empty() {
+            self.metrics.state.update_state_empty_path.inc();
             return;
         }
 
@@ -445,6 +453,13 @@ where
                 state.seqno
             });
 
+        assert!(
+            seqno_before <= new_seqno,
+            "state seqno regressed: {} vs {}",
+            seqno_before,
+            new_seqno
+        );
+
         // whether the seqno advanced from diffs and/or because another handle
         // already updated it, we can assume it is now up-to-date
         if seqno_before < new_seqno {
@@ -452,8 +467,9 @@ where
             return;
         }
 
-        // looks like our state is so old there aren't any diffs we can use to
+        // our state is so old there aren't any diffs we can use to
         // catch up directly. fall back to fully refetching state.
+        // we can reuse the recent diffs we already have as a hint.
         let new_state = self
             .state_versions
             .fetch_current_state(&self.shard_id, diffs_to_current)
