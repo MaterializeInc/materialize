@@ -45,8 +45,8 @@ use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
 use mz_repr::{
-    ColumnName, ColumnType, Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowEncoder,
-    ScalarType,
+    ColumnName, ColumnType, Datum, DatumEncoderT, Diff, GlobalId, RelationDesc, RelationType, Row,
+    RowEncoder, ScalarType,
 };
 use mz_timely_util::order::{Interval, Partitioned, RangeBound};
 

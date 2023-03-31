@@ -14,8 +14,9 @@
 use bytes::BufMut;
 use chrono::Timelike;
 use dec::Decimal;
+use enum_dispatch::enum_dispatch;
 use mz_persist_types::columnar::{
-    ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
+    ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
 };
 use mz_persist_types::part::{ColumnsMut, ColumnsRef};
 use mz_persist_types::Codec;
@@ -34,7 +35,7 @@ use crate::row::{
     ProtoArray, ProtoArrayDimension, ProtoDatum, ProtoDatumOther, ProtoDict, ProtoDictElement,
     ProtoNumeric, ProtoRange, ProtoRangeInner, ProtoRow,
 };
-use crate::{Datum, RelationDesc, Row, RowPacker, ScalarType};
+use crate::{ColumnType, Datum, RelationDesc, Row, RowPacker, ScalarType};
 
 impl Codec for Row {
     type Schema = RelationDesc;
@@ -68,240 +69,221 @@ impl Codec for Row {
     }
 }
 
-impl From<&ScalarType> for ColumnFormat {
-    fn from(value: &ScalarType) -> Self {
-        match value {
-            ScalarType::Bool => ColumnFormat::Bool,
-            ScalarType::Int16 => ColumnFormat::I16,
-            ScalarType::Int32 => ColumnFormat::I32,
-            ScalarType::Int64 => ColumnFormat::I64,
-            ScalarType::UInt16 => ColumnFormat::U16,
-            ScalarType::UInt32 => ColumnFormat::U32,
-            ScalarType::UInt64 => ColumnFormat::U64,
-            ScalarType::Float32 => ColumnFormat::F32,
-            ScalarType::Float64 => ColumnFormat::F64,
-            ScalarType::Bytes => ColumnFormat::Bytes,
-            ScalarType::String => ColumnFormat::String,
-            _ => {
-                #[cfg(feature = "tracing_")]
-                tracing::trace!(
-                    "TODO: finish implementing all the ScalarType variants: {:?}",
-                    value
-                );
-                ColumnFormat::Bytes
+impl ColumnType {
+    /// Returns the [DatumToPersist] implementation for this ColumnType.
+    ///
+    /// See [DatumToPersist] to map `Datum`s to/from a persist columnar type.
+    /// There is a 1:N correspondence between DatumToPersist impls and
+    /// ColumnTypes because a number of ScalarTypes map to the same set of
+    /// `Datum`s (e.g. `String` and `VarChar`).
+    fn to_persist<R, F: DatumToPersistFn<R>>(&self, f: F) -> R {
+        use ScalarType::*;
+        let ColumnType {
+            nullable,
+            scalar_type,
+        } = self;
+        match (nullable, scalar_type) {
+            (false, Bool) => f.call::<bool>(),
+            (true, Bool) => f.call::<Option<bool>>(),
+            (false, Int16) => f.call::<i16>(),
+            (true, Int16) => f.call::<Option<i16>>(),
+            (false, Int32 | Date) => f.call::<i32>(),
+            (true, Int32 | Date) => f.call::<Option<i32>>(),
+            (false, Int64) => f.call::<i64>(),
+            (true, Int64) => f.call::<Option<i64>>(),
+            (false, UInt16) => f.call::<u16>(),
+            (true, UInt16) => f.call::<Option<u16>>(),
+            (false, UInt32 | Oid | RegClass | RegProc | RegType) => f.call::<u32>(),
+            (true, UInt32 | Oid | RegClass | RegProc | RegType) => f.call::<Option<u32>>(),
+            (false, UInt64) => f.call::<u64>(),
+            (true, UInt64) => f.call::<Option<u64>>(),
+            (false, Float32) => f.call::<f32>(),
+            (true, Float32) => f.call::<Option<f32>>(),
+            (false, Float64) => f.call::<f64>(),
+            (true, Float64) => f.call::<Option<f64>>(),
+            (false, PgLegacyChar) => f.call::<u8>(),
+            (true, PgLegacyChar) => f.call::<Option<u8>>(),
+            (false, Bytes) => f.call::<Vec<u8>>(),
+            (true, Bytes) => f.call::<Option<Vec<u8>>>(),
+            (false, String | Char { .. } | VarChar { .. }) => f.call::<std::string::String>(),
+            (true, String | Char { .. } | VarChar { .. }) => {
+                f.call::<Option<std::string::String>>()
             }
+            (
+                _,
+                Numeric { .. }
+                | Time
+                | Timestamp
+                | TimestampTz
+                | Interval
+                | Jsonb
+                | Uuid
+                | Array(..)
+                | List { .. }
+                | Record { .. }
+                | Map { .. }
+                | Int2Vector
+                | MzTimestamp
+                | Range { .. },
+            ) => f.call::<TodoDatumToPersist>(),
         }
     }
 }
 
-/// A helper for adapting mz's [Datum] to persist's columnar [Data].
-#[derive(Debug)]
-pub enum DatumEncoder<'a> {
-    Bool(&'a mut <bool as Data>::Mut),
-    BoolOpt(&'a mut <Option<bool> as Data>::Mut),
-    UInt16(&'a mut <u16 as Data>::Mut),
-    UInt16Opt(&'a mut <Option<u16> as Data>::Mut),
-    UInt32(&'a mut <u32 as Data>::Mut),
-    UInt32Opt(&'a mut <Option<u32> as Data>::Mut),
-    UInt64(&'a mut <u64 as Data>::Mut),
-    UInt64Opt(&'a mut <Option<u64> as Data>::Mut),
-    Int16(&'a mut <i16 as Data>::Mut),
-    Int16Opt(&'a mut <Option<i16> as Data>::Mut),
-    Int32(&'a mut <i32 as Data>::Mut),
-    Int32Opt(&'a mut <Option<i32> as Data>::Mut),
-    Int64(&'a mut <i64 as Data>::Mut),
-    Int64Opt(&'a mut <Option<i64> as Data>::Mut),
-    Float32(&'a mut <f32 as Data>::Mut),
-    Float32Opt(&'a mut <Option<f32> as Data>::Mut),
-    Float64(&'a mut <f64 as Data>::Mut),
-    Float64Opt(&'a mut <Option<f64> as Data>::Mut),
-    String(&'a mut <String as Data>::Mut),
-    StringOpt(&'a mut <Option<String> as Data>::Mut),
-    Bytes(&'a mut <Vec<u8> as Data>::Mut),
-    BytesOpt(&'a mut <Option<Vec<u8>> as Data>::Mut),
-    Todo(&'a mut <Vec<u8> as Data>::Mut),
+/// Implementation of mapping between mz [Datum] and persist [Data].
+///
+/// This always maps to and from a single persist columnar type, but it maps a
+/// _set_ of `Datum` types. For example: any nullable [ColumnType] will map
+/// `Datum::Null` along with the type(s) corresponding to the [ScalarType].
+/// Similarly, `ScalarType::Jsonb` maps to several `Datum` types.
+///
+/// See `ColumnType::to_persist` to map a ColumnType to this. There is a 1:N
+/// correspondence between DatumToPersist impls and ColumnTypes because a number
+/// of ScalarTypes map to the same set of `Datum`s (e.g. `String` and
+/// `VarChar`).
+///
+/// TODO: Specify stats fn so we can override it.
+pub trait DatumToPersist {
+    /// The persist columnar type we're mapping to/from.
+    type Data: Data;
+
+    /// Encodes and pushes the given Datum into the persist column.
+    ///
+    /// Panics if the Datum doesn't match the persist column type.
+    fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum);
+
+    /// Decodes the data in the persist column at the specific offset into a
+    /// Datum. This Datum is returned by pushing it in to the given RowPacker.
+    fn decode(col: &<Self::Data as Data>::Col, idx: usize, row: &mut RowPacker);
 }
 
-impl<'a> DatumEncoder<'a> {
-    /// Encodes and pushes the given Datum into the wrapped persist column.
-    ///
-    /// Panics if the Datum doesn't match the wrapped column type (which is
-    /// derived from the RelationDesc).
-    pub fn encode(&mut self, datum: Datum) {
-        match self {
-            DatumEncoder::Bool(col) => {
-                let x = match datum {
-                    Datum::True => true,
-                    Datum::False => false,
-                    _ => panic!("Datum cannot be converted into bool: {}", datum),
-                };
-                col.push(x);
+/// `FnOnce<T: DatumToPersist>() -> R`
+///
+/// This saves us from needing another `enum_dispatch` for [DatumToPersist].
+trait DatumToPersistFn<R> {
+    fn call<T: DatumToPersist>(self) -> R
+    where
+        for<'a> DatumDecoder<'a>: From<DataRef<'a, T>>,
+        for<'a> DatumEncoder<'a>: From<DataMut<'a, T>>;
+}
+
+macro_rules! data_to_persist_primitive {
+    ($data:ty, $unwrap:ident) => {
+        impl DatumToPersist for $data {
+            type Data = $data;
+            fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
+                ColumnPush::<Self::Data>::push(col, datum.$unwrap());
             }
-            DatumEncoder::BoolOpt(col) => {
-                let x = match datum {
-                    Datum::True => Some(true),
-                    Datum::False => Some(false),
-                    Datum::Null => None,
-                    _ => panic!("Datum cannot be converted into Option<bool>: {}", datum),
-                };
-                col.push(x)
-            }
-            DatumEncoder::UInt16(col) => {
-                let x = match datum {
-                    Datum::UInt16(x) => x,
-                    _ => panic!("Datum cannot be converted into u16: {}", datum),
-                };
-                col.push(x);
-            }
-            DatumEncoder::UInt16Opt(col) => {
-                let x = match datum {
-                    Datum::UInt16(x) => Some(x),
-                    Datum::Null => None,
-                    _ => panic!("Datum cannot be converted into Option<u16>: {}", datum),
-                };
-                col.push(x);
-            }
-            DatumEncoder::UInt32(col) => {
-                let x = match datum {
-                    Datum::UInt32(x) => x,
-                    _ => panic!("Datum cannot be converted into u32: {}", datum),
-                };
-                col.push(x);
-            }
-            DatumEncoder::UInt32Opt(col) => {
-                let x = match datum {
-                    Datum::UInt32(x) => Some(x),
-                    Datum::Null => None,
-                    _ => panic!("Datum cannot be converted into Option<u32>: {}", datum),
-                };
-                col.push(x);
-            }
-            DatumEncoder::UInt64(col) => {
-                let x = match datum {
-                    Datum::UInt64(x) => x,
-                    _ => panic!("Datum cannot be converted into u64: {}", datum),
-                };
-                col.push(x);
-            }
-            DatumEncoder::UInt64Opt(col) => {
-                let x = match datum {
-                    Datum::UInt64(x) => Some(x),
-                    Datum::Null => None,
-                    _ => panic!("Datum cannot be converted into Option<u64>: {}", datum),
-                };
-                col.push(x);
-            }
-            DatumEncoder::Int16(col) => {
-                let x = match datum {
-                    Datum::Int16(x) => x,
-                    _ => panic!("Datum cannot be converted into i16: {}", datum),
-                };
-                col.push(x);
-            }
-            DatumEncoder::Int16Opt(col) => {
-                let x = match datum {
-                    Datum::Int16(x) => Some(x),
-                    Datum::Null => None,
-                    _ => panic!("Datum cannot be converted into Option<i16>: {}", datum),
-                };
-                col.push(x);
-            }
-            DatumEncoder::Int32(col) => {
-                let x = match datum {
-                    Datum::Int32(x) => x,
-                    _ => panic!("Datum cannot be converted into i32: {}", datum),
-                };
-                col.push(x);
-            }
-            DatumEncoder::Int32Opt(col) => {
-                let x = match datum {
-                    Datum::Int32(x) => Some(x),
-                    Datum::Null => None,
-                    _ => panic!("Datum cannot be converted into Option<i32>: {}", datum),
-                };
-                col.push(x);
-            }
-            DatumEncoder::Int64(col) => {
-                let x = match datum {
-                    Datum::Int64(x) => x,
-                    _ => panic!("Datum cannot be converted into i64: {}", datum),
-                };
-                col.push(x);
-            }
-            DatumEncoder::Int64Opt(col) => {
-                let x = match datum {
-                    Datum::Int64(x) => Some(x),
-                    Datum::Null => None,
-                    _ => panic!("Datum cannot be converted into Option<i64>: {}", datum),
-                };
-                col.push(x);
-            }
-            DatumEncoder::Float32(col) => {
-                let x = match datum {
-                    Datum::Float32(x) => x,
-                    _ => panic!("Datum cannot be converted into f32: {}", datum),
-                };
-                col.push(x.into_inner());
-            }
-            DatumEncoder::Float32Opt(col) => {
-                let x = match datum {
-                    Datum::Float32(x) => Some(x),
-                    Datum::Null => None,
-                    _ => panic!("Datum cannot be converted into Option<f32>: {}", datum),
-                };
-                col.push(x.map(|x| x.into_inner()));
-            }
-            DatumEncoder::Float64(col) => {
-                let x = match datum {
-                    Datum::Float64(x) => x,
-                    _ => panic!("Datum cannot be converted into f64: {}", datum),
-                };
-                col.push(x.into_inner());
-            }
-            DatumEncoder::Float64Opt(col) => {
-                let x = match datum {
-                    Datum::Float64(x) => Some(x),
-                    Datum::Null => None,
-                    _ => panic!("Datum cannot be converted into Option<f64>: {}", datum),
-                };
-                col.push(x.map(|x| x.into_inner()));
-            }
-            DatumEncoder::String(col) => {
-                let x = match datum {
-                    Datum::String(x) => x,
-                    _ => panic!("Datum cannot be converted into String: {}", datum),
-                };
-                ColumnPush::<String>::push(*col, x);
-            }
-            DatumEncoder::StringOpt(col) => {
-                let x = match datum {
-                    Datum::String(x) => Some(x),
-                    Datum::Null => None,
-                    _ => panic!("Datum cannot be converted into Option<String>: {}", datum),
-                };
-                ColumnPush::<Option<String>>::push(*col, x);
-            }
-            DatumEncoder::Bytes(col) => {
-                let x = match datum {
-                    Datum::Bytes(x) => x,
-                    _ => panic!("Datum cannot be converted into Vec<u8>: {}", datum),
-                };
-                ColumnPush::<Vec<u8>>::push(*col, x);
-            }
-            DatumEncoder::BytesOpt(col) => {
-                let x = match datum {
-                    Datum::Bytes(x) => Some(x),
-                    Datum::Null => None,
-                    _ => panic!("Datum cannot be converted into Option<Vec<u8>>: {}", datum),
-                };
-                ColumnPush::<Option<Vec<u8>>>::push(*col, x);
-            }
-            DatumEncoder::Todo(col) => {
-                let proto = ProtoDatum::from(datum);
-                let buf = proto.encode_to_vec();
-                ColumnPush::<Vec<u8>>::push(*col, &buf);
+            fn decode(col: &<Self::Data as Data>::Col, idx: usize, row: &mut RowPacker) {
+                row.push(Datum::from(ColumnGet::<Self::Data>::get(col, idx)))
             }
         }
+        impl DatumToPersist for Option<$data> {
+            type Data = Option<$data>;
+            fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
+                if datum.is_null() {
+                    ColumnPush::<Self::Data>::push(col, None);
+                } else {
+                    ColumnPush::<Self::Data>::push(col, Some(datum.$unwrap()));
+                }
+            }
+            fn decode(col: &<Self::Data as Data>::Col, idx: usize, row: &mut RowPacker) {
+                row.push(Datum::from(ColumnGet::<Self::Data>::get(col, idx)))
+            }
+        }
+    };
+}
+
+data_to_persist_primitive!(bool, unwrap_bool);
+data_to_persist_primitive!(u8, unwrap_uint8);
+data_to_persist_primitive!(u16, unwrap_uint16);
+data_to_persist_primitive!(u32, unwrap_uint32);
+data_to_persist_primitive!(u64, unwrap_uint64);
+data_to_persist_primitive!(i16, unwrap_int16);
+data_to_persist_primitive!(i32, unwrap_int32);
+data_to_persist_primitive!(i64, unwrap_int64);
+data_to_persist_primitive!(f32, unwrap_float32);
+data_to_persist_primitive!(f64, unwrap_float64);
+data_to_persist_primitive!(Vec<u8>, unwrap_bytes);
+data_to_persist_primitive!(String, unwrap_str);
+
+/// An implementation of [DatumToPersist] that maps to/from all Datum types
+/// using the ProtoDatum representation.
+#[derive(Debug)]
+pub struct TodoDatumToPersist;
+
+impl DatumToPersist for TodoDatumToPersist {
+    type Data = Vec<u8>;
+    fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
+        let proto = ProtoDatum::from(datum);
+        let buf = proto.encode_to_vec();
+        ColumnPush::<Self::Data>::push(col, &buf);
+    }
+    fn decode(col: &<Self::Data as Data>::Col, idx: usize, row: &mut RowPacker) {
+        let buf = ColumnGet::<Self::Data>::get(col, idx);
+        let proto = ProtoDatum::decode(buf).expect("col should be valid ProtoDatum");
+        row.try_push_proto(&proto)
+            .expect("ProtoDatum should be valid Datum");
+    }
+}
+
+/// A helper for adapting mz's [Datum] to persist's columnar [Data].
+#[enum_dispatch]
+#[derive(Debug)]
+pub enum DatumEncoder<'a> {
+    Bool(DataMut<'a, bool>),
+    OptBool(DataMut<'a, Option<bool>>),
+    Int16(DataMut<'a, i16>),
+    OptInt16(DataMut<'a, Option<i16>>),
+    Int32(DataMut<'a, i32>),
+    OptInt32(DataMut<'a, Option<i32>>),
+    Int64(DataMut<'a, i64>),
+    OptInt64(DataMut<'a, Option<i64>>),
+    UInt8(DataMut<'a, u8>),
+    OptUInt8(DataMut<'a, Option<u8>>),
+    UInt16(DataMut<'a, u16>),
+    OptUInt16(DataMut<'a, Option<u16>>),
+    UInt32(DataMut<'a, u32>),
+    OptUInt32(DataMut<'a, Option<u32>>),
+    UInt64(DataMut<'a, u64>),
+    OptUInt64(DataMut<'a, Option<u64>>),
+    Float32(DataMut<'a, f32>),
+    OptFloat32(DataMut<'a, Option<f32>>),
+    Float64(DataMut<'a, f64>),
+    OptFloat64(DataMut<'a, Option<f64>>),
+    Bytes(DataMut<'a, Vec<u8>>),
+    OptBytes(DataMut<'a, Option<Vec<u8>>>),
+    String(DataMut<'a, String>),
+    OptString(DataMut<'a, Option<String>>),
+    Todo(DataMut<'a, TodoDatumToPersist>),
+}
+
+/// An `enum_dispatch` companion for `DatumEncoder`.
+///
+/// This allows us to do Datum encoding without dynamic dispatch. It's a pretty
+/// hot path, so the hassle is worth it.
+#[enum_dispatch(DatumEncoder)]
+pub trait DatumEncoderT<'a> {
+    fn encode(&mut self, datum: Datum);
+}
+
+/// A newtype wrapper for `&mut T::Mut`.
+///
+/// This is necessary for enum_dispatch to create From/TryInto (conflicting
+/// impls if we try to store `&mut T::Mut` directly in the enum variants), but
+/// it's also a convenient place to hang a std::fmt::Debug impl.
+pub struct DataMut<'a, T: DatumToPersist>(&'a mut <T::Data as Data>::Mut);
+
+impl<T: DatumToPersist> std::fmt::Debug for DataMut<'_, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(&format!("DataMut<{}>", std::any::type_name::<T>()))
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a, T: DatumToPersist> DatumEncoderT<'a> for DataMut<'a, T> {
+    fn encode(&mut self, datum: Datum) {
+        T::encode(self.0, datum);
     }
 }
 
@@ -327,71 +309,62 @@ impl<'a> PartEncoder<'a, Row> for RowEncoder<'a> {
 }
 
 /// A helper for adapting mz's [Datum] to persist's columnar [Data].
+#[enum_dispatch]
 #[derive(Debug)]
 pub enum DatumDecoder<'a> {
-    Bool(&'a <bool as Data>::Col),
-    BoolOpt(&'a <Option<bool> as Data>::Col),
-    UInt16(&'a <u16 as Data>::Col),
-    UInt16Opt(&'a <Option<u16> as Data>::Col),
-    UInt32(&'a <u32 as Data>::Col),
-    UInt32Opt(&'a <Option<u32> as Data>::Col),
-    UInt64(&'a <u64 as Data>::Col),
-    UInt64Opt(&'a <Option<u64> as Data>::Col),
-    Int16(&'a <i16 as Data>::Col),
-    Int16Opt(&'a <Option<i16> as Data>::Col),
-    Int32(&'a <i32 as Data>::Col),
-    Int32Opt(&'a <Option<i32> as Data>::Col),
-    Int64(&'a <i64 as Data>::Col),
-    Int64Opt(&'a <Option<i64> as Data>::Col),
-    Float32(&'a <f32 as Data>::Col),
-    Float32Opt(&'a <Option<f32> as Data>::Col),
-    Float64(&'a <f64 as Data>::Col),
-    Float64Opt(&'a <Option<f64> as Data>::Col),
-    String(&'a <String as Data>::Col),
-    StringOpt(&'a <Option<String> as Data>::Col),
-    Bytes(&'a <Vec<u8> as Data>::Col),
-    BytesOpt(&'a <Option<Vec<u8>> as Data>::Col),
-    Todo(&'a <Vec<u8> as Data>::Col),
+    Bool(DataRef<'a, bool>),
+    OptBool(DataRef<'a, Option<bool>>),
+    Int16(DataRef<'a, i16>),
+    OptInt16(DataRef<'a, Option<i16>>),
+    Int32(DataRef<'a, i32>),
+    OptInt32(DataRef<'a, Option<i32>>),
+    Int64(DataRef<'a, i64>),
+    OptInt64(DataRef<'a, Option<i64>>),
+    UInt8(DataRef<'a, u8>),
+    OptUInt8(DataRef<'a, Option<u8>>),
+    UInt16(DataRef<'a, u16>),
+    OptUInt16(DataRef<'a, Option<u16>>),
+    UInt32(DataRef<'a, u32>),
+    OptUInt32(DataRef<'a, Option<u32>>),
+    UInt64(DataRef<'a, u64>),
+    OptUInt64(DataRef<'a, Option<u64>>),
+    Float32(DataRef<'a, f32>),
+    OptFloat32(DataRef<'a, Option<f32>>),
+    Float64(DataRef<'a, f64>),
+    OptFloat64(DataRef<'a, Option<f64>>),
+    Bytes(DataRef<'a, Vec<u8>>),
+    OptBytes(DataRef<'a, Option<Vec<u8>>>),
+    String(DataRef<'a, String>),
+    OptString(DataRef<'a, Option<String>>),
+    Todo(DataRef<'a, TodoDatumToPersist>),
 }
 
-impl<'a> DatumDecoder<'a> {
-    /// Decodes the data in the persist column at the specific offset into a
-    /// Datum. This Datum is returned by pushing it in to the given RowPacker.
-    pub fn push(&self, idx: usize, row: &'a mut RowPacker) {
-        match self {
-            DatumDecoder::Bool(col) => row.push(Datum::from(col.get(idx))),
-            DatumDecoder::BoolOpt(col) => row.push(Datum::from(col.get(idx))),
-            DatumDecoder::UInt16(col) => row.push(Datum::from(col.get(idx))),
-            DatumDecoder::UInt16Opt(col) => row.push(Datum::from(col.get(idx))),
-            DatumDecoder::UInt32(col) => row.push(Datum::from(col.get(idx))),
-            DatumDecoder::UInt32Opt(col) => row.push(Datum::from(col.get(idx))),
-            DatumDecoder::UInt64(col) => row.push(Datum::from(col.get(idx))),
-            DatumDecoder::UInt64Opt(col) => row.push(Datum::from(col.get(idx))),
-            DatumDecoder::Int16(col) => row.push(Datum::from(col.get(idx))),
-            DatumDecoder::Int16Opt(col) => row.push(Datum::from(col.get(idx))),
-            DatumDecoder::Int32(col) => row.push(Datum::from(col.get(idx))),
-            DatumDecoder::Int32Opt(col) => row.push(Datum::from(col.get(idx))),
-            DatumDecoder::Int64(col) => row.push(Datum::from(col.get(idx))),
-            DatumDecoder::Int64Opt(col) => row.push(Datum::from(col.get(idx))),
-            DatumDecoder::Float32(col) => row.push(Datum::from(col.get(idx))),
-            DatumDecoder::Float32Opt(col) => row.push(Datum::from(col.get(idx))),
-            DatumDecoder::Float64(col) => row.push(Datum::from(col.get(idx))),
-            DatumDecoder::Float64Opt(col) => row.push(Datum::from(col.get(idx))),
-            DatumDecoder::String(col) => row.push(Datum::from(ColumnGet::<String>::get(*col, idx))),
-            DatumDecoder::StringOpt(col) => {
-                row.push(Datum::from(ColumnGet::<Option<String>>::get(*col, idx)))
-            }
-            DatumDecoder::Bytes(col) => row.push(Datum::from(ColumnGet::<Vec<u8>>::get(*col, idx))),
-            DatumDecoder::BytesOpt(col) => {
-                row.push(Datum::from(ColumnGet::<Option<Vec<u8>>>::get(*col, idx)))
-            }
-            DatumDecoder::Todo(col) => {
-                let buf = ColumnGet::<Vec<u8>>::get(*col, idx);
-                let proto = ProtoDatum::decode(buf).expect("col should be valid ProtoDatum");
-                row.try_push_proto(&proto)
-                    .expect("ProtoDatum should be valid");
-            }
-        }
+/// An `enum_dispatch` companion for `DatumDecoder`.
+///
+/// This allows us to do Datum decoding without dynamic dispatch. It's a pretty
+/// hot path, so the hassle is worth it.
+#[enum_dispatch(DatumDecoder)]
+pub trait DatumDecoderT<'a> {
+    fn decode(&self, idx: usize, row: &mut RowPacker);
+}
+
+/// A newtype wrapper for `& T::Ref`.
+///
+/// This is necessary for enum_dispatch to create From/TryInto (conflicting
+/// impls if we try to store `& T::Ref` directly in the enum variants), but it's
+/// also a convenient place to hang a std::fmt::Debug impl.
+pub struct DataRef<'a, T: DatumToPersist>(&'a <T::Data as Data>::Col);
+
+impl<T: DatumToPersist> std::fmt::Debug for DataRef<'_, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(&format!("DataRef<{}>", std::any::type_name::<T>()))
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a, T: DatumToPersist> DatumDecoderT<'a> for DataRef<'a, T> {
+    fn decode(&self, idx: usize, row: &mut RowPacker) {
+        T::decode(self.0, idx, row);
     }
 }
 
@@ -412,7 +385,7 @@ impl<'a> PartDecoder<'a, Row> for RowDecoder<'a> {
     fn decode(&self, idx: usize, val: &mut Row) {
         let mut packer = val.packer();
         for decoder in self.col_decoders.iter() {
-            decoder.push(idx, &mut packer);
+            decoder.decode(idx, &mut packer);
         }
     }
 }
@@ -422,218 +395,61 @@ impl Schema<Row> for RelationDesc {
     type Decoder<'a> = RowDecoder<'a>;
 
     fn columns(&self) -> Vec<(String, DataType)> {
+        struct ToDataType;
+        impl DatumToPersistFn<DataType> for ToDataType {
+            fn call<T: DatumToPersist>(self) -> DataType {
+                <T::Data as Data>::TYPE
+            }
+        }
+
         self.iter()
-            .map(|(name, typ)| {
-                let data_type = DataType {
-                    optional: typ.nullable,
-                    format: ColumnFormat::from(&typ.scalar_type),
-                };
-                (name.0.clone(), data_type)
-            })
+            .map(|(name, typ)| (name.0.clone(), typ.to_persist(ToDataType)))
             .collect()
     }
 
     fn decoder<'a>(&self, mut part: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
+        struct DatumDecoderFn<'a, 'b>(&'b str, &'b mut ColumnsRef<'a>);
+        impl<'a, 'b> DatumToPersistFn<DatumDecoder<'a>> for DatumDecoderFn<'a, 'b> {
+            fn call<T: DatumToPersist>(self) -> DatumDecoder<'a>
+            where
+                for<'c> DatumDecoder<'c>: From<DataRef<'c, T>>,
+            {
+                let DatumDecoderFn(name, part) = self;
+                let col = part
+                    .col::<T::Data>(name)
+                    .expect("mapping to persist column type should be consistent");
+                DatumDecoder::from(DataRef::<T>(col))
+            }
+        }
+
         let mut col_decoders = Vec::new();
         for (name, typ) in self.iter() {
-            match (typ.nullable, &typ.scalar_type) {
-                (false, ScalarType::Bool) => {
-                    col_decoders.push(DatumDecoder::Bool(part.col::<bool>(name.as_str())?));
-                }
-                (true, ScalarType::Bool) => {
-                    col_decoders.push(DatumDecoder::BoolOpt(
-                        part.col::<Option<bool>>(name.as_str())?,
-                    ));
-                }
-                (false, ScalarType::UInt16) => {
-                    col_decoders.push(DatumDecoder::UInt16(part.col::<u16>(name.as_str())?));
-                }
-                (true, ScalarType::UInt16) => {
-                    col_decoders.push(DatumDecoder::UInt16Opt(
-                        part.col::<Option<u16>>(name.as_str())?,
-                    ));
-                }
-                (false, ScalarType::UInt32) => {
-                    col_decoders.push(DatumDecoder::UInt32(part.col::<u32>(name.as_str())?));
-                }
-                (true, ScalarType::UInt32) => {
-                    col_decoders.push(DatumDecoder::UInt32Opt(
-                        part.col::<Option<u32>>(name.as_str())?,
-                    ));
-                }
-                (false, ScalarType::UInt64) => {
-                    col_decoders.push(DatumDecoder::UInt64(part.col::<u64>(name.as_str())?));
-                }
-                (true, ScalarType::UInt64) => {
-                    col_decoders.push(DatumDecoder::UInt64Opt(
-                        part.col::<Option<u64>>(name.as_str())?,
-                    ));
-                }
-                (false, ScalarType::Int16) => {
-                    col_decoders.push(DatumDecoder::Int16(part.col::<i16>(name.as_str())?));
-                }
-                (true, ScalarType::Int16) => {
-                    col_decoders.push(DatumDecoder::Int16Opt(
-                        part.col::<Option<i16>>(name.as_str())?,
-                    ));
-                }
-                (false, ScalarType::Int32) => {
-                    col_decoders.push(DatumDecoder::Int32(part.col::<i32>(name.as_str())?));
-                }
-                (true, ScalarType::Int32) => {
-                    col_decoders.push(DatumDecoder::Int32Opt(
-                        part.col::<Option<i32>>(name.as_str())?,
-                    ));
-                }
-                (false, ScalarType::Int64) => {
-                    col_decoders.push(DatumDecoder::Int64(part.col::<i64>(name.as_str())?));
-                }
-                (true, ScalarType::Int64) => {
-                    col_decoders.push(DatumDecoder::Int64Opt(
-                        part.col::<Option<i64>>(name.as_str())?,
-                    ));
-                }
-                (false, ScalarType::Float32) => {
-                    col_decoders.push(DatumDecoder::Float32(part.col::<f32>(name.as_str())?));
-                }
-                (true, ScalarType::Float32) => {
-                    col_decoders.push(DatumDecoder::Float32Opt(
-                        part.col::<Option<f32>>(name.as_str())?,
-                    ));
-                }
-                (false, ScalarType::Float64) => {
-                    col_decoders.push(DatumDecoder::Float64(part.col::<f64>(name.as_str())?));
-                }
-                (true, ScalarType::Float64) => {
-                    col_decoders.push(DatumDecoder::Float64Opt(
-                        part.col::<Option<f64>>(name.as_str())?,
-                    ));
-                }
-                (false, ScalarType::String) => {
-                    col_decoders.push(DatumDecoder::String(part.col::<String>(name.as_str())?));
-                }
-                (true, ScalarType::String) => {
-                    col_decoders.push(DatumDecoder::StringOpt(
-                        part.col::<Option<String>>(name.as_str())?,
-                    ));
-                }
-                (false, ScalarType::Bytes) => {
-                    col_decoders.push(DatumDecoder::Bytes(part.col::<Vec<u8>>(name.as_str())?));
-                }
-                (true, ScalarType::Bytes) => {
-                    col_decoders.push(DatumDecoder::BytesOpt(
-                        part.col::<Option<Vec<u8>>>(name.as_str())?,
-                    ));
-                }
-                _ => {
-                    #[cfg(feature = "tracing_")]
-                    tracing::trace!("TODO: finish implementing all the Datum variants");
-                    col_decoders.push(DatumDecoder::Todo(part.col::<Vec<u8>>(name.as_str())?));
-                }
-            };
+            let col_decoder = typ.to_persist(DatumDecoderFn(name.as_str(), &mut part));
+            col_decoders.push(col_decoder);
         }
         let () = part.finish()?;
         Ok(RowDecoder { col_decoders })
     }
 
     fn encoder<'a>(&self, mut part: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
+        struct DatumEncoderFn<'a, 'b>(&'b str, &'b mut ColumnsMut<'a>);
+        impl<'a, 'b> DatumToPersistFn<DatumEncoder<'a>> for DatumEncoderFn<'a, 'b> {
+            fn call<T: DatumToPersist>(self) -> DatumEncoder<'a>
+            where
+                for<'c> DatumEncoder<'c>: From<DataMut<'c, T>>,
+            {
+                let DatumEncoderFn(name, part) = self;
+                let col = part
+                    .col::<T::Data>(name)
+                    .expect("mapping to persist column type should be consistent");
+                DatumEncoder::from(DataMut::<T>(col))
+            }
+        }
+
         let mut col_encoders = Vec::new();
         for (name, typ) in self.iter() {
-            match (typ.nullable, &typ.scalar_type) {
-                (false, ScalarType::Bool) => {
-                    col_encoders.push(DatumEncoder::Bool(part.col::<bool>(name.as_str())?));
-                }
-                (true, ScalarType::Bool) => {
-                    col_encoders.push(DatumEncoder::BoolOpt(
-                        part.col::<Option<bool>>(name.as_str())?,
-                    ));
-                }
-                (false, ScalarType::UInt16) => {
-                    col_encoders.push(DatumEncoder::UInt16(part.col::<u16>(name.as_str())?));
-                }
-                (true, ScalarType::UInt16) => {
-                    col_encoders.push(DatumEncoder::UInt16Opt(
-                        part.col::<Option<u16>>(name.as_str())?,
-                    ));
-                }
-                (false, ScalarType::UInt32) => {
-                    col_encoders.push(DatumEncoder::UInt32(part.col::<u32>(name.as_str())?));
-                }
-                (true, ScalarType::UInt32) => {
-                    col_encoders.push(DatumEncoder::UInt32Opt(
-                        part.col::<Option<u32>>(name.as_str())?,
-                    ));
-                }
-                (false, ScalarType::UInt64) => {
-                    col_encoders.push(DatumEncoder::UInt64(part.col::<u64>(name.as_str())?));
-                }
-                (true, ScalarType::UInt64) => {
-                    col_encoders.push(DatumEncoder::UInt64Opt(
-                        part.col::<Option<u64>>(name.as_str())?,
-                    ));
-                }
-                (false, ScalarType::Int16) => {
-                    col_encoders.push(DatumEncoder::Int16(part.col::<i16>(name.as_str())?));
-                }
-                (true, ScalarType::Int16) => {
-                    col_encoders.push(DatumEncoder::Int16Opt(
-                        part.col::<Option<i16>>(name.as_str())?,
-                    ));
-                }
-                (false, ScalarType::Int32) => {
-                    col_encoders.push(DatumEncoder::Int32(part.col::<i32>(name.as_str())?));
-                }
-                (true, ScalarType::Int32) => {
-                    col_encoders.push(DatumEncoder::Int32Opt(
-                        part.col::<Option<i32>>(name.as_str())?,
-                    ));
-                }
-                (false, ScalarType::Int64) => {
-                    col_encoders.push(DatumEncoder::Int64(part.col::<i64>(name.as_str())?));
-                }
-                (true, ScalarType::Int64) => {
-                    col_encoders.push(DatumEncoder::Int64Opt(
-                        part.col::<Option<i64>>(name.as_str())?,
-                    ));
-                }
-                (false, ScalarType::Float32) => {
-                    col_encoders.push(DatumEncoder::Float32(part.col::<f32>(name.as_str())?));
-                }
-                (true, ScalarType::Float32) => {
-                    col_encoders.push(DatumEncoder::Float32Opt(
-                        part.col::<Option<f32>>(name.as_str())?,
-                    ));
-                }
-                (false, ScalarType::Float64) => {
-                    col_encoders.push(DatumEncoder::Float64(part.col::<f64>(name.as_str())?));
-                }
-                (true, ScalarType::Float64) => {
-                    col_encoders.push(DatumEncoder::Float64Opt(
-                        part.col::<Option<f64>>(name.as_str())?,
-                    ));
-                }
-                (false, ScalarType::String) => {
-                    col_encoders.push(DatumEncoder::String(part.col::<String>(name.as_str())?));
-                }
-                (true, ScalarType::String) => {
-                    col_encoders.push(DatumEncoder::StringOpt(
-                        part.col::<Option<String>>(name.as_str())?,
-                    ));
-                }
-                (false, ScalarType::Bytes) => {
-                    col_encoders.push(DatumEncoder::Bytes(part.col::<Vec<u8>>(name.as_str())?));
-                }
-                (true, ScalarType::Bytes) => {
-                    col_encoders.push(DatumEncoder::BytesOpt(
-                        part.col::<Option<Vec<u8>>>(name.as_str())?,
-                    ));
-                }
-                _ => {
-                    #[cfg(feature = "tracing_")]
-                    tracing::trace!("TODO: finish implementing all the Datum variants");
-                    col_encoders.push(DatumEncoder::Todo(part.col::<Vec<u8>>(name.as_str())?));
-                }
-            }
+            let col_encoder = typ.to_persist(DatumEncoderFn(name.as_str(), &mut part));
+            col_encoders.push(col_encoder);
         }
         let () = part.finish()?;
         Ok(RowEncoder { col_encoders })

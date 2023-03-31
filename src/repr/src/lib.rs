@@ -114,7 +114,7 @@ pub use crate::relation::{
     ColumnName, ColumnType, NotNullViolation, ProtoColumnName, ProtoColumnType, ProtoRelationDesc,
     ProtoRelationType, RelationDesc, RelationType,
 };
-pub use crate::row::encoding::{RowDecoder, RowEncoder};
+pub use crate::row::encoding::{DatumDecoderT, DatumEncoderT, RowDecoder, RowEncoder};
 pub use crate::row::{
     datum_list_size, datum_size, datums_size, row_size, DatumList, DatumMap, ProtoRow, Row,
     RowArena, RowPacker, RowRef,

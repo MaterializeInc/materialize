@@ -896,6 +896,12 @@ impl<'a> From<i64> for Datum<'a> {
     }
 }
 
+impl<'a> From<u8> for Datum<'a> {
+    fn from(u: u8) -> Datum<'a> {
+        Datum::UInt8(u)
+    }
+}
+
 impl<'a> From<u16> for Datum<'a> {
     fn from(u: u16) -> Datum<'a> {
         Datum::UInt16(u)
