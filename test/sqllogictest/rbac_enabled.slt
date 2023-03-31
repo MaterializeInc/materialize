@@ -1,0 +1,187 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+reset-server
+
+# LD - false; Server - false; Session - false
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_ld_rbac_checks TO false;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_server_rbac_checks TO false;
+----
+COMPLETE 0
+
+statement ok
+SET enable_session_rbac_checks TO false;
+
+query B
+SELECT mz_internal.is_rbac_enabled();
+----
+false
+
+# LD - true; Server - false; Session - false
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_ld_rbac_checks TO true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_ld_rbac_checks TO false;
+----
+COMPLETE 0
+
+statement ok
+SET enable_session_rbac_checks TO false;
+
+query B
+SELECT mz_internal.is_rbac_enabled();
+----
+false
+
+# LD - false; Server - true; Session - false
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_ld_rbac_checks TO false;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_server_rbac_checks TO true;
+----
+COMPLETE 0
+
+statement ok
+SET enable_session_rbac_checks TO false;
+
+query B
+SELECT mz_internal.is_rbac_enabled();
+----
+false
+
+# LD - false; Server - false; Session - true
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_ld_rbac_checks TO false;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_server_rbac_checks TO false;
+----
+COMPLETE 0
+
+statement ok
+SET enable_session_rbac_checks TO true
+
+query B
+SELECT mz_internal.is_rbac_enabled();
+----
+false
+
+# LD - true; Server - true; Session - false
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_ld_rbac_checks TO true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_server_rbac_checks TO true;
+----
+COMPLETE 0
+
+statement ok
+SET enable_session_rbac_checks TO false
+
+query B
+SELECT mz_internal.is_rbac_enabled();
+----
+true
+
+# LD - true; Server - false; Session - true
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_ld_rbac_checks TO true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_server_rbac_checks TO false;
+----
+COMPLETE 0
+
+statement ok
+SET enable_session_rbac_checks TO true
+
+query B
+SELECT mz_internal.is_rbac_enabled();
+----
+true
+
+# LD - false; Server - true; Session - true
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_ld_rbac_checks TO false;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_server_rbac_checks TO true;
+----
+COMPLETE 0
+
+statement ok
+SET enable_session_rbac_checks TO true
+
+query B
+SELECT mz_internal.is_rbac_enabled();
+----
+false
+
+# LD - true; Server - true; Session - true
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_ld_rbac_checks TO true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_server_rbac_checks TO true;
+----
+COMPLETE 0
+
+statement ok
+SET enable_session_rbac_checks TO true
+
+query B
+SELECT mz_internal.is_rbac_enabled();
+----
+true
+
+# Turn everything off
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_ld_rbac_checks TO false;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_server_rbac_checks TO false;
+----
+COMPLETE 0
+
+statement ok
+SET enable_session_rbac_checks TO false

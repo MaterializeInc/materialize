@@ -61,11 +61,11 @@ use mz_sql::plan::{
     ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, VariableValue, View,
 };
 use mz_sql::session::user::SYSTEM_USER;
+use mz_sql::session::vars::Var;
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, VarError, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
-    TRANSACTION_ISOLATION_VAR_NAME,
+    ENABLE_SERVER_RBAC_CHECKS, TRANSACTION_ISOLATION_VAR_NAME,
 };
-use mz_sql::session::vars::{Var, ENABLE_RBAC_CHECKS};
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
@@ -3605,15 +3605,15 @@ impl Coordinator {
         var_name: Option<&str>,
     ) -> Result<(), AdapterError> {
         if session.user().is_system_user()
-            || (var_name == Some(ENABLE_RBAC_CHECKS.name()) && session.is_superuser())
+            || (var_name == Some(ENABLE_SERVER_RBAC_CHECKS.name()) && session.is_superuser())
         {
             Ok(())
-        } else if var_name == Some(ENABLE_RBAC_CHECKS.name()) {
+        } else if var_name == Some(ENABLE_SERVER_RBAC_CHECKS.name()) {
             Err(AdapterError::Unauthorized(
                 rbac::UnauthorizedError::Superuser {
                     action: format!(
                         "toggle the '{}' system configuration parameter",
-                        ENABLE_RBAC_CHECKS.name()
+                        ENABLE_SERVER_RBAC_CHECKS.name()
                     ),
                 },
             ))
