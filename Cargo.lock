@@ -1885,7 +1885,7 @@ dependencies = [
  "once_cell",
  "proc-macro2",
  "quote",
- "syn",
+ "syn 1.0.107",
 ]
 
 [[package]]
@@ -3218,7 +3218,7 @@ checksum = "a8a3e2bde382ebf960c1f3e79689fa5941625fe9bf694a1cb64af3e85faff3af"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 1.0.107",
 ]
 
 [[package]]
@@ -8344,7 +8344,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "smallvec",
- "socket2 0.4.9",
  "syn 1.0.107",
  "textwrap",
  "tikv-jemalloc-sys",
