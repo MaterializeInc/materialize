@@ -609,32 +609,29 @@ where
         import_id: GlobalId,
         export_ids: Vec<GlobalId>,
     ) -> Self {
-        let mut previous_time = None;
+        // Using `RetractImportFrontiers` ensures that retraction events are logged even when the
+        // dataflow is dropped before the input advances to the empty frontier.
+        let mut retractions = RetractImportFrontiers {
+            logger: logger.clone(),
+            import_id,
+            export_ids: export_ids.clone(),
+            time: None,
+        };
+
         self.inspect_container(move |event| {
-            if let Err(frontier) = event {
-                if let Some(previous) = previous_time {
-                    for &export_id in export_ids.iter() {
-                        logger.log(ComputeEvent::ImportFrontier {
-                            import_id,
-                            export_id,
-                            time: previous,
-                            diff: -1,
-                        });
-                    }
-                }
-                if let Some(time) = frontier.get(0) {
-                    for &export_id in export_ids.iter() {
-                        logger.log(ComputeEvent::ImportFrontier {
-                            import_id,
-                            export_id,
-                            time: *time,
-                            diff: 1,
-                        });
-                    }
-                    previous_time = Some(*time);
-                } else {
-                    previous_time = None;
-                }
+            let Err(frontier) = event else { return };
+
+            retractions.log();
+
+            let Some(&time) = frontier.get(0) else { return };
+            for &export_id in export_ids.iter() {
+                logger.log(ComputeEvent::ImportFrontier {
+                    import_id,
+                    export_id,
+                    time,
+                    diff: 1,
+                });
+                retractions.time = Some(time);
             }
         })
     }
@@ -655,5 +652,33 @@ where
             .stream
             .log_import_frontiers(logger, import_id, export_ids);
         self
+    }
+}
+
+struct RetractImportFrontiers {
+    logger: Logger,
+    import_id: GlobalId,
+    export_ids: Vec<GlobalId>,
+    time: Option<Timestamp>,
+}
+
+impl RetractImportFrontiers {
+    fn log(&mut self) {
+        if let Some(time) = self.time.take() {
+            for &export_id in self.export_ids.iter() {
+                self.logger.log(ComputeEvent::ImportFrontier {
+                    import_id: self.import_id,
+                    export_id,
+                    time,
+                    diff: -1,
+                });
+            }
+        }
+    }
+}
+
+impl Drop for RetractImportFrontiers {
+    fn drop(&mut self) {
+        self.log();
     }
 }
