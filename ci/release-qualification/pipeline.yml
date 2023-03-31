@@ -86,7 +86,8 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=ClusterReplicas, --actions=10000]
+          # Execution times longer than 4h are apparently not feasible at this time due to #17845
+          args: [--scenario=ClusterReplicas, --actions=10000, --max-execution-time=4h]
 
   - id: zippy-user-tables-large
     label: "Long Zippy w/ user tables"
