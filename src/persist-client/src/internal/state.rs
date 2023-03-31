@@ -141,7 +141,7 @@ pub struct HandleDebugState {
 }
 
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug)]
 pub struct HollowBatchPart {
     /// Pointer usable to retrieve the updates.
     pub key: PartialBatchKey,
@@ -152,6 +152,37 @@ pub struct HollowBatchPart {
     /// Stored inside an Arc because HollowBatchPart needs to be cheaply
     /// clone-able.
     pub stats: Option<Arc<PartStats>>,
+}
+
+impl PartialEq for HollowBatchPart {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for HollowBatchPart {}
+
+impl PartialOrd for HollowBatchPart {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for HollowBatchPart {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // TODO(mfp): Extremely sus, but it's not clear what else we can do.
+        let HollowBatchPart {
+            key: self_key,
+            encoded_size_bytes: _,
+            stats: _,
+        } = self;
+        let HollowBatchPart {
+            key: other_key,
+            encoded_size_bytes: _,
+            stats: _,
+        } = other;
+        self_key.cmp(other_key)
+    }
 }
 
 /// A [Batch] but with the updates themselves stored externally.

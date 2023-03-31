@@ -28,6 +28,7 @@ use crate::columnar::{
     ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
 };
 use crate::part::{ColumnsMut, ColumnsRef};
+use crate::stats::{OptionStats, PrimitiveStats};
 use crate::{Codec, Codec64, Opaque};
 
 /// An implementation of [Schema] for [()].
@@ -281,6 +282,7 @@ impl Data for bool {
     type Ref<'a> = bool;
     type Col = Bitmap;
     type Mut = MutableBitmap;
+    type Stats = PrimitiveStats<bool>;
 }
 
 impl Data for Option<bool> {
@@ -291,6 +293,7 @@ impl Data for Option<bool> {
     type Ref<'a> = Option<bool>;
     type Col = BooleanArray;
     type Mut = MutableBooleanArray;
+    type Stats = OptionStats<PrimitiveStats<bool>>;
 }
 
 macro_rules! data_primitive {
@@ -303,6 +306,7 @@ macro_rules! data_primitive {
             type Ref<'a> = $data;
             type Col = Buffer<$data>;
             type Mut = Vec<$data>;
+            type Stats = PrimitiveStats<$data>;
         }
 
         impl Data for Option<$data> {
@@ -313,6 +317,7 @@ macro_rules! data_primitive {
             type Ref<'a> = Option<$data>;
             type Col = PrimitiveArray<$data>;
             type Mut = MutablePrimitiveArray<$data>;
+            type Stats = OptionStats<PrimitiveStats<$data>>;
         }
     };
 }
@@ -337,6 +342,7 @@ impl Data for Vec<u8> {
     // TODO: Something that more obviously isn't optional.
     type Col = BinaryArray<i32>;
     type Mut = MutableBinaryArray<i32>;
+    type Stats = PrimitiveStats<Vec<u8>>;
 }
 
 impl Data for Option<Vec<u8>> {
@@ -347,6 +353,7 @@ impl Data for Option<Vec<u8>> {
     type Ref<'a> = Option<&'a [u8]>;
     type Col = BinaryArray<i32>;
     type Mut = MutableBinaryArray<i32>;
+    type Stats = OptionStats<PrimitiveStats<Vec<u8>>>;
 }
 
 impl Data for String {
@@ -358,6 +365,7 @@ impl Data for String {
     // TODO: Something that more obviously isn't optional.
     type Col = Utf8Array<i32>;
     type Mut = MutableUtf8Array<i32>;
+    type Stats = PrimitiveStats<String>;
 }
 
 impl Data for Option<String> {
@@ -368,6 +376,7 @@ impl Data for Option<String> {
     type Ref<'a> = Option<&'a str>;
     type Col = Utf8Array<i32>;
     type Mut = MutableUtf8Array<i32>;
+    type Stats = OptionStats<PrimitiveStats<String>>;
 }
 
 impl ColumnRef for Bitmap {
