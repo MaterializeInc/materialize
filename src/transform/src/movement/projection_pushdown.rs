@@ -32,6 +32,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use itertools::zip_eq;
 use mz_expr::visit::Visit;
 use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
@@ -42,6 +43,10 @@ use crate::{TransformArgs, TransformError};
 pub struct ProjectionPushdown;
 
 impl crate::Transform for ProjectionPushdown {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     // This method is only used during unit testing.
     #[tracing::instrument(
         target = "optimizer"
@@ -122,15 +127,60 @@ impl ProjectionPushdown {
                 )?;
                 desired_projection.clone()
             }
-            MirRelationExpr::LetRec { values, body, .. } => {
-                // TODO: Implement a more thoughtful projection pushdown.
-                let desired_projection = (0..body.arity()).collect();
-                self.action(body, &desired_projection, gets)?;
-                for value in values.iter_mut() {
-                    let desired_projection = (0..value.arity()).collect();
+            MirRelationExpr::LetRec { ids, values, body } => {
+                // Determine the recursive IDs in this LetRec binding.
+                let rec_ids = MirRelationExpr::recursive_ids(ids, values)?;
+
+                // Seed the gets map with empty demand for each non-recursive ID.
+                for id in ids.iter().filter(|id| !rec_ids.contains(id)) {
+                    let prior = gets.insert(Id::Local(*id), BTreeSet::new());
+                    assert!(prior.is_none());
+                }
+
+                // Descend into the body with the supplied desired_projection.
+                self.action(body, desired_projection, gets)?;
+                // Descend into the values in reverse order.
+                for (id, value) in zip_eq(ids.iter().rev(), values.iter_mut().rev()) {
+                    let desired_projection = if rec_ids.contains(id) {
+                        // For recursive IDs: request all columns.
+                        let columns = 0..value.arity();
+                        columns.collect::<Vec<_>>()
+                    } else {
+                        // For non-recursive IDs: request the gets entry.
+                        let columns = gets.get(&Id::Local(*id)).unwrap();
+                        columns.iter().cloned().collect::<Vec<_>>()
+                    };
                     self.action(value, &desired_projection, gets)?;
                 }
-                desired_projection
+
+                // Update projections around gets of non-recursive IDs.
+                let mut updates = BTreeMap::new();
+                for (id, value) in zip_eq(ids.iter(), values.iter_mut()) {
+                    // Update the current value.
+                    self.update_projection_around_get(value, &updates)?;
+                    // If this is a non-recursive ID, add an entry to the
+                    // updates map for subsequent values and the body.
+                    if !rec_ids.contains(id) {
+                        let new_type = value.typ();
+                        let new_proj = {
+                            let columns = gets.remove(&Id::Local(*id)).unwrap();
+                            columns.iter().cloned().collect::<Vec<_>>()
+                        };
+                        updates.insert(Id::Local(*id), (new_proj, new_type));
+                    }
+                }
+                // Update the body.
+                self.update_projection_around_get(body, &updates)?;
+
+                // Remove the entries for all ids (don't restrict only to
+                // non-recursive IDs here for better hygene).
+                for id in ids.iter() {
+                    gets.remove(&Id::Local(*id));
+                }
+
+                // Return the desired projection (leads to a no-op in the
+                // projection handling logic after this match statement).
+                desired_projection.clone()
             }
             MirRelationExpr::Join {
                 inputs,
