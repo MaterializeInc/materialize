@@ -1264,12 +1264,20 @@ statement ok
 CREATE TABLE t ()
 
 simple conn=mz_system,user=mz_system
-CREATE ROLE group;
+CREATE ROLE group1;
 ----
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-ALTER TABLE t OWNER TO group;
+ALTER TABLE t OWNER TO group1;
+----
+COMPLETE 0
+
+statement ok
+CREATE ROLE group2;
+
+simple conn=mz_system,user=mz_system
+ALTER TABLE t OWNER TO group2;
 ----
 COMPLETE 0
 
