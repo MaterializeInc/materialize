@@ -21,12 +21,11 @@ use timely::communication::Allocate;
 use timely::container::columnation::{CloneRegion, Columnation};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Filter, InputCapability};
 use timely::logging::{
     ChannelsEvent, MessagesEvent, OperatesEvent, ParkEvent, ScheduleEvent, ShutdownEvent,
-    TimelyEvent, WorkerIdentifier,
+    TimelyEvent,
 };
 use tracing::error;
 
@@ -34,35 +33,38 @@ use mz_compute_client::logging::LoggingConfig;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
 use mz_repr::{datum_list_size, datum_size, Datum, DatumVec, Diff, Row, Timestamp};
-use mz_timely_util::activator::RcActivator;
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::replay::MzReplay;
 
 use crate::logging::{LogVariant, TimelyLog};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
+use super::Plumbing;
+
 /// Constructs the logging dataflow for timely logs.
 ///
 /// Params
 /// * `worker`: The Timely worker hosting the log analysis dataflow.
 /// * `config`: Logging configuration
-/// * `event_source`: The source to read log events from.
-/// * `activator`: A handle to acknowledge activations.
+/// * `plumbing`: The source to read log events from.
 ///
 /// Returns a map from log variant to a tuple of a trace handle and a dataflow drop token.
 pub(super) fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
-    event_source: Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, TimelyEvent)>>,
-    activator: RcActivator,
+    plumbing: Plumbing<TimelyEvent>,
 ) -> BTreeMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
     let worker_id = worker.index();
     let peers = worker.peers();
 
     worker.dataflow_named("Dataflow: timely logging", move |scope| {
-        let (mut logs, token) =
-            Some(event_source).mz_replay(scope, "timely logs", config.interval, activator);
+        let (mut logs, token) = Some(plumbing.link).mz_replay(
+            scope,
+            "timely logs",
+            config.interval,
+            plumbing.activator,
+        );
 
         // If logging is disabled, we still need to install the indexes, but we can leave them
         // empty. We do so by immediately filtering all logs events.

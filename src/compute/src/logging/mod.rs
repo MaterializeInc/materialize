@@ -15,13 +15,16 @@ mod initialize;
 mod reachability;
 mod timely;
 
+use std::rc::Rc;
 use std::time::Duration;
 
-use ::timely::dataflow::operators::capture::{Event, EventPusher};
+use ::timely::dataflow::operators::capture::{Event, EventLink, EventPusher};
+use ::timely::logging::WorkerIdentifier;
 use ::timely::progress::Timestamp as TimelyTimestamp;
 
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_repr::Timestamp;
+use mz_timely_util::activator::RcActivator;
 
 pub use initialize::initialize;
 
@@ -117,5 +120,23 @@ where
     fn drop(&mut self) {
         self.event_pusher
             .push(Event::Progress(vec![(self.time_ms, -1)]));
+    }
+}
+
+/// Parts to connect logging dataflows to the timely runtime.
+#[derive(Clone)]
+struct Plumbing<E> {
+    link: Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, E)>>,
+    activator: RcActivator,
+}
+
+impl<E> Plumbing<E> {
+    fn new(name: &str) -> Self {
+        let activator_name = format!("{name}_activator");
+        let activate_after = 128;
+        Self {
+            link: Rc::new(EventLink::new()),
+            activator: RcActivator::new(activator_name, activate_after),
+        }
     }
 }

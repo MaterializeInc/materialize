@@ -13,62 +13,53 @@ use std::any::Any;
 use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::rc::Rc;
-use std::time::Duration;
 
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::AsCollection;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::Filter;
-use timely::logging::WorkerIdentifier;
 
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
 use mz_ore::iter::IteratorExt;
 use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
-use mz_timely_util::activator::RcActivator;
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::replay::MzReplay;
 
 use crate::logging::{LogVariant, TimelyLog};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
+use super::Plumbing;
+
 /// Constructs the logging dataflow for reachability logs.
 ///
 /// Params
 /// * `worker`: The Timely worker hosting the log analysis dataflow.
 /// * `config`: Logging configuration
-/// * `linked`: The source to read log events from.
-/// * `activator`: A handle to acknowledge activations.
+/// * `plumbing`: The source to read log events from.
 ///
 /// Returns a map from log variant to a tuple of a trace handle and a permutation to reconstruct
 /// the original rows.
 pub(super) fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
-    linked: std::rc::Rc<
-        EventLink<
-            Timestamp,
-            (
-                Duration,
-                WorkerIdentifier,
-                (
-                    Vec<usize>,
-                    Vec<(usize, usize, bool, Option<Timestamp>, Diff)>,
-                ),
-            ),
-        >,
-    >,
-    activator: RcActivator,
+    plumbing: Plumbing<(
+        Vec<usize>,
+        Vec<(usize, usize, bool, Option<Timestamp>, Diff)>,
+    )>,
 ) -> BTreeMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
     // A dataflow for multiple log-derived arrangements.
     let traces = worker.dataflow_named("Dataflow: timely reachability logging", move |scope| {
-        let (mut logs, token) =
-            Some(linked).mz_replay(scope, "reachability logs", config.interval, activator);
+        let (mut logs, token) = Some(plumbing.link).mz_replay(
+            scope,
+            "reachability logs",
+            config.interval,
+            plumbing.activator,
+        );
 
         // If logging is disabled, we still need to install the indexes, but we can leave them
         // empty. We do so by immediately filtering all logs events.
