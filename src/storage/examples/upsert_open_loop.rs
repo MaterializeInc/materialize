@@ -593,6 +593,8 @@ async fn run_benchmark(
         // Dumped every 600 seconds.
         rocks_options.enable_statistics();
         rocks_options.set_report_bg_io_stats(true);
+        rocks_options.set_compression_type(rocksdb::DBCompressionType::None);
+        rocks_options.set_blob_compression_type(rocksdb::DBCompressionType::None);
 
         if args.rocksdb_use_vector_memtable {
             rocks_options.set_memtable_factory(rocksdb::MemtableFactory::Vector);
