@@ -1015,7 +1015,6 @@ pub struct StateMetrics {
     pub(crate) apply_spine_slow_path_with_reconstruction: IntCounter,
     pub(crate) update_state_noop_path: IntCounter,
     pub(crate) update_state_empty_path: IntCounter,
-    pub(crate) update_state_up_to_date_path: IntCounter,
     pub(crate) update_state_fast_path: IntCounter,
     pub(crate) update_state_slow_path: IntCounter,
     pub(crate) rollup_at_seqno_migration: IntCounter,

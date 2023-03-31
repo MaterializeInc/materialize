@@ -371,9 +371,7 @@ impl StateVersions {
                 }
             };
 
-            let rollup_seqno = state.seqno();
-            let diffs = live_diffs.iter().filter(|x| x.seqno > rollup_seqno);
-            state.apply_encoded_diffs(&self.cfg, &self.metrics, diffs);
+            state.apply_encoded_diffs(&self.cfg, &self.metrics, &live_diffs);
             return state;
         }
     }

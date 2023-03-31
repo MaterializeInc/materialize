@@ -49,7 +49,7 @@ pub struct Applier<K, V, T, D> {
     pub(crate) shard_id: ShardId,
 
     // Access to the shard's state, shared across all handles created by the same
-    // PersistClientCache. The state is wrapped in a std::sync::RwLock, disallowing
+    // PersistClientCache. The state is wrapped in LockingTypedState, disallowing
     // access across await points. Access should be always be kept brief, and it
     // is expected that other handles may advance the state at any time this Applier
     // is not holding the lock.
@@ -72,9 +72,6 @@ impl<K, V, T: Clone, D> Clone for Applier<K, V, T, D> {
         }
     }
 }
-
-#[derive(Debug)]
-struct ExpectationMismatch(SeqNo);
 
 impl<K, V, T, D> Applier<K, V, T, D>
 where
