@@ -318,7 +318,9 @@ steps:
     label: "Zippy w/ latest CRDB"
     timeout_in_minutes: 120
     agents:
-      queue: linux-x86_64
+      # Workload takes slightly more than 8Gb, so it OOMs
+      # on the instances from the linux-x86_64 queue
+      queue: builder-linux-x86_64
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
