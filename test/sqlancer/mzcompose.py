@@ -15,7 +15,10 @@ from materialize.mzcompose import Composition, Service, WorkflowArgumentParser
 from materialize.mzcompose.services import Materialized
 
 SERVICES = [
-    Materialized(),
+    # Auto-restart so we can keep testing even after we ran into a panic
+    Materialized(
+        restart="on-failure",
+    ),
     Service(
         "sqlancer",
         {
