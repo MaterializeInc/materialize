@@ -753,8 +753,8 @@ where
                     |(key, result)| match result {
                         Err((key, _)) => {
                             let message = format!(
-                                "Invalid data in source, saw negative accumulation for \
-                                         key {key:?} in hierarchical mins-maxes aggregate"
+                                "Invalid data in source, saw non-positive accumulation for \
+                                 key {key:?} in hierarchical mins-maxes aggregate"
                             );
                             Err(EvalError::Internal(message).into())
                         }
@@ -780,38 +780,50 @@ where
         // Build a series of stages for the reduction
         // Arrange the final result into (key, Row)
         let debug_name = debug_name.to_string();
-        partial
-            .arrange_named::<RowSpine<_, Vec<Row>, _, _>>("Arrange ReduceMinsMaxes")
+        let arranged =
+            partial.arrange_named::<RowSpine<_, Vec<Row>, _, _>>("Arrange ReduceMinsMaxes");
+        // Note that we would prefer to use `mz_timely_util::reduce::ReduceExt::reduce_pair` here,
+        // but we then wouldn't be able to do this error check conditionally.  See its documentation
+        // for the rationale around using a second reduction here.
+        if validating {
+            let errs = arranged
+                .reduce_abelian::<_, ErrValSpine<_, _, _>>(
+                    "ReduceMinsMaxes Error Check",
+                    move |_key, source, target| {
+                        // Negative counts would be surprising, but until we are 100% certain we wont
+                        // see them, we should report when we do. We may want to bake even more info
+                        // in here in the future.
+                        for (val, count) in source.iter() {
+                            if count.is_positive() {
+                                continue;
+                            }
+
+                            let message = "Non-positive accumulation in ReduceMinsMaxes";
+                            warn!(?val, ?count, debug_name, "[customer-data] {message}");
+                            error!("{message}");
+                            target.push((
+                                DataflowError::from(EvalError::Internal(message.to_string())),
+                                1,
+                            ));
+                            return;
+                        }
+                    },
+                )
+                .as_collection(|_, v| v.clone());
+            err_output = Some(errs.leave_region());
+        }
+        arranged
             .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMinsMaxes", {
                 let mut row_buf = Row::default();
-                move |_key, source, target| {
-                    // Negative counts would be surprising, but until we are 100% certain we wont
-                    // see them, we should report when we do. We may want to bake even more info
-                    // in here in the future.
-                    if validating && source.iter().any(|(_val, cnt)| cnt < &0) {
-                        // XXX: This reports user data, which we perhaps should not do!
-                        for (val, cnt) in source.iter() {
-                            if cnt < &0 {
-                                warn!(
-                                    "[customer-data] Negative accumulation in ReduceMinsMaxes: \
-                                    {val:?} with count {cnt:?} in dataflow {debug_name}"
-                                );
-                                soft_assert_or_log!(
-                                    false,
-                                    "Negative accumulation in ReduceMinsMaxes"
-                                );
-                            }
-                        }
-                    } else {
-                        let mut row_packer = row_buf.packer();
-                        for (aggr_index, func) in aggr_funcs.iter().enumerate() {
-                            let iter = source
-                                .iter()
-                                .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
-                            row_packer.push(func.eval(iter, &RowArena::new()));
-                        }
-                        target.push((row_buf.clone(), 1));
+                move |_key, source: &[(&Vec<Row>, Diff)], target: &mut Vec<(Row, Diff)>| {
+                    let mut row_packer = row_buf.packer();
+                    for (aggr_index, func) in aggr_funcs.iter().enumerate() {
+                        let iter = source
+                            .iter()
+                            .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
+                        row_packer.push(func.eval(iter, &RowArena::new()));
                     }
+                    target.push((row_buf.clone(), 1));
                 }
             })
             .leave_region()

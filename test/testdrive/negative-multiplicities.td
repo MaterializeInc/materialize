@@ -49,3 +49,7 @@ contains:Non-positive accumulation in ReduceInaccumulable DISTINCT
 # regression scenario per #18212
 ! SELECT list_agg(data)[1] FROM data;
 contains:Non-positive accumulation in ReduceInaccumulable
+
+# regression scenario per #17509
+! SELECT MAX(data) FROM data;
+contains:Invalid data in source, saw non-positive accumulation
