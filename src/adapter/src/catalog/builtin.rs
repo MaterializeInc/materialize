@@ -2818,7 +2818,6 @@ FROM parent_addrs AS pa
         AND pa.worker_id = oa.worker_id",
 };
 
-
 pub const MZ_DATAFLOW_OPERATOR_PARENTS: BuiltinView = BuiltinView {
     name: "mz_dataflow_operator_parents",
     schema: MZ_INTERNAL_SCHEMA,
