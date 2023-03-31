@@ -18,7 +18,8 @@ use enum_dispatch::enum_dispatch;
 use mz_persist_types::columnar::{
     ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
 };
-use mz_persist_types::part::{ColumnsMut, ColumnsRef};
+use mz_persist_types::part::{ColumnsMut, ColumnsRef, DynColumnRef};
+use mz_persist_types::stats::{BytesStats, DynStats, OptionStats, PrimitiveStats, StatsFn};
 use mz_persist_types::Codec;
 use prost::Message;
 use uuid::Uuid;
@@ -27,6 +28,7 @@ use mz_ore::cast::CastFrom;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
 use crate::adt::array::ArrayDimension;
+use crate::adt::jsonb::Jsonb;
 use crate::adt::numeric::Numeric;
 use crate::adt::range::{Range, RangeInner, RangeLowerBound, RangeUpperBound};
 use crate::chrono::ProtoNaiveTime;
@@ -35,6 +37,7 @@ use crate::row::{
     ProtoArray, ProtoArrayDimension, ProtoDatum, ProtoDatumOther, ProtoDict, ProtoDictElement,
     ProtoNumeric, ProtoRange, ProtoRangeInner, ProtoRow,
 };
+use crate::stats::{jsonb_stats_nulls, proto_datum_min_max_nulls};
 use crate::{ColumnType, Datum, RelationDesc, Row, RowPacker, ScalarType};
 
 impl Codec for Row {
@@ -109,6 +112,8 @@ impl ColumnType {
             (true, String | Char { .. } | VarChar { .. }) => {
                 f.call::<Option<std::string::String>>()
             }
+            (false, Jsonb) => f.call::<crate::adt::jsonb::Jsonb>(),
+            (true, Jsonb) => f.call::<Option<crate::adt::jsonb::Jsonb>>(),
             (
                 _,
                 Numeric { .. }
@@ -117,7 +122,6 @@ impl ColumnType {
                 | Timestamp
                 | TimestampTz
                 | Interval
-                | Jsonb
                 | Uuid
                 | Array(..)
                 | List { .. }
@@ -127,7 +131,13 @@ impl ColumnType {
                 | MzTimestamp
                 | Range { .. }
                 | MzAclItem,
-            ) => f.call::<TodoDatumToPersist>(),
+            ) => {
+                if *nullable {
+                    f.call::<NullableProtoDatumToPersist>()
+                } else {
+                    f.call::<ProtoDatumToPersist>()
+                }
+            }
         }
     }
 }
@@ -143,11 +153,12 @@ impl ColumnType {
 /// correspondence between DatumToPersist impls and ColumnTypes because a number
 /// of ScalarTypes map to the same set of `Datum`s (e.g. `String` and
 /// `VarChar`).
-///
-/// TODO: Specify stats fn so we can override it.
 pub trait DatumToPersist {
     /// The persist columnar type we're mapping to/from.
     type Data: Data;
+
+    /// Which logic to use for computing aggregate stats.
+    const STATS_FN: StatsFn;
 
     /// Encodes and pushes the given Datum into the persist column.
     ///
@@ -173,6 +184,7 @@ macro_rules! data_to_persist_primitive {
     ($data:ty, $unwrap:ident) => {
         impl DatumToPersist for $data {
             type Data = $data;
+            const STATS_FN: StatsFn = StatsFn::Default;
             fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
                 ColumnPush::<Self::Data>::push(col, datum.$unwrap());
             }
@@ -182,6 +194,7 @@ macro_rules! data_to_persist_primitive {
         }
         impl DatumToPersist for Option<$data> {
             type Data = Option<$data>;
+            const STATS_FN: StatsFn = StatsFn::Default;
             fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
                 if datum.is_null() {
                     ColumnPush::<Self::Data>::push(col, None);
@@ -209,13 +222,15 @@ data_to_persist_primitive!(f64, unwrap_float64);
 data_to_persist_primitive!(Vec<u8>, unwrap_bytes);
 data_to_persist_primitive!(String, unwrap_str);
 
-/// An implementation of [DatumToPersist] that maps to/from all Datum types
-/// using the ProtoDatum representation.
-#[derive(Debug)]
-pub struct TodoDatumToPersist;
+/// A specification for which StatsFn to use with DatumToPersist impls that
+/// encode and decode via ProtoDatum.
+trait ProtoDatumStats {
+    const STATS_FN: StatsFn;
+}
 
-impl DatumToPersist for TodoDatumToPersist {
+impl<T: ProtoDatumStats> DatumToPersist for T {
     type Data = Vec<u8>;
+    const STATS_FN: StatsFn = T::STATS_FN;
     fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
         let proto = ProtoDatum::from(datum);
         let buf = proto.encode_to_vec();
@@ -227,6 +242,56 @@ impl DatumToPersist for TodoDatumToPersist {
         row.try_push_proto(&proto)
             .expect("ProtoDatum should be valid Datum");
     }
+}
+
+/// An implementation of [DatumToPersist] that maps to/from all non-nullable
+/// Datum types using the ProtoDatum representation.
+#[derive(Debug)]
+pub struct ProtoDatumToPersist;
+
+impl ProtoDatumStats for ProtoDatumToPersist {
+    const STATS_FN: StatsFn =
+        StatsFn::Custom(|col: &DynColumnRef| -> Result<Box<dyn DynStats>, String> {
+            let (lower, upper, null_count) = proto_datum_min_max_nulls(col.downcast::<Vec<u8>>()?);
+            assert_eq!(null_count, 0);
+            Ok(Box::new(PrimitiveStats { lower, upper }))
+        });
+}
+
+/// An implementation of [DatumToPersist] that maps to/from all nullable Datum
+/// types using the ProtoDatum representation.
+#[derive(Debug)]
+pub struct NullableProtoDatumToPersist;
+
+impl ProtoDatumStats for NullableProtoDatumToPersist {
+    const STATS_FN: StatsFn =
+        StatsFn::Custom(|col: &DynColumnRef| -> Result<Box<dyn DynStats>, String> {
+            let (lower, upper, null_count) = proto_datum_min_max_nulls(col.downcast::<Vec<u8>>()?);
+            Ok(Box::new(OptionStats {
+                none: null_count,
+                some: PrimitiveStats { lower, upper },
+            }))
+        });
+}
+
+impl ProtoDatumStats for Jsonb {
+    const STATS_FN: StatsFn =
+        StatsFn::Custom(|col: &DynColumnRef| -> Result<Box<dyn DynStats>, String> {
+            let (stats, null_count) = jsonb_stats_nulls(col.downcast::<Vec<u8>>()?)?;
+            assert_eq!(null_count, 0);
+            Ok(Box::new(BytesStats::Json(stats)))
+        });
+}
+
+impl ProtoDatumStats for Option<Jsonb> {
+    const STATS_FN: StatsFn =
+        StatsFn::Custom(|col: &DynColumnRef| -> Result<Box<dyn DynStats>, String> {
+            let (stats, null_count) = jsonb_stats_nulls(col.downcast::<Vec<u8>>()?)?;
+            Ok(Box::new(OptionStats {
+                some: BytesStats::Json(stats),
+                none: null_count,
+            }))
+        });
 }
 
 /// A helper for adapting mz's [Datum] to persist's columnar [Data].
@@ -257,7 +322,10 @@ pub enum DatumEncoder<'a> {
     OptBytes(DataMut<'a, Option<Vec<u8>>>),
     String(DataMut<'a, String>),
     OptString(DataMut<'a, Option<String>>),
-    Todo(DataMut<'a, TodoDatumToPersist>),
+    Jsonb(DataMut<'a, Jsonb>),
+    OptJsonb(DataMut<'a, Option<Jsonb>>),
+    Todo(DataMut<'a, ProtoDatumToPersist>),
+    OptTodo(DataMut<'a, NullableProtoDatumToPersist>),
 }
 
 /// An `enum_dispatch` companion for `DatumEncoder`.
@@ -338,7 +406,10 @@ pub enum DatumDecoder<'a> {
     OptBytes(DataRef<'a, Option<Vec<u8>>>),
     String(DataRef<'a, String>),
     OptString(DataRef<'a, Option<String>>),
-    Todo(DataRef<'a, TodoDatumToPersist>),
+    Jsonb(DataRef<'a, Jsonb>),
+    OptJsonb(DataRef<'a, Option<Jsonb>>),
+    Todo(DataRef<'a, ProtoDatumToPersist>),
+    OptTodo(DataRef<'a, NullableProtoDatumToPersist>),
 }
 
 /// An `enum_dispatch` companion for `DatumDecoder`.
@@ -396,16 +467,19 @@ impl Schema<Row> for RelationDesc {
     type Encoder<'a> = RowEncoder<'a>;
     type Decoder<'a> = RowDecoder<'a>;
 
-    fn columns(&self) -> Vec<(String, DataType)> {
-        struct ToDataType;
-        impl DatumToPersistFn<DataType> for ToDataType {
-            fn call<T: DatumToPersist>(self) -> DataType {
-                <T::Data as Data>::TYPE
+    fn columns(&self) -> Vec<(String, DataType, StatsFn)> {
+        struct ToPersist;
+        impl DatumToPersistFn<(DataType, StatsFn)> for ToPersist {
+            fn call<T: DatumToPersist>(self) -> (DataType, StatsFn) {
+                (<T::Data as Data>::TYPE, T::STATS_FN)
             }
         }
 
         self.iter()
-            .map(|(name, typ)| (name.0.clone(), typ.to_persist(ToDataType)))
+            .map(|(name, typ)| {
+                let (data_type, stats_fn) = typ.to_persist(ToPersist);
+                (name.0.clone(), data_type, stats_fn)
+            })
             .collect()
     }
 

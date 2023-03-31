@@ -26,6 +26,7 @@ message ProtoDynStats {
     oneof kind {
         ProtoStructStats struct = 2;
         ProtoPrimitiveStats primitive = 3;
+        ProtoBytesStats bytes = 4;
     }
 }
 
@@ -63,5 +64,21 @@ message ProtoPrimitiveStats {
         double upper_f64 = 24;
         bytes upper_bytes = 25;
         string upper_string = 26;
+    }
+}
+
+message ProtoJsonStats {
+    uint64 json_nulls = 1;
+    ProtoPrimitiveStats bools = 2;
+    ProtoPrimitiveStats string = 3;
+    ProtoPrimitiveStats numeric = 4;
+    uint64 list = 5;
+    map<string, ProtoJsonStats> map = 6;
+}
+
+message ProtoBytesStats {
+    oneof kind {
+        ProtoPrimitiveStats primitive = 1;
+        ProtoJsonStats json = 2;
     }
 }

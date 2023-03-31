@@ -33,13 +33,9 @@ impl PartStats {
             len: part.len(),
             cols: Default::default(),
         };
-        // TODO(mfp): We only need to plumb the schemas here if we end up
-        // allowing them to specify arbitrary min/max logic for complex types.
-        // If we don't end up doing that, consider pulling the schemas out of
-        // here.
         let mut key_cols = part.key_ref();
-        for (name, _typ) in schemas.key.columns() {
-            let col_stats = key_cols.stats(&name)?;
+        for (name, _typ, stats_fn) in schemas.key.columns() {
+            let col_stats = key_cols.stats(&name, stats_fn)?;
             key.cols.insert(name, col_stats);
         }
         key_cols.finish()?;
