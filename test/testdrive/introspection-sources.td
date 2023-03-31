@@ -288,9 +288,9 @@ true
 
 # Test that non-arranging dataflows show up in `mz_dataflow_arrangement_sizes`
 
-> CREATE VIEW vv_empty AS SELECT 1 LIMIT 0
+> CREATE TABLE t3 (c int)
 
-> CREATE DEFAULT INDEX ii_empty ON vv_empty
+> CREATE DEFAULT INDEX ii_empty ON t3
 
 > SELECT records, batches FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_empty'
 0 0
