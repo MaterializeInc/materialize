@@ -84,6 +84,10 @@ use crate::source::types::{
 };
 use crate::statistics::{SourceStatisticsMetrics, StorageStatistics};
 
+/// How long to wait before initiating a `SuspendAndRestart` command, to
+/// prevent hot restart loops.
+const SUSPEND_AND_RESTART_DELAY: Duration = Duration::from_secs(30);
+
 /// Shared configuration information for all source types. This is used in the
 /// `create_raw_source` functions, which produce raw sources.
 #[derive(Clone)]
@@ -263,10 +267,6 @@ where
         let health_cap = caps.pop().unwrap();
         drop(caps);
 
-        health_output
-            .give(&health_cap, HealthStatus::Starting.into())
-            .await;
-
         let mut statuses = vec![];
 
         while let Some(event) = data_input.next_mut().await {
@@ -420,9 +420,10 @@ fn health_operator<G: Scope>(
                 // We should definitely do that, but this is okay for a PoC.
                 if let Some(halt_with) = halt_with {
                     info!(
-                        "Broadcasting suspend-and-restart command because of {:?}",
-                        halt_with
+                        "Broadcasting suspend-and-restart command because of {:?} after {:?} delay",
+                        halt_with, SUSPEND_AND_RESTART_DELAY
                     );
+                    tokio::time::sleep(SUSPEND_AND_RESTART_DELAY).await;
                     internal_cmd_tx.borrow_mut().broadcast(
                         InternalStorageCommand::SuspendAndRestart {
                             id: source_id,

@@ -390,7 +390,8 @@ impl KafkaConnection {
                             broker_port,
                             "kafka",
                         )
-                        .await?;
+                        .await
+                        .context("creating ssh tunnel")?;
 
                     context.add_broker_rewrite_with_token(
                         &broker.address,
