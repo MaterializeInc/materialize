@@ -22,7 +22,7 @@
 ! CREATE SOURCE "test_error"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR ALL TABLES
-exact:failed to fetch publication information from PostgreSQL database
+exact:failed to connect to PostgreSQL database
 detail:error connecting to server:
 
 > CREATE MATERIALIZED VIEW mv as SELECT 1;

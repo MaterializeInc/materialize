@@ -153,7 +153,7 @@ $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=mat
 ! CREATE SOURCE "no_such_host"
   FROM POSTGRES CONNECTION no_such_host (PUBLICATION 'mz_source');
 # TODO: assert on `detail` here.
-exact:failed to fetch publication information from PostgreSQL database
+exact:failed to connect to PostgreSQL database
 
 > CREATE CONNECTION no_such_port TO POSTGRES (
     HOST postgres,
@@ -165,7 +165,7 @@ exact:failed to fetch publication information from PostgreSQL database
 ! CREATE SOURCE "no_such_port"
   FROM POSTGRES CONNECTION no_such_port (PUBLICATION 'mz_source');
 # TODO: assert on `detail` here.
-exact:failed to fetch publication information from PostgreSQL database
+exact:failed to connect to PostgreSQL database
 
 > CREATE CONNECTION no_such_user TO POSTGRES (
     HOST postgres,
@@ -176,7 +176,7 @@ exact:failed to fetch publication information from PostgreSQL database
 ! CREATE SOURCE "no_such_user"
   FROM POSTGRES CONNECTION no_such_user (PUBLICATION 'mz_source');
 # TODO: assert on `detail` here.
-exact:failed to fetch publication information from PostgreSQL database
+exact:failed to connect to PostgreSQL database
 
 > CREATE SECRET badpass AS 'badpass'
 > CREATE CONNECTION no_such_password TO POSTGRES (
@@ -188,7 +188,7 @@ exact:failed to fetch publication information from PostgreSQL database
 ! CREATE SOURCE "no_such_password"
   FROM POSTGRES CONNECTION no_such_password (PUBLICATION 'mz_source');
 # TODO: assert on `detail` here.
-exact:failed to fetch publication information from PostgreSQL database
+exact:failed to connect to PostgreSQL database
 
 > CREATE CONNECTION no_such_dbname TO POSTGRES (
     HOST postgres,
@@ -199,12 +199,12 @@ exact:failed to fetch publication information from PostgreSQL database
 ! CREATE SOURCE "no_such_dbname"
   FROM POSTGRES CONNECTION no_such_dbname (PUBLICATION 'mz_source');
 # TODO: assert on `detail` here.
-exact:failed to fetch publication information from PostgreSQL database
+exact:failed to connect to PostgreSQL database
 
 ! CREATE SOURCE "no_such_publication"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'no_such_publication');
 # TODO: assert on `detail` here.
-exact:failed to fetch publication information from PostgreSQL database
+exact:failed to connect to PostgreSQL database
 
 ! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
@@ -220,11 +220,6 @@ regex: the following columns contain unsupported types:\npostgres.public.enum_ta
     public.another_enum_table
   );
 regex: the following columns contain unsupported types:\npostgres\.public\.another_enum_table\."колона" \(OID \d+\)\npostgres\.public\.enum_table\.a \(OID \d+\)
-
-! CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR SCHEMAS (dne);
-regex: Postgres source must ingest at least one table, but FOR SCHEMAS \(dne\) matched none
 
 #
 # Establish direct replication
@@ -573,7 +568,10 @@ contains: invalid TEXT COLUMNS option value: table table_dne not found in source
     PUBLICATION 'mz_source',
     TEXT COLUMNS [another_enum_table."колона"]
   )
-  FOR ALL TABLES;
+  FOR TABLES(
+    conflict_schema.another_enum_table AS conflict_enum,
+    public.another_enum_table AS public_enum
+  );
 contains: invalid TEXT COLUMNS option value: table another_enum_table is ambiguous, consider specifying the schema
 
 ! CREATE SOURCE enum_source
@@ -581,7 +579,7 @@ contains: invalid TEXT COLUMNS option value: table another_enum_table is ambiguo
     PUBLICATION 'mz_source',
     TEXT COLUMNS [foo]
   )
-  FOR ALL TABLES;
+  FOR SCHEMAS (public);
 contains: invalid TEXT COLUMNS option value: column name 'foo' must have at least a table qualification
 
 ! CREATE SOURCE enum_source
@@ -589,7 +587,7 @@ contains: invalid TEXT COLUMNS option value: column name 'foo' must have at leas
     PUBLICATION 'mz_source',
     TEXT COLUMNS [foo.bar.qux.qax.foo]
   )
-  FOR ALL TABLES;
+  FOR SCHEMAS (public);
 contains: invalid TEXT COLUMNS option value: qualified name did not have between 1 and 3 components: foo.bar.qux.qax
 
 ! CREATE SOURCE enum_source
@@ -597,7 +595,7 @@ contains: invalid TEXT COLUMNS option value: qualified name did not have between
     PUBLICATION 'mz_source',
     TEXT COLUMNS [enum_table.a, enum_table.a]
   )
-  FOR ALL TABLES;
+  FOR SCHEMAS (public);
 contains: invalid TEXT COLUMNS option value: unexpected multiple references to postgres.public.enum_table.a
 
 # utf8_table is not part of mz_source_narrow publication
@@ -606,7 +604,7 @@ contains: invalid TEXT COLUMNS option value: unexpected multiple references to p
     PUBLICATION 'mz_source_narrow',
     TEXT COLUMNS [enum_table.a, utf8_table.f1]
   )
-  FOR ALL TABLES;
+  FOR SCHEMAS (public);
 contains: invalid TEXT COLUMNS option value: table utf8_table not found in source
 
 # n.b includes a reference to pk_table, which is not a table that's part of the

@@ -24,20 +24,33 @@ ALTER USER postgres WITH replication;
 DROP SCHEMA IF EXISTS public CASCADE;
 DROP PUBLICATION IF EXISTS mz_source;
 CREATE SCHEMA public;
+DROP SCHEMA IF EXISTS other CASCADE;
+CREATE SCHEMA other;
 
 DROP PUBLICATION IF EXISTS mz_source_empty;
 CREATE PUBLICATION mz_source_empty;
 
+DROP PUBLICATION IF EXISTS mz_source;
+CREATE PUBLICATION mz_source FOR ALL TABLES;
+
+CREATE TABLE t (f1 int);
+ALTER TABLE t REPLICA IDENTITY FULL;
+
 ! CREATE SOURCE "mz_source_empty"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_empty')
   FOR ALL TABLES;
-exact: FOR ALL TABLES is only valid for non-empty publications
+exact: PostgreSQL PUBLICATION mz_source_empty is empty
 
 ! CREATE SOURCE "mz_source_empty"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_empty')
   FOR TABLES (t1);
-exact: FOR TABLES (..) is only valid for non-empty publications
+exact: PostgreSQL PUBLICATION mz_source_empty is empty
 
 ! CREATE SOURCE "mz_source_empty"
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_empty');
+  FROM POSTGRES CONNECTION pg (PUBLICATION mz_source);
 exact: multi-output sources require a FOR TABLES (..), FOR SCHEMAS (..), or FOR ALL TABLES clause
+
+! CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION mz_source)
+  FOR SCHEMAS (dne);
+exact: FOR SCHEMAS (..) included dne, but PostgreSQL database has no schema with that name
