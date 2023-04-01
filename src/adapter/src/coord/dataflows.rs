@@ -146,18 +146,18 @@ impl Coordinator {
     ) -> Result<(), AdapterError> {
         let mut output_ids = Vec::new();
         let mut dataflow_plans = Vec::with_capacity(dataflows.len());
-        for dataflow in dataflows.into_iter() {
+        for mut dataflow in dataflows.into_iter() {
             output_ids.extend(dataflow.export_ids());
-            let mut plan = self.finalize_dataflow(dataflow, instance)?;
             // If the only outputs of the dataflow are sinks, we might
             // be able to turn off the computation early, if they all
             // have non-trivial `up_to`s.
-            if plan.index_exports.is_empty() {
-                plan.until = Antichain::from_elem(Timestamp::MIN);
-                for (_, sink) in &plan.sink_exports {
-                    plan.until.join_assign(&sink.up_to);
+            if dataflow.index_exports.is_empty() {
+                dataflow.until = Antichain::from_elem(Timestamp::MIN);
+                for (_, sink) in &dataflow.sink_exports {
+                    dataflow.until.join_assign(&sink.up_to);
                 }
             }
+            let plan = self.finalize_dataflow(dataflow, instance)?;
             dataflow_plans.push(plan);
         }
         self.controller

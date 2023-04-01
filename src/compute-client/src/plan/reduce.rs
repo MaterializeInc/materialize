@@ -321,6 +321,20 @@ pub enum HierarchicalPlan {
     Bucketed(BucketedPlan),
 }
 
+impl HierarchicalPlan {
+    /// Informs the plan that it will apply to a single time, and therefore
+    /// may upgrade from a bucketed plan to a monotonic plan with mandatory
+    /// consolidation.
+    pub fn flag_snapshot(&mut self) {
+        if let HierarchicalPlan::Bucketed(bucketed) = self {
+            // Convert to a monotonic plan with mandatory consolidation.
+            // TODO: ideally we would not have the `clone()` but ownership
+            // seems fraught here as we are behind a `&mut self` reference.
+            *self = HierarchicalPlan::Monotonic(bucketed.clone().into_monotonic(true));
+        }
+    }
+}
+
 impl RustType<ProtoHierarchicalPlan> for HierarchicalPlan {
     fn into_proto(&self) -> ProtoHierarchicalPlan {
         use proto_hierarchical_plan::Kind;
@@ -404,6 +418,18 @@ pub struct BucketedPlan {
     /// be decreasing, and ideally, a power of two so that we can easily
     /// distribute values to buckets with `value.hashed() % buckets[layer]`.
     pub buckets: Vec<u64>,
+}
+
+impl BucketedPlan {
+    /// Convert to a monotonic plan, indicate whether the operator must apply
+    /// consolidation to its input.
+    fn into_monotonic(self, must_consolidate: bool) -> MonotonicPlan {
+        MonotonicPlan {
+            aggr_funcs: self.aggr_funcs,
+            skips: self.skips,
+            must_consolidate,
+        }
+    }
 }
 
 impl RustType<ProtoBucketedPlan> for BucketedPlan {

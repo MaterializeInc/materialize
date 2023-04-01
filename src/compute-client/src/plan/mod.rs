@@ -1677,6 +1677,55 @@ This is not expected to cause incorrect results, but could indicate a performanc
             }
         }
 
+        // If a SELECT query (i.e. `until == as_of + 1`) upgrade plans to monotonic.
+        // TODO: this would be much easier to check if `until` was a strict lower bound,
+        // and we would be testing that `until == as_of`.
+        let single_time = match (dataflow.as_of.as_ref(), dataflow.until.as_ref()) {
+            (Some(as_of), until) => {
+                as_of.len() == 1
+                    && until.len() == 1
+                    && as_of[0].checked_add(1) == Some(until[0].clone())
+            }
+            _ => false,
+        };
+        if single_time {
+            for build_desc in dataflow.objects_to_build.iter_mut() {
+                let mut todo = vec![&mut build_desc.plan];
+                while let Some(expression) = todo.pop() {
+                    match expression {
+                        Plan::Reduce { plan, .. } => {
+                            use crate::plan::reduce::{CollationPlan, ReducePlan};
+                            // Upgrade non-monotonic hierarchical plans to monotonic with mandatory consolidation.
+                            match plan {
+                                ReducePlan::Collation(CollationPlan { hierarchical, .. }) => {
+                                    hierarchical.as_mut().map(|plan| plan.flag_snapshot());
+                                }
+                                ReducePlan::Hierarchical(hierarchical) => {
+                                    hierarchical.flag_snapshot();
+                                }
+                                _ => {
+                                    // Nothing to do for other plans, and doing nothing is safe for future variants.
+                                }
+                            }
+                            todo.extend(expression.children_mut());
+                        }
+                        Plan::TopK { top_k_plan, .. } => {
+                            top_k_plan.flag_snapshot();
+                            todo.extend(expression.children_mut());
+                        }
+                        Plan::LetRec { body, .. } => {
+                            // Only the non-recursive `body` is restricted to a single time.
+                            todo.push(body);
+                        }
+                        _ => {
+                            // Nothing to do for other expressions, and doing nothing is safe for future expressions.
+                            todo.extend(expression.children_mut());
+                        }
+                    }
+                }
+            }
+        }
+
         mz_repr::explain::trace_plan(&dataflow);
 
         Ok(dataflow)

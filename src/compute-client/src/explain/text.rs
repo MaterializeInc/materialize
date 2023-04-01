@@ -265,6 +265,9 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                             let order_by = separated(", ", &plan.order_key);
                             write!(f, " order_by=[{}]", order_by)?;
                         }
+                        if plan.must_consolidate {
+                            writeln!(f, "{}must_consolidate", ctx.indent)?;
+                        }
                     }
                     TopKPlan::MonotonicTopK(plan) => {
                         write!(f, "{}TopK::MonotonicTopK", ctx.indent)?;
@@ -278,6 +281,9 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                         }
                         if let Some(limit) = &plan.limit {
                             write!(f, " limit={}", limit)?;
+                        }
+                        if plan.must_consolidate {
+                            writeln!(f, "{}must_consolidate", ctx.indent)?;
                         }
                     }
                     TopKPlan::Basic(plan) => {
@@ -593,6 +599,9 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for HierarchicalPlan {
                 writeln!(f, "{}aggr_funcs=[{}]", ctx.indent, aggr_funcs)?;
                 let skips = separated(", ", &plan.skips);
                 writeln!(f, "{}skips=[{}]", ctx.indent, skips)?;
+                if plan.must_consolidate {
+                    writeln!(f, "{}must_consolidate", ctx.indent)?;
+                }
             }
             HierarchicalPlan::Bucketed(plan) => {
                 let aggr_funcs = separated(", ", &plan.aggr_funcs);
