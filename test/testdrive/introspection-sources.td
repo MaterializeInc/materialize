@@ -269,3 +269,28 @@ mv1_primary_idx mv1
   FROM mz_internal.mz_arrangement_sharing_per_worker
   GROUP BY operator_id, count
 16
+
+# Test that the roll-up of arrangement sizes is correct
+
+> INSERT INTO t SELECT * FROM generate_series(1, 100);
+
+> INSERT INTO t2 SELECT * FROM generate_series(1, 200);
+
+> CREATE VIEW vv_arr AS SELECT sum(a) FROM t JOIN t2 ON t.a = t2.b;
+
+> CREATE MATERIALIZED VIEW mv_arr AS SELECT * FROM vv_arr
+
+> CREATE DEFAULT INDEX ii_arr ON vv_arr
+
+> SELECT records >= 300 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_arr' OR name='mv_arr'
+true
+true
+
+# Test that non-arranging dataflows show up in `mz_dataflow_arrangement_sizes`
+
+> CREATE TABLE t3 (c int)
+
+> CREATE DEFAULT INDEX ii_empty ON t3
+
+> SELECT records, batches FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_empty'
+0 0
