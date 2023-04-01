@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use reqwest::Proxy;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -24,13 +25,14 @@ pub struct Auth {
 }
 
 /// Configuration for a `Client`.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ClientConfig {
     url: Url,
     root_certs: Vec<Certificate>,
     identity: Option<Identity>,
     auth: Option<Auth>,
     dns_overrides: BTreeMap<String, Vec<SocketAddr>>,
+    proxies: Vec<Proxy>,
 }
 
 impl ClientConfig {
@@ -43,6 +45,7 @@ impl ClientConfig {
             identity: None,
             auth: None,
             dns_overrides: BTreeMap::new(),
+            proxies: vec![],
         }
     }
 
@@ -76,11 +79,9 @@ impl ClientConfig {
         self
     }
 
-    /// Overrides the url.
-    ///
-    /// Useful for certain kinds of tunneling.
-    pub fn override_url(mut self, url: Url) -> ClientConfig {
-        self.url = url;
+    /// Adds a `Proxy` to the list of proxies that the client will use.
+    pub fn proxy(mut self, proxy: Proxy) -> ClientConfig {
+        self.proxies.push(proxy);
         self
     }
 
@@ -98,6 +99,10 @@ impl ClientConfig {
 
         for (domain, addrs) in self.dns_overrides {
             builder = builder.resolve_to_addrs(&domain, &addrs);
+        }
+
+        for proxy in self.proxies {
+            builder = builder.proxy(proxy);
         }
 
         let inner = builder

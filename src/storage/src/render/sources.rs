@@ -256,10 +256,7 @@ where
                 None => None,
                 Some(csr_connection) => Some(
                     TokioHandle::current()
-                        .block_on(
-                            csr_connection
-                                .connect(&*storage_state.connection_context.secrets_reader),
-                        )
+                        .block_on(csr_connection.connect(&storage_state.connection_context))
                         .expect("CSR connection unexpectedly missing secrets"),
                 ),
             };

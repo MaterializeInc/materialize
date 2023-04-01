@@ -111,3 +111,4 @@ pub mod tls;
 
 pub use client::*;
 pub use config::ClientConfig;
+pub use reqwest::Proxy;
