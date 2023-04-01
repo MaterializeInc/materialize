@@ -36,7 +36,7 @@ use mz_expr::PartitionId;
 use mz_interchange::avro::ConfluentAvroResolver;
 use mz_repr::{adt::timestamp::CheckedTimestamp, Datum};
 use mz_repr::{Diff, Row, Timestamp};
-use mz_storage_client::types::connections::{ConnectionContext, CsrClient};
+use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::{DecodeError, DecodeErrorKind};
 use mz_storage_client::types::sources::encoding::{
     AvroEncoding, DataEncoding, DataEncodingInner, RegexEncoding,
@@ -62,7 +62,7 @@ mod protobuf;
 pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
     input: &Collection<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, u32>,
     schema: &str,
-    registry: Option<CsrClient>,
+    registry: Option<mz_ccsr::Client>,
     confluent_wire_format: bool,
 ) -> (Collection<G, Row, Diff>, Box<dyn Any + Send + Sync>) {
     // We will have already checked validity of the schema by now, so this can't fail.
@@ -263,7 +263,7 @@ fn get_decoder(
                 None => None,
                 Some(csr_connection) => Some(
                     TokioHandle::current()
-                        .block_on(csr_connection.connect(&*connection_context.secrets_reader))
+                        .block_on(csr_connection.connect(connection_context))
                         .expect("CSR connection unexpectedly missing secrets"),
                 ),
             };

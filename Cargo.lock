@@ -4670,6 +4670,7 @@ name = "mz-ssh-util"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "mz-ore",
  "openssh",
  "openssl",
  "rand",
@@ -4677,6 +4678,7 @@ dependencies = [
  "serde_json",
  "ssh-key",
  "tempfile",
+ "tokio",
  "tracing",
  "workspace-hack",
  "zeroize",

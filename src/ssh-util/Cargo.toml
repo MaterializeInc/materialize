@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 anyhow = { version = "1.0.66" }
+mz-ore = { path = "../ore" }
 openssh = { version = "0.9.8", default-features = false, features = ["native-mux"] }
 openssl = { version = "0.10.48", features = ["vendored"] }
 rand = "0.8.5"
@@ -15,6 +16,7 @@ serde = { version = "1.0.152", features = ["derive"] }
 serde_json = { version = "1.0.89" }
 ssh-key = { version = "0.4.3" }
 tempfile = "3.3.0"
+tokio = "1.24.2"
 tracing = "0.1.37"
 zeroize = { version = "1.5.7", features = ["serde"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }

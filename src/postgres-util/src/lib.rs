@@ -79,7 +79,6 @@
 
 use std::time::Duration;
 
-use anyhow::anyhow;
 use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
@@ -393,19 +392,14 @@ impl Config {
             }
             TunnelConfig::Ssh(tunnel) => {
                 let (host, port) = self.address()?;
-                let (session, local_port) = tunnel.connect(host, port).await?;
+                let tunnel = tunnel.connect("postgres", host, port).await?;
                 let tls = MakeTlsConnect::<TokioTcpStream>::make_tls_connect(&mut tls, host)?;
-                let tcp_stream = TokioTcpStream::connect(("localhost", local_port)).await?;
+                let tcp_stream = TokioTcpStream::connect(tunnel.local_addr()).await?;
                 let (client, connection) = postgres_config.connect_raw(tcp_stream, tls).await?;
                 task::spawn(|| task_name, async {
+                    let _tunnel = tunnel; // Keep SSH tunnel alive for duration of connection.
                     if let Err(e) = connection.await {
                         warn!("postgres connection failed: {e}");
-                    }
-                    if let Err(e) = session.close().await {
-                        // Convert to `anyhow::Error` to include error source
-                        // via the alternate `Display` implementation, which can
-                        // contain key details about the nature of the failure.
-                        warn!("failed to close ssh tunnel: {:#}", anyhow!(e))
                     }
                 });
                 Ok(client)

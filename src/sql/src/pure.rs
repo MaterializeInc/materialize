@@ -794,9 +794,7 @@ async fn purify_csr_connection_proto(
                 _ => sql_bail!("{} is not a schema registry connection", connection),
             };
 
-            let ccsr_client = ccsr_connection
-                .connect(&*connection_context.secrets_reader)
-                .await?;
+            let ccsr_client = ccsr_connection.connect(connection_context).await?;
 
             let value = compile_proto(&format!("{}-value", topic), &ccsr_client).await?;
             let key = compile_proto(&format!("{}-key", topic), &ccsr_client)
@@ -848,9 +846,7 @@ async fn purify_csr_connection_avro(
             Connection::Csr(connection) => connection.clone(),
             _ => sql_bail!("{} is not a schema registry connection", connection),
         };
-        let ccsr_client = csr_connection
-            .connect(&*connection_context.secrets_reader)
-            .await?;
+        let ccsr_client = csr_connection.connect(connection_context).await?;
 
         let Schema {
             key_schema,
