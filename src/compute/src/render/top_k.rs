@@ -60,8 +60,14 @@ where
                 TopKPlan::MonotonicTop1(MonotonicTop1Plan {
                     group_key,
                     order_key,
+                    must_consolidate,
                 }) => {
-                    let (oks, errs) = self.render_top1_monotonic(ok_input, group_key, order_key);
+                    let (oks, errs) = self.render_top1_monotonic(
+                        ok_input,
+                        group_key,
+                        order_key,
+                        must_consolidate,
+                    );
                     err_collection = err_collection.concat(&errs);
                     oks
                 }
@@ -70,9 +76,10 @@ where
                     group_key,
                     arity,
                     limit,
+                    must_consolidate,
                 }) => {
                     let mut datum_vec = mz_repr::DatumVec::new();
-                    let collection = ok_input.map(move |row| {
+                    let mut collection = ok_input.map(move |row| {
                         let group_row = {
                             let datums = datum_vec.borrow_with(&row);
                             let iterator = group_key.iter().map(|i| datums[*i]);
@@ -83,6 +90,13 @@ where
                         };
                         (group_row, row)
                     });
+
+                    // Consolidate if required to do so.
+                    if must_consolidate {
+                        collection = collection.consolidate_named::<RowKeySpine<_, _, _>>(
+                            "Consolidated ReduceMonotonic input",
+                        );
+                    }
 
                     // For monotonic inputs, we are able to thin the input relation in two stages:
                     // 1. First, we can do an intra-timestamp thinning which has the advantage of
@@ -287,6 +301,7 @@ where
         collection: Collection<S, Row, Diff>,
         group_key: Vec<usize>,
         order_key: Vec<mz_expr::ColumnOrder>,
+        must_consolidate: bool,
     ) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>)
     where
         S: Scope<Timestamp = G::Timestamp>,
@@ -294,7 +309,7 @@ where
         // We can place our rows directly into the diff field, and only keep the relevant one
         // corresponding to evaluating our aggregate, instead of having to do a hierarchical
         // reduction.
-        let collection = collection.map({
+        let mut collection = collection.map({
             let mut datum_vec = mz_repr::DatumVec::new();
             move |row| {
                 let group_key = {
@@ -309,12 +324,14 @@ where
             }
         });
 
-        // We arrange the inputs ourself to force it into a leaner structure because we know we
-        // won't care about values.
-        let consolidated = collection
-            .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated MonotonicTop1 input");
+        // Consolidate if required to do so.
+        if must_consolidate {
+            collection = collection
+                .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated MonotonicTop1 input");
+        }
+
         let error_logger = self.error_logger();
-        let (partial, errs) = consolidated.ensure_monotonic(move |data, diff| {
+        let (partial, errs) = collection.ensure_monotonic(move |data, diff| {
             error_logger.log(
                 "Non-monotonic input to MonotonicTop1",
                 &format!("data={data:?}, diff={diff}"),

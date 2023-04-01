@@ -35,6 +35,7 @@ message ProtoBasicTopKPlan {
 message ProtoMonotonicTop1Plan {
     repeated uint64 group_key = 1;
     repeated mz_expr.relation.ProtoColumnOrder order_key = 2;
+    bool must_consolidate = 3;
 }
 
 message ProtoMonotonicTopKPlan {
@@ -42,4 +43,5 @@ message ProtoMonotonicTopKPlan {
     repeated mz_expr.relation.ProtoColumnOrder order_key = 2;
     optional uint64 limit = 3;
     uint64 arity = 4;
+    bool must_consolidate = 5;
 }

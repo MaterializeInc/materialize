@@ -914,14 +914,18 @@ where
     fn build_monotonic<S>(
         &self,
         collection: Collection<S, (Row, Row), Diff>,
-        MonotonicPlan { aggr_funcs, skips }: MonotonicPlan,
+        MonotonicPlan {
+            aggr_funcs,
+            skips,
+            must_consolidate,
+        }: MonotonicPlan,
     ) -> (Arrangement<S, Row>, Collection<S, DataflowError, Diff>)
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
         // Gather the relevant values into a vec of rows ordered by aggregation_index
         let mut row_buf = Row::default();
-        let collection = collection.map(move |(key, row)| {
+        let mut collection = collection.map(move |(key, row)| {
             let mut values = Vec::with_capacity(skips.len());
             let mut row_iter = row.iter();
             for skip in skips.iter() {
@@ -932,12 +936,14 @@ where
             (key, values)
         });
 
-        // We arrange the inputs ourself to force it into a leaner structure because we know we
-        // won't care about values.
-        let consolidated = collection
-            .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated ReduceMonotonic input");
+        // Consolidate if required to do so.
+        if must_consolidate {
+            collection = collection
+                .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated ReduceMonotonic input");
+        }
+
         let error_logger = self.error_logger();
-        let (partial, errs) = consolidated.ensure_monotonic(move |data, diff| {
+        let (partial, errs) = collection.ensure_monotonic(move |data, diff| {
             error_logger.log(
                 "Non-monotonic input to ReduceMonotonic",
                 &format!("data={data:?}, diff={diff}"),

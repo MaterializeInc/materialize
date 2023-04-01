@@ -359,6 +359,10 @@ pub struct MonotonicPlan {
     /// Set of "skips" or calls to `nth()` an iterator needs to do over
     /// the input to extract the relevant datums.
     pub skips: Vec<usize>,
+    /// True if the input is logically but not physically monotonic,
+    /// and the operator must first consolidate the inputs to remove
+    /// potential negations.
+    pub must_consolidate: bool,
 }
 
 impl RustType<ProtoMonotonicPlan> for MonotonicPlan {
@@ -366,6 +370,7 @@ impl RustType<ProtoMonotonicPlan> for MonotonicPlan {
         ProtoMonotonicPlan {
             aggr_funcs: self.aggr_funcs.into_proto(),
             skips: self.skips.into_proto(),
+            must_consolidate: self.must_consolidate.into_proto(),
         }
     }
 
@@ -373,6 +378,7 @@ impl RustType<ProtoMonotonicPlan> for MonotonicPlan {
         Ok(Self {
             aggr_funcs: proto.aggr_funcs.into_rust()?,
             skips: proto.skips.into_rust()?,
+            must_consolidate: proto.must_consolidate.into_rust()?,
         })
     }
 }
@@ -677,7 +683,11 @@ impl ReducePlan {
                 // to do to get the desired indexes.
                 let skips = convert_indexes_to_skips(indexes);
                 if monotonic {
-                    let monotonic = MonotonicPlan { aggr_funcs, skips };
+                    let monotonic = MonotonicPlan {
+                        aggr_funcs,
+                        skips,
+                        must_consolidate: false,
+                    };
                     ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(monotonic))
                 } else {
                     let buckets = bucketing_of_expected_group_size(expected_group_size);
