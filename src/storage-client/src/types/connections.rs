@@ -11,6 +11,7 @@
 
 use std::any::Any;
 use std::collections::BTreeMap;
+use std::net::Ipv4Addr;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,6 +20,7 @@ use anyhow::{anyhow, Context};
 use itertools::Itertools;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
+use rdkafka::client::BrokerAddr;
 use rdkafka::config::FromClientConfigAndContext;
 use rdkafka::ClientContext;
 use serde::{Deserialize, Serialize};
@@ -30,7 +32,7 @@ use url::Url;
 
 use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::AwsExternalIdPrefix;
-use mz_kafka_util::client::BrokerRewritingClientContext;
+use mz_kafka_util::client::{BrokerRewrite, BrokerRewritingClientContext};
 use mz_proto::tokio_postgres::any_ssl_mode;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
@@ -358,51 +360,52 @@ impl KafkaConnection {
 
         let mut context = BrokerRewritingClientContext::new(context);
         for broker in &self.brokers {
+            let mut addr_parts = broker.address.splitn(2, ':');
+            let addr = BrokerAddr {
+                host: addr_parts
+                    .next()
+                    .context("BROKER is not address:port")?
+                    .into(),
+                port: addr_parts.next().unwrap_or("9092").into(),
+            };
             match &broker.tunnel {
                 Tunnel::Direct => {
                     // By default, don't override broker address lookup.
                 }
                 Tunnel::AwsPrivatelink(aws_privatelink) => {
-                    context.add_broker_rewrite(
-                        &broker.address,
-                        &mz_cloud_resources::vpc_endpoint_host(
-                            aws_privatelink.connection_id,
-                            aws_privatelink.availability_zone.as_deref(),
-                        ),
-                        aws_privatelink.port,
+                    let host = mz_cloud_resources::vpc_endpoint_host(
+                        aws_privatelink.connection_id,
+                        aws_privatelink.availability_zone.as_deref(),
                     );
+                    let port = aws_privatelink.port;
+                    context.add_broker_rewrite(addr, move || BrokerRewrite {
+                        host: host.clone(),
+                        port,
+                    });
                 }
                 Tunnel::Ssh(ssh_tunnel) => {
-                    // Extract the host address pieces...
-                    let mut broker_iter = broker.address.splitn(2, ':');
-
-                    let broker_host = broker_iter.next().context("BROKER is not address:port")?;
-                    let broker_port: u16 = broker_iter
-                        .next()
-                        .unwrap_or("9092")
-                        .parse()
-                        .context("BROKER port is not an integer")?;
-
                     let (local_port, token) = ssh_tunnel
                         .build_ssh_tunnel_for_url(
                             &*connection_context.secrets_reader,
-                            broker_host,
-                            broker_port,
+                            &addr.host,
+                            addr.port.parse().context("parsing broker port")?,
                             "kafka",
                         )
                         .await
                         .context("creating ssh tunnel")?;
 
-                    context.add_broker_rewrite_with_token(
-                        &broker.address,
-                        // This should never be `"localhost"`, as that causes reliability
-                        // problems, _probably_ related to resolving to ipv6.
-                        "127.0.0.1",
-                        Some(local_port),
-                        // Note, this does double-boxing, but its only relevant during dropping,
-                        // so not a performance problem.
-                        token,
-                    );
+                    context.add_broker_rewrite(addr, move || {
+                        // Move `token` into the closure to keep the tunnel
+                        // alive for as long as the closure.
+                        let _token = &token;
+                        BrokerRewrite {
+                            // Force use of IPv4 loopback. Do not use the hostname `localhost`,
+                            // as that can resolve to IPv6, and the SSH tunnel is only listening
+                            // for IPv4 connections.
+                            host: Ipv4Addr::LOCALHOST.to_string(),
+                            port: Some(local_port),
+                        }
+                    });
                 }
             }
         }
