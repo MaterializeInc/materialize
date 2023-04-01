@@ -17,6 +17,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::anyhow;
+use itertools::Itertools;
 use mz_repr::adt::system::Oid;
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
@@ -291,11 +292,11 @@ pub async fn purify_create_source(
                 .config(&*connection_context.secrets_reader)
                 .await?;
             let publication_tables =
-                mz_postgres_util::publication_info(&config, &publication, None)
-                    .await
-                    .map_err(|cause| PlanError::FetchingPostgresPublicationInfoFailed {
-                        cause: Arc::new(cause),
-                    })?;
+                mz_postgres_util::publication_info(&config, &publication, None).await?;
+
+            if publication_tables.is_empty() {
+                return Err(PlanError::EmptyPublication(publication));
+            }
 
             // An index from table name -> schema name -> database name -> PostgresTableDesc
             let mut tables_by_name = BTreeMap::new();
@@ -316,9 +317,6 @@ pub async fn purify_create_source(
             let mut validated_requested_subsources = vec![];
             match referenced_subsources {
                 Some(ReferencedSubsources::All) => {
-                    if publication_tables.is_empty() {
-                        sql_bail!("FOR ALL TABLES is only valid for non-empty publications");
-                    }
                     for table in &publication_tables {
                         let upstream_name = UnresolvedItemName::qualified(&[
                             &connection.database,
@@ -330,26 +328,41 @@ pub async fn purify_create_source(
                     }
                 }
                 Some(ReferencedSubsources::SubsetSchemas(schemas)) => {
-                    let schemas: BTreeSet<_> = schemas.iter().map(|s| s.as_str()).collect();
+                    let available_schemas: BTreeSet<_> = mz_postgres_util::get_schemas(&config)
+                        .await?
+                        .into_iter()
+                        .map(|s| s.name)
+                        .collect();
+
+                    let requested_schemas: BTreeSet<_> =
+                        schemas.iter().map(|s| s.as_str().to_string()).collect();
+
+                    let missing_schemas: Vec<_> = requested_schemas
+                        .difference(&available_schemas)
+                        .map(|s| s.to_string())
+                        .collect();
+
+                    if !missing_schemas.is_empty() {
+                        return Err(PlanError::PostgresDatabaseMissingFilteredSchemas {
+                            schemas: missing_schemas,
+                        });
+                    }
+
                     for table in &publication_tables {
-                        if !schemas.contains(table.namespace.as_str()) {
+                        if !requested_schemas.contains(table.namespace.as_str()) {
                             continue;
                         }
 
-                        let upstream_name = UnresolvedObjectName::qualified(&[
+                        let upstream_name = UnresolvedItemName::qualified(&[
                             &connection.database,
                             &table.namespace,
                             &table.name,
                         ]);
-                        let subsource_name = UnresolvedObjectName::unqualified(&table.name);
+                        let subsource_name = UnresolvedItemName::unqualified(&table.name);
                         validated_requested_subsources.push((upstream_name, subsource_name, table));
                     }
                 }
                 Some(ReferencedSubsources::SubsetTables(subsources)) => {
-                    // TODO: can subsources be empty?
-                    if publication_tables.is_empty() {
-                        sql_bail!("FOR TABLES (..) is only valid for non-empty publications");
-                    }
                     // The user manually selected a subset of upstream tables so we need to
                     // validate that the names actually exist and are not ambiguous
 
@@ -366,9 +379,32 @@ pub async fn purify_create_source(
 
             if validated_requested_subsources.is_empty() {
                 sql_bail!(
-                    "Postgres source must ingest at least one table, but {} matched none",
+                    "[internal error]: Postgres source must ingest at least one table, but {} matched none",
                     referenced_subsources.as_ref().unwrap().to_ast_string()
                 );
+            }
+
+            // This condition would get caught during the catalog transaction, but produces a
+            // vague, non-contextual error. Instead, error here so we can suggest to the user
+            // how to fix the problem.
+            if let Some(name) = validated_requested_subsources
+                .iter()
+                .map(|(_, subsource_name, _)| subsource_name)
+                .duplicates()
+                .next()
+                .cloned()
+            {
+                let mut upstream_references: Vec<_> = validated_requested_subsources
+                    .into_iter()
+                    .filter_map(|(u, t, _)| if t == name { Some(u) } else { None })
+                    .collect();
+
+                upstream_references.sort();
+
+                return Err(PlanError::DuplicateSubsourceReference {
+                    name,
+                    upstream_references,
+                });
             }
 
             let mut text_cols_dict: BTreeMap<u32, BTreeSet<String>> = BTreeMap::new();

@@ -20,6 +20,7 @@ use mz_expr::EvalError;
 use mz_ore::error::ErrorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::{separated, StrExt};
+use mz_postgres_util::PostgresError;
 use mz_repr::adt::char::InvalidCharLengthError;
 use mz_repr::adt::numeric::InvalidNumericMaxScaleError;
 use mz_repr::adt::system::Oid;
@@ -107,7 +108,7 @@ pub enum PlanError {
         schema_lookup: String,
         cause: Arc<dyn Error + Send + Sync>,
     },
-    FetchingPostgresPublicationInfoFailed {
+    PostgresConnectionErr {
         cause: Arc<mz_postgres_util::PostgresError>,
     },
     InvalidProtobufSchema {
@@ -154,6 +155,14 @@ pub enum PlanError {
         cluster_name: String,
         linked_object_name: String,
     },
+    EmptyPublication(String),
+    DuplicateSubsourceReference {
+        name: UnresolvedItemName,
+        upstream_references: Vec<UnresolvedItemName>,
+    },
+    PostgresDatabaseMissingFilteredSchemas {
+        schemas: Vec<String>,
+    },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -169,9 +178,7 @@ impl PlanError {
     pub fn detail(&self) -> Option<String> {
         match self {
             Self::FetchingCsrSchemaFailed { cause, .. } => Some(cause.to_string_with_causes()),
-            Self::FetchingPostgresPublicationInfoFailed { cause } => {
-                Some(cause.to_string_with_causes())
-            }
+            Self::PostgresConnectionErr { cause } => Some(cause.to_string_with_causes()),
             Self::InvalidProtobufSchema { cause } => Some(cause.to_string_with_causes()),
             Self::InvalidOptionValue { err, .. } => err.detail(),
             _ => None,
@@ -205,7 +212,7 @@ impl PlanError {
                 as text."
                     .into(),
             ),
-            Self::FetchingPostgresPublicationInfoFailed { cause } => {
+            Self::PostgresConnectionErr { cause } => {
                 if let Some(cause) = cause.source() {
                     if let Some(cause) = cause.downcast_ref::<io::Error>() {
                         if cause.kind() == io::ErrorKind::TimedOut {
@@ -238,6 +245,9 @@ impl PlanError {
             Self::InvalidPrivatelinkAvailabilityZone { supported_azs, ..} => {
                 let supported_azs_str = supported_azs.iter().join("\n  ");
                 Some(format!("Did you supply an availability zone name instead of an ID? Known availability zone IDs:\n  {}", supported_azs_str))
+            }
+            Self::DuplicateSubsourceReference { .. } => {
+                Some("Specify target table names using FOR TABLES (foo AS bar), or limit the upstream tables using FOR SCHEMAS (foo)".into())
             }
             _ => None,
         }
@@ -358,8 +368,8 @@ impl fmt::Display for PlanError {
             Self::FetchingCsrSchemaFailed { schema_lookup, .. } => {
                 write!(f, "failed to fetch schema {schema_lookup} from schema registry")
             }
-            Self::FetchingPostgresPublicationInfoFailed { .. } => {
-                write!(f, "failed to fetch publication information from PostgreSQL database")
+            Self::PostgresConnectionErr { .. } => {
+                write!(f, "failed to connect to PostgreSQL database")
             }
             Self::InvalidProtobufSchema { .. } => {
                 write!(f, "invalid protobuf schema")
@@ -401,6 +411,13 @@ impl fmt::Display for PlanError {
             Self::InvalidSchemaName => write!(f, "no schema has been selected to create in"),
             Self::ItemAlreadyExists { name, item_type } => write!(f, "{item_type} {} already exists", name.quoted()),
             Self::ModifyLinkedCluster {cluster_name, ..} => write!(f, "cannot modify linked cluster {}", cluster_name.quoted()),
+            Self::EmptyPublication(publication) => write!(f, "PostgreSQL PUBLICATION {publication} is empty"),
+            Self::DuplicateSubsourceReference { name, upstream_references } => {
+                write!(f, "multiple tables with name {}: {}", name.to_ast_string_stable(), itertools::join(upstream_references.iter().map(|n| n.to_ast_string_stable()), ", "))
+            },
+            Self::PostgresDatabaseMissingFilteredSchemas { schemas} => {
+                write!(f, "FOR SCHEMAS (..) included {}, but PostgreSQL database has no schema with that name", itertools::join(schemas.iter(), ", "))
+            }
         }
     }
 }
@@ -471,6 +488,12 @@ impl From<EvalError> for PlanError {
 impl From<ParserError> for PlanError {
     fn from(e: ParserError) -> PlanError {
         PlanError::Parser(e)
+    }
+}
+
+impl From<PostgresError> for PlanError {
+    fn from(e: PostgresError) -> PlanError {
+        PlanError::PostgresConnectionErr { cause: Arc::new(e) }
     }
 }
 
