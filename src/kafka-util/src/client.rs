@@ -9,7 +9,6 @@
 
 //! Helpers for working with Kafka's client API.
 
-use std::any::Any;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::sync::Arc;
@@ -71,19 +70,24 @@ impl ProducerContext for MzClientContext {
     }
 }
 
+/// Rewrites a broker address.
+///
+/// For use with [`BrokerRewritingClientContext`].
+#[derive(Debug, Clone)]
+pub struct BrokerRewrite {
+    /// The rewritten hostname.
+    pub host: String,
+    /// The rewritten port.
+    ///
+    /// If unspecified, the broker's original port is left unchanged.
+    pub port: Option<u16>,
+}
+
 /// A client context that supports rewriting broker addresses.
-///
-/// This struct implements `Clone`, but it will likely hold onto
-/// ssh sessions if cloned for anything other than retries.
-///
-/// TODO(guswynn): this needs to be cleaned up when we re-evaluate how
-/// this pipeline works.
 #[derive(Clone)]
 pub struct BrokerRewritingClientContext<C> {
     inner: C,
-    overrides: BTreeMap<BrokerAddr, BrokerAddr>,
-    /// Opaque tokens to cleanup resources associated with overrides.
-    drop_tokens: Vec<Arc<dyn Any + Send + Sync>>,
+    rewrites: BTreeMap<BrokerAddr, Arc<dyn Fn() -> BrokerRewrite + Send + Sync>>,
 }
 
 impl<C> BrokerRewritingClientContext<C> {
@@ -91,61 +95,24 @@ impl<C> BrokerRewritingClientContext<C> {
     pub fn new(inner: C) -> BrokerRewritingClientContext<C> {
         BrokerRewritingClientContext {
             inner,
-            overrides: BTreeMap::new(),
-            drop_tokens: vec![],
+            rewrites: BTreeMap::new(),
         }
     }
 
     /// Adds a broker rewrite rule.
     ///
-    /// Connections to the specified `broker` will be rewritten to connect to
-    /// `rewrite_host` and `rewrite_port` instead. If `rewrite_port` is omitted,
-    /// only the host is rewritten.
-    pub fn add_broker_rewrite(
-        &mut self,
-        broker: &str,
-        rewrite_host: &str,
-        rewrite_port: Option<u16>,
-    ) {
-        self.add_broker_rewrite_inner(broker, rewrite_host, rewrite_port, None)
-    }
-
-    /// The same as `add_broker_rewrite`, but holds onto a token that may perform
-    /// some shutdown on drop.
-    pub fn add_broker_rewrite_with_token<T: Any + Send + Sync>(
-        &mut self,
-        broker: &str,
-        rewrite_host: &str,
-        rewrite_port: Option<u16>,
-        token: T,
-    ) {
-        self.add_broker_rewrite_inner(broker, rewrite_host, rewrite_port, Some(Arc::new(token)))
-    }
-
-    fn add_broker_rewrite_inner(
-        &mut self,
-        broker: &str,
-        rewrite_host: &str,
-        rewrite_port: Option<u16>,
-        token: Option<Arc<dyn Any + Send + Sync>>,
-    ) {
-        let mut parts = broker.splitn(2, ':');
-        let broker = BrokerAddr {
-            host: parts.next().expect("at least one part").into(),
-            port: parts.next().unwrap_or("9092").into(),
-        };
-        let rewrite = BrokerAddr {
-            host: rewrite_host.into(),
-            port: match rewrite_port {
-                None => broker.port.clone(),
-                Some(port) => port.to_string(),
-            },
-        };
-        self.overrides.insert(broker, rewrite);
-
-        if let Some(token) = token {
-            self.drop_tokens.push(token)
-        }
+    /// `rewrite` is a function that returns a `BrokerRewrite` that specifies
+    /// how to rewrite the address for `broker`.
+    ///
+    /// The function is invoked by librdkafka on every connection attempt to the
+    /// broker. This permits the rewrite to evolve over time, for example, if
+    /// the rewrite is for a tunnel whose address changes if the tunnel fails
+    /// and restarts.
+    pub fn add_broker_rewrite<F>(&mut self, broker: BrokerAddr, rewrite: F)
+    where
+        F: Fn() -> BrokerRewrite + Send + Sync + 'static,
+    {
+        self.rewrites.insert(broker, Arc::new(rewrite));
     }
 
     /// Returns a reference to the wrapped context.
@@ -161,14 +128,22 @@ where
     const ENABLE_REFRESH_OAUTH_TOKEN: bool = C::ENABLE_REFRESH_OAUTH_TOKEN;
 
     fn rewrite_broker_addr(&self, addr: BrokerAddr) -> BrokerAddr {
-        match self.overrides.get(&addr) {
+        match self.rewrites.get(&addr) {
             None => addr,
-            Some(o) => {
+            Some(rewrite) => {
+                let rewrite = rewrite();
+                let new_addr = BrokerAddr {
+                    host: rewrite.host,
+                    port: match rewrite.port {
+                        None => addr.port.clone(),
+                        Some(port) => port.to_string(),
+                    },
+                };
                 info!(
                     "rewriting broker {}:{} to {}:{}",
-                    addr.host, addr.port, o.host, o.port
+                    addr.host, addr.port, new_addr.host, new_addr.port
                 );
-                o.clone()
+                new_addr
             }
         }
     }

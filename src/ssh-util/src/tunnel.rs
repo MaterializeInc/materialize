@@ -102,8 +102,9 @@ impl SshTunnelConfig {
             // Choosing a dynamic port according to RFC 6335
             let local_port: u16 = rng.gen_range(49152..65535);
 
-            // This should never be `"localhost"`, as that causes reliability
-            // problems, _probably_ related to resolving to ipv6.
+            // Force use of IPv4 loopback. Do not use the hostname `localhost`,
+            // as that can resolve to IPv6, and the SSH tunnel is only listening
+            // for IPv4 connections.
             let local = openssh::Socket::new(&(Ipv4Addr::LOCALHOST, local_port))?;
             let remote = openssh::Socket::new(&(host, port))?;
 
