@@ -13,7 +13,6 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::Read;
-use std::ops::Deref;
 use std::rc::Rc;
 
 use ordered_float::OrderedFloat;
@@ -35,8 +34,8 @@ use crate::avro::ConfluentAvroResolver;
 
 /// Manages decoding of Avro-encoded bytes.
 #[derive(Debug)]
-pub struct Decoder<C> {
-    csr_avro: ConfluentAvroResolver<C>,
+pub struct Decoder {
+    csr_avro: ConfluentAvroResolver,
     debug_name: String,
     buf1: Vec<u8>,
     row_buf: Row,
@@ -55,8 +54,7 @@ mod tests {
 "name": "test",
 "fields": [{"name": "f1", "type": "int"}, {"name": "f2", "type": "int"}]
 }"#;
-        let mut decoder =
-            Decoder::<Box<mz_ccsr::Client>>::new(schema, None, "Test".to_string(), false).unwrap();
+        let mut decoder = Decoder::new(schema, None, "Test".to_string(), false).unwrap();
         // This is not a valid Avro blob for the given schema
         let mut bad_bytes: &[u8] = &[0];
         assert!(decoder.decode(&mut bad_bytes).await.is_err());
@@ -70,7 +68,7 @@ mod tests {
     }
 }
 
-impl<C: Deref<Target = mz_ccsr::Client>> Decoder<C> {
+impl Decoder {
     /// Creates a new `Decoder`
     ///
     /// The provided schema is called the "reader schema", which is the schema
@@ -78,10 +76,10 @@ impl<C: Deref<Target = mz_ccsr::Client>> Decoder<C> {
     /// that they are encoded with a different schema; as long as those.
     pub fn new(
         reader_schema: &str,
-        ccsr_client: Option<C>,
+        ccsr_client: Option<mz_ccsr::Client>,
         debug_name: String,
         confluent_wire_format: bool,
-    ) -> anyhow::Result<Decoder<C>> {
+    ) -> anyhow::Result<Decoder> {
         let csr_avro =
             ConfluentAvroResolver::new(reader_schema, ccsr_client, confluent_wire_format)?;
 

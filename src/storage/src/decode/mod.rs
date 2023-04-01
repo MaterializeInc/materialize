@@ -81,7 +81,7 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
         let registry = match csr_connection {
             None => None,
             Some(conn) => Some(
-                conn.connect(&*connection_context.secrets_reader)
+                conn.connect(&connection_context)
                     .await
                     .expect("CSR connection unexpectedly missing secrets"),
             ),
@@ -276,7 +276,7 @@ async fn get_decoder(
                 None => None,
                 Some(csr_connection) => Some(
                     csr_connection
-                        .connect(&*connection_context.secrets_reader)
+                        .connect(connection_context)
                         .await
                         .expect("CSR connection unexpectedly missing secrets"),
                 ),

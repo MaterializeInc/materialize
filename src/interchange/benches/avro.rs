@@ -461,9 +461,7 @@ pub fn bench_avro(c: &mut Criterion) {
     buf.extend(mz_avro::to_avro_datum(&schema, record).unwrap());
     let len = u64::cast_from(buf.len());
 
-    let mut decoder =
-        Decoder::<Box<mz_ccsr::Client>>::new(schema_str, None, "avro_bench".to_string(), false)
-            .unwrap();
+    let mut decoder = Decoder::new(schema_str, None, "avro_bench".to_string(), false).unwrap();
 
     let mut bg = c.benchmark_group("avro");
     bg.throughput(Throughput::Bytes(len));
