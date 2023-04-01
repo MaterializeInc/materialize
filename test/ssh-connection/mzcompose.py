@@ -24,7 +24,7 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Materialized(),
-    Testdrive(),
+    Testdrive(consistent_seed=True),
     SshBastionHost(),
     Postgres(),
     TestCerts(),
@@ -85,6 +85,10 @@ def workflow_kafka_csr_via_ssh_tunnel(c: Composition) -> None:
     )
 
     c.run("testdrive", "--no-reset", "kafka-source.td")
+    c.kill("ssh-bastion-host")
+    c.run("testdrive", "--no-reset", "kafka-source-after-ssh-failure.td")
+    c.up("ssh-bastion-host")
+    c.run("testdrive", "--no-reset", "kafka-source-after-ssh-restart.td")
 
 
 # Test that if we restart the bastion AND change its server keys(s), we can

@@ -39,6 +39,7 @@ use std::time::{Duration, Instant};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
+use futures::future;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -87,6 +88,10 @@ use crate::source::types::{
 use crate::statistics::{SourceStatisticsMetrics, StorageStatistics};
 
 const YIELD_INTERVAL: Duration = Duration::from_millis(10);
+
+/// How long to wait before initiating a `SuspendAndRestart` command, to
+/// prevent hot restart loops.
+const SUSPEND_AND_RESTART_DELAY: Duration = Duration::from_secs(30);
 
 /// Shared configuration information for all source types. This is used in the
 /// `create_raw_source` functions, which produce raw sources.
@@ -345,29 +350,6 @@ where
         if source_upper.is_empty() {
             return;
         }
-        let (source_reader, offset_committer) = match source_connection
-            .into_reader(
-                name.clone(),
-                id,
-                worker_id,
-                worker_count,
-                sync_activator,
-                data_cap,
-                upper_cap,
-                source_upper,
-                encoding,
-                base_metrics,
-                connection_context.clone(),
-            ) {
-                Ok(res) => res,
-                Err(e) => {
-                    panic!("Failed to create source: {:#}", e);
-                }
-            };
-
-        let source_stream = source_reader.into_stream(timestamp_interval).peekable();
-        tokio::pin!(source_stream);
-        tokio::pin!(resume_uppers);
 
         health_output.give(&health_cap, (worker_id, HealthStatusUpdate {
             update: HealthStatus::Starting,
@@ -377,6 +359,53 @@ where
             update: HealthStatus::Starting,
             should_halt: false,
         };
+
+        let (source_reader, offset_committer) = match source_connection
+            .into_reader(
+                name.clone(),
+                id,
+                worker_id,
+                worker_count,
+                sync_activator,
+                data_cap,
+                // IMPORTANT: retain a reference to `upper_cap` in the error
+                // case. See below.
+                upper_cap.clone(),
+                source_upper,
+                encoding,
+                base_metrics,
+                connection_context.clone(),
+            ) {
+                Ok(r) => {
+                    // The source reader was successfully created, so leave it
+                    // with the only copy of `upper_cap`.
+                    drop(upper_cap);
+                    r
+                }
+                Err(e) => {
+                    // If creating the source reader fails, nothing to do but
+                    // log an error and request a restart.
+                    health_output.give(&health_cap, (worker_id, HealthStatusUpdate {
+                        update: HealthStatus::StalledWithError {
+                            error: format!("failed creating source reader: {e:#}"),
+                            hint: None
+                        },
+                        should_halt: true,
+                    })).await;
+
+                    // IMPORTANT: wedge forever to retain `upper_cap` until the
+                    // `SuspendAndRestart` is processed. Dropping `upper_cap`
+                    // can result in the remap operator noticing and advancing
+                    // the remap shard to the empty frontier before the
+                    // `SuspendAndRestart` occurs.
+                    future::pending::<()>().await;
+                    unreachable!("pending future never returns");
+                }
+            };
+
+        let source_stream = source_reader.into_stream(timestamp_interval).peekable();
+        tokio::pin!(source_stream);
+        tokio::pin!(resume_uppers);
 
         // We want to commit offsets concurrently with ingestion so that a slow commit
         // implementation doesn't stall the operator and prevent it from reading more data. For
@@ -600,9 +629,10 @@ fn health_operator<G: Scope>(
                 // We should definitely do that, but this is okay for a PoC.
                 if let Some(halt_with) = halt_with {
                     info!(
-                        "Broadcasting suspend-and-restart command because of {:?}",
-                        halt_with
+                        "Broadcasting suspend-and-restart command because of {:?} after {:?} delay",
+                        halt_with, SUSPEND_AND_RESTART_DELAY,
                     );
+                    tokio::time::sleep(SUSPEND_AND_RESTART_DELAY).await;
                     internal_cmd_tx.borrow_mut().broadcast(
                         InternalStorageCommand::SuspendAndRestart {
                             id: source_id,
