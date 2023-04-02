@@ -91,6 +91,7 @@ class SourceErrors(Check):
                 > SELECT status, error ~* 'publication .+ does not exist'
                   FROM mz_internal.mz_source_statuses
                   WHERE name LIKE 'source_errors_source%'
+                  AND type != 'subsource';
                 stalled true
                 stalled true
                 """
