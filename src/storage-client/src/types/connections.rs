@@ -382,7 +382,6 @@ impl KafkaConnection {
                     let ssh_tunnel = ssh_tunnel
                         .connect(
                             connection_context,
-                            "kafka",
                             &addr.host,
                             addr.port.parse().context("parsing broker port")?,
                         )
@@ -574,7 +573,6 @@ impl CsrConnection {
                 let ssh_tunnel = ssh_tunnel
                     .connect(
                         connection_context,
-                        "csr",
                         host,
                         // Default to the default http port, but this
                         // could default to 8081...
@@ -1031,7 +1029,6 @@ impl SshTunnel {
     async fn connect(
         &self,
         connection_context: &ConnectionContext,
-        debug_name: &str,
         remote_host: &str,
         remote_port: u16,
     ) -> Result<SshTunnelHandle, anyhow::Error> {
@@ -1047,6 +1044,6 @@ impl SshTunnel {
             user: self.connection.user.clone(),
             key_pair,
         };
-        config.connect(debug_name, remote_host, remote_port).await
+        config.connect(remote_host, remote_port).await
     }
 }
