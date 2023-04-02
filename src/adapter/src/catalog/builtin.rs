@@ -1748,7 +1748,7 @@ FROM mz_sources
 LEFT JOIN latest_events ON mz_sources.id = latest_events.source_id
 WHERE
     -- This is a convenient way to filter out system sources, like the status_history table itself.
-    mz_sources.id NOT LIKE 's%' and mz_sources.type != 'subsource'",
+    mz_sources.id NOT LIKE 's%'",
 };
 
 pub static MZ_SINK_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
