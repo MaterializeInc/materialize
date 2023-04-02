@@ -62,14 +62,13 @@ impl SshTunnelConfig {
     /// down when the handle is dropped.
     pub async fn connect(
         &self,
-        debug_name: &str,
         remote_host: &str,
         remote_port: u16,
     ) -> Result<SshTunnelHandle, anyhow::Error> {
         let (mut session, local_port) = connect(self, remote_host, remote_port).await?;
         let local_port = Arc::new(AtomicU16::new(local_port));
 
-        let join_handle = task::spawn(|| format!("ssh_session_{debug_name}"), {
+        let join_handle = task::spawn(|| format!("ssh_session_{remote_host}:{remote_port}"), {
             let config = self.clone();
             let remote_host = remote_host.to_string();
             let local_port = Arc::clone(&local_port);

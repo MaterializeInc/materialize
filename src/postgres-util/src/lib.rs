@@ -471,7 +471,7 @@ impl Config {
             }
             TunnelConfig::Ssh(tunnel) => {
                 let (host, port) = self.address()?;
-                let tunnel = tunnel.connect("postgres", host, port).await?;
+                let tunnel = tunnel.connect(host, port).await?;
                 let tls = MakeTlsConnect::<TokioTcpStream>::make_tls_connect(&mut tls, host)?;
                 let tcp_stream = TokioTcpStream::connect(tunnel.local_addr()).await?;
                 let (client, connection) = postgres_config.connect_raw(tcp_stream, tls).await?;
