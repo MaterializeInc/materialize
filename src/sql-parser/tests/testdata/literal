@@ -103,62 +103,62 @@ Value(HexString("deadBEEF"))
 parse-scalar
 DATE '1999-01-01'
 ----
-Cast { expr: Value(String("1999-01-01")), data_type: Other { name: Name(UnresolvedObjectName([Ident("date")])), typ_mod: [] } }
+Cast { expr: Value(String("1999-01-01")), data_type: Other { name: Name(UnresolvedItemName([Ident("date")])), typ_mod: [] } }
 
 parse-scalar
 DATE 'invalid date'
 ----
-Cast { expr: Value(String("invalid date")), data_type: Other { name: Name(UnresolvedObjectName([Ident("date")])), typ_mod: [] } }
+Cast { expr: Value(String("invalid date")), data_type: Other { name: Name(UnresolvedItemName([Ident("date")])), typ_mod: [] } }
 
 parse-scalar
 TIME '01:23:34'
 ----
-Cast { expr: Value(String("01:23:34")), data_type: Other { name: Name(UnresolvedObjectName([Ident("time")])), typ_mod: [] } }
+Cast { expr: Value(String("01:23:34")), data_type: Other { name: Name(UnresolvedItemName([Ident("time")])), typ_mod: [] } }
 
 parse-scalar
 TIME 'invalid time'
 ----
-Cast { expr: Value(String("invalid time")), data_type: Other { name: Name(UnresolvedObjectName([Ident("time")])), typ_mod: [] } }
+Cast { expr: Value(String("invalid time")), data_type: Other { name: Name(UnresolvedItemName([Ident("time")])), typ_mod: [] } }
 
 parse-scalar
 TIMESTAMP '1999-01-01 01:23:34.555'
 ----
-Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamp")])), typ_mod: [] } }
+Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamp")])), typ_mod: [] } }
 
 parse-scalar
 TIMESTAMPTZ '1999-01-01 01:23:34.555'
 ----
-Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamptz")])), typ_mod: [] } }
+Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamptz")])), typ_mod: [] } }
 
 parse-scalar
 TIMESTAMP WITH TIME ZONE '1999-01-01 01:23:34.555'
 ----
-Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamptz")])), typ_mod: [] } }
+Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamptz")])), typ_mod: [] } }
 
 parse-scalar
 TIMESTAMP WITHOUT TIME ZONE '1999-01-01 01:23:34.555'
 ----
-Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamp")])), typ_mod: [] } }
+Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamp")])), typ_mod: [] } }
 
 parse-scalar
 TIMESTAMP 'invalid timestamptx'
 ----
-Cast { expr: Value(String("invalid timestamptx")), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamp")])), typ_mod: [] } }
+Cast { expr: Value(String("invalid timestamptx")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamp")])), typ_mod: [] } }
 
 parse-scalar
 TIMESTAMPTZ 'invalid timestamptx'
 ----
-Cast { expr: Value(String("invalid timestamptx")), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamptz")])), typ_mod: [] } }
+Cast { expr: Value(String("invalid timestamptx")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamptz")])), typ_mod: [] } }
 
 parse-scalar
 TIMESTAMP WITH TIME ZONE 'invalid timestamptx'
 ----
-Cast { expr: Value(String("invalid timestamptx")), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamptz")])), typ_mod: [] } }
+Cast { expr: Value(String("invalid timestamptx")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamptz")])), typ_mod: [] } }
 
 parse-scalar
 TIMESTAMP WITHOUT TIME ZONE 'invalid timestamptx'
 ----
-Cast { expr: Value(String("invalid timestamptx")), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamp")])), typ_mod: [] } }
+Cast { expr: Value(String("invalid timestamptx")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamp")])), typ_mod: [] } }
 
 parse-scalar
 INTERVAL '1' YEAR
