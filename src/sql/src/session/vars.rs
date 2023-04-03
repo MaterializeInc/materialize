@@ -560,6 +560,24 @@ const PERSIST_STATS_FILTER_ENABLED: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+/// Controls [`mz_persist_client::cfg::DynamicConfig::batch_cas_enabled`].
+const PERSIST_BATCH_CAS_ENABLED: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("persist_batch_cas_enabled"),
+    value: &PersistConfig::DEFAULT_BATCH_CAS_ENABLED,
+    description: "WIP",
+    internal: true,
+    safe: true,
+};
+
+/// Controls [`mz_persist_client::cfg::DynamicConfig::connection_pool_batch_cas_max_size`].
+const PERSIST_BATCH_CAS_POOL_SIZE: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("persist_batch_cas_pool_size"),
+    value: &PersistConfig::DEFAULT_CONNECTION_POOL_BATCH_CAS_MAX_SIZE,
+    description: "WIP",
+    internal: true,
+    safe: true,
+};
+
 /// Boolean flag indicating that the remote configuration was synchronized at
 /// least once with the persistent [SessionVars].
 pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
@@ -1355,6 +1373,8 @@ impl Default for SystemVars {
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP)
             .with_var(&PERSIST_STATS_COLLECTION_ENABLED)
             .with_var(&PERSIST_STATS_FILTER_ENABLED)
+            .with_var(&PERSIST_BATCH_CAS_ENABLED)
+            .with_var(&PERSIST_BATCH_CAS_POOL_SIZE)
             .with_var(&METRICS_RETENTION)
             .with_var(&MOCK_AUDIT_EVENT_TIMESTAMP)
             .with_var(&ENABLE_WITH_MUTUALLY_RECURSIVE)
@@ -1622,6 +1642,16 @@ impl SystemVars {
     /// Returns the `persist_stats_filter_enabled` configuration parameter.
     pub fn persist_stats_filter_enabled(&self) -> bool {
         *self.expect_value(&PERSIST_STATS_FILTER_ENABLED)
+    }
+
+    /// WIP
+    pub fn persist_batch_cas_enabled(&self) -> bool {
+        *self.expect_value(&PERSIST_BATCH_CAS_ENABLED)
+    }
+
+    /// WIP
+    pub fn persist_batch_cas_pool_size(&self) -> usize {
+        *self.expect_value(&PERSIST_BATCH_CAS_POOL_SIZE)
     }
 
     /// Returns the `metrics_retention` configuration parameter.
@@ -2622,4 +2652,6 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name()
         || name == PERSIST_STATS_COLLECTION_ENABLED.name()
         || name == PERSIST_STATS_FILTER_ENABLED.name()
+        || name == PERSIST_BATCH_CAS_ENABLED.name()
+        || name == PERSIST_BATCH_CAS_POOL_SIZE.name()
 }

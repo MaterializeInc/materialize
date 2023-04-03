@@ -31,7 +31,8 @@ use std::fmt::Formatter;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::debug;
+use tokio::sync::mpsc::UnboundedReceiver;
+use tracing::{debug, info, warn};
 
 use crate::error::Error;
 use crate::location::{CaSResult, Consensus, ExternalError, SeqNo, VersionedData};
@@ -167,10 +168,21 @@ impl PostgresConsensusConfig {
 }
 
 /// Implementation of [Consensus] over a Postgres database.
+#[derive(Clone)]
 pub struct PostgresConsensus {
     pool: Pool,
     batch_write_pool: Pool,
+    tx: tokio::sync::mpsc::UnboundedSender<BatchableCompareAndSet>,
+    knobs: Arc<dyn ConsensusKnobs>,
     metrics: Arc<PostgresConsensusMetrics>,
+}
+
+#[derive(Debug)]
+struct BatchableCompareAndSet {
+    key: String,
+    expected: SeqNo,
+    new: VersionedData,
+    tx: tokio::sync::oneshot::Sender<Result<bool, ExternalError>>,
 }
 
 impl std::fmt::Debug for PostgresConsensus {
@@ -216,11 +228,140 @@ impl PostgresConsensus {
             ))
             .await?;
 
-        Ok(PostgresConsensus {
+        let (batched_cas_tx, batched_cas_rx) =
+            tokio::sync::mpsc::unbounded_channel::<BatchableCompareAndSet>();
+
+        let pg = PostgresConsensus {
             pool,
             batch_write_pool,
+            tx: batched_cas_tx,
+            knobs: Arc::clone(&config.knobs),
             metrics: Arc::clone(&config.metrics),
-        })
+        };
+
+        pg.start_task(batched_cas_rx);
+
+        Ok(pg)
+    }
+
+    fn start_task(&self, mut rx: UnboundedReceiver<BatchableCompareAndSet>) {
+        let mut s = self.clone();
+        let _ = mz_ore::task::spawn(|| format!("compare_and_set_batcher"), async move {
+            while let Some(cas) = rx.recv().await {
+                let mut batch = vec![cas];
+
+                // TODO: avoid the O(n^2) build up here
+                'batchable: while let Ok(cas) = rx.try_recv() {
+                    let cas = cas;
+                    for existing_cas in batch.iter_mut() {
+                        if &existing_cas.key == &cas.key {
+                            // our CaS is greater than a pending request, we can replace the
+                            // pending request because it must be out-of-date at this point
+                            if &existing_cas.expected < &cas.expected {
+                                let old = std::mem::replace(existing_cas, cas);
+                                let _ = old.tx.send(Ok(false));
+                                continue 'batchable;
+                            } else {
+                                // otherwise, someone beat us to add a pending CaS request, send
+                                // an early-return to our caller without needing to ping CRDB
+                                let _ = cas.tx.send(Ok(false));
+                                continue 'batchable;
+                            }
+                        }
+                    }
+
+                    batch.push(cas);
+
+                    if batch.len() == 5 {
+                        break;
+                    }
+                }
+
+                if batch.is_empty() {
+                    continue;
+                }
+
+                let pool = &mut s.batch_write_pool;
+                pool.resize(s.knobs.connection_pool_batch_cas_max_size());
+                info!("Pool: {:?}", pool.status());
+                let client = pool.get().await.expect("WIP");
+
+                let _ = mz_ore::task::spawn(|| format!("WIP"), async move {
+                    info!("Batch size: {}", batch.len());
+
+                    // WIP: Gotta pull these into functions!
+                    let mut param_count = 1;
+                    let mut params: Vec<&(dyn ToSql + Sync)> = Vec::new();
+
+                    let mut cas_batch_values = vec![];
+                    let mut seqno_queries = vec![];
+                    let mut slices = vec![];
+                    for cas in &batch {
+                        slices.push(cas.new.data.as_ref());
+                    }
+                    let slices = slices;
+
+                    for (i, cas) in batch.iter().enumerate() {
+                        cas_batch_values.push(format!(
+                            "(${}::text, ${}::bigint, ${}::bigint, ${}::bytea)",
+                            param_count,
+                            param_count + 1,
+                            param_count + 2,
+                            param_count + 3
+                        ));
+                        seqno_queries.push(format!("(SELECT shard, sequence_number FROM consensus.consensus WHERE shard = ${param_count} ORDER BY sequence_number DESC LIMIT 1)"));
+                        params.push(&cas.key);
+                        params.push(&cas.expected);
+                        params.push(&cas.new.seqno);
+                        params.push(&slices[i]);
+                        param_count += 4;
+                    }
+
+                    let q = format!(
+                        r#"
+                            WITH cas_batch (shard, expected_sequence_number, new_sequence_number, data) AS (
+                               VALUES {}
+                            ),
+                            shard_seqnos (shard, sequence_number) AS (
+                              {}
+                            )
+                            INSERT INTO consensus.consensus (shard, sequence_number, data)
+                            SELECT cas_batch.shard, cas_batch.new_sequence_number, cas_batch.data
+                            FROM cas_batch, shard_seqnos
+                            WHERE cas_batch.shard = shard_seqnos.shard AND cas_batch.expected_sequence_number = shard_seqnos.sequence_number
+                            ON CONFLICT (shard, sequence_number) DO NOTHING
+                            RETURNING shard, sequence_number;
+                        "#,
+                        cas_batch_values.join(","),
+                        seqno_queries.join(" UNION "),
+                    );
+
+                    let statement = client
+                        .prepare_cached(&q)
+                        .await
+                        .expect("WIP: also pass along errors");
+                    let rows = client
+                        .query(&statement, params.as_slice())
+                        .await
+                        .expect("rows");
+                    let mut successful_cas = vec![];
+
+                    for row in rows {
+                        let shard: String = row.try_get("shard").expect("shahd");
+                        let seqno: SeqNo = row.try_get("sequence_number").expect("seqno");
+                        successful_cas.push((shard, seqno));
+                    }
+
+                    for entry in batch {
+                        if successful_cas.contains(&(entry.key.clone(), entry.new.seqno.clone())) {
+                            let _ = entry.tx.send(Ok(true));
+                        } else {
+                            let _ = entry.tx.send(Ok(false));
+                        }
+                    }
+                });
+            }
+        });
     }
 
     /// Drops and recreates the `consensus` table in Postgres
@@ -413,27 +554,57 @@ impl Consensus for PostgresConsensus {
         }
 
         let result = if let Some(expected) = expected {
-            // This query has been written to execute within a single
-            // network round-trip. The insert performance has been tuned
-            // against CockroachDB, ensuring it goes through the fast-path
-            // 1-phase commit of CRDB. Any changes to this query should
-            // confirm an EXPLAIN ANALYZE (VERBOSE) query plan contains
-            // `auto commit`
-            let q = r#"
-                INSERT INTO consensus (shard, sequence_number, data)
-                SELECT $1, $2, $3
-                WHERE (SELECT sequence_number FROM consensus
-                       WHERE shard = $1
-                       ORDER BY sequence_number DESC LIMIT 1) = $4;
-            "#;
-            let client = self.get_connection().await?;
-            let statement = client.prepare_cached(q).await?;
-            client
-                .execute(
-                    &statement,
-                    &[&key, &new.seqno, &new.data.as_ref(), &expected],
-                )
-                .await?
+            if self.knobs.batch_cas_enabled() {
+                let (oneshot_tx, oneshot_rx) = tokio::sync::oneshot::channel();
+
+                self.tx
+                    .send(BatchableCompareAndSet {
+                        key: key.to_string(),
+                        expected,
+                        new,
+                        tx: oneshot_tx,
+                    })
+                    .expect("WIP");
+
+                match oneshot_rx.await {
+                    Ok(Ok(res)) => {
+                        if res {
+                            1
+                        } else {
+                            0
+                        }
+                    }
+                    Ok(Err(err)) => {
+                        return Err(err);
+                    }
+                    Err(err) => {
+                        warn!("for some reason the rx channel errored: {:?}", err);
+                        0
+                    }
+                }
+            } else {
+                // This query has been written to execute within a single
+                // network round-trip. The insert performance has been tuned
+                // against CockroachDB, ensuring it goes through the fast-path
+                // 1-phase commit of CRDB. Any changes to this query should
+                // confirm an EXPLAIN ANALYZE (VERBOSE) query plan contains
+                // `auto commit`
+                let q = r#"
+                    INSERT INTO consensus (shard, sequence_number, data)
+                    SELECT $1, $2, $3
+                    WHERE (SELECT sequence_number FROM consensus
+                           WHERE shard = $1
+                           ORDER BY sequence_number DESC LIMIT 1) = $4;
+                "#;
+                let client = self.get_connection().await?;
+                let statement = client.prepare_cached(q).await?;
+                client
+                    .execute(
+                        &statement,
+                        &[&key, &new.seqno, &new.data.as_ref(), &expected],
+                    )
+                    .await?
+            }
         } else {
             // Insert the new row as long as no other row exists for the same shard.
             let q = "INSERT INTO consensus SELECT $1, $2, $3 WHERE
