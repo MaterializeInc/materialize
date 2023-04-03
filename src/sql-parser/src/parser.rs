@@ -2736,7 +2736,7 @@ impl<'a> Parser<'a> {
                         WithOptionValue::Sequence(
                             inner
                                 .into_iter()
-                                .map(WithOptionValue::UnresolvedObjectName)
+                                .map(WithOptionValue::UnresolvedItemName)
                                 .collect_vec(),
                         )
                     });
@@ -3529,7 +3529,7 @@ impl<'a> Parser<'a> {
 
     fn parse_object_option_value(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
         let _ = self.consume_token(&Token::Eq);
-        Ok(WithOptionValue::Object(self.parse_raw_name()?))
+        Ok(WithOptionValue::Item(self.parse_raw_name()?))
     }
 
     fn parse_optional_option_value(&mut self) -> Result<Option<WithOptionValue<Raw>>, ParserError> {

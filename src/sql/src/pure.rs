@@ -414,7 +414,7 @@ pub async fn purify_create_source(
             {
                 let seq = text_columns
                     .into_iter()
-                    .map(WithOptionValue::UnresolvedObjectName)
+                    .map(WithOptionValue::UnresolvedItemName)
                     .collect();
                 text_cols_option.value = Some(WithOptionValue::Sequence(seq));
             }

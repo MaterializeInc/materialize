@@ -1196,7 +1196,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 }
                 Secret(item_name)
             }
-            Object(obj) => {
+            Item(obj) => {
                 let item_name = self.fold_item_name(obj);
                 match &item_name {
                     ResolvedItemName::Item { .. } => {}
@@ -1205,10 +1205,10 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     }
                     ResolvedItemName::Error => {}
                 }
-                Object(item_name)
+                Item(item_name)
             }
-            UnresolvedObjectName(name) => {
-                UnresolvedObjectName(self.fold_unresolved_item_name(name))
+            UnresolvedItemName(name) => {
+                UnresolvedItemName(self.fold_unresolved_item_name(name))
             }
             ClusterReplicas(replicas) => ClusterReplicas(
                 replicas
