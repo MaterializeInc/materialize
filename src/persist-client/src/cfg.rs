@@ -148,7 +148,7 @@ impl PersistConfig {
             compaction_enabled: !compaction_disabled,
             compaction_concurrency_limit: 5,
             compaction_queue_size: 20,
-            consensus_connection_pool_max_size: 50,
+            consensus_connection_pool_max_size: 10000,
             writer_lease_duration: 60 * Duration::from_secs(60),
             reader_lease_duration: Self::DEFAULT_READ_LEASE_DURATION,
             critical_downgrade_interval: Duration::from_secs(30),
