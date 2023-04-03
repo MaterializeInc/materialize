@@ -26,7 +26,7 @@
 //! by invoking the right folder method on each of its fields.
 //!
 //! ```
-//! # use mz_sql_parser::ast::{Expr, Function, FunctionArgs, UnresolvedObjectName, WindowSpec, Raw, AstInfo};
+//! # use mz_sql_parser::ast::{Expr, Function, FunctionArgs, UnresolvedItemName, WindowSpec, Raw, AstInfo};
 //! #
 //! pub trait Fold<T: AstInfo, T2: AstInfo> {
 //!     /* ... */
@@ -36,7 +36,7 @@
 //!     }
 //!
 //!     /* ... */
-//!     # fn fold_unresolved_object_name(&mut self, node: UnresolvedObjectName) -> UnresolvedObjectName;
+//!     # fn fold_unresolved_item_name(&mut self, node: UnresolvedItemName) -> UnresolvedItemName;
 //!     # fn fold_function_args(&mut self, node: FunctionArgs<T>) -> FunctionArgs<T2>;
 //!     # fn fold_expr(&mut self, node: Expr<T>) -> Expr<T2>;
 //!     # fn fold_window_spec(&mut self, node: WindowSpec<T>) -> WindowSpec<T2>;
@@ -47,7 +47,7 @@
 //!     F: Fold<T, T2> + ?Sized,
 //! {
 //!     Function {
-//!         name: folder.fold_unresolved_object_name(node.name),
+//!         name: folder.fold_unresolved_item_name(node.name),
 //!         args: folder.fold_function_args(node.args),
 //!         filter: node.filter.map(|filter| Box::new(folder.fold_expr(*filter))),
 //!         over: node.over.map(|over| folder.fold_window_spec(over)),

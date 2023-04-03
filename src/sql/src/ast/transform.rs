@@ -76,10 +76,10 @@ pub fn create_stmt_rename_refs(
     from_name: FullItemName,
     to_item_name: String,
 ) -> Result<(), String> {
-    let from_object = UnresolvedItemName::from(from_name.clone());
-    let maybe_update_object_name = |item_name: &mut UnresolvedItemName| {
-        if item_name.0 == from_object.0 {
-            // The last name in an ObjectName is the item name. The item name
+    let from_item = UnresolvedItemName::from(from_name.clone());
+    let maybe_update_item_name = |item_name: &mut UnresolvedItemName| {
+        if item_name.0 == from_item.0 {
+            // The last name in an ItemName is the item name. The item name
             // does not have a fixed index.
             // TODO: https://github.com/MaterializeInc/materialize/issues/5591
             let item_name_len = item_name.0.len() - 1;
@@ -90,10 +90,10 @@ pub fn create_stmt_rename_refs(
     // TODO(sploiselle): Support renaming schemas and databases.
     match create_stmt {
         Statement::CreateIndex(CreateIndexStatement { on_name, .. }) => {
-            maybe_update_object_name(on_name.name_mut());
+            maybe_update_item_name(on_name.name_mut());
         }
         Statement::CreateSink(CreateSinkStatement { from, .. }) => {
-            maybe_update_object_name(from.name_mut());
+            maybe_update_item_name(from.name_mut());
         }
         Statement::CreateView(CreateViewStatement {
             definition: ViewDefinition { query, .. },
@@ -259,7 +259,7 @@ impl<'a, 'ast> Visit<'ast, Raw> for QueryIdentAgg<'a> {
     fn visit_unresolved_item_name(&mut self, unresolved_item_name: &'ast UnresolvedItemName) {
         let names = &unresolved_item_name.0;
         self.check_failure(names);
-        // Every item is used as an `ObjectName` at least once, which
+        // Every item is used as an `ItemName` at least once, which
         // lets use track all items named `self.name`.
         if let Some(p) = names.iter().rposition(|e| e == self.name) {
             // Name used as last element of `<db>.<schema>.<item>`
