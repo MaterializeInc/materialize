@@ -20,7 +20,6 @@ use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::{self, Exchange, OkErr};
 use timely::dataflow::Scope;
 use timely::progress::{Antichain, Timestamp as _};
-use tokio::runtime::Handle as TokioHandle;
 
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
@@ -252,21 +251,16 @@ where
                 SourceType::Delimited(s) => s,
                 _ => unreachable!("Attempted to create non-delimited CDCv2 source"),
             };
-            let csr_client = match csr_connection {
-                None => None,
-                Some(csr_connection) => Some(
-                    TokioHandle::current()
-                        .block_on(
-                            csr_connection
-                                .connect(&*storage_state.connection_context.secrets_reader),
-                        )
-                        .expect("CSR connection unexpectedly missing secrets"),
-                ),
-            };
             // TODO(petrosagg): this should move to the envelope section below and
             // made to work with a stream of Rows instead of decoding Avro directly
-            let (oks, token) =
-                render_decode_cdcv2(&ok_source, &schema, csr_client, confluent_wire_format);
+            let connection_context = storage_state.connection_context.clone();
+            let (oks, token) = render_decode_cdcv2(
+                &ok_source,
+                schema,
+                connection_context,
+                csr_connection,
+                confluent_wire_format,
+            );
             needed_tokens.push(Rc::new(token));
             (oks, None)
         } else {
@@ -278,10 +272,10 @@ where
                     &source,
                     key_encoding,
                     value_encoding,
-                    dataflow_debug_name,
+                    dataflow_debug_name.clone(),
                     metadata_columns,
                     storage_state.decode_metrics.clone(),
-                    &storage_state.connection_context,
+                    storage_state.connection_context.clone(),
                 ),
                 SourceType::Row(source) => (
                     source.map(|r| DecodeResult {

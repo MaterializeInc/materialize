@@ -29,7 +29,6 @@ use timely::dataflow::operators::to_stream::Event;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
-use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_postgres::error::DbError;
 use tokio_postgres::replication::LogicalReplicationStream;
@@ -295,8 +294,10 @@ impl SourceRender for PostgresSourceConnection {
 
             let resume_lsn = Arc::new(AtomicU64::new(start_offset.offset));
 
-            let connection_config = TokioHandle::current()
-                .block_on(self.connection.config(&*connection_context.secrets_reader))
+            let connection_config = self
+                .connection
+                .config(&*connection_context.secrets_reader)
+                .await
                 .expect("Postgres connection unexpectedly missing secrets");
 
             let mut source_tables = BTreeMap::new();

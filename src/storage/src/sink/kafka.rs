@@ -36,7 +36,6 @@ use timely::dataflow::operators::{Enter, Leave, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
-use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, warn};
 
@@ -129,13 +128,13 @@ where
             sink.envelope,
             sink.as_of.clone(),
             Rc::clone(&shared_frontier),
-            &storage_state.sink_metrics.kafka,
+            storage_state.sink_metrics.kafka.clone(),
             storage_state
                 .sink_statistics
                 .get(&sink_id)
                 .expect("statistics initialized")
                 .clone(),
-            &storage_state.connection_context,
+            storage_state.connection_context.clone(),
             healthchecker_args,
             internal_cmd_tx,
         );
@@ -428,7 +427,7 @@ impl ClientContext for SinkConsumerContext {
 impl ConsumerContext for SinkConsumerContext {}
 
 impl KafkaSinkState {
-    fn new(
+    async fn new(
         connection: KafkaSinkConnection,
         sink_name: String,
         sink_id: &GlobalId,
@@ -469,8 +468,9 @@ impl KafkaSinkState {
             });
         }
 
-        let producer = TokioHandle::current()
-            .block_on(connection.connection.create_with_context(
+        let producer = connection
+            .connection
+            .create_with_context(
                 connection_context,
                 producer_context,
                 &btreemap! {
@@ -500,7 +500,8 @@ impl KafkaSinkState {
                     "queue.buffering.max.ms" => format!("{}", 10),
                     "transactional.id" => format!("mz-producer-{sink_id}-{worker_id}"),
                 },
-            ))
+            )
+            .await
             .expect("creating Kafka producer for sink failed");
         let producer = KafkaTxProducer {
             name: sink_name.clone(),
@@ -508,8 +509,9 @@ impl KafkaSinkState {
             timeout: Duration::from_secs(5),
         };
 
-        let progress_client = TokioHandle::current()
-            .block_on(connection.connection.create_with_context(
+        let progress_client = connection
+            .connection
+            .create_with_context(
                 connection_context,
                 SinkConsumerContext { status_tx },
                 &btreemap! {
@@ -519,7 +521,8 @@ impl KafkaSinkState {
                     "auto.offset.reset" => "earliest".into(),
                     "enable.partition.eof" => "true".into(),
                 },
-            ))
+            )
+            .await
             .expect("creating Kafka progress client for sink failed");
 
         KafkaSinkState {
@@ -973,9 +976,9 @@ fn kafka<G>(
     envelope: Option<SinkEnvelope>,
     as_of: SinkAsOf,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
-    metrics: &KafkaBaseMetrics,
+    metrics: KafkaBaseMetrics,
     sink_statistics: StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>,
-    connection_context: &ConnectionContext,
+    connection_context: ConnectionContext,
     healthchecker_args: HealthcheckerArgs,
     internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
 ) -> Rc<dyn Any>
@@ -1067,29 +1070,18 @@ pub fn produce_to_kafka<G>(
     as_of: SinkAsOf,
     shared_gate_ts: Rc<Cell<Option<Timestamp>>>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
-    metrics: &KafkaBaseMetrics,
+    metrics: KafkaBaseMetrics,
     sink_statistics: StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>,
-    connection_context: &ConnectionContext,
+    connection_context: ConnectionContext,
     healthchecker_args: HealthcheckerArgs,
     internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
 ) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let scope = stream.scope();
-    let mut builder = AsyncOperatorBuilder::new(name.clone(), scope.clone());
-
-    let mut s = KafkaSinkState::new(
-        connection,
-        name,
-        &id,
-        scope.index().to_string(),
-        write_frontier,
-        metrics,
-        connection_context,
-        Rc::clone(&shared_gate_ts),
-        internal_cmd_tx,
-    );
+    let worker_id = stream.scope().index();
+    let worker_count = stream.scope().peers();
+    let mut builder = AsyncOperatorBuilder::new(name.clone(), stream.scope());
 
     // keep the latest progress updates, if any, in order to update
     // our internal state after the send loop
@@ -1097,7 +1089,7 @@ where
 
     // We want exactly one worker to send all the data to the sink topic.
     let hashed_id = id.hashed();
-    let is_active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
+    let is_active_worker = usize::cast_from(hashed_id) % worker_count == worker_id;
 
     let mut input = builder.new_input(&stream, Exchange::new(move |_| hashed_id));
 
@@ -1105,6 +1097,19 @@ where
         if !is_active_worker {
             return;
         }
+
+        let mut s = KafkaSinkState::new(
+            connection,
+            name,
+            &id,
+            worker_id.to_string(),
+            write_frontier,
+            &metrics,
+            &connection_context,
+            Rc::clone(&shared_gate_ts),
+            internal_cmd_tx,
+        )
+        .await;
 
         if let Some(status_shard_id) = healthchecker_args.status_shard_id {
             let hc = Healthchecker::new(
