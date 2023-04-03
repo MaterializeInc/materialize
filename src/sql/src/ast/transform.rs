@@ -256,8 +256,8 @@ impl<'a, 'ast> Visit<'ast, Raw> for QueryIdentAgg<'a> {
         }
     }
 
-    fn visit_unresolved_object_name(&mut self, unresolved_object_name: &'ast UnresolvedItemName) {
-        let names = &unresolved_object_name.0;
+    fn visit_unresolved_item_name(&mut self, unresolved_item_name: &'ast UnresolvedItemName) {
+        let names = &unresolved_item_name.0;
         self.check_failure(names);
         // Every item is used as an `ObjectName` at least once, which
         // lets use track all items named `self.name`.
@@ -276,8 +276,8 @@ impl<'a, 'ast> Visit<'ast, Raw> for QueryIdentAgg<'a> {
         }
     }
 
-    fn visit_object_name(&mut self, object_name: &'ast <Raw as AstInfo>::ItemName) {
-        match object_name {
+    fn visit_item_name(&mut self, item_name: &'ast <Raw as AstInfo>::ItemName) {
+        match item_name {
             RawItemName::Name(n) | RawItemName::Id(_, n) => {
                 self.visit_unresolved_object_name(n)
             }
@@ -333,17 +333,17 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlRewriter {
             _ => visit_mut::visit_expr_mut(self, e),
         }
     }
-    fn visit_unresolved_object_name_mut(
+    fn visit_unresolved_item_name_mut(
         &mut self,
-        unresolved_object_name: &'ast mut UnresolvedItemName,
+        unresolved_item_name: &'ast mut UnresolvedItemName,
     ) {
-        self.maybe_rewrite_idents(&mut unresolved_object_name.0);
+        self.maybe_rewrite_idents(&mut unresolved_item_name.0);
     }
-    fn visit_object_name_mut(
+    fn visit_item_name_mut(
         &mut self,
-        object_name: &'ast mut <mz_sql_parser::ast::Raw as AstInfo>::ItemName,
+        item_name: &'ast mut <mz_sql_parser::ast::Raw as AstInfo>::ItemName,
     ) {
-        match object_name {
+        match item_name {
             RawItemName::Name(n) | RawItemName::Id(_, n) => self.maybe_rewrite_idents(&mut n.0),
         }
     }
@@ -363,11 +363,11 @@ struct CreateSqlIdReplacer<'a> {
 }
 
 impl<'ast> VisitMut<'ast, Raw> for CreateSqlIdReplacer<'_> {
-    fn visit_object_name_mut(
+    fn visit_item_name_mut(
         &mut self,
-        object_name: &'ast mut <mz_sql_parser::ast::Raw as AstInfo>::ItemName,
+        item_name: &'ast mut <mz_sql_parser::ast::Raw as AstInfo>::ItemName,
     ) {
-        match object_name {
+        match item_name {
             RawItemName::Id(id, _) => {
                 let old_id = match id.parse() {
                     Ok(old_id) => old_id,

@@ -961,11 +961,11 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         panic!("this should have been handled when walking the CTE");
     }
 
-    fn fold_object_name(
+    fn fold_item_name(
         &mut self,
-        object_name: <Raw as AstInfo>::ItemName,
+        item_name: <Raw as AstInfo>::ItemName,
     ) -> <Aug as AstInfo>::ItemName {
-        match object_name {
+        match item_name {
             RawItemName::Name(raw_name) => {
                 let raw_name = match normalize::unresolved_object_name(raw_name) {
                     Ok(raw_name) => raw_name,
@@ -1180,35 +1180,35 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             Ident(i) => Ident(self.fold_ident(i)),
             DataType(dt) => DataType(self.fold_data_type(dt)),
             Secret(secret) => {
-                let object_name = self.fold_object_name(secret);
-                match &object_name {
+                let item_name = self.fold_item_name(secret);
+                match &item_name {
                     ResolvedItemName::Item { id, .. } => {
                         let item = self.catalog.get_item(id);
                         if item.item_type() != CatalogItemType::Secret {
                             self.status =
-                                Err(PlanError::InvalidSecret(Box::new(object_name.clone())));
+                                Err(PlanError::InvalidSecret(Box::new(item_name.clone())));
                         }
                     }
                     ResolvedItemName::Cte { .. } => {
-                        self.status = Err(PlanError::InvalidSecret(Box::new(object_name.clone())));
+                        self.status = Err(PlanError::InvalidSecret(Box::new(item_name.clone())));
                     }
                     ResolvedItemName::Error => {}
                 }
-                Secret(object_name)
+                Secret(item_name)
             }
             Object(obj) => {
-                let object_name = self.fold_object_name(obj);
-                match &object_name {
+                let item_name = self.fold_item_name(obj);
+                match &item_name {
                     ResolvedItemName::Item { .. } => {}
                     ResolvedItemName::Cte { .. } => {
-                        self.status = Err(PlanError::InvalidObject(Box::new(object_name.clone())));
+                        self.status = Err(PlanError::InvalidObject(Box::new(item_name.clone())));
                     }
                     ResolvedItemName::Error => {}
                 }
-                Object(object_name)
+                Object(item_name)
             }
             UnresolvedObjectName(name) => {
-                UnresolvedObjectName(self.fold_unresolved_object_name(name))
+                UnresolvedObjectName(self.fold_unresolved_item_name(name))
             }
             ClusterReplicas(replicas) => ClusterReplicas(
                 replicas
@@ -1289,8 +1289,8 @@ impl<'a> TransientResolver<'a> {
 }
 
 impl Fold<Aug, Aug> for TransientResolver<'_> {
-    fn fold_object_name(&mut self, object_name: ResolvedItemName) -> ResolvedItemName {
-        match object_name {
+    fn fold_item_name(&mut self, item_name: ResolvedItemName) -> ResolvedItemName {
+        match item_name {
             ResolvedItemName::Item {
                 id: transient_id @ GlobalId::Transient(_),
                 qualifiers,
@@ -1374,8 +1374,8 @@ pub struct DependencyVisitor {
 }
 
 impl<'ast> Visit<'ast, Aug> for DependencyVisitor {
-    fn visit_object_name(&mut self, object_name: &'ast <Aug as AstInfo>::ItemName) {
-        if let ResolvedItemName::Item { id, .. } = object_name {
+    fn visit_item_name(&mut self, item_name: &'ast <Aug as AstInfo>::ItemName) {
+        if let ResolvedItemName::Item { id, .. } = item_name {
             self.ids.insert(*id);
         }
     }
@@ -1419,7 +1419,7 @@ impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
         node.print_name = Some(self.catalog.get_cluster(node.id).name().into());
     }
 
-    fn visit_object_name_mut(&mut self, name: &mut ResolvedItemName) {
+    fn visit_item_name_mut(&mut self, name: &mut ResolvedItemName) {
         if let ResolvedItemName::Item {
             id,
             full_name,
