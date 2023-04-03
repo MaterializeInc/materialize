@@ -29,7 +29,7 @@ use prost::Message;
 use ref_cast::RefCast;
 use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
-use timely::progress::frontier::{Antichain, AntichainRef};
+use timely::progress::frontier::Antichain;
 use timely::progress::timestamp::Refines;
 use timely::progress::{PathSummary, Timestamp};
 use timely::scheduling::ActivateOnDrop;
@@ -54,7 +54,6 @@ use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use crate::types::connections::{KafkaConnection, PostgresConnection};
 use crate::types::errors::DataflowError;
 use crate::types::instances::StorageInstanceId;
-use crate::util::antichain::OffsetAntichain;
 
 use self::encoding::{DataEncoding, DataEncodingInner, SourceDataEncoding};
 use proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
@@ -337,8 +336,6 @@ where
 pub trait SourceTimestamp: timely::progress::Timestamp + Refines<()> + std::fmt::Display {
     fn from_compat_ts(pid: PartitionId, offset: MzOffset) -> Self;
     fn try_into_compat_ts(&self) -> Option<(PartitionId, MzOffset)>;
-    fn from_compat_frontier(frontier: OffsetAntichain) -> Antichain<Self>;
-    fn into_compat_frontier(frontier: AntichainRef<'_, Self>) -> OffsetAntichain;
     fn encode_row(&self) -> Row;
     fn decode_row(row: &Row) -> Self;
 }
@@ -355,25 +352,6 @@ impl SourceTimestamp for MzOffset {
 
     fn try_into_compat_ts(&self) -> Option<(PartitionId, MzOffset)> {
         Some((PartitionId::None, *self))
-    }
-
-    fn from_compat_frontier(frontier: OffsetAntichain) -> Antichain<Self> {
-        let mut times = frontier.iter();
-        match (times.next(), times.next()) {
-            (Some((PartitionId::None, offset)), None) => Antichain::from_elem(*offset),
-            (None, None) => Antichain::from_elem(Self::minimum()),
-            _ => panic!("invalid non-partitioned compat frontier: {frontier:?}"),
-        }
-    }
-
-    fn into_compat_frontier(frontier: AntichainRef<'_, Self>) -> OffsetAntichain {
-        let mut ret = OffsetAntichain::new();
-        if let Some(offset) = frontier.as_option() {
-            if offset.offset > 0 {
-                ret.insert(PartitionId::None, *offset);
-            }
-        }
-        ret
     }
 
     fn encode_row(&self) -> Row {
@@ -400,14 +378,6 @@ impl SourceTimestamp for Partitioned<i32, MzOffset> {
     fn try_into_compat_ts(&self) -> Option<(PartitionId, MzOffset)> {
         let pid = self.partition()?;
         Some((PartitionId::Kafka(*pid), *self.timestamp()))
-    }
-
-    fn from_compat_frontier(frontier: OffsetAntichain) -> Antichain<Self> {
-        frontier.into()
-    }
-
-    fn into_compat_frontier(frontier: AntichainRef<'_, Self>) -> OffsetAntichain {
-        frontier.to_owned().into()
     }
 
     fn encode_row(&self) -> Row {
