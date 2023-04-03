@@ -449,12 +449,12 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
         metrics: &LockMetrics,
         mut f: F,
     ) -> R {
-        let start = Instant::now();
         metrics.acquire_count.inc();
         let state = match self.0.try_read() {
             Ok(x) => x,
             Err(TryLockError::WouldBlock) => {
                 metrics.blocking_acquire_count.inc();
+                let start = Instant::now();
                 let state = self.0.read().expect("lock poisoned");
                 metrics
                     .blocking_seconds
@@ -471,12 +471,12 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
         metrics: &LockMetrics,
         f: F,
     ) -> R {
-        let start = Instant::now();
         metrics.acquire_count.inc();
         let mut state = match self.0.try_write() {
             Ok(x) => x,
             Err(TryLockError::WouldBlock) => {
                 metrics.blocking_acquire_count.inc();
+                let start = Instant::now();
                 let state = self.0.write().expect("lock poisoned");
                 metrics
                     .blocking_seconds

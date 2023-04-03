@@ -50,7 +50,6 @@ use crate::{PersistConfig, ShardId};
 
 #[derive(Debug)]
 pub struct Machine<K, V, T, D> {
-    shard_id: ShardId,
     pub(crate) applier: Applier<K, V, T, D>,
 }
 
@@ -58,7 +57,6 @@ pub struct Machine<K, V, T, D> {
 impl<K, V, T: Clone, D> Clone for Machine<K, V, T, D> {
     fn clone(&self) -> Self {
         Self {
-            shard_id: self.shard_id,
             applier: self.applier.clone(),
         }
     }
@@ -79,11 +77,11 @@ where
         shared_states: &StateCache,
     ) -> Result<Self, Box<CodecMismatch>> {
         let applier = Applier::new(cfg, shard_id, metrics, state_versions, shared_states).await?;
-        Ok(Machine { shard_id, applier })
+        Ok(Machine { applier })
     }
 
     pub fn shard_id(&self) -> ShardId {
-        self.shard_id
+        self.applier.shard_id
     }
 
     pub fn seqno(&self) -> SeqNo {

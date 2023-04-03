@@ -537,7 +537,7 @@ impl StateVersions {
     ///
     /// TODO: Apply a limit to this scan. This could additionally be used as an internal
     /// call within `fetch_recent_live_diffs`.
-    pub async fn fetch_all_live_diffs_from_seqno<K, V, T, D>(
+    pub async fn fetch_all_live_diffs_gt_seqno<K, V, T, D>(
         &self,
         shard_id: &ShardId,
         seqno: SeqNo,

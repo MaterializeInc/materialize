@@ -284,21 +284,20 @@ where
         shard_metrics: &ShardMetrics,
         state_versions: &StateVersions,
     ) -> ApplyCmdResult<K, V, T, D, R, E> {
-        let computed_next_state =
-            state.read_lock(&metrics.locks.applier_read_noncacheable, |state| {
-                match Self::compute_next_state_locked(state, work_fn, metrics, cmd, cfg) {
-                    Ok(x) => Ok(x),
-                    Err((seqno, err)) => Err(ApplyCmdResult::SkippedStateTransition((
-                        seqno,
-                        err,
-                        RoutineMaintenance::default(),
-                    ))),
-                }
+        let computed_next_state = state
+            .read_lock(&metrics.locks.applier_read_noncacheable, |state| {
+                Self::compute_next_state_locked(state, work_fn, metrics, cmd, cfg)
             });
 
         let next_state = match computed_next_state {
             Ok(x) => x,
-            Err(err) => return err,
+            Err((seqno, err)) => {
+                return ApplyCmdResult::SkippedStateTransition((
+                    seqno,
+                    err,
+                    RoutineMaintenance::default(),
+                ))
+            }
         };
 
         let NextState {
@@ -431,7 +430,9 @@ where
             self.state
                 .write_lock(&self.metrics.locks.applier_write, |state| {
                     let seqno_before = state.seqno;
-                    state.try_replace_state(new_state);
+                    if seqno_before < new_state.seqno {
+                        *state = new_state;
+                    }
                     let seqno_after = state.seqno;
                     (seqno_before, seqno_after)
                 });
@@ -464,7 +465,7 @@ where
 
         let diffs_to_current = self
             .state_versions
-            .fetch_all_live_diffs_from_seqno::<K, V, T, D>(&self.shard_id, seqno_before)
+            .fetch_all_live_diffs_gt_seqno::<K, V, T, D>(&self.shard_id, seqno_before)
             .await;
 
         // no new diffs past our current seqno, nothing to do
@@ -507,7 +508,9 @@ where
         let new_seqno = self
             .state
             .write_lock(&self.metrics.locks.applier_write, |state| {
-                state.try_replace_state(new_state);
+                if state.seqno < new_state.seqno {
+                    *state = new_state;
+                }
                 state.seqno
             });
 

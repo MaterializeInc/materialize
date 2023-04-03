@@ -986,6 +986,7 @@ pub struct TypedState<K, V, T, D> {
     pub(crate) _phantom: PhantomData<fn() -> (K, V, D)>,
 }
 
+#[cfg(any(test, debug_assertions))]
 impl<K, V, T: Clone, D> TypedState<K, V, T, D> {
     pub(crate) fn clone(&self, applier_version: Version, hostname: String) -> Self {
         TypedState {
@@ -1105,13 +1106,6 @@ where
             _phantom: PhantomData,
         };
         Continue((work_ret, new_state))
-    }
-
-    /// Replaces self with `new_state` if `new_state` is more recent.
-    pub fn try_replace_state(&mut self, new_state: Self) {
-        if self.seqno < new_state.seqno {
-            *self = new_state;
-        }
     }
 }
 
