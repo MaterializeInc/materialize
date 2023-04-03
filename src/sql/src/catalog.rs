@@ -39,8 +39,8 @@ use mz_storage_client::types::sources::SourceDesc;
 
 use crate::func::Func;
 use crate::names::{
-    Aug, DatabaseId, FullItemName, FullSchemaName, ObjectId, PartialObjectName,
-    QualifiedObjectName, QualifiedSchemaName, ResolvedDatabaseSpecifier, RoleId, SchemaSpecifier,
+    Aug, DatabaseId, FullItemName, FullSchemaName, ObjectId, PartialItemName,
+    QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, RoleId, SchemaSpecifier,
 };
 use crate::normalize;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
@@ -174,14 +174,14 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     ///
     /// Note that it is not an error if the named item appears in more than one
     /// of the search schemas. The catalog implementation must choose one.
-    fn resolve_item(&self, item_name: &PartialObjectName)
+    fn resolve_item(&self, item_name: &PartialItemName)
         -> Result<&dyn CatalogItem, CatalogError>;
 
     /// Performs the same operation as [`SessionCatalog::resolve_item`] but for
     /// functions within the catalog.
     fn resolve_function(
         &self,
-        item_name: &PartialObjectName,
+        item_name: &PartialItemName,
     ) -> Result<&dyn CatalogItem, CatalogError>;
 
     /// Gets an item by its ID.
@@ -193,7 +193,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     fn get_item(&self, id: &GlobalId) -> &dyn CatalogItem;
 
     /// Reports whether the specified type exists in the catalog.
-    fn item_exists(&self, name: &QualifiedObjectName) -> bool;
+    fn item_exists(&self, name: &QualifiedItemName) -> bool;
 
     /// Gets a cluster by ID.
     fn get_cluster(&self, id: ClusterId) -> &dyn CatalogCluster;
@@ -208,10 +208,10 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Finds a name like `name` that is not already in use.
     ///
     /// If `name` itself is available, it is returned unchanged.
-    fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName;
+    fn find_available_name(&self, name: QualifiedItemName) -> QualifiedItemName;
 
     /// Returns a fully qualified human readable name from fully qualified non-human readable name
-    fn resolve_full_name(&self, name: &QualifiedObjectName) -> FullItemName;
+    fn resolve_full_name(&self, name: &QualifiedItemName) -> FullItemName;
 
     /// Returns a fully qualified human readable schema name from fully qualified non-human
     /// readable schema name
@@ -478,7 +478,7 @@ pub trait CatalogClusterReplica<'a> {
 /// catalog, and refers to the various entities that belong to a schema.
 pub trait CatalogItem {
     /// Returns the fully qualified name of the catalog item.
-    fn name(&self) -> &QualifiedObjectName;
+    fn name(&self) -> &QualifiedItemName;
 
     /// Returns a stable ID for the catalog item.
     fn id(&self) -> GlobalId;

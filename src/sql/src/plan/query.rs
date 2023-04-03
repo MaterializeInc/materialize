@@ -68,7 +68,7 @@ use mz_sql_parser::ast::{
 
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
 use crate::func::{self, Func, FuncSpec};
-use crate::names::{Aug, PartialObjectName, ResolvedDataType, ResolvedItemName};
+use crate::names::{Aug, PartialItemName, ResolvedDataType, ResolvedItemName};
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
@@ -2084,7 +2084,7 @@ fn plan_scalar_table_funcs(
         // A single table-function might return several columns as a record
         let num_cols = scope.len();
         for i in 0..scope.len() {
-            scope.items[i].table_name = Some(PartialObjectName {
+            scope.items[i].table_name = Some(PartialItemName {
                 database: None,
                 schema: None,
                 item: id.clone(),
@@ -2102,7 +2102,7 @@ fn plan_scalar_table_funcs(
     let mut i = 0;
     for (id, num_cols) in table_funcs.values().zip(num_cols) {
         for _ in 0..num_cols {
-            scope.items[i].table_name = Some(PartialObjectName {
+            scope.items[i].table_name = Some(PartialItemName {
                 database: None,
                 schema: None,
                 item: id.clone(),
@@ -2114,7 +2114,7 @@ fn plan_scalar_table_funcs(
         // Ordinality column. This doubles as the
         // `is_exists_column_for_a_table_function_that_was_in_the_target_list` later on
         // because it only needs to be NULL or not.
-        scope.items[i].table_name = Some(PartialObjectName {
+        scope.items[i].table_name = Some(PartialItemName {
             database: None,
             schema: None,
             item: id.clone(),
@@ -2593,7 +2593,7 @@ fn plan_table_function_internal(
         Some(table_name) => normalize::unresolved_object_name(table_name.clone())?.item,
         None => resolved_name.item.clone(),
     };
-    let scope_name = Some(PartialObjectName {
+    let scope_name = Some(PartialItemName {
         database: None,
         schema: None,
         item: table_name,
@@ -2650,7 +2650,7 @@ fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scop
         let table_name = normalize::ident(name.to_owned());
         for (i, item) in scope.items.iter_mut().enumerate() {
             item.table_name = if item.allow_unqualified_references {
-                Some(PartialObjectName {
+                Some(PartialItemName {
                     database: None,
                     schema: None,
                     item: table_name.clone(),
@@ -2862,7 +2862,7 @@ fn expand_select_item<'a>(
                 if let [name] = ident.as_slice() {
                     if let Ok(items) = ecx.scope.items_from_table(
                         &[],
-                        &PartialObjectName {
+                        &PartialItemName {
                             database: None,
                             schema: None,
                             item: name.as_str().to_string(),
@@ -4242,7 +4242,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
     // to a table.
     let items = ecx.scope.items_from_table(
         &ecx.qcx.outer_scopes,
-        &PartialObjectName {
+        &PartialItemName {
             database: None,
             schema: None,
             item: col_name.as_str().to_owned(),

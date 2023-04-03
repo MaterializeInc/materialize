@@ -60,8 +60,8 @@ use mz_sql::catalog::{
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
-    Aug, DatabaseId, FullObjectName, FullSchemaName, ObjectId, ObjectQualifiers, PartialObjectName,
-    QualifiedObjectName, QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier,
+    Aug, DatabaseId, FullItemName, FullSchemaName, ObjectId, ItemQualifiers, PartialItemName,
+    QualifiedItemName, QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier,
     RoleId, SchemaId, SchemaSpecifier, PUBLIC_ROLE_NAME,
 };
 use mz_sql::plan::{
@@ -131,7 +131,7 @@ pub const LINKED_CLUSTER_REPLICA_NAME: &str = "linked";
 /// like sources, sinks, view, and indexes.
 ///
 /// To the outside world, databases, schemas, and items are all identified by
-/// name. Items can be referred to by their [`FullObjectName`], which fully and
+/// name. Items can be referred to by their [`FullItemName`], which fully and
 /// unambiguously specifies the item, or a [`PartialObjectName`], which can omit the
 /// database name and/or the schema name. Partial names can be converted into
 /// full names via a complicated resolution process documented by the
@@ -293,9 +293,9 @@ impl CatalogState {
 
     pub fn resolve_full_name(
         &self,
-        name: &QualifiedObjectName,
+        name: &QualifiedItemName,
         conn_id: Option<ConnectionId>,
-    ) -> FullObjectName {
+    ) -> FullItemName {
         let conn_id = conn_id.unwrap_or(SYSTEM_CONN_ID);
 
         let database = match &name.qualifiers.database_spec {
@@ -313,7 +313,7 @@ impl CatalogState {
             .name()
             .schema
             .clone();
-        FullObjectName {
+        FullItemName {
             database,
             schema,
             item: name.item.clone(),
@@ -330,7 +330,7 @@ impl CatalogState {
 
     pub fn try_get_entry_in_schema(
         &self,
-        name: &QualifiedObjectName,
+        name: &QualifiedItemName,
         conn_id: ConnectionId,
     ) -> Option<&CatalogEntry> {
         self.get_schema(
@@ -369,15 +369,15 @@ impl CatalogState {
         res.unwrap_or_else(|| panic!("cannot find {} in system schema", item))
     }
 
-    pub fn item_exists(&self, name: &QualifiedObjectName, conn_id: ConnectionId) -> bool {
+    pub fn item_exists(&self, name: &QualifiedItemName, conn_id: ConnectionId) -> bool {
         self.try_get_entry_in_schema(name, conn_id).is_some()
     }
 
     fn find_available_name(
         &self,
-        mut name: QualifiedObjectName,
+        mut name: QualifiedItemName,
         conn_id: ConnectionId,
-    ) -> QualifiedObjectName {
+    ) -> QualifiedItemName {
         let mut i = 0;
         let orig_item_name = name.item.clone();
         while self.item_exists(&name, conn_id) {
@@ -524,7 +524,7 @@ impl CatalogState {
         &mut self,
         id: GlobalId,
         oid: u32,
-        name: QualifiedObjectName,
+        name: QualifiedItemName,
         item: CatalogItem,
         owner_id: RoleId,
     ) {
@@ -649,14 +649,14 @@ impl CatalogState {
     ) {
         let mut log_indexes = BTreeMap::new();
         for (log, index_id) in introspection_source_indexes {
-            let source_name = FullObjectName {
+            let source_name = FullItemName {
                 database: RawDatabaseSpecifier::Ambient,
                 schema: log.schema.into(),
                 item: log.name.into(),
             };
             let index_name = format!("{}_{}_primary_idx", log.name, id);
-            let mut index_name = QualifiedObjectName {
-                qualifiers: ObjectQualifiers {
+            let mut index_name = QualifiedItemName {
+                qualifiers: ItemQualifiers {
                     database_spec: ResolvedDatabaseSpecifier::Ambient,
                     schema_spec: SchemaSpecifier::Id(self.get_mz_internal_schema_id().clone()),
                 },
@@ -1083,7 +1083,7 @@ impl CatalogState {
         get_schema_entries: fn(&Schema) -> &BTreeMap<String, GlobalId>,
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
-        name: &PartialObjectName,
+        name: &PartialItemName,
         conn_id: ConnectionId,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
         // If a schema name was specified, just try to find the item in that
@@ -1131,7 +1131,7 @@ impl CatalogState {
         &self,
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
-        name: &PartialObjectName,
+        name: &PartialItemName,
         conn_id: ConnectionId,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
         self.resolve(
@@ -1148,7 +1148,7 @@ impl CatalogState {
         &self,
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
-        name: &PartialObjectName,
+        name: &PartialItemName,
         conn_id: ConnectionId,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
         self.resolve(
@@ -1480,7 +1480,7 @@ pub struct CatalogEntry {
     used_by: Vec<GlobalId>,
     id: GlobalId,
     oid: u32,
-    name: QualifiedObjectName,
+    name: QualifiedItemName,
     owner_id: RoleId,
 }
 
@@ -1764,7 +1764,7 @@ impl CatalogItem {
         }
     }
 
-    pub fn desc(&self, name: &FullObjectName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
+    pub fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
         match &self {
             CatalogItem::Source(src) => Ok(Cow::Borrowed(&src.desc)),
             CatalogItem::Log(log) => Ok(Cow::Owned(log.variant.desc())),
@@ -1883,7 +1883,7 @@ impl CatalogItem {
     /// is ambiguous.
     fn rename_item_refs(
         &self,
-        from: FullObjectName,
+        from: FullItemName,
         to_item_name: String,
         rename_self: bool,
     ) -> Result<CatalogItem, String> {
@@ -2029,7 +2029,7 @@ impl CatalogItem {
 
 impl CatalogEntry {
     /// Reports the description of the datums produced by this catalog item.
-    pub fn desc(&self, name: &FullObjectName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
+    pub fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
         self.item.desc(name)
     }
 
@@ -2200,7 +2200,7 @@ impl CatalogEntry {
     }
 
     /// Returns the fully qualified name of this catalog entry.
-    pub fn name(&self) -> &QualifiedObjectName {
+    pub fn name(&self) -> &QualifiedItemName {
         &self.name
     }
 
@@ -2291,7 +2291,7 @@ pub struct BuiltinMigrationMetadata {
     pub all_create_ops: Vec<(
         GlobalId,
         u32,
-        QualifiedObjectName,
+        QualifiedItemName,
         RoleId,
         CatalogItemRebuilder,
     )>,
@@ -2508,8 +2508,9 @@ impl Catalog {
             let _enter = span.enter();
             for (builtin, id) in builtin_non_indexes {
                 let schema_id = catalog.state.ambient_schemas_by_name[builtin.schema()];
-                let name = QualifiedObjectName {
-                    qualifiers: ObjectQualifiers {
+                let name = QualifiedItemName {
+                    qualifiers: ItemQualifiers
+ {
                         database_spec: ResolvedDatabaseSpecifier::Ambient,
                         schema_spec: SchemaSpecifier::Id(schema_id),
                     },
@@ -2685,8 +2686,8 @@ impl Catalog {
 
         for (builtin, id) in builtin_indexes {
             let schema_id = catalog.state.ambient_schemas_by_name[builtin.schema()];
-            let name = QualifiedObjectName {
-                qualifiers: ObjectQualifiers {
+            let name = QualifiedItemName {
+                qualifiers: ItemQualifiers {
                     database_spec: ResolvedDatabaseSpecifier::Ambient,
                     schema_spec: SchemaSpecifier::Id(schema_id),
                 },
@@ -3106,8 +3107,9 @@ impl Catalog {
             self.state.insert_item(
                 element_id,
                 typ.oid,
-                QualifiedObjectName {
-                    qualifiers: ObjectQualifiers {
+                QualifiedItemName {
+                    qualifiers: ItemQualifiers
+ {
                         database_spec: ResolvedDatabaseSpecifier::Ambient,
                         schema_spec: SchemaSpecifier::Id(pg_catalog_schema_id),
                     },
@@ -3845,7 +3847,7 @@ impl Catalog {
         &self,
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
-        name: &PartialObjectName,
+        name: &PartialItemName,
         conn_id: ConnectionId,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
         self.state
@@ -3872,7 +3874,7 @@ impl Catalog {
         &self,
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
-        name: &PartialObjectName,
+        name: &PartialItemName,
         conn_id: ConnectionId,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
         self.state
@@ -3927,22 +3929,22 @@ impl Catalog {
 
     pub fn resolve_full_name(
         &self,
-        name: &QualifiedObjectName,
+        name: &QualifiedItemName,
         conn_id: Option<ConnectionId>,
-    ) -> FullObjectName {
+    ) -> FullItemName {
         self.state.resolve_full_name(name, conn_id)
     }
 
     /// Returns the named catalog item, if it exists.
     pub fn try_get_entry_in_schema(
         &self,
-        name: &QualifiedObjectName,
+        name: &QualifiedItemName,
         conn_id: ConnectionId,
     ) -> Option<&CatalogEntry> {
         self.state.try_get_entry_in_schema(name, conn_id)
     }
 
-    pub fn item_exists(&self, name: &QualifiedObjectName, conn_id: ConnectionId) -> bool {
+    pub fn item_exists(&self, name: &QualifiedItemName, conn_id: ConnectionId) -> bool {
         self.state.item_exists(name, conn_id)
     }
 
@@ -4204,7 +4206,7 @@ impl Catalog {
         !item.is_temporary()
     }
 
-    fn full_name_detail(name: &FullObjectName) -> FullNameV1 {
+    fn full_name_detail(name: &FullItemName) -> FullNameV1 {
         FullNameV1 {
             database: name.database.to_string(),
             schema: name.schema.clone(),
@@ -5645,7 +5647,7 @@ impl Catalog {
             state: &mut CatalogState,
             builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
             id: GlobalId,
-            to_name: QualifiedObjectName,
+            to_name: QualifiedItemName,
             to_item: CatalogItem,
         ) -> Result<(), AdapterError> {
             let old_entry = state.entry_by_id.remove(&id).expect("catalog out of sync");
@@ -6149,7 +6151,7 @@ pub enum Op {
     CreateItem {
         id: GlobalId,
         oid: u32,
-        name: QualifiedObjectName,
+        name: QualifiedItemName,
         item: CatalogItem,
         owner_id: RoleId,
     },
@@ -6183,7 +6185,7 @@ pub enum Op {
     },
     RenameItem {
         id: GlobalId,
-        current_full_name: FullObjectName,
+        current_full_name: FullItemName,
         to_name: String,
     },
     UpdateOwner {
@@ -6199,7 +6201,7 @@ pub enum Op {
     },
     UpdateItem {
         id: GlobalId,
-        name: QualifiedObjectName,
+        name: QualifiedItemName,
         to_item: CatalogItem,
     },
     UpdateStorageUsage {
@@ -6352,14 +6354,14 @@ impl From<&BuiltinRole> for SerializedRole {
 impl ConnCatalog<'_> {
     fn resolve_item_name(
         &self,
-        name: &PartialObjectName,
-    ) -> Result<&QualifiedObjectName, SqlCatalogError> {
+        name: &PartialItemName,
+    ) -> Result<&QualifiedItemName, SqlCatalogError> {
         self.resolve_item(name).map(|entry| entry.name())
     }
 
     /// returns a `PartialObjectName` with the minimum amount of qualifiers to unambiguously resolve
     /// the object.
-    fn minimal_qualification(&self, qualified_name: &QualifiedObjectName) -> PartialObjectName {
+    fn minimal_qualification(&self, qualified_name: &QualifiedItemName) -> PartialItemName {
         let database_id = match &qualified_name.qualifiers.database_spec {
             ResolvedDatabaseSpecifier::Ambient => None,
             ResolvedDatabaseSpecifier::Id(id)
@@ -6371,7 +6373,7 @@ impl ConnCatalog<'_> {
         };
 
         let schema_spec = if database_id.is_none()
-            && self.resolve_item_name(&PartialObjectName {
+            && self.resolve_item_name(&PartialItemName {
                 database: None,
                 schema: None,
                 item: qualified_name.item.clone(),
@@ -6384,7 +6386,7 @@ impl ConnCatalog<'_> {
             Some(qualified_name.qualifiers.schema_spec.clone())
         };
 
-        let res = PartialObjectName {
+        let res = PartialItemName {
             database: database_id.map(|id| self.get_database(&id).name().to_string()),
             schema: schema_spec.map(|spec| {
                 self.get_schema(&qualified_name.qualifiers.database_spec, &spec)
@@ -6472,8 +6474,9 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 } else {
                     // If PG_CATALOG_SCHEMA is not in search path, you need
                     // qualified object name to refer to type.
-                    let name = QualifiedObjectName {
-                        qualifiers: ObjectQualifiers {
+                    let name = QualifiedItemName {
+                        qualifiers: ItemQualifiers
+     {
                             database_spec: ResolvedDatabaseSpecifier::Ambient,
                             schema_spec: pg_catalog_schema,
                         },
@@ -6594,7 +6597,7 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn resolve_item(
         &self,
-        name: &PartialObjectName,
+        name: &PartialItemName,
     ) -> Result<&dyn mz_sql::catalog::CatalogItem, SqlCatalogError> {
         Ok(self.state.resolve_entry(
             self.database.as_ref(),
@@ -6606,7 +6609,7 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn resolve_function(
         &self,
-        name: &PartialObjectName,
+        name: &PartialItemName,
     ) -> Result<&dyn mz_sql::catalog::CatalogItem, SqlCatalogError> {
         Ok(self.state.resolve_function(
             self.database.as_ref(),
@@ -6624,7 +6627,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.get_entry(id)
     }
 
-    fn item_exists(&self, name: &QualifiedObjectName) -> bool {
+    fn item_exists(&self, name: &QualifiedItemName) -> bool {
         self.state.item_exists(name, self.conn_id)
     }
 
@@ -6641,11 +6644,11 @@ impl SessionCatalog for ConnCatalog<'_> {
         cluster.replica(replica_id)
     }
 
-    fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName {
+    fn find_available_name(&self, name: QualifiedItemName) -> QualifiedItemName {
         self.state.find_available_name(name, self.conn_id)
     }
 
-    fn resolve_full_name(&self, name: &QualifiedObjectName) -> FullObjectName {
+    fn resolve_full_name(&self, name: &QualifiedItemName) -> FullItemName {
         self.state.resolve_full_name(name, Some(self.conn_id))
     }
 
@@ -6815,7 +6818,7 @@ impl mz_sql::catalog::CatalogClusterReplica<'_> for ClusterReplica {
 }
 
 impl mz_sql::catalog::CatalogItem for CatalogEntry {
-    fn name(&self) -> &QualifiedObjectName {
+    fn name(&self) -> &QualifiedItemName {
         self.name()
     }
 
@@ -6827,7 +6830,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.oid()
     }
 
-    fn desc(&self, name: &FullObjectName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
+    fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
         self.desc(name)
     }
 
@@ -6920,7 +6923,7 @@ mod tests {
     use mz_sql::catalog::CatalogDatabase;
     use mz_sql::names;
     use mz_sql::names::{
-        DatabaseId, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
+        DatabaseId, ItemQuali         , PartialItemName, QualifiedItemName,
         ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
     };
     use mz_sql::plan::StatementContext;
@@ -6945,15 +6948,16 @@ mod tests {
     async fn test_minimal_qualification() {
         Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
             struct TestCase {
-                input: QualifiedObjectName,
-                system_output: PartialObjectName,
-                normal_output: PartialObjectName,
+                input: QualifiedItemName,
+                system_output: PartialItemName,
+                normal_output: PartialItemName,
             }
 
             let test_cases = vec![
                 TestCase {
-                    input: QualifiedObjectName {
-                        qualifiers: ObjectQualifiers {
+                    input: QualifiedItemName {
+                        qualifiers: ItemQualifiers
+     {
                             database_spec: ResolvedDatabaseSpecifier::Ambient,
                             schema_spec: SchemaSpecifier::Id(
                                 catalog.get_pg_catalog_schema_id().clone(),
@@ -6961,20 +6965,21 @@ mod tests {
                         },
                         item: "numeric".to_string(),
                     },
-                    system_output: PartialObjectName {
+                    system_output: PartialItemName {
                         database: None,
                         schema: None,
                         item: "numeric".to_string(),
                     },
-                    normal_output: PartialObjectName {
+                    normal_output: PartialItemName {
                         database: None,
                         schema: None,
                         item: "numeric".to_string(),
                     },
                 },
                 TestCase {
-                    input: QualifiedObjectName {
-                        qualifiers: ObjectQualifiers {
+                    input: QualifiedItemName {
+                        qualifiers: ItemQualifiers
+     {
                             database_spec: ResolvedDatabaseSpecifier::Ambient,
                             schema_spec: SchemaSpecifier::Id(
                                 catalog.get_mz_catalog_schema_id().clone(),
@@ -6982,12 +6987,12 @@ mod tests {
                         },
                         item: "mz_array_types".to_string(),
                     },
-                    system_output: PartialObjectName {
+                    system_output: PartialItemName {
                         database: None,
                         schema: None,
                         item: "mz_array_types".to_string(),
                     },
-                    normal_output: PartialObjectName {
+                    normal_output: PartialItemName {
                         database: None,
                         schema: None,
                         item: "mz_array_types".to_string(),
@@ -7305,8 +7310,9 @@ mod tests {
                     vec![Op::CreateItem {
                         id,
                         oid,
-                        name: QualifiedObjectName {
-                            qualifiers: ObjectQualifiers {
+                        name: QualifiedItemName {
+                            qualifiers: ItemQualifiers
+         {
                                 database_spec,
                                 schema_spec,
                             },
@@ -7890,8 +7896,9 @@ mod tests {
                     None,
                     vec![Op::CreateItem {
                         item,
-                        name: QualifiedObjectName {
-                            qualifiers: ObjectQualifiers {
+                        name: QualifiedItemName {
+                            qualifiers: ItemQualifiers
+         {
                                 database_spec: ResolvedDatabaseSpecifier::Id(DatabaseId::new(1)),
                                 schema_spec: SchemaSpecifier::Id(SchemaId::new(3)),
                             },

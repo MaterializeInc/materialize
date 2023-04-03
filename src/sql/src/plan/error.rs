@@ -31,7 +31,7 @@ use mz_sql_parser::ast::UnresolvedItemName;
 use mz_sql_parser::parser::ParserError;
 
 use crate::catalog::{CatalogError, CatalogItemType};
-use crate::names::PartialObjectName;
+use crate::names::PartialItemName;
 use crate::names::ResolvedItemName;
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
@@ -49,19 +49,19 @@ pub enum PlanError {
         documentation_link: String,
     },
     UnknownColumn {
-        table: Option<PartialObjectName>,
+        table: Option<PartialItemName>,
         column: ColumnName,
     },
     UngroupedColumn {
-        table: Option<PartialObjectName>,
+        table: Option<PartialItemName>,
         column: ColumnName,
     },
     WrongJoinTypeForLateralColumn {
-        table: Option<PartialObjectName>,
+        table: Option<PartialItemName>,
         column: ColumnName,
     },
     AmbiguousColumn(ColumnName),
-    AmbiguousTable(PartialObjectName),
+    AmbiguousTable(PartialItemName),
     UnknownColumnInUsingClause {
         column: ColumnName,
         join_side: JoinSide,
@@ -466,7 +466,7 @@ impl From<ParserError> for PlanError {
 }
 
 struct ColumnDisplay<'a> {
-    table: &'a Option<PartialObjectName>,
+    table: &'a Option<PartialItemName>,
     column: &'a ColumnName,
 }
 

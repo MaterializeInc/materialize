@@ -46,7 +46,7 @@ use mz_sql::catalog::{
     CatalogTypeDetails,
 };
 use mz_sql::catalog::{CatalogItem as SqlCatalogItem, CatalogRole};
-use mz_sql::names::{QualifiedObjectName, RoleId};
+use mz_sql::names::{QualifiedItemName, RoleId};
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
     AlterOptionParameter, AlterOwnerPlan, AlterRolePlan, AlterSecretPlan, AlterSinkPlan,
@@ -1103,7 +1103,7 @@ impl Coordinator {
     async fn generate_view_ops(
         &mut self,
         session: &Session,
-        name: QualifiedObjectName,
+        name: QualifiedItemName,
         view: View,
         replace: Option<GlobalId>,
         depends_on: Vec<GlobalId>,
@@ -3720,7 +3720,7 @@ impl Coordinator {
     async fn create_linked_cluster_ops(
         &mut self,
         linked_object_id: GlobalId,
-        name: &QualifiedObjectName,
+        name: &QualifiedItemName,
         config: &SourceSinkClusterConfig,
         ops: &mut Vec<catalog::Op>,
         session: &Session,

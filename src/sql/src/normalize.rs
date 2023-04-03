@@ -30,7 +30,7 @@ use mz_sql_parser::ast::{
 };
 
 use crate::names::{
-    Aug, FullItemName, PartialObjectName, PartialSchemaName, RawDatabaseSpecifier,
+    Aug, FullItemName, PartialItemName, PartialSchemaName, RawDatabaseSpecifier,
 };
 use crate::plan::error::PlanError;
 use crate::plan::statement::StatementContext;
@@ -53,11 +53,11 @@ pub fn column_name(id: Ident) -> ColumnName {
 /// Normalizes an unresolved object name.
 pub fn unresolved_object_name(
     mut name: UnresolvedItemName,
-) -> Result<PartialObjectName, PlanError> {
+) -> Result<PartialItemName, PlanError> {
     if name.0.len() < 1 || name.0.len() > 3 {
         return Err(PlanError::MisqualifiedName(name.to_string()));
     }
-    let out = PartialObjectName {
+    let out = PartialItemName {
         item: ident(
             name.0
                 .pop()

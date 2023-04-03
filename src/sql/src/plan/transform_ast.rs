@@ -22,7 +22,7 @@ use mz_sql_parser::ast::{
     TableFactor, TableFunction, TableWithJoins, UnresolvedItemName, Value,
 };
 
-use crate::names::{Aug, PartialObjectName, ResolvedDataType};
+use crate::names::{Aug, PartialItemName, ResolvedDataType};
 use crate::normalize;
 use crate::plan::{PlanError, StatementContext};
 
@@ -72,7 +72,7 @@ impl<'a> FuncRewriter<'a> {
         }
     }
 
-    fn resolve_known_valid_data_type(&self, name: &PartialObjectName) -> ResolvedDataType {
+    fn resolve_known_valid_data_type(&self, name: &PartialItemName) -> ResolvedDataType {
         let item = self
             .scx
             .catalog
@@ -89,7 +89,7 @@ impl<'a> FuncRewriter<'a> {
     }
 
     fn int32_data_type(&self) -> ResolvedDataType {
-        self.resolve_known_valid_data_type(&PartialObjectName {
+        self.resolve_known_valid_data_type(&PartialItemName {
             database: None,
             schema: Some("pg_catalog".into()),
             item: "int4".into(),

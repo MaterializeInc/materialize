@@ -29,7 +29,7 @@ use mz_sql::catalog::{
     CatalogSchema, RoleAttributes,
 };
 use mz_sql::names::{
-    DatabaseId, ItemQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, RoleId, SchemaId,
+    DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, RoleId, SchemaId,
     SchemaSpecifier, PUBLIC_ROLE_NAME,
 };
 use mz_stash::{AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
@@ -1337,7 +1337,7 @@ pub struct Transaction<'a> {
 impl<'a> Transaction<'a> {
     pub fn loaded_items(
         &self,
-    ) -> Vec<(GlobalId, QualifiedObjectName, SerializedCatalogItem, RoleId)> {
+    ) -> Vec<(GlobalId, QualifiedItemName, SerializedCatalogItem, RoleId)> {
         let databases = self.databases.items();
         let schemas = self.schemas.items();
         let mut items = Vec::new();
@@ -1364,7 +1364,7 @@ impl<'a> Transaction<'a> {
             };
             items.push((
                 k.gid,
-                QualifiedObjectName {
+                QualifiedItemName {
                     qualifiers: ItemQualifiers {
                         database_spec,
                         schema_spec: SchemaSpecifier::from(v.schema_id),

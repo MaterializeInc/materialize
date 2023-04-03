@@ -24,7 +24,7 @@ use mz_repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, 
 
 use crate::ast::{SelectStatement, Statement};
 use crate::catalog::{CatalogType, TypeCategory, TypeReference};
-use crate::names::{self, PartialObjectName};
+use crate::names::{self, PartialItemName};
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, ColumnOrder, HirRelationExpr, HirScalarExpr,
@@ -39,7 +39,7 @@ use crate::plan::typeconv::{self, CastContext};
 #[derive(Clone, Copy, Debug)]
 pub enum FuncSpec<'a> {
     /// A function name.
-    Func(&'a PartialObjectName),
+    Func(&'a PartialItemName),
     /// An operator name.
     Op(&'a str),
 }

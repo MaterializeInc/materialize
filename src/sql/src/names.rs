@@ -78,12 +78,12 @@ impl From<FullItemName> for UnresolvedItemName {
 /// A fully-qualified non-human readable name of an item in the catalog using IDs for the database
 /// and schema.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct QualifiedObjectName {
+pub struct QualifiedItemName {
     pub qualifiers: ItemQualifiers,
     pub item: String,
 }
 
-impl fmt::Display for QualifiedObjectName {
+impl fmt::Display for QualifiedItemName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let ResolvedDatabaseSpecifier::Id(id) = &self.qualifiers.database_spec {
             write!(f, "{}.", id)?;
@@ -94,16 +94,16 @@ impl fmt::Display for QualifiedObjectName {
 
 /// An optionally-qualified human-readable name of an item in the catalog.
 ///
-/// This is like a [`FullObjectName`], but either the database or schema name may be
+/// This is like a [`FullItemName`], but either the database or schema name may be
 /// omitted.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct PartialObjectName {
+pub struct PartialItemName {
     pub database: Option<String>,
     pub schema: Option<String>,
     pub item: String,
 }
 
-impl PartialObjectName {
+impl PartialItemName {
     // Whether either self or other might be a (possibly differently qualified)
     // version of the other.
     pub fn matches(&self, other: &Self) -> bool {
@@ -119,7 +119,7 @@ impl PartialObjectName {
     }
 }
 
-impl fmt::Display for PartialObjectName {
+impl fmt::Display for PartialItemName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let Some(database) = &self.database {
             write!(f, "{}.", database)?;
@@ -131,13 +131,13 @@ impl fmt::Display for PartialObjectName {
     }
 }
 
-impl From<FullItemName> for PartialObjectName {
-    fn from(n: FullItemName) -> PartialObjectName {
+impl From<FullItemName> for PartialItemName {
+    fn from(n: FullItemName) -> PartialItemName {
         let database = match n.database {
             RawDatabaseSpecifier::Ambient => None,
             RawDatabaseSpecifier::Name(name) => Some(name),
         };
-        PartialObjectName {
+        PartialItemName {
             database,
             schema: Some(n.schema),
             item: n.item,
@@ -145,9 +145,9 @@ impl From<FullItemName> for PartialObjectName {
     }
 }
 
-impl From<String> for PartialObjectName {
+impl From<String> for PartialItemName {
     fn from(item: String) -> Self {
-        PartialObjectName {
+        PartialItemName {
             database: None,
             schema: None,
             item,
@@ -155,8 +155,8 @@ impl From<String> for PartialObjectName {
     }
 }
 
-impl From<PartialObjectName> for UnresolvedItemName {
-    fn from(partial_name: PartialObjectName) -> UnresolvedItemName {
+impl From<PartialItemName> for UnresolvedItemName {
+    fn from(partial_name: PartialItemName) -> UnresolvedItemName {
         let mut name_parts = Vec::new();
         if let Some(database) = partial_name.database {
             name_parts.push(Ident::new(database));

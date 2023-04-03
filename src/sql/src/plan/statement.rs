@@ -26,8 +26,8 @@ use crate::catalog::{
     CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, SessionCatalog,
 };
 use crate::names::{
-    self, Aug, DatabaseId, FullItemName, ItemQualifiers, PartialObjectName,
-    QualifiedObjectName, RawDatabaseSpecifier, ResolvedDataType, ResolvedDatabaseSpecifier,
+    self, Aug, DatabaseId, FullItemName, ItemQualifiers, PartialItemName,
+    QualifiedItemName, RawDatabaseSpecifier, ResolvedDataType, ResolvedDatabaseSpecifier,
     ResolvedItemName, ResolvedSchemaName, SchemaSpecifier,
 };
 use crate::normalize;
@@ -437,7 +437,7 @@ impl<'a> StatementContext<'a> {
         self.pcx.ok_or_else(|| sql_err!("no plan context"))
     }
 
-    pub fn allocate_full_name(&self, name: PartialObjectName) -> Result<FullItemName, PlanError> {
+    pub fn allocate_full_name(&self, name: PartialItemName) -> Result<FullItemName, PlanError> {
         let (database, schema): (RawDatabaseSpecifier, String) = match (name.database, name.schema)
         {
             (None, None) => {
@@ -482,8 +482,8 @@ impl<'a> StatementContext<'a> {
 
     pub fn allocate_qualified_name(
         &self,
-        name: PartialObjectName,
-    ) -> Result<QualifiedObjectName, PlanError> {
+        name: PartialItemName,
+    ) -> Result<QualifiedItemName, PlanError> {
         let full_name = self.allocate_full_name(name)?;
         let database_spec = match full_name.database {
             RawDatabaseSpecifier::Ambient => ResolvedDatabaseSpecifier::Ambient,
@@ -496,7 +496,7 @@ impl<'a> StatementContext<'a> {
             .resolve_schema_in_database(&database_spec, &Ident::new(full_name.schema))?
             .id()
             .clone();
-        Ok(QualifiedObjectName {
+        Ok(QualifiedItemName {
             qualifiers: ItemQualifiers {
                 database_spec,
                 schema_spec,
@@ -505,7 +505,7 @@ impl<'a> StatementContext<'a> {
         })
     }
 
-    pub fn allocate_temporary_full_name(&self, name: PartialObjectName) -> FullItemName {
+    pub fn allocate_temporary_full_name(&self, name: PartialItemName) -> FullItemName {
         FullItemName {
             database: RawDatabaseSpecifier::Ambient,
             schema: name.schema.unwrap_or_else(|| "mz_temp".to_owned()),
@@ -515,8 +515,8 @@ impl<'a> StatementContext<'a> {
 
     pub fn allocate_temporary_qualified_name(
         &self,
-        name: PartialObjectName,
-    ) -> Result<QualifiedObjectName, PlanError> {
+        name: PartialItemName,
+    ) -> Result<QualifiedItemName, PlanError> {
         if let Some(name) = name.schema {
             if name
                 != self
@@ -531,7 +531,7 @@ impl<'a> StatementContext<'a> {
             }
         }
 
-        Ok(QualifiedObjectName {
+        Ok(QualifiedItemName {
             qualifiers: ItemQualifiers {
                 database_spec: ResolvedDatabaseSpecifier::Ambient,
                 schema_spec: SchemaSpecifier::Temporary,
@@ -623,7 +623,7 @@ impl<'a> StatementContext<'a> {
         self.catalog.get_schema(database_spec, schema_spec)
     }
 
-    pub fn item_exists(&self, name: &QualifiedObjectName) -> bool {
+    pub fn item_exists(&self, name: &QualifiedItemName) -> bool {
         self.catalog.item_exists(name)
     }
 

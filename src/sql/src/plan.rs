@@ -60,7 +60,7 @@ use crate::ast::{
 };
 use crate::catalog::{CatalogType, IdReference, RoleAttributes};
 use crate::names::{
-    Aug, DatabaseId, FullItemName, ObjectId, QualifiedObjectName, ResolvedDatabaseSpecifier,
+    Aug, DatabaseId, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier,
     RoleId, SchemaId,
 };
 
@@ -450,7 +450,7 @@ pub enum ReplicaConfig {
 
 #[derive(Debug)]
 pub struct CreateSourcePlan {
-    pub name: QualifiedObjectName,
+    pub name: QualifiedItemName,
     pub source: Source,
     pub if_not_exists: bool,
     pub timeline: Timeline,
@@ -502,21 +502,21 @@ pub enum SourceSinkClusterConfig {
 
 #[derive(Debug)]
 pub struct CreateConnectionPlan {
-    pub name: QualifiedObjectName,
+    pub name: QualifiedItemName,
     pub if_not_exists: bool,
     pub connection: Connection,
 }
 
 #[derive(Debug)]
 pub struct CreateSecretPlan {
-    pub name: QualifiedObjectName,
+    pub name: QualifiedItemName,
     pub secret: Secret,
     pub if_not_exists: bool,
 }
 
 #[derive(Debug)]
 pub struct CreateSinkPlan {
-    pub name: QualifiedObjectName,
+    pub name: QualifiedItemName,
     pub sink: Sink,
     pub with_snapshot: bool,
     pub if_not_exists: bool,
@@ -525,14 +525,14 @@ pub struct CreateSinkPlan {
 
 #[derive(Debug)]
 pub struct CreateTablePlan {
-    pub name: QualifiedObjectName,
+    pub name: QualifiedItemName,
     pub table: Table,
     pub if_not_exists: bool,
 }
 
 #[derive(Debug)]
 pub struct CreateViewPlan {
-    pub name: QualifiedObjectName,
+    pub name: QualifiedItemName,
     pub view: View,
     /// The ID of the object that this view is replacing, if any.
     pub replace: Option<GlobalId>,
@@ -544,7 +544,7 @@ pub struct CreateViewPlan {
 
 #[derive(Debug)]
 pub struct CreateMaterializedViewPlan {
-    pub name: QualifiedObjectName,
+    pub name: QualifiedItemName,
     pub materialized_view: MaterializedView,
     /// The ID of the object that this view is replacing, if any.
     pub replace: Option<GlobalId>,
@@ -556,7 +556,7 @@ pub struct CreateMaterializedViewPlan {
 
 #[derive(Debug)]
 pub struct CreateIndexPlan {
-    pub name: QualifiedObjectName,
+    pub name: QualifiedItemName,
     pub index: Index,
     pub options: Vec<IndexOption>,
     pub if_not_exists: bool,
@@ -564,7 +564,7 @@ pub struct CreateIndexPlan {
 
 #[derive(Debug)]
 pub struct CreateTypePlan {
-    pub name: QualifiedObjectName,
+    pub name: QualifiedItemName,
     pub typ: Type,
 }
 

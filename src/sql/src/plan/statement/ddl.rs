@@ -91,7 +91,7 @@ use crate::catalog::{
 };
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
-    Aug, DatabaseId, FullSchemaName, ObjectId, PartialObjectName, QualifiedObjectName,
+    Aug, DatabaseId, FullSchemaName, ObjectId, PartialItemName, QualifiedItemName,
     RawDatabaseSpecifier, ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier,
     ResolvedItemName, RoleId, SchemaId, SchemaSpecifier,
 };
@@ -320,7 +320,7 @@ pub fn plan_create_table(
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
-    let partial_name = PartialObjectName::from(full_name.clone());
+    let partial_name = PartialItemName::from(full_name.clone());
     if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
         return Err(PlanError::ItemAlreadyExists {
             name: full_name.to_string(),
@@ -1024,7 +1024,7 @@ pub fn plan_create_source(
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
-    let partial_name = PartialObjectName::from(full_name.clone());
+    let partial_name = PartialItemName::from(full_name.clone());
     if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
         return Err(PlanError::ItemAlreadyExists {
             name: full_name.to_string(),
@@ -1654,7 +1654,7 @@ pub fn plan_view(
     def: &mut ViewDefinition<Aug>,
     params: &Params,
     temporary: bool,
-) -> Result<(QualifiedObjectName, View), PlanError> {
+) -> Result<(QualifiedItemName, View), PlanError> {
     let create_sql = normalize::create_statement(
         scx,
         Statement::CreateView(CreateViewStatement {
@@ -1736,7 +1736,7 @@ pub fn plan_create_view(
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
-    let partial_name = PartialObjectName::from(full_name.clone());
+    let partial_name = PartialItemName::from(full_name.clone());
     if let (IfExistsBehavior::Error, Ok(item)) =
         (*if_exists, scx.catalog.resolve_item(&partial_name))
     {
@@ -1824,7 +1824,7 @@ pub fn plan_create_materialized_view(
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
-    let partial_name = PartialObjectName::from(full_name.clone());
+    let partial_name = PartialItemName::from(full_name.clone());
     if let (IfExistsBehavior::Error, Ok(item)) =
         (stmt.if_exists, scx.catalog.resolve_item(&partial_name))
     {
@@ -1897,7 +1897,7 @@ pub fn plan_create_sink(
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
-    let partial_name = PartialObjectName::from(full_name.clone());
+    let partial_name = PartialItemName::from(full_name.clone());
     if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
         return Err(PlanError::ItemAlreadyExists {
             name: full_name.to_string(),
@@ -2292,12 +2292,12 @@ pub fn plan_create_index(
     let keys = query::plan_index_exprs(scx, &on_desc, filled_key_parts.clone())?;
 
     let index_name = if let Some(name) = name {
-        QualifiedObjectName {
+        QualifiedItemName {
             qualifiers: on.name().qualifiers.clone(),
             item: normalize::ident(name.clone()),
         }
     } else {
-        let mut idx_name = QualifiedObjectName {
+        let mut idx_name = QualifiedItemName {
             qualifiers: on.name().qualifiers.clone(),
             item: on.name().item.clone(),
         };
@@ -2331,7 +2331,7 @@ pub fn plan_create_index(
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&index_name);
-    let partial_name = PartialObjectName::from(full_name.clone());
+    let partial_name = PartialItemName::from(full_name.clone());
     if let (false, Ok(item)) = (*if_not_exists, scx.catalog.resolve_item(&partial_name)) {
         return Err(PlanError::ItemAlreadyExists {
             name: full_name.to_string(),
@@ -2476,7 +2476,7 @@ pub fn plan_create_type(
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
-    let partial_name = PartialObjectName::from(full_name.clone());
+    let partial_name = PartialItemName::from(full_name.clone());
     if let Ok(item) = scx.catalog.resolve_item(&partial_name) {
         return Err(PlanError::ItemAlreadyExists {
             name: full_name.to_string(),
@@ -3281,7 +3281,7 @@ pub fn plan_create_connection(
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
-    let partial_name = PartialObjectName::from(full_name.clone());
+    let partial_name = PartialItemName::from(full_name.clone());
     if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
         return Err(PlanError::ItemAlreadyExists {
             name: full_name.to_string(),
@@ -3887,7 +3887,7 @@ pub fn plan_alter_object_rename(
                     format!("{object_type}").to_lowercase()
                 )
             }
-            let proposed_name = QualifiedObjectName {
+            let proposed_name = QualifiedItemName {
                 qualifiers: entry.name().qualifiers.clone(),
                 item: to_item_name.clone().into_string(),
             };
