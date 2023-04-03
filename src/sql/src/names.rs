@@ -39,11 +39,11 @@ use crate::plan::PlanError;
 /// A fully-qualified human readable name of an item in the catalog.
 ///
 /// Catalog names compare case sensitively. Use
-/// [`normalize::unresolved_object_name`] to
-/// perform proper case folding if converting an [`UnresolvedObjectName`] to a
+/// [`normalize::unresolved_item_name`] to
+/// perform proper case folding if converting an [`UnresolvedItemName`] to a
 /// `FullItemName`.
 ///
-/// [`normalize::unresolved_object_name`]: crate::normalize::unresolved_object_name
+/// [`normalize::unresolved_item_name`]: crate::normalize::unresolved_item_name
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct FullItemName {
     /// The database name.
@@ -829,7 +829,7 @@ impl<'a> NameResolver<'a> {
             RawDataType::Other { name, typ_mod } => {
                 let (full_name, item) = match name {
                     RawItemName::Name(name) => {
-                        let name = normalize::unresolved_object_name(name)?;
+                        let name = normalize::unresolved_item_name(name)?;
                         let item = self.catalog.resolve_item(&name)?;
                         let full_name = self.catalog.resolve_full_name(item.name());
                         (full_name, item)
@@ -967,7 +967,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
     ) -> <Aug as AstInfo>::ItemName {
         match item_name {
             RawItemName::Name(raw_name) => {
-                let raw_name = match normalize::unresolved_object_name(raw_name) {
+                let raw_name = match normalize::unresolved_item_name(raw_name) {
                     Ok(raw_name) => raw_name,
                     Err(e) => {
                         if self.status.is_ok() {

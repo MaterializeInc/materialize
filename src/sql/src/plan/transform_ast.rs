@@ -272,7 +272,7 @@ impl<'a> FuncRewriter<'a> {
                 distinct,
                 over: None,
             }) => {
-                let name = normalize::unresolved_object_name(name.clone()).ok()?;
+                let name = normalize::unresolved_item_name(name.clone()).ok()?;
                 if let Some(database) = &name.database {
                     // If a database name is provided, we need only verify that
                     // the database exists, as presently functions can only

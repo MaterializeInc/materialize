@@ -1022,7 +1022,7 @@ impl<'a, T> ErsatzCatalog<'a, T> {
         &self,
         item: UnresolvedItemName,
     ) -> Result<(UnresolvedItemName, &'a T), PlanError> {
-        let name = normalize::unresolved_object_name(item)?;
+        let name = normalize::unresolved_item_name(item)?;
 
         let schemas = match self.0.get(&name.item) {
             Some(schemas) => schemas,

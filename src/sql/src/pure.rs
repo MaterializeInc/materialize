@@ -64,7 +64,7 @@ fn subsource_gen<'a, T>(
         let subsource_name = match &subsource.subsource {
             Some(name) => match name {
                 DeferredObjectName::Deferred(name) => {
-                    let partial = normalize::unresolved_object_name(name.clone())?;
+                    let partial = normalize::unresolved_item_name(name.clone())?;
                     match partial.schema {
                         Some(_) => name.clone(),
                         // In cases when a prefix is not provided for the deferred name
@@ -83,7 +83,7 @@ fn subsource_gen<'a, T>(
                 // the schema of the reference.
                 subsource_name_gen(
                     source_name,
-                    &normalize::unresolved_object_name(subsource.reference.clone())?.item,
+                    &normalize::unresolved_item_name(subsource.reference.clone())?.item,
                 )?
             }
         };
@@ -104,7 +104,7 @@ fn subsource_name_gen(
     source_name: &UnresolvedItemName,
     subsource_name: &String,
 ) -> Result<UnresolvedItemName, PlanError> {
-    let mut partial = normalize::unresolved_object_name(source_name.clone())?;
+    let mut partial = normalize::unresolved_item_name(source_name.clone())?;
     partial.item = subsource_name.to_string();
     Ok(UnresolvedItemName::from(partial))
 }
@@ -380,7 +380,7 @@ pub async fn purify_create_source(
                         option_name: PgConfigOptionName::TextColumns.to_ast_string(),
                         err: Box::new(PlanError::UnknownColumn {
                             table: Some(
-                                normalize::unresolved_object_name(fully_qualified_name)
+                                normalize::unresolved_item_name(fully_qualified_name)
                                     .expect("known to be of valid len"),
                             ),
                             column: mz_repr::ColumnName::from(col),
@@ -673,7 +673,7 @@ pub async fn purify_create_source(
             let mut suggested_name = prefix.to_vec();
             suggested_name.push(format!("{}_progress", item).into());
 
-            let partial = normalize::unresolved_object_name(UnresolvedItemName(suggested_name))?;
+            let partial = normalize::unresolved_item_name(UnresolvedItemName(suggested_name))?;
             let qualified = scx.allocate_qualified_name(partial)?;
             let found_name = scx.catalog.find_available_name(qualified);
             let full_name = scx.catalog.resolve_full_name(&found_name);

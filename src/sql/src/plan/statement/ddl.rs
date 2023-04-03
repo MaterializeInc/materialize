@@ -313,9 +313,9 @@ pub fn plan_create_table(
 
     let temporary = *temporary;
     let name = if temporary {
-        scx.allocate_temporary_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?
+        scx.allocate_temporary_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?
     } else {
-        scx.allocate_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?
+        scx.allocate_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?
     };
 
     // Check for an object in the catalog with this same name
@@ -1020,7 +1020,7 @@ pub fn plan_create_source(
         .transpose()?;
 
     let if_not_exists = *if_not_exists;
-    let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.clone())?)?;
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
@@ -1203,7 +1203,7 @@ pub fn plan_create_subsource(
     }
 
     let if_not_exists = *if_not_exists;
-    let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.clone())?)?;
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
     let create_sql = normalize::create_statement(scx, Statement::CreateSubsource(stmt))?;
 
     let typ = RelationType::new(column_types).with_keys(keys);
@@ -1682,9 +1682,9 @@ pub fn plan_view(
     let relation_expr = expr.optimize_and_lower(&scx.into())?;
 
     let name = if temporary {
-        scx.allocate_temporary_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?
+        scx.allocate_temporary_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?
     } else {
-        scx.allocate_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?
+        scx.allocate_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?
     };
 
     plan_utils::maybe_rename_columns(format!("view {}", name), &mut desc, columns)?;
@@ -1714,7 +1714,7 @@ pub fn plan_create_view(
         if_exists,
         definition,
     } = &mut stmt;
-    let partial_name = normalize::unresolved_object_name(definition.name.clone())?;
+    let partial_name = normalize::unresolved_item_name(definition.name.clone())?;
     let (name, view) = plan_view(scx, definition, params, *temporary)?;
 
     let replace = if *if_exists == IfExistsBehavior::Replace {
@@ -1779,7 +1779,7 @@ pub fn plan_create_materialized_view(
     let create_sql =
         normalize::create_statement(scx, Statement::CreateMaterializedView(stmt.clone()))?;
 
-    let partial_name = normalize::unresolved_object_name(stmt.name)?;
+    let partial_name = normalize::unresolved_item_name(stmt.name)?;
     let name = scx.allocate_qualified_name(partial_name.clone())?;
 
     let query::PlannedQuery {
@@ -1893,7 +1893,7 @@ pub fn plan_create_sink(
         Some(Envelope::CdcV2) => bail_unsupported!("CDCv2 sinks"),
         Some(Envelope::None) => bail_unsupported!("\"ENVELOPE NONE\" sinks"),
     };
-    let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
@@ -2472,7 +2472,7 @@ pub fn plan_create_type(
         }
     };
 
-    let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
@@ -2793,7 +2793,7 @@ pub fn plan_create_secret(
         value,
     } = &stmt;
 
-    let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?;
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?;
     let mut create_sql_statement = stmt.clone();
     create_sql_statement.value = Expr::Value(Value::String("********".to_string()));
     let create_sql =
@@ -3277,7 +3277,7 @@ pub fn plan_create_connection(
             Connection::Ssh(connection)
         }
     };
-    let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
@@ -3651,7 +3651,7 @@ pub fn plan_alter_index_options(
         action: actions,
     }: AlterIndexStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let index_name = normalize::unresolved_object_name(index_name)?;
+    let index_name = normalize::unresolved_item_name(index_name)?;
     let entry = match scx.catalog.resolve_item(&index_name) {
         Ok(index) => index,
         Err(_) if if_exists => {
@@ -3921,7 +3921,7 @@ pub fn plan_alter_secret(
         if_exists,
         value,
     } = stmt;
-    let name = normalize::unresolved_object_name(name)?;
+    let name = normalize::unresolved_item_name(name)?;
     let entry = match scx.catalog.resolve_item(&name) {
         Ok(secret) => secret,
         Err(_) if if_exists => {
@@ -3963,7 +3963,7 @@ pub fn plan_alter_sink(
         action,
     } = stmt;
 
-    let sink_name = normalize::unresolved_object_name(sink_name)?;
+    let sink_name = normalize::unresolved_item_name(sink_name)?;
     let entry = match scx.catalog.resolve_item(&sink_name) {
         Ok(sink) => sink,
         Err(_) if if_exists => {
@@ -4039,7 +4039,7 @@ pub fn plan_alter_source(
         if_exists,
         action,
     } = stmt;
-    let source_name = normalize::unresolved_object_name(source_name)?;
+    let source_name = normalize::unresolved_item_name(source_name)?;
     let entry = match scx.catalog.resolve_item(&source_name) {
         Ok(source) => source,
         Err(_) if if_exists => {
@@ -4157,7 +4157,7 @@ pub fn plan_alter_connection(
     stmt: AlterConnectionStatement,
 ) -> Result<Plan, PlanError> {
     let AlterConnectionStatement { name, if_exists } = stmt;
-    let name = normalize::unresolved_object_name(name)?;
+    let name = normalize::unresolved_item_name(name)?;
     let entry = match scx.catalog.resolve_item(&name) {
         Ok(connection) => connection,
         Err(_) if if_exists => {
@@ -4337,7 +4337,7 @@ fn resolve_object<'a>(
     name: UnresolvedItemName,
     if_exists: bool,
 ) -> Result<Option<&'a dyn CatalogItem>, PlanError> {
-    let name = normalize::unresolved_object_name(name)?;
+    let name = normalize::unresolved_item_name(name)?;
     match scx.catalog.resolve_item(&name) {
         Ok(item) => Ok(Some(item)),
         // TODO(benesch/jkosh44): generate a notice indicating items do not exist.

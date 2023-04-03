@@ -51,7 +51,7 @@ pub fn column_name(id: Ident) -> ColumnName {
 }
 
 /// Normalizes an unresolved object name.
-pub fn unresolved_object_name(
+pub fn unresolved_item_name(
     mut name: UnresolvedItemName,
 ) -> Result<PartialItemName, PlanError> {
     if name.0.len() < 1 || name.0.len() > 3 {
@@ -129,9 +129,9 @@ impl From<SqlValueOrSecret> for Option<Value> {
     }
 }
 
-/// Unnormalizes an object name.
+/// Unnormalizes an item name.
 ///
-/// This is the inverse of the [`unresolved_object_name`] function.
+/// This is the inverse of the [`unresolved_item_name`] function.
 pub fn unresolve(name: FullItemName) -> UnresolvedItemName {
     let mut out = vec![];
     if let RawDatabaseSpecifier::Name(n) = name.database {
@@ -142,8 +142,8 @@ pub fn unresolve(name: FullItemName) -> UnresolvedItemName {
     UnresolvedItemName(out)
 }
 
-/// Converts an `UnresolvedObjectName` to a `FullObjectName` if the
-/// `UnresolvedObjectName` is fully specified. Otherwise returns an error.
+/// Converts an `UnresolvedItemName` to a `FullItemName` if the
+/// `UnresolvedItemName` is fully specified. Otherwise returns an error.
 pub fn full_name(mut raw_name: UnresolvedItemName) -> Result<FullItemName, PlanError> {
     match raw_name.0.len() {
         3 => Ok(FullItemName {
@@ -165,22 +165,22 @@ pub fn full_name(mut raw_name: UnresolvedItemName) -> Result<FullItemName, PlanE
 /// The resulting statement will not depend upon any session parameters, nor
 /// specify any non-default options (like `TEMPORARY`, `IF NOT EXISTS`, etc).
 ///
-/// The goal is to construct a backwards-compatible description of the object.
+/// The goal is to construct a backwards-compatible description of the item.
 /// SQL is the most stable part of Materialize, so SQL is used to describe the
-/// objects that are persisted in the catalog.
+/// items that are persisted in the catalog.
 pub fn create_statement(
     scx: &StatementContext,
     mut stmt: Statement<Aug>,
 ) -> Result<String, PlanError> {
     let allocate_name = |name: &UnresolvedItemName| -> Result<_, PlanError> {
         Ok(unresolve(scx.allocate_full_name(
-            unresolved_object_name(name.clone())?,
+            unresolved_item_name(name.clone())?,
         )?))
     };
 
     let allocate_temporary_name = |name: &UnresolvedItemName| -> Result<_, PlanError> {
         Ok(unresolve(scx.allocate_temporary_full_name(
-            unresolved_object_name(name.clone())?,
+            unresolved_item_name(name.clone())?,
         )))
     };
 

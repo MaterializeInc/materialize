@@ -547,7 +547,7 @@ impl<'a> StatementContext<'a> {
         id: GlobalId,
         name: UnresolvedItemName,
     ) -> Result<ResolvedItemName, PlanError> {
-        let partial = normalize::unresolved_object_name(name)?;
+        let partial = normalize::unresolved_item_name(name)?;
         let qualified = self.allocate_qualified_name(partial.clone())?;
         let full_name = self.allocate_full_name(partial)?;
         Ok(ResolvedItemName::Item {
@@ -630,7 +630,7 @@ impl<'a> StatementContext<'a> {
     pub fn resolve_item(&self, name: RawItemName) -> Result<&dyn CatalogItem, PlanError> {
         match name {
             RawItemName::Name(name) => {
-                let name = normalize::unresolved_object_name(name)?;
+                let name = normalize::unresolved_item_name(name)?;
                 Ok(self.catalog.resolve_item(&name)?)
             }
             RawItemName::Id(id, _) => {
@@ -659,7 +659,7 @@ impl<'a> StatementContext<'a> {
         &self,
         name: UnresolvedItemName,
     ) -> Result<&dyn CatalogItem, PlanError> {
-        let name = normalize::unresolved_object_name(name)?;
+        let name = normalize::unresolved_item_name(name)?;
         Ok(self.catalog.resolve_function(&name)?)
     }
 

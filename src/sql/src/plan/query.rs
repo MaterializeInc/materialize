@@ -2588,9 +2588,9 @@ fn plan_table_function_internal(
             plan_exprs(ecx, args)?
         }
     };
-    let resolved_name = normalize::unresolved_object_name(name.clone())?;
+    let resolved_name = normalize::unresolved_item_name(name.clone())?;
     let table_name = match table_name {
-        Some(table_name) => normalize::unresolved_object_name(table_name.clone())?.item,
+        Some(table_name) => normalize::unresolved_item_name(table_name.clone())?.item,
         None => resolved_name.item.clone(),
     };
     let scope_name = Some(PartialItemName {
@@ -2747,7 +2747,7 @@ fn invent_column_name(
                 _ => None,
             },
             Expr::Function(func) => {
-                let name = normalize::unresolved_object_name(func.name.clone()).ok()?;
+                let name = normalize::unresolved_item_name(func.name.clone()).ok()?;
                 if name.schema.as_deref() == Some("mz_internal") {
                     None
                 } else {
@@ -2825,7 +2825,7 @@ fn expand_select_item<'a>(
         } => {
             *ecx.qcx.scx.ambiguous_columns.borrow_mut() = true;
             let table_name =
-                normalize::unresolved_object_name(UnresolvedItemName(table_name.clone()))?;
+                normalize::unresolved_item_name(UnresolvedItemName(table_name.clone()))?;
             let out: Vec<_> = ecx
                 .scope
                 .items
@@ -4134,7 +4134,7 @@ fn plan_aggregate(
         bail_unsupported!("aggregate window functions");
     }
 
-    let name = normalize::unresolved_object_name(name.clone())?;
+    let name = normalize::unresolved_item_name(name.clone())?;
 
     // We follow PostgreSQL's rule here for mapping `count(*)` into the
     // generalized function selection framework. The rule is simple: the user
@@ -4224,7 +4224,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
 
     // If the name is qualified, it must refer to a column in a table.
     if !names.is_empty() {
-        let table_name = normalize::unresolved_object_name(UnresolvedItemName(names))?;
+        let table_name = normalize::unresolved_item_name(UnresolvedItemName(names))?;
         let i = ecx
             .scope
             .resolve_table_column(&ecx.qcx.outer_scopes, &table_name, &col_name)?;
@@ -4325,7 +4325,7 @@ fn plan_function<'a>(
         distinct,
     }: &'a Function<Aug>,
 ) -> Result<HirScalarExpr, PlanError> {
-    let unresolved_name = normalize::unresolved_object_name(name.clone())?;
+    let unresolved_name = normalize::unresolved_item_name(name.clone())?;
 
     let impls = match resolve_func(ecx, name, args)? {
         Func::Aggregate(_) if ecx.allow_aggregates => {
