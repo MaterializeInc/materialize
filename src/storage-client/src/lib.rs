@@ -78,6 +78,7 @@
 //! Materialize's storage layer.
 
 mod metrics;
+mod ssh_tunnels;
 
 pub mod client;
 pub mod controller;

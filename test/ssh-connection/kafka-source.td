@@ -14,10 +14,19 @@ $ kafka-create-topic topic=thetopic
 $ kafka-ingest topic=thetopic format=bytes
 one
 
+# Create a dedicated cluster for the source, so we can easily restart the
+# source by dropping and recreating the clsuter's replica.
+#
+# We also use a large number of worker threads to protect against past behavior
+# in which we opened one SSH tunnel per worker thread per broker, which
+# tripped the default `MaxStartups 10` sshd configuration.
+> DROP CLUSTER IF EXISTS sc;
+> CREATE CLUSTER sc REPLICAS (r1 (SIZE '32'))
+
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred);
 
-> CREATE SOURCE mz_source
+> CREATE SOURCE mz_source IN CLUSTER sc
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-thetopic-${testdrive.seed}')
   FORMAT TEXT
   ENVELOPE NONE
