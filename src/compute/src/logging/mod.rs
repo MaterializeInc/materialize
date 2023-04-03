@@ -123,14 +123,17 @@ where
     }
 }
 
-/// Parts to connect logging dataflows to the timely runtime.
+/// Parts to connect a logging dataflows the timely runtime.
+///
+/// This is just a bundle-type intended to make passing around its contents in the logging
+/// initialization code more convenient.
 #[derive(Clone)]
-struct Plumbing<E> {
+struct EventQueue<E> {
     link: Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, E)>>,
     activator: RcActivator,
 }
 
-impl<E> Plumbing<E> {
+impl<E> EventQueue<E> {
     fn new(name: &str) -> Self {
         let activator_name = format!("{name}_activator");
         let activate_after = 128;

@@ -38,7 +38,7 @@ use mz_timely_util::replay::MzReplay;
 use crate::logging::{ComputeLog, LogVariant};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
-use super::Plumbing;
+use super::EventQueue;
 
 /// Type alias for a logger of compute events.
 pub type Logger = timely::logging_core::Logger<ComputeEvent, WorkerIdentifier>;
@@ -105,23 +105,23 @@ impl Peek {
 /// Params
 /// * `worker`: The Timely worker hosting the log analysis dataflow.
 /// * `config`: Logging configuration.
-/// * `plumbing`: The source to read compute log events from.
+/// * `event_queue`: The source to read compute log events from.
 ///
 /// Returns a map from log variant to a tuple of a trace handle and a dataflow drop token.
 pub(super) fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &mz_compute_client::logging::LoggingConfig,
-    plumbing: Plumbing<ComputeEvent>,
+    event_queue: EventQueue<ComputeEvent>,
 ) -> BTreeMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
     let worker_id = worker.index();
 
     worker.dataflow_named("Dataflow: compute logging", move |scope| {
-        let (mut logs, token) = Some(plumbing.link).mz_replay(
+        let (mut logs, token) = Some(event_queue.link).mz_replay(
             scope,
             "compute logs",
             config.interval,
-            plumbing.activator,
+            event_queue.activator,
         );
 
         // If logging is disabled, we still need to install the indexes, but we can leave them

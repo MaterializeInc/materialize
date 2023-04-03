@@ -24,7 +24,7 @@ use crate::arrangement::manager::TraceBundle;
 
 use super::compute::ComputeEvent;
 use super::reachability::ReachabilityEvent;
-use super::{BatchLogger, Plumbing};
+use super::{BatchLogger, EventQueue};
 
 /// Initialize logging dataflows.
 ///
@@ -52,10 +52,10 @@ pub fn initialize<A: Allocate>(
         interval_ms,
         now,
         start_offset,
-        t_plumbing: Plumbing::new("t"),
-        r_plumbing: Plumbing::new("r"),
-        d_plumbing: Plumbing::new("d"),
-        c_plumbing: Plumbing::new("c"),
+        t_event_queue: EventQueue::new("t"),
+        r_event_queue: EventQueue::new("r"),
+        d_event_queue: EventQueue::new("d"),
+        c_event_queue: EventQueue::new("c"),
     };
 
     // Depending on whether we should log the creation of the logging dataflows, we register the
@@ -79,10 +79,10 @@ struct LoggingContext<'a, A: Allocate> {
     interval_ms: u64,
     now: Instant,
     start_offset: Duration,
-    t_plumbing: Plumbing<TimelyEvent>,
-    r_plumbing: Plumbing<ReachabilityEvent>,
-    d_plumbing: Plumbing<DifferentialEvent>,
-    c_plumbing: Plumbing<ComputeEvent>,
+    t_event_queue: EventQueue<TimelyEvent>,
+    r_event_queue: EventQueue<ReachabilityEvent>,
+    d_event_queue: EventQueue<DifferentialEvent>,
+    c_event_queue: EventQueue<ComputeEvent>,
 }
 
 impl<A: Allocate> LoggingContext<'_, A> {
@@ -91,22 +91,22 @@ impl<A: Allocate> LoggingContext<'_, A> {
         traces.extend(super::timely::construct(
             self.worker,
             self.config,
-            self.t_plumbing.clone(),
+            self.t_event_queue.clone(),
         ));
         traces.extend(super::reachability::construct(
             self.worker,
             self.config,
-            self.r_plumbing.clone(),
+            self.r_event_queue.clone(),
         ));
         traces.extend(super::differential::construct(
             self.worker,
             self.config,
-            self.d_plumbing.clone(),
+            self.d_event_queue.clone(),
         ));
         traces.extend(super::compute::construct(
             self.worker,
             self.config,
-            self.c_plumbing.clone(),
+            self.c_event_queue.clone(),
         ));
 
         let errs = self
@@ -129,36 +129,36 @@ impl<A: Allocate> LoggingContext<'_, A> {
     fn register_loggers(&self) {
         self.worker
             .log_register()
-            .insert_logger("timely", self.simple_logger(self.t_plumbing.clone()));
+            .insert_logger("timely", self.simple_logger(self.t_event_queue.clone()));
         self.worker
             .log_register()
             .insert_logger("timely/reachability", self.reachability_logger());
         self.worker.log_register().insert_logger(
             "differential/arrange",
-            self.simple_logger(self.d_plumbing.clone()),
+            self.simple_logger(self.d_event_queue.clone()),
         );
         self.worker.log_register().insert_logger(
             "materialize/compute",
-            self.simple_logger(self.c_plumbing.clone()),
+            self.simple_logger(self.c_event_queue.clone()),
         );
     }
 
-    fn simple_logger<E: 'static>(&self, plumbing: Plumbing<E>) -> Logger<E> {
-        let mut logger = BatchLogger::new(plumbing.link, self.interval_ms);
+    fn simple_logger<E: 'static>(&self, event_queue: EventQueue<E>) -> Logger<E> {
+        let mut logger = BatchLogger::new(event_queue.link, self.interval_ms);
         Logger::new(
             self.now,
             self.start_offset,
             self.worker.index(),
             move |time, data| {
                 logger.publish_batch(time, data);
-                plumbing.activator.activate();
+                event_queue.activator.activate();
             },
         )
     }
 
     fn reachability_logger(&self) -> Logger<TrackerEvent> {
-        let plumbing = self.r_plumbing.clone();
-        let mut logger = BatchLogger::new(plumbing.link, self.interval_ms);
+        let event_queue = self.r_event_queue.clone();
+        let mut logger = BatchLogger::new(event_queue.link, self.interval_ms);
         Logger::new(
             self.now,
             self.start_offset,
@@ -204,7 +204,7 @@ impl<A: Allocate> LoggingContext<'_, A> {
                     }
                 }
                 logger.publish_batch(time, &mut converted_updates);
-                plumbing.activator.activate();
+                event_queue.activator.activate();
             },
         )
     }

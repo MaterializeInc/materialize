@@ -34,30 +34,30 @@ use mz_timely_util::replay::MzReplay;
 use crate::logging::{DifferentialLog, LogVariant};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
-use super::Plumbing;
+use super::EventQueue;
 
 /// Constructs the logging dataflow for differential logs.
 ///
 /// Params
 /// * `worker`: The Timely worker hosting the log analysis dataflow.
 /// * `config`: Logging configuration
-/// * `plumbing`: The source to read log events from.
+/// * `event_queue`: The source to read log events from.
 ///
 /// Returns a map from log variant to a tuple of a trace handle and a dataflow drop token.
 pub(super) fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &mz_compute_client::logging::LoggingConfig,
-    plumbing: Plumbing<DifferentialEvent>,
+    event_queue: EventQueue<DifferentialEvent>,
 ) -> BTreeMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
     let worker_id = worker.index();
 
     worker.dataflow_named("Dataflow: differential logging", move |scope| {
-        let (mut logs, token) = Some(plumbing.link).mz_replay(
+        let (mut logs, token) = Some(event_queue.link).mz_replay(
             scope,
             "differential logs",
             config.interval,
-            plumbing.activator,
+            event_queue.activator,
         );
 
         // If logging is disabled, we still need to install the indexes, but we can leave them

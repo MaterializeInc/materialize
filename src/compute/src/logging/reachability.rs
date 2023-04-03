@@ -31,7 +31,7 @@ use mz_timely_util::replay::MzReplay;
 use crate::logging::{LogVariant, TimelyLog};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
-use super::Plumbing;
+use super::EventQueue;
 
 pub(super) type ReachabilityEvent = (
     Vec<usize>,
@@ -43,24 +43,24 @@ pub(super) type ReachabilityEvent = (
 /// Params
 /// * `worker`: The Timely worker hosting the log analysis dataflow.
 /// * `config`: Logging configuration
-/// * `plumbing`: The source to read log events from.
+/// * `event_queue`: The source to read log events from.
 ///
 /// Returns a map from log variant to a tuple of a trace handle and a permutation to reconstruct
 /// the original rows.
 pub(super) fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
-    plumbing: Plumbing<ReachabilityEvent>,
+    event_queue: EventQueue<ReachabilityEvent>,
 ) -> BTreeMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
     // A dataflow for multiple log-derived arrangements.
     let traces = worker.dataflow_named("Dataflow: timely reachability logging", move |scope| {
-        let (mut logs, token) = Some(plumbing.link).mz_replay(
+        let (mut logs, token) = Some(event_queue.link).mz_replay(
             scope,
             "reachability logs",
             config.interval,
-            plumbing.activator,
+            event_queue.activator,
         );
 
         // If logging is disabled, we still need to install the indexes, but we can leave them
