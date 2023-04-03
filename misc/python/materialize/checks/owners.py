@@ -15,6 +15,15 @@ from materialize.util import MzVersion
 
 
 class Owners(Check):
+    def _enable_rbac_checks(self, value: bool) -> str:
+        return dedent(
+            f"""
+            $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+            ALTER SYSTEM SET enable_rbac_checks TO {value};
+            ALTER ROLE materialize CREATEROLE CREATEDB CREATECLUSTER;
+            """
+        )
+
     def _create_objects(self, role: str, i: int, expensive: bool = False) -> str:
         s = dedent(
             f"""
@@ -42,20 +51,39 @@ class Owners(Check):
 
         return s
 
-    def _drop_objects(self, i: int) -> str:
-        return dedent(
-            f"""
-            > DROP SECRET owner_secret{i}
-            > DROP MATERIALIZED VIEW owner_mv{i}
-            > DROP VIEW owner_v{i}
-            > DROP INDEX owner_i{i}
-            > DROP TABLE owner_t{i}
-            > DROP TYPE owner_type{i}
-            > DROP CONNECTION owner_csr_conn{i}
-            > DROP CONNECTION owner_kafka_conn{i}
-            > DROP SCHEMA owner_schema{i}
-            > DROP DATABASE owner_db{i}
-            """
+    def _drop_objects(
+        self, role: str, i: int, expensive: bool = False, success: bool = True
+    ) -> str:
+        cmds = [
+            f"DROP SECRET owner_secret{i}",
+            f"DROP MATERIALIZED VIEW owner_mv{i}",
+            f"DROP VIEW owner_v{i}",
+            f"DROP INDEX owner_i{i}",
+            f"DROP TABLE owner_t{i}",
+            f"DROP TYPE owner_type{i}",
+            f"DROP CONNECTION owner_csr_conn{i}",
+            f"DROP CONNECTION owner_kafka_conn{i}",
+            f"DROP SCHEMA owner_schema{i}",
+            f"DROP DATABASE owner_db{i}",
+        ]
+        if expensive:
+            cmds += [
+                f"DROP SOURCE owner_source{i}",
+                f"DROP SINK owner_sink{i}",
+                f"DROP CLUSTER owner_cluster{i}",
+            ]
+        if success:
+            return (
+                f"$ postgres-execute connection=postgres://{role}@materialized:6875/materialize\n"
+                + "\n".join(cmds)
+                + "\n"
+            )
+        if role != "materialize":
+            raise ValueError(
+                "Can't check for failures with user other than materialize"
+            )
+        return "\n".join(
+            [f"! {cmd} CASCADE\ncontains: must be owner of\n" for cmd in cmds]
         )
 
     def _can_run(self) -> bool:
@@ -63,19 +91,25 @@ class Owners(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(
-            "> CREATE ROLE owner_role_01"
+            self._enable_rbac_checks(True)
+            + "> CREATE ROLE owner_role_01 CREATEDB CREATECLUSTER"
             + self._create_objects("owner_role_01", 1, expensive=True)
+            + self._enable_rbac_checks(False)
         )
 
     def manipulate(self) -> List[Testdrive]:
         return [
             Testdrive(s)
             for s in [
-                self._create_objects("owner_role_01", 2)
-                + "> CREATE ROLE owner_role_02",
-                self._create_objects("owner_role_01", 3)
+                self._enable_rbac_checks(True)
+                + self._create_objects("owner_role_01", 2)
+                + "> CREATE ROLE owner_role_02 CREATEDB CREATECLUSTER"
+                + self._enable_rbac_checks(False),
+                self._enable_rbac_checks(True)
+                + self._create_objects("owner_role_01", 3)
                 + self._create_objects("owner_role_02", 4)
-                + "> CREATE ROLE owner_role_03",
+                + "> CREATE ROLE owner_role_03 CREATEDB CREATECLUSTER"
+                + self._enable_rbac_checks(False),
             ]
         ]
 
@@ -87,13 +121,20 @@ class Owners(Check):
         )
         # TODO: Fix owners in dbs, schemas, types after #18414 is fixed
         return Testdrive(
-            self._create_objects("owner_role_01", 5)
+            self._enable_rbac_checks(True)
+            # materialize role is not allowed to drop the objects since it is
+            # not the owner, verify this:
+            + self._drop_objects("materialize", 1, success=False, expensive=True)
+            + self._drop_objects("materialize", 2, success=False)
+            + self._drop_objects("materialize", 3, success=False)
+            + self._drop_objects("materialize", 4, success=False)
+            + self._create_objects("owner_role_01", 5)
             + self._create_objects("owner_role_02", 6)
             + self._create_objects("owner_role_03", 7)
             + dedent(
                 f"""
                 $ psql-execute command="\\l owner_db*"
-                \                             List of databases
+                \\                             List of databases
                    Name    |     Owner     | Encoding | Collate | Ctype | Access privileges
                 -----------+---------------+----------+---------+-------+-------------------
                  owner_db1 | {owner1} | UTF8     | C       | C     |
@@ -105,7 +146,7 @@ class Owners(Check):
                  owner_db7 | owner_role_03 | UTF8     | C       | C     |
 
                 $ psql-execute command="\\dn owner_schema*"
-                \        List of schemas
+                \\        List of schemas
                      Name      |     Owner
                 ---------------+---------------
                  owner_schema1 | {owner1}
@@ -117,7 +158,7 @@ class Owners(Check):
                  owner_schema7 | owner_role_03
 
                 $ psql-execute command="\\dt owner_t*"
-                \             List of relations
+                \\             List of relations
                  Schema |   Name   | Type  |     Owner
                 --------+----------+-------+---------------
                  public | owner_t1 | table | {owner1}
@@ -129,7 +170,7 @@ class Owners(Check):
                  public | owner_t7 | table | owner_role_03
 
                 $ psql-execute command="\\di owner_i*"
-                \                  List of relations
+                \\                  List of relations
                  Schema |   Name   | Type  |     Owner     |  Table
                 --------+----------+-------+---------------+----------
                  public | owner_i1 | index | {owner1} | owner_t1
@@ -141,7 +182,7 @@ class Owners(Check):
                  public | owner_i7 | index | owner_role_03 | owner_t7
 
                 $ psql-execute command="\\dv owner_v*"
-                \            List of relations
+                \\            List of relations
                  Schema |   Name   | Type |     Owner
                 --------+----------+------+---------------
                  public | owner_v1 | view | {owner1}
@@ -153,7 +194,7 @@ class Owners(Check):
                  public | owner_v7 | view | owner_role_03
 
                 $ psql-execute command="\\dmv owner_mv*"
-                \                   List of relations
+                \\                   List of relations
                  Schema |   Name    |       Type        |     Owner
                 --------+-----------+-------------------+---------------
                  public | owner_mv1 | materialized view | {owner1}
@@ -195,7 +236,8 @@ class Owners(Check):
                 owner_cluster_r1 {owner1}
                 """
             )
-            + self._drop_objects(5)
-            + self._drop_objects(6)
-            + self._drop_objects(7)
+            + self._drop_objects("owner_role_01", 5)
+            + self._drop_objects("owner_role_02", 6)
+            + self._drop_objects("owner_role_03", 7)
+            + self._enable_rbac_checks(False)
         )
