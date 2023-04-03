@@ -12,9 +12,9 @@
 //! Raw sources are streams (currently, Timely streams) of data directly
 //! produced by the upstream service. The main export of this module is
 //! [`create_raw_source`], which turns
-//! [`RawSourceCreationConfigs`](RawSourceCreationConfig),
-//! [`SourceConnections`](mz_storage_client::types::sources::SourceConnection), and
-//! [`SourceReader`] implementations into the aforementioned streams.
+//! [`RawSourceCreationConfigs`](RawSourceCreationConfig) and
+//! [`SourceConnections`](mz_storage_client::types::sources::SourceConnection)
+//! implementations into the aforementioned streams.
 //!
 //! The full source, which is the _differential_ stream that represents the
 //! actual object created by a `CREATE SOURCE` statement, is created by
@@ -30,11 +30,9 @@ use differential_dataflow::Hashable;
 use mz_ore::cast::CastFrom;
 use mz_repr::GlobalId;
 
-use crate::source::types::SourceMessageType;
+use crate::source::types::SourceMessage;
 use crate::source::types::SourceReaderError;
-use crate::source::types::{NextMessage, SourceMessage, SourceReader};
 
-mod commit;
 pub mod generator;
 mod kafka;
 pub mod metrics;
@@ -47,12 +45,10 @@ mod source_reader_pipeline;
 pub mod testscript;
 pub mod types;
 
-pub use generator::LoadGeneratorSourceReader;
 pub use kafka::KafkaSourceReader;
 pub use postgres::PostgresSourceReader;
 pub use source_reader_pipeline::create_raw_source;
 pub use source_reader_pipeline::RawSourceCreationConfig;
-pub use testscript::TestScriptSourceReader;
 
 /// Returns true if the given source id/worker id is responsible for handling the given
 /// partition.

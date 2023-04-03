@@ -8,11 +8,16 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::Context;
-use std::collections::{BTreeMap, VecDeque};
+use std::any::Any;
+use std::collections::BTreeMap;
+use std::convert::Infallible;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use differential_dataflow::{AsCollection, Collection};
+use futures::StreamExt;
 use maplit::btreemap;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
@@ -23,29 +28,24 @@ use rdkafka::topic_partition_list::Offset;
 use rdkafka::types::RDKafkaRespErr;
 use rdkafka::{ClientContext, Message, TopicPartitionList};
 use timely::dataflow::operators::Capability;
+use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
-use timely::scheduling::activate::SyncActivator;
 use tokio::runtime::Handle as TokioHandle;
+use tokio::sync::Notify;
 use tracing::{error, info, trace, warn};
 
 use mz_kafka_util::client::{BrokerRewritingClientContext, MzClientContext};
-use mz_ore::collections::HashMap;
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
-use mz_repr::{adt::jsonb::Jsonb, GlobalId};
+use mz_repr::{adt::jsonb::Jsonb, Diff, GlobalId};
 use mz_storage_client::types::connections::{ConnectionContext, StringOrSecret};
-use mz_storage_client::types::sources::encoding::SourceDataEncoding;
-use mz_storage_client::types::sources::{KafkaSourceConnection, MzOffset};
+use mz_storage_client::types::sources::{KafkaSourceConnection, MzOffset, SourceTimestamp};
+use mz_timely_util::antichain::AntichainExt;
+use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
 use mz_timely_util::order::Partitioned;
 
-use crate::source::commit::LogCommitter;
-
-use crate::source::source_reader_pipeline::HealthStatus;
-use crate::source::types::{OffsetCommitter, SourceConnectionBuilder};
-use crate::source::{
-    NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
-};
-
 use self::metrics::KafkaPartitionMetrics;
+use crate::source::types::{HealthStatus, HealthStatusUpdate, SourceReaderMetrics, SourceRender};
+use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 mod metrics;
 
@@ -62,7 +62,7 @@ pub struct KafkaSourceReader {
     /// Kafka consumer for this source
     consumer: Arc<BaseConsumer<BrokerRewritingClientContext<GlueConsumerContext>>>,
     /// List of consumers. A consumer should be assigned per partition to guarantee fairness
-    partition_consumers: VecDeque<PartitionConsumer>,
+    partition_consumers: Vec<PartitionConsumer>,
     /// Worker ID
     worker_id: usize,
     /// Total count of workers
@@ -88,13 +88,7 @@ pub struct KafkaSourceReader {
     /// The latest status detected by the metadata refresh thread.
     health_status: Arc<Mutex<Option<HealthStatus>>>,
     /// Per partition capabilities used to produce messages
-    partition_data_capabilities:
-        HashMap<PartitionId, Capability<Partitioned<PartitionId, MzOffset>>>,
-    partition_upper_capabilities:
-        HashMap<PartitionId, Capability<Partitioned<PartitionId, MzOffset>>>,
-    /// A capability representing the range partitions not yet seen _by this worker_.
-    data_capability: Capability<Partitioned<PartitionId, MzOffset>>,
-    upper_capability: Capability<Partitioned<PartitionId, MzOffset>>,
+    partition_capabilities: BTreeMap<PartitionId, Capability<Partitioned<PartitionId, MzOffset>>>,
 }
 
 pub struct KafkaOffsetCommiter {
@@ -104,43 +98,52 @@ pub struct KafkaOffsetCommiter {
     /// Total count of workers
     worker_count: usize,
     topic_name: String,
-    logger: LogCommitter,
     consumer: Arc<BaseConsumer<BrokerRewritingClientContext<GlueConsumerContext>>>,
 }
 
-impl SourceConnectionBuilder for KafkaSourceConnection {
-    type Reader = KafkaSourceReader;
-    type OffsetCommitter = KafkaOffsetCommiter;
+impl SourceRender for KafkaSourceConnection {
+    type Key = Option<Vec<u8>>;
+    type Value = Option<Vec<u8>>;
+    type Time = Partitioned<PartitionId, MzOffset>;
 
-    fn into_reader(
+    fn render<G: Scope<Timestamp = Partitioned<PartitionId, MzOffset>>>(
         self,
-        source_name: String,
-        source_id: GlobalId,
-        worker_id: usize,
-        worker_count: usize,
-        consumer_activator: SyncActivator,
-        mut data_capability: Capability<Partitioned<PartitionId, MzOffset>>,
-        mut upper_capability: Capability<Partitioned<PartitionId, MzOffset>>,
-        resume_upper: Antichain<<Self::Reader as SourceReader>::Time>,
-        _: SourceDataEncoding,
-        metrics: crate::source::metrics::SourceBaseMetrics,
+        scope: &mut G,
+        config: RawSourceCreationConfig,
         connection_context: ConnectionContext,
-    ) -> Result<(Self::Reader, Self::OffsetCommitter), anyhow::Error> {
-        let KafkaSourceConnection {
-            connection,
-            connection_id,
-            topic,
-            group_id_prefix,
-            environment_id,
-            ..
-        } = self;
-        let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
-        let health_status = Arc::new(Mutex::new(None));
-        let consumer: BaseConsumer<_> =
-            TokioHandle::current().block_on(connection.create_with_context(
+        resume_uppers: impl futures::Stream<Item = Antichain<Partitioned<PartitionId, MzOffset>>>
+            + 'static,
+    ) -> (
+        Collection<G, Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>, Diff>,
+        Option<Stream<G, Infallible>>,
+        Stream<G, HealthStatusUpdate>,
+        Rc<dyn Any>,
+    ) {
+        let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
+
+        let (mut data_output, stream) = builder.new_output();
+        let (mut health_output, health_stream) = builder.new_output();
+
+        let button = builder.build(move |mut capabilities| async move {
+            let health_cap = capabilities.pop().unwrap();
+            let mut data_cap = capabilities.pop().unwrap();
+            assert!(capabilities.is_empty());
+
+            let KafkaSourceConnection {
+                connection,
+                connection_id,
+                topic,
+                group_id_prefix,
+                environment_id,
+                ..
+            } = self;
+            let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
+            let health_status = Arc::new(Mutex::new(None));
+            let notificator = Arc::new(Notify::new());
+            let consumer = TokioHandle::current().block_on(connection.create_with_context(
                 &connection_context,
                 GlueConsumerContext {
-                    activator: consumer_activator,
+                    notificator: Arc::clone(&notificator),
                     stats_tx,
                 },
                 &btreemap! {
@@ -183,141 +186,176 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
                         group_id_prefix.unwrap_or_else(String::new),
                         environment_id,
                         connection_id,
-                        source_id,
+                        config.id,
                     ),
                 },
-            ))?;
-        let consumer = Arc::new(consumer);
+            ));
 
-        // Start offsets is a map from partition to the next offset to read
-        // from.
-        let mut start_offsets: BTreeMap<_, i64> = self
-            .start_offsets
-            .into_iter()
-            .filter(|(pid, _offset)| {
-                crate::source::responsible_for(&source_id, worker_id, worker_count, pid)
-            })
-            .map(|(k, v)| (k, v))
-            .collect();
-
-        let mut partition_data_capabilities = HashMap::new();
-        let mut partition_upper_capabilities = HashMap::new();
-        let mut max_pid = None;
-        for ts in resume_upper.elements() {
-            if let Some(pid) = ts.partition() {
-                max_pid = std::cmp::max(max_pid, Some(*pid));
-                if crate::source::responsible_for(&source_id, worker_id, worker_count, pid) {
-                    let restored_offset = i64::try_from(ts.timestamp().offset)
-                        .expect("restored kafka offsets must fit into i64");
-                    if let Some(start_offset) = start_offsets.get_mut(pid) {
-                        *start_offset = std::cmp::max(restored_offset, *start_offset);
-                    } else {
-                        start_offsets.insert(*pid, restored_offset);
-                    }
-
-                    let part_ts = Partitioned::with_partition(*pid, ts.timestamp().clone());
-                    partition_data_capabilities.insert(*pid, data_capability.delayed(&part_ts));
-                    partition_upper_capabilities.insert(*pid, upper_capability.delayed(&part_ts));
+            let consumer = match consumer {
+                Ok(consumer) => Arc::new(consumer),
+                Err(e) => {
+                    let update = HealthStatusUpdate {
+                        update: HealthStatus::StalledWithError {
+                            error: format!("failed creating kafka consumer: {e:#}"),
+                            hint: None,
+                        },
+                        should_halt: true,
+                    };
+                    health_output.give(&health_cap, update).await;
+                    // IMPORTANT: wedge forever until the `SuspendAndRestart` is processed.
+                    // Returning would incorrectly present to the remap operator as progress to the
+                    // empty frontier which would be incorrectly recorded to the remap shard.
+                    std::future::pending::<()>().await;
+                    unreachable!("pending future never returns");
                 }
-            }
-        }
-        let future_ts = Partitioned::with_range(max_pid, None, MzOffset::from(0));
-        data_capability.downgrade(&future_ts);
-        upper_capability.downgrade(&future_ts);
+            };
 
-        info!(
-            source_id = source_id.to_string(),
-            worker_id = worker_id,
-            num_workers = worker_count,
-            "into_reader: instantiating Kafka source reader at offsets {start_offsets:?}"
-        );
-
-        let partition_info = Arc::new(Mutex::new(None));
-        let metadata_thread_handle = {
-            let partition_info = Arc::downgrade(&partition_info);
-            let topic = topic.clone();
-            let consumer = Arc::clone(&consumer);
-            let metadata_refresh_interval = connection
-                .options
-                .get("topic.metadata.refresh.interval.ms")
-                // Safe conversion: statement::extract_config enforces that option is a value
-                // between 0 and 3600000
-                .map(|s| match s {
-                    StringOrSecret::String(s) => Duration::from_millis(s.parse().unwrap()),
-                    StringOrSecret::Secret(_) => unreachable!(),
-                })
-                // By default, rdkafka will check for updated metadata every five minutes:
-                // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
-                .unwrap_or_else(|| Duration::from_secs(15));
-
-            // We want a fairly low ceiling on our polling frequency, since we rely
-            // on this heartbeat to determine the health of our Kafka connection.
-            let metadata_refresh_frequency = metadata_refresh_interval.min(Duration::from_secs(60));
-
-            let status_report = Arc::clone(&health_status);
-
-            thread::Builder::new()
-                .name("kafka-metadata".to_string())
-                .spawn(move || {
-                    trace!(
-                        source_id = source_id.to_string(),
-                        worker_id = worker_id,
-                        num_workers = worker_count,
-                        refresh_frequency =? metadata_refresh_frequency,
-                        "kafka metadata thread: starting..."
-                    );
-                    while let Some(partition_info) = partition_info.upgrade() {
-                        let result =
-                            get_kafka_partitions(&consumer, &topic, Duration::from_secs(30));
-                        trace!(
-                            source_id = source_id.to_string(),
-                            worker_id = worker_id,
-                            num_workers = worker_count,
-                            "kafka metadata thread: metadata fetch result: {:?}",
-                            result
-                        );
-                        match result {
-                            Ok(info) => {
-                                *partition_info.lock().unwrap() = Some(info);
-                                trace!(
-                                    source_id = source_id.to_string(),
-                                    worker_id = worker_id,
-                                    num_workers = worker_count,
-                                    "kafka metadata thread: updated partition metadata info",
-                                );
-                                *status_report.lock().unwrap() = Some(HealthStatus::Running);
-                                thread::park_timeout(metadata_refresh_frequency);
-                            }
-                            Err(e) => {
-                                *status_report.lock().unwrap() =
-                                    Some(HealthStatus::StalledWithError {
-                                        error: format!("{:#}", e),
-                                        hint: None,
-                                    });
-                                thread::park_timeout(metadata_refresh_frequency);
-                            }
-                        }
-                    }
-                    info!(
-                        source_id = source_id.to_string(),
-                        worker_id = worker_id,
-                        num_workers = worker_count,
-                        "kafka metadata thread: partition info has been dropped; shutting down."
+            // Start offsets is a map from partition to the next offset to read
+            // from.
+            let mut start_offsets: BTreeMap<_, i64> = self
+                .start_offsets
+                .into_iter()
+                .filter(|(pid, _offset)| {
+                    crate::source::responsible_for(
+                        &config.id,
+                        config.worker_id,
+                        config.worker_count,
+                        pid,
                     )
                 })
-                .unwrap()
-                .unpark_on_drop()
-        };
-        let partition_ids = start_offsets.keys().copied().collect();
-        Ok((
-            KafkaSourceReader {
+                .map(|(k, v)| (k, v))
+                .collect();
+
+            let mut partition_capabilities = BTreeMap::new();
+            let mut max_pid = None;
+            let resume_upper = Antichain::from_iter(
+                config
+                    .source_resume_upper
+                    .iter()
+                    .map(Partitioned::<_, _>::decode_row),
+            );
+            for ts in resume_upper.elements() {
+                if let Some(pid) = ts.partition() {
+                    max_pid = std::cmp::max(max_pid, Some(*pid));
+                    if crate::source::responsible_for(
+                        &config.id,
+                        config.worker_id,
+                        config.worker_count,
+                        pid,
+                    ) {
+                        let restored_offset = i64::try_from(ts.timestamp().offset)
+                            .expect("restored kafka offsets must fit into i64");
+                        if let Some(start_offset) = start_offsets.get_mut(pid) {
+                            *start_offset = std::cmp::max(restored_offset, *start_offset);
+                        } else {
+                            start_offsets.insert(*pid, restored_offset);
+                        }
+
+                        let part_ts = Partitioned::with_partition(*pid, ts.timestamp().clone());
+                        partition_capabilities.insert(*pid, data_cap.delayed(&part_ts));
+                    }
+                }
+            }
+            let future_ts = Partitioned::with_range(max_pid, None, MzOffset::from(0));
+            data_cap.downgrade(&future_ts);
+
+            info!(
+                source_id = config.id.to_string(),
+                worker_id = config.worker_id,
+                num_workers = config.worker_count,
+                "instantiating Kafka source reader at offsets {start_offsets:?}"
+            );
+
+            let partition_info = Arc::new(Mutex::new(None));
+            let metadata_thread_handle = {
+                let partition_info = Arc::downgrade(&partition_info);
+                let topic = topic.clone();
+                let consumer = Arc::clone(&consumer);
+                let metadata_refresh_interval = connection
+                    .options
+                    .get("topic.metadata.refresh.interval.ms")
+                    // Safe conversion: statement::extract_config enforces that option is a value
+                    // between 0 and 3600000
+                    .map(|s| match s {
+                        StringOrSecret::String(s) => Duration::from_millis(s.parse().unwrap()),
+                        StringOrSecret::Secret(_) => unreachable!(),
+                    })
+                    // By default, rdkafka will check for updated metadata every five minutes:
+                    // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
+                    .unwrap_or_else(|| Duration::from_secs(15));
+
+                // We want a fairly low ceiling on our polling frequency, since we rely
+                // on this heartbeat to determine the health of our Kafka connection.
+                let metadata_refresh_frequency =
+                    metadata_refresh_interval.min(Duration::from_secs(60));
+
+                let status_report = Arc::clone(&health_status);
+
+                thread::Builder::new()
+                    .name("kafka-metadata".to_string())
+                    .spawn(move || {
+                        trace!(
+                            source_id = config.id.to_string(),
+                            worker_id = config.worker_id,
+                            num_workers = config.worker_count,
+                            refresh_frequency =? metadata_refresh_frequency,
+                            "kafka metadata thread: starting..."
+                        );
+                        while let Some(partition_info) = partition_info.upgrade() {
+                            let result =
+                                get_kafka_partitions(&consumer, &topic, Duration::from_secs(30));
+                            trace!(
+                                source_id = config.id.to_string(),
+                                worker_id = config.worker_id,
+                                num_workers = config.worker_count,
+                                "kafka metadata thread: metadata fetch result: {:?}",
+                                result
+                            );
+                            match result {
+                                Ok(info) => {
+                                    *partition_info.lock().unwrap() = Some(info);
+                                    trace!(
+                                        source_id = config.id.to_string(),
+                                        worker_id = config.worker_id,
+                                        num_workers = config.worker_count,
+                                        "kafka metadata thread: updated partition metadata info",
+                                    );
+                                    *status_report.lock().unwrap() = Some(HealthStatus::Running);
+                                    thread::park_timeout(metadata_refresh_frequency);
+                                }
+                                Err(e) => {
+                                    *status_report.lock().unwrap() =
+                                        Some(HealthStatus::StalledWithError {
+                                            error: format!("{:#}", e),
+                                            hint: None,
+                                        });
+                                    thread::park_timeout(metadata_refresh_frequency);
+                                }
+                            }
+                        }
+                        info!(
+                            source_id = config.id.to_string(),
+                            worker_id = config.worker_id,
+                            num_workers = config.worker_count,
+                            "kafka metadata thread: partition info has been dropped; shutting down."
+                        )
+                    })
+                    .unwrap()
+                    .unpark_on_drop()
+            };
+            let partition_ids = start_offsets.keys().copied().collect();
+
+            let source_metrics = SourceReaderMetrics::new(&config.base_metrics, config.id);
+            let offset_commit_metrics = source_metrics.offset_commit_metrics();
+
+            let mut reader = KafkaSourceReader {
                 topic_name: topic.clone(),
-                source_name,
-                id: source_id,
-                partition_consumers: VecDeque::new(),
+                source_name: config.name.clone(),
+                id: config.id,
+                partition_consumers: Vec::new(),
                 consumer: Arc::clone(&consumer),
-                worker_id,
-                worker_count,
+                worker_id: config.worker_id,
+                worker_count: config.worker_count,
                 last_offsets: BTreeMap::new(),
                 start_offsets,
                 stats_rx,
@@ -325,161 +363,178 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
                 include_headers: self.include_headers.is_some(),
                 _metadata_thread_handle: metadata_thread_handle,
                 partition_metrics: KafkaPartitionMetrics::new(
-                    metrics,
+                    config.base_metrics,
                     partition_ids,
                     topic.clone(),
-                    source_id,
+                    config.id,
                 ),
                 health_status,
-                partition_data_capabilities,
-                partition_upper_capabilities,
-                data_capability,
-                upper_capability,
-            },
-            KafkaOffsetCommiter {
-                source_id,
-                worker_id,
-                worker_count,
-                topic_name: topic,
-                logger: LogCommitter {
-                    source_id,
-                    worker_id,
-                    worker_count,
-                },
+                partition_capabilities,
+            };
+
+            let offset_committer = KafkaOffsetCommiter {
+                source_id: config.id,
+                worker_id: config.worker_id,
+                worker_count: config.worker_count,
+                topic_name: topic.clone(),
                 consumer,
-            },
-        ))
+            };
+
+            let offset_commit_loop = async move {
+                tokio::pin!(resume_uppers);
+                while let Some(frontier) = resume_uppers.next().await {
+                    if let Err(e) = offset_committer.commit_offsets(frontier.clone()).await {
+                        offset_commit_metrics.offset_commit_failures.inc();
+                        tracing::warn!(
+                            %e,
+                            "timely-{} source({}) failed to commit offsets: resume_upper={}",
+                            config.id,
+                            config.worker_id,
+                            frontier.pretty()
+                        );
+                    }
+                }
+            };
+            tokio::pin!(offset_commit_loop);
+
+            loop {
+                let partition_info = reader.partition_info.lock().unwrap().take();
+                if let Some(partitions) = partition_info {
+                    let mut max_pid = None;
+                    for pid in partitions {
+                        max_pid = std::cmp::max(max_pid, Some(pid));
+                        let is_responsible = crate::source::responsible_for(
+                            &reader.id,
+                            reader.worker_id,
+                            reader.worker_count,
+                            pid,
+                        );
+                        if is_responsible {
+                            reader.ensure_partition(pid);
+                            let part_min_ts = Partitioned::with_partition(pid, MzOffset::from(0));
+                            reader
+                                .partition_capabilities
+                                .entry(pid)
+                                .or_insert_with(|| data_cap.delayed(&part_min_ts));
+                        }
+                    }
+                    let future_ts = Partitioned::with_range(max_pid, None, MzOffset::from(0));
+                    data_cap.downgrade(&future_ts);
+                }
+
+                // Poll the consumer once. We split the consumer's partitions out into separate
+                // queues and poll those individually, but it's still necessary to drive logic that
+                // consumes from rdkafka's internal event queue, such as statistics callbacks.
+                //
+                // Additionally, assigning topics and splitting them off into separate queues is
+                // not atomic, so we expect to see at least some messages to show up when polling
+                // the consumer directly.
+                if let Some(result) = reader.consumer.poll(Duration::from_secs(0)) {
+                    match result {
+                        Err(e) => {
+                            let error = format!(
+                                "kafka error when polling consumer for source: {} topic: {} : {}",
+                                reader.source_name, reader.topic_name, e
+                            );
+                            let status = HealthStatusUpdate::from(HealthStatus::StalledWithError {
+                                error,
+                                hint: None,
+                            });
+                            health_output.give(&health_cap, status).await;
+                        }
+                        Ok(message) => {
+                            let (message, ts) =
+                                construct_source_message(&message, reader.include_headers);
+                            if let Some((msg, time, diff)) = reader.handle_message(message, ts) {
+                                let pid = time.partition().unwrap();
+                                let part_cap = &reader.partition_capabilities[pid];
+                                data_output.give(part_cap, (Ok(msg), time, diff)).await;
+                            }
+                        }
+                    }
+                }
+
+                reader.update_stats();
+
+                // Take the consumers temporarily to get around borrow checker errors
+                let mut consumers = std::mem::take(&mut reader.partition_consumers);
+                for consumer in consumers.iter_mut() {
+                    while let Some(message) = consumer.get_next_message().transpose() {
+                        let message = match message {
+                            Ok((msg, ts)) => Ok(reader.handle_message(msg, ts)),
+                            Err(err) => Err(err),
+                        };
+                        match message {
+                            Ok(Some((msg, time, diff))) => {
+                                let pid = time.partition().unwrap();
+                                let part_cap = &reader.partition_capabilities[pid];
+                                data_output.give(part_cap, (Ok(msg), time, diff)).await;
+                            }
+                            Ok(None) => continue,
+                            Err(err) => {
+                                let pid = consumer.pid();
+                                let last_offset = reader
+                                    .last_offsets
+                                    .get(&pid)
+                                    .expect("partition known to be installed");
+
+                                let status = HealthStatus::StalledWithError {
+                                    error: format!(
+                                        "error consuming from source: {} topic: {topic}: partition:\
+                                        {pid} last processed offset: {last_offset} : {err}",
+                                        config.name
+                                    ),
+                                    hint: None,
+                                };
+                                health_output.give(&health_cap, status.into()).await;
+                            }
+                        }
+                    }
+                }
+                // We can now put them back
+                assert!(reader.partition_consumers.is_empty());
+                reader.partition_consumers = consumers;
+
+                for (pid, last_offset) in reader.last_offsets.iter() {
+                    let pid_upper = MzOffset::from(u64::try_from(*last_offset + 1).unwrap());
+                    let upper = Partitioned::with_partition(*pid, pid_upper);
+                    let part_cap = reader.partition_capabilities.get_mut(pid).unwrap();
+                    part_cap.downgrade(&upper);
+                }
+
+                let status = reader.health_status.lock().unwrap().take();
+                if let Some(status) = status {
+                    health_output.give(&health_cap, status.into()).await;
+                }
+
+                // Wait to be notified while also making progress with offset committing
+                tokio::select! {
+                    // TODO(petrosagg): remove the timeout and rely purely on librdkafka waking us
+                    // up
+                    _  = tokio::time::timeout(Duration::from_secs(1), notificator.notified()) => {},
+                    // This future is not cancel safe but we are only passing a reference to it in
+                    // the select! loop so the future stays on the stack and never gets cancelled
+                    // until the end of the function.
+                    _ = offset_commit_loop.as_mut() => {},
+                }
+            }
+        });
+
+        (
+            stream.as_collection(),
+            None,
+            health_stream,
+            Rc::new(button.press_on_drop()),
+        )
     }
 }
 
-impl SourceReader for KafkaSourceReader {
-    type Key = Option<Vec<u8>>;
-    type Value = Option<Vec<u8>>;
-    type Time = Partitioned<PartitionId, MzOffset>;
-    type Diff = u32;
-
-    /// This function polls from the next consumer for which a message is available. This function
-    /// polls the set round-robin: when a consumer is polled, it is placed at the back of the
-    /// queue.
-    ///
-    /// If a message has an offset that is smaller than the next expected offset for this consumer
-    /// (and this partition) we skip this message, and seek to the appropriate offset
-    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Time, Self::Diff> {
-        let partition_info = self.partition_info.lock().unwrap().take();
-        if let Some(partitions) = partition_info {
-            let mut max_pid = None;
-            for pid in partitions {
-                max_pid = std::cmp::max(max_pid, Some(pid));
-                let is_responsible = crate::source::responsible_for(
-                    &self.id,
-                    self.worker_id,
-                    self.worker_count,
-                    pid,
-                );
-                if is_responsible {
-                    self.ensure_partition(pid);
-                    let part_min_ts = Partitioned::with_partition(pid, MzOffset::from(0));
-                    self.partition_data_capabilities
-                        .entry(pid)
-                        .or_insert_with(|| self.data_capability.delayed(&part_min_ts));
-                    self.partition_upper_capabilities
-                        .entry(pid)
-                        .or_insert_with(|| self.upper_capability.delayed(&part_min_ts));
-                }
-            }
-            let future_ts = Partitioned::with_range(max_pid, None, MzOffset::from(0));
-            self.data_capability.downgrade(&future_ts);
-            self.upper_capability.downgrade(&future_ts);
-        }
-        let mut next_message = NextMessage::Pending;
-
-        // Poll the consumer once. We split the consumer's partitions out into separate queues and
-        // poll those individually, but it's still necessary to drive logic that consumes from
-        // rdkafka's internal event queue, such as statistics callbacks.
-        //
-        // Additionally, assigning topics and splitting them off into separate queues is not
-        // atomic, so we expect to see at least some messages to show up when polling the consumer
-        // directly.
-        if let Some(result) = self.consumer.poll(Duration::from_secs(0)) {
-            match result {
-                Err(e) => {
-                    let message = format!(
-                        "kafka error when polling consumer for source: {} topic: {} : {}",
-                        self.source_name, self.topic_name, e
-                    );
-                    next_message = NextMessage::Ready(SourceMessageType::status(
-                        HealthStatus::StalledWithError {
-                            error: message,
-                            hint: None,
-                        },
-                    ))
-                }
-                Ok(message) => {
-                    let (message, ts) = construct_source_message(&message, self.include_headers);
-                    next_message = self.handle_message(Ok(message), ts);
-                }
-            }
-        }
-
-        self.update_stats();
-
-        let consumer_count = self.get_partition_consumers_count();
-        let mut attempts = 0;
-        while attempts < consumer_count {
-            // First, see if we have a message already, either from polling the consumer, above, or
-            // from polling the partition queues below.
-            if let NextMessage::Ready(_) = next_message {
-                // Found a message, exit the loop and return message
-                break;
-            }
-
-            let message = self.poll_from_next_queue();
-            attempts += 1;
-
-            match message {
-                Ok(Some((message, ts))) => {
-                    next_message = self.handle_message(Ok(message), ts);
-                }
-                Err(error) => {
-                    next_message = NextMessage::Ready(SourceMessageType::status(
-                        HealthStatus::StalledWithError { error, hint: None },
-                    ))
-                }
-                Ok(None) => {
-                    // no message in this queue; keep looping
-                }
-            }
-        }
-        if let Some(status) = self
-            .health_status
-            .lock()
-            .expect("locking error mutex")
-            .take()
-        {
-            // If we're blocking _and_ kafka is reporting an error, pass it on.
-            // Otherwise, discard it. It's possible for us to experience an error while there
-            // are more messages in the queue; in that case, we'll rely on the client reporting that
-            // error again in the future if the error condition persists.
-            if let NextMessage::Pending = next_message {
-                next_message = NextMessage::Ready(SourceMessageType::status(status))
-            }
-        }
-
-        next_message
-    }
-}
-
-#[async_trait::async_trait]
-impl OffsetCommitter<Partitioned<PartitionId, MzOffset>> for KafkaOffsetCommiter {
+impl KafkaOffsetCommiter {
     async fn commit_offsets(
         &self,
         frontier: Antichain<Partitioned<PartitionId, MzOffset>>,
     ) -> Result<(), anyhow::Error> {
-        // Log frontier before we potentially fail to commit them.
-        self.logger.commit_offsets(frontier.clone()).await?;
-
         use rdkafka::consumer::CommitMode;
-        use rdkafka::topic_partition_list::Offset;
 
         // Generate a list of partitions that this worker is responsible for
         let mut offsets = vec![];
@@ -495,13 +550,6 @@ impl OffsetCommitter<Partitioned<PartitionId, MzOffset>> for KafkaOffsetCommiter
                 }
             }
         }
-
-        tracing::trace!(
-            ?offsets,
-            "timely-{} source({}) attempting to commit kafka offsets",
-            self.worker_id,
-            self.source_id,
-        );
 
         if !offsets.is_empty() {
             let mut tpl = TopicPartitionList::new();
@@ -535,13 +583,6 @@ impl KafkaSourceReader {
         let prev = self.last_offsets.insert(pid, start_offset - 1);
 
         assert!(prev.is_none());
-    }
-
-    /// Returns a count of total number of consumers for this source
-    fn get_partition_consumers_count(&self) -> i32 {
-        // Note: the number of consumers is guaranteed to always be smaller than
-        // expected_partition_count (i32)
-        self.partition_consumers.len().try_into().unwrap()
     }
 
     /// Creates a new partition queue for `partition_id`.
@@ -591,7 +632,7 @@ impl KafkaSourceReader {
             .split_partition_queue(&self.topic_name, partition_id)
             .expect("partition known to be valid");
         partition_queue.set_nonempty_callback(move || context.inner().activate());
-        self.partition_consumers.push_front(PartitionConsumer::new(
+        self.partition_consumers.push(PartitionConsumer::new(
             partition_id,
             partition_queue,
             self.include_headers,
@@ -695,53 +736,17 @@ impl KafkaSourceReader {
         }
     }
 
-    /// Polls from the next partition queue and returns the message, if any.
-    ///
-    /// We maintain the list of partition queues in a queue, and add queues that we polled from to
-    /// the end of the queue. We thus swing through all available partition queues in a somewhat
-    /// fair manner.
-    fn poll_from_next_queue(
-        &mut self,
-    ) -> Result<
-        Option<(
-            SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
-            (PartitionId, MzOffset),
-        )>,
-        String,
-    > {
-        let mut partition_queue = self.partition_consumers.pop_front().unwrap();
-
-        let message = partition_queue
-            .get_next_message()
-            .map_err(|e| {
-                let pid = partition_queue.pid();
-                let last_offset = self
-                    .last_offsets
-                    .get(&pid)
-                    .expect("partition known to be installed");
-                format!(
-                    "kafka error consuming from source: {} topic: {}: partition: {} last processed offset: {} : {}",
-                    self.source_name,
-                    self.topic_name,
-                    pid,
-                    last_offset,
-                    e
-                )
-            });
-
-        self.partition_consumers.push_back(partition_queue);
-
-        message
-    }
-
     /// Checks if the given message is viable for emission. This checks if the message offset is
     /// past the expected offset and seeks the consumer if it is not.
     fn handle_message(
         &mut self,
-        message: Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, SourceReaderError>,
+        message: SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
         (partition, offset): (PartitionId, MzOffset),
-    ) -> NextMessage<Option<Vec<u8>>, Option<Vec<u8>>, Partitioned<PartitionId, MzOffset>, u32>
-    {
+    ) -> Option<(
+        SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
+        Partitioned<PartitionId, MzOffset>,
+        Diff,
+    )> {
         // Offsets are guaranteed to be 1) monotonically increasing *unless* there is
         // a network issue or a new partition added, at which point the consumer may
         // start processing the topic from the beginning, or we may see duplicate offsets
@@ -781,24 +786,12 @@ impl KafkaSourceReader {
             // We explicitly should not consume the message as we have already processed it
             // However, we make sure to activate the source to make sure that we get a chance
             // to read from this consumer again (even if no new data arrives)
-            NextMessage::TransientDelay
+            None
         } else {
             *last_offset_ref = offset_as_i64;
-            let part_data_cap = self
-                .partition_data_capabilities
-                .get_mut(&partition)
-                .expect("attempted to emit data for dropped or unknown partition");
-            let part_upper_cap = self
-                .partition_upper_capabilities
-                .get_mut(&partition)
-                .expect("attempted to emit data for dropped or unknown partition");
 
             let ts = Partitioned::with_partition(partition, offset);
-            let cap = part_data_cap.delayed(&ts);
-            let next_ts = Partitioned::with_partition(partition, offset + 1);
-            part_data_cap.downgrade(&next_ts);
-            part_upper_cap.downgrade(&next_ts);
-            NextMessage::Ready(SourceMessageType::Message(message, cap, 1))
+            Some((message, ts, 1))
         }
     }
 }
@@ -893,7 +886,7 @@ impl PartitionConsumer {
 /// worker
 #[derive(Clone)]
 struct GlueConsumerContext {
-    activator: SyncActivator,
+    notificator: Arc<Notify>,
     stats_tx: crossbeam_channel::Sender<Jsonb>,
 }
 
@@ -922,9 +915,7 @@ impl ClientContext for GlueConsumerContext {
 
 impl GlueConsumerContext {
     fn activate(&self) {
-        self.activator
-            .activate()
-            .expect("timely operator hung up while Kafka source active");
+        self.notificator.notify_waiters();
     }
 }
 

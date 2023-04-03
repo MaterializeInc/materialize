@@ -40,9 +40,9 @@ use crate::source::{self, RawSourceCreationConfig};
 ///
 /// This enum puts no restrictions to the generic parameters of the variants since it only serves
 /// as a type-level enum.
-enum SourceType<G: Scope> {
+pub enum SourceType<G: Scope> {
     /// A delimited source
-    Delimited(Collection<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, u32>),
+    Delimited(Collection<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, Diff>),
     /// A source that produces Row's natively, and skips any `render_decode` stream adapters, and
     /// can produce retractions
     Row(Collection<G, SourceOutput<(), Row>, Diff>),

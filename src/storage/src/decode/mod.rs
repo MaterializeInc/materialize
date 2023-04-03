@@ -60,7 +60,7 @@ mod protobuf;
 /// also builds a differential dataflow collection that respects the
 /// data and progress messages in the underlying CDCv2 stream.
 pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
-    input: &Collection<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, u32>,
+    input: &Collection<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, Diff>,
     schema: &str,
     registry: Option<CsrClient>,
     confluent_wire_format: bool,
@@ -351,7 +351,7 @@ fn decode_delimited(decoder: &mut DataDecoder, buf: &[u8]) -> Result<Option<Row>
 /// (which is not always possible otherwise, since often gibberish strings can be interpreted as Avro,
 ///  so the only signal is how many bytes you managed to decode).
 pub fn render_decode_delimited<G>(
-    input: &Collection<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, u32>,
+    input: &Collection<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, Diff>,
     key_encoding: Option<DataEncoding>,
     value_encoding: DataEncoding,
     debug_name: &str,
@@ -442,7 +442,7 @@ where
                                 headers.as_deref(),
                             ),
                         };
-                        session.give((result, ts.clone(), Diff::from(*diff)));
+                        session.give((result, ts.clone(), *diff));
                     }
                 });
                 // Matching historical practice, we only log metrics on the value decoder.
