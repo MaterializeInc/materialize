@@ -272,7 +272,7 @@ pub fn create_statement(
         fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor<Aug>) {
             match table_factor {
                 TableFactor::Table { name, alias, .. } => {
-                    self.visit_object_name_mut(name);
+                    self.visit_item_name_mut(name);
                     if let Some(alias) = alias {
                         self.visit_table_alias_mut(alias);
                     }

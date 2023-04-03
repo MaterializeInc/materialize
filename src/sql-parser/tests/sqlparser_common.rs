@@ -261,8 +261,8 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
         fn visit_ident(&mut self, ident: &'a Ident) {
             self.seen_idents.push(ident.as_str());
         }
-        fn visit_object_name(&mut self, object_name: &'a <Raw as AstInfo>::ItemName) {
-            if let RawItemName::Name(name) = object_name {
+        fn visit_item_name(&mut self, item_name: &'a <Raw as AstInfo>::ItemName) {
+            if let RawItemName::Name(name) = item_name {
                 for ident in &name.0 {
                     self.seen_idents.push(ident.as_str());
                 }
