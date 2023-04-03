@@ -110,20 +110,26 @@ where
         })
     }
 
-    pub async fn fetch_upper(&mut self) -> Antichain<T> {
+    /// Fetches the latest state from Consensus and passes its `upper` to the provided closure.
+    pub async fn fetch_upper<R, F: FnMut(&Antichain<T>) -> R>(&mut self, f: F) -> R {
         self.fetch_and_update_state(None).await;
-        self.upper()
+        self.upper(f)
     }
 
-    /// A point-in-time read of `upper` from the current state.
+    /// A point-in-time read/clone of `upper` from the current state.
     ///
     /// Due to sharing state with other handles, successive reads to this fn or any other may
     /// see a different version of state, even if this Applier has not explicitly fetched and
-    /// updated to the latest state.
-    pub fn upper(&self) -> Antichain<T> {
+    /// updated to the latest state. Successive calls will always return values such that
+    /// `PartialOrder::less_equal(call1, call2)` hold true.
+    pub fn clone_upper(&self) -> Antichain<T> {
+        self.upper(|upper| upper.clone())
+    }
+
+    fn upper<R, F: FnMut(&Antichain<T>) -> R>(&self, mut f: F) -> R {
         self.state
-            .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
-                state.upper().clone()
+            .read_lock(&self.metrics.locks.applier_read_cacheable, move |state| {
+                f(state.upper())
             })
     }
 
@@ -131,7 +137,8 @@ where
     ///
     /// Due to sharing state with other handles, successive reads to this fn or any other may
     /// see a different version of state, even if this Applier has not explicitly fetched and
-    /// updated to the latest state.
+    /// updated to the latest state. Successive calls will always return values such that
+    /// `PartialOrder::less_equal(call1, call2)` hold true.
     #[cfg(test)]
     pub fn since(&self) -> Antichain<T> {
         self.state
@@ -144,7 +151,8 @@ where
     ///
     /// Due to sharing state with other handles, successive reads to this fn or any other may
     /// see a different version of state, even if this Applier has not explicitly fetched and
-    /// updated to the latest state.
+    /// updated to the latest state. Successive calls will always return values such that
+    /// `call1 <= call2` hold true.
     pub fn seqno(&self) -> SeqNo {
         self.state
             .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
@@ -152,23 +160,12 @@ where
             })
     }
 
-    /// A point-in-time read of `is_tombstone` from the current state.
-    ///
-    /// Due to sharing state with other handles, successive reads to this fn or any other may
-    /// see a different version of state, even if this Applier has not explicitly fetched and
-    /// updated to the latest state.
-    pub fn is_tombstone(&self) -> bool {
-        self.state
-            .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
-                state.collections.is_tombstone()
-            })
-    }
-
     /// A point-in-time read of `seqno_since` from the current state.
     ///
     /// Due to sharing state with other handles, successive reads to this fn or any other may
     /// see a different version of state, even if this Applier has not explicitly fetched and
-    /// updated to the latest state.
+    /// updated to the latest state. Successive calls will always return values such that
+    /// `call1 <= call2` hold true.
     pub fn seqno_since(&self) -> SeqNo {
         self.state
             .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
@@ -176,15 +173,27 @@ where
             })
     }
 
-    /// A point-in-time read of `since` and `upper` from the current state.
+    /// A point-in-time read of `is_tombstone` from the current state.
     ///
     /// Due to sharing state with other handles, successive reads to this fn or any other may
     /// see a different version of state, even if this Applier has not explicitly fetched and
-    /// updated to the latest state.
-    pub fn since_and_upper(&self) -> (Antichain<T>, Antichain<T>) {
+    /// updated to the latest state. Once this fn returns true, it will always return true.
+    pub fn is_tombstone(&self) -> bool {
         self.state
             .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
-                (state.since().clone(), state.upper().clone())
+                state.collections.is_tombstone()
+            })
+    }
+
+    /// Returns whether the current's state `since` and `upper` are both empty.
+    ///
+    /// Due to sharing state with other handles, successive reads to this fn or any other may
+    /// see a different version of state, even if this Applier has not explicitly fetched and
+    /// updated to the latest state. Once this fn returns true, it will always return true.
+    pub fn since_upper_both_empty(&self) -> bool {
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
+                state.since().is_empty() && state.upper().is_empty()
             })
     }
 

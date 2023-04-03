@@ -197,8 +197,10 @@ where
     pub async fn fetch_recent_upper(&mut self) -> &Antichain<T> {
         // TODO: Do we even need to track self.upper on WriteHandle or could
         // WriteHandle::upper just get the one out of machine?
-        let fresh_upper = self.machine.applier.fetch_upper().await;
-        self.upper.clone_from(&fresh_upper);
+        self.machine
+            .applier
+            .fetch_upper(|current_upper| self.upper.clone_from(current_upper))
+            .await;
         &self.upper
     }
 

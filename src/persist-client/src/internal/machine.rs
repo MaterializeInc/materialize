@@ -224,7 +224,7 @@ where
                     // side-channel that didn't update our local cache of the
                     // machine state. So, fetch the latest state and try again
                     // if we indeed get something different.
-                    let current_upper = self.applier.fetch_upper().await;
+                    let current_upper = self.applier.clone_upper();
 
                     // We tried to to a compare_and_append with the wrong
                     // expected upper, that won't work.
@@ -623,8 +623,7 @@ where
     }
 
     pub async fn maybe_become_tombstone(&mut self) -> Option<RoutineMaintenance> {
-        let (since, upper) = self.applier.since_and_upper();
-        if !since.is_empty() || !upper.is_empty() {
+        if self.applier.since_upper_both_empty() {
             return None;
         }
 
@@ -1103,7 +1102,7 @@ pub mod datadriven {
         Ok(format!(
             "since={:?} upper={:?}\n",
             datadriven.machine.applier.since().elements(),
-            datadriven.machine.applier.upper().elements()
+            datadriven.machine.applier.clone_upper().elements()
         ))
     }
 
@@ -1614,7 +1613,7 @@ pub mod datadriven {
         Ok(format!(
             "{} {:?}\n",
             datadriven.machine.seqno(),
-            datadriven.machine.applier.upper().elements(),
+            datadriven.machine.applier.clone_upper().elements(),
         ))
     }
 
