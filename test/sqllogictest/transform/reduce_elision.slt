@@ -16,3 +16,114 @@ query T
 select (select jsonb_agg(1) from (select c) group by c) from (select 1 as c)
 ----
 [1]
+
+statement ok
+CREATE TABLE x (f0 int4, f1 string);
+
+statement ok
+CREATE TABLE y (f0 int2, f1 string primary key);
+
+# `ReductionPushdown` pushes the Distinct from after the Join into both join inputs.
+# Then, `ReduceElision` eliminates the Distinct from the 2nd join input.
+query T multiline
+EXPLAIN WITH(arity, join_impls, keys)
+SELECT DISTINCT *
+FROM x, y
+WHERE x.f1 = y.f1
+----
+Explained Query:
+  Project (#0..=#2, #1) // { arity: 4, keys: "([0, 1])" }
+    Join on=(#1 = #3) type=differential // { arity: 4, keys: "([0, 1])" }
+      implementation
+        %1:y[#1]UK » %0[#1]K
+      ArrangeBy keys=[[#1]] // { arity: 2, keys: "([0, 1])" }
+        Distinct group_by=[#0, #1] // { arity: 2, keys: "([0, 1])" }
+          Filter (#1) IS NOT NULL // { arity: 2, keys: "()" }
+            Get materialize.public.x // { arity: 2, keys: "()" }
+      ArrangeBy keys=[[#1]] // { arity: 2, keys: "([1])" }
+        Get materialize.public.y // { arity: 2, keys: "([1])" }
+
+Source materialize.public.x
+  filter=((#1) IS NOT NULL)
+
+EOF
+
+## -------------------- Tests for WITH MUTUALLY RECURSIVE --------------------
+
+# `ReductionPushdown` pushes the Distinct from after the Join into both join inputs.
+# Then, `ReduceElision` eliminates the Distinct from the 2nd join input.
+query T multiline
+EXPLAIN WITH(arity, join_impls, keys)
+WITH MUTUALLY RECURSIVE
+  c0(f0 int4, f1 string, f2 int2, f3 string) AS (
+    (SELECT DISTINCT *
+     FROM x, y
+     WHERE x.f1 = y.f1)
+    UNION ALL
+    (SELECT *
+     FROM c0)
+  )
+SELECT * FROM c0;
+----
+Explained Query:
+  Return // { arity: 4, keys: "()" }
+    Get l0 // { arity: 4, keys: "()" }
+  With Mutually Recursive
+    cte l0 =
+      Union // { arity: 4, keys: "()" }
+        Join on=(#1 = #3) type=differential // { arity: 4, keys: "([0, 1])" }
+          implementation
+            %1:y[#1]UK » %0[#1]K
+          ArrangeBy keys=[[#1]] // { arity: 2, keys: "([0, 1])" }
+            Distinct group_by=[#0, #1] // { arity: 2, keys: "([0, 1])" }
+              Filter (#1) IS NOT NULL // { arity: 2, keys: "()" }
+                Get materialize.public.x // { arity: 2, keys: "()" }
+          ArrangeBy keys=[[#1]] // { arity: 2, keys: "([1])" }
+            Get materialize.public.y // { arity: 2, keys: "([1])" }
+        Get l0 // { arity: 4, keys: "()" }
+
+Source materialize.public.x
+  filter=((#1) IS NOT NULL)
+
+EOF
+
+# Similar to the previous test, but
+#  - Has UNION instead of UNION ALL. This means that there is a Distinct at the root of l0.
+#  - The second input of the UNION has a DISTINCT. This should be eliminated later by `ReduceElision` after we make the
+#    unique key inference smarter for `LetRec`.
+query T multiline
+EXPLAIN WITH(arity, join_impls, keys)
+WITH MUTUALLY RECURSIVE
+  c0(f0 int4, f1 string, f2 int2, f3 string) AS (
+    (SELECT DISTINCT *
+     FROM x, y
+     WHERE x.f1 = y.f1)
+    UNION
+    (SELECT DISTINCT *
+     FROM c0)
+  )
+SELECT * FROM c0;
+----
+Explained Query:
+  Return // { arity: 4, keys: "([0, 1, 2, 3])" }
+    Get l0 // { arity: 4, keys: "([0, 1, 2, 3])" }
+  With Mutually Recursive
+    cte l0 =
+      Distinct group_by=[#0..=#3] // { arity: 4, keys: "([0, 1, 2, 3])" }
+        Union // { arity: 4, keys: "()" }
+          Join on=(#1 = #3) type=differential // { arity: 4, keys: "([0, 1])" }
+            implementation
+              %1:y[#1]UK » %0[#1]K
+            ArrangeBy keys=[[#1]] // { arity: 2, keys: "([0, 1])" }
+              Distinct group_by=[#0, #1] // { arity: 2, keys: "([0, 1])" }
+                Filter (#1) IS NOT NULL // { arity: 2, keys: "()" }
+                  Get materialize.public.x // { arity: 2, keys: "()" }
+            ArrangeBy keys=[[#1]] // { arity: 2, keys: "([1])" }
+              Get materialize.public.y // { arity: 2, keys: "([1])" }
+          Distinct group_by=[#0..=#3] // { arity: 4, keys: "([0, 1, 2, 3])" }
+            Get l0 // { arity: 4, keys: "()" }
+
+Source materialize.public.x
+  filter=((#1) IS NOT NULL)
+
+EOF

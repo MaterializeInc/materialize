@@ -59,6 +59,10 @@ use mz_expr::{AggregateExpr, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 pub struct ReductionPushdown;
 
 impl crate::Transform for ReductionPushdown {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
