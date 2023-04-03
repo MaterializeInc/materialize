@@ -30,7 +30,6 @@ use rdkafka::{ClientContext, Message, TopicPartitionList};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
-use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::Notify;
 use tracing::{error, info, trace, warn};
 
@@ -140,56 +139,58 @@ impl SourceRender for KafkaSourceConnection {
             let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
             let health_status = Arc::new(Mutex::new(None));
             let notificator = Arc::new(Notify::new());
-            let consumer = TokioHandle::current().block_on(connection.create_with_context(
-                &connection_context,
-                GlueConsumerContext {
-                    notificator: Arc::clone(&notificator),
-                    stats_tx,
-                },
-                &btreemap! {
-                    // Default to disabling Kafka auto commit. This can be
-                    // explicitly enabled by the user if they want to use it for
-                    // progress tracking.
-                    "enable.auto.commit" => "false".into(),
-                    // Always begin ingest at 0 when restarted, even if Kafka
-                    // contains committed consumer read offsets
-                    "auto.offset.reset" => "earliest".into(),
-                    // How often to refresh metadata from the Kafka broker. This
-                    // can have a minor impact on startup latency and latency
-                    // after adding a new partition, as the metadata for a
-                    // partition must be fetched before we can retrieve data
-                    // from it. We try to manually trigger metadata fetches when
-                    // it makes sense, but if those manual fetches fail, this is
-                    // the interval at which we retry.
-                    //
-                    // 30s may seem low, but the default is 5m. More frequent
-                    // metadata refresh rates are surprising to Kafka users, as
-                    // topic partition counts hardly ever change in production.
-                    "topic.metadata.refresh.interval.ms" => "30000".into(), // 30s
-                    // TODO: document the rationale for this.
-                    "fetch.message.max.bytes" => "134217728".into(),
-                    // Consumer group ID. librdkafka requires this, and we use
-                    // offset committing to provide a way for users to monitor
-                    // ingest progress, though we do not rely on the committed
-                    // offsets for any functionality.
-                    //
-                    // The group ID is partially dictated by the user and
-                    // partially dictated by us. Users can set a prefix so they
-                    // can see which consumers belong to which Materialize
-                    // deployment, but we set a suffix to ensure uniqueness. A
-                    // unique consumer group ID is the most surefire way to
-                    // ensure that librdkafka does not try to perform its own
-                    // consumer group balancing, which would wreak havoc with
-                    // our careful partition assignment strategy.
-                    "group.id" => format!(
-                        "{}materialize-{}-{}-{}",
-                        group_id_prefix.unwrap_or_else(String::new),
-                        environment_id,
-                        connection_id,
-                        config.id,
-                    ),
-                },
-            ));
+            let consumer = connection
+                .create_with_context(
+                    &connection_context,
+                    GlueConsumerContext {
+                        notificator: Arc::clone(&notificator),
+                        stats_tx,
+                    },
+                    &btreemap! {
+                        // Default to disabling Kafka auto commit. This can be
+                        // explicitly enabled by the user if they want to use it for
+                        // progress tracking.
+                        "enable.auto.commit" => "false".into(),
+                        // Always begin ingest at 0 when restarted, even if Kafka
+                        // contains committed consumer read offsets
+                        "auto.offset.reset" => "earliest".into(),
+                        // How often to refresh metadata from the Kafka broker. This
+                        // can have a minor impact on startup latency and latency
+                        // after adding a new partition, as the metadata for a
+                        // partition must be fetched before we can retrieve data
+                        // from it. We try to manually trigger metadata fetches when
+                        // it makes sense, but if those manual fetches fail, this is
+                        // the interval at which we retry.
+                        //
+                        // 30s may seem low, but the default is 5m. More frequent
+                        // metadata refresh rates are surprising to Kafka users, as
+                        // topic partition counts hardly ever change in production.
+                        "topic.metadata.refresh.interval.ms" => "30000".into(), // 30s
+                        // TODO: document the rationale for this.
+                        "fetch.message.max.bytes" => "134217728".into(),
+                        // Consumer group ID. librdkafka requires this, and we use
+                        // offset committing to provide a way for users to monitor
+                        // ingest progress, though we do not rely on the committed
+                        // offsets for any functionality.
+                        //
+                        // The group ID is partially dictated by the user and
+                        // partially dictated by us. Users can set a prefix so they
+                        // can see which consumers belong to which Materialize
+                        // deployment, but we set a suffix to ensure uniqueness. A
+                        // unique consumer group ID is the most surefire way to
+                        // ensure that librdkafka does not try to perform its own
+                        // consumer group balancing, which would wreak havoc with
+                        // our careful partition assignment strategy.
+                        "group.id" => format!(
+                            "{}materialize-{}-{}-{}",
+                            group_id_prefix.unwrap_or_else(String::new),
+                            environment_id,
+                            connection_id,
+                            config.id,
+                        ),
+                    },
+                )
+                .await;
 
             let consumer = match consumer {
                 Ok(consumer) => Arc::new(consumer),
