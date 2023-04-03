@@ -318,12 +318,35 @@ impl SourceRender for PostgresSourceConnection {
 
             let resume_lsn = Arc::new(AtomicU64::new(start_offset.offset));
 
-            let connection_config = self
+            let connection_config = match self
                 .connection
                 .config(&*connection_context.secrets_reader)
                 .await
-                .expect("Postgres connection unexpectedly missing secrets")
-                .replication_timeouts(config.params.pg_replication_timeouts);
+            {
+                Ok(config) => config,
+                Err(e) => {
+                    let update = HealthStatusUpdate {
+                        update: HealthStatus::StalledWithError {
+                            error: format!(
+                                "failed creating postgres config: {}",
+                                e.display_with_causes()
+                            ),
+                            hint: None,
+                        },
+                        should_halt: true,
+                    };
+                    let primary_output_index = 0;
+                    health_output.give(&health_capability, (primary_output_index, update)).await;
+                    // IMPORTANT: wedge forever until the `SuspendAndRestart` is processed.
+                    // Returning would incorrectly present to the remap operator as progress to the
+                    // empty frontier which would be incorrectly recorded to the remap shard.
+                    std::future::pending::<()>().await;
+                    unreachable!("pending future never returns");
+                }
+            };
+
+            let connection_config =
+                connection_config.replication_timeouts(config.params.pg_replication_timeouts);
 
             let mut source_tables = BTreeMap::new();
             let tables_iter = self.publication_details.tables.iter();

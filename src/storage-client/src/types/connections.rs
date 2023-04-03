@@ -351,7 +351,7 @@ impl KafkaConnection {
                 k,
                 v.get_string(&*connection_context.secrets_reader)
                     .await
-                    .expect("reading kafka secret unexpectedly failed"),
+                    .context("reading kafka secret")?,
             );
         }
         for (k, v) in extra_options {
