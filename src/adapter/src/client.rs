@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
+use mz_sql::session::hint::ApplicationNameHint;
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::error;
 use uuid::Uuid;
@@ -483,6 +484,8 @@ impl SessionClient {
     {
         let session = self.session.take().expect("session invariant violated");
         let mut typ = None;
+        let application_name = session.application_name();
+        let name_hint = ApplicationNameHint::from_str(application_name);
         let res = self
             .inner_mut()
             .send(|tx| {
@@ -517,7 +520,7 @@ impl SessionClient {
                 .inner
                 .metrics
                 .commands
-                .with_label_values(&[typ, status])
+                .with_label_values(&[typ, status, name_hint.as_str()])
                 .inc();
         }
         self.session = Some(res.session);

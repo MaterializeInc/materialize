@@ -57,7 +57,7 @@ impl Metrics {
             commands: registry.register(metric!(
                 name: "mz_adapter_commands",
                 help: "The total number of adapter commands issued of the given type since process start.",
-                var_labels: ["command_type", "status"],
+                var_labels: ["command_type", "status", "application_name"],
             )),
             storage_usage_collection_time_seconds: registry.register(metric!(
                 name: "mz_storage_usage_collection_time_seconds",

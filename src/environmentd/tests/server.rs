@@ -77,6 +77,7 @@
 
 //! Integration tests for Materialize server.
 
+use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -88,6 +89,7 @@ use http::StatusCode;
 use itertools::Itertools;
 use reqwest::blocking::Client;
 use reqwest::Url;
+use serde::{Deserialize, Serialize};
 use tokio_postgres::error::SqlState;
 use tracing::info;
 use tungstenite::error::ProtocolError;
@@ -264,7 +266,7 @@ fn test_http_sql() {
         ))
         .unwrap();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
-        util::auth_with_ws(&mut ws);
+        util::auth_with_ws(&mut ws, BTreeMap::default());
 
         f.run(|tc| {
             let msg = match tc.directive.as_str() {
@@ -842,7 +844,7 @@ fn test_max_request_size() {
         ))
         .unwrap();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
-        util::auth_with_ws(&mut ws);
+        util::auth_with_ws(&mut ws, BTreeMap::default());
         let json =
             format!("{{\"queries\":[{{\"query\":\"{statement}\",\"params\":[\"{param}\"]}}]}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -914,7 +916,7 @@ fn test_max_statement_batch_size() {
         ))
         .unwrap();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
-        util::auth_with_ws(&mut ws);
+        util::auth_with_ws(&mut ws, BTreeMap::default());
         let json = format!("{{\"query\":\"{statements}\"}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
         ws.write_message(Message::Text(json.to_string())).unwrap();
@@ -956,4 +958,172 @@ fn test_mz_system_user_admin() {
             .unwrap()
             .get::<_, String>(0)
     );
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_ws_passes_options() {
+    let server = util::start_server(util::Config::default()).unwrap();
+
+    // Create our WebSocket.
+    let ws_url = Url::parse(&format!(
+        "ws://{}/api/experimental/sql",
+        server.inner.http_local_addr()
+    ))
+    .unwrap();
+    let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
+    let options = BTreeMap::from([(
+        "application_name".to_string(),
+        "billion_dollar_idea".to_string(),
+    )]);
+    util::auth_with_ws(&mut ws, options);
+
+    // Query to make sure we get back the correct session var, which should be
+    // set from the options map we passed with the auth.
+    let json = "{\"query\":\"SHOW application_name;\"}";
+    let json: serde_json::Value = serde_json::from_str(json).unwrap();
+    ws.write_message(Message::Text(json.to_string())).unwrap();
+
+    let mut read_msg = || -> WebSocketResponse {
+        let msg = ws.read_message().unwrap();
+        let msg = msg.into_text().expect("response should be text");
+        serde_json::from_str(&msg).unwrap()
+    };
+    let col_name = read_msg();
+    let row_val = read_msg();
+
+    if let WebSocketResponse::Rows(rows) = col_name {
+        assert_eq!(rows, ["application_name"]);
+    } else {
+        panic!("wrong message!, {col_name:?}");
+    };
+
+    if let WebSocketResponse::Row(row) = row_val {
+        let expected = serde_json::Value::String("billion_dollar_idea".to_string());
+        assert_eq!(row, [expected]);
+    } else {
+        panic!("wrong message!, {row_val:?}");
+    }
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_ws_notifies_for_bad_options() {
+    let server = util::start_server(util::Config::default()).unwrap();
+
+    // Create our WebSocket.
+    let ws_url = Url::parse(&format!(
+        "ws://{}/api/experimental/sql",
+        server.inner.http_local_addr()
+    ))
+    .unwrap();
+    let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
+    let options = BTreeMap::from([("bad_var_name".to_string(), "i_do_not_exist".to_string())]);
+    util::auth_with_ws(&mut ws, options);
+
+    let mut read_msg = || -> WebSocketResponse {
+        let msg = ws.read_message().unwrap();
+        let msg = msg.into_text().expect("response should be text");
+        serde_json::from_str(&msg).unwrap()
+    };
+    let notice = read_msg();
+
+    // After startup, we should get a notice that our var name was not set.
+    if let WebSocketResponse::Notice(notice) = notice {
+        let msg = notice.message();
+        assert!(msg.starts_with("startup setting bad_var_name not set"));
+    } else {
+        panic!("wrong message!, {notice:?}");
+    };
+}
+
+#[derive(Debug, Deserialize)]
+struct HttpResponse<R> {
+    results: Vec<R>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HttpRows {
+    rows: Vec<Vec<String>>,
+    col_names: Vec<String>,
+    notices: Vec<Notice>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Notice {
+    message: String,
+    #[serde(rename = "severity")]
+    _severity: String,
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_http_options_param() {
+    let server = util::start_server(util::Config::default()).unwrap();
+
+    #[derive(Debug, Serialize)]
+    struct Params {
+        options: String,
+    }
+
+    let make_request = |params| {
+        let http_url = Url::parse(&format!(
+            "http://{}/api/sql?{}",
+            server.inner.http_local_addr(),
+            params
+        ))
+        .unwrap();
+
+        let json = r#"{ "query": "SHOW application_name;" }"#;
+        let json: serde_json::Value = serde_json::from_str(json).unwrap();
+        Client::new().post(http_url).json(&json).send().unwrap()
+    };
+
+    //
+    // Happy path, valid and correctly formatted options dictionary.
+    //
+    let options = BTreeMap::from([("application_name", "yet_another_client")]);
+    let options = serde_json::to_string(&options).unwrap();
+    let params = serde_urlencoded::to_string(Params { options }).unwrap();
+
+    let resp = make_request(params);
+    assert!(resp.status().is_success());
+
+    let mut result: HttpResponse<HttpRows> = resp.json().unwrap();
+    assert_eq!(result.results.len(), 1);
+
+    let mut rows = result.results.pop().unwrap();
+    assert!(rows.notices.is_empty());
+
+    let row = rows.rows.pop().unwrap().pop().unwrap();
+    let col = rows.col_names.pop().unwrap();
+
+    assert_eq!(col, "application_name");
+    assert_eq!(row, "yet_another_client");
+
+    //
+    // Malformed options dictionary.
+    //
+    let params = "options=not_a_urlencoded_json_object".to_string();
+    let resp = make_request(params);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    //
+    // Correctly formed options dictionary, but invalid param.
+    //
+    let options = BTreeMap::from([("not_a_session_var", "hmmmm")]);
+    let options = serde_json::to_string(&options).unwrap();
+    let params = serde_urlencoded::to_string(Params { options }).unwrap();
+
+    let resp = make_request(params);
+    assert!(resp.status().is_success());
+
+    let result: HttpResponse<HttpRows> = resp.json().unwrap();
+    assert_eq!(result.results.len(), 1);
+    assert_eq!(result.results[0].notices.len(), 1);
+
+    let notice = &result.results[0].notices[0];
+    assert!(notice
+        .message
+        .contains(r#"startup setting not_a_session_var not set"#));
 }
