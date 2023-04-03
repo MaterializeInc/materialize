@@ -124,7 +124,8 @@ impl ColumnType {
                 | Map { .. }
                 | Int2Vector
                 | MzTimestamp
-                | Range { .. },
+                | Range { .. }
+                | MzAclItem,
             ) => f.call::<TodoDatumToPersist>(),
         }
     }
