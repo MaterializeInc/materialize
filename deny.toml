@@ -18,7 +18,7 @@ skip = [
     # allowing these duplicate dependencies until the rest of the ecosystem catches
     # up.
     { name = "socket2", version = "0.4.9" },
-    { name = "window-sys", version = "0.42.0" },
+    { name = "windows-sys", version = "0.42.0" },
 ]
 
 # Use `tracing` instead.
