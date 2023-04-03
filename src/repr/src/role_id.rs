@@ -64,7 +64,7 @@ impl RoleId {
     }
 
     pub fn encode_binary(&self) -> Vec<u8> {
-        let mut res = Vec::new();
+        let mut res = Vec::with_capacity(Self::binary_size());
         match self {
             RoleId::System(id) => {
                 res.push(SYSTEM_BYTE);
@@ -111,22 +111,22 @@ impl FromStr for RoleId {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.chars().next().unwrap() {
-            SYSTEM_CHAR => {
+        match s.chars().next() {
+            Some(SYSTEM_CHAR) => {
                 if s.len() < 2 {
                     return Err(anyhow!("couldn't parse role id {}", s));
                 }
                 let val: u64 = s[1..].parse()?;
                 Ok(Self::System(val))
             }
-            USER_CHAR => {
+            Some(USER_CHAR) => {
                 if s.len() < 2 {
                     return Err(anyhow!("couldn't parse role id {}", s));
                 }
                 let val: u64 = s[1..].parse()?;
                 Ok(Self::User(val))
             }
-            PUBLIC_CHAR => {
+            Some(PUBLIC_CHAR) => {
                 if s.len() == 1 {
                     Ok(Self::Public)
                 } else {
@@ -199,6 +199,9 @@ fn test_role_id_parsing() {
     assert!(s.parse::<RoleId>().is_err());
 
     let s = "asfje90uf23i";
+    assert!(s.parse::<RoleId>().is_err());
+
+    let s = "";
     assert!(s.parse::<RoleId>().is_err());
 }
 

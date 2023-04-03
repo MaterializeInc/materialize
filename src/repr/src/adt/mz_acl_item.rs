@@ -14,7 +14,6 @@ use anyhow::{anyhow, Error};
 use bitflags::bitflags;
 use columnation::{CloneRegion, Columnation};
 use mz_proto::{RustType, TryFromProtoError};
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::mem::size_of;
@@ -38,7 +37,7 @@ bitflags! {
     #[derive(Serialize, Deserialize)]
     pub struct AclMode: u64 {
         const INSERT = 1 << 0;
-        const SELECT = 1 << 1 ;
+        const SELECT = 1 << 1;
         const UPDATE = 1 << 2;
         const DELETE = 1 << 3;
         const USAGE = 1 << 8;
@@ -127,7 +126,7 @@ pub struct MzAclItem {
 
 impl MzAclItem {
     pub fn encode_binary(&self) -> Vec<u8> {
-        let mut res = Vec::new();
+        let mut res = Vec::with_capacity(Self::binary_size());
         res.extend_from_slice(&self.grantee.encode_binary());
         res.extend_from_slice(&self.grantor.encode_binary());
         res.extend_from_slice(&self.acl_mode.bits().to_le_bytes());
@@ -159,7 +158,7 @@ impl MzAclItem {
     }
 
     pub const fn binary_size() -> usize {
-        RoleId::binary_size() + RoleId::binary_size() + size_of::<AclMode>()
+        RoleId::binary_size() + RoleId::binary_size() + size_of::<u64>()
     }
 }
 
@@ -167,29 +166,17 @@ impl FromStr for MzAclItem {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let re: Regex = Regex::new(&format!(
-            r"(.*)=([{INSERT_CHAR},{SELECT_CHAR},{UPDATE_CHAR},{DELETE_CHAR},{USAGE_CHAR},{CREATE_CHAR}]*)/(.+)"
-        ))?;
-        let caps = re
-            .captures(s)
-            .ok_or_else(|| anyhow!("invalid mz_aclitem '{s}'"))?;
-
-        let grantee: &str = caps.get(1).map_or("", |m| m.as_str());
-        let grantee = if grantee.is_empty() {
+        let parts: Vec<_> = s.split(&['=', '/']).collect();
+        if parts.len() != 3 {
+            return Err(anyhow!("invalid mz_aclitem '{s}'"));
+        }
+        let grantee: RoleId = if parts[0].is_empty() {
             RoleId::Public
         } else {
-            grantee.parse()?
+            parts[0].parse()?
         };
-        let acl_mode: AclMode = caps
-            .get(2)
-            .ok_or_else(|| anyhow!("invalid mz_aclitem '{s}'"))?
-            .as_str()
-            .parse()?;
-        let grantor: RoleId = caps
-            .get(3)
-            .ok_or_else(|| anyhow!("invalid mz_aclitem '{s}'"))?
-            .as_str()
-            .parse()?;
+        let acl_mode: AclMode = parts[1].parse()?;
+        let grantor: RoleId = parts[2].parse()?;
 
         Ok(MzAclItem {
             grantee,
@@ -288,6 +275,7 @@ fn test_mz_acl_parsing() {
     assert!("u32=C/".parse::<MzAclItem>().is_err());
     assert!("=/".parse::<MzAclItem>().is_err());
     assert!("f62hfiuew827fhh".parse::<MzAclItem>().is_err());
+    assert!("u2=rw/s66=CU/u33".parse::<MzAclItem>().is_err());
 }
 
 #[test]

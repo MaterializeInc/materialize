@@ -2719,6 +2719,7 @@ impl<'a> ScalarType {
             ScalarType::RegClass,
             ScalarType::Int2Vector,
             ScalarType::MzTimestamp,
+            ScalarType::MzAclItem,
             // TODO: Fill in some variants of these.
             /*
             ScalarType::Array(_),
