@@ -12,12 +12,14 @@ Kubernetes to orchestrate interactions with other systems, like [Apache Kafka].
 ### C components
 
 Materialize depends on several components that are written in C and C++, so
-you'll need a working C and C++ toolchain. You'll also need to install the
-[CMake] build system.
+you'll need a working C and C++ toolchain. You'll also need to install:
+* The [CMake] build system
+* libclang
+* PostgreSQL
 
 On macOS, if you install [Homebrew], you'll be guided through the process of
-installing Apple's developer tools, which includes a C compiler. Then it's a
-cinch to install CMake:
+installing Apple's developer tools, which includes a C compiler and libclang.
+Then it's a cinch to install CMake and PostgreSQL.
 
 ```
 brew install cmake postgresql
@@ -27,7 +29,7 @@ On Debian-based Linux variants, it's even easier:
 
 ```shell
 sudo apt update
-sudo apt install build-essential cmake postgresql-client
+sudo apt install build-essential cmake postgresql-client libclang-dev
 ```
 
 On other platforms, you'll have to figure out how to get these tools yourself.

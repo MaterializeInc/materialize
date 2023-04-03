@@ -19,6 +19,10 @@ skip = [
     # up.
     { name = "socket2", version = "0.4.9" },
     { name = "windows-sys", version = "0.42.0" },
+
+    # Waiting for <https://github.com/blackbeam/rust_mysql_common/commit/2a6419aef2ff609cd35a5ce41a9eb48253a8214d>
+    # to be released.
+    { name = "bindgen", version = "0.59.2" },
 ]
 
 # Use `tracing` instead.
