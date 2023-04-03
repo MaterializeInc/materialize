@@ -205,7 +205,8 @@ impl FronteggAuthentication {
             loop {
                 let current_time = SystemTime::now();
 
-                let sleep_time = auth.refresh_at
+                let sleep_time = auth
+                    .refresh_at
                     .duration_since(current_time)
                     .unwrap_or(Duration::from_millis(0));
                 tokio::time::sleep(sleep_time).await;
@@ -230,7 +231,8 @@ impl FronteggAuthentication {
                     }
                 };
 
-                let sleep_time = auth.refresh_at
+                let sleep_time = auth
+                    .refresh_at
                     .duration_since(current_time)
                     .unwrap_or(Duration::from_millis(0));
                 let expire_in = tokio::time::sleep(sleep_time);

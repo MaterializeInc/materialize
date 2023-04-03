@@ -63,7 +63,7 @@ pub struct Auth {
 ///
 /// [`Arc`]: std::sync::Arc
 #[derive(Debug)]
-pub struct Client {
+pub(crate) struct Client {
     pub(crate) inner: reqwest::Client,
     pub(crate) app_password: AppPassword,
     pub(crate) endpoint: Url,
