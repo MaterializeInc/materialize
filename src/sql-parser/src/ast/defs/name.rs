@@ -107,18 +107,18 @@ impl_display!(Ident);
 pub struct UnresolvedItemName(pub Vec<Ident>);
 
 pub enum CatalogName {
-    ObjectName(Vec<Ident>),
+    ItemName(Vec<Ident>),
     FuncName(Vec<Ident>),
 }
 
 impl UnresolvedItemName {
-    /// Creates an `ObjectName` with a single [`Ident`], i.e. it appears as
+    /// Creates an `ItemName` with a single [`Ident`], i.e. it appears as
     /// "unqualified".
     pub fn unqualified(n: &str) -> UnresolvedItemName {
         UnresolvedItemName(vec![Ident::new(n)])
     }
 
-    /// Creates an `ObjectName` with an [`Ident`] for each element of `n`.
+    /// Creates an `ItemName` with an [`Ident`] for each element of `n`.
     ///
     /// Panics if passed an in ineligible `&[&str]` whose length is 0 or greater
     /// than 3.

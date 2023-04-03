@@ -132,7 +132,7 @@ pub const LINKED_CLUSTER_REPLICA_NAME: &str = "linked";
 ///
 /// To the outside world, databases, schemas, and items are all identified by
 /// name. Items can be referred to by their [`FullItemName`], which fully and
-/// unambiguously specifies the item, or a [`PartialObjectName`], which can omit the
+/// unambiguously specifies the item, or a [`PartialItemName`], which can omit the
 /// database name and/or the schema name. Partial names can be converted into
 /// full names via a complicated resolution process documented by the
 /// [`CatalogState::resolve`] method.
@@ -1072,7 +1072,7 @@ impl CatalogState {
             .expect("failed to lookup BuiltinCluster by ID")
     }
 
-    /// Resolves [`PartialObjectName`] into a [`CatalogEntry`].
+    /// Resolves [`PartialItemName`] into a [`CatalogEntry`].
     ///
     /// If `name` does not specify a database, the `current_database` is used.
     /// If `name` does not specify a schema, then the schemas in `search_path`
@@ -6359,7 +6359,7 @@ impl ConnCatalog<'_> {
         self.resolve_item(name).map(|entry| entry.name())
     }
 
-    /// returns a `PartialObjectName` with the minimum amount of qualifiers to unambiguously resolve
+    /// returns a `PartialItemName` with the minimum amount of qualifiers to unambiguously resolve
     /// the object.
     fn minimal_qualification(&self, qualified_name: &QualifiedItemName) -> PartialItemName {
         let database_id = match &qualified_name.qualifiers.database_spec {
