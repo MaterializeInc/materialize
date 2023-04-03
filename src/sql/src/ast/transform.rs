@@ -278,9 +278,7 @@ impl<'a, 'ast> Visit<'ast, Raw> for QueryIdentAgg<'a> {
 
     fn visit_item_name(&mut self, item_name: &'ast <Raw as AstInfo>::ItemName) {
         match item_name {
-            RawItemName::Name(n) | RawItemName::Id(_, n) => {
-                self.visit_unresolved_item_name(n)
-            }
+            RawItemName::Name(n) | RawItemName::Id(_, n) => self.visit_unresolved_item_name(n),
         }
     }
 }

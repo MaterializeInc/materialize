@@ -37,8 +37,8 @@ use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
     AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
     CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
-    GrantRoleStatement, RevokeRoleStatement, SshConnectionOption, UnresolvedName,
-    UnresolvedItemName, UnresolvedSchemaName, Value,
+    GrantRoleStatement, RevokeRoleStatement, SshConnectionOption, UnresolvedItemName,
+    UnresolvedName, UnresolvedSchemaName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -112,9 +112,9 @@ use crate::plan::{
     CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
     CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
     DropClusterReplicasPlan, DropClustersPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
-    DropSchemaPlan, FullItemName, GrantRolePlan, HirScalarExpr, Index, Ingestion,
-    MaterializedView, Params, Plan, QueryContext, ReplicaConfig, RevokeRolePlan, RotateKeysPlan,
-    Secret, Sink, Source, SourceSinkClusterConfig, Table, Type, View,
+    DropSchemaPlan, FullItemName, GrantRolePlan, HirScalarExpr, Index, Ingestion, MaterializedView,
+    Params, Plan, QueryContext, ReplicaConfig, RevokeRolePlan, RotateKeysPlan, Secret, Sink,
+    Source, SourceSinkClusterConfig, Table, Type, View,
 };
 
 pub fn describe_create_database(
@@ -589,10 +589,7 @@ pub fn plan_create_source(
             for name in text_columns {
                 let (qual, col) = match name.0.split_last().expect("must have at least one element")
                 {
-                    (col, qual) => (
-                        UnresolvedItemName(qual.to_vec()),
-                        col.as_str().to_string(),
-                    ),
+                    (col, qual) => (UnresolvedItemName(qual.to_vec()), col.as_str().to_string()),
                 };
 
                 let (_name, table_desc) = publication_catalog

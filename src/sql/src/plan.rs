@@ -60,8 +60,8 @@ use crate::ast::{
 };
 use crate::catalog::{CatalogType, IdReference, RoleAttributes};
 use crate::names::{
-    Aug, DatabaseId, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier,
-    RoleId, SchemaId,
+    Aug, DatabaseId, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, RoleId,
+    SchemaId,
 };
 
 pub use self::expr::{

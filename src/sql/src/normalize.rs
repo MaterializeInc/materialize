@@ -29,9 +29,7 @@ use mz_sql_parser::ast::{
     UnresolvedItemName, UnresolvedSchemaName, Value, ViewDefinition,
 };
 
-use crate::names::{
-    Aug, FullItemName, PartialItemName, PartialSchemaName, RawDatabaseSpecifier,
-};
+use crate::names::{Aug, FullItemName, PartialItemName, PartialSchemaName, RawDatabaseSpecifier};
 use crate::plan::error::PlanError;
 use crate::plan::statement::StatementContext;
 
@@ -51,9 +49,7 @@ pub fn column_name(id: Ident) -> ColumnName {
 }
 
 /// Normalizes an unresolved object name.
-pub fn unresolved_item_name(
-    mut name: UnresolvedItemName,
-) -> Result<PartialItemName, PlanError> {
+pub fn unresolved_item_name(mut name: UnresolvedItemName) -> Result<PartialItemName, PlanError> {
     if name.0.len() < 1 || name.0.len() > 3 {
         return Err(PlanError::MisqualifiedName(name.to_string()));
     }
@@ -173,9 +169,9 @@ pub fn create_statement(
     mut stmt: Statement<Aug>,
 ) -> Result<String, PlanError> {
     let allocate_name = |name: &UnresolvedItemName| -> Result<_, PlanError> {
-        Ok(unresolve(scx.allocate_full_name(
-            unresolved_item_name(name.clone())?,
-        )?))
+        Ok(unresolve(
+            scx.allocate_full_name(unresolved_item_name(name.clone())?)?,
+        ))
     };
 
     let allocate_temporary_name = |name: &UnresolvedItemName| -> Result<_, PlanError> {

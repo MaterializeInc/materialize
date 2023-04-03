@@ -26,9 +26,9 @@ use crate::catalog::{
     CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, SessionCatalog,
 };
 use crate::names::{
-    self, Aug, DatabaseId, FullItemName, ItemQualifiers, PartialItemName,
-    QualifiedItemName, RawDatabaseSpecifier, ResolvedDataType, ResolvedDatabaseSpecifier,
-    ResolvedItemName, ResolvedSchemaName, SchemaSpecifier,
+    self, Aug, DatabaseId, FullItemName, ItemQualifiers, PartialItemName, QualifiedItemName,
+    RawDatabaseSpecifier, ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedItemName,
+    ResolvedSchemaName, SchemaSpecifier,
 };
 use crate::normalize;
 use crate::plan::error::PlanError;

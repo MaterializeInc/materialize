@@ -60,7 +60,7 @@ use mz_sql::catalog::{
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
-    Aug, DatabaseId, FullItemName, FullSchemaName, ObjectId, ItemQualifiers, PartialItemName,
+    Aug, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId, PartialItemName,
     QualifiedItemName, QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier,
     RoleId, SchemaId, SchemaSpecifier, PUBLIC_ROLE_NAME,
 };
@@ -2509,8 +2509,7 @@ impl Catalog {
             for (builtin, id) in builtin_non_indexes {
                 let schema_id = catalog.state.ambient_schemas_by_name[builtin.schema()];
                 let name = QualifiedItemName {
-                    qualifiers: ItemQualifiers
- {
+                    qualifiers: ItemQualifiers {
                         database_spec: ResolvedDatabaseSpecifier::Ambient,
                         schema_spec: SchemaSpecifier::Id(schema_id),
                     },
@@ -3108,8 +3107,7 @@ impl Catalog {
                 element_id,
                 typ.oid,
                 QualifiedItemName {
-                    qualifiers: ItemQualifiers
- {
+                    qualifiers: ItemQualifiers {
                         database_spec: ResolvedDatabaseSpecifier::Ambient,
                         schema_spec: SchemaSpecifier::Id(pg_catalog_schema_id),
                     },
@@ -6475,8 +6473,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                     // If PG_CATALOG_SCHEMA is not in search path, you need
                     // qualified object name to refer to type.
                     let name = QualifiedItemName {
-                        qualifiers: ItemQualifiers
-     {
+                        qualifiers: ItemQualifiers {
                             database_spec: ResolvedDatabaseSpecifier::Ambient,
                             schema_spec: pg_catalog_schema,
                         },
@@ -6923,8 +6920,8 @@ mod tests {
     use mz_sql::catalog::CatalogDatabase;
     use mz_sql::names;
     use mz_sql::names::{
-        DatabaseId, ItemQualifiers, PartialItemName, QualifiedItemName,
-        ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
+        DatabaseId, ItemQualifiers, PartialItemName, QualifiedItemName, ResolvedDatabaseSpecifier,
+        SchemaId, SchemaSpecifier,
     };
     use mz_sql::plan::StatementContext;
     use mz_sql::session::vars::VarInput;
@@ -6956,8 +6953,7 @@ mod tests {
             let test_cases = vec![
                 TestCase {
                     input: QualifiedItemName {
-                        qualifiers: ItemQualifiers
-     {
+                        qualifiers: ItemQualifiers {
                             database_spec: ResolvedDatabaseSpecifier::Ambient,
                             schema_spec: SchemaSpecifier::Id(
                                 catalog.get_pg_catalog_schema_id().clone(),
@@ -6978,8 +6974,7 @@ mod tests {
                 },
                 TestCase {
                     input: QualifiedItemName {
-                        qualifiers: ItemQualifiers
-     {
+                        qualifiers: ItemQualifiers {
                             database_spec: ResolvedDatabaseSpecifier::Ambient,
                             schema_spec: SchemaSpecifier::Id(
                                 catalog.get_mz_catalog_schema_id().clone(),
@@ -7311,8 +7306,7 @@ mod tests {
                         id,
                         oid,
                         name: QualifiedItemName {
-                            qualifiers: ItemQualifiers
-         {
+                            qualifiers: ItemQualifiers {
                                 database_spec,
                                 schema_spec,
                             },
@@ -7897,8 +7891,7 @@ mod tests {
                     vec![Op::CreateItem {
                         item,
                         name: QualifiedItemName {
-                            qualifiers: ItemQualifiers
-         {
+                            qualifiers: ItemQualifiers {
                                 database_spec: ResolvedDatabaseSpecifier::Id(DatabaseId::new(1)),
                                 schema_spec: SchemaSpecifier::Id(SchemaId::new(3)),
                             },

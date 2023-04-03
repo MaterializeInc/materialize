@@ -31,7 +31,7 @@ use crate::ast::{
     AstInfo, ColumnDef, CreateConnection, CreateSinkConnection, CreateSourceConnection,
     CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, DeferredItemName, Envelope,
     Expr, Format, Ident, KeyConstraint, Query, SelectItem, SourceIncludeMetadata, TableAlias,
-    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedName, UnresolvedItemName,
+    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedName,
     UnresolvedSchemaName, Value,
 };
 

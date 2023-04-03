@@ -39,8 +39,8 @@ use mz_storage_client::types::sources::SourceDesc;
 
 use crate::func::Func;
 use crate::names::{
-    Aug, DatabaseId, FullItemName, FullSchemaName, ObjectId, PartialItemName,
-    QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, RoleId, SchemaSpecifier,
+    Aug, DatabaseId, FullItemName, FullSchemaName, ObjectId, PartialItemName, QualifiedItemName,
+    QualifiedSchemaName, ResolvedDatabaseSpecifier, RoleId, SchemaSpecifier,
 };
 use crate::normalize;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
@@ -174,8 +174,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     ///
     /// Note that it is not an error if the named item appears in more than one
     /// of the search schemas. The catalog implementation must choose one.
-    fn resolve_item(&self, item_name: &PartialItemName)
-        -> Result<&dyn CatalogItem, CatalogError>;
+    fn resolve_item(&self, item_name: &PartialItemName) -> Result<&dyn CatalogItem, CatalogError>;
 
     /// Performs the same operation as [`SessionCatalog::resolve_item`] but for
     /// functions within the catalog.
