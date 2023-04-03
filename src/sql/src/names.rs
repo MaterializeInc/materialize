@@ -30,7 +30,7 @@ use crate::ast::visit::{Visit, VisitNode};
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
     self, AstInfo, Cte, CteBlock, CteMutRec, Ident, Query, Raw, RawClusterName, RawDataType,
-    RawObjectName, Statement, UnresolvedObjectName,
+    RawItemName, Statement, UnresolvedItemName,
 };
 use crate::catalog::{CatalogItemType, CatalogTypeDetails, SessionCatalog};
 use crate::normalize;
@@ -63,15 +63,15 @@ impl fmt::Display for FullItemName {
     }
 }
 
-impl From<FullItemName> for UnresolvedObjectName {
-    fn from(full_name: FullItemName) -> UnresolvedObjectName {
+impl From<FullItemName> for UnresolvedItemName {
+    fn from(full_name: FullItemName) -> UnresolvedItemName {
         let mut name_parts = Vec::new();
         if let RawDatabaseSpecifier::Name(database) = full_name.database {
             name_parts.push(Ident::new(database));
         }
         name_parts.push(Ident::new(full_name.schema));
         name_parts.push(Ident::new(full_name.item));
-        UnresolvedObjectName(name_parts)
+        UnresolvedItemName(name_parts)
     }
 }
 
@@ -155,8 +155,8 @@ impl From<String> for PartialObjectName {
     }
 }
 
-impl From<PartialObjectName> for UnresolvedObjectName {
-    fn from(partial_name: PartialObjectName) -> UnresolvedObjectName {
+impl From<PartialObjectName> for UnresolvedItemName {
+    fn from(partial_name: PartialObjectName) -> UnresolvedItemName {
         let mut name_parts = Vec::new();
         if let Some(database) = partial_name.database {
             name_parts.push(Ident::new(database));
@@ -165,7 +165,7 @@ impl From<PartialObjectName> for UnresolvedObjectName {
             name_parts.push(Ident::new(schema));
         }
         name_parts.push(Ident::new(partial_name.item));
-        UnresolvedObjectName(name_parts)
+        UnresolvedItemName(name_parts)
     }
 }
 
@@ -621,7 +621,7 @@ impl AstDisplay for ResolvedRoleName {
 
 impl AstInfo for Aug {
     type NestedStatement = Statement<Raw>;
-    type ObjectName = ResolvedItemName;
+    type ItemName = ResolvedItemName;
     type SchemaName = ResolvedSchemaName;
     type DatabaseName = ResolvedDatabaseName;
     type ClusterName = ResolvedClusterName;
@@ -828,13 +828,13 @@ impl<'a> NameResolver<'a> {
             }
             RawDataType::Other { name, typ_mod } => {
                 let (full_name, item) = match name {
-                    RawObjectName::Name(name) => {
+                    RawItemName::Name(name) => {
                         let name = normalize::unresolved_object_name(name)?;
                         let item = self.catalog.resolve_item(&name)?;
                         let full_name = self.catalog.resolve_full_name(item.name());
                         (full_name, item)
                     }
-                    RawObjectName::Id(id, name) => {
+                    RawItemName::Id(id, name) => {
                         let gid: GlobalId = id.parse()?;
                         let item = self.catalog.get_item(&gid);
                         let full_name = normalize::full_name(name)?;
@@ -963,10 +963,10 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
 
     fn fold_object_name(
         &mut self,
-        object_name: <Raw as AstInfo>::ObjectName,
-    ) -> <Aug as AstInfo>::ObjectName {
+        object_name: <Raw as AstInfo>::ItemName,
+    ) -> <Aug as AstInfo>::ItemName {
         match object_name {
-            RawObjectName::Name(raw_name) => {
+            RawItemName::Name(raw_name) => {
                 let raw_name = match normalize::unresolved_object_name(raw_name) {
                     Ok(raw_name) => raw_name,
                     Err(e) => {
@@ -1010,7 +1010,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     }
                 }
             }
-            RawObjectName::Id(id, raw_name) => {
+            RawItemName::Id(id, raw_name) => {
                 let gid: GlobalId = match id.parse() {
                     Ok(id) => id,
                     Err(e) => {
@@ -1374,7 +1374,7 @@ pub struct DependencyVisitor {
 }
 
 impl<'ast> Visit<'ast, Aug> for DependencyVisitor {
-    fn visit_object_name(&mut self, object_name: &'ast <Aug as AstInfo>::ObjectName) {
+    fn visit_object_name(&mut self, object_name: &'ast <Aug as AstInfo>::ItemName) {
         if let ResolvedItemName::Item { id, .. } = object_name {
             self.ids.insert(*id);
         }

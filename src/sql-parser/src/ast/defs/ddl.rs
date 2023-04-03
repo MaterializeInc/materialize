@@ -24,7 +24,7 @@
 use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, Expr, Ident, UnresolvedObjectName, WithOptionValue};
+use crate::ast::{AstInfo, Expr, Ident, UnresolvedItemName, WithOptionValue};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Schema {
@@ -171,7 +171,7 @@ impl_display_t!(CsrConfigOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrConnection<T: AstInfo> {
-    pub connection: T::ObjectName,
+    pub connection: T::ItemName,
     pub options: Vec<CsrConfigOption<T>>,
 }
 
@@ -526,7 +526,7 @@ impl_display!(DbzMode);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DbzTxMetadataOption<T: AstInfo> {
-    Source(T::ObjectName),
+    Source(T::ItemName),
     Collection(WithOptionValue<T>),
 }
 impl<T: AstInfo> AstDisplay for DbzTxMetadataOption<T> {
@@ -931,7 +931,7 @@ impl_display_t!(KafkaConfigOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KafkaConnection<T: AstInfo> {
-    pub connection: T::ObjectName,
+    pub connection: T::ItemName,
     pub options: Vec<KafkaConfigOption<T>>,
 }
 
@@ -998,7 +998,7 @@ pub enum CreateSourceConnection<T: AstInfo> {
     Kafka(KafkaSourceConnection<T>),
     Postgres {
         /// The postgres connection.
-        connection: T::ObjectName,
+        connection: T::ItemName,
         options: Vec<PgConfigOption<T>>,
     },
     LoadGenerator {
@@ -1154,9 +1154,9 @@ impl AstDisplay for KafkaSinkKey {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PgTable<T: AstInfo> {
     /// The name of the table to sync
-    pub name: UnresolvedObjectName,
+    pub name: UnresolvedItemName,
     /// The name for the table in Materialize
-    pub alias: T::ObjectName,
+    pub alias: T::ItemName,
     /// The expected column schema of the synced table
     pub columns: Vec<ColumnDef<T>>,
 }
@@ -1221,7 +1221,7 @@ pub enum TableConstraint<T: AstInfo> {
     ForeignKey {
         name: Option<Ident>,
         columns: Vec<Ident>,
-        foreign_table: T::ObjectName,
+        foreign_table: T::ItemName,
         referred_columns: Vec<Ident>,
     },
     /// `[ CONSTRAINT <name> ] CHECK (<expr>)`
@@ -1344,7 +1344,7 @@ impl_display_t!(CreateSourceOption);
 pub struct ColumnDef<T: AstInfo> {
     pub name: Ident,
     pub data_type: T::DataType,
-    pub collation: Option<UnresolvedObjectName>,
+    pub collation: Option<UnresolvedItemName>,
     pub options: Vec<ColumnOptionDef<T>>,
 }
 
@@ -1412,7 +1412,7 @@ pub enum ColumnOption<T: AstInfo> {
     /// A referential integrity constraint (`[FOREIGN KEY REFERENCES
     /// <foreign_table> (<referred_columns>)`).
     ForeignKey {
-        foreign_table: UnresolvedObjectName,
+        foreign_table: UnresolvedItemName,
         referred_columns: Vec<Ident>,
     },
     // `CHECK (<expr>)`

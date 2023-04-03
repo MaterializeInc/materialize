@@ -478,7 +478,7 @@ pub fn plan_subscribe(
 
 pub fn describe_table(
     scx: &StatementContext,
-    table_name: <Aug as AstInfo>::ObjectName,
+    table_name: <Aug as AstInfo>::ItemName,
     columns: Vec<Ident>,
 ) -> Result<StatementDesc, PlanError> {
     let (_, desc, _) = query::plan_copy_from(scx, table_name, columns)?;

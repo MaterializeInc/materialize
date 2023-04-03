@@ -34,7 +34,7 @@ use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CsrConnection, CsrSeedAvro,
     CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, DeferredObjectName, Envelope, Ident,
     KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection,
-    PgConfigOption, PgConfigOptionName, ReaderSchemaSelectionStrategy, UnresolvedObjectName,
+    PgConfigOption, PgConfigOptionName, ReaderSchemaSelectionStrategy, UnresolvedItemName,
 };
 use mz_storage_client::types::connections::{Connection, ConnectionContext};
 use mz_storage_client::types::sources::PostgresSourcePublicationDetails;
@@ -56,8 +56,8 @@ use crate::plan::StatementContext;
 fn subsource_gen<'a, T>(
     selected_subsources: &mut Vec<CreateSourceSubsource<Aug>>,
     catalog: &ErsatzCatalog<'a, T>,
-    source_name: &mut UnresolvedObjectName,
-) -> Result<Vec<(UnresolvedObjectName, UnresolvedObjectName, &'a T)>, PlanError> {
+    source_name: &mut UnresolvedItemName,
+) -> Result<Vec<(UnresolvedItemName, UnresolvedItemName, &'a T)>, PlanError> {
     let mut validated_requested_subsources = vec![];
 
     for subsource in selected_subsources {
@@ -101,12 +101,12 @@ fn subsource_gen<'a, T>(
 /// For eg. if source is `a.b`, then `a` will be prepended to the subsource name
 /// so that it's generated in the same schema as source
 fn subsource_name_gen(
-    source_name: &UnresolvedObjectName,
+    source_name: &UnresolvedItemName,
     subsource_name: &String,
-) -> Result<UnresolvedObjectName, PlanError> {
+) -> Result<UnresolvedItemName, PlanError> {
     let mut partial = normalize::unresolved_object_name(source_name.clone())?;
     partial.item = subsource_name.to_string();
-    Ok(UnresolvedObjectName::from(partial))
+    Ok(UnresolvedItemName::from(partial))
 }
 
 /// Purifies a statement, removing any dependencies on external state.
@@ -323,7 +323,7 @@ pub async fn purify_create_source(
                         sql_bail!("FOR ALL TABLES is only valid for non-empty publications");
                     }
                     for table in &publication_tables {
-                        let upstream_name = UnresolvedObjectName::qualified(&[
+                        let upstream_name = UnresolvedItemName::qualified(&[
                             &connection.database,
                             &table.namespace,
                             &table.name,
@@ -366,7 +366,7 @@ pub async fn purify_create_source(
                     (col, qual) => (qual.to_vec(), col.as_str().to_string()),
                 };
 
-                let qual_name = UnresolvedObjectName(qual);
+                let qual_name = UnresolvedItemName(qual);
 
                 let (mut fully_qualified_name, desc) = publication_catalog
                     .resolve(qual_name)
@@ -437,7 +437,7 @@ pub async fn purify_create_source(
                                 let mut full_name = upstream_name.0.clone();
                                 full_name.push(name);
                                 unsupported_cols.push((
-                                    UnresolvedObjectName(full_name).to_ast_string(),
+                                    UnresolvedItemName(full_name).to_ast_string(),
                                     Oid(c.type_oid),
                                 ));
                                 continue;
@@ -569,7 +569,7 @@ pub async fn purify_create_source(
                         }
                     };
                     for (name, (_, desc)) in available_subsources {
-                        let upstream_name = UnresolvedObjectName::from(name.clone());
+                        let upstream_name = UnresolvedItemName::from(name.clone());
                         let subsource_name = subsource_name_gen(source_name, &name.item)?;
                         validated_requested_subsources.push((upstream_name, subsource_name, desc));
                     }
@@ -673,13 +673,13 @@ pub async fn purify_create_source(
             let mut suggested_name = prefix.to_vec();
             suggested_name.push(format!("{}_progress", item).into());
 
-            let partial = normalize::unresolved_object_name(UnresolvedObjectName(suggested_name))?;
+            let partial = normalize::unresolved_object_name(UnresolvedItemName(suggested_name))?;
             let qualified = scx.allocate_qualified_name(partial)?;
             let found_name = scx.catalog.find_available_name(qualified);
             let full_name = scx.catalog.resolve_full_name(&found_name);
 
             (
-                UnresolvedObjectName::from(full_name.clone()),
+                UnresolvedItemName::from(full_name.clone()),
                 crate::names::ResolvedItemName::Item {
                     id: transient_id,
                     qualifiers: found_name.qualifiers,

@@ -62,7 +62,7 @@ use mz_sql_parser::ast::{
     HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator,
     Limit, OrderByExpr, Query, Select, SelectItem, SelectOption, SelectOptionName, SetExpr,
     SetOperator, ShowStatement, SubscriptPosition, TableAlias, TableFactor, TableFunction,
-    TableWithJoins, UnresolvedObjectName, UpdateStatement, Value, Values, WindowFrame,
+    TableWithJoins, UnresolvedItemName, UpdateStatement, Value, Values, WindowFrame,
     WindowFrameBound, WindowFrameUnits, WindowSpec,
 };
 
@@ -2443,7 +2443,7 @@ fn plan_rows_from(
 fn plan_rows_from_internal<'a>(
     qcx: &QueryContext,
     functions: impl IntoIterator<Item = &'a TableFunction<Aug>>,
-    table_name: Option<&UnresolvedObjectName>,
+    table_name: Option<&UnresolvedItemName>,
 ) -> Result<(HirRelationExpr, Scope, Vec<usize>), PlanError> {
     let mut functions = functions.into_iter();
     let mut num_cols = Vec::new();
@@ -2558,9 +2558,9 @@ fn plan_table_function_internal(
     qcx: &QueryContext,
     TableFunction { name, args }: &TableFunction<Aug>,
     with_ordinality: bool,
-    table_name: Option<&UnresolvedObjectName>,
+    table_name: Option<&UnresolvedItemName>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
-    if *name == UnresolvedObjectName::unqualified("values") {
+    if *name == UnresolvedItemName::unqualified("values") {
         // Produce a nice error message for the common typo
         // `SELECT * FROM VALUES (1)`.
         sql_bail!("VALUES expression in FROM clause must be surrounded by parentheses");
@@ -2825,7 +2825,7 @@ fn expand_select_item<'a>(
         } => {
             *ecx.qcx.scx.ambiguous_columns.borrow_mut() = true;
             let table_name =
-                normalize::unresolved_object_name(UnresolvedObjectName(table_name.clone()))?;
+                normalize::unresolved_object_name(UnresolvedItemName(table_name.clone()))?;
             let out: Vec<_> = ecx
                 .scope
                 .items
@@ -3874,7 +3874,7 @@ where
 fn plan_collate(
     ecx: &ExprContext,
     expr: &Expr<Aug>,
-    collation: &UnresolvedObjectName,
+    collation: &UnresolvedItemName,
 ) -> Result<CoercibleScalarExpr, PlanError> {
     if collation.0.len() == 2
         && collation.0[0] == Ident::new("pg_catalog")
@@ -4224,7 +4224,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
 
     // If the name is qualified, it must refer to a column in a table.
     if !names.is_empty() {
-        let table_name = normalize::unresolved_object_name(UnresolvedObjectName(names))?;
+        let table_name = normalize::unresolved_object_name(UnresolvedItemName(names))?;
         let i = ecx
             .scope
             .resolve_table_column(&ecx.qcx.outer_scopes, &table_name, &col_name)?;
@@ -4445,7 +4445,7 @@ fn plan_function<'a>(
 /// If the name does not specify a known built-in function, returns an error.
 pub fn resolve_func(
     ecx: &ExprContext,
-    name: &UnresolvedObjectName,
+    name: &UnresolvedItemName,
     args: &mz_sql_parser::ast::FunctionArgs<Aug>,
 ) -> Result<&'static Func, PlanError> {
     if let Ok(i) = ecx.qcx.scx.resolve_function(name.clone()) {
@@ -4482,7 +4482,7 @@ pub fn resolve_func(
         Some((i, q)) if i.as_str().starts_with("json_") => {
             let mut jsonb_version = q.to_vec();
             jsonb_version.push(Ident::new(i.as_str().replace("json_", "jsonb_")));
-            let jsonb_version = UnresolvedObjectName(jsonb_version);
+            let jsonb_version = UnresolvedItemName(jsonb_version);
             match resolve_func(ecx, &jsonb_version, args) {
                 Ok(_) => Some(format!("Try using {}", jsonb_version)),
                 Err(_) => None,

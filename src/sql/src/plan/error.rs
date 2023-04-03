@@ -27,7 +27,7 @@ use mz_repr::strconv;
 use mz_repr::ColumnName;
 use mz_repr::GlobalId;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::UnresolvedObjectName;
+use mz_sql_parser::ast::UnresolvedItemName;
 use mz_sql_parser::parser::ParserError;
 
 use crate::catalog::{CatalogError, CatalogItemType};
@@ -119,7 +119,7 @@ pub enum PlanError {
         err: Box<PlanError>,
     },
     UnexpectedDuplicateReference {
-        name: UnresolvedObjectName,
+        name: UnresolvedItemName,
     },
     /// Declaration of a recursive type did not match the inferred type.
     RecursiveTypeMismatch(String, Vec<String>, Vec<String>),

@@ -26,7 +26,7 @@ use mz_sql_parser::ast::{
     CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
     CreateTableStatement, CreateTypeStatement, CreateViewStatement, CteBlock, Function,
     FunctionArgs, Ident, IfExistsBehavior, Op, Query, Statement, TableFactor, TableFunction,
-    UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
+    UnresolvedItemName, UnresolvedSchemaName, Value, ViewDefinition,
 };
 
 use crate::names::{
@@ -52,7 +52,7 @@ pub fn column_name(id: Ident) -> ColumnName {
 
 /// Normalizes an unresolved object name.
 pub fn unresolved_object_name(
-    mut name: UnresolvedObjectName,
+    mut name: UnresolvedItemName,
 ) -> Result<PartialObjectName, PlanError> {
     if name.0.len() < 1 || name.0.len() > 3 {
         return Err(PlanError::MisqualifiedName(name.to_string()));
@@ -132,19 +132,19 @@ impl From<SqlValueOrSecret> for Option<Value> {
 /// Unnormalizes an object name.
 ///
 /// This is the inverse of the [`unresolved_object_name`] function.
-pub fn unresolve(name: FullItemName) -> UnresolvedObjectName {
+pub fn unresolve(name: FullItemName) -> UnresolvedItemName {
     let mut out = vec![];
     if let RawDatabaseSpecifier::Name(n) = name.database {
         out.push(Ident::new(n));
     }
     out.push(Ident::new(name.schema));
     out.push(Ident::new(name.item));
-    UnresolvedObjectName(out)
+    UnresolvedItemName(out)
 }
 
 /// Converts an `UnresolvedObjectName` to a `FullObjectName` if the
 /// `UnresolvedObjectName` is fully specified. Otherwise returns an error.
-pub fn full_name(mut raw_name: UnresolvedObjectName) -> Result<FullItemName, PlanError> {
+pub fn full_name(mut raw_name: UnresolvedItemName) -> Result<FullItemName, PlanError> {
     match raw_name.0.len() {
         3 => Ok(FullItemName {
             item: ident(raw_name.0.pop().unwrap()),
@@ -172,13 +172,13 @@ pub fn create_statement(
     scx: &StatementContext,
     mut stmt: Statement<Aug>,
 ) -> Result<String, PlanError> {
-    let allocate_name = |name: &UnresolvedObjectName| -> Result<_, PlanError> {
+    let allocate_name = |name: &UnresolvedItemName| -> Result<_, PlanError> {
         Ok(unresolve(scx.allocate_full_name(
             unresolved_object_name(name.clone())?,
         )?))
     };
 
-    let allocate_temporary_name = |name: &UnresolvedObjectName| -> Result<_, PlanError> {
+    let allocate_temporary_name = |name: &UnresolvedItemName| -> Result<_, PlanError> {
         Ok(unresolve(scx.allocate_temporary_full_name(
             unresolved_object_name(name.clone())?,
         )))
@@ -186,7 +186,7 @@ pub fn create_statement(
 
     fn normalize_function_name(
         scx: &StatementContext,
-        name: &mut UnresolvedObjectName,
+        name: &mut UnresolvedItemName,
     ) -> Result<(), PlanError> {
         let item = scx.resolve_function(name.clone())?;
         *name = unresolve(scx.catalog.resolve_full_name(item.name()));

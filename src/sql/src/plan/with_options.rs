@@ -18,7 +18,7 @@ use mz_repr::strconv;
 use mz_repr::GlobalId;
 use mz_storage_client::types::connections::StringOrSecret;
 
-use crate::ast::{AstInfo, IntervalValue, UnresolvedObjectName, Value, WithOptionValue};
+use crate::ast::{AstInfo, IntervalValue, UnresolvedItemName, Value, WithOptionValue};
 use crate::names::{ResolvedDataType, ResolvedItemName};
 use crate::plan::{Aug, PlanError};
 
@@ -91,7 +91,7 @@ impl ImpliedValue for Object {
     }
 }
 
-impl TryFromValue<WithOptionValue<Aug>> for UnresolvedObjectName {
+impl TryFromValue<WithOptionValue<Aug>> for UnresolvedItemName {
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         Ok(match v {
             WithOptionValue::UnresolvedObjectName(name) => name,
@@ -103,7 +103,7 @@ impl TryFromValue<WithOptionValue<Aug>> for UnresolvedObjectName {
     }
 }
 
-impl ImpliedValue for UnresolvedObjectName {
+impl ImpliedValue for UnresolvedItemName {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide an object name")
     }

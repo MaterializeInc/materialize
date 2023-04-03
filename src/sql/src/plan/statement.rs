@@ -16,12 +16,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
-    ColumnDef, RawObjectName, ShowStatement, TableConstraint, UnresolvedDatabaseName,
+    ColumnDef, RawItemName, ShowStatement, TableConstraint, UnresolvedDatabaseName,
     UnresolvedSchemaName,
 };
 use mz_storage_client::types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
 
-use crate::ast::{Ident, ObjectType, Statement, UnresolvedObjectName};
+use crate::ast::{Ident, ObjectType, Statement, UnresolvedItemName};
 use crate::catalog::{
     CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, SessionCatalog,
 };
@@ -545,7 +545,7 @@ impl<'a> StatementContext<'a> {
     pub fn allocate_resolved_object_name(
         &self,
         id: GlobalId,
-        name: UnresolvedObjectName,
+        name: UnresolvedItemName,
     ) -> Result<ResolvedItemName, PlanError> {
         let partial = normalize::unresolved_object_name(name)?;
         let qualified = self.allocate_qualified_name(partial.clone())?;
@@ -627,13 +627,13 @@ impl<'a> StatementContext<'a> {
         self.catalog.item_exists(name)
     }
 
-    pub fn resolve_item(&self, name: RawObjectName) -> Result<&dyn CatalogItem, PlanError> {
+    pub fn resolve_item(&self, name: RawItemName) -> Result<&dyn CatalogItem, PlanError> {
         match name {
-            RawObjectName::Name(name) => {
+            RawItemName::Name(name) => {
                 let name = normalize::unresolved_object_name(name)?;
                 Ok(self.catalog.resolve_item(&name)?)
             }
-            RawObjectName::Id(id, _) => {
+            RawItemName::Id(id, _) => {
                 let gid = id.parse()?;
                 Ok(self.catalog.get_item(&gid))
             }
@@ -657,7 +657,7 @@ impl<'a> StatementContext<'a> {
 
     pub fn resolve_function(
         &self,
-        name: UnresolvedObjectName,
+        name: UnresolvedItemName,
     ) -> Result<&dyn CatalogItem, PlanError> {
         let name = normalize::unresolved_object_name(name)?;
         Ok(self.catalog.resolve_function(&name)?)

@@ -24,7 +24,7 @@ use std::mem;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    AstInfo, Expr, FunctionArgs, Ident, ShowStatement, UnresolvedObjectName, WithOptionValue,
+    AstInfo, Expr, FunctionArgs, Ident, ShowStatement, UnresolvedItemName, WithOptionValue,
 };
 
 /// The most complete variant of a `SELECT` query expression, optionally
@@ -484,7 +484,7 @@ impl<T: AstInfo> TableWithJoins<T> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TableFactor<T: AstInfo> {
     Table {
-        name: T::ObjectName,
+        name: T::ItemName,
         alias: Option<TableAlias>,
     },
     Function {
@@ -584,7 +584,7 @@ impl_display_t!(TableFactor);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TableFunction<T: AstInfo> {
-    pub name: UnresolvedObjectName,
+    pub name: UnresolvedItemName,
     pub args: FunctionArgs<T>,
 }
 impl<T: AstInfo> AstDisplay for TableFunction<T> {

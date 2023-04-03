@@ -600,7 +600,7 @@ impl<'a> Parser<'a> {
         Ok(parse(self)?.into_expr())
     }
 
-    fn parse_function(&mut self, name: UnresolvedObjectName) -> Result<Expr<Raw>, ParserError> {
+    fn parse_function(&mut self, name: UnresolvedItemName) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let distinct = matches!(
             self.parse_at_most_one_keyword(&[ALL, DISTINCT], &format!("function: {}", name))?,
@@ -788,7 +788,7 @@ impl<'a> Parser<'a> {
         let expr = self.parse_expr()?;
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: UnresolvedObjectName::unqualified("extract"),
+            name: UnresolvedItemName::unqualified("extract"),
             args: FunctionArgs::args(vec![Expr::Value(Value::String(field)), expr]),
             filter: None,
             over: None,
@@ -851,7 +851,7 @@ impl<'a> Parser<'a> {
         }
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: UnresolvedObjectName::unqualified(name),
+            name: UnresolvedItemName::unqualified(name),
             args: FunctionArgs::args(exprs),
             filter: None,
             over: None,
@@ -869,7 +869,7 @@ impl<'a> Parser<'a> {
         let haystack = self.parse_expr()?;
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: UnresolvedObjectName::unqualified("position"),
+            name: UnresolvedItemName::unqualified("position"),
             args: FunctionArgs::args(vec![needle, haystack]),
             filter: None,
             over: None,
@@ -1095,7 +1095,7 @@ impl<'a> Parser<'a> {
                 AT => {
                     self.expect_keywords(&[TIME, ZONE])?;
                     Ok(Expr::Function(Function {
-                        name: UnresolvedObjectName(vec!["timezone".into()]),
+                        name: UnresolvedItemName(vec!["timezone".into()]),
                         args: FunctionArgs::args(vec![self.parse_subexpr(precedence)?, expr]),
                         filter: None,
                         over: None,
@@ -1219,7 +1219,7 @@ impl<'a> Parser<'a> {
 
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: UnresolvedObjectName::unqualified("substring"),
+            name: UnresolvedItemName::unqualified("substring"),
             args: FunctionArgs::args(exprs),
             filter: None,
             over: None,
@@ -4188,7 +4188,7 @@ impl<'a> Parser<'a> {
     /// Parse a SQL datatype (in the context of a CREATE TABLE statement for example)
     fn parse_data_type(&mut self) -> Result<RawDataType, ParserError> {
         let other = |name: &str| RawDataType::Other {
-            name: RawObjectName::Name(UnresolvedObjectName::unqualified(name)),
+            name: RawItemName::Name(UnresolvedItemName::unqualified(name)),
             typ_mod: vec![],
         };
 
@@ -4202,16 +4202,16 @@ impl<'a> Parser<'a> {
                         "bpchar"
                     };
                     RawDataType::Other {
-                        name: RawObjectName::Name(UnresolvedObjectName::unqualified(name)),
+                        name: RawItemName::Name(UnresolvedItemName::unqualified(name)),
                         typ_mod: self.parse_typ_mod()?,
                     }
                 }
                 BPCHAR => RawDataType::Other {
-                    name: RawObjectName::Name(UnresolvedObjectName::unqualified("bpchar")),
+                    name: RawItemName::Name(UnresolvedItemName::unqualified("bpchar")),
                     typ_mod: self.parse_typ_mod()?,
                 },
                 VARCHAR => RawDataType::Other {
-                    name: RawObjectName::Name(UnresolvedObjectName::unqualified("varchar")),
+                    name: RawItemName::Name(UnresolvedItemName::unqualified("varchar")),
                     typ_mod: self.parse_typ_mod()?,
                 },
                 STRING => other("text"),
@@ -4220,7 +4220,7 @@ impl<'a> Parser<'a> {
                 BIGINT => other("int8"),
                 SMALLINT => other("int2"),
                 DEC | DECIMAL => RawDataType::Other {
-                    name: RawObjectName::Name(UnresolvedObjectName::unqualified("numeric")),
+                    name: RawItemName::Name(UnresolvedItemName::unqualified("numeric")),
                     typ_mod: self.parse_typ_mod()?,
                 },
                 DOUBLE => {
@@ -4276,7 +4276,7 @@ impl<'a> Parser<'a> {
                 _ => {
                     self.prev_token();
                     RawDataType::Other {
-                        name: RawObjectName::Name(self.parse_object_name()?),
+                        name: RawItemName::Name(self.parse_object_name()?),
                         typ_mod: self.parse_typ_mod()?,
                     }
                 }
@@ -4380,12 +4380,12 @@ impl<'a> Parser<'a> {
 
     fn parse_deferred_object_name(&mut self) -> Result<DeferredObjectName<Raw>, ParserError> {
         Ok(match self.parse_raw_name()? {
-            named @ RawObjectName::Id(..) => DeferredObjectName::Named(named),
-            RawObjectName::Name(name) => DeferredObjectName::Deferred(name),
+            named @ RawItemName::Id(..) => DeferredObjectName::Named(named),
+            RawItemName::Name(name) => DeferredObjectName::Deferred(name),
         })
     }
 
-    fn parse_raw_name(&mut self) -> Result<RawObjectName, ParserError> {
+    fn parse_raw_name(&mut self) -> Result<RawItemName, ParserError> {
         if self.consume_token(&Token::LBracket) {
             let id = match self.next_token() {
                 Some(Token::Ident(id)) => id,
@@ -4402,9 +4402,9 @@ impl<'a> Parser<'a> {
                 );
             }
             self.expect_token(&Token::RBracket)?;
-            Ok(RawObjectName::Id(id, name))
+            Ok(RawItemName::Id(id, name))
         } else {
-            Ok(RawObjectName::Name(self.parse_object_name()?))
+            Ok(RawItemName::Name(self.parse_object_name()?))
         }
     }
 
@@ -4422,8 +4422,8 @@ impl<'a> Parser<'a> {
 
     /// Parse a possibly qualified, possibly quoted object identifier, e.g.
     /// `foo` or `myschema."table"`
-    fn parse_object_name(&mut self) -> Result<UnresolvedObjectName, ParserError> {
-        Ok(UnresolvedObjectName(self.parse_identifiers()?))
+    fn parse_object_name(&mut self) -> Result<UnresolvedItemName, ParserError> {
+        Ok(UnresolvedItemName(self.parse_identifiers()?))
     }
 
     ///Parse one or more simple one-word identifiers separated by a '.'
@@ -4495,7 +4495,7 @@ impl<'a> Parser<'a> {
                     Ok(Expr::QualifiedWildcard(id_parts))
                 } else if self.consume_token(&Token::LParen) {
                     self.prev_token();
-                    self.parse_function(UnresolvedObjectName(id_parts))
+                    self.parse_function(UnresolvedItemName(id_parts))
                 } else {
                     Ok(Expr::Identifier(id_parts))
                 }
@@ -4548,7 +4548,7 @@ impl<'a> Parser<'a> {
 
     fn parse_delete(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(FROM)?;
-        let table_name = RawObjectName::Name(self.parse_object_name()?);
+        let table_name = RawItemName::Name(self.parse_object_name()?);
         let alias = self.parse_optional_table_alias()?;
         let using = if self.parse_keyword(USING) {
             self.parse_comma_separated(Parser::parse_table_and_joins)?
@@ -5299,7 +5299,7 @@ impl<'a> Parser<'a> {
         } else {
             let name = self.parse_raw_name()?;
             match name {
-                RawObjectName::Name(name) if self.consume_token(&Token::LParen) => {
+                RawItemName::Name(name) if self.consume_token(&Token::LParen) => {
                     let args = self.parse_optional_args(false)?;
                     let alias = self.parse_optional_table_alias()?;
                     let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
@@ -5402,7 +5402,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_update(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let table_name = RawObjectName::Name(self.parse_object_name()?);
+        let table_name = RawItemName::Name(self.parse_object_name()?);
 
         self.expect_keyword(SET)?;
         let assignments = self.parse_comma_separated(Parser::parse_assignment)?;

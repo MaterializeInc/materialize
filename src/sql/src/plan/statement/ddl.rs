@@ -38,7 +38,7 @@ use mz_sql_parser::ast::{
     AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
     CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredObjectName,
     GrantRoleStatement, RevokeRoleStatement, SshConnectionOption, UnresolvedName,
-    UnresolvedObjectName, UnresolvedSchemaName, Value,
+    UnresolvedItemName, UnresolvedSchemaName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -370,7 +370,7 @@ generate_extracted_config!(
     PgConfigOption,
     (Details, String),
     (Publication, String),
-    (TextColumns, Vec::<UnresolvedObjectName>, Default(vec![]))
+    (TextColumns, Vec::<UnresolvedItemName>, Default(vec![]))
 );
 
 pub fn plan_create_source(
@@ -590,7 +590,7 @@ pub fn plan_create_source(
                 let (qual, col) = match name.0.split_last().expect("must have at least one element")
                 {
                     (col, qual) => (
-                        UnresolvedObjectName(qual.to_vec()),
+                        UnresolvedItemName(qual.to_vec()),
                         col.as_str().to_string(),
                     ),
                 };
@@ -3815,7 +3815,7 @@ fn plan_alter_item_owner(
     scx: &StatementContext,
     object_type: ObjectType,
     if_exists: bool,
-    name: UnresolvedObjectName,
+    name: UnresolvedItemName,
     new_owner: RoleId,
 ) -> Result<Plan, PlanError> {
     match resolve_object(scx, name, if_exists)? {
@@ -4334,7 +4334,7 @@ fn resolve_schema<'a>(
 
 fn resolve_object<'a>(
     scx: &'a StatementContext,
-    name: UnresolvedObjectName,
+    name: UnresolvedItemName,
     if_exists: bool,
 ) -> Result<Option<&'a dyn CatalogItem>, PlanError> {
     let name = normalize::unresolved_object_name(name)?;

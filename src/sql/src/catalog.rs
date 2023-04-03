@@ -32,7 +32,7 @@ use mz_expr::MirScalarExpr;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
-use mz_sql_parser::ast::UnresolvedObjectName;
+use mz_sql_parser::ast::UnresolvedItemName;
 use mz_sql_parser::ast::{Expr, ObjectType};
 use mz_storage_client::types::connections::Connection;
 use mz_storage_client::types::sources::SourceDesc;
@@ -1020,8 +1020,8 @@ impl<'a, T> ErsatzCatalog<'a, T> {
     ///   `self.0`.
     pub fn resolve(
         &self,
-        item: UnresolvedObjectName,
-    ) -> Result<(UnresolvedObjectName, &'a T), PlanError> {
+        item: UnresolvedItemName,
+    ) -> Result<(UnresolvedItemName, &'a T), PlanError> {
         let name = normalize::unresolved_object_name(item)?;
 
         let schemas = match self.0.get(&name.item) {
@@ -1060,7 +1060,7 @@ impl<'a, T> ErsatzCatalog<'a, T> {
         };
 
         Ok((
-            UnresolvedObjectName::qualified(&[database, schema, &name.item]),
+            UnresolvedItemName::qualified(&[database, schema, &name.item]),
             desc,
         ))
     }

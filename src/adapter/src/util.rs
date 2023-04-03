@@ -24,7 +24,7 @@ use mz_sql::plan::StatementDesc;
 use mz_sql::session::vars::Var;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    CreateIndexStatement, FetchStatement, Ident, Raw, RawClusterName, RawObjectName, Statement,
+    CreateIndexStatement, FetchStatement, Ident, Raw, RawClusterName, RawItemName, Statement,
 };
 use mz_stash::StashError;
 use mz_storage_client::controller::StorageError;
@@ -196,7 +196,7 @@ pub fn index_sql(
 
     CreateIndexStatement::<Raw> {
         name: Some(Ident::new(index_name)),
-        on_name: RawObjectName::Name(mz_sql::normalize::unresolve(view_name)),
+        on_name: RawItemName::Name(mz_sql::normalize::unresolve(view_name)),
         in_cluster: Some(RawClusterName::Resolved(cluster_id.to_string())),
         key_parts: Some(
             keys.iter()

@@ -19,7 +19,7 @@ use crate::ast::visit_mut::{self, VisitMut};
 use crate::ast::{
     AstInfo, CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
     CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
-    CreateViewStatement, Expr, Ident, Query, Raw, RawObjectName, Statement, UnresolvedObjectName,
+    CreateViewStatement, Expr, Ident, Query, Raw, RawItemName, Statement, UnresolvedItemName,
     ViewDefinition,
 };
 use crate::names::FullItemName;
@@ -76,8 +76,8 @@ pub fn create_stmt_rename_refs(
     from_name: FullItemName,
     to_item_name: String,
 ) -> Result<(), String> {
-    let from_object = UnresolvedObjectName::from(from_name.clone());
-    let maybe_update_object_name = |object_name: &mut UnresolvedObjectName| {
+    let from_object = UnresolvedItemName::from(from_name.clone());
+    let maybe_update_object_name = |object_name: &mut UnresolvedItemName| {
         if object_name.0 == from_object.0 {
             // The last name in an ObjectName is the item name. The item name
             // does not have a fixed index.
@@ -256,7 +256,7 @@ impl<'a, 'ast> Visit<'ast, Raw> for QueryIdentAgg<'a> {
         }
     }
 
-    fn visit_unresolved_object_name(&mut self, unresolved_object_name: &'ast UnresolvedObjectName) {
+    fn visit_unresolved_object_name(&mut self, unresolved_object_name: &'ast UnresolvedItemName) {
         let names = &unresolved_object_name.0;
         self.check_failure(names);
         // Every item is used as an `ObjectName` at least once, which
@@ -276,9 +276,9 @@ impl<'a, 'ast> Visit<'ast, Raw> for QueryIdentAgg<'a> {
         }
     }
 
-    fn visit_object_name(&mut self, object_name: &'ast <Raw as AstInfo>::ObjectName) {
+    fn visit_object_name(&mut self, object_name: &'ast <Raw as AstInfo>::ItemName) {
         match object_name {
-            RawObjectName::Name(n) | RawObjectName::Id(_, n) => {
+            RawItemName::Name(n) | RawItemName::Id(_, n) => {
                 self.visit_unresolved_object_name(n)
             }
         }
@@ -335,16 +335,16 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlRewriter {
     }
     fn visit_unresolved_object_name_mut(
         &mut self,
-        unresolved_object_name: &'ast mut UnresolvedObjectName,
+        unresolved_object_name: &'ast mut UnresolvedItemName,
     ) {
         self.maybe_rewrite_idents(&mut unresolved_object_name.0);
     }
     fn visit_object_name_mut(
         &mut self,
-        object_name: &'ast mut <mz_sql_parser::ast::Raw as AstInfo>::ObjectName,
+        object_name: &'ast mut <mz_sql_parser::ast::Raw as AstInfo>::ItemName,
     ) {
         match object_name {
-            RawObjectName::Name(n) | RawObjectName::Id(_, n) => self.maybe_rewrite_idents(&mut n.0),
+            RawItemName::Name(n) | RawItemName::Id(_, n) => self.maybe_rewrite_idents(&mut n.0),
         }
     }
 }
@@ -365,10 +365,10 @@ struct CreateSqlIdReplacer<'a> {
 impl<'ast> VisitMut<'ast, Raw> for CreateSqlIdReplacer<'_> {
     fn visit_object_name_mut(
         &mut self,
-        object_name: &'ast mut <mz_sql_parser::ast::Raw as AstInfo>::ObjectName,
+        object_name: &'ast mut <mz_sql_parser::ast::Raw as AstInfo>::ItemName,
     ) {
         match object_name {
-            RawObjectName::Id(id, _) => {
+            RawItemName::Id(id, _) => {
                 let old_id = match id.parse() {
                     Ok(old_id) => old_id,
                     Err(_) => panic!("invalid persisted global id {id}"),
@@ -377,7 +377,7 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlIdReplacer<'_> {
                     *id = new_id.to_string();
                 }
             }
-            RawObjectName::Name(_) => {}
+            RawItemName::Name(_) => {}
         }
     }
 }
