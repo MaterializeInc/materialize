@@ -61,73 +61,97 @@ where
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
 {
+    // Note also the special case in `ReducePlan::keys()`.
+    if plan == ReducePlan::DistinctNegated {
+        let (output, errs) = build_distinct_retractions(debug_name, collection);
+        return CollectionBundle::from_collections(output, errs);
+    }
+
+    let (arrangement, err_collection) =
+        render_reduce_plan_inner(debug_name, plan, collection, err_input, key_arity);
+    CollectionBundle::from_columns(
+        0..key_arity,
+        ArrangementFlavor::Local(
+            arrangement,
+            err_collection.arrange_named("Arrange bundle err"),
+        ),
+    )
+}
+
+fn render_reduce_plan_inner<G, T>(
+    debug_name: &str,
+    plan: ReducePlan,
+    collection: Collection<G, (Row, Row), Diff>,
+    err_input: Collection<G, DataflowError, Diff>,
+    key_arity: usize,
+) -> (Arrangement<G, Row>, Collection<G, DataflowError, Diff>)
+where
+    G: Scope,
+    G::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice,
+{
     let mut err_collection = err_input;
-    // Convenience wrapper to render the right kind of hierarchical plan.
-    let mut build_hierarchical =
-        |collection: Collection<G, (Row, Row), Diff>, expr: HierarchicalPlan| match expr {
-            HierarchicalPlan::Monotonic(expr) => {
-                let (output, errs) = build_monotonic(debug_name, collection, expr);
-                err_collection = err_collection.concat(&errs);
-                output
-            }
-            HierarchicalPlan::Bucketed(expr) => {
-                let (bucketed_output, bucketed_errs) = build_bucketed(debug_name, collection, expr);
-                if let Some(errs) = bucketed_errs {
-                    err_collection = err_collection.concat(&errs);
-                }
-                bucketed_output
-            }
-        };
 
-    // Convenience wrapper to render the right kind of basic plan.
-    let build_basic = |collection: Collection<G, (Row, Row), Diff>, expr: BasicPlan| match expr {
-        BasicPlan::Single(index, aggr) => {
-            build_basic_aggregate(debug_name, collection, index, &aggr)
-        }
-        BasicPlan::Multiple(aggrs) => build_basic_aggregates(debug_name, collection, aggrs),
-    };
-
-    let arrangement_or_bundle: ArrangementOrCollection<G> = match plan {
+    let arrangement: Arrangement<G, Row> = match plan {
         // If we have no aggregations or just a single type of reduction, we
         // can go ahead and render them directly.
         ReducePlan::Distinct => {
             let (arranged_output, errs) = build_distinct(debug_name, collection);
             err_collection = err_collection.concat(&errs);
-            arranged_output.into()
+            arranged_output
         }
-        ReducePlan::DistinctNegated => {
-            let (output, errs) = build_distinct_retractions(debug_name, collection);
-            err_collection = err_collection.concat(&errs);
-            output.into()
-        }
+        ReducePlan::DistinctNegated => panic!("should have been handled in render_reduce_plan()"),
         ReducePlan::Accumulable(expr) => {
             let (arranged_output, errs) = build_accumulable(debug_name, collection, expr);
             err_collection = err_collection.concat(&errs);
-            arranged_output.into()
+            arranged_output
         }
-        ReducePlan::Hierarchical(expr) => build_hierarchical(collection, expr).into(),
-        ReducePlan::Basic(expr) => build_basic(collection, expr).into(),
+        ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(expr)) => {
+            let (output, errs) = build_monotonic(debug_name, collection, expr);
+            err_collection = err_collection.concat(&errs);
+            output
+        }
+        ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(expr)) => {
+            let (output, errs) = build_bucketed(debug_name, collection, expr);
+            if let Some(e) = errs {
+                err_collection = err_collection.concat(&e);
+            }
+            output
+        }
+        ReducePlan::Basic(BasicPlan::Single(index, aggr)) => {
+            build_basic_aggregate(debug_name, collection, index, &aggr)
+        }
+        ReducePlan::Basic(BasicPlan::Multiple(aggrs)) => {
+            build_basic_aggregates(debug_name, collection, aggrs)
+        }
         // Otherwise, we need to render something different for each type of
         // reduction, and then stitch them together.
         ReducePlan::Collation(expr) => {
             // First, we need to render our constituent aggregations.
             let mut to_collate = vec![];
 
-            if let Some(hierarchical) = expr.hierarchical {
-                to_collate.push((
-                    ReductionType::Hierarchical,
-                    build_hierarchical(collection.clone(), hierarchical),
-                ));
+            for plan in [
+                expr.hierarchical.map(ReducePlan::Hierarchical),
+                expr.accumulable.map(ReducePlan::Accumulable),
+                expr.basic.map(ReducePlan::Basic),
+            ]
+            .into_iter()
+            .flat_map(std::convert::identity)
+            {
+                let r#type = ReductionType::try_from(&plan)
+                    .expect("only representable reduction types were used above");
+
+                let (arrangement, errs) = render_reduce_plan_inner(
+                    debug_name,
+                    plan,
+                    collection.clone(),
+                    err_collection,
+                    key_arity,
+                );
+                err_collection = errs;
+                to_collate.push((r#type, arrangement));
             }
-            if let Some(accumulable) = expr.accumulable {
-                let (arranged_output, errs) =
-                    build_accumulable(debug_name, collection.clone(), accumulable);
-                err_collection = err_collection.concat(&errs);
-                to_collate.push((ReductionType::Accumulable, arranged_output));
-            }
-            if let Some(basic) = expr.basic {
-                to_collate.push((ReductionType::Basic, build_basic(collection.clone(), basic)));
-            }
+
             // Now we need to collate them together.
             build_collation(
                 debug_name,
@@ -135,76 +159,9 @@ where
                 expr.aggregate_types,
                 &mut collection.scope(),
             )
-            .into()
         }
     };
-    arrangement_or_bundle.into_bundle(key_arity, err_collection)
-}
-
-/// A type wrapping either an arrangement or a single collection.
-enum ArrangementOrCollection<G>
-where
-    G: Scope,
-    G::Timestamp: Lattice,
-{
-    /// Wrap an arrangement
-    Arrangement(Arrangement<G, Row>),
-    /// Wrap a collection
-    Collection(Collection<G, Row, Diff>),
-}
-
-impl<G> ArrangementOrCollection<G>
-where
-    G: Scope,
-    G::Timestamp: Lattice,
-{
-    /// Convert to a [CollectionBundle] by either supplying the arrangement or construction from
-    /// collections.
-    ///
-    /// * `key_arity` - The number of columns in the key. Only used for arrangement variants.
-    /// * `err_input` - A collection containing the error stream.
-    fn into_bundle<T>(
-        self,
-        key_arity: usize,
-        err_input: Collection<G, DataflowError, Diff>,
-    ) -> CollectionBundle<G, Row, T>
-    where
-        G::Timestamp: Lattice + Refines<T>,
-        T: Timestamp + Lattice,
-    {
-        match self {
-            ArrangementOrCollection::Arrangement(arrangement) => CollectionBundle::from_columns(
-                0..key_arity,
-                ArrangementFlavor::Local(
-                    arrangement,
-                    err_input.arrange_named("Arrange bundle err"),
-                ),
-            ),
-            ArrangementOrCollection::Collection(oks) => {
-                CollectionBundle::from_collections(oks, err_input)
-            }
-        }
-    }
-}
-
-impl<G> From<Arrangement<G, Row>> for ArrangementOrCollection<G>
-where
-    G: Scope,
-    G::Timestamp: Lattice,
-{
-    fn from(arrangement: Arrangement<G, Row>) -> Self {
-        ArrangementOrCollection::Arrangement(arrangement)
-    }
-}
-
-impl<G> From<Collection<G, Row, Diff>> for ArrangementOrCollection<G>
-where
-    G: Scope,
-    G::Timestamp: Lattice,
-{
-    fn from(collection: Collection<G, Row, Diff>) -> Self {
-        ArrangementOrCollection::Collection(collection)
-    }
+    (arrangement, err_collection)
 }
 
 impl<G, T> Context<G, Row, T>
