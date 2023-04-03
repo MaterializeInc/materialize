@@ -1728,12 +1728,16 @@ pub fn plan_create_view(
                     scx.catalog.resolve_full_name(item.name())
                 );
             }
-            Some(id)
+            scx.catalog
+                .item_dependents(id)
+                .into_iter()
+                .map(|id| id.unwrap_item_id())
+                .collect()
         } else {
-            None
+            Vec::new()
         }
     } else {
-        None
+        Vec::new()
     };
 
     // Check for an object in the catalog with this same name
@@ -1784,6 +1788,13 @@ pub fn plan_create_materialized_view(
     let partial_name = normalize::unresolved_item_name(stmt.name)?;
     let name = scx.allocate_qualified_name(partial_name.clone())?;
 
+    if !scx
+        .catalog
+        .is_system_schema_specifier(&name.qualifiers.schema_spec)
+    {
+        ensure_cluster_is_not_linked(scx, cluster_id)?;
+    }
+
     let query::PlannedQuery {
         mut expr,
         mut desc,
@@ -1805,27 +1816,33 @@ pub fn plan_create_materialized_view(
         sql_bail!("column {} specified more than once", dup.as_str().quoted());
     }
 
-    let mut replace = None;
+    let mut replace = Vec::new();
     let mut if_not_exists = false;
     match stmt.if_exists {
         IfExistsBehavior::Replace => {
             let if_exists = true;
             let cascade = false;
-            replace = plan_drop_item(
+            let replace_id = plan_drop_item(
                 scx,
                 ObjectType::MaterializedView,
                 if_exists,
                 partial_name.into(),
                 cascade,
             )?;
-            if let Some(id) = &replace {
-                if expr.depends_on().contains(id) {
-                    let item = scx.catalog.get_item(id);
+            if let Some(id) = replace_id {
+                if expr.depends_on().contains(&id) {
+                    let item = scx.catalog.get_item(&id);
                     sql_bail!(
                         "cannot replace materialized view {0}: depended upon by new {0} definition",
                         scx.catalog.resolve_full_name(item.name())
                     );
                 }
+                replace.extend(
+                    scx.catalog
+                        .item_dependents(id)
+                        .into_iter()
+                        .map(|id| id.unwrap_item_id()),
+                );
             }
         }
         IfExistsBehavior::Skip => if_not_exists = true,
@@ -2354,6 +2371,12 @@ pub fn plan_create_index(
         None => scx.resolve_cluster(None)?.id(),
         Some(in_cluster) => in_cluster.id,
     };
+    if !scx
+        .catalog
+        .is_system_schema_specifier(&index_name.qualifiers.schema_spec)
+    {
+        ensure_cluster_is_not_linked(scx, cluster_id)?;
+    }
     *in_cluster = Some(ResolvedClusterName {
         id: cluster_id,
         print_name: None,
@@ -2773,6 +2796,7 @@ pub fn plan_create_cluster_replica(
     }: CreateClusterReplicaStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let cluster = scx.catalog.resolve_cluster(Some(&of_cluster.to_string()))?;
+    ensure_cluster_is_not_linked(scx, cluster.id())?;
     if is_storage_cluster(scx, cluster)
         && cluster.bound_objects().len() > 0
         && cluster.replicas().len() > 0
@@ -3309,6 +3333,7 @@ pub fn plan_create_connection(
     };
     Ok(Plan::CreateConnection(plan))
 }
+
 fn plan_drop_database(
     scx: &StatementContext,
     if_exists: bool,
@@ -3371,6 +3396,7 @@ pub fn plan_drop_objects(
             ids.push(id);
         }
     }
+    let ids = scx.catalog.object_dependents(ids);
 
     Ok(Plan::DropObjects(DropObjectsPlan { ids, object_type }))
 }
@@ -3437,6 +3463,7 @@ fn plan_drop_cluster(
             if !cascade && !cluster.bound_objects().is_empty() {
                 sql_bail!("cannot drop cluster with active objects");
             }
+            ensure_cluster_is_not_linked(scx, cluster.id())?;
             Some(cluster.id())
         }
         None => None,
@@ -3457,7 +3484,11 @@ fn plan_drop_cluster_replica(
     if_exists: bool,
     name: QualifiedReplica,
 ) -> Result<Option<(ClusterId, ReplicaId)>, PlanError> {
-    resolve_cluster_replica(scx, &name, if_exists)
+    let id = resolve_cluster_replica(scx, &name, if_exists)?;
+    if let Some((cluster_id, _)) = &id {
+        ensure_cluster_is_not_linked(scx, *cluster_id)?;
+    }
+    Ok(id)
 }
 
 fn plan_drop_item(
@@ -4311,5 +4342,23 @@ fn resolve_item<'a>(
         // TODO(benesch/jkosh44): generate a notice indicating items do not exist.
         Err(_) if if_exists => Ok(None),
         Err(e) => Err(e.into()),
+    }
+}
+
+/// Returns an error if the given cluster is a linked cluster
+fn ensure_cluster_is_not_linked(
+    scx: &StatementContext,
+    cluster_id: ClusterId,
+) -> Result<(), PlanError> {
+    let cluster = scx.catalog.get_cluster(cluster_id);
+    if let Some(linked_id) = cluster.linked_object_id() {
+        let cluster_name = scx.catalog.get_cluster(cluster_id).name().to_string();
+        let linked_object_name = scx.catalog.get_item(&linked_id).name().to_string();
+        Err(PlanError::ModifyLinkedCluster {
+            cluster_name,
+            linked_object_name,
+        })
+    } else {
+        Ok(())
     }
 }

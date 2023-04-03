@@ -517,8 +517,8 @@ pub struct CreateTablePlan {
 pub struct CreateViewPlan {
     pub name: QualifiedItemName,
     pub view: View,
-    /// The ID of the object that this view is replacing, if any.
-    pub replace: Option<GlobalId>,
+    /// The IDs of the objects that this view is replacing, if any.
+    pub replace: Vec<GlobalId>,
     pub if_not_exists: bool,
     /// True if the view contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
@@ -529,8 +529,8 @@ pub struct CreateViewPlan {
 pub struct CreateMaterializedViewPlan {
     pub name: QualifiedItemName,
     pub materialized_view: MaterializedView,
-    /// The ID of the object that this view is replacing, if any.
-    pub replace: Option<GlobalId>,
+    /// The IDs of the objects that this view is replacing, if any.
+    pub replace: Vec<GlobalId>,
     pub if_not_exists: bool,
     /// True if the materialized view contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.

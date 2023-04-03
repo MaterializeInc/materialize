@@ -17,7 +17,7 @@ use mz_ore::str::StrExt;
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier, SchemaSpecifier};
-use mz_sql::plan::{AlterOwnerPlan, Plan};
+use mz_sql::plan::{AlterOwnerPlan, CreateMaterializedViewPlan, CreateViewPlan, Plan};
 use mz_sql_parser::ast::{ObjectType, QualifiedReplica};
 
 use crate::catalog::Catalog;
@@ -339,8 +339,6 @@ fn generate_required_ownership(plan: &Plan) -> Vec<Ownership> {
         | Plan::CreateSecret(_)
         | Plan::CreateSink(_)
         | Plan::CreateTable(_)
-        | Plan::CreateView(_)
-        | Plan::CreateMaterializedView(_)
         | Plan::CreateIndex(_)
         | Plan::CreateType(_)
         | Plan::DiscardTemp
@@ -376,6 +374,11 @@ fn generate_required_ownership(plan: &Plan) -> Vec<Ownership> {
         | Plan::Raise(_)
         | Plan::GrantRole(_)
         | Plan::RevokeRole(_) => Vec::new(),
+        Plan::CreateView(CreateViewPlan { replace, .. })
+        | Plan::CreateMaterializedView(CreateMaterializedViewPlan { replace, .. }) => replace
+            .iter()
+            .map(|id| Ownership(ObjectId::Item(*id)))
+            .collect(),
         Plan::DropObjects(plan) => plan.ids.iter().cloned().map(Ownership).collect(),
         Plan::AlterIndexSetOptions(plan) => vec![Ownership(ObjectId::Item(plan.id))],
         Plan::AlterIndexResetOptions(plan) => vec![Ownership(ObjectId::Item(plan.id))],

@@ -242,6 +242,156 @@ impl CatalogState {
         }
     }
 
+    /// Returns all the IDs of all objects that depend on `ids`, including `ids` themselves.
+    ///
+    /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
+    /// earlier in the list than the roots. This is particularly userful for the order to drop
+    /// objects.
+    fn object_dependents(
+        &self,
+        object_ids: Vec<ObjectId>,
+        seen: &mut BTreeSet<ObjectId>,
+    ) -> Vec<ObjectId> {
+        let mut dependents = Vec::new();
+        for object_id in object_ids {
+            match object_id {
+                ObjectId::Cluster(id) => {
+                    dependents.extend_from_slice(&self.cluster_dependents(id, seen))
+                }
+                id @ ObjectId::ClusterReplica(_) => {
+                    seen.insert(id.clone());
+                    dependents.push(id);
+                }
+                ObjectId::Database(id) => {
+                    dependents.extend_from_slice(&self.database_dependents(id, seen))
+                }
+                ObjectId::Schema((database_id, schema_id)) => {
+                    dependents.extend_from_slice(&self.schema_dependents(
+                        database_id,
+                        schema_id,
+                        seen,
+                    ));
+                }
+                id @ ObjectId::Role(_) => {
+                    seen.insert(id.clone());
+                    dependents.push(id);
+                }
+                ObjectId::Item(id) => dependents.extend_from_slice(&self.item_dependents(id, seen)),
+            }
+        }
+        dependents
+    }
+
+    /// Returns all the IDs of all objects that depend on `cluster_id`, including `cluster_id`
+    /// itself.
+    ///
+    /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
+    /// earlier in the list than the roots. This is particularly userful for the order to drop
+    /// objects.
+    fn cluster_dependents(
+        &self,
+        cluster_id: ClusterId,
+        seen: &mut BTreeSet<ObjectId>,
+    ) -> Vec<ObjectId> {
+        let mut dependents = Vec::new();
+        let object_id = ObjectId::Cluster(cluster_id);
+        if !seen.contains(&object_id) {
+            seen.insert(object_id.clone());
+            let cluster = self.get_cluster(cluster_id);
+            for item_id in cluster.bound_objects() {
+                dependents.extend_from_slice(&self.item_dependents(*item_id, seen));
+            }
+            for replica_id in cluster.replicas().values() {
+                seen.insert(ObjectId::ClusterReplica((cluster_id, *replica_id)));
+                dependents.push(ObjectId::ClusterReplica((cluster_id, *replica_id)));
+            }
+            dependents.push(object_id);
+        }
+        dependents
+    }
+
+    /// Returns all the IDs of all objects that depend on `database_id`, including `database_id`
+    /// itself.
+    ///
+    /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
+    /// earlier in the list than the roots. This is particularly userful for the order to drop
+    /// objects.
+    fn database_dependents(
+        &self,
+        database_id: DatabaseId,
+        seen: &mut BTreeSet<ObjectId>,
+    ) -> Vec<ObjectId> {
+        let mut dependents = Vec::new();
+        let object_id = ObjectId::Database(database_id);
+        if !seen.contains(&object_id) {
+            seen.insert(object_id.clone());
+            let database = self.get_database(&database_id);
+            for schema_id in database.schemas().values() {
+                dependents.extend_from_slice(&self.schema_dependents(
+                    database_id,
+                    *schema_id,
+                    seen,
+                ));
+            }
+            dependents.push(object_id);
+        }
+        dependents
+    }
+
+    /// Returns all the IDs of all objects that depend on `schema_id`, including `schema_id`
+    /// itself.
+    ///
+    /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
+    /// earlier in the list than the roots. This is particularly userful for the order to drop
+    /// objects.
+    fn schema_dependents(
+        &self,
+        database_id: DatabaseId,
+        schema_id: SchemaId,
+        seen: &mut BTreeSet<ObjectId>,
+    ) -> Vec<ObjectId> {
+        let mut dependents = Vec::new();
+        let object_id = ObjectId::Schema((database_id, schema_id));
+        if !seen.contains(&object_id) {
+            seen.insert(object_id.clone());
+            let schema = self
+                .get_database(&database_id)
+                .schemas_by_id
+                .get(&schema_id)
+                .expect("catalog out of sync");
+            for item_id in schema.items().values() {
+                dependents.extend_from_slice(&self.item_dependents(*item_id, seen));
+            }
+            dependents.push(object_id)
+        }
+        dependents
+    }
+
+    /// Returns all the IDs of all objects that depend on `item_id`, including `item_id`
+    /// itself.
+    ///
+    /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
+    /// earlier in the list than the roots. This is particularly userful for the order to drop
+    /// objects.
+    fn item_dependents(&self, item_id: GlobalId, seen: &mut BTreeSet<ObjectId>) -> Vec<ObjectId> {
+        let mut dependents = Vec::new();
+        let object_id = ObjectId::Item(item_id);
+        if !seen.contains(&object_id) {
+            seen.insert(object_id.clone());
+            for dependent_id in self.get_entry(&item_id).used_by() {
+                dependents.extend_from_slice(&self.item_dependents(*dependent_id, seen));
+            }
+            for subsource_id in self.get_entry(&item_id).subsources() {
+                dependents.extend_from_slice(&self.item_dependents(subsource_id, seen));
+            }
+            dependents.push(object_id);
+            if let Some(linked_cluster_id) = self.clusters_by_linked_object_id.get(&item_id) {
+                dependents.extend_from_slice(&self.cluster_dependents(*linked_cluster_id, seen));
+            }
+        }
+        dependents
+    }
+
     pub fn uses_tables(&self, id: GlobalId) -> bool {
         match self.get_entry(&id).item() {
             CatalogItem::Table(_) => true,
@@ -4017,14 +4167,17 @@ impl Catalog {
     }
 
     pub fn drop_temp_item_ops(&mut self, conn_id: &ConnectionId) -> Vec<Op> {
-        let ids: Vec<GlobalId> = self.state.temporary_schemas[conn_id]
+        let temp_ids = self.state.temporary_schemas[conn_id]
             .items
             .values()
             .cloned()
+            .map(ObjectId::Item)
             .collect();
-        self.drop_items_ops(&ids, &mut BTreeSet::new())
+        self.object_dependents(temp_ids)
+            .into_iter()
+            .map(Op::DropObject)
+            .collect()
     }
-
     pub fn drop_temporary_schema(&mut self, conn_id: &ConnectionId) -> Result<(), Error> {
         if !self.state.temporary_schemas[conn_id].items.is_empty() {
             return Err(Error::new(ErrorKind::SchemaNotEmpty(MZ_TEMP_SCHEMA.into())));
@@ -4033,120 +4186,14 @@ impl Catalog {
         Ok(())
     }
 
-    pub fn drop_database_ops(
-        &self,
-        id: Option<DatabaseId>,
-        seen: &mut BTreeSet<ObjectId>,
-    ) -> Vec<Op> {
-        let mut ops = vec![];
-        if let Some(id) = id {
-            if !seen.contains(&ObjectId::Database(id)) {
-                let database = self.get_database(&id);
-                for (schema_id, schema) in &database.schemas_by_id {
-                    self.drop_schema_items(schema, &mut ops, seen);
-                    ops.push(Op::DropObject(ObjectId::Schema((
-                        id.clone(),
-                        schema_id.clone(),
-                    ))));
-                }
-                ops.push(Op::DropObject(ObjectId::Database(id)));
-            }
-        }
-        ops
+    pub(crate) fn object_dependents(&self, object_ids: Vec<ObjectId>) -> Vec<ObjectId> {
+        let mut seen = BTreeSet::new();
+        self.state.object_dependents(object_ids, &mut seen)
     }
 
-    pub fn drop_schema_ops(
-        &self,
-        id: Option<(DatabaseId, SchemaId)>,
-        seen: &mut BTreeSet<ObjectId>,
-    ) -> Vec<Op> {
-        let mut ops = vec![];
-        if let Some((database_id, schema_id)) = id {
-            if !seen.contains(&ObjectId::Schema((database_id, schema_id))) {
-                let database = self.get_database(&database_id);
-                let schema = &database.schemas_by_id[&schema_id];
-                self.drop_schema_items(schema, &mut ops, seen);
-                ops.push(Op::DropObject(ObjectId::Schema((database_id, schema_id))));
-            }
-        }
-        ops
-    }
-
-    /// Creates the catalog operations to drop the given compute instances.
-    pub fn drop_cluster_ops(&self, ids: &[ClusterId], seen: &mut BTreeSet<ObjectId>) -> Vec<Op> {
-        let mut replica_ids = vec![];
-        let mut cluster_ops = vec![];
-        let mut ids_to_drop = vec![];
-        for id in ids {
-            if !seen.contains(&ObjectId::Cluster(*id)) {
-                seen.insert(ObjectId::Cluster(*id));
-                let cluster = &self.state.clusters_by_id[id];
-                for replica_id in cluster.replica_id_by_name.values() {
-                    replica_ids.push((*id, *replica_id));
-                }
-                cluster_ops.push(Op::DropObject(ObjectId::Cluster(*id)));
-                ids_to_drop.extend(cluster.bound_objects().iter().copied());
-            }
-        }
-        let replica_ops = self.drop_cluster_replica_ops(&replica_ids, seen);
-        let mut ops = vec![];
-        for id in ids_to_drop {
-            self.drop_item_cascade(id, &mut ops, seen);
-        }
-        ops.extend(replica_ops);
-        ops.extend(cluster_ops);
-        ops
-    }
-
-    /// Creates the catalog operations to drop the given compute instance
-    /// replicas.
-    pub fn drop_cluster_replica_ops(
-        &self,
-        ids: &[(ClusterId, ReplicaId)],
-        seen: &mut BTreeSet<ObjectId>,
-    ) -> Vec<Op> {
-        let mut ops = vec![];
-        for (cluster_id, replica_id) in ids {
-            if !seen.contains(&ObjectId::ClusterReplica((*cluster_id, *replica_id))) {
-                seen.insert(ObjectId::ClusterReplica((*cluster_id, *replica_id)));
-                ops.push(Op::DropObject(ObjectId::ClusterReplica((
-                    *cluster_id,
-                    *replica_id,
-                ))));
-            }
-        }
-        ops
-    }
-
-    pub fn drop_items_ops(&self, ids: &[GlobalId], seen: &mut BTreeSet<ObjectId>) -> Vec<Op> {
-        let mut ops = vec![];
-        for &id in ids {
-            self.drop_item_cascade(id, &mut ops, seen);
-        }
-        ops
-    }
-
-    fn drop_schema_items(&self, schema: &Schema, ops: &mut Vec<Op>, seen: &mut BTreeSet<ObjectId>) {
-        for &id in schema.items.values() {
-            self.drop_item_cascade(id, ops, seen);
-        }
-    }
-
-    fn drop_item_cascade(&self, id: GlobalId, ops: &mut Vec<Op>, seen: &mut BTreeSet<ObjectId>) {
-        if !seen.contains(&ObjectId::Item(id)) {
-            seen.insert(ObjectId::Item(id));
-            for u in &self.state.entry_by_id[&id].used_by {
-                self.drop_item_cascade(*u, ops, seen);
-            }
-            for subsource in self.state.entry_by_id[&id].subsources() {
-                self.drop_item_cascade(subsource, ops, seen);
-            }
-            ops.push(Op::DropObject(ObjectId::Item(id)));
-            if let Some(linked_cluster_id) = self.state.clusters_by_linked_object_id.get(&id) {
-                let cluster_ops = self.drop_cluster_ops(&[*linked_cluster_id], seen);
-                ops.extend(cluster_ops);
-            }
-        }
+    pub(crate) fn item_dependents(&self, item_id: GlobalId) -> Vec<ObjectId> {
+        let mut seen = BTreeSet::new();
+        self.state.item_dependents(item_id, &mut seen)
     }
 
     /// Gets GlobalIds of temporary items to be created, checks for name collisions
@@ -6528,6 +6575,13 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.is_system_schema(schema)
     }
 
+    fn is_system_schema_specifier(&self, schema: &SchemaSpecifier) -> bool {
+        match schema {
+            SchemaSpecifier::Temporary => false,
+            SchemaSpecifier::Id(id) => self.state.is_system_schema_id(id),
+        }
+    }
+
     fn resolve_role(
         &self,
         role_name: &str,
@@ -6667,6 +6721,16 @@ impl SessionCatalog for ConnCatalog<'_> {
             ObjectId::Item(id) => Some(self.get_item(id).owner_id()),
             ObjectId::Role(_) => None,
         }
+    }
+
+    fn object_dependents(&self, ids: Vec<ObjectId>) -> Vec<ObjectId> {
+        let mut seen = BTreeSet::new();
+        self.state.object_dependents(ids, &mut seen)
+    }
+
+    fn item_dependents(&self, id: GlobalId) -> Vec<ObjectId> {
+        let mut seen = BTreeSet::new();
+        self.state.item_dependents(id, &mut seen)
     }
 }
 

@@ -141,6 +141,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Returns true if `schema` is an internal system schema, false otherwise
     fn is_system_schema(&self, schema: &str) -> bool;
 
+    /// Returns true if `schema` is an internal system schema, false otherwise
+    fn is_system_schema_specifier(&self, schema: &SchemaSpecifier) -> bool;
+
     /// Resolves the named role.
     fn resolve_role(&self, role_name: &str) -> Result<&dyn CatalogRole, CatalogError>;
 
@@ -241,6 +244,20 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
 
     /// Returns the [`RoleId`] of the owner of an object by its ID.
     fn get_owner_id(&self, id: &ObjectId) -> Option<RoleId>;
+
+    /// Returns all the IDs of all objects that depend on `ids`, including `ids` themselves.
+    ///
+    /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
+    /// earlier in the list than the roots. This is particularly userful for the order to drop
+    /// objects.
+    fn object_dependents(&self, ids: Vec<ObjectId>) -> Vec<ObjectId>;
+
+    /// Returns all the IDs of all objects that depend on `id`, including `id` themselves.
+    ///
+    /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
+    /// earlier in the list than `id`. This is particularly userful for the order to drop
+    /// objects.
+    fn item_dependents(&self, id: GlobalId) -> Vec<ObjectId>;
 }
 
 /// Configuration associated with a catalog.
