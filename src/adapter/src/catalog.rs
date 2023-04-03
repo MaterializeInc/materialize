@@ -6923,7 +6923,7 @@ mod tests {
     use mz_sql::catalog::CatalogDatabase;
     use mz_sql::names;
     use mz_sql::names::{
-        DatabaseId, ItemQuali         , PartialItemName, QualifiedItemName,
+        DatabaseId, ItemQualifiers, PartialItemName, QualifiedItemName,
         ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
     };
     use mz_sql::plan::StatementContext;
