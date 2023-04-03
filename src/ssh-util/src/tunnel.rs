@@ -73,6 +73,16 @@ impl SshTunnelConfig {
             let remote_host = remote_host.to_string();
             let local_port = Arc::clone(&local_port);
             async move {
+                scopeguard::defer! {
+                    info!(
+                        "terminating ssh tunnel ({}:{} via {}@{}:{})",
+                        remote_host,
+                        remote_port,
+                        config.user,
+                        config.host,
+                        config.port,
+                    );
+                }
                 loop {
                     time::sleep(CHECK_INTERVAL).await;
                     if let Err(e) = session.check().await {

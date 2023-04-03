@@ -69,7 +69,16 @@ def workflow_pg_via_ssh_tunnel(c: Composition) -> None:
 
 
 def workflow_kafka_csr_via_ssh_tunnel(c: Composition) -> None:
-    c.up("zookeeper", "kafka", "schema-registry", "materialized", "ssh-bastion-host")
+    # Configure the SSH bastion host to allow only two connections to be
+    # initiated simultaneously. This is enough to establish *one* Kafka SSH
+    # tunnel and *one* Confluent Schema Registry tunnel simultaneously.
+    # Combined with using a large cluster in kafka-source.td, this ensures that
+    # we only create one SSH tunnel per Kafka broker, rather than one SSH tunnel
+    # per Kafka broker per worker.
+    with c.override(SshBastionHost(max_startups="2")):
+        c.up(
+            "zookeeper", "kafka", "schema-registry", "materialized", "ssh-bastion-host"
+        )
 
     c.run("testdrive", "setup.td")
 
