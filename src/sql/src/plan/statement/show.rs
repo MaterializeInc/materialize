@@ -21,7 +21,6 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement, ShowObjectType,
 };
-use query::QueryContext;
 
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
@@ -35,9 +34,13 @@ use crate::names::{
     ResolvedSchemaName,
 };
 use crate::parse;
+
+use crate::plan::column_disambiguate::StatementTagger;
 use crate::plan::scope::Scope;
 use crate::plan::statement::{dml, StatementContext, StatementDesc};
-use crate::plan::{query, transform_ast, HirRelationExpr, Params, Plan, PlanError, SendRowsPlan};
+use crate::plan::{
+    query, transform_ast, HirRelationExpr, Params, Plan, PlanError, QueryContext, SendRowsPlan,
+};
 
 pub fn describe_show_create_view(
     _: &StatementContext,
@@ -58,7 +61,13 @@ pub fn plan_show_create_view(
     match view.item_type() {
         CatalogItemType::View => {
             let name = view_name.full_name_str();
-            let create_sql = simplify_names(scx.catalog, view.create_sql())?;
+            let create_sql = simplify_names(
+                scx.catalog,
+                scx.column_disambiguation_metadata
+                    .borrow_mut()
+                    .statement_tagger_mut(),
+                view.create_sql(),
+            )?;
             Ok(SendRowsPlan {
                 rows: vec![Row::pack_slice(&[
                     Datum::String(&name),
@@ -92,7 +101,13 @@ pub fn plan_show_create_materialized_view(
     let mview = scx.get_item_by_resolved_name(&name)?;
     if let CatalogItemType::MaterializedView = mview.item_type() {
         let full_name = name.full_name_str();
-        let create_sql = simplify_names(scx.catalog, mview.create_sql())?;
+        let create_sql = simplify_names(
+            scx.catalog,
+            scx.column_disambiguation_metadata
+                .borrow_mut()
+                .statement_tagger_mut(),
+            mview.create_sql(),
+        )?;
         Ok(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
                 Datum::String(&full_name),
@@ -128,7 +143,13 @@ pub fn plan_show_create_table(
     }
     if let CatalogItemType::Table = table.item_type() {
         let name = table_name.full_name_str();
-        let create_sql = simplify_names(scx.catalog, table.create_sql())?;
+        let create_sql = simplify_names(
+            scx.catalog,
+            scx.column_disambiguation_metadata
+                .borrow_mut()
+                .statement_tagger_mut(),
+            table.create_sql(),
+        )?;
         Ok(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
                 Datum::String(&name),
@@ -164,7 +185,13 @@ pub fn plan_show_create_source(
     }
     if let CatalogItemType::Source = source.item_type() {
         let name = source_name.full_name_str();
-        let create_sql = simplify_names(scx.catalog, source.create_sql())?;
+        let create_sql = simplify_names(
+            scx.catalog,
+            scx.column_disambiguation_metadata
+                .borrow_mut()
+                .statement_tagger_mut(),
+            source.create_sql(),
+        )?;
         Ok(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
                 Datum::String(&name),
@@ -194,7 +221,13 @@ pub fn plan_show_create_sink(
     let sink = scx.get_item_by_resolved_name(&sink_name)?;
     if let CatalogItemType::Sink = sink.item_type() {
         let name = sink_name.full_name_str();
-        let create_sql = simplify_names(scx.catalog, sink.create_sql())?;
+        let create_sql = simplify_names(
+            scx.catalog,
+            scx.column_disambiguation_metadata
+                .borrow_mut()
+                .statement_tagger_mut(),
+            sink.create_sql(),
+        )?;
         Ok(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
                 Datum::String(&name),
@@ -224,7 +257,13 @@ pub fn plan_show_create_index(
     let index = scx.get_item_by_resolved_name(&index_name)?;
     if let CatalogItemType::Index = index.item_type() {
         let name = index_name.full_name_str();
-        let create_sql = simplify_names(scx.catalog, index.create_sql())?;
+        let create_sql = simplify_names(
+            scx.catalog,
+            scx.column_disambiguation_metadata
+                .borrow_mut()
+                .statement_tagger_mut(),
+            index.create_sql(),
+        )?;
         Ok(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
                 Datum::String(&name),
@@ -254,7 +293,13 @@ pub fn plan_show_create_connection(
     let connection = scx.get_item_by_resolved_name(&connection_name)?;
     if let CatalogItemType::Connection = connection.item_type() {
         let name = connection_name.full_name_str();
-        let create_sql = simplify_names(scx.catalog, connection.create_sql())?;
+        let create_sql = simplify_names(
+            scx.catalog,
+            scx.column_disambiguation_metadata
+                .borrow_mut()
+                .statement_tagger_mut(),
+            connection.create_sql(),
+        )?;
         Ok(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
                 Datum::String(&name),
@@ -597,7 +642,7 @@ pub fn show_secrets<'a>(
 /// Can be interrogated for its columns, or converted into a proper [`Plan`].
 pub struct ShowSelect<'a> {
     scx: &'a StatementContext<'a>,
-    stmt: SelectStatement<Aug>,
+    pub stmt: SelectStatement<Aug>,
 }
 
 impl<'a> ShowSelect<'a> {
@@ -635,7 +680,13 @@ impl<'a> ShowSelect<'a> {
             Statement::Select(select) => select,
             _ => panic!("ShowSelect::new called with non-SELECT statement"),
         };
-        let (mut stmt, _) = names::resolve(scx.catalog, stmt)?;
+        let (mut stmt, _) = names::resolve(
+            scx.catalog,
+            scx.column_disambiguation_metadata
+                .borrow_mut()
+                .statement_tagger_mut(),
+            stmt,
+        )?;
         transform_ast::transform(scx, &mut stmt)?;
         Ok(ShowSelect { scx, stmt })
     }
@@ -656,9 +707,13 @@ impl<'a> ShowSelect<'a> {
     }
 }
 
-fn simplify_names(catalog: &dyn SessionCatalog, sql: &str) -> Result<String, PlanError> {
+fn simplify_names(
+    catalog: &dyn SessionCatalog,
+    statement_tagger: &mut StatementTagger,
+    sql: &str,
+) -> Result<String, PlanError> {
     let parsed = parse::parse(sql)?.into_element();
-    let (mut resolved, _) = names::resolve(catalog, parsed)?;
+    let (mut resolved, _) = names::resolve(catalog, statement_tagger, parsed)?;
     let mut simplifier = NameSimplifier { catalog };
     simplifier.visit_statement_mut(&mut resolved);
     Ok(resolved.to_ast_string_stable())

@@ -105,7 +105,7 @@ use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::Aug;
-use mz_sql::plan::{CopyFormat, Params, QueryWhen};
+use mz_sql::plan::{CopyFormat, Params, QueryWhen, StatementTagger};
 use mz_storage_client::controller::{
     CollectionDescription, CreateExportToken, DataSource, StorageError,
 };
@@ -225,6 +225,7 @@ pub struct CreateSourceStatementReady {
     pub depends_on: Vec<GlobalId>,
     pub original_stmt: Statement<Raw>,
     pub otel_ctx: OpenTelemetryContext,
+    pub statement_tagger: StatementTagger,
 }
 
 #[derive(Derivative)]

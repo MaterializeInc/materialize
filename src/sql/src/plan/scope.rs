@@ -49,16 +49,21 @@ use mz_repr::ColumnName;
 
 use crate::ast::Expr;
 use crate::names::{Aug, PartialObjectName};
+
 use crate::plan::error::PlanError;
 use crate::plan::expr::ColumnRef;
 use crate::plan::plan_utils::JoinSide;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopeItem {
     /// The name of the table that produced this scope item, if any.
     pub table_name: Option<PartialObjectName>,
     /// The name of the column.
     pub column_name: ColumnName,
+    /// A unique column name to use in a generated derived column list.
+    ///
+    /// Used for experimental column disambiguation.
+    pub unique_derived_column_name: Option<ColumnName>,
     /// The expressions from which this scope item is derived. Used by `GROUP
     /// BY`.
     pub exprs: BTreeSet<Expr<Aug>>,
@@ -77,6 +82,10 @@ pub struct ScopeItem {
     /// having three columns in scope named `a` would result in "ambiguous
     /// column reference" errors.
     pub allow_unqualified_references: bool,
+    /// Indicates if the column comes from a USING join constraint.
+    ///
+    /// Used for experimental column disambiguation.
+    pub using_column: bool,
     /// Whether reference the item should produce an error about the item being
     /// on the wrong side of a lateral join.
     ///
@@ -96,7 +105,7 @@ pub struct ScopeItem {
     _private: (),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scope {
     // The items in this scope.
     pub items: Vec<ScopeItem>,
@@ -127,9 +136,11 @@ impl ScopeItem {
         ScopeItem {
             table_name: None,
             column_name: "?column?".into(),
+            unique_derived_column_name: None,
             exprs: BTreeSet::new(),
             from_single_column_function: false,
             allow_unqualified_references: true,
+            using_column: false,
             lateral_error_if_referenced: false,
             is_exists_column_for_a_table_function_that_was_in_the_target_list: false,
             _private: (),
@@ -275,7 +286,7 @@ impl Scope {
         mut matches: M,
         table_name: Option<&PartialObjectName>,
         column_name: &ColumnName,
-    ) -> Result<ColumnRef, PlanError>
+    ) -> Result<(ColumnRef, Option<PartialObjectName>), PlanError>
     where
         M: FnMut(ColumnRef, usize, &ScopeItem) -> bool,
     {
@@ -306,7 +317,7 @@ impl Scope {
                     });
                 }
 
-                Ok(column)
+                Ok((column, item.table_name.clone()))
             }
         }
     }
@@ -317,7 +328,7 @@ impl Scope {
         &'a self,
         outer_scopes: &[Scope],
         column_name: &ColumnName,
-    ) -> Result<ColumnRef, PlanError> {
+    ) -> Result<(ColumnRef, Option<PartialObjectName>), PlanError> {
         let table_name = None;
         self.resolve_internal(
             outer_scopes,
@@ -335,17 +346,19 @@ impl Scope {
         column_name: &ColumnName,
         join_side: JoinSide,
     ) -> Result<ColumnRef, PlanError> {
-        self.resolve_column(&[], column_name).map_err(|e| match e {
-            // Attach a bit more context to unknown and ambiguous column
-            // errors to match PostgreSQL.
-            PlanError::AmbiguousColumn(column) => {
-                PlanError::AmbiguousColumnInUsingClause { column, join_side }
-            }
-            PlanError::UnknownColumn { column, .. } => {
-                PlanError::UnknownColumnInUsingClause { column, join_side }
-            }
-            _ => e,
-        })
+        self.resolve_column(&[], column_name)
+            .map_err(|e| match e {
+                // Attach a bit more context to unknown and ambiguous column
+                // errors to match PostgreSQL.
+                PlanError::AmbiguousColumn(column) => {
+                    PlanError::AmbiguousColumnInUsingClause { column, join_side }
+                }
+                PlanError::UnknownColumn { column, .. } => {
+                    PlanError::UnknownColumnInUsingClause { column, join_side }
+                }
+                _ => e,
+            })
+            .map(|(column_ref, _)| column_ref)
     }
 
     pub fn resolve_table_column<'a>(
@@ -353,7 +366,7 @@ impl Scope {
         outer_scopes: &[Scope],
         table_name: &PartialObjectName,
         column_name: &ColumnName,
-    ) -> Result<ColumnRef, PlanError> {
+    ) -> Result<(ColumnRef, Option<PartialObjectName>), PlanError> {
         let mut seen_at_level = None;
         self.resolve_internal(
             outer_scopes,
@@ -388,6 +401,7 @@ impl Scope {
             None => self.resolve_column(outer_scopes, column_name),
             Some(table_name) => self.resolve_table_column(outer_scopes, table_name, column_name),
         }
+        .map(|(column_ref, _)| column_ref)
     }
 
     /// Look to see if there is an already-calculated instance of this expr.

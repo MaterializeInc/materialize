@@ -66,3 +66,798 @@ SELECT mz_connections.* FROM mz_connections LIMIT 0;
 query TI
 SELECT * FROM (SELECT id, oid FROM mz_sources) LIMIT 0;
 ----
+
+# TODO(jkosh44) Many of these test don't work so they're commented out.
+
+# Fully qualified columns
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET disambiguate_columns = true
+----
+COMPLETE 0
+
+mode standard
+
+#statement ok
+#CREATE TABLE t (a INT, b INT);
+#
+#statement ok
+#CREATE VIEW v as SELECT a FROM t;
+#
+#query TT
+#SHOW CREATE VIEW v
+#----
+#materialize.public.v
+#CREATE VIEW "materialize"."public"."v" AS SELECT "t"."a" FROM "materialize"."public"."t" AS "t" ("a", "b")
+#
+#statement ok
+#CREATE MATERIALIZED VIEW mv as SELECT a FROM t;
+#
+#query TT
+#SHOW CREATE MATERIALIZED VIEW mv
+#----
+#materialize.public.mv
+#CREATE MATERIALIZED VIEW "materialize"."public"."mv" AS SELECT "materialize"."public"."t"."a" FROM "materialize"."public"."t"
+#
+#statement ok
+#DROP VIEW v;
+#
+#statement ok
+#DROP MATERIALIZED VIEW mv
+#
+#statement ok
+#CREATE VIEW v as SELECT a, (a + 5), avg(b) FROM t WHERE a > 5 GROUP BY a HAVING t.a > 10 ORDER BY a;
+#
+#query TT
+#SHOW CREATE VIEW v
+#----
+#materialize.public.v
+#CREATE VIEW "materialize"."public"."v" AS SELECT "materialize"."public"."t"."a", "materialize"."public"."t"."a" + 5, "mz_internal"."mz_avg_promotion"("pg_catalog"."sum"("materialize"."public"."t"."b")) / CASE WHEN "pg_catalog"."count"("materialize"."public"."t"."b") = 0 THEN NULL ELSE "pg_catalog"."count"("materialize"."public"."t"."b") END AS "avg" FROM "materialize"."public"."t" WHERE "materialize"."public"."t"."a" > 5 GROUP BY "materialize"."public"."t"."a" HAVING "materialize"."public"."t"."a" > 10 ORDER BY "materialize"."public"."t"."a"
+#
+#statement ok
+#CREATE MATERIALIZED VIEW mv as SELECT a, (a + 5), avg(b) FROM t WHERE a > 5 GROUP BY a HAVING t.a > 10 ORDER BY a;
+#
+#query TT
+#SHOW CREATE MATERIALIZED VIEW mv
+#----
+#materialize.public.mv
+#CREATE MATERIALIZED VIEW "materialize"."public"."mv" IN CLUSTER "default" AS SELECT "materialize"."public"."t"."a", "materialize"."public"."t"."a" + 5, "mz_internal"."mz_avg_promotion"("pg_catalog"."sum"("materialize"."public"."t"."b")) / CASE WHEN "pg_catalog"."count"("materialize"."public"."t"."b") = 0 THEN NULL ELSE "pg_catalog"."count"("materialize"."public"."t"."b") END AS "avg" FROM "materialize"."public"."t" WHERE "materialize"."public"."t"."a" > 5 GROUP BY "materialize"."public"."t"."a" HAVING "materialize"."public"."t"."a" > 10 ORDER BY "materialize"."public"."t"."a"
+#
+#statement ok
+#DROP VIEW v;
+#
+#statement ok
+#DROP MATERIALIZED VIEW mv
+#
+#statement ok
+#CREATE TABLE t1 (c INT);
+#
+#statement ok
+#CREATE TABLE t2 (c INT);
+#
+#statement ok
+#CREATE VIEW v AS SELECT c || 'a' AS f1 , (SELECT c || 'a' AS f2 FROM t2 GROUP BY c || 'a') FROM t1 GROUP BY c || 'a';
+#
+#query TT
+#SHOW CREATE VIEW v
+#----
+#materialize.public.v
+#CREATE VIEW "materialize"."public"."v" AS SELECT "materialize"."public"."t1"."c" || 'a' AS "f1", (SELECT "materialize"."public"."t2"."c" || 'a' AS "f2" FROM "materialize"."public"."t2" GROUP BY "materialize"."public"."t2"."c" || 'a') FROM "materialize"."public"."t1" GROUP BY "materialize"."public"."t1"."c" || 'a'
+#
+#statement ok
+#CREATE MATERIALIZED VIEW mv AS SELECT c || 'a' AS f1 , (SELECT c || 'a' AS f2 FROM t2 GROUP BY c || 'a') FROM t1 GROUP BY c || 'a';
+#
+#query TT
+#SHOW CREATE MATERIALIZED VIEW mv
+#----
+#materialize.public.mv
+#CREATE MATERIALIZED VIEW "materialize"."public"."mv" IN CLUSTER "default" AS SELECT "materialize"."public"."t1"."c" || 'a' AS "f1", (SELECT "materialize"."public"."t2"."c" || 'a' AS "f2" FROM "materialize"."public"."t2" GROUP BY "materialize"."public"."t2"."c" || 'a') FROM "materialize"."public"."t1" GROUP BY "materialize"."public"."t1"."c" || 'a'
+#
+#statement ok
+#DROP VIEW v
+#
+#statement ok
+#DROP MATERIALIZED VIEW mv
+#
+#statement ok
+#DROP TABLE t1;
+#
+#statement ok
+#DROP TABLE t2;
+#
+# TODO(jkosh44) Doesn't work due to expression plan caching
+#statement ok
+#CREATE TABLE t1 (a INT);
+#
+#statement ok
+#CREATE TABLE t2 (a INT);
+#
+#statement ok
+#CREATE VIEW v AS SELECT (a + 1) AS b, (SELECT a + 1 FROM t2) AS c, (SELECT a + 1 FROM t2) AS d FROM t1 ORDER BY (a + 1);
+#
+#query TT
+#SHOW CREATE VIEW v
+#----
+#materialize.public.v
+#CREATE VIEW "materialize"."public"."v" AS SELECT "materialize"."public"."t1"."a" + 1 AS "b", (SELECT "materialize"."public"."t2"."a" + 1 FROM "materialize"."public"."t2") AS "c", (SELECT "materialize"."public"."t2"."a" + 1 FROM "materialize"."public"."t2") AS "d" FROM "materialize"."public"."t1" ORDER BY "materialize"."public"."t1"."a" + 1
+#
+#statement ok
+#DROP VIEW v
+#
+#statement ok
+#DROP TABLE t1
+#
+#statement ok
+#DROP TABLE t2
+#
+# Wildcard and NATURAL JOIN expansions
+
+statement ok
+CREATE TABLE t (a INT, b INT);
+
+statement ok
+CREATE VIEW v AS SELECT * FROM t;
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT "materialize"."public"."t"."a" AS "a", "materialize"."public"."t"."b" AS "b" FROM "materialize"."public"."t" AS "t" ("a", "b")
+
+statement ok
+DROP VIEW v
+
+statement ok
+CREATE VIEW v AS SELECT t.* FROM t;
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT "materialize"."public"."t"."a" AS "a", "materialize"."public"."t"."b" AS "b" FROM "materialize"."public"."t" AS "t" ("a", "b")
+
+statement ok
+DROP VIEW v
+
+statement ok
+CREATE VIEW v AS SELECT (t).* FROM t;
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT "t"."a" AS "a", "t"."b" AS "b" FROM "materialize"."public"."t" AS "t" ("a", "b")
+
+statement ok
+DROP VIEW v
+
+statement ok
+CREATE VIEW v AS SELECT 1, * FROM t;
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT 1, "materialize"."public"."t"."a" AS "a", "materialize"."public"."t"."b" AS "b" FROM "materialize"."public"."t" AS "t" ("a", "b")
+
+statement ok
+DROP VIEW v
+
+#statement ok
+#CREATE SCHEMA foo
+#
+#statement ok
+#CREATE TABLE foo.t(a INT, b INT)
+#
+#statement ok
+#CREATE VIEW v AS SELECT 1 FROM (SELECT * FROM public.t, foo.t)
+#
+#query TT
+#SHOW CREATE VIEW v
+#----
+#materialize.public.v
+#CREATE VIEW "materialize"."public"."v" AS SELECT 1 FROM (SELECT "materialize"."public"."t"."a" AS "a", "materialize"."public"."t"."b" AS "b", "materialize"."foo"."t"."a" AS "a", "materialize"."foo"."t"."b" AS "b" FROM "materialize"."public"."t", "materialize"."foo"."t") AS "unnamed_subquery" ("a", "b", "a_1", "b_1")
+#
+#statement ok
+#DROP VIEW v
+#
+#statement ok
+#DROP SCHEMA foo CASCADE
+
+statement ok
+CREATE VIEW v AS SELECT 1 FROM (SELECT * FROM (SELECT 1, 2));
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT 1 FROM (SELECT "unnamed_subquery_1"."?column?" AS "?column?", "unnamed_subquery_1"."?column?_1" AS "?column?" FROM (SELECT 1, 2) AS "unnamed_subquery_1" ("?column?", "?column?_1")) AS "unnamed_subquery" ("?column?", "?column?_1")
+
+statement ok
+DROP VIEW v
+
+statement ok
+CREATE VIEW v AS SELECT * FROM (SELECT * FROM (SELECT 1, 2) foo(a,b)) bar(c,d);
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT "bar"."c" AS "c", "bar"."d" AS "d" FROM (SELECT "foo"."a" AS "a", "foo"."b" AS "b" FROM (SELECT 1, 2) AS "foo" ("a", "b")) AS "bar" ("c", "d")
+
+statement ok
+DROP VIEW v
+
+statement ok
+CREATE VIEW v AS SELECT (information_schema._pg_expandarray(ARRAY[100])).*;
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT "information_schema"."_pg_expandarray"(ARRAY[100])."x", "information_schema"."_pg_expandarray"(ARRAY[100])."n"
+
+statement ok
+DROP VIEW v
+
+statement ok
+CREATE VIEW v AS SELECT 1 FROM (SELECT (information_schema._pg_expandarray(ARRAY[100])).*, (information_schema._pg_expandarray(ARRAY[100])).*);
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT 1 FROM (SELECT "information_schema"."_pg_expandarray"(ARRAY[100])."x", "information_schema"."_pg_expandarray"(ARRAY[100])."n", "information_schema"."_pg_expandarray"(ARRAY[100])."x", "information_schema"."_pg_expandarray"(ARRAY[100])."n") AS "unnamed_subquery" ("x", "n", "x_1", "n_1")
+
+statement ok
+DROP VIEW v
+
+statement ok
+CREATE TABLE t1 (c INT, d INT)
+
+statement ok
+CREATE VIEW v AS SELECT * FROM (t CROSS JOIN t1) j(aa,bb,cc,dd)
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT "j"."aa" AS "aa", "j"."bb" AS "bb", "j"."cc" AS "cc", "j"."dd" AS "dd" FROM ("materialize"."public"."t" AS "t" ("a", "b") CROSS JOIN "materialize"."public"."t1" AS "t1" ("c", "d")) AS "j" ("aa", "bb", "cc", "dd")
+
+statement ok
+DROP VIEW v
+
+statement ok
+CREATE VIEW v AS SELECT * FROM (t CROSS JOIN t1)
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT "materialize"."public"."t"."a" AS "a", "materialize"."public"."t"."b" AS "b", "materialize"."public"."t1"."c" AS "c", "materialize"."public"."t1"."d" AS "d" FROM ("materialize"."public"."t" AS "t" ("a", "b") CROSS JOIN "materialize"."public"."t1" AS "t1" ("c", "d"))
+
+statement ok
+DROP VIEW v
+
+statement ok
+DROP TABLE t1
+
+#statement ok
+#CREATE VIEW v AS SELECT * FROM t NATURAL JOIN t AS tt
+#
+#query TT
+#SHOW CREATE VIEW v
+#----
+#materialize.public.v
+#CREATE VIEW "materialize"."public"."v" AS SELECT "materialize"."public"."t"."a" AS "a", "materialize"."public"."t"."b" AS "b" FROM "materialize"."public"."t" JOIN "materialize"."public"."t" AS "tt" ("a", "b") USING ("a", "b")
+#
+#statement ok
+#DROP VIEW v
+
+statement ok
+DROP TABLE t
+
+statement ok
+CREATE TABLE t1 (a INT)
+
+statement ok
+CREATE TABLE t2 (b INT)
+
+#statement ok
+#CREATE VIEW v AS SELECT * FROM (SELECT a FROM t1) AS l JOIN (SELECT b FROM t2) AS r ON l.a = r.b
+#
+#query TT
+#SHOW CREATE VIEW v
+#----
+#materialize.public.v
+#CREATE VIEW "materialize"."public"."v" AS SELECT "l"."a" AS "a", "r"."b" AS "b" FROM (SELECT "a" FROM "materialize"."public"."t1" AS "t1" ("a")) AS "l" ("a") JOIN (SELECT "b" FROM "materialize"."public"."t2" AS "t2" ("b")) AS "r" ("b") ON "l"."a" = "r"."b"
+#
+#statement ok
+#DROP VIEW v
+
+statement ok
+CREATE VIEW v AS SELECT f.* FROM generate_series(1, 10) AS f
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT "f"."f" AS "f" FROM "pg_catalog"."generate_series"(1, 10) AS "f" ("f")
+
+statement ok
+DROP VIEW v
+
+statement ok
+CREATE VIEW v AS SELECT * FROM (SELECT * FROM t1), t2
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT "unnamed_subquery"."a" AS "a", "materialize"."public"."t2"."b" AS "b" FROM (SELECT "materialize"."public"."t1"."a" AS "a" FROM "materialize"."public"."t1" AS "t1" ("a")) AS "unnamed_subquery" ("a"), "materialize"."public"."t2" AS "t2" ("b")
+
+statement ok
+DROP VIEW v
+
+statement ok
+CREATE VIEW v AS SELECT 1 FROM (SELECT * FROM (SELECT 1, 2), (SELECT 3, 4))
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT 1 FROM (SELECT "unnamed_subquery_1"."?column?" AS "?column?", "unnamed_subquery_1"."?column?_1" AS "?column?", "unnamed_subquery_2"."?column?" AS "?column?", "unnamed_subquery_2"."?column?_1" AS "?column?" FROM (SELECT 1, 2) AS "unnamed_subquery_1" ("?column?", "?column?_1"), (SELECT 3, 4) AS "unnamed_subquery_2" ("?column?", "?column?_1")) AS "unnamed_subquery" ("?column?", "?column?_1", "?column?_2", "?column?_3")
+
+statement ok
+DROP VIEW v
+
+statement ok
+CREATE TABLE tt1 (a INT)
+
+#statement ok
+#CREATE VIEW v AS SELECT * FROM (SELECT * FROM t1 NATURAL FULL JOIN tt1)
+#
+#query TT
+#SHOW CREATE VIEW v
+#----
+#materialize.public.v
+#CREATE VIEW "materialize"."public"."v" AS SELECT "unnamed_subquery"."a" AS "a" FROM (SELECT "a" AS "a" FROM "materialize"."public"."t1" FULL JOIN "materialize"."public"."tt1" USING ("a")) AS "unnamed_subquery" ("a")
+#
+#statement ok
+#DROP VIEW v
+
+statement ok
+DROP TABLE t1
+
+statement ok
+DROP TABLE t2
+
+statement ok
+CREATE TABLE unnamed_subquery (a INT)
+
+statement ok
+CREATE VIEW v AS SELECT * FROM unnamed_subquery, (SELECT 1)
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT "materialize"."public"."unnamed_subquery"."a" AS "a", "unnamed_subquery_1"."?column?" AS "?column?" FROM "materialize"."public"."unnamed_subquery" AS "unnamed_subquery" ("a"), (SELECT 1) AS "unnamed_subquery_1" ("?column?")
+
+statement ok
+DROP VIEW v
+
+#statement ok
+#CREATE TABLE t1 (a INT)
+#
+#statement ok
+#CREATE TABLE t2 (a INT)
+#
+#statement ok
+#CREATE TABLE t3 (a INT)
+#
+#statement ok
+#CREATE TABLE t4 (a INT)
+#
+#query III
+#SELECT * FROM t3 NATURAL FULL JOIN t4, (t1 LEFT JOIN t2 ON t1.a = t2.a)
+#----
+#
+#statement ok
+#DROP TABLE t1
+#
+#statement ok
+#DROP TABLE t2
+#
+#statement ok
+#DROP TABLE t3
+#
+#statement ok
+#DROP TABLE t4
+
+statement ok
+CREATE TABLE t (a INT)
+
+statement ok
+CREATE VIEW v AS SELECT COUNT(*) FROM t
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT "pg_catalog"."count"(*) FROM "materialize"."public"."t" AS "t" ("a")
+
+#statement ok
+#CREATE SCHEMA other
+#
+#statement ok
+#CREATE TABLE t1 (a INT)
+#
+#statement ok
+#CREATE TABLE t2 (a INT)
+#
+#statement ok
+#CREATE TABLE t3 (a INT)
+#
+#statement ok
+#CREATE TABLE other.t3 (a INT)
+#
+#statement ok
+#CREATE TABLE t4 (a INT)
+#
+#statement ok
+#CREATE TABLE t5 (a INT)
+#
+#statement ok
+#CREATE VIEW V AS SELECT * FROM (VALUES(1, 2, 3, 4, 5)) AS vv(a, b, c, d, e) UNION ALL SELECT *, (other.t3.a + 1) FROM t1 NATURAL FULL JOIN t2, t3, other.t3, t4 NATURAL FULL JOIN t5 WHERE other.t3.a > 0;
+#
+#query TT
+#SHOW CREATE VIEW v
+#----
+#materialize.public.v
+# TODO(jkosh44) Figure out what this should expand to.
+#
+#statement ok
+#DROP VIEW v
+#
+#statement ok
+#DROP table t1
+#
+#statement ok
+#DROP table t2
+#
+#statement ok
+#DROP table t3
+#
+#statement ok
+#DROP table other.t3
+#
+#statement ok
+#DROP table t4
+#
+#statement ok
+#DROP table t5
+#
+#statement ok
+#DROP SCHEMA other
+
+
+# The following is adapted from tests from PostgreSQL found in src/test/regress/expected/create_view.out
+# A lot of them are actually testing that the definition stays valid after altering the table's schema, something
+# that we don't support. Still, they provide good tests even without the alters.
+
+statement ok
+CREATE TABLE tbl1 (a int, b int);
+
+statement ok
+CREATE TABLE tbl1a (a int, c int);
+
+#statement ok
+#CREATE VIEW view_of_joins_2a AS SELECT * FROM tbl1 JOIN tbl1a USING (a);
+
+# TODO(jkosh44) view_of_joins_2b and view_of_joins_2d were removed because it uses a join column alias, which we don't
+# support. See: https://github.com/MaterializeInc/materialize/issues/16910
+
+#statement ok
+#CREATE VIEW view_of_joins_2b AS SELECT * FROM tbl1 JOIN tbl1a USING (a) AS x;
+
+#statement ok
+#CREATE VIEW view_of_joins_2c AS SELECT * FROM (tbl1 JOIN tbl1a USING (a)) AS y;
+
+#statement ok
+#CREATE VIEW view_of_joins_2d AS SELECT * FROM (tbl1 JOIN tbl1a USING (a) AS x) AS y;
+
+#query TT
+#SHOW CREATE VIEW view_of_joins_2a
+#----
+#materialize.public.view_of_joins_2a
+#CREATE VIEW "materialize"."public"."view_of_joins_2a" AS SELECT "materialize"."public"."tbl1"."a" AS "a", "materialize"."public"."tbl1"."b" AS "b", "materialize"."public"."tbl1a"."c" AS "c" FROM "materialize"."public"."tbl1" JOIN "materialize"."public"."tbl1a" USING ("a")
+
+#query TT
+#SHOW CREATE VIEW view_of_joins_2b
+#----
+#materialize.public.view_of_joins_2b
+
+#query TT
+#SHOW CREATE VIEW view_of_joins_2c
+#----
+#materialize.public.view_of_joins_2c
+#CREATE VIEW "materialize"."public"."view_of_joins_2c" AS SELECT "y"."a" AS "a", "y"."b" AS "b", "y"."c" AS "c" FROM ("materialize"."public"."tbl1" JOIN "materialize"."public"."tbl1a" USING ("a")) AS "y" ("a", "b", "c")
+
+#query TT
+#SHOW CREATE VIEW view_of_joins_2d
+#----
+#materialize.public.view_of_joins_2d
+
+statement ok
+CREATE TABLE tt2 (a int, b int, c int);
+
+statement ok
+CREATE TABLE tt3 (ax int8, b int2, c numeric);
+
+statement ok
+CREATE TABLE tt4 (ay int, b int, q int);
+
+#statement ok
+#CREATE VIEW CREATE VIEW v1 AS SELECT * FROM tt2 NATURAL JOIN tt3; AS SELECT * FROM tt2 NATURAL JOIN tt3;
+
+#statement ok
+#CREATE VIEW v1a AS SELECT * FROM (tt2 NATURAL JOIN tt3) j;
+
+#statement ok
+#CREATE VIEW v2 AS SELECT * FROM tt2 JOIN tt3 USING (b,c) JOIN tt4 USING (b);
+
+#statement ok
+#CREATE VIEW v2a AS SELECT * FROM (tt2 JOIN tt3 USING (b,c) JOIN tt4 USING (b)) j;
+
+#statement ok
+#CREATE VIEW v3 AS SELECT * FROM tt2 JOIN tt3 USING (b,c) full JOIN tt4 USING (b);
+
+# TODO(jkosh44) Postgres uses "materialize"."public"."tt3"."c" instead of "materialize"."public"."tt2"."c", I think that it's equivalent
+#query TT
+#SHOW CREATE VIEW v1
+#----
+#materialize.public.v1
+#CREATE VIEW "materialize"."public"."v1" AS SELECT "materialize"."public"."tt2"."b" AS "b", "materialize"."public"."tt2"."c" AS "c", "materialize"."public"."tt2"."a" AS "a", "materialize"."public"."tt3"."ax" AS "ax" FROM "materialize"."public"."tt2" JOIN "materialize"."public"."tt3" USING ("b", "c")
+
+
+# TODO(jkosh44) The column alias list is wrong. Probably because of scope.
+#query TT
+#SHOW CREATE VIEW v1a
+#----
+#materialize.public.v1a
+#CREATE VIEW "materialize"."public"."v1a" AS SELECT "j"."b" AS "b", "j"."c" AS "c", "j"."a" AS "a", "j"."ax" AS "ax" FROM ("materialize"."public"."tt2" JOIN "materialize"."public"."tt3" USING ("b", "c")) AS "j" ("b", "c", "a", "ax")
+
+# TODO(jkosh44) Postgres uses "materialize"."public"."tt3"."c" instead of "materialize"."public"."tt2"."c", I think that it's equivalent
+#query TT
+#SHOW CREATE VIEW v2
+#----
+#materialize.public.v2
+#CREATE VIEW "materialize"."public"."v2" AS SELECT "materialize"."public"."tt2"."b" AS "b", "materialize"."public"."tt2"."c" AS "c", "materialize"."public"."tt2"."a" AS "a", "materialize"."public"."tt3"."ax" AS "ax", "materialize"."public"."tt4"."ay" AS "ay", "materialize"."public"."tt4"."q" AS "q" FROM "materialize"."public"."tt2" JOIN "materialize"."public"."tt3" USING ("b", "c") JOIN "materialize"."public"."tt4" USING ("b")
+
+#query TT
+#SHOW CREATE VIEW v2a
+#----
+#materialize.public.v2a
+#CREATE VIEW "materialize"."public"."v2a" AS SELECT "j"."b" AS "b", "j"."c" AS "c", "j"."a" AS "a", "j"."ax" AS "ax", "j"."ay" AS "ay", "j"."q" AS "q" FROM ("materialize"."public"."tt2" JOIN "materialize"."public"."tt3" USING ("b", "c") JOIN "materialize"."public"."tt4" USING ("b")) AS "j" ("b", "c", "a", "ax", "ay", "q")
+
+# TODO(jkosh44) Postgres uses "materialize"."public"."tt3"."c" instead of "materialize"."public"."tt2"."c", I think that it's equivalent
+#query TT
+#SHOW CREATE VIEW v3
+#----
+#materialize.public.v3
+#CREATE VIEW "materialize"."public"."v3" AS SELECT "b" AS "b", "materialize"."public"."tt2"."c" AS "c", "materialize"."public"."tt2"."a" AS "a", "materialize"."public"."tt3"."ax" AS "ax", "materialize"."public"."tt4"."ay" AS "ay", "materialize"."public"."tt4"."q" AS "q" FROM "materialize"."public"."tt2" JOIN "materialize"."public"."tt3" USING ("b", "c") FULL JOIN "materialize"."public"."tt4" USING ("b")
+
+statement ok
+CREATE TABLE tt5 (a int, b int);
+
+statement ok
+CREATE TABLE tt6 (c int, d int);
+
+statement ok
+CREATE VIEW vv1 AS SELECT * FROM (tt5 CROSS JOIN tt6) j(aa,bb,cc,dd);
+
+query TT
+SHOW CREATE VIEW vv1
+----
+materialize.public.vv1
+CREATE VIEW "materialize"."public"."vv1" AS SELECT "j"."aa" AS "aa", "j"."bb" AS "bb", "j"."cc" AS "cc", "j"."dd" AS "dd" FROM ("materialize"."public"."tt5" AS "tt5" ("a", "b") CROSS JOIN "materialize"."public"."tt6" AS "tt6" ("c", "d")) AS "j" ("aa", "bb", "cc", "dd")
+
+statement ok
+CREATE TABLE tt7 (x int, y int);
+
+statement ok
+CREATE TABLE tt8 (x int, z int);
+
+#
+#statement ok
+#CREATE VIEW vv2 AS SELECT * FROM (VALUES(1,2,3,4,5)) v(a,b,c,d,e) UNION ALL SELECT * FROM tt7 FULL JOIN tt8 USING (x), tt8 tt8x;
+#
+#query TT
+#SHOW CREATE VIEW vv2
+#----
+#materialize.public.vv2
+#CREATE VIEW "materialize"."public"."vv2" AS SELECT "v"."a", "v"."b", "v"."c", "v"."d", "v"."e" FROM (VALUES (1,2,3,4,5)) AS "v" ("a", "b", "c", "d", "e") UNION ALL SELECT "x" AS "a", "materialize"."public"."tt7"."y" AS "b", "materialize"."public"."tt8"."z" AS "c", "materialize"."public"."tt8x"."x_1" AS "d", "materialize"."public"."tt8x"."z" AS "e" FROM "materialize"."public"."tt7" FULL JOIN "materialize"."public"."tt8" USING ("x"), "materialize"."public"."tt8" AS "tt8x" ("x_1", "z");
+#
+#statement ok
+#CREATE VIEW vv3 AS SELECT * FROM (VALUES(1,2,3,4,5,6)) v(a,b,c,x,e,f) UNION ALL SELECT * FROM tt7 FULL JOIN tt8 USING (x), tt7 tt7x FULL JOIN tt8 tt8x USING (x);
+#
+#query TT
+#SHOW CREATE VIEW vv3
+#----
+#materialize.public.vv3
+#CREATE VIEW "materialize"."public"."vv3" AS SELECT "v"."a", "v"."b", "v"."c", "v"."x", "v"."e", "v"."f" FROM (VALUES (1,2,3,4,5,6)) AS "v" ("a", "b", "c", "x", "e", "f") UNION ALL SELECT "x" AS "a", "materialize"."public"."tt7"."y" AS "b", "materialize"."public"."tt8"."z" AS "c", "tt7x"."x_1" AS "x", tt7x.y AS e, tt8x.z AS f FROM tt7 FULL JOIN tt8 USING (x), tt7 tt7x(x_1, y) FULL JOIN tt8 tt8x(x_1, z) USING (x_1);
+#
+#statement ok
+#CREATE VIEW vv4 AS SELECT * FROM (VALUES(1,2,3,4,5,6,7)) v(a,b,c,x,e,f,g) UNION ALL SELECT * FROM tt7 FULL JOIN tt8 USING (x), tt7 tt7x FULL JOIN tt8 tt8x USING (x) FULL JOIN tt8 tt8y USING (x);
+#
+#query TT
+#SHOW CREATE VIEW vv4
+#----
+#materialize.public.vv4
+#SELECT v.a, v.b, v.c, v.x, v.e, v.f, v.g FROM ( VALUES (1,2,3,4,5,6,7)) v(a, b, c, x, e, f, g) UNION ALL SELECT x AS a, tt7.y AS b, tt8.z AS c, x_1 AS x, tt7x.y AS e, tt8x.z AS f, tt8y.z AS g FROM tt7 FULL JOIN tt8 USING (x), tt7 tt7x(x_1, y) FULL JOIN tt8 tt8x(x_1, z) USING (x_1) FULL JOIN tt8 tt8y(x_1, z) USING (x_1);
+
+statement ok
+CREATE TABLE tt7a (x date, y int);
+
+statement ok
+CREATE TABLE tt8a (x timestamptz, z int);
+
+#statement ok
+#CREATE VIEW vv2a AS SELECT * FROM (VALUES(NOW(), 2, 3, NOW(), 5)) v(a, b, c, d, e) UNION ALL SELECT * FROM tt7a LEFT JOIN tt8a USING (x), tt8a tt8ax;
+
+# PostgreSQL will alias all columns in the form `... AS "<col_name>"` where <col_name> is the
+# name of the columns in the left-most table factor in the UNION ALL. Since the column aliases
+# in the non left-most table factor are ignored, we don't follow this rule.
+# TODO(jkosh44) This is wrong, we need to use "x" in the * expansion, not tt7a.x
+#query TT
+#SHOW CREATE VIEW vv2a
+#----
+#materialize.public.vv2a
+#CREATE VIEW "materialize"."public"."vv2a" AS SELECT "v"."a" AS "a", "v"."b" AS "b", "v"."c" AS "c", "v"."d" AS "d", "v"."e" AS "e" FROM (VALUES ("pg_catalog"."now"(), 2, 3, "pg_catalog"."now"(), 5)) AS "v" ("a", "b", "c", "d", "e") UNION ALL SELECT "x" AS "a", "materialize"."public"."tt7a"."y" AS "b", "materialize"."public"."tt8a"."z" AS "c", "tt8ax"."x_1" AS "d", "tt8ax"."z" AS "e" FROM "materialize"."public"."tt7a" LEFT JOIN "materialize"."public"."tt8a" USING ("x"), "materialize"."public"."tt8a" "tt8ax"("x_1", "z")
+
+statement ok
+CREATE TABLE INT8_TBL(q1 int8, q2 int8);
+
+# TODO(jkosh44) We don't support creating this type.
+#statement ok
+#CREATE TYPE nestedcomposite AS (x int8_tbl);
+#
+#statement ok
+#CREATE VIEW tt15v AS SELECT ROW(i)::nestedcomposite FROM int8_tbl i;
+#
+#query TT
+#SHOW CREATE VIEW tt15v
+#----
+#materialize.public.tt15v
+#CREATE VIEW tt15v AS SELECT ROW(i.*::int8_tbl)::nestedcomposite AS "row"+ FROM int8_tbl i;
+
+statement ok
+CREATE VIEW tt16v AS SELECT * FROM int8_tbl i, LATERAL(VALUES(i)) ss;
+
+# TODO(jkosh44) Postgres uses LATERAL (VALUES (\"i\".*::\"int8_tbl\")) instead of LATERAL (VALUES ("i")).
+# that syntax, and I have no idea what it means.
+query TT
+SHOW CREATE VIEW tt16v
+----
+materialize.public.tt16v
+CREATE VIEW "materialize"."public"."tt16v" AS SELECT "i"."q1" AS "q1", "i"."q2" AS "q2", "ss"."column1" AS "column1" FROM "materialize"."public"."int8_tbl" AS "i" ("q1", "q2"), LATERAL (VALUES ("i")) AS "ss" ("column1")
+
+# No way for us to test this, because Materialize will rewrite this query using random UUIDs.
+#statement ok
+#CREATE VIEW tt17v AS SELECT * FROM int8_tbl i WHERE i IN (VALUES(i));
+#
+#query TT
+#SHOW CREATE VIEW tt17v
+#----
+#materialize.public.tt17v
+#CREATE VIEW "materialize"."public"."tt17v" AS SELECT "i"."q1", "i"."q2" FROM "materialize"."public"."int8_tbl" AS "i" WHERE ("i".* IN (VALUES ("i".*::"int8_tbl")))
+
+statement ok
+CREATE VIEW tt18v AS SELECT * FROM int8_tbl xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxy UNION ALL SELECT * FROM int8_tbl xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxz;
+
+# Postgres will truncate these aliases by 1 character, we will not.
+query TT
+SHOW CREATE VIEW tt18v
+----
+materialize.public.tt18v
+CREATE VIEW "materialize"."public"."tt18v" AS SELECT "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxy"."q1" AS "q1", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxy"."q2" AS "q2" FROM "materialize"."public"."int8_tbl" AS "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxy" ("q1", "q2") UNION ALL SELECT "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxz"."q1" AS "q1", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxz"."q2" AS "q2" FROM "materialize"."public"."int8_tbl" AS "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxz" ("q1", "q2")
+
+# TODO(jkosh44) We do not support functions in the from clause.
+#statement ok
+#CREATE VIEW tt20v AS SELECT * FROM COALESCE(1,2) AS c, COLLATION FOR ('x'::text) col, CURRENT_DATE AS d, LOCALTIMESTAMP(3) AS t, CAST(1+2 as int4) AS i4, CAST(1+2 as int8) AS i8;
+#
+#query TT
+#SHOW CREATE VIEW tt20v
+#----
+#materialize.public.tt20v
+#SELECT c.c, col.col, d.d, t.t, i4.i4, i8.i8 FROM COALESCE(1, 2) c(c), COLLATION FOR ('x'::text) col(col), CURRENT_DATE d(d), LOCALTIMESTAMP(3) t(t), CAST(1 + 2 AS integer) i4(i4), CAST((1 + 2)::bigint AS bigint) i8(i8);
+
+# TODO(jkosh44) We do not support this query, though maybe one day.
+#statement ok
+#CREATE VIEW tt201v AS
+#SELECT
+#  ('2022-12-01'::date + '1 day'::interval) AT TIME ZONE 'UTC' AS atz,
+#  EXTRACT(day FROM now()) AS extr,
+#  (now(), '1 day'::interval) OVERLAPS
+#    (CURRENT_TIMESTAMP(2), '1 day'::interval) AS o,
+#  'foo' IS NORMALIZED isn,
+#  'foo' IS NFKC NORMALIZED isnn,
+#  NORMALIZE('foo') AS n,
+#  NORMALIZE('foo', nfkd) AS nfkd,
+#  OVERLAY('foo' PLACING 'bar' from 2) AS ovl,
+#  OVERLAY('foo' PLACING 'bar' from 2 for 3) AS ovl2,
+#  POSITION('foo' IN 'foobar') AS p,
+#  SUBSTRING('foo' FROM 2 for 3) AS s,
+#  SUBSTRING('foo' SIMILAR 'f' escape '#') AS ss,
+#  SUBSTRING('foo' FROM 'oo') AS ssf,  -- historically-permitted abuse
+#  TRIM(' ' FROM ' foo ') AS bt,
+#  TRIM(LEADING ' ' FROM ' foo ') AS lt,
+#  TRIM(TRAILING ' foo ') AS rt,
+#  TRIM(E'\\000'::bytea FROM E'\\000Tom\\000'::bytea) AS btb,
+#  TRIM(LEADING E'\\000'::bytea FROM E'\\000Tom\\000'::bytea) AS ltb,
+#  TRIM(TRAILING E'\\000'::bytea FROM E'\\000Tom\\000'::bytea) AS rtb,
+#  CURRENT_DATE AS cd,
+#  (select * FROM CURRENT_DATE) AS cd2,
+#  CURRENT_TIME AS ct,
+#  (select * FROM CURRENT_TIME) AS ct2,
+#  CURRENT_TIME (1) AS ct3,
+#  (select * FROM CURRENT_TIME (1)) AS ct4,
+#  CURRENT_TIMESTAMP AS ct5,
+#  (SELECT * FROM CURRENT_TIMESTAMP) AS ct6,
+#  CURRENT_TIMESTAMP (1) AS ct7,
+#  (SELECT * FROM CURRENT_TIMESTAMP (1)) AS ct8,
+#  LOCALTIME AS lt1,
+#  (SELECT * FROM LOCALTIME) AS lt2,
+#  LOCALTIME (1) AS lt3,
+#  (SELECT * FROM LOCALTIME (1)) AS lt4,
+#  LOCALTIMESTAMP AS lt5,
+#  (SELECT * FROM LOCALTIMESTAMP) AS lt6,
+#  LOCALTIMESTAMP (1) AS lt7,
+#  (SELECT * FROM LOCALTIMESTAMP (1)) AS lt8,
+#  CURRENT_CATALOG AS ca,
+#  (SELECT * FROM CURRENT_CATALOG) AS ca2,
+#  CURRENT_ROLE AS cr,
+#  (SELECT * FROM CURRENT_ROLE) AS cr2,
+#  CURRENT_SCHEMA AS cs,
+#  (SELECT * FROM CURRENT_SCHEMA) AS cs2,
+#  CURRENT_USER AS cu,
+#  (SELECT * FROM CURRENT_USER) AS cu2,
+#  USER AS us,
+#  (SELECT * FROM USER) AS us2,
+#  SESSION_USER seu,
+#  (SELECT * FROM SESSION_USER) AS seu2,
+#  SYSTEM_USER AS su,
+#  (SELECT * FROM SYSTEM_USER) AS su2;
+
+# We need to drop and re-create tt5 to replicate the ALTER TABLEs in Postgres
+
+statement ok
+DROP TABLE tt5 CASCADE
+
+statement ok
+CREATE TABLE tt5 (a int, b int, cc int)
+
+statement ok
+CREATE VIEW tt21v AS SELECT * FROM tt5 NATURAL INNER JOIN tt6;
+
+# Postgres uses CROSS JOIN instead of JOIN ... ON TRUE, they are equivalent.
+query TT
+SHOW CREATE VIEW tt21v
+----
+materialize.public.tt21v
+CREATE VIEW "materialize"."public"."tt21v" AS SELECT "materialize"."public"."tt5"."a" AS "a", "materialize"."public"."tt5"."b" AS "b", "materialize"."public"."tt5"."cc" AS "cc", "materialize"."public"."tt6"."c" AS "c", "materialize"."public"."tt6"."d" AS "d" FROM "materialize"."public"."tt5" AS "tt5" ("a", "b", "cc") JOIN "materialize"."public"."tt6" AS "tt6" ("c", "d") ON true
+
+statement ok
+CREATE VIEW tt22v AS SELECT * FROM tt5 NATURAL LEFT JOIN tt6;
+
+query TT
+SHOW CREATE VIEW tt22v
+----
+materialize.public.tt22v
+CREATE VIEW "materialize"."public"."tt22v" AS SELECT "materialize"."public"."tt5"."a" AS "a", "materialize"."public"."tt5"."b" AS "b", "materialize"."public"."tt5"."cc" AS "cc", "materialize"."public"."tt6"."c" AS "c", "materialize"."public"."tt6"."d" AS "d" FROM "materialize"."public"."tt5" AS "tt5" ("a", "b", "cc") LEFT JOIN "materialize"."public"."tt6" AS "tt6" ("c", "d") ON true
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET disambiguate_columns = false
+----
+COMPLETE 0

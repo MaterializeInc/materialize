@@ -1708,7 +1708,10 @@ fn mutate(sql: &str) -> Vec<String> {
                     key_parts: Some(
                         stmt.columns
                             .iter()
-                            .map(|def| Expr::Identifier(vec![def.name.clone()]))
+                            .map(|def| Expr::Identifier {
+                                names: vec![def.name.clone()],
+                                id: (),
+                            })
                             .collect(),
                     ),
                     with_options: Vec::new(),

@@ -34,6 +34,7 @@ use crate::ast::{
 };
 use crate::catalog::{CatalogItemType, CatalogTypeDetails, SessionCatalog};
 use crate::normalize;
+use crate::plan::column_disambiguate::StatementTagger;
 use crate::plan::PlanError;
 
 /// A fully-qualified human readable name of an item in the catalog.
@@ -104,8 +105,8 @@ pub struct PartialObjectName {
 }
 
 impl PartialObjectName {
-    // Whether either self or other might be a (possibly differently qualified)
-    // version of the other.
+    /// Whether either self or other might be a (possibly differently qualified)
+    /// version of the other.
     pub fn matches(&self, other: &Self) -> bool {
         match (&self.database, &other.database) {
             (Some(d1), Some(d2)) if d1 != d2 => return false,
@@ -116,6 +117,19 @@ impl PartialObjectName {
             _ => (),
         }
         self.item == other.item
+    }
+
+    /// Converts the `PartialObjectName` into a vector of `Ident`s.
+    pub fn into_idents(&self) -> Vec<Ident> {
+        let mut idents = Vec::new();
+        if let Some(database) = &self.database {
+            idents.push(Ident::new(database));
+        }
+        if let Some(schema) = &self.schema {
+            idents.push(Ident::new(schema));
+        }
+        idents.push(Ident::new(&self.item));
+        idents
     }
 }
 
@@ -393,6 +407,14 @@ impl ResolvedObjectName {
             ResolvedObjectName::Error => "error in name resolution".to_string(),
         }
     }
+
+    pub fn name(&self) -> &str {
+        match self {
+            ResolvedObjectName::Object { full_name, .. } => &full_name.item,
+            ResolvedObjectName::Cte { name, .. } => name,
+            ResolvedObjectName::Error => "error in name resolution",
+        }
+    }
 }
 
 impl AstDisplay for ResolvedObjectName {
@@ -628,6 +650,7 @@ impl AstInfo for Aug {
     type DataType = ResolvedDataType;
     type CteId = LocalId;
     type RoleName = ResolvedRoleName;
+    type NodeId = Option<u64>;
 }
 
 /// The identifier for a schema.
@@ -758,15 +781,20 @@ pub enum ObjectId {
 #[derive(Debug)]
 pub struct NameResolver<'a> {
     catalog: &'a dyn SessionCatalog,
+    statement_tagger: &'a mut StatementTagger,
     ctes: BTreeMap<String, LocalId>,
     status: Result<(), PlanError>,
     ids: BTreeSet<GlobalId>,
 }
 
 impl<'a> NameResolver<'a> {
-    fn new(catalog: &'a dyn SessionCatalog) -> NameResolver {
+    fn new(
+        catalog: &'a dyn SessionCatalog,
+        statement_tagger: &'a mut StatementTagger,
+    ) -> NameResolver<'a> {
         NameResolver {
             catalog,
+            statement_tagger,
             ctes: BTreeMap::new(),
             status: Ok(()),
             ids: BTreeSet::new(),
@@ -1238,6 +1266,10 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             }
         }
     }
+
+    fn fold_node_id(&mut self, _node_id: <Raw as AstInfo>::NodeId) -> <Aug as AstInfo>::NodeId {
+        self.statement_tagger.node_id()
+    }
 }
 
 /// Resolves names in an AST node using the provided catalog.
@@ -1249,12 +1281,13 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
 )]
 pub fn resolve<N>(
     catalog: &dyn SessionCatalog,
+    statement_tagger: &mut StatementTagger,
     node: N,
 ) -> Result<(N::Folded, BTreeSet<GlobalId>), PlanError>
 where
     N: FoldNode<Raw, Aug>,
 {
-    let mut resolver = NameResolver::new(catalog);
+    let mut resolver = NameResolver::new(catalog, statement_tagger);
     let result = node.fold(&mut resolver);
     resolver.status?;
     Ok((result, resolver.ids))
@@ -1352,6 +1385,9 @@ impl Fold<Aug, Aug> for TransientResolver<'_> {
     }
     fn fold_role_name(&mut self, node: <Aug as AstInfo>::RoleName) -> <Aug as AstInfo>::RoleName {
         node
+    }
+    fn fold_node_id(&mut self, node_id: <Aug as AstInfo>::NodeId) -> <Aug as AstInfo>::NodeId {
+        node_id
     }
 }
 

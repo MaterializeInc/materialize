@@ -19,8 +19,9 @@ use mz_controller::clusters::ClusterId;
 use mz_ore::halt;
 use mz_ore::soft_assert;
 use mz_repr::{GlobalId, RelationDesc, Row, ScalarType};
+use mz_sql::catalog::SessionCatalog;
 use mz_sql::names::FullObjectName;
-use mz_sql::plan::StatementDesc;
+use mz_sql::plan::{StatementDesc, StatementTagger};
 use mz_sql::session::vars::Var;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
@@ -201,7 +202,10 @@ pub fn index_sql(
         key_parts: Some(
             keys.iter()
                 .map(|i| match view_desc.get_unambiguous_name(*i) {
-                    Some(n) => Expr::Identifier(vec![Ident::new(n.to_string())]),
+                    Some(n) => Expr::Identifier {
+                        names: vec![Ident::new(n.to_string())],
+                        id: (),
+                    },
                     _ => Expr::Value(Value::Number((i + 1).to_string())),
                 })
                 .collect(),
@@ -239,12 +243,15 @@ pub fn describe(
         }
         _ => {
             let catalog = &catalog.for_session(session);
-            let (stmt, _) = mz_sql::names::resolve(catalog, stmt)?;
+            let mut statement_tagger =
+                StatementTagger::new(catalog.system_vars().enable_disambiguate_columns());
+            let (stmt, _) = mz_sql::names::resolve(catalog, &mut statement_tagger, stmt)?;
             Ok(mz_sql::plan::describe(
                 session.pcx(),
                 catalog,
                 stmt,
                 param_types,
+                statement_tagger,
             )?)
         }
     }

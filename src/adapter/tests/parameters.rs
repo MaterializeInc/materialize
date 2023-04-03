@@ -79,6 +79,7 @@ use mz_adapter::catalog::Catalog;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
 use mz_repr::ScalarType;
+use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::PlanContext;
 
 #[tokio::test]
@@ -178,8 +179,11 @@ async fn test_parameter_type_inference() {
         let catalog = catalog.for_system_session();
         for (sql, types) in test_cases {
             let stmt = mz_sql::parse::parse(sql).unwrap().into_element();
-            let (stmt, _) = mz_sql::names::resolve(&catalog, stmt).unwrap();
-            let desc = mz_sql::plan::describe(&PlanContext::zero(), &catalog, stmt, &[]).unwrap();
+            let mut statement_tagger = StatementTagger::new(catalog.disambiguate_columns_enabled());
+            let (stmt, _) = mz_sql::names::resolve(&catalog, &mut statement_tagger, stmt).unwrap();
+            let desc =
+                mz_sql::plan::describe(&PlanContext::zero(), &catalog, stmt, &[], statement_tagger)
+                    .unwrap();
             assert_eq!(desc.param_types, types);
         }
     })

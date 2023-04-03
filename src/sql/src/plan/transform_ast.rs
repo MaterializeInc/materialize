@@ -13,6 +13,7 @@
 //! are much easier to perform in SQL. Someday, we'll want our own SQL IR,
 //! but for now we just use the parser's AST directly.
 
+use std::collections::BTreeSet;
 use uuid::Uuid;
 
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
@@ -34,9 +35,17 @@ where
     node.visit_mut(&mut func_rewriter);
     func_rewriter.status?;
 
-    let mut desugarer = Desugarer::new();
+    let mut desugarer = Desugarer::new(scx);
     node.visit_mut(&mut desugarer);
-    desugarer.status
+    desugarer.status?;
+
+    let mut alias_collector = TableNameCollector::new();
+    node.visit_mut(&mut alias_collector);
+    let mut subquery_aliaser = SubqueryAliaser::new(alias_collector.table_names);
+    node.visit_mut(&mut subquery_aliaser);
+    subquery_aliaser.status?;
+
+    Ok(())
 }
 
 // Transforms various functions to forms that are more easily handled by the
@@ -313,7 +322,10 @@ impl<'a> FuncRewriter<'a> {
             // Rewrites special keywords that SQL considers to be function calls
             // to actual function calls. For example, `SELECT current_timestamp`
             // is rewritten to `SELECT current_timestamp()`.
-            Expr::Identifier(ident) if ident.len() == 1 => {
+            Expr::Identifier {
+                names: ident,
+                id: _,
+            } if ident.len() == 1 => {
                 let ident = normalize::ident(ident[0].clone());
                 let fn_ident = match ident.as_str() {
                     "current_role" => Some("current_user"),
@@ -362,24 +374,25 @@ impl<'ast> VisitMut<'ast, Aug> for FuncRewriter<'_> {
 ///
 /// For example, `<expr> NOT IN (<subquery>)` is rewritten to `expr <> ALL
 /// (<subquery>)`.
-struct Desugarer {
+struct Desugarer<'a> {
+    scx: &'a StatementContext<'a>,
     status: Result<(), PlanError>,
     recursion_guard: RecursionGuard,
 }
 
-impl CheckedRecursion for Desugarer {
+impl<'a> CheckedRecursion for Desugarer<'a> {
     fn recursion_guard(&self) -> &RecursionGuard {
         &self.recursion_guard
     }
 }
 
-impl<'ast> VisitMut<'ast, Aug> for Desugarer {
+impl<'ast> VisitMut<'ast, Aug> for Desugarer<'_> {
     fn visit_expr_mut(&mut self, expr: &'ast mut Expr<Aug>) {
         self.visit_internal(Self::visit_expr_mut_internal, expr);
     }
 }
 
-impl Desugarer {
+impl<'a> Desugarer<'a> {
     fn visit_internal<F, X>(&mut self, f: F, x: X)
     where
         F: Fn(&mut Self, X) -> Result<(), PlanError>,
@@ -394,8 +407,9 @@ impl Desugarer {
         }
     }
 
-    fn new() -> Desugarer {
+    fn new(scx: &'a StatementContext<'a>) -> Desugarer<'a> {
         Desugarer {
+            scx,
             status: Ok(()),
             recursion_guard: RecursionGuard::with_limit(1024), // chosen arbitrarily
         }
@@ -471,11 +485,15 @@ impl Desugarer {
                                 strict: true,
                             }),
                             with_ordinality: false,
+                            id: self.scx.node_id(),
                         },
                         joins: vec![],
                     })
                     .project(SelectItem::Expr {
-                        expr: Expr::Identifier(vec![binding]),
+                        expr: Expr::Identifier {
+                            names: vec![binding],
+                            id: self.scx.node_id(),
+                        },
                         alias: None,
                     }),
             );
@@ -530,6 +548,7 @@ impl Desugarer {
                         columns: bindings.clone(),
                         strict: true,
                     },
+                    self.scx.node_id(),
                 ))
                 .project(SelectItem::Expr {
                     expr: left
@@ -538,7 +557,10 @@ impl Desugarer {
                             Expr::Row {
                                 exprs: bindings
                                     .into_iter()
-                                    .map(|b| Expr::Identifier(vec![b]))
+                                    .map(|b| Expr::Identifier {
+                                        names: vec![b],
+                                        id: self.scx.node_id(),
+                                    })
                                     .collect(),
                             },
                         )
@@ -624,5 +646,95 @@ impl Desugarer {
 
         visit_mut::visit_expr_mut(self, expr);
         Ok(())
+    }
+}
+
+/// Collects the visible name of all table factors.
+struct TableNameCollector {
+    table_names: BTreeSet<Ident>,
+}
+
+impl TableNameCollector {
+    fn new() -> TableNameCollector {
+        TableNameCollector {
+            table_names: BTreeSet::new(),
+        }
+    }
+
+    fn table_factor_name(table_factor: &TableFactor<Aug>) -> Option<Ident> {
+        match table_factor {
+            TableFactor::Table { name, .. } => Some(Ident::new(name.name())),
+            TableFactor::Function { function, .. } => {
+                Some(function.name.0.last().expect("empty function name").clone())
+            }
+            TableFactor::RowsFrom { functions, .. } => functions
+                .first()
+                .map(|function| function.name.0.last().expect("empty function name").clone()),
+            TableFactor::Derived { .. } => None,
+            TableFactor::NestedJoin { .. } => None,
+        }
+    }
+}
+
+impl<'ast> VisitMut<'ast, Aug> for TableNameCollector {
+    fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor<Aug>) {
+        if let Some(alias) = table_factor.alias() {
+            self.table_names.insert(alias.name.clone());
+        } else if let Some(name) = Self::table_factor_name(table_factor) {
+            self.table_names.insert(name);
+        }
+        visit_mut::visit_table_factor_mut(self, table_factor);
+    }
+}
+
+/// Assigns a unique alias to all un-aliased subqueries.
+struct SubqueryAliaser {
+    aliases: BTreeSet<Ident>,
+    idx: u64,
+    status: Result<(), PlanError>,
+}
+
+impl SubqueryAliaser {
+    fn new(aliases: BTreeSet<Ident>) -> SubqueryAliaser {
+        SubqueryAliaser {
+            aliases,
+            idx: 0,
+            status: Ok(()),
+        }
+    }
+
+    fn unique_alias(&mut self) -> Result<Ident, PlanError> {
+        const ANONYMOUS_ALIAS_NAME: &str = "unnamed_subquery";
+        let mut alias = Ident::new(ANONYMOUS_ALIAS_NAME);
+        while self.aliases.contains(&alias) {
+            self.idx = self.idx.checked_add(1).ok_or(PlanError::SubqueryOverflow)?;
+            alias = Ident::new(format!("{ANONYMOUS_ALIAS_NAME}_{}", self.idx));
+        }
+        self.aliases.insert(alias.clone());
+        Ok(alias)
+    }
+}
+
+impl<'ast> VisitMut<'ast, Aug> for SubqueryAliaser {
+    fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor<Aug>) {
+        match table_factor {
+            TableFactor::Derived { alias, .. } if alias.is_none() => match self.unique_alias() {
+                Ok(unique_alias) => {
+                    *alias = Some(TableAlias {
+                        name: unique_alias,
+                        columns: Vec::new(),
+                        strict: false,
+                    });
+                }
+                Err(e) => self.status = Err(e),
+            },
+            TableFactor::Table { .. }
+            | TableFactor::Function { .. }
+            | TableFactor::RowsFrom { .. }
+            | TableFactor::Derived { .. }
+            | TableFactor::NestedJoin { .. } => {}
+        }
+
+        visit_mut::visit_table_factor_mut(self, table_factor);
     }
 }

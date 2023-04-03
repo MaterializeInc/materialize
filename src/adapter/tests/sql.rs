@@ -96,7 +96,7 @@ use mz_adapter::session::{Session, DEFAULT_DATABASE_NAME};
 use mz_ore::now::NOW_ZERO;
 use mz_repr::RelationDesc;
 use mz_sql::ast::{Expr, Statement};
-use mz_sql::catalog::CatalogDatabase;
+use mz_sql::catalog::{CatalogDatabase, CatalogFeature};
 use mz_sql::names::{self, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier};
 use mz_sql::plan::{PlanContext, QueryContext, QueryLifetime, StatementContext};
 use mz_sql::DEFAULT_SCHEMA;
@@ -186,7 +186,15 @@ async fn datadriven() {
                                 Statement::Select(s) => s.query,
                                 _ => unreachable!(),
                             };
-                            let resolved = names::resolve(qcx.scx.catalog, q);
+                            let resolved = names::resolve(
+                                qcx.scx.catalog,
+                                &mut StatementTagger::new(
+                                    qcx.scx
+                                        .catalog
+                                        .get_feature(CatalogFeature::EnableColumnDisambiguation),
+                                ),
+                                q,
+                            );
                             match resolved {
                                 Ok((q, _depends_on)) => format!("{}\n", q),
                                 Err(e) => format!("error: {}\n", e),
