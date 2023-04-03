@@ -36,7 +36,7 @@ use mz_sql_parser::ast::{
     AlterOwnerStatement, AlterRoleStatement, AlterSinkAction, AlterSinkStatement,
     AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
     AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
-    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredObjectName,
+    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
     GrantRoleStatement, RevokeRoleStatement, SshConnectionOption, UnresolvedName,
     UnresolvedItemName, UnresolvedSchemaName, Value,
 };
@@ -821,7 +821,7 @@ pub fn plan_create_source(
                 let name = subsource.reference.clone();
 
                 let target = match &subsource.subsource {
-                    Some(DeferredObjectName::Named(target)) => target.clone(),
+                    Some(DeferredItemName::Named(target)) => target.clone(),
                     _ => {
                         sql_bail!("[internal error] subsources must be named during purification")
                     }
@@ -1007,13 +1007,13 @@ pub fn plan_create_source(
     let progress_subsource = progress_subsource
         .as_ref()
         .map(|name| match name {
-            DeferredObjectName::Named(name) => match name {
+            DeferredItemName::Named(name) => match name {
                 ResolvedItemName::Item { id, .. } => Ok(*id),
                 ResolvedItemName::Cte { .. } | ResolvedItemName::Error => {
                     sql_bail!("[internal error] invalid target id")
                 }
             },
-            DeferredObjectName::Deferred(_) => {
+            DeferredItemName::Deferred(_) => {
                 sql_bail!("[internal error] progress subsource must be named during purification")
             }
         })

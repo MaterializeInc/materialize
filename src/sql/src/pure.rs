@@ -32,7 +32,7 @@ use mz_repr::{strconv, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CsrConnection, CsrSeedAvro,
-    CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, DeferredObjectName, Envelope, Ident,
+    CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, DeferredItemName, Envelope, Ident,
     KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection,
     PgConfigOption, PgConfigOptionName, ReaderSchemaSelectionStrategy, UnresolvedItemName,
 };
@@ -63,7 +63,7 @@ fn subsource_gen<'a, T>(
     for subsource in selected_subsources {
         let subsource_name = match &subsource.subsource {
             Some(name) => match name {
-                DeferredObjectName::Deferred(name) => {
+                DeferredItemName::Deferred(name) => {
                     let partial = normalize::unresolved_item_name(name.clone())?;
                     match partial.schema {
                         Some(_) => name.clone(),
@@ -72,7 +72,7 @@ fn subsource_gen<'a, T>(
                         None => subsource_name_gen(source_name, &partial.item)?,
                     }
                 }
-                DeferredObjectName::Named(..) => {
+                DeferredItemName::Named(..) => {
                     unreachable!("already errored on this condition")
                 }
             },
@@ -136,9 +136,9 @@ pub async fn purify_create_source(
         ..
     } = &mut stmt;
 
-    fn named_subsource_err(name: &Option<DeferredObjectName<Aug>>) -> Result<(), PlanError> {
+    fn named_subsource_err(name: &Option<DeferredItemName<Aug>>) -> Result<(), PlanError> {
         match name {
-            Some(DeferredObjectName::Named(_)) => {
+            Some(DeferredItemName::Named(_)) => {
                 sql_bail!("Cannot manually ID qualify subsources")
             }
             _ => Ok(()),
@@ -498,11 +498,11 @@ pub async fn purify_create_source(
                 let transient_id = GlobalId::Transient(get_transient_subsource_id());
 
                 let subsource =
-                    scx.allocate_resolved_object_name(transient_id, subsource_name.clone())?;
+                    scx.allocate_resolved_item_name(transient_id, subsource_name.clone())?;
 
                 targeted_subsources.push(CreateSourceSubsource {
                     reference: upstream_name,
-                    subsource: Some(DeferredObjectName::Named(subsource)),
+                    subsource: Some(DeferredItemName::Named(subsource)),
                 });
 
                 // Create the subsource statement
@@ -622,11 +622,11 @@ pub async fn purify_create_source(
                 let transient_id = GlobalId::Transient(get_transient_subsource_id());
 
                 let subsource =
-                    scx.allocate_resolved_object_name(transient_id, subsource_name.clone())?;
+                    scx.allocate_resolved_item_name(transient_id, subsource_name.clone())?;
 
                 targeted_subsources.push(CreateSourceSubsource {
                     reference: upstream_name,
-                    subsource: Some(DeferredObjectName::Named(subsource)),
+                    subsource: Some(DeferredItemName::Named(subsource)),
                 });
 
                 // Create the subsource statement
@@ -662,11 +662,11 @@ pub async fn purify_create_source(
     // Take name from input or generate name
     let (name, subsource) = match progress_subsource {
         Some(name) => match name {
-            DeferredObjectName::Deferred(name) => (
+            DeferredItemName::Deferred(name) => (
                 name.clone(),
-                scx.allocate_resolved_object_name(transient_id, name.clone())?,
+                scx.allocate_resolved_item_name(transient_id, name.clone())?,
             ),
-            DeferredObjectName::Named(_) => unreachable!("already checked for this value"),
+            DeferredItemName::Named(_) => unreachable!("already checked for this value"),
         },
         None => {
             let (item, prefix) = source_name.0.split_last().unwrap();
@@ -692,7 +692,7 @@ pub async fn purify_create_source(
 
     let (columns, constraints) = scx.relation_desc_into_table_defs(progress_desc)?;
 
-    *progress_subsource = Some(DeferredObjectName::Named(subsource));
+    *progress_subsource = Some(DeferredItemName::Named(subsource));
 
     // Create the subsource statement
     let subsource = CreateSubsourceStatement {

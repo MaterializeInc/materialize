@@ -540,9 +540,9 @@ impl<'a> StatementContext<'a> {
         })
     }
 
-    // Creates a `ResolvedObjectName::Object` from a `GlobalId` and an
-    // `UnresolvedObjectName`.
-    pub fn allocate_resolved_object_name(
+    // Creates a `ResolvedItemName::Item` from a `GlobalId` and an
+    // `UnresolvedItemName`.
+    pub fn allocate_resolved_item_name(
         &self,
         id: GlobalId,
         name: UnresolvedItemName,

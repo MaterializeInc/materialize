@@ -4378,10 +4378,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_deferred_object_name(&mut self) -> Result<DeferredObjectName<Raw>, ParserError> {
+    fn parse_deferred_object_name(&mut self) -> Result<DeferredItemName<Raw>, ParserError> {
         Ok(match self.parse_raw_name()? {
-            named @ RawItemName::Id(..) => DeferredObjectName::Named(named),
-            RawItemName::Name(name) => DeferredObjectName::Deferred(name),
+            named @ RawItemName::Id(..) => DeferredItemName::Named(named),
+            RawItemName::Name(name) => DeferredItemName::Deferred(name),
         })
     }
 

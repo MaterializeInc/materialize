@@ -29,7 +29,7 @@ use enum_kinds::EnumKind;
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     AstInfo, ColumnDef, CreateConnection, CreateSinkConnection, CreateSourceConnection,
-    CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, DeferredObjectName, Envelope,
+    CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, DeferredItemName, Envelope,
     Expr, Format, Ident, KeyConstraint, Query, SelectItem, SourceIncludeMetadata, TableAlias,
     TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedName, UnresolvedItemName,
     UnresolvedSchemaName, Value,
@@ -568,7 +568,7 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub key_constraint: Option<KeyConstraint>,
     pub with_options: Vec<CreateSourceOption<T>>,
     pub referenced_subsources: Option<ReferencedSubsources<T>>,
-    pub progress_subsource: Option<DeferredObjectName<T>>,
+    pub progress_subsource: Option<DeferredItemName<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
@@ -631,7 +631,7 @@ impl_display_t!(CreateSourceStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSourceSubsource<T: AstInfo> {
     pub reference: UnresolvedItemName,
-    pub subsource: Option<DeferredObjectName<T>>,
+    pub subsource: Option<DeferredItemName<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceSubsource<T> {

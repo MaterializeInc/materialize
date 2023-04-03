@@ -1015,8 +1015,8 @@ impl<'a, T> ErsatzCatalog<'a, T> {
     /// describes.
     ///
     /// # Errors
-    /// - If `item` cannot be normalized to a [`PartialObjectName`]
-    /// - If the normalized `PartialObjectName` does not resolve to an item in
+    /// - If `item` cannot be normalized to a [`PartialItemName`]
+    /// - If the normalized `PartialItemName` does not resolve to an item in
     ///   `self.0`.
     pub fn resolve(
         &self,

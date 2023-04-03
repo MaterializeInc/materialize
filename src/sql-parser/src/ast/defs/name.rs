@@ -163,23 +163,23 @@ impl AstDisplay for UnresolvedDatabaseName {
 }
 impl_display!(UnresolvedDatabaseName);
 
-// The name of an object not yet created during name resolution, which should be
-// resolveable as an object name later.
+// The name of an item not yet created during name resolution, which should be
+// resolveable as an item name later.
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub enum DeferredObjectName<T: AstInfo> {
+pub enum DeferredItemName<T: AstInfo> {
     Named(T::ItemName),
     Deferred(UnresolvedItemName),
 }
 
-impl<T: AstInfo> AstDisplay for DeferredObjectName<T> {
+impl<T: AstInfo> AstDisplay for DeferredItemName<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            DeferredObjectName::Named(o) => f.write_node(o),
-            DeferredObjectName::Deferred(o) => f.write_node(o),
+            DeferredItemName::Named(o) => f.write_node(o),
+            DeferredItemName::Deferred(o) => f.write_node(o),
         }
     }
 }
-impl_display_t!(DeferredObjectName);
+impl_display_t!(DeferredItemName);
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum UnresolvedName {
