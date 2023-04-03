@@ -59,7 +59,7 @@
 /src/pgtest                         @MaterializeInc/surfaces
 /src/pgwire                         @MaterializeInc/surfaces
 /src/pid-file                       @benesch
-/src/postgres-util                  @MaterializeInc/surfaces
+/src/postgres-util                  @MaterializeInc/storage
 /src/prof                           @umanwizard
 /src/proto                          @aalexandrov
 /src/repr                           @MaterializeInc/storage @MaterializeInc/compute
