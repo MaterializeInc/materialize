@@ -1167,12 +1167,7 @@ where
     }
 
     pub(crate) fn seqno_since(&self) -> SeqNo {
-        let mut seqno_since = self.seqno;
-        for cap in self.collections.leased_readers.values() {
-            seqno_since = std::cmp::min(seqno_since, cap.seqno);
-        }
-        // critical_readers don't hold a seqno capability.
-        seqno_since
+        self.collections.seqno_since(self.seqno)
     }
 
     // Returns whether the cmd proposing this state has been selected to perform
