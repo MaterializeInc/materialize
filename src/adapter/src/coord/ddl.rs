@@ -1076,7 +1076,7 @@ impl Coordinator {
     }
 
     /// Validate a specific type of resource limit and return an error if that limit is exceeded.
-    fn validate_resource_limit<F>(
+    pub(crate) fn validate_resource_limit<F>(
         &self,
         current_amount: usize,
         new_instances: i32,

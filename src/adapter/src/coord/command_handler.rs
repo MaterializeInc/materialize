@@ -28,7 +28,7 @@ use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, Params, Plan,
     TransactionType,
 };
-use mz_sql::session::vars::{EndTransactionAction, OwnedVarInput};
+use mz_sql::session::vars::{EndTransactionAction, OwnedVarInput, SystemVars};
 
 use crate::client::ConnectionId;
 use crate::command::{
@@ -205,6 +205,19 @@ impl Coordinator {
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
     ) {
+        if let Err(e) = self.validate_resource_limit(
+            self.active_conns.len(),
+            1,
+            SystemVars::max_connections,
+            "Max Connections",
+        ) {
+            let _ = tx.send(Response {
+                result: Err(e),
+                session,
+            });
+            return;
+        }
+
         if self
             .catalog()
             .try_get_role_by_name(&session.user().name)

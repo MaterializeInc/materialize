@@ -62,8 +62,8 @@ use mz_sql::plan::{
 };
 use mz_sql::session::user::SYSTEM_USER;
 use mz_sql::session::vars::{
-    IsolationLevel, OwnedVarInput, VarError, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
-    TRANSACTION_ISOLATION_VAR_NAME,
+    IsolationLevel, OwnedVarInput, SystemVars, VarError, VarInput, CLUSTER_VAR_NAME,
+    DATABASE_VAR_NAME, TRANSACTION_ISOLATION_VAR_NAME,
 };
 use mz_sql::session::vars::{Var, ENABLE_RBAC_CHECKS};
 use mz_ssh_util::keys::SshKeyPairSet;
@@ -2261,6 +2261,13 @@ impl Coordinator {
         plan: SubscribePlan,
         depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
+        self.validate_resource_limit(
+            self.active_subscribes.len(),
+            1,
+            SystemVars::max_subscribes,
+            "Max Subscribes",
+        )?;
+
         let SubscribePlan {
             from,
             with_snapshot,

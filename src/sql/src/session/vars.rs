@@ -648,6 +648,22 @@ pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+pub const MAX_SUBSCRIBES: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("max_subscribes"),
+    value: &100,
+    description: "The maximum number of concurrent subscribes on a single cluster (Materialize).",
+    internal: false,
+    safe: true,
+};
+
+pub const MAX_CONNECTIONS: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("max_connections"),
+    value: &500,
+    description: "The maximum number of concurrent cpmmectopms on a single cluster (Materialize).",
+    internal: false,
+    safe: true,
+};
+
 /// Represents the input to a variable.
 ///
 /// Each variable has different rules for how it handles each style of input.
@@ -1360,6 +1376,8 @@ impl Default for SystemVars {
             .with_var(&ENABLE_WITH_MUTUALLY_RECURSIVE)
             .with_var(&ENABLE_RBAC_CHECKS)
             .with_var(&ENABLE_AUTO_ROUTE_INTROSPECTION_QUERIES)
+            .with_var(&MAX_SUBSCRIBES)
+            .with_var(&MAX_CONNECTIONS)
     }
 }
 
@@ -1658,6 +1676,16 @@ impl SystemVars {
     /// Note: this is generally intended to be set via LaunchDarkly
     pub fn enable_auto_route_introspection_queries(&self) -> bool {
         *self.expect_value(&ENABLE_AUTO_ROUTE_INTROSPECTION_QUERIES)
+    }
+
+    /// Returns the `max_subscribes` configuration parameter.
+    pub fn max_subscribes(&self) -> u32 {
+        *self.expect_value(&MAX_SUBSCRIBES)
+    }
+
+    /// Returns the `max_connections` configuration parameter.
+    pub fn max_connections(&self) -> u32 {
+        *self.expect_value(&MAX_CONNECTIONS)
     }
 }
 
