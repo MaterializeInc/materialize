@@ -270,7 +270,7 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
         }
         fn visit_data_type(&mut self, data_type: &'a <Raw as AstInfo>::DataType) {
             if let RawDataType::Other { name, .. } = data_type {
-                self.visit_object_name(name)
+                self.visit_item_name(name)
             }
         }
     }
