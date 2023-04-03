@@ -623,7 +623,7 @@ where
     }
 
     pub async fn maybe_become_tombstone(&mut self) -> Option<RoutineMaintenance> {
-        if self.applier.since_upper_both_empty() {
+        if !self.applier.since_upper_both_empty() {
             return None;
         }
 
