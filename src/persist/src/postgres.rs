@@ -87,7 +87,7 @@ impl<'a> FromSql<'a> for SeqNo {
 pub struct PostgresConsensusConfig {
     url: String,
     knobs: Arc<dyn ConsensusKnobs>,
-    metrics: PostgresConsensusMetrics,
+    metrics: Arc<PostgresConsensusMetrics>,
 }
 
 impl PostgresConsensusConfig {
@@ -103,7 +103,7 @@ impl PostgresConsensusConfig {
         Ok(PostgresConsensusConfig {
             url: url.to_string(),
             knobs: Arc::from(knobs),
-            metrics,
+            metrics: Arc::from(metrics),
         })
     }
 
@@ -137,6 +137,9 @@ impl PostgresConsensusConfig {
             fn connection_pool_max_size(&self) -> usize {
                 2
             }
+            fn connection_pool_batch_cas_max_size(&self) -> usize {
+                2
+            }
             fn connection_pool_ttl(&self) -> Duration {
                 Duration::MAX
             }
@@ -145,6 +148,12 @@ impl PostgresConsensusConfig {
             }
             fn connect_timeout(&self) -> Duration {
                 Duration::MAX
+            }
+            fn batch_cas_enabled(&self) -> bool {
+                false
+            }
+            fn max_batch_cas_size(&self) -> usize {
+                0
             }
         }
 
@@ -160,7 +169,8 @@ impl PostgresConsensusConfig {
 /// Implementation of [Consensus] over a Postgres database.
 pub struct PostgresConsensus {
     pool: Pool,
-    metrics: PostgresConsensusMetrics,
+    batch_write_pool: Pool,
+    metrics: Arc<PostgresConsensusMetrics>,
 }
 
 impl std::fmt::Debug for PostgresConsensus {
@@ -177,59 +187,18 @@ impl PostgresConsensus {
         pg_config.connect_timeout(config.knobs.connect_timeout());
         let tls = make_tls(&pg_config)?;
 
-        let manager = Manager::from_config(
-            pg_config,
-            tls,
-            ManagerConfig {
-                recycling_method: RecyclingMethod::Fast,
-            },
+        let pool = Self::create_connection_pool(
+            &config,
+            &pg_config,
+            &tls,
+            config.knobs.connection_pool_max_size(),
         );
-
-        let last_ttl_connection = AtomicU64::new(0);
-        let connections_created = config.metrics.connpool_connections_created.clone();
-        let ttl_reconnections = config.metrics.connpool_ttl_reconnections.clone();
-        let pool = Pool::builder(manager)
-            .max_size(config.knobs.connection_pool_max_size())
-            .post_create(Hook::async_fn(move |client, _| {
-                connections_created.inc();
-                Box::pin(async move {
-                    debug!("opened new consensus postgres connection");
-                    client.batch_execute(
-                        "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE",
-                    ).await.map_err(|e| HookError::Abort(HookErrorCause::Backend(e)))
-                })
-            }))
-            .pre_recycle(Hook::sync_fn(move |_client, conn_metrics| {
-                // proactively TTL connections to rebalance load to Postgres/CRDB. this helps
-                // fix skew when downstream DB operations (e.g. CRDB rolling restart) result
-                // in uneven load to each node, and works to reduce the # of connections
-                // maintained by the pool after bursty workloads.
-
-                // add a bias towards TTLing older connections first
-                if conn_metrics.age() < config.knobs.connection_pool_ttl() {
-                    return Ok(());
-                }
-
-                let last_ttl = last_ttl_connection.load(Ordering::SeqCst);
-                let now = (SYSTEM_TIME)();
-                let elapsed_since_last_ttl = Duration::from_millis(now.saturating_sub(last_ttl));
-
-                // stagger out reconnections to avoid stampeding the DB
-                if elapsed_since_last_ttl > config.knobs.connection_pool_ttl_stagger()
-                    && last_ttl_connection
-                        .compare_exchange_weak(last_ttl, now, Ordering::SeqCst, Ordering::SeqCst)
-                        .is_ok()
-                {
-                    ttl_reconnections.inc();
-                    return Err(HookError::Continue(Some(HookErrorCause::Message(
-                        "connection has been TTLed".to_string(),
-                    ))));
-                }
-
-                Ok(())
-            }))
-            .build()
-            .expect("postgres connection pool built with incorrect parameters");
+        let batch_write_pool = Self::create_connection_pool(
+            &config,
+            &pg_config,
+            &tls,
+            config.knobs.connection_pool_batch_cas_max_size(),
+        );
 
         let client = pool.get().await?;
 
@@ -249,7 +218,8 @@ impl PostgresConsensus {
 
         Ok(PostgresConsensus {
             pool,
-            metrics: config.metrics,
+            batch_write_pool,
+            metrics: Arc::clone(&config.metrics),
         })
     }
 
@@ -262,6 +232,68 @@ impl PostgresConsensus {
         client.execute("DROP TABLE consensus", &[]).await?;
         client.execute(SCHEMA, &[]).await?;
         Ok(())
+    }
+
+    fn create_connection_pool(
+        config: &PostgresConsensusConfig,
+        pg_config: &Config,
+        tls: &MakeTlsConnector,
+        initial_size: usize,
+    ) -> Pool {
+        let manager = Manager::from_config(
+            pg_config.clone(),
+            tls.clone(),
+            ManagerConfig {
+                recycling_method: RecyclingMethod::Fast,
+            },
+        );
+
+        let last_ttl_connection = AtomicU64::new(0);
+        let knobs = Arc::clone(&config.knobs);
+        let metrics = Arc::clone(&config.metrics);
+        let connections_created = config.metrics.connpool_connections_created.clone();
+        Pool::builder(manager)
+            .max_size(initial_size)
+            .post_create(Hook::async_fn(move |client, _| {
+                connections_created.inc();
+                Box::pin(async move {
+                    debug!("opened new consensus postgres connection");
+                    client.batch_execute(
+                        "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+                    ).await.map_err(|e| HookError::Abort(HookErrorCause::Backend(e)))
+                })
+            }))
+            .pre_recycle(Hook::sync_fn(move |_client, conn_metrics| {
+                // proactively TTL connections to rebalance load to Postgres/CRDB. this helps
+                // fix skew when downstream DB operations (e.g. CRDB rolling restart) result
+                // in uneven load to each node, and works to reduce the # of connections
+                // maintained by the pool after bursty workloads.
+
+                // add a bias towards TTLing older connections first
+                if conn_metrics.age() < knobs.connection_pool_ttl() {
+                    return Ok(());
+                }
+
+                let last_ttl = last_ttl_connection.load(Ordering::SeqCst);
+                let now = (SYSTEM_TIME)();
+                let elapsed_since_last_ttl = Duration::from_millis(now.saturating_sub(last_ttl));
+
+                // stagger out reconnections to avoid stampeding the DB
+                if elapsed_since_last_ttl > knobs.connection_pool_ttl_stagger()
+                    && last_ttl_connection
+                        .compare_exchange_weak(last_ttl, now, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_ok()
+                {
+                    metrics.connpool_ttl_reconnections.inc();
+                    return Err(HookError::Continue(Some(HookErrorCause::Message(
+                        "connection has been TTLed".to_string(),
+                    ))));
+                }
+
+                Ok(())
+            }))
+            .build()
+            .expect("postgres connection pool built with incorrect parameters")
     }
 
     async fn get_connection(&self) -> Result<Object, PoolError> {

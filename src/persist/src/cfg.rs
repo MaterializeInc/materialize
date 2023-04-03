@@ -149,6 +149,8 @@ pub enum ConsensusConfig {
 pub trait ConsensusKnobs: std::fmt::Debug + Send + Sync {
     /// Maximum number of connections allowed in a pool.
     fn connection_pool_max_size(&self) -> usize;
+    /// Maximum number of connections allowed in a pool for batched CaS operations.
+    fn connection_pool_batch_cas_max_size(&self) -> usize;
     /// Minimum TTL of a connection. It is expected that connections are
     /// routinely culled to balance load to the backing store of [Consensus].
     fn connection_pool_ttl(&self) -> Duration;
@@ -157,6 +159,10 @@ pub trait ConsensusKnobs: std::fmt::Debug + Send + Sync {
     fn connection_pool_ttl_stagger(&self) -> Duration;
     /// Time to wait for a connection to be made before trying.
     fn connect_timeout(&self) -> Duration;
+    /// Enable batch CaS operations.
+    fn batch_cas_enabled(&self) -> bool;
+    /// Maximum batch size for batch CaS operations.
+    fn max_batch_cas_size(&self) -> usize;
 }
 
 impl ConsensusConfig {
