@@ -22,42 +22,43 @@ use differential_dataflow::operators::arrange::arrangement::Arrange;
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Filter, InputCapability};
-use timely::logging::WorkerIdentifier;
 
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, DatumVec, Diff, Row, Timestamp};
-use mz_timely_util::activator::RcActivator;
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::replay::MzReplay;
 
 use crate::logging::{DifferentialLog, LogVariant};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
+use super::EventQueue;
+
 /// Constructs the logging dataflow for differential logs.
 ///
 /// Params
 /// * `worker`: The Timely worker hosting the log analysis dataflow.
 /// * `config`: Logging configuration
-/// * `event_source`: The source to read log events from.
-/// * `activator`: A handle to acknowledge activations.
+/// * `event_queue`: The source to read log events from.
 ///
 /// Returns a map from log variant to a tuple of a trace handle and a dataflow drop token.
-pub fn construct<A: Allocate>(
+pub(super) fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &mz_compute_client::logging::LoggingConfig,
-    event_source: Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, DifferentialEvent)>>,
-    activator: RcActivator,
+    event_queue: EventQueue<DifferentialEvent>,
 ) -> BTreeMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
     let worker_id = worker.index();
 
     worker.dataflow_named("Dataflow: differential logging", move |scope| {
-        let (mut logs, token) =
-            Some(event_source).mz_replay(scope, "differential logs", config.interval, activator);
+        let (mut logs, token) = Some(event_queue.link).mz_replay(
+            scope,
+            "differential logs",
+            config.interval,
+            event_queue.activator,
+        );
 
         // If logging is disabled, we still need to install the indexes, but we can leave them
         // empty. We do so by immediately filtering all logs events.
