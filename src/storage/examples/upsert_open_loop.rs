@@ -700,23 +700,23 @@ async fn run_benchmark(
                                     / MIB as f64;
                                 let key_throughput = key_mb_read / elapsed_seconds as f64;
                                 let throughput = mb_read / elapsed_seconds as f64;
+
+                                let rocksdb_stats = if args.rocksdb_print_stats {
+                                    calculate_rocksdb_stats(Some(&rocks_options), elapsed_seconds)
+                                        .unwrap_or_else(String::new)
+                                } else {
+                                    "".to_string()
+                                };
+
                                 info!(
                                     "After {} ms, source {source_id} has read {num_additions} \
                                     records (throughput {:.3} MiB/s, key throughput {:.3} MiB/s). \
-                                    Max processing \
-                                    lag {max_lag}ms, most recent processing lag {lag}ms.{}",
+                                    Max processing lag {max_lag}ms, \
+                                    most recent processing lag {lag}ms.{}",
                                     elapsed.as_millis(),
                                     throughput,
                                     key_throughput,
-                                    if args.rocksdb_print_stats {
-                                        calculate_rocksdb_stats(
-                                            Some(&rocks_options),
-                                            elapsed_seconds,
-                                        )
-                                        .unwrap_or_else(String::new)
-                                    } else {
-                                        "".to_string()
-                                    }
+                                    rocksdb_stats
                                 );
                             }
                         }
@@ -1301,11 +1301,10 @@ fn calculate_rocksdb_stats(
             }
 
             return Some(format!(
-                "\n\tRocksDB read throughput {:.3} MiB/s\n\
-                \tRocksDB write throughput {:.3} MiB/s\n\
-                \tRocksDB compact read throughput {:.3} MiB/s\n\
-                \tRocksDB write throughput {:.3} MiB/s",
-                read_rate, write_rate, compact_read_rate, compact_write_rate
+                "\n\tRocksDB read throughput {read_rate:.3} MiB/s\n\
+                \tRocksDB write throughput {write_rate:.3} MiB/s\n\
+                \tRocksDB compact read throughput {compact_read_rate:.3} MiB/s\n\
+                \tRocksDB compact write throughput {compact_write_rate:.3} MiB/s",
             ));
         }
     }
