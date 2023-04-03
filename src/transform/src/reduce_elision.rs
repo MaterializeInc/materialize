@@ -23,6 +23,10 @@ use mz_expr::MirRelationExpr;
 pub struct ReduceElision;
 
 impl crate::Transform for ReduceElision {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
