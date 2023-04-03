@@ -68,7 +68,7 @@ use mz_sql_parser::ast::{
 
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
 use crate::func::{self, Func, FuncSpec};
-use crate::names::{Aug, PartialObjectName, ResolvedDataType, ResolvedObjectName};
+use crate::names::{Aug, PartialObjectName, ResolvedDataType, ResolvedItemName};
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
@@ -172,7 +172,7 @@ fn try_push_projection_order_by(
 
 pub fn plan_insert_query(
     scx: &StatementContext,
-    table_name: ResolvedObjectName,
+    table_name: ResolvedItemName,
     columns: Vec<Ident>,
     source: InsertSource<Aug>,
     returning: Vec<SelectItem<Aug>>,
@@ -319,7 +319,7 @@ pub fn plan_insert_query(
     }
 
     let returning = {
-        let (scope, typ) = if let ResolvedObjectName::Object { full_name, .. } = table_name {
+        let (scope, typ) = if let ResolvedItemName::Object { full_name, .. } = table_name {
             let desc = table.desc(&full_name)?;
             let scope = Scope::from_source(Some(full_name.clone().into()), desc.iter_names());
             let typ = desc.typ().clone();
@@ -376,7 +376,7 @@ pub fn plan_insert_query(
 
 pub fn plan_copy_from(
     scx: &StatementContext,
-    table_name: ResolvedObjectName,
+    table_name: ResolvedItemName,
     columns: Vec<Ident>,
 ) -> Result<(GlobalId, RelationDesc, Vec<usize>), PlanError> {
     let table = scx.get_item_by_resolved_name(&table_name)?;
@@ -558,7 +558,7 @@ pub fn plan_update_query(
 
 pub fn plan_mutation_query_inner(
     qcx: QueryContext,
-    table_name: ResolvedObjectName,
+    table_name: ResolvedItemName,
     alias: Option<TableAlias>,
     using: Vec<TableWithJoins<Aug>>,
     assignments: Vec<Assignment<Aug>>,
@@ -566,7 +566,7 @@ pub fn plan_mutation_query_inner(
 ) -> Result<ReadThenWritePlan, PlanError> {
     // Get global ID.
     let id = match table_name {
-        ResolvedObjectName::Object { id, .. } => id,
+        ResolvedItemName::Object { id, .. } => id,
         _ => sql_bail!("cannot mutate non-user table"),
     };
 
@@ -5235,10 +5235,10 @@ impl<'a> QueryContext<'a> {
     /// CTE.
     pub fn resolve_table_name(
         &self,
-        object: ResolvedObjectName,
+        object: ResolvedItemName,
     ) -> Result<(HirRelationExpr, Scope), PlanError> {
         match object {
-            ResolvedObjectName::Object { id, full_name, .. } => {
+            ResolvedItemName::Object { id, full_name, .. } => {
                 let name = full_name.into();
                 let item = self.scx.get_item(&id);
                 let desc = item
@@ -5253,7 +5253,7 @@ impl<'a> QueryContext<'a> {
 
                 Ok((expr, scope))
             }
-            ResolvedObjectName::Cte { id, name } => {
+            ResolvedItemName::Cte { id, name } => {
                 let name = name.into();
                 let cte = self.ctes.get(&id).unwrap();
                 let expr = HirRelationExpr::Get {
@@ -5265,7 +5265,7 @@ impl<'a> QueryContext<'a> {
 
                 Ok((expr, scope))
             }
-            ResolvedObjectName::Error => unreachable!("should have been caught in name resolution"),
+            ResolvedItemName::Error => unreachable!("should have been caught in name resolution"),
         }
     }
 

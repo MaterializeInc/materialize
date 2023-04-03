@@ -93,7 +93,7 @@ use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
     Aug, DatabaseId, FullSchemaName, ObjectId, PartialObjectName, QualifiedObjectName,
     RawDatabaseSpecifier, ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier,
-    ResolvedObjectName, RoleId, SchemaId, SchemaSpecifier,
+    ResolvedItemName, RoleId, SchemaId, SchemaSpecifier,
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
@@ -850,8 +850,8 @@ pub fn plan_create_source(
         };
 
         let target_id = match target {
-            ResolvedObjectName::Object { id, .. } => id,
-            ResolvedObjectName::Cte { .. } | ResolvedObjectName::Error => {
+            ResolvedItemName::Object { id, .. } => id,
+            ResolvedItemName::Cte { .. } | ResolvedItemName::Error => {
                 sql_bail!("[internal error] invalid target id")
             }
         };
@@ -1008,8 +1008,8 @@ pub fn plan_create_source(
         .as_ref()
         .map(|name| match name {
             DeferredObjectName::Named(name) => match name {
-                ResolvedObjectName::Object { id, .. } => Ok(*id),
-                ResolvedObjectName::Cte { .. } | ResolvedObjectName::Error => {
+                ResolvedItemName::Object { id, .. } => Ok(*id),
+                ResolvedItemName::Cte { .. } | ResolvedItemName::Error => {
                     sql_bail!("[internal error] invalid target id")
                 }
             },
@@ -2353,7 +2353,7 @@ pub fn plan_create_index(
     *name = Some(Ident::new(index_name.item.clone()));
     *key_parts = Some(filled_key_parts);
     let if_not_exists = *if_not_exists;
-    if let ResolvedObjectName::Object { print_id, .. } = &mut stmt.on_name {
+    if let ResolvedItemName::Object { print_id, .. } = &mut stmt.on_name {
         *print_id = false;
     }
     let create_sql = normalize::create_statement(scx, Statement::CreateIndex(stmt))?;
@@ -2867,7 +2867,7 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                     )?;
 
                     let id = match &aws_privatelink.connection {
-                        ResolvedObjectName::Object { id, .. } => id,
+                        ResolvedItemName::Object { id, .. } => id,
                         _ => sql_bail!(
                             "internal error: Kafka PrivateLink connection was not resolved"
                         ),
@@ -2896,7 +2896,7 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                 }
                 KafkaBrokerTunnel::SshTunnel(ssh) => {
                     let id = match &ssh {
-                        ResolvedObjectName::Object { id, .. } => id,
+                        ResolvedItemName::Object { id, .. } => id,
                         _ => sql_bail!(
                             "internal error: Kafka SSH tunnel connection was not resolved"
                         ),

@@ -680,7 +680,7 @@ pub async fn purify_create_source(
 
             (
                 UnresolvedObjectName::from(full_name.clone()),
-                crate::names::ResolvedObjectName::Object {
+                crate::names::ResolvedItemName::Object {
                     id: transient_id,
                     qualifiers: found_name.qualifiers,
                     full_name,

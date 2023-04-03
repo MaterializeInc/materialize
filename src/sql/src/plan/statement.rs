@@ -28,7 +28,7 @@ use crate::catalog::{
 use crate::names::{
     self, Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName,
     QualifiedObjectName, RawDatabaseSpecifier, ResolvedDataType, ResolvedDatabaseSpecifier,
-    ResolvedObjectName, ResolvedSchemaName, SchemaSpecifier,
+    ResolvedItemName, ResolvedSchemaName, SchemaSpecifier,
 };
 use crate::normalize;
 use crate::plan::error::PlanError;
@@ -546,11 +546,11 @@ impl<'a> StatementContext<'a> {
         &self,
         id: GlobalId,
         name: UnresolvedObjectName,
-    ) -> Result<ResolvedObjectName, PlanError> {
+    ) -> Result<ResolvedItemName, PlanError> {
         let partial = normalize::unresolved_object_name(name)?;
         let qualified = self.allocate_qualified_name(partial.clone())?;
         let full_name = self.allocate_full_name(partial)?;
-        Ok(ResolvedObjectName::Object {
+        Ok(ResolvedItemName::Object {
             id,
             qualifiers: qualified.qualifiers,
             full_name,
@@ -646,12 +646,12 @@ impl<'a> StatementContext<'a> {
 
     pub fn get_item_by_resolved_name(
         &self,
-        name: &ResolvedObjectName,
+        name: &ResolvedItemName,
     ) -> Result<&dyn CatalogItem, PlanError> {
         match name {
-            ResolvedObjectName::Object { id, .. } => Ok(self.get_item(id)),
-            ResolvedObjectName::Cte { .. } => sql_bail!("non-user item"),
-            ResolvedObjectName::Error => unreachable!("should have been caught in name resolution"),
+            ResolvedItemName::Object { id, .. } => Ok(self.get_item(id)),
+            ResolvedItemName::Cte { .. } => sql_bail!("non-user item"),
+            ResolvedItemName::Error => unreachable!("should have been caught in name resolution"),
         }
     }
 

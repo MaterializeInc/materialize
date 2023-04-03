@@ -32,7 +32,7 @@ use mz_sql_parser::parser::ParserError;
 
 use crate::catalog::{CatalogError, CatalogItemType};
 use crate::names::PartialObjectName;
-use crate::names::ResolvedObjectName;
+use crate::names::ResolvedItemName;
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
 
@@ -85,9 +85,9 @@ pub enum PlanError {
     InvalidNumericMaxScale(InvalidNumericMaxScaleError),
     InvalidCharLength(InvalidCharLengthError),
     InvalidId(GlobalId),
-    InvalidObject(Box<ResolvedObjectName>),
+    InvalidObject(Box<ResolvedItemName>),
     InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),
-    InvalidSecret(Box<ResolvedObjectName>),
+    InvalidSecret(Box<ResolvedItemName>),
     InvalidTemporarySchema,
     Parser(ParserError),
     DropViewOnMaterializedView(String),

@@ -19,7 +19,7 @@ use mz_repr::GlobalId;
 use mz_storage_client::types::connections::StringOrSecret;
 
 use crate::ast::{AstInfo, IntervalValue, UnresolvedObjectName, Value, WithOptionValue};
-use crate::names::{ResolvedDataType, ResolvedObjectName};
+use crate::names::{ResolvedDataType, ResolvedItemName};
 use crate::plan::{Aug, PlanError};
 
 pub trait TryFromValue<T>: Sized {
@@ -76,7 +76,7 @@ impl From<&Object> for GlobalId {
 impl TryFromValue<WithOptionValue<Aug>> for Object {
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         Ok(match v {
-            WithOptionValue::Object(ResolvedObjectName::Object { id, .. }) => Object(id),
+            WithOptionValue::Object(ResolvedItemName::Object { id, .. }) => Object(id),
             _ => sql_bail!("must provide an object"),
         })
     }
@@ -130,7 +130,7 @@ impl ImpliedValue for ResolvedDataType {
 impl TryFromValue<WithOptionValue<Aug>> for StringOrSecret {
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         Ok(match v {
-            WithOptionValue::Secret(ResolvedObjectName::Object { id, .. }) => {
+            WithOptionValue::Secret(ResolvedItemName::Object { id, .. }) => {
                 StringOrSecret::Secret(id)
             }
             v => StringOrSecret::String(String::try_from_value(v)?),

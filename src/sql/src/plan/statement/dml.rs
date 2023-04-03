@@ -31,7 +31,7 @@ use crate::ast::{
     ViewDefinition,
 };
 use crate::catalog::CatalogItemType;
-use crate::names::{self, Aug, ResolvedObjectName};
+use crate::names::{self, Aug, ResolvedItemName};
 use crate::plan::query::{plan_up_to, QueryLifetime};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
@@ -499,7 +499,7 @@ pub fn describe_copy(
 
 fn plan_copy_from(
     scx: &StatementContext,
-    table_name: ResolvedObjectName,
+    table_name: ResolvedItemName,
     columns: Vec<Ident>,
     format: CopyFormat,
     options: CopyOptionExtracted,
