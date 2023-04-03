@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 
 import psutil
 
-from materialize import ROOT, spawn, ui
+from materialize import ROOT, rustc_flags, spawn, ui
 from materialize.ui import UIError
 
 KNOWN_PROGRAMS = ["environmentd", "sqllogictest"]
@@ -268,7 +268,9 @@ def _build(args: argparse.Namespace, extra_programs: list[str] = []) -> int:
         features += ["tokio-console"]
         env["RUSTFLAGS"] = env.get("RUSTFLAGS", "") + " --cfg=tokio_unstable"
     if args.coverage:
-        env["RUSTFLAGS"] = env.get("RUSTFLAGS", "") + " -Cinstrument-coverage"
+        env["RUSTFLAGS"] = (
+            env.get("RUSTFLAGS", "") + " " + " ".join(rustc_flags.coverage)
+        )
     if args.features:
         features.extend(args.features.split(","))
     if features:

@@ -444,7 +444,8 @@ impl ExecuteResponse {
 
         match plan {
             AbortTransaction => vec![TransactionRolledBack],
-            AlterItemRename | AlterNoop | AlterSecret | AlterSink | AlterSource | RotateKeys => {
+            AlterOwner | AlterItemRename | AlterNoop | AlterSecret | AlterSink | AlterSource
+            | RotateKeys => {
                 vec![AlteredObject]
             }
             AlterIndexSetOptions | AlterIndexResetOptions => {
@@ -492,7 +493,7 @@ impl ExecuteResponse {
                 DroppedSecret,
             ],
             PlanKind::EmptyQuery => vec![ExecuteResponseKind::EmptyQuery],
-            Explain | Peek | SendRows | ShowAllVariables | ShowVariable => {
+            Explain | Peek | SendRows | ShowAllVariables | ShowCreate | ShowVariable => {
                 vec![CopyTo, SendingRows]
             }
             Execute | ReadThenWrite => vec![Deleted, Inserted, SendingRows, Updated],

@@ -32,6 +32,7 @@ use mz_proto::RustType;
 use serde_json::json;
 
 use crate::async_runtime::CpuHeavyRuntime;
+use crate::cache::StateCache;
 use crate::cli::admin::{make_blob, make_consensus};
 use crate::error::CodecConcreteType;
 use crate::fetch::EncodedPart;
@@ -606,12 +607,14 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
         make_consensus(&cfg, &args.consensus_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
     let blob = make_blob(&cfg, &args.blob_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
     let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
+    let state_cache = Arc::new(StateCache::default());
     let usage = StorageUsageClient::open(PersistClient::new(
         cfg,
         blob,
         consensus,
         metrics,
         cpu_heavy_runtime,
+        state_cache,
     )?);
 
     if let Some(shard_id) = shard_id {

@@ -13,5 +13,7 @@
 
 > CREATE MATERIALIZED VIEW generator_view1 AS SELECT COUNT(*) AS cnt FROM generator1;
 
+> CREATE DEFAULT INDEX ON generator_view1;
+
 > SELECT cnt > 0 FROM generator_view1;
 true

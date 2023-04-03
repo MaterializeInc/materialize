@@ -1,0 +1,31 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for issues corrected by https://github.com/MaterializeInc/materialize/issues/18522.
+
+# Regression test for #18522.
+statement ok
+CREATE TABLE t0(c0 VARCHAR(203) );
+
+statement ok
+INSERT INTO t0 VALUES ('0'), ('1');
+
+statement ok
+CREATE TABLE t2(c0 CHAR(206) );
+
+query TT
+SELECT
+  *
+FROM
+  t0 LEFT OUTER JOIN t2 ON t2.c0 = CAST(0 AS VARCHAR)
+----
+0
+NULL
+1
+NULL

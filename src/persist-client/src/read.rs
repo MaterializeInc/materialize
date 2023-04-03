@@ -1079,6 +1079,7 @@ mod tests {
     use std::str::FromStr;
 
     use crate::async_runtime::CpuHeavyRuntime;
+    use crate::cache::StateCache;
     use crate::internal::metrics::Metrics;
     use crate::tests::{all_ok, new_test_client};
     use crate::{PersistClient, PersistConfig, ShardId};
@@ -1331,6 +1332,7 @@ mod tests {
             consensus,
             metrics,
             Arc::new(CpuHeavyRuntime::new()),
+            Arc::new(StateCache::default()),
         )
         .expect("client construction failed")
         .expect_open::<String, String, u64, i64>(ShardId::new())

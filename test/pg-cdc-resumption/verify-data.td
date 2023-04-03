@@ -12,5 +12,8 @@
 > SELECT COUNT(*) FROM t2;
 500000
 
-! SELECT * FROM to_be_altered;
-contains:altered
+! SELECT * FROM alter_fail_drop_constraint;
+contains:has been altered
+
+! SELECT * FROM alter_fail_drop_col;
+contains:has been altered

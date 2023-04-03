@@ -30,12 +30,14 @@ use mz_compute_client::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
 };
 use mz_expr::EvalError;
+use mz_ore::soft_assert_or_log;
 use mz_repr::{DatumVec, Diff, Row};
 use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 
 use crate::render::context::CollectionBundle;
 use crate::render::context::Context;
+use crate::render::MaybeValidatingRow;
 use crate::typedefs::{RowKeySpine, RowSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
@@ -122,8 +124,21 @@ where
                     // intra-ts thinning. The maximum number of records per timestamp is
                     // (num_workers * limit), which we expect to be a small number and so we render
                     // a single topk stage.
-                    let result = build_topk_stage(thinned, order_key, 1u64, 0, limit, arity);
+                    let (result, errs) = build_topk_stage(
+                        thinned,
+                        order_key,
+                        1u64,
+                        0,
+                        limit,
+                        arity,
+                        false,
+                        &self.debug_name,
+                    );
                     retractions.set(&collection.concat(&result.negate()));
+                    soft_assert_or_log!(
+                        errs.is_none(),
+                        "requested no validation, but received error collection"
+                    );
 
                     result.map(|((_key, _hash), row)| row)
                 }
@@ -133,7 +148,19 @@ where
                     offset,
                     limit,
                     arity,
-                }) => build_topk(ok_input, group_key, order_key, offset, limit, arity),
+                }) => {
+                    let (oks, errs) = build_topk(
+                        ok_input,
+                        group_key,
+                        order_key,
+                        offset,
+                        limit,
+                        arity,
+                        &self.debug_name,
+                    );
+                    err_collection = errs;
+                    oks
+                }
             };
             // Extract the results from the region.
             (ok_result.leave_region(), err_collection.leave_region())
@@ -149,7 +176,8 @@ where
             offset: usize,
             limit: Option<usize>,
             arity: usize,
-        ) -> Collection<G, Row, Diff>
+            debug_name: &str,
+        ) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
         where
             G: Scope,
             G::Timestamp: Lattice,
@@ -169,6 +197,10 @@ where
                     ((group_row, row_hash), row)
                 }
             });
+
+            let mut validating = true;
+            let mut err_collection: Option<Collection<G, _, _>> = None;
+
             // This sequence of numbers defines the shifts that happen to the 64 bit hash
             // of the record, and has the properties that 1. there are not too many of them,
             // and 2. each has a modest difference to the next.
@@ -183,22 +215,38 @@ where
                     // here we do not apply `offset`, but instead restrict ourself with a limit
                     // that includes the offset. We cannot apply `offset` until we perform the
                     // final, complete reduction.
-                    collection = build_topk_stage(
+                    let (oks, errs) = build_topk_stage(
                         collection,
                         order_key.clone(),
                         1u64 << log_modulus,
                         0,
                         Some(offset + limit),
                         arity,
+                        validating,
+                        debug_name,
                     );
+                    collection = oks;
+                    if validating {
+                        err_collection = errs;
+                        validating = false;
+                    }
                 }
             }
 
             // We do a final step, both to make sure that we complete the reduction, and to correctly
             // apply `offset` to the final group, as we have not yet been applying it to the partially
             // formed groups.
-            build_topk_stage(collection, order_key, 1u64, offset, limit, arity)
-                .map(|((_key, _hash), row)| row)
+            let (oks, errs) = build_topk_stage(
+                collection, order_key, 1u64, offset, limit, arity, validating, debug_name,
+            );
+            collection = oks;
+            if validating {
+                err_collection = errs;
+            }
+            (
+                collection.map(|((_key, _hash), row)| row),
+                err_collection.expect("at least one stage validated its inputs"),
+            )
         }
 
         // To provide a robust incremental orderby-limit experience, we want to avoid grouping
@@ -216,18 +264,78 @@ where
             offset: usize,
             limit: Option<usize>,
             arity: usize,
-        ) -> Collection<G, ((Row, u64), Row), Diff>
+            validating: bool,
+            debug_name: &str,
+        ) -> (
+            Collection<G, ((Row, u64), Row), Diff>,
+            Option<Collection<G, DataflowError, Diff>>,
+        )
         where
             G: Scope,
             G::Timestamp: Lattice,
         {
             let input = collection.map(move |((key, hash), row)| ((key, hash % modulus), row));
+            let (oks, errs) = if validating {
+                let stage = build_topk_negated_stage::<G, Result<Row, Row>>(
+                    &input, order_key, offset, limit, arity,
+                );
+
+                let debug_name = debug_name.to_string();
+                let (oks, errs) =
+                    stage.map_fallible("Demuxing Errors", move |((k, h), result)| match result {
+                        Err(v) => {
+                            let message = "Negative multiplicities in TopK";
+                            warn!(?k, ?h, ?v, debug_name, "[customer-data] {message}");
+                            error!(message);
+                            Err(DataflowError::EvalError(
+                                EvalError::Internal(message.to_string()).into(),
+                            ))
+                        }
+                        Ok(t) => Ok(((k, h), t)),
+                    });
+                (oks, Some(errs))
+            } else {
+                (
+                    build_topk_negated_stage::<G, Row>(&input, order_key, offset, limit, arity),
+                    None,
+                )
+            };
+            (
+                oks.negate()
+                    .concat(&input)
+                    .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated TopK"),
+                errs,
+            )
+        }
+
+        fn build_topk_negated_stage<G, R>(
+            input: &Collection<G, ((Row, u64), Row), Diff>,
+            order_key: Vec<mz_expr::ColumnOrder>,
+            offset: usize,
+            limit: Option<usize>,
+            arity: usize,
+        ) -> Collection<G, ((Row, u64), R), Diff>
+        where
+            G: Scope,
+            G::Timestamp: Lattice,
+            R: MaybeValidatingRow<Row, Row>,
+        {
             // We only want to arrange parts of the input that are not part of the actual output
             // such that `input.concat(&negated_output.negate())` yields the correct TopK
-            let negated_output = input
+            input
                 .arrange_named::<RowSpine<(Row, u64), _, _, _>>("Arranged TopK input")
                 .reduce_abelian::<_, RowSpine<_, _, _, _>>("Reduced TopK input", {
-                    move |_key, source, target: &mut Vec<(Row, Diff)>| {
+                    move |_key, source, target: &mut Vec<(R, Diff)>| {
+                        if let Some(err) = R::into_error() {
+                            for (row, diff) in source.iter() {
+                                if diff.is_positive() {
+                                    continue;
+                                }
+                                target.push((err((*row).clone()), -1));
+                                return;
+                            }
+                        }
+
                         // Determine if we must actually shrink the result set.
                         // TODO(benesch): avoid dangerous `as` conversion.
                         #[allow(clippy::as_conversions)]
@@ -235,73 +343,68 @@ where
                             || limit
                                 .map(|l| source.iter().map(|(_, d)| *d).sum::<Diff>() as usize > l)
                                 .unwrap_or(false);
-                        if must_shrink {
-                            // First go ahead and emit all records
-                            for (row, diff) in source.iter() {
-                                target.push(((*row).clone(), diff.clone()));
+                        if !must_shrink {
+                            return;
+                        }
+
+                        // First go ahead and emit all records
+                        for (row, diff) in source.iter() {
+                            target.push((R::ok((*row).clone()), diff.clone()));
+                        }
+                        // local copies that may count down to zero.
+                        let mut offset = offset;
+                        let mut limit = limit;
+
+                        // The order in which we should produce rows.
+                        let mut indexes = (0..source.len()).collect::<Vec<_>>();
+                        // We decode the datums once, into a common buffer for efficiency.
+                        // Each row should contain `arity` columns; we should check that.
+                        let mut buffer = Vec::with_capacity(arity * source.len());
+                        for (index, row) in source.iter().enumerate() {
+                            buffer.extend(row.0.iter());
+                            assert_eq!(buffer.len(), arity * (index + 1));
+                        }
+                        let width = buffer.len() / source.len();
+
+                        //todo: use arrangements or otherwise make the sort more performant?
+                        indexes.sort_by(|left, right| {
+                            let left = &buffer[left * width..][..width];
+                            let right = &buffer[right * width..][..width];
+                            // Note: source was originally ordered by the u8 array representation
+                            // of rows, but left.cmp(right) uses Datum::cmp.
+                            mz_expr::compare_columns(&order_key, left, right, || left.cmp(right))
+                        });
+
+                        // We now need to lay out the data in order of `buffer`, but respecting
+                        // the `offset` and `limit` constraints.
+                        for index in indexes.into_iter() {
+                            let (row, mut diff) = source[index];
+                            if !diff.is_positive() {
+                                continue;
                             }
-                            // local copies that may count down to zero.
-                            let mut offset = offset;
-                            let mut limit = limit;
-
-                            // The order in which we should produce rows.
-                            let mut indexes = (0..source.len()).collect::<Vec<_>>();
-                            // We decode the datums once, into a common buffer for efficiency.
-                            // Each row should contain `arity` columns; we should check that.
-                            let mut buffer = Vec::with_capacity(arity * source.len());
-                            for (index, row) in source.iter().enumerate() {
-                                buffer.extend(row.0.iter());
-                                assert_eq!(buffer.len(), arity * (index + 1));
+                            // If we are still skipping early records ...
+                            if offset > 0 {
+                                let to_skip = std::cmp::min(offset, usize::try_from(diff).unwrap());
+                                offset -= to_skip;
+                                diff -= Diff::try_from(to_skip).unwrap();
                             }
-                            let width = buffer.len() / source.len();
-
-                            //todo: use arrangements or otherwise make the sort more performant?
-                            indexes.sort_by(|left, right| {
-                                let left = &buffer[left * width..][..width];
-                                let right = &buffer[right * width..][..width];
-                                // Note: source was originally ordered by the u8 array representation
-                                // of rows, but left.cmp(right) uses Datum::cmp.
-                                mz_expr::compare_columns(&order_key, left, right, || {
-                                    left.cmp(right)
-                                })
-                            });
-
-                            // We now need to lay out the data in order of `buffer`, but respecting
-                            // the `offset` and `limit` constraints.
-                            for index in indexes.into_iter() {
-                                let (row, mut diff) = source[index];
-                                if diff > 0 {
-                                    // If we are still skipping early records ...
-                                    if offset > 0 {
-                                        let to_skip =
-                                            std::cmp::min(offset, usize::try_from(diff).unwrap());
-                                        offset -= to_skip;
-                                        diff -= Diff::try_from(to_skip).unwrap();
-                                    }
-                                    // We should produce at most `limit` records.
-                                    // TODO(benesch): avoid dangerous `as` conversion.
-                                    #[allow(clippy::as_conversions)]
-                                    if let Some(limit) = &mut limit {
-                                        diff = std::cmp::min(diff, Diff::try_from(*limit).unwrap());
-                                        *limit -= diff as usize;
-                                    }
-                                    // Output the indicated number of rows.
-                                    if diff > 0 {
-                                        // Emit retractions for the elements actually part of
-                                        // the set of TopK elements.
-                                        target.push((row.clone(), -diff));
-                                    }
-                                }
+                            // We should produce at most `limit` records.
+                            // TODO(benesch): avoid dangerous `as` conversion.
+                            #[allow(clippy::as_conversions)]
+                            if let Some(limit) = &mut limit {
+                                diff = std::cmp::min(diff, Diff::try_from(*limit).unwrap());
+                                *limit -= diff as usize;
+                            }
+                            // Output the indicated number of rows.
+                            if diff > 0 {
+                                // Emit retractions for the elements actually part of
+                                // the set of TopK elements.
+                                target.push((R::ok(row.clone()), -diff));
                             }
                         }
                     }
                 })
-                .as_collection(|k, v| (k.clone(), v.clone()));
-
-            negated_output
-                .negate()
-                .concat(&input)
-                .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated TopK")
+                .as_collection(|k, v| (k.clone(), v.clone()))
         }
 
         fn render_top1_monotonic<G>(
@@ -493,14 +596,19 @@ pub mod topk_agg {
                         false
                     }
                 });
-                // By the end of the loop above `limit` will be less than or equal to zero. The
-                // case where it goes negative is when the last record we retained had more copies
-                // than necessary. For this reason we need to do one final adjustment of the diff
-                // field of the last record so that the total sum of the diffs in the batch is K.
-                if let Some(item) = self.updates.last_mut() {
-                    // We are subtracting the limit *negated*, therefore we are subtracting a value
-                    // that is *greater* than or equal to zero, which represents the excess.
-                    item.1 -= -limit;
+                // By the end of the loop above `limit` will either be:
+                // (a) Positive, in which case all updates were retained;
+                // (b) Zero, in which case we discarded all updates after limit became zero;
+                // (c) Negative, in which case the last record we retained had more copies
+                // than necessary. In this latter case, we need to do one final adjustment
+                // of the diff field of the last record so that the total sum of the diffs
+                // in the batch is K.
+                if limit < 0 {
+                    if let Some(item) = self.updates.last_mut() {
+                        // We are subtracting the limit *negated*, therefore we are subtracting a value
+                        // that is *greater* than or equal to zero, which represents the excess.
+                        item.1 -= -limit;
+                    }
                 }
             }
             self.clean = self.updates.len();

@@ -88,16 +88,16 @@ pub enum InvalidUsage<T> {
     },
     /// An update in the batch was beyond the expected upper
     UpdateBeyondUpper {
-        /// The maximum timestamp of updates added to the batch.
-        max_ts: T,
+        /// The timestamp of the update
+        ts: T,
         /// The expected upper of the batch
         expected_upper: Antichain<T>,
     },
     /// An update in the batch was beyond the expected since
     /// This is an error when `upper.less_than(since)`
     UpdateBeyondSince {
-        /// The maximum timestamp of updates added to the batch.
-        max_ts: T,
+        /// The timestamp of the update
+        ts: T,
         /// The expected since of the batch
         expected_since: Antichain<T>,
     },
@@ -143,21 +143,15 @@ impl<T: Debug> std::fmt::Display for InvalidUsage<T> {
             InvalidUsage::UpdateNotBeyondLower { ts, lower } => {
                 write!(f, "timestamp {:?} not beyond batch lower {:?}", ts, lower)
             }
-            InvalidUsage::UpdateBeyondUpper {
-                max_ts,
-                expected_upper,
-            } => write!(
+            InvalidUsage::UpdateBeyondUpper { ts, expected_upper } => write!(
                 f,
-                "maximum timestamp {:?} is beyond the expected batch upper: {:?}",
-                max_ts, expected_upper
+                "timestamp {:?} is beyond the expected batch upper: {:?}",
+                ts, expected_upper
             ),
-            InvalidUsage::UpdateBeyondSince {
-                max_ts,
-                expected_since,
-            } => write!(
+            InvalidUsage::UpdateBeyondSince { ts, expected_since } => write!(
                 f,
-                "maximum timestamp {:?} is beyond the expected batch since: {:?}",
-                max_ts, expected_since
+                "timestamp {:?} is beyond the expected batch since: {:?}",
+                ts, expected_since
             ),
             InvalidUsage::BatchNotFromThisShard {
                 batch_shard,
@@ -213,7 +207,7 @@ impl std::fmt::Display for CodecMismatch {
 /// [mz_persist_types::Codec64] impl.
 #[derive(Debug)]
 #[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
-pub struct CodecConcreteType(&'static str);
+pub struct CodecConcreteType(pub(crate) &'static str);
 
 impl<T> From<CodecMismatch> for InvalidUsage<T> {
     fn from(x: CodecMismatch) -> Self {

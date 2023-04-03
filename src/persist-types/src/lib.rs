@@ -92,6 +92,7 @@ pub mod codec_impls;
 pub mod columnar;
 pub mod parquet;
 pub mod part;
+pub mod stats;
 
 /// Encoding and decoding operations for a type usable as a persisted key or
 /// value.

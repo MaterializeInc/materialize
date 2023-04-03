@@ -8,8 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Borrow;
-use std::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem;
@@ -19,19 +18,20 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
-use mz_ore::cast::CastFrom;
-use mz_persist::location::{Blob, SeqNo};
-use mz_persist_types::{Codec, Codec64};
 use prometheus::Counter;
 use timely::progress::Timestamp;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot, Semaphore};
 use tracing::{debug, debug_span, warn, Instrument, Span};
 
+use mz_ore::cast::CastFrom;
+use mz_persist::location::{Blob, SeqNo};
+use mz_persist_types::{Codec, Codec64};
+
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::RetryMetrics;
-use crate::internal::paths::{BlobKey, PartialRollupKey, RollupId};
+use crate::internal::paths::{BlobKey, PartialBatchKey, PartialRollupKey, RollupId};
 use crate::ShardId;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -276,7 +276,7 @@ where
         );
         report_step_timing(&machine.applier.metrics.gc.steps.fetch_seconds);
 
-        let earliest_live_seqno = match states.peek_seqno() {
+        let mut earliest_live_seqno = match states.peek_seqno() {
             Some(x) => x,
             None => panic!(
                 "initialized shard {} should have at least one live state",
@@ -296,14 +296,96 @@ where
             return RoutineMaintenance::default();
         }
 
-        let mut deleteable_batch_blobs = BTreeSet::new();
-        let mut deleteable_rollup_blobs = Vec::new();
+        let mut batch_part_holds = BTreeMap::new();
+        let mut rollup_holds = BTreeMap::new();
         let mut live_diffs = 0;
-        let mut seqno_held_parts = BTreeSet::new();
-
         let mut state_count = 0;
 
+        let mut maintenance = RoutineMaintenance::default();
+
+        async fn truncate_range<K, V, T, D>(
+            req: &GcReq,
+            from_seqno: SeqNo,
+            until_seqno: SeqNo,
+            machine: &Machine<K, V, T, D>,
+            delete_semaphore: &Semaphore,
+            report_step_timing: &mut impl FnMut(&Counter),
+            rollup_holds: &mut BTreeMap<PartialRollupKey, SeqNo>,
+            part_holds: &mut BTreeMap<PartialBatchKey, SeqNo>,
+        ) {
+            let GcReq {
+                shard_id,
+                new_seqno_since,
+            } = *req;
+
+            assert!(
+                until_seqno <= new_seqno_since,
+                "should not truncate past the new seqno since"
+            );
+
+            if until_seqno <= from_seqno {
+                // We've already truncated past this point! This can happen when we encounter an
+                // already-removed rollup, or if rollups were added to consensus out of order, and
+                // should be harmless.
+                return;
+            }
+            let mut deletable_rollups = vec![];
+            rollup_holds.retain(|rollup, last_seen| {
+                if *last_seen < from_seqno {
+                    deletable_rollups.push(rollup.complete(&shard_id));
+                    false
+                } else {
+                    true
+                }
+            });
+            delete_all(
+                machine.applier.state_versions.blob.borrow(),
+                deletable_rollups.into_iter(),
+                &machine.applier.metrics.retries.external.rollup_delete,
+                debug_span!("rollup::delete"),
+                delete_semaphore,
+            )
+            .await;
+
+            debug!("gc {} deleted rollup blobs", shard_id);
+            report_step_timing(&machine.applier.metrics.gc.steps.delete_rollup_seconds);
+
+            let mut deletable_parts = vec![];
+            part_holds.retain(|key, last_seen| {
+                if *last_seen < until_seqno {
+                    deletable_parts.push(key.complete(&shard_id));
+                    false
+                } else {
+                    true
+                }
+            });
+            delete_all(
+                machine.applier.state_versions.blob.borrow(),
+                deletable_parts.into_iter(),
+                &machine.applier.metrics.retries.external.batch_delete,
+                debug_span!("batch::delete"),
+                delete_semaphore,
+            )
+            .await;
+            debug!("gc {} deleted batch blobs", shard_id);
+            report_step_timing(&machine.applier.metrics.gc.steps.delete_batch_part_seconds);
+
+            // Now that we've deleted the eligible blobs, "commit" this info by
+            // truncating the state versions that referenced them.
+            machine
+                .applier
+                .state_versions
+                .truncate_diffs(&shard_id, until_seqno)
+                .await;
+            debug!(
+                "gc {} truncated diffs through seqno {}",
+                shard_id, until_seqno
+            );
+            report_step_timing(&machine.applier.metrics.gc.steps.truncate_diff_seconds);
+        }
+
         while let Some(state) = states.next() {
+            // Periodically record the overall size of batches in our state
             if state_count % 1000 == 0 {
                 let batch_count = state.collections.trace.batches().into_iter().count();
                 debug!(
@@ -313,164 +395,118 @@ where
             }
             state_count += 1;
 
-            match state.seqno.cmp(&req.new_seqno_since) {
-                Ordering::Less => {
-                    state.collections.trace.map_batches(|b| {
-                        for part in b.parts.iter() {
-                            // It's okay (expected) if the key already exists in
-                            // deleteable_batch_blobs, it may have been present in
-                            // previous versions of state.
-                            deleteable_batch_blobs.insert(part.key.to_owned());
-                        }
-                    });
-                }
-                Ordering::Equal => {
-                    live_diffs += 1;
-                    state.collections.trace.map_batches(|b| {
-                        for part in b.parts.iter() {
-                            // It's okay (expected) if the key doesn't exist in
-                            // deleteable_batch_blobs, it may have been added in
-                            // this version of state.
-                            let _ = deleteable_batch_blobs.remove(&part.key);
-                            seqno_held_parts.insert(part.key.to_owned());
-                        }
-                    });
-                    // We only need to detect deletable rollups in the last iter
-                    // through the live_diffs loop because they accumulate in state.
-                    for (seqno, rollup) in state.collections.rollups.iter() {
-                        // SUBTLE: We only guarantee that a rollup exists for the
-                        // first live state. Anything before that is not allowed to
-                        // be used and so is free to be deleted and removed from
-                        // state.
-                        if seqno < &earliest_live_seqno {
-                            deleteable_rollup_blobs.push((*seqno, rollup.key.clone()));
-                        } else {
-                            // We iterate in order, may as well short circuit the
-                            // rollup loop.
-                            break;
-                        }
-                    }
-                    break;
-                }
-                Ordering::Greater => {
-                    break;
-                }
+            if state.seqno >= req.new_seqno_since {
+                live_diffs += 1;
             }
-        }
 
-        debug!(
-            "gc {} collected {} deleteable batch blobs, {} deleteable rollup blobs",
-            req.shard_id,
-            deleteable_batch_blobs.len(),
-            deleteable_rollup_blobs.len()
-        );
-        report_step_timing(&machine.applier.metrics.gc.steps.apply_diff_seconds);
-
-        // Delete the rollup blobs before removing them from state.
-        delete_all(
-            machine.applier.state_versions.blob.borrow(),
-            deleteable_rollup_blobs
-                .iter()
-                .map(|(_, k)| k.complete(&req.shard_id)),
-            &machine.applier.metrics.retries.external.rollup_delete,
-            debug_span!("rollup::delete"),
-            &delete_semaphore,
-        )
-        .await;
-        debug!("gc {} deleted rollup blobs", req.shard_id);
-        report_step_timing(&machine.applier.metrics.gc.steps.delete_rollup_seconds);
-
-        // As described in the big rustdoc comment on [StateVersions], we
-        // maintain the invariant that there is always a rollup corresponding to
-        // the seqno of the first live version in consensus. So, write a new
-        // rollup at exactly req.new_seqno_since so we're free to truncate
-        // anything before it.
-        //
-        // NB: We write rollups periodically (via maintenance) to cover the case
-        // when GC is being held up by a long seqno hold (such as the 15m read
-        // lease timeouts whenever environmentd restarts).
-        let state = states.state();
-        assert_eq!(state.seqno, req.new_seqno_since);
-        let rollup = machine.applier.state_versions.encode_rollup_blob(
-            &machine.applier.shard_metrics,
-            state,
-            PartialRollupKey::new(state.seqno, &RollupId::new()),
-        );
-        let () = machine
-            .applier
-            .state_versions
-            .write_rollup_blob(&rollup)
-            .await;
-        let (applied, maintenance) = machine
-            .add_and_remove_rollups(
-                (rollup.seqno, &rollup.to_hollow()),
-                &deleteable_rollup_blobs,
-            )
-            .await;
-        // We raced with some other GC process to write this rollup out. Ours
-        // wasn't registered, so delete it.
-        if !applied {
-            machine
-                .applier
-                .state_versions
-                .delete_rollup(&rollup.shard_id, &rollup.key)
-                .await;
-        }
-        debug!(
-            "gc {} wrote rollup at seqno {}. applied={}",
-            req.shard_id, rollup.seqno, applied
-        );
-        report_step_timing(&machine.applier.metrics.gc.steps.write_rollup_seconds);
-
-        delete_all(
-            machine.applier.state_versions.blob.borrow(),
-            deleteable_batch_blobs
-                .into_iter()
-                .map(|k| k.complete(&req.shard_id)),
-            &machine.applier.metrics.retries.external.batch_delete,
-            debug_span!("batch::delete"),
-            &delete_semaphore,
-        )
-        .await;
-        debug!("gc {} deleted batch blobs", req.shard_id);
-        report_step_timing(&machine.applier.metrics.gc.steps.delete_batch_part_seconds);
-
-        // Now that we've deleted the eligible blobs, "commit" this info by
-        // truncating the state versions that referenced them.
-        machine
-            .applier
-            .state_versions
-            .truncate_diffs(&req.shard_id, req.new_seqno_since)
-            .await;
-        debug!(
-            "gc {} truncated diffs through seqno {}",
-            req.shard_id, req.new_seqno_since
-        );
-        report_step_timing(&machine.applier.metrics.gc.steps.truncate_diff_seconds);
-
-        // Finally, apply the remaining diffs to calculate metrics.
-        while let Some(state) = states.next() {
-            live_diffs += 1;
+            // Record that any referenced parts and rollups were referenced by this seqno
             state.collections.trace.map_batches(|b| {
                 for part in b.parts.iter() {
-                    seqno_held_parts.insert(part.key.to_owned());
+                    batch_part_holds.insert(part.key.to_owned(), state.seqno);
                 }
             });
+
+            for (seqno, rollup) in state.collections.rollups.iter() {
+                if rollup_holds.contains_key(&rollup.key) {
+                    continue;
+                }
+                rollup_holds.insert(rollup.key.clone(), *seqno);
+                if *seqno <= req.new_seqno_since {
+                    // We've discovered a new rollup! It's safe to truncate up to here.
+                    // Note that this may cause a large number of additional truncate calls,
+                    // compared to truncating only once per GC run. If this turns out to be too
+                    // expensive we should consider only truncating when the range is large enough.
+                    report_step_timing(&machine.applier.metrics.gc.steps.apply_diff_seconds);
+                    truncate_range(
+                        &req,
+                        earliest_live_seqno,
+                        *seqno,
+                        machine,
+                        &delete_semaphore,
+                        &mut report_step_timing,
+                        &mut rollup_holds,
+                        &mut batch_part_holds,
+                    )
+                    .await;
+                    earliest_live_seqno = *seqno;
+                }
+            }
+
+            if state.seqno == req.new_seqno_since {
+                // As described in the big rustdoc comment on [StateVersions], we
+                // maintain the invariant that there is always a rollup corresponding to
+                // the seqno of the first live version in consensus. So, write a new
+                // rollup at exactly req.new_seqno_since so we're free to truncate
+                // anything before it.
+                //
+                // NB: We write rollups periodically (via maintenance) to cover the case
+                // when GC is being held up by a long seqno hold (such as the 15m read
+                // lease timeouts whenever environmentd restarts).
+                report_step_timing(&machine.applier.metrics.gc.steps.apply_diff_seconds);
+                let rollup = machine.applier.state_versions.encode_rollup_blob(
+                    &machine.applier.shard_metrics,
+                    state,
+                    PartialRollupKey::new(state.seqno, &RollupId::new()),
+                );
+                let () = machine
+                    .applier
+                    .state_versions
+                    .write_rollup_blob(&rollup)
+                    .await;
+
+                let remove_rollups: Vec<_> = state
+                    .collections
+                    .rollups
+                    .iter()
+                    .filter(|(seqno, _)| **seqno < earliest_live_seqno)
+                    .map(|(seqno, rollup)| (*seqno, rollup.key.clone()))
+                    .collect();
+
+                let (applied, new_maintenance) = machine
+                    .add_and_remove_rollups((rollup.seqno, &rollup.to_hollow()), &remove_rollups)
+                    .await;
+
+                maintenance.merge(new_maintenance);
+                // We raced with some other GC process to write this rollup out. Ours
+                // wasn't registered, so delete it.
+                if !applied {
+                    machine
+                        .applier
+                        .state_versions
+                        .delete_rollup(&rollup.shard_id, &rollup.key)
+                        .await;
+                }
+                debug!(
+                    "gc {} wrote rollup at seqno {}. applied={}",
+                    req.shard_id, rollup.seqno, applied
+                );
+                report_step_timing(&machine.applier.metrics.gc.steps.write_rollup_seconds);
+            }
         }
 
-        // Remove the current batch's parts from the set; we only count parts
-        // that are in some live diff but not the current state.
-        let state = states.state();
-        state.collections.trace.map_batches(|b| {
-            for part in b.parts.iter() {
-                let _ = seqno_held_parts.remove(&part.key);
-            }
-        });
+        // Finally, truncate to the rollup at new_seqno_since... which we know exists because
+        // we created it.
+        truncate_range(
+            &req,
+            earliest_live_seqno,
+            req.new_seqno_since,
+            machine,
+            &delete_semaphore,
+            &mut report_step_timing,
+            &mut rollup_holds,
+            &mut batch_part_holds,
+        )
+        .await;
+
+        let seqno_held_parts = batch_part_holds
+            .iter()
+            .filter(|(_, seqno)| **seqno < states.state().seqno)
+            .count();
 
         let shard_metrics = machine.applier.metrics.shards.shard(&req.shard_id);
         shard_metrics
             .gc_seqno_held_parts
-            .set(u64::cast_from(seqno_held_parts.len()));
+            .set(u64::cast_from(seqno_held_parts));
         shard_metrics.gc_live_diffs.set(live_diffs);
         report_step_timing(&machine.applier.metrics.gc.steps.finish_seconds);
 

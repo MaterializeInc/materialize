@@ -22,6 +22,7 @@ from materialize.cloudtest.k8s.debezium import DEBEZIUM_RESOURCES
 from materialize.cloudtest.k8s.environmentd import (
     EnvironmentdService,
     EnvironmentdStatefulSet,
+    MaterializedAliasService,
 )
 from materialize.cloudtest.k8s.minio import Minio
 from materialize.cloudtest.k8s.postgres import POSTGRES_RESOURCES
@@ -81,6 +82,7 @@ class MaterializeApplication(Application):
         log_filter: Optional[str] = None,
     ) -> None:
         self.environmentd = EnvironmentdService()
+        self.materialized_alias = MaterializedAliasService()
         self.testdrive = Testdrive(release_mode=release_mode, aws_region=aws_region)
         self.release_mode = release_mode
         self.aws_region = aws_region
@@ -127,6 +129,7 @@ class MaterializeApplication(Application):
                 release_mode=release_mode, tag=tag, log_filter=log_filter
             ),
             self.environmentd,
+            self.materialized_alias,
             self.testdrive,
         ]
 

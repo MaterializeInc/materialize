@@ -34,7 +34,7 @@ use crate::client::ConnectionId;
 use crate::command::{
     Canceled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
 };
-use crate::coord::appends::{Deferred, PendingWriteTxn};
+use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, PendingWriteTxn};
 use crate::coord::peek::PendingPeek;
 use crate::coord::{ConnMeta, Coordinator, CreateSourceStatementReady, Message, PendingTxn};
 use crate::error::AdapterError;
@@ -237,7 +237,7 @@ impl Coordinator {
 
         if let Err(e) = self
             .catalog_mut()
-            .create_temporary_schema(session.conn_id())
+            .create_temporary_schema(session.conn_id(), role_id)
         {
             let _ = tx.send(Response {
                 result: Err(e.into()),
@@ -269,6 +269,12 @@ impl Coordinator {
                 drop_sinks: Vec::new(),
             },
         );
+        let update =
+            self.catalog()
+                .state()
+                .pack_session_update(session.conn_id(), *session.role_id(), 1);
+        self.send_builtin_table_updates(vec![update], BuiltinTableUpdateSource::DDL)
+            .await;
 
         ClientTransmitter::new(tx, self.internal_cmd_tx.clone())
             .send(Ok(StartupResponse { messages }), session)
@@ -426,6 +432,7 @@ impl Coordinator {
                     | Statement::AlterSystemSet(_)
                     | Statement::AlterSystemReset(_)
                     | Statement::AlterSystemResetAll(_)
+                    | Statement::AlterOwner(_)
                     | Statement::CreateConnection(_)
                     | Statement::CreateDatabase(_)
                     | Statement::CreateIndex(_)
@@ -636,5 +643,11 @@ impl Coordinator {
             .dec();
         self.active_conns.remove(&session.conn_id());
         self.cancel_pending_peeks(&session.conn_id());
+        let update =
+            self.catalog()
+                .state()
+                .pack_session_update(session.conn_id(), *session.role_id(), -1);
+        self.send_builtin_table_updates(vec![update], BuiltinTableUpdateSource::DDL)
+            .await;
     }
 }

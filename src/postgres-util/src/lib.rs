@@ -94,7 +94,7 @@ use mz_ore::task;
 use mz_repr::GlobalId;
 use mz_ssh_util::tunnel::SshTunnelConfig;
 
-use crate::desc::{PostgresColumnDesc, PostgresTableDesc};
+use crate::desc::{PostgresColumnDesc, PostgresKeyDesc, PostgresTableDesc};
 
 pub mod desc;
 
@@ -188,9 +188,12 @@ pub fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, Pos
     Ok(tls_connector)
 }
 
-/// Fetches table schema information from an upstream Postgres source for all
+/// Fetches table schema information from an upstream Postgres source for
 /// tables that are part of a publication, given a connection string and the
 /// publication name.
+///
+/// If `oid_filter` is `None`, returns all tables, otherwise returns only the
+/// details for the identified oid.
 ///
 /// # Errors
 ///
@@ -199,6 +202,7 @@ pub fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, Pos
 pub async fn publication_info(
     config: &Config,
     publication: &str,
+    oid_filter: Option<u32>,
 ) -> Result<Vec<PostgresTableDesc>, PostgresError> {
     let client = config.connect("postgres_publication_info").await?;
 
@@ -221,8 +225,9 @@ pub async fn publication_info(
                 JOIN pg_publication_tables AS p ON
                         c.relname = p.tablename AND n.nspname = p.schemaname
             WHERE
-                p.pubname = $1",
-            &[&publication],
+                p.pubname = $1
+                AND ($2::oid IS NULL OR c.oid = $2::oid)",
+            &[&publication, &oid_filter],
         )
         .await?;
 
@@ -235,6 +240,7 @@ pub async fn publication_info(
                 "SELECT
                         a.attname AS name,
                         a.atttypid AS typoid,
+                        a.attnum AS colnum,
                         a.atttypmod AS typmod,
                         a.attnotnull AS not_null,
                         b.oid IS NOT NULL AS primary_key
@@ -254,24 +260,97 @@ pub async fn publication_info(
             .map(|row| {
                 let name: String = row.get("name");
                 let type_oid = row.get("typoid");
+                let col_num = Some(
+                    row.get::<_, i16>("colnum")
+                        .try_into()
+                        .expect("non-negative values"),
+                );
                 let type_mod: i32 = row.get("typmod");
                 let not_null: bool = row.get("not_null");
-                let primary_key = row.get("primary_key");
                 Ok(PostgresColumnDesc {
                     name,
+                    col_num,
                     type_oid,
                     type_mod,
                     nullable: !not_null,
-                    primary_key,
                 })
             })
             .collect::<Result<Vec<_>, PostgresError>>()?;
+
+        // PG 15 adds UNIQUE NULLS NOT DISTINCT, which would let us use `UNIQUE` constraints over
+        // nullable columns as keys; i.e. aligns a PG index's NULL handling with an arrangement's
+        // keys. For more info, see https://www.postgresql.org/about/featurematrix/detail/392/
+        let pg_15_plus_keys = "
+        SELECT
+            pg_constraint.oid,
+            pg_constraint.conkey,
+            pg_constraint.conname,
+            pg_constraint.contype = 'p' AS is_primary,
+            pg_index.indnullsnotdistinct AS nulls_not_distinct
+        FROM
+            pg_constraint
+                JOIN
+                    pg_index
+                    ON pg_index.indexrelid = pg_constraint.conindid
+        WHERE
+            pg_constraint.conrelid = $1
+                AND
+            pg_constraint.contype =ANY (ARRAY['p', 'u']);";
+
+        // As above but for versions of PG without indnullsnotdistinct.
+        let pg_14_minus_keys = "
+        SELECT
+            pg_constraint.oid,
+            pg_constraint.conkey,
+            pg_constraint.conname,
+            pg_constraint.contype = 'p' AS is_primary,
+            false AS nulls_not_distinct
+        FROM pg_constraint
+        WHERE
+            pg_constraint.conrelid = $1
+                AND
+            pg_constraint.contype =ANY (ARRAY['p', 'u']);";
+
+        let keys = match client.query(pg_15_plus_keys, &[&oid]).await {
+            Ok(keys) => keys,
+            Err(e)
+                // PG versions prior to 15 do not contain this column.
+                if e.to_string()
+                    == "db error: ERROR: column pg_index.indnullsnotdistinct does not exist" =>
+            {
+                client.query(pg_14_minus_keys, &[&oid]).await?
+            }
+            e => e?,
+        };
+
+        let keys = keys
+            .into_iter()
+            .map(|row| {
+                let oid: u32 = row.get("oid");
+                let cols: Vec<i16> = row.get("conkey");
+                let name: String = row.get("conname");
+                let is_primary: bool = row.get("is_primary");
+                let nulls_not_distinct: bool = row.get("nulls_not_distinct");
+                let cols = cols
+                    .into_iter()
+                    .map(|col| u16::try_from(col).expect("non-negative colnums"))
+                    .collect();
+                PostgresKeyDesc {
+                    oid,
+                    name,
+                    cols,
+                    is_primary,
+                    nulls_not_distinct,
+                }
+            })
+            .collect();
 
         table_infos.push(PostgresTableDesc {
             oid,
             namespace: row.get("schemaname"),
             name: row.get("tablename"),
             columns,
+            keys,
         });
     }
 

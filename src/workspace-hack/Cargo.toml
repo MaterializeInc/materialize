@@ -64,8 +64,8 @@ nom = { version = "7.1.2" }
 num-bigint = { version = "0.4.3" }
 num-integer = { version = "0.1.44", features = ["i128"] }
 num-traits = { version = "0.2.15", features = ["i128"] }
-openssl = { version = "0.10.43", features = ["vendored"] }
-openssl-sys = { version = "0.9.80", default-features = false, features = ["vendored"] }
+openssl = { version = "0.10.48", features = ["vendored"] }
+openssl-sys = { version = "0.9.83", default-features = false, features = ["vendored"] }
 ordered-float = { version = "3.4.0", features = ["serde"] }
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
 phf = { version = "0.11.1", features = ["uncased"] }
@@ -162,8 +162,8 @@ nom = { version = "7.1.2" }
 num-bigint = { version = "0.4.3" }
 num-integer = { version = "0.1.44", features = ["i128"] }
 num-traits = { version = "0.2.15", features = ["i128"] }
-openssl = { version = "0.10.43", features = ["vendored"] }
-openssl-sys = { version = "0.9.80", default-features = false, features = ["vendored"] }
+openssl = { version = "0.10.48", features = ["vendored"] }
+openssl-sys = { version = "0.9.83", default-features = false, features = ["vendored"] }
 ordered-float = { version = "3.4.0", features = ["serde"] }
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
 phf = { version = "0.11.1", features = ["uncased"] }
@@ -211,7 +211,6 @@ zeroize = { version = "1.5.7", features = ["serde"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
 byteorder = { version = "1.4.3", default-features = false, features = ["i128"] }
-getrandom = { version = "0.2.7", default-features = false, features = ["std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.16.0", features = ["unstable"] }
 rustix = { version = "0.36.7", features = ["param", "process", "thread"] }
@@ -219,20 +218,17 @@ tikv-jemalloc-sys = { version = "0.5.2", features = ["background_threads", "prof
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 byteorder = { version = "1.4.3", default-features = false, features = ["i128"] }
-getrandom = { version = "0.2.7", default-features = false, features = ["std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.16.0", features = ["unstable"] }
 rustix = { version = "0.36.7", features = ["param", "process", "thread"] }
 tikv-jemalloc-sys = { version = "0.5.2", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 
 [target.x86_64-apple-darwin.dependencies]
-getrandom = { version = "0.2.7", default-features = false, features = ["std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.16.0", features = ["unstable"] }
 security-framework = { version = "2.7.0", features = ["alpn"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
-getrandom = { version = "0.2.7", default-features = false, features = ["std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.16.0", features = ["unstable"] }
 security-framework = { version = "2.7.0", features = ["alpn"] }

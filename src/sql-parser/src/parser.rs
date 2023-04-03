@@ -3240,94 +3240,72 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_drop(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let object_type = match self.expect_one_of_keywords(&[
-            CONNECTION,
-            CLUSTER,
-            DATABASE,
-            INDEX,
-            MATERIALIZED,
-            ROLE,
-            SECRET,
-            SCHEMA,
-            SINK,
-            SOURCE,
-            TABLE,
-            TYPE,
-            USER,
-            VIEW,
-        ])? {
-            DATABASE => {
-                let if_exists = self.parse_if_exists()?;
+        let object_type = self.expect_object_type()?;
+        let if_exists = self.parse_if_exists()?;
+        match object_type {
+            ObjectType::Database => {
                 let name = self.parse_database_name()?;
                 let restrict = matches!(
                     self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
                     Some(RESTRICT),
                 );
-                return Ok(Statement::DropDatabase(DropDatabaseStatement {
+                Ok(Statement::DropDatabase(DropDatabaseStatement {
                     if_exists,
                     name,
                     restrict,
-                }));
+                }))
             }
-            SCHEMA => {
-                let if_exists = self.parse_if_exists()?;
+            ObjectType::Schema => {
                 let name = self.parse_schema_name()?;
                 let cascade = matches!(
                     self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
                     Some(CASCADE),
                 );
-                return Ok(Statement::DropSchema(DropSchemaStatement {
+                Ok(Statement::DropSchema(DropSchemaStatement {
                     name,
                     if_exists,
                     cascade,
-                }));
+                }))
             }
-            ROLE | USER => {
-                let if_exists = self.parse_if_exists()?;
+            ObjectType::Role => {
                 let names = self.parse_comma_separated(Parser::parse_object_name)?;
-                return Ok(Statement::DropRoles(DropRolesStatement {
+                Ok(Statement::DropRoles(DropRolesStatement {
                     if_exists,
                     names,
-                }));
+                }))
             }
-            CLUSTER => {
-                return if self.peek_keyword(REPLICA) {
-                    self.parse_drop_cluster_replicas()
-                } else {
-                    self.parse_drop_clusters()
-                };
+            ObjectType::Cluster => self.parse_drop_clusters(if_exists),
+            ObjectType::ClusterReplica => self.parse_drop_cluster_replicas(if_exists),
+            ObjectType::Table
+            | ObjectType::View
+            | ObjectType::MaterializedView
+            | ObjectType::Source
+            | ObjectType::Sink
+            | ObjectType::Index
+            | ObjectType::Type
+            | ObjectType::Secret
+            | ObjectType::Connection => {
+                let names = self.parse_comma_separated(Parser::parse_object_name)?;
+                let cascade = matches!(
+                    self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
+                    Some(CASCADE),
+                );
+                Ok(Statement::DropObjects(DropObjectsStatement {
+                    object_type,
+                    if_exists,
+                    names,
+                    cascade,
+                }))
             }
-            INDEX => ObjectType::Index,
-            SINK => ObjectType::Sink,
-            SOURCE => ObjectType::Source,
-            TABLE => ObjectType::Table,
-            TYPE => ObjectType::Type,
-            VIEW => ObjectType::View,
-            MATERIALIZED => {
-                self.expect_keyword(VIEW)?;
-                ObjectType::MaterializedView
-            }
-            SECRET => ObjectType::Secret,
-            CONNECTION => ObjectType::Connection,
-            _ => unreachable!(),
-        };
-
-        let if_exists = self.parse_if_exists()?;
-        let names = self.parse_comma_separated(Parser::parse_object_name)?;
-        let cascade = matches!(
-            self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
-            Some(CASCADE),
-        );
-        Ok(Statement::DropObjects(DropObjectsStatement {
-            object_type,
-            if_exists,
-            names,
-            cascade,
-        }))
+            ObjectType::Func => parser_err!(
+                self,
+                self.peek_prev_pos(),
+                format!("Unsupported DROP on {object_type}")
+            ),
+        }
     }
 
-    fn parse_drop_clusters(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let if_exists = self.parse_if_exists()?;
+    fn parse_drop_clusters(&mut self, if_exists: bool) -> Result<Statement<Raw>, ParserError> {
         let names = self.parse_comma_separated(Parser::parse_object_name)?;
         let cascade = matches!(
             self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
@@ -3340,18 +3318,21 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_drop_cluster_replicas(&mut self) -> Result<Statement<Raw>, ParserError> {
-        self.expect_keyword(REPLICA).unwrap();
-        let if_exists = self.parse_if_exists()?;
-        let names = self.parse_comma_separated(|p| {
-            let cluster = p.parse_identifier()?;
-            p.expect_token(&Token::Dot)?;
-            let replica = p.parse_identifier()?;
-            Ok(QualifiedReplica { cluster, replica })
-        })?;
+    fn parse_drop_cluster_replicas(
+        &mut self,
+        if_exists: bool,
+    ) -> Result<Statement<Raw>, ParserError> {
+        let names = self.parse_comma_separated(|p| p.parse_cluster_replica_name())?;
         Ok(Statement::DropClusterReplicas(
             DropClusterReplicasStatement { if_exists, names },
         ))
+    }
+
+    fn parse_cluster_replica_name(&mut self) -> Result<QualifiedReplica, ParserError> {
+        let cluster = self.parse_identifier()?;
+        self.expect_token(&Token::Dot)?;
+        let replica = self.parse_identifier()?;
+        Ok(QualifiedReplica { cluster, replica })
     }
 
     fn parse_create_table(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -3486,16 +3467,30 @@ impl<'a> Parser<'a> {
             None
         };
         match self.next_token() {
-            Some(Token::Keyword(kw @ PRIMARY)) | Some(Token::Keyword(kw @ UNIQUE)) => {
-                let is_primary = kw == PRIMARY;
-                if is_primary {
-                    self.expect_keyword(KEY)?;
-                }
+            Some(Token::Keyword(PRIMARY)) => {
+                self.expect_keyword(KEY)?;
                 let columns = self.parse_parenthesized_column_list(Mandatory)?;
                 Ok(Some(TableConstraint::Unique {
                     name,
                     columns,
-                    is_primary,
+                    is_primary: true,
+                    nulls_not_distinct: false,
+                }))
+            }
+            Some(Token::Keyword(UNIQUE)) => {
+                let nulls_not_distinct = if self.parse_keyword(NULLS) {
+                    self.expect_keywords(&[NOT, DISTINCT])?;
+                    true
+                } else {
+                    false
+                };
+
+                let columns = self.parse_parenthesized_column_list(Mandatory)?;
+                Ok(Some(TableConstraint::Unique {
+                    name,
+                    columns,
+                    is_primary: false,
+                    nulls_not_distinct,
                 }))
             }
             Some(Token::Keyword(FOREIGN)) => {
@@ -3605,135 +3600,229 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_alter(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let object_type = match self.expect_one_of_keywords(&[
-            SINK,
-            SOURCE,
-            VIEW,
-            MATERIALIZED,
-            TABLE,
-            INDEX,
-            SECRET,
-            SYSTEM,
-            CONNECTION,
-            ROLE,
-        ])? {
-            SINK => return self.parse_alter_sink(),
-            SOURCE => return self.parse_alter_source(),
-            VIEW => ObjectType::View,
-            MATERIALIZED => {
-                self.expect_keyword(VIEW)?;
-                ObjectType::MaterializedView
+        if self.parse_keyword(SYSTEM) {
+            return self.parse_alter_system();
+        }
+
+        let object_type = self.expect_object_type()?;
+
+        match object_type {
+            ObjectType::Role => self.parse_alter_role(),
+            ObjectType::Sink => self.parse_alter_sink(),
+            ObjectType::Source => self.parse_alter_source(),
+            ObjectType::Index => self.parse_alter_index(),
+            ObjectType::Secret => self.parse_alter_secret(),
+            ObjectType::Connection => self.parse_alter_connection(),
+            ObjectType::View | ObjectType::MaterializedView | ObjectType::Table => {
+                let if_exists = self.parse_if_exists()?;
+                let name = self.parse_object_name()?;
+                let action = self.expect_one_of_keywords(&[RENAME, OWNER])?;
+                self.expect_keyword(TO)?;
+                match action {
+                    RENAME => {
+                        let to_item_name = self.parse_identifier()?;
+                        Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
+                            object_type,
+                            if_exists,
+                            name,
+                            to_item_name,
+                        }))
+                    }
+                    OWNER => {
+                        let new_owner = self.parse_identifier()?;
+                        Ok(Statement::AlterOwner(AlterOwnerStatement {
+                            object_type,
+                            if_exists,
+                            name: UnresolvedName::Item(name),
+                            new_owner,
+                        }))
+                    }
+                    _ => unreachable!(),
+                }
             }
-            TABLE => ObjectType::Table,
-            INDEX => return self.parse_alter_index(),
-            SECRET => return self.parse_alter_secret(),
-            SYSTEM => return self.parse_alter_system(),
-            CONNECTION => return self.parse_alter_connection(),
-            ROLE => return self.parse_alter_role(),
-            _ => unreachable!(),
-        };
-
-        let if_exists = self.parse_if_exists()?;
-        let name = self.parse_object_name()?;
-
-        self.expect_keywords(&[RENAME, TO])?;
-        let to_item_name = self.parse_identifier()?;
-
-        Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
-            object_type,
-            if_exists,
-            name,
-            to_item_name,
-        }))
+            ObjectType::Type => {
+                let if_exists = self.parse_if_exists()?;
+                let name = UnresolvedName::Item(self.parse_object_name()?);
+                self.expect_keywords(&[OWNER, TO])?;
+                let new_owner = self.parse_identifier()?;
+                Ok(Statement::AlterOwner(AlterOwnerStatement {
+                    object_type,
+                    if_exists,
+                    name,
+                    new_owner,
+                }))
+            }
+            ObjectType::Cluster => {
+                let if_exists = self.parse_if_exists()?;
+                let name = UnresolvedName::Cluster(self.parse_identifier()?);
+                self.expect_keywords(&[OWNER, TO])?;
+                let new_owner = self.parse_identifier()?;
+                Ok(Statement::AlterOwner(AlterOwnerStatement {
+                    object_type,
+                    if_exists,
+                    name,
+                    new_owner,
+                }))
+            }
+            ObjectType::ClusterReplica => {
+                let if_exists = self.parse_if_exists()?;
+                let name = UnresolvedName::ClusterReplica(self.parse_cluster_replica_name()?);
+                self.expect_keywords(&[OWNER, TO])?;
+                let new_owner = self.parse_identifier()?;
+                Ok(Statement::AlterOwner(AlterOwnerStatement {
+                    object_type,
+                    if_exists,
+                    name,
+                    new_owner,
+                }))
+            }
+            ObjectType::Database => {
+                let if_exists = self.parse_if_exists()?;
+                let name = UnresolvedName::Database(self.parse_database_name()?);
+                self.expect_keywords(&[OWNER, TO])?;
+                let new_owner = self.parse_identifier()?;
+                Ok(Statement::AlterOwner(AlterOwnerStatement {
+                    object_type,
+                    if_exists,
+                    name,
+                    new_owner,
+                }))
+            }
+            ObjectType::Schema => {
+                let if_exists = self.parse_if_exists()?;
+                let name = UnresolvedName::Schema(self.parse_schema_name()?);
+                self.expect_keywords(&[OWNER, TO])?;
+                let new_owner = self.parse_identifier()?;
+                Ok(Statement::AlterOwner(AlterOwnerStatement {
+                    object_type,
+                    if_exists,
+                    name,
+                    new_owner,
+                }))
+            }
+            ObjectType::Func => parser_err!(
+                self,
+                self.peek_prev_pos(),
+                format!("Unsupported ALTER on {object_type}")
+            ),
+        }
     }
 
     fn parse_alter_source(&mut self) -> Result<Statement<Raw>, ParserError> {
         let if_exists = self.parse_if_exists()?;
         let name = self.parse_object_name()?;
 
-        Ok(match self.expect_one_of_keywords(&[RESET, SET, RENAME])? {
-            RESET => {
-                self.expect_token(&Token::LParen)?;
-                let reset_options = self.parse_comma_separated(Parser::parse_source_option_name)?;
-                self.expect_token(&Token::RParen)?;
+        Ok(
+            match self.expect_one_of_keywords(&[RESET, SET, RENAME, OWNER])? {
+                RESET => {
+                    self.expect_token(&Token::LParen)?;
+                    let reset_options =
+                        self.parse_comma_separated(Parser::parse_source_option_name)?;
+                    self.expect_token(&Token::RParen)?;
 
-                Statement::AlterSource(AlterSourceStatement {
-                    source_name: name,
-                    if_exists,
-                    action: AlterSourceAction::ResetOptions(reset_options),
-                })
-            }
-            SET => {
-                self.expect_token(&Token::LParen)?;
-                let set_options = self.parse_comma_separated(Parser::parse_source_option)?;
-                self.expect_token(&Token::RParen)?;
-                Statement::AlterSource(AlterSourceStatement {
-                    source_name: name,
-                    if_exists,
-                    action: AlterSourceAction::SetOptions(set_options),
-                })
-            }
-            RENAME => {
-                self.expect_keyword(TO)?;
-                let to_item_name = self.parse_identifier()?;
+                    Statement::AlterSource(AlterSourceStatement {
+                        source_name: name,
+                        if_exists,
+                        action: AlterSourceAction::ResetOptions(reset_options),
+                    })
+                }
+                SET => {
+                    self.expect_token(&Token::LParen)?;
+                    let set_options = self.parse_comma_separated(Parser::parse_source_option)?;
+                    self.expect_token(&Token::RParen)?;
+                    Statement::AlterSource(AlterSourceStatement {
+                        source_name: name,
+                        if_exists,
+                        action: AlterSourceAction::SetOptions(set_options),
+                    })
+                }
+                RENAME => {
+                    self.expect_keyword(TO)?;
+                    let to_item_name = self.parse_identifier()?;
 
-                Statement::AlterObjectRename(AlterObjectRenameStatement {
-                    object_type: ObjectType::Source,
-                    if_exists,
-                    name,
-                    to_item_name,
-                })
-            }
-            _ => unreachable!(),
-        })
+                    Statement::AlterObjectRename(AlterObjectRenameStatement {
+                        object_type: ObjectType::Source,
+                        if_exists,
+                        name,
+                        to_item_name,
+                    })
+                }
+                OWNER => {
+                    self.expect_keyword(TO)?;
+                    let new_owner = self.parse_identifier()?;
+
+                    Statement::AlterOwner(AlterOwnerStatement {
+                        object_type: ObjectType::Source,
+                        if_exists,
+                        name: UnresolvedName::Item(name),
+                        new_owner,
+                    })
+                }
+                _ => unreachable!(),
+            },
+        )
     }
 
     fn parse_alter_index(&mut self) -> Result<Statement<Raw>, ParserError> {
         let if_exists = self.parse_if_exists()?;
         let name = self.parse_object_name()?;
 
-        Ok(match self.expect_one_of_keywords(&[RESET, SET, RENAME])? {
-            RESET => {
-                self.expect_token(&Token::LParen)?;
-                let reset_options = self.parse_comma_separated(Parser::parse_index_option_name)?;
-                self.expect_token(&Token::RParen)?;
+        Ok(
+            match self.expect_one_of_keywords(&[RESET, SET, RENAME, OWNER])? {
+                RESET => {
+                    self.expect_token(&Token::LParen)?;
+                    let reset_options =
+                        self.parse_comma_separated(Parser::parse_index_option_name)?;
+                    self.expect_token(&Token::RParen)?;
 
-                Statement::AlterIndex(AlterIndexStatement {
-                    index_name: name,
-                    if_exists,
-                    action: AlterIndexAction::ResetOptions(reset_options),
-                })
-            }
-            SET => {
-                self.expect_token(&Token::LParen)?;
-                let set_options = self.parse_comma_separated(Parser::parse_index_option)?;
-                self.expect_token(&Token::RParen)?;
-                Statement::AlterIndex(AlterIndexStatement {
-                    index_name: name,
-                    if_exists,
-                    action: AlterIndexAction::SetOptions(set_options),
-                })
-            }
-            RENAME => {
-                self.expect_keyword(TO)?;
-                let to_item_name = self.parse_identifier()?;
+                    Statement::AlterIndex(AlterIndexStatement {
+                        index_name: name,
+                        if_exists,
+                        action: AlterIndexAction::ResetOptions(reset_options),
+                    })
+                }
+                SET => {
+                    self.expect_token(&Token::LParen)?;
+                    let set_options = self.parse_comma_separated(Parser::parse_index_option)?;
+                    self.expect_token(&Token::RParen)?;
+                    Statement::AlterIndex(AlterIndexStatement {
+                        index_name: name,
+                        if_exists,
+                        action: AlterIndexAction::SetOptions(set_options),
+                    })
+                }
+                RENAME => {
+                    self.expect_keyword(TO)?;
+                    let to_item_name = self.parse_identifier()?;
 
-                Statement::AlterObjectRename(AlterObjectRenameStatement {
-                    object_type: ObjectType::Index,
-                    if_exists,
-                    name,
-                    to_item_name,
-                })
-            }
-            _ => unreachable!(),
-        })
+                    Statement::AlterObjectRename(AlterObjectRenameStatement {
+                        object_type: ObjectType::Index,
+                        if_exists,
+                        name,
+                        to_item_name,
+                    })
+                }
+                OWNER => {
+                    self.expect_keyword(TO)?;
+                    let new_owner = self.parse_identifier()?;
+
+                    Statement::AlterOwner(AlterOwnerStatement {
+                        object_type: ObjectType::Index,
+                        if_exists,
+                        name: UnresolvedName::Item(name),
+                        new_owner,
+                    })
+                }
+                _ => unreachable!(),
+            },
+        )
     }
 
     fn parse_alter_secret(&mut self) -> Result<Statement<Raw>, ParserError> {
         let if_exists = self.parse_if_exists()?;
         let name = self.parse_object_name()?;
 
-        Ok(match self.expect_one_of_keywords(&[AS, RENAME])? {
+        Ok(match self.expect_one_of_keywords(&[AS, RENAME, OWNER])? {
             AS => {
                 let value = self.parse_expr()?;
                 Statement::AlterSecret(AlterSecretStatement {
@@ -3753,6 +3842,17 @@ impl<'a> Parser<'a> {
                     to_item_name,
                 })
             }
+            OWNER => {
+                self.expect_keyword(TO)?;
+                let new_owner = self.parse_identifier()?;
+
+                Statement::AlterOwner(AlterOwnerStatement {
+                    object_type: ObjectType::Secret,
+                    if_exists,
+                    name: UnresolvedName::Item(name),
+                    new_owner,
+                })
+            }
             _ => unreachable!(),
         })
     }
@@ -3762,42 +3862,56 @@ impl<'a> Parser<'a> {
         let if_exists = self.parse_if_exists()?;
         let name = self.parse_object_name()?;
 
-        Ok(match self.expect_one_of_keywords(&[RESET, SET, RENAME])? {
-            RESET => {
-                self.expect_token(&Token::LParen)?;
-                let reset_options =
-                    self.parse_comma_separated(Parser::parse_create_sink_option_name)?;
-                self.expect_token(&Token::RParen)?;
+        Ok(
+            match self.expect_one_of_keywords(&[RESET, SET, RENAME, OWNER])? {
+                RESET => {
+                    self.expect_token(&Token::LParen)?;
+                    let reset_options =
+                        self.parse_comma_separated(Parser::parse_create_sink_option_name)?;
+                    self.expect_token(&Token::RParen)?;
 
-                Statement::AlterSink(AlterSinkStatement {
-                    sink_name: name,
-                    if_exists,
-                    action: AlterSinkAction::ResetOptions(reset_options),
-                })
-            }
-            SET => {
-                self.expect_token(&Token::LParen)?;
-                let set_options = self.parse_comma_separated(Parser::parse_create_sink_option)?;
-                self.expect_token(&Token::RParen)?;
-                Statement::AlterSink(AlterSinkStatement {
-                    sink_name: name,
-                    if_exists,
-                    action: AlterSinkAction::SetOptions(set_options),
-                })
-            }
-            RENAME => {
-                self.expect_keyword(TO)?;
-                let to_item_name = self.parse_identifier()?;
+                    Statement::AlterSink(AlterSinkStatement {
+                        sink_name: name,
+                        if_exists,
+                        action: AlterSinkAction::ResetOptions(reset_options),
+                    })
+                }
+                SET => {
+                    self.expect_token(&Token::LParen)?;
+                    let set_options =
+                        self.parse_comma_separated(Parser::parse_create_sink_option)?;
+                    self.expect_token(&Token::RParen)?;
+                    Statement::AlterSink(AlterSinkStatement {
+                        sink_name: name,
+                        if_exists,
+                        action: AlterSinkAction::SetOptions(set_options),
+                    })
+                }
+                RENAME => {
+                    self.expect_keyword(TO)?;
+                    let to_item_name = self.parse_identifier()?;
 
-                Statement::AlterObjectRename(AlterObjectRenameStatement {
-                    object_type: ObjectType::Sink,
-                    if_exists,
-                    name,
-                    to_item_name,
-                })
-            }
-            _ => unreachable!(),
-        })
+                    Statement::AlterObjectRename(AlterObjectRenameStatement {
+                        object_type: ObjectType::Sink,
+                        if_exists,
+                        name,
+                        to_item_name,
+                    })
+                }
+                OWNER => {
+                    self.expect_keyword(TO)?;
+                    let new_owner = self.parse_identifier()?;
+
+                    Statement::AlterOwner(AlterOwnerStatement {
+                        object_type: ObjectType::Sink,
+                        if_exists,
+                        name: UnresolvedName::Item(name),
+                        new_owner,
+                    })
+                }
+                _ => unreachable!(),
+            },
+        )
     }
 
     /// Parse an ALTER SYSTEM statement.
@@ -3832,24 +3946,38 @@ impl<'a> Parser<'a> {
         let if_exists = self.parse_if_exists()?;
         let name = self.parse_object_name()?;
 
-        Ok(match self.expect_one_of_keywords(&[RENAME, ROTATE])? {
-            RENAME => {
-                self.expect_keyword(TO)?;
-                let to_item_name = self.parse_identifier()?;
+        Ok(
+            match self.expect_one_of_keywords(&[RENAME, ROTATE, OWNER])? {
+                RENAME => {
+                    self.expect_keyword(TO)?;
+                    let to_item_name = self.parse_identifier()?;
 
-                Statement::AlterObjectRename(AlterObjectRenameStatement {
-                    object_type: ObjectType::Connection,
-                    if_exists,
-                    name,
-                    to_item_name,
-                })
-            }
-            ROTATE => {
-                self.expect_keyword(KEYS)?;
-                Statement::AlterConnection(AlterConnectionStatement { name, if_exists })
-            }
-            _ => unreachable!(),
-        })
+                    Statement::AlterObjectRename(AlterObjectRenameStatement {
+                        object_type: ObjectType::Connection,
+
+                        if_exists,
+                        name,
+                        to_item_name,
+                    })
+                }
+                ROTATE => {
+                    self.expect_keyword(KEYS)?;
+                    Statement::AlterConnection(AlterConnectionStatement { name, if_exists })
+                }
+                OWNER => {
+                    self.expect_keyword(TO)?;
+                    let new_owner = self.parse_identifier()?;
+
+                    Statement::AlterOwner(AlterOwnerStatement {
+                        object_type: ObjectType::Connection,
+                        if_exists,
+                        name: UnresolvedName::Item(name),
+                        new_owner,
+                    })
+                }
+                _ => unreachable!(),
+            },
+        )
     }
 
     fn parse_alter_role(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -4869,74 +4997,39 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_show(&mut self) -> Result<ShowStatement<Raw>, ParserError> {
-        if self.parse_keyword(DATABASES) {
-            return Ok(ShowStatement::ShowDatabases(ShowDatabasesStatement {
-                filter: self.parse_show_statement_filter()?,
-            }));
-        }
-
         if self.parse_one_of_keywords(&[COLUMNS, FIELDS]).is_some() {
             self.parse_show_columns()
-        } else if self.parse_keyword(SCHEMAS) {
-            let from = if self.parse_keyword(FROM) {
-                Some(self.parse_database_name()?)
-            } else {
-                None
-            };
-            Ok(ShowStatement::ShowSchemas(ShowSchemasStatement {
-                from,
-                filter: self.parse_show_statement_filter()?,
-            }))
-        } else if let Some(object_type) = self.parse_one_of_keywords(&[
-            OBJECTS,
-            ROLES,
-            CLUSTER,
-            CLUSTERS,
-            SINKS,
-            SOURCES,
-            TABLES,
-            TYPES,
-            USERS,
-            VIEWS,
-            MATERIALIZED,
-            SECRETS,
-            INDEXES,
-            CONNECTIONS,
-        ]) {
-            let object_type = match object_type {
-                OBJECTS => ObjectType::Object,
-                ROLES | USERS => ObjectType::Role,
-                CLUSTERS => ObjectType::Cluster,
-                SINKS => ObjectType::Sink,
-                SOURCES => ObjectType::Source,
-                TABLES => ObjectType::Table,
-                TYPES => ObjectType::Type,
-                VIEWS => ObjectType::View,
-                SECRETS => ObjectType::Secret,
-                CONNECTIONS => ObjectType::Connection,
-                CLUSTER => {
-                    if self.parse_keyword(REPLICAS) {
-                        ObjectType::ClusterReplica
-                    } else {
-                        return Ok(ShowStatement::ShowVariable(ShowVariableStatement {
-                            variable: Ident::from("cluster"),
-                        }));
-                    }
-                }
-                MATERIALIZED => {
-                    self.expect_keyword(VIEWS)?;
-                    ObjectType::MaterializedView
-                }
-                INDEXES => ObjectType::Index,
-                _ => unreachable!(),
-            };
+        } else if self.parse_keyword(OBJECTS) {
             let from = if self.parse_keywords(&[FROM]) {
                 Some(self.parse_schema_name()?)
             } else {
                 None
             };
-
+            Ok(ShowStatement::ShowObjects(ShowObjectsStatement {
+                object_type: ShowObjectType::Object,
+                from,
+                filter: self.parse_show_statement_filter()?,
+            }))
+        } else if let Some(object_type) = self.parse_plural_object_type() {
+            let from = if object_type.lives_in_schema() {
+                if self.parse_keywords(&[FROM]) {
+                    Some(self.parse_schema_name()?)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             let show_object_type = match object_type {
+                ObjectType::Database => ShowObjectType::Database,
+                ObjectType::Schema => {
+                    let from = if self.parse_keyword(FROM) {
+                        Some(self.parse_database_name()?)
+                    } else {
+                        None
+                    };
+                    ShowObjectType::Schema { from }
+                }
                 ObjectType::Table => ShowObjectType::Table,
                 ObjectType::View => ShowObjectType::View,
                 ObjectType::Source => ShowObjectType::Source,
@@ -4944,7 +5037,6 @@ impl<'a> Parser<'a> {
                 ObjectType::Type => ShowObjectType::Type,
                 ObjectType::Role => ShowObjectType::Role,
                 ObjectType::ClusterReplica => ShowObjectType::ClusterReplica,
-                ObjectType::Object => ShowObjectType::Object,
                 ObjectType::Secret => ShowObjectType::Secret,
                 ObjectType::Connection => ShowObjectType::Connection,
                 ObjectType::Cluster => ShowObjectType::Cluster,
@@ -4973,13 +5065,22 @@ impl<'a> Parser<'a> {
                         on_object,
                     }
                 }
+                ObjectType::Func => {
+                    return parser_err!(
+                        self,
+                        self.peek_prev_pos(),
+                        format!("Unsupported SHOW on {object_type}")
+                    )
+                }
             };
-
-            // Only Materialized Views and Indexes (handled separately below) are associated with clusters.
             Ok(ShowStatement::ShowObjects(ShowObjectsStatement {
                 object_type: show_object_type,
                 from,
                 filter: self.parse_show_statement_filter()?,
+            }))
+        } else if self.parse_keyword(CLUSTER) {
+            Ok(ShowStatement::ShowVariable(ShowVariableStatement {
+                variable: Ident::from("cluster"),
             }))
         } else if self.parse_keywords(&[CREATE, VIEW]) {
             Ok(ShowStatement::ShowCreateView(ShowCreateViewStatement {
@@ -5786,6 +5887,107 @@ impl<'a> Parser<'a> {
             role_name,
             member_names,
         }))
+    }
+
+    /// Bail out if the current token is not an object type, or consume and return it if it is.
+    fn expect_object_type(&mut self) -> Result<ObjectType, ParserError> {
+        Ok(
+            match self.expect_one_of_keywords(&[
+                TABLE,
+                VIEW,
+                MATERIALIZED,
+                SOURCE,
+                SINK,
+                INDEX,
+                TYPE,
+                ROLE,
+                USER,
+                CLUSTER,
+                SECRET,
+                CONNECTION,
+                DATABASE,
+                SCHEMA,
+                FUNCTION,
+            ])? {
+                TABLE => ObjectType::Table,
+                VIEW => ObjectType::View,
+                MATERIALIZED => {
+                    self.expect_keyword(VIEW)?;
+                    ObjectType::MaterializedView
+                }
+                SOURCE => ObjectType::Source,
+                SINK => ObjectType::Sink,
+                INDEX => ObjectType::Index,
+                TYPE => ObjectType::Type,
+                ROLE | USER => ObjectType::Role,
+                CLUSTER => {
+                    if self.parse_keyword(REPLICA) {
+                        ObjectType::ClusterReplica
+                    } else {
+                        ObjectType::Cluster
+                    }
+                }
+                SECRET => ObjectType::Secret,
+                CONNECTION => ObjectType::Connection,
+                DATABASE => ObjectType::Database,
+                SCHEMA => ObjectType::Schema,
+                FUNCTION => ObjectType::Func,
+                _ => unreachable!(),
+            },
+        )
+    }
+
+    /// Look for an object type in the plural form and return it if it matches.
+    fn parse_plural_object_type(&mut self) -> Option<ObjectType> {
+        Some(
+            match self.parse_one_of_keywords(&[
+                TABLES,
+                VIEWS,
+                MATERIALIZED,
+                SOURCES,
+                SINKS,
+                INDEXES,
+                TYPES,
+                ROLES,
+                USERS,
+                CLUSTER,
+                CLUSTERS,
+                SECRETS,
+                CONNECTIONS,
+                DATABASES,
+                SCHEMAS,
+            ])? {
+                TABLES => ObjectType::Table,
+                VIEWS => ObjectType::View,
+                MATERIALIZED => {
+                    if self.parse_keyword(VIEWS) {
+                        ObjectType::MaterializedView
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
+                SOURCES => ObjectType::Source,
+                SINKS => ObjectType::Sink,
+                INDEXES => ObjectType::Index,
+                TYPES => ObjectType::Type,
+                ROLES | USERS => ObjectType::Role,
+                CLUSTER => {
+                    if self.parse_keyword(REPLICAS) {
+                        ObjectType::ClusterReplica
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
+                CLUSTERS => ObjectType::Cluster,
+                SECRETS => ObjectType::Secret,
+                CONNECTIONS => ObjectType::Connection,
+                DATABASES => ObjectType::Database,
+                SCHEMAS => ObjectType::Schema,
+                _ => unreachable!(),
+            },
+        )
     }
 }
 

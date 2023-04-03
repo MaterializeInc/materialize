@@ -87,6 +87,7 @@ pub enum AdapterNotice {
         role_name: String,
         member_name: String,
     },
+    AutoRunOnIntrospectionCluster,
 }
 
 impl AdapterNotice {
@@ -207,6 +208,10 @@ impl fmt::Display for AdapterNotice {
             } => write!(
                 f,
                 "role \"{member_name}\" is not a member of role \"{role_name}\""
+            ),
+            AdapterNotice::AutoRunOnIntrospectionCluster => write!(
+                f,
+                "query was automatically run on the \"mz_introspection\" cluster"
             ),
         }
     }

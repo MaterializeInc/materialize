@@ -10,6 +10,7 @@
 import pytest
 
 from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.k8s import cluster_pod_name
 from materialize.cloudtest.wait import wait
 
 
@@ -27,12 +28,13 @@ def zones_used(mz: MaterializeApplication) -> int:
         )[0]
         assert replica_id is not None
 
-        cluster_pod_name = f"cluster-{cluster_id}-replica-{replica_id}-0"
+        cluster_pod = cluster_pod_name(cluster_id, replica_id)
 
-        wait(condition="condition=Ready", resource=f"pod/{cluster_pod_name}")
+        wait(condition="condition=Ready", resource=cluster_pod)
 
         compute_pod = mz.environmentd.api().read_namespaced_pod(
-            cluster_pod_name, mz.environmentd.namespace()
+            cluster_pod.removeprefix("pod/"),
+            mz.environmentd.namespace(),
         )
         spec = compute_pod.spec
         assert spec is not None

@@ -173,6 +173,8 @@ impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
             return Err(format!("invalid desc: {:?}", &self.desc).into());
         }
 
+        let uncompacted = PartialOrder::less_equal(self.desc.since(), self.desc.lower());
+
         for update in self.updates.iter().flat_map(|u| u.iter()) {
             let ((_key, _val), ts, diff) = update;
             // TODO: Don't assume diff is an i64, take a D type param instead.
@@ -188,18 +190,14 @@ impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
                 .into());
             }
 
-            if PartialOrder::less_than(self.desc.since(), self.desc.upper()) {
-                if self.desc.upper().less_equal(&ts) {
-                    return Err(format!(
-                        "timestamp {:?} is greater than or equal to the batch upper: {:?}",
-                        ts, self.desc
-                    )
-                    .into());
-                }
-            } else if self.desc.since().less_than(&ts) {
+            // when since is less than or equal to lower, the upper is a strict bound on the updates'
+            // timestamp because no compaction has been performed. Because user batches are always
+            // uncompacted, this ensures that new updates are recorded with valid timestamps.
+            // Otherwise, we can make no assumptions about the timestamps
+            if uncompacted && self.desc.upper().less_equal(&ts) {
                 return Err(format!(
-                    "timestamp {:?} is greater than the batch since: {:?}",
-                    ts, self.desc,
+                    "timestamp {:?} is greater than or equal to the batch upper: {:?}",
+                    ts, self.desc
                 )
                 .into());
             }
@@ -471,7 +469,7 @@ mod tests {
             index: 0,
             updates: columnar_records(vec![update_with_key(5, "0")]),
         };
-        assert_eq!(b.validate(), Err(Error::from("timestamp 5 is greater than the batch since: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [4] } }")));
+        assert_eq!(b.validate(), Ok(()));
 
         // Invalid update
         let b = BlobTraceBatchPart {

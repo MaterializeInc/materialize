@@ -16,46 +16,55 @@ use std::time::Duration;
 
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
-use mz_expr::{permutation_for_arrangement, MirScalarExpr};
+use serde::{Deserialize, Serialize};
 use timely::communication::Allocate;
-use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::capture::EventLink;
-use timely::dataflow::operators::Filter;
-use timely::logging::{ParkEvent, TimelyEvent, WorkerIdentifier};
+use timely::container::columnation::{CloneRegion, Columnation};
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::channels::pushers::Tee;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::{Filter, InputCapability};
+use timely::logging::{
+    ChannelsEvent, MessagesEvent, OperatesEvent, ParkEvent, ScheduleEvent, ShutdownEvent,
+    TimelyEvent,
+};
+use tracing::error;
 
 use mz_compute_client::logging::LoggingConfig;
+use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
 use mz_repr::{datum_list_size, datum_size, Datum, DatumVec, Diff, Row, Timestamp};
-use mz_timely_util::activator::RcActivator;
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::replay::MzReplay;
 
 use crate::logging::{LogVariant, TimelyLog};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
+use super::EventQueue;
+
 /// Constructs the logging dataflow for timely logs.
 ///
 /// Params
 /// * `worker`: The Timely worker hosting the log analysis dataflow.
 /// * `config`: Logging configuration
-/// * `linked`: The source to read log events from.
-/// * `activator`: A handle to acknowledge activations.
+/// * `event_queue`: The source to read log events from.
 ///
-/// Returns a map from log variant to a tuple of a trace handle and a permutation to reconstruct
-/// the original rows.
-pub fn construct<A: Allocate>(
+/// Returns a map from log variant to a tuple of a trace handle and a dataflow drop token.
+pub(super) fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
-    linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, TimelyEvent)>>,
-    activator: RcActivator,
+    event_queue: EventQueue<TimelyEvent>,
 ) -> BTreeMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
-    let interval_ms = std::cmp::max(1, config.interval.as_millis());
+    let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
+    let worker_id = worker.index();
     let peers = worker.peers();
 
-    // A dataflow for multiple log-derived arrangements.
-    let traces = worker.dataflow_named("Dataflow: timely logging", move |scope| {
-        let (mut logs, token) =
-            Some(linked).mz_replay(scope, "timely logs", config.interval, activator);
+    worker.dataflow_named("Dataflow: timely logging", move |scope| {
+        let (mut logs, token) = Some(event_queue.link).mz_replay(
+            scope,
+            "timely logs",
+            config.interval,
+            event_queue.activator,
+        );
 
         // If logging is disabled, we still need to install the indexes, but we can leave them
         // empty. We do so by immediately filtering all logs events.
@@ -63,13 +72,10 @@ pub fn construct<A: Allocate>(
             logs = logs.filter(|_| false);
         }
 
-        use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-
+        // Build a demux operator that splits the replayed event stream up into the separate
+        // logging streams.
         let mut demux = OperatorBuilder::new("Timely Logging Demux".to_string(), scope.clone());
-
-        use timely::dataflow::channels::pact::Pipeline;
         let mut input = demux.new_input(&logs, Pipeline);
-
         let (mut operates_out, operates) = demux.new_output();
         let (mut channels_out, channels) = demux.new_output();
         let (mut addresses_out, addresses) = demux.new_output();
@@ -79,18 +85,9 @@ pub fn construct<A: Allocate>(
         let (mut schedules_duration_out, schedules_duration) = demux.new_output();
         let (mut schedules_histogram_out, schedules_histogram) = demux.new_output();
 
+        let mut demux_state = DemuxState::default();
         let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
-            // These two maps track operator and channel information
-            // so that they can be deleted when we observe the drop
-            // events for the corresponding operators.
-            let mut operates_data = BTreeMap::new();
-            let mut channels_data = BTreeMap::new();
-            let mut parks_data = BTreeMap::new();
-            let mut schedules_stash = BTreeMap::new();
-            let mut messages_sent_data: BTreeMap<_, Vec<Diff>> = BTreeMap::new();
-            let mut messages_received_data: BTreeMap<_, Vec<Diff>> = BTreeMap::new();
-            let mut schedules_data: BTreeMap<_, Vec<(isize, Diff)>> = BTreeMap::new();
             move |_frontiers| {
                 let mut operates = operates_out.activate();
                 let mut channels = channels_out.activate();
@@ -101,351 +98,157 @@ pub fn construct<A: Allocate>(
                 let mut schedules_duration = schedules_duration_out.activate();
                 let mut schedules_histogram = schedules_histogram_out.activate();
 
-                let mut operates_session = ConsolidateBuffer::new(&mut operates, 0);
-                let mut channels_session = ConsolidateBuffer::new(&mut channels, 1);
-                let mut addresses_session = ConsolidateBuffer::new(&mut addresses, 2);
-                let mut parks_session = ConsolidateBuffer::new(&mut parks, 3);
-                let mut messages_sent_session = ConsolidateBuffer::new(&mut messages_sent, 4);
-                let mut messages_received_session =
-                    ConsolidateBuffer::new(&mut messages_received, 5);
-                let mut schedules_duration_session =
-                    ConsolidateBuffer::new(&mut schedules_duration, 6);
-                let mut schedules_histogram_session =
-                    ConsolidateBuffer::new(&mut schedules_histogram, 7);
+                let mut output_buffers = DemuxOutput {
+                    operates: ConsolidateBuffer::new(&mut operates, 0),
+                    channels: ConsolidateBuffer::new(&mut channels, 1),
+                    addresses: ConsolidateBuffer::new(&mut addresses, 2),
+                    parks: ConsolidateBuffer::new(&mut parks, 3),
+                    messages_sent: ConsolidateBuffer::new(&mut messages_sent, 4),
+                    messages_received: ConsolidateBuffer::new(&mut messages_received, 5),
+                    schedules_duration: ConsolidateBuffer::new(&mut schedules_duration, 6),
+                    schedules_histogram: ConsolidateBuffer::new(&mut schedules_histogram, 7),
+                };
 
                 input.for_each(|cap, data| {
                     data.swap(&mut demux_buffer);
 
-                    for (time, worker, datum) in demux_buffer.drain(..) {
-                        let time_ns = time.as_nanos();
-                        let time_ms = (((time.as_millis() / interval_ms) + 1) * interval_ms)
-                            .try_into()
-                            .expect("must fit");
-
-                        match datum {
-                            TimelyEvent::Operates(event) => {
-                                // Record operator information so that we can replay a negated
-                                // version when the operator is dropped.
-                                operates_data.insert((event.id, worker), event.clone());
-
-                                operates_session
-                                    .give(&cap, (((event.id, worker), event.name), time_ms, 1));
-
-                                let address_row = (event.id, worker, event.addr);
-                                addresses_session.give(&cap, (address_row, time_ms, 1));
+                    for (time, logger_id, event) in demux_buffer.drain(..) {
+                        // We expect the logging infrastructure to not shuffle events between
+                        // workers and this code relies on the assumption that each worker handles
+                        // its own events.
+                        assert_eq!(logger_id, worker_id);
+                        if let TimelyEvent::Messages(msg) = &event {
+                            match msg.is_send {
+                                true => assert_eq!(msg.source, worker_id),
+                                false => assert_eq!(msg.target, worker_id),
                             }
-                            TimelyEvent::Channels(event) => {
-                                // Record channel information so that we can replay a negated
-                                // version when the host dataflow is dropped.
-                                channels_data
-                                    .entry((event.scope_addr[0], worker))
-                                    .or_insert_with(Vec::new)
-                                    .push(event.clone());
-
-                                // Present channel description.
-                                let d = (
-                                    (event.id, worker),
-                                    event.source.0,
-                                    event.source.1,
-                                    event.target.0,
-                                    event.target.1,
-                                );
-                                channels_session.give(&cap, (d, time_ms, 1));
-
-                                let address_row = (event.id, worker, event.scope_addr);
-                                addresses_session.give(&cap, (address_row, time_ms, 1));
-                            }
-                            TimelyEvent::Shutdown(event) => {
-                                // Dropped operators should result in a negative record for
-                                // the `operates` collection, cancelling out the initial
-                                // operator announcement.
-                                if let Some(event) = operates_data.remove(&(event.id, worker)) {
-                                    operates_session.give(
-                                        &cap,
-                                        (((event.id, worker), event.name), time_ms, -1),
-                                    );
-
-                                    // Retract schedules information for the operator
-                                    if let Some(schedules) =
-                                        schedules_data.remove(&(event.id, worker))
-                                    {
-                                        for (index, (pow, elapsed_ns)) in schedules
-                                            .into_iter()
-                                            .enumerate()
-                                            .filter(|(_, (pow, _))| *pow != 0)
-                                        {
-                                            schedules_duration_session.give(
-                                                &cap,
-                                                ((event.id, worker), time_ms, -elapsed_ns),
-                                            );
-                                            schedules_histogram_session.give(
-                                                &cap,
-                                                (
-                                                    (event.id, worker, 1 << index),
-                                                    time_ms,
-                                                    Diff::cast_from(-pow),
-                                                ),
-                                            );
-                                        }
-                                    }
-
-                                    // If we are observing a dataflow shutdown, we should also
-                                    // issue a deletion for channels in the dataflow.
-                                    if event.addr.len() == 1 {
-                                        let dataflow_id = event.addr[0];
-                                        if let Some(events) =
-                                            channels_data.remove(&(dataflow_id, worker))
-                                        {
-                                            for event in events {
-                                                // Retract channel description.
-                                                let d = (
-                                                    (event.id, worker),
-                                                    event.source.0,
-                                                    event.source.1,
-                                                    event.target.0,
-                                                    event.target.1,
-                                                );
-                                                channels_session.give(&cap, (d, time_ms, -1));
-
-                                                if let Some(sent) =
-                                                    messages_sent_data.remove(&(event.id, worker))
-                                                {
-                                                    for (index, count) in sent.iter().enumerate() {
-                                                        let data = (
-                                                            ((event.id, worker), index),
-                                                            time_ms,
-                                                            -count,
-                                                        );
-                                                        messages_sent_session.give(&cap, data);
-                                                    }
-                                                }
-                                                if let Some(received) = messages_received_data
-                                                    .remove(&(event.id, worker))
-                                                {
-                                                    for (index, count) in
-                                                        received.iter().enumerate()
-                                                    {
-                                                        let data = (
-                                                            ((event.id, worker), index),
-                                                            time_ms,
-                                                            -count,
-                                                        );
-                                                        messages_received_session.give(&cap, data);
-                                                    }
-                                                }
-
-                                                let address_row =
-                                                    (event.id, worker, event.scope_addr);
-                                                addresses_session
-                                                    .give(&cap, (address_row, time_ms, -1));
-                                            }
-                                        }
-                                    }
-
-                                    let address_row = (event.id, worker, event.addr);
-                                    addresses_session.give(&cap, (address_row, time_ms, -1));
-                                }
-                            }
-                            TimelyEvent::Park(event) => match event {
-                                ParkEvent::Park(duration) => {
-                                    parks_data.insert(worker, (time_ns, duration));
-                                }
-                                ParkEvent::Unpark => {
-                                    let (start_ns, requested) =
-                                        parks_data.remove(&worker).expect("park data must exist");
-                                    let duration_ns = time_ns - start_ns;
-                                    let requested =
-                                        requested.map(|r| r.as_nanos().next_power_of_two());
-                                    let pow = duration_ns.next_power_of_two();
-                                    parks_session
-                                        .give(&cap, ((worker, pow, requested), time_ms, 1));
-                                }
-                            },
-
-                            TimelyEvent::Messages(event) => {
-                                let length = Diff::try_from(event.length).unwrap();
-                                if event.is_send {
-                                    // Record messages sent per channel and source
-                                    // We can send data to at most `peers` targets.
-                                    messages_sent_data
-                                        .entry((event.channel, event.source))
-                                        .or_insert_with(|| vec![0; peers])[event.target] += length;
-                                    let d = ((event.channel, event.source), event.target);
-                                    messages_sent_session.give(&cap, (d, time_ms, length));
-                                } else {
-                                    // Record messages received per channel and target
-                                    // We can receive data from at most `peers` targets.
-                                    messages_received_data
-                                        .entry((event.channel, event.target))
-                                        .or_insert_with(|| vec![0; peers])[event.source] += length;
-                                    let d = ((event.channel, event.target), event.source);
-                                    messages_received_session.give(&cap, (d, time_ms, length));
-                                }
-                            }
-                            TimelyEvent::Schedule(event) => {
-                                // Pair of operator ID and worker
-                                let key = (event.id, worker);
-                                match event.start_stop {
-                                    timely::logging::StartStop::Start => {
-                                        debug_assert!(!schedules_stash.contains_key(&key));
-                                        schedules_stash.insert(key, time_ns);
-                                    }
-                                    timely::logging::StartStop::Stop => {
-                                        debug_assert!(schedules_stash.contains_key(&key));
-                                        let start = schedules_stash
-                                            .remove(&key)
-                                            .expect("start event absent");
-                                        let elapsed_ns = time_ns - start;
-
-                                        // Record count and elapsed for retraction
-                                        // Note that we store the histogram for retraction with
-                                        // 64 buckets, which should be enough to cover all scheduling
-                                        // durations up to ~500 years. One bucket is an `(isize, isize`)
-                                        // pair, which should consume 1KiB on 64-bit arch per entry.
-                                        let (count, duration) = &mut schedules_data
-                                            .entry(key)
-                                            .or_insert_with(|| vec![(0, 0); 64])[usize::cast_from(
-                                            elapsed_ns.next_power_of_two().trailing_zeros(),
-                                        )];
-                                        *count += 1;
-                                        let elapsed_ns_diff = Diff::try_from(elapsed_ns).unwrap();
-                                        *duration += elapsed_ns_diff;
-
-                                        schedules_duration_session
-                                            .give(&cap, (key, time_ms, elapsed_ns_diff));
-                                        let d = (event.id, worker, elapsed_ns.next_power_of_two());
-                                        schedules_histogram_session.give(&cap, (d, time_ms, 1));
-                                    }
-                                }
-                            }
-                            _ => {}
                         }
+
+                        DemuxHandler {
+                            state: &mut demux_state,
+                            output: &mut output_buffers,
+                            logging_interval_ms,
+                            peers,
+                            time,
+                            cap: &cap,
+                        }
+                        .handle(event);
                     }
                 });
             }
         });
 
-        // Accumulate the durations of each operator.
+        // Encode the contents of each logging stream into its expected `Row` format.
+        // We pre-arrange the logging streams to force a consolidation and reduce the amount of
+        // updates that reach `Row` encoding.
+        let operates = operates
+            .as_collection()
+            .arrange_core::<_, RowSpine<_, _, _, _>>(
+                Exchange::new(move |_| u64::cast_from(worker_id)),
+                "PreArrange Timely operates",
+            )
+            .as_collection(move |(id, name), _| {
+                Row::pack_slice(&[
+                    Datum::UInt64(u64::cast_from(*id)),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                    Datum::String(name),
+                ])
+            });
+        let channels = channels
+            .as_collection()
+            .arrange_core::<_, RowSpine<_, _, _, _>>(
+                Exchange::new(move |_| u64::cast_from(worker_id)),
+                "PreArrange Timely operates",
+            )
+            .as_collection(move |datum, ()| {
+                let (source_node, source_port) = datum.source;
+                let (target_node, target_port) = datum.target;
+                Row::pack_slice(&[
+                    Datum::UInt64(u64::cast_from(datum.id)),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                    Datum::UInt64(u64::cast_from(source_node)),
+                    Datum::UInt64(u64::cast_from(source_port)),
+                    Datum::UInt64(u64::cast_from(target_node)),
+                    Datum::UInt64(u64::cast_from(target_port)),
+                ])
+            });
+        let addresses = addresses
+            .as_collection()
+            .arrange_core::<_, RowSpine<_, _, _, _>>(
+                Exchange::new(move |_| u64::cast_from(worker_id)),
+                "PreArrange Timely addresses",
+            )
+            .as_collection(move |(id, address), _| create_address_row(*id, address, worker_id));
+        let parks = parks
+            .as_collection()
+            .arrange_core::<_, RowSpine<_, _, _, _>>(
+                Exchange::new(move |_| u64::cast_from(worker_id)),
+                "PreArrange Timely parks",
+            )
+            .as_collection(move |datum, ()| {
+                Row::pack_slice(&[
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                    Datum::UInt64(u64::try_from(datum.duration_pow).expect("duration too big")),
+                    datum
+                        .requested_pow
+                        .map(|v| Datum::UInt64(v.try_into().expect("requested too big")))
+                        .unwrap_or(Datum::Null),
+                ])
+            });
+        let messages_sent = messages_sent
+            .as_collection()
+            .arrange_core::<_, RowSpine<_, _, _, _>>(
+                Exchange::new(move |_| u64::cast_from(worker_id)),
+                "PreArrange Timely messages sent",
+            )
+            .as_collection(move |datum, ()| {
+                Row::pack_slice(&[
+                    Datum::UInt64(u64::cast_from(datum.channel)),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                    Datum::UInt64(u64::cast_from(datum.worker)),
+                ])
+            });
+        let messages_received = messages_received
+            .as_collection()
+            .arrange_core::<_, RowSpine<_, _, _, _>>(
+                Exchange::new(move |_| u64::cast_from(worker_id)),
+                "PreArrange Timely messages received",
+            )
+            .as_collection(move |datum, ()| {
+                Row::pack_slice(&[
+                    Datum::UInt64(u64::cast_from(datum.channel)),
+                    Datum::UInt64(u64::cast_from(datum.worker)),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                ])
+            });
         let elapsed = schedules_duration
             .as_collection()
             .arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(|(((_, w), ()), _, _)| u64::cast_from(*w)),
+                Exchange::new(move |_| u64::cast_from(worker_id)),
                 "PreArrange Timely duration",
             )
-            .as_collection(|(op, worker), _| {
+            .as_collection(move |operator, _| {
                 Row::pack_slice(&[
-                    Datum::UInt64(u64::cast_from(*op)),
-                    Datum::UInt64(u64::cast_from(*worker)),
+                    Datum::UInt64(u64::cast_from(*operator)),
+                    Datum::UInt64(u64::cast_from(worker_id)),
                 ])
             });
-
-        // Accumulate histograms of execution times for each operator.
         let histogram = schedules_histogram
             .as_collection()
             .arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(|(((_, w, _), ()), _, _)| u64::cast_from(*w)),
+                Exchange::new(move |_| u64::cast_from(worker_id)),
                 "PreArrange Timely histogram",
             )
-            .as_collection(|(op, worker, pow), _| {
+            .as_collection(move |datum, _| {
                 let row = Row::pack_slice(&[
-                    Datum::UInt64(u64::cast_from(*op)),
-                    Datum::UInt64(u64::cast_from(*worker)),
-                    Datum::UInt64(u64::try_from(*pow).expect("pow too big")),
+                    Datum::UInt64(u64::cast_from(datum.operator)),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                    Datum::UInt64(u64::try_from(datum.duration_pow).expect("duration too big")),
                 ]);
                 row
             });
 
-        let operates = operates
-            .as_collection()
-            .arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(|((((_, w), _), ()), _, _)| u64::cast_from(*w)),
-                "PreArrange Timely operates",
-            )
-            .as_collection(move |((id, worker), name), _| {
-                Row::pack_slice(&[
-                    Datum::UInt64(u64::cast_from(*id)),
-                    Datum::UInt64(u64::cast_from(*worker)),
-                    Datum::String(name),
-                ])
-            });
-
-        let addresses = addresses
-            .as_collection()
-            .arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(|(((_, w, _), ()), _, _)| u64::cast_from(*w)),
-                "PreArrange Timely addresses",
-            )
-            .as_collection(|(event_id, worker, addr), _| {
-                create_address_row(*event_id, *worker, addr)
-            });
-
-        let parks = parks
-            .as_collection()
-            .arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(|(((w, _, _), ()), _, _)| u64::cast_from(*w)),
-                "PreArrange Timely parks",
-            )
-            .as_collection(|(worker, duration_ns, requested), ()| {
-                Row::pack_slice(&[
-                    Datum::UInt64(u64::cast_from(*worker)),
-                    Datum::UInt64(u64::try_from(*duration_ns).expect("pow too big")),
-                    requested
-                        .map(|requested| {
-                            Datum::UInt64(requested.try_into().expect("requested too big"))
-                        })
-                        .unwrap_or(Datum::Null),
-                ])
-            });
-
-        let messages_received = messages_received
-            .as_collection()
-            .arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(|((((_, w), _), ()), _, _)| u64::cast_from(*w)),
-                "PreArrange Timely messages received",
-            )
-            .as_collection(move |((channel, target), source), ()| {
-                Row::pack_slice(&[
-                    Datum::UInt64(u64::cast_from(*channel)),
-                    Datum::UInt64(u64::cast_from(*source)),
-                    Datum::UInt64(u64::cast_from(*target)),
-                ])
-            });
-
-        let messages_sent = messages_sent
-            .as_collection()
-            .arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(|((((_, w), _), ()), _, _)| u64::cast_from(*w)),
-                "PreArrange Timely messages sent",
-            )
-            .as_collection(move |((channel, source), target), ()| {
-                Row::pack_slice(&[
-                    Datum::UInt64(u64::cast_from(*channel)),
-                    Datum::UInt64(u64::cast_from(*source)),
-                    Datum::UInt64(u64::cast_from(*target)),
-                ])
-            });
-
-        let channels = channels
-            .as_collection()
-            .arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(|((((_, w), _, _, _, _), ()), _, _)| u64::cast_from(*w)),
-                "PreArrange Timely operates",
-            )
-            .as_collection(
-                move |((id, worker), source_node, source_port, target_node, target_port), ()| {
-                    Row::pack_slice(&[
-                        Datum::UInt64(u64::cast_from(*id)),
-                        Datum::UInt64(u64::cast_from(*worker)),
-                        Datum::UInt64(u64::cast_from(*source_node)),
-                        Datum::UInt64(u64::cast_from(*source_port)),
-                        Datum::UInt64(u64::cast_from(*target_node)),
-                        Datum::UInt64(u64::cast_from(*target_port)),
-                    ])
-                },
-            );
-
-        // Restrict results by those logs that are meant to be active.
-        let logs = vec![
+        let logs = [
             (LogVariant::Timely(TimelyLog::Operates), operates),
             (LogVariant::Timely(TimelyLog::Channels), channels),
             (LogVariant::Timely(TimelyLog::Elapsed), elapsed),
@@ -459,7 +262,8 @@ pub fn construct<A: Allocate>(
             ),
         ];
 
-        let mut result = BTreeMap::new();
+        // Build the output arrangements.
+        let mut traces = BTreeMap::new();
         for (variant, collection) in logs {
             if config.index_logs.contains_key(&variant) {
                 let key = variant.index_by();
@@ -470,37 +274,35 @@ pub fn construct<A: Allocate>(
                         .collect::<Vec<_>>(),
                     variant.desc().arity(),
                 );
-                let rows = collection.map({
-                    let mut row_buf = Row::default();
-                    let mut datums = DatumVec::new();
-                    move |row| {
-                        let datums = datums.borrow_with(&row);
-                        row_buf.packer().extend(key.iter().map(|k| datums[*k]));
-                        let row_key = row_buf.clone();
-                        row_buf.packer().extend(value.iter().map(|k| datums[*k]));
-                        let row_val = row_buf.clone();
-                        (row_key, row_val)
-                    }
-                });
-
-                let trace = rows
+                let trace = collection
+                    .map({
+                        let mut row_buf = Row::default();
+                        let mut datums = DatumVec::new();
+                        move |row| {
+                            let datums = datums.borrow_with(&row);
+                            row_buf.packer().extend(key.iter().map(|k| datums[*k]));
+                            let row_key = row_buf.clone();
+                            row_buf.packer().extend(value.iter().map(|k| datums[*k]));
+                            let row_val = row_buf.clone();
+                            (row_key, row_val)
+                        }
+                    })
                     .arrange_named::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
                     .trace;
-                result.insert(variant.clone(), (trace, Rc::clone(&token)));
+                traces.insert(variant.clone(), (trace, Rc::clone(&token)));
             }
         }
-        result
-    });
 
-    traces
+        traces
+    })
 }
 
-fn create_address_row(id: usize, worker: WorkerIdentifier, address: &[usize]) -> Row {
+fn create_address_row(id: usize, address: &[usize], worker_id: usize) -> Row {
     let id_datum = Datum::UInt64(u64::cast_from(id));
-    let worker_datum = Datum::UInt64(u64::cast_from(worker));
-    // we're collecting into a Vec because we need to iterate over the Datums
+    let worker_datum = Datum::UInt64(u64::cast_from(worker_id));
+    // We're collecting into a Vec because we need to iterate over the Datums
     // twice: once for determining the size of the row, then again for pushing
-    // them
+    // them.
     let address_datums: Vec<_> = address
         .iter()
         .map(|i| Datum::UInt64(u64::cast_from(*i)))
@@ -516,4 +318,379 @@ fn create_address_row(id: usize, worker: WorkerIdentifier, address: &[usize]) ->
     packer.push_list(address_datums);
 
     address_row
+}
+
+/// State maintained by the demux operator.
+#[derive(Default)]
+struct DemuxState {
+    /// Information about live operators, indexed by operator ID.
+    operators: BTreeMap<usize, OperatesEvent>,
+    /// Maps dataflow IDs to channels in the dataflow.
+    dataflow_channels: BTreeMap<usize, Vec<ChannelsEvent>>,
+    /// Information about the last requested park.
+    last_park: Option<Park>,
+    /// Maps channel IDs to vectors counting the messages sent to each target worker.
+    messages_sent: BTreeMap<usize, Vec<i64>>,
+    /// Maps channel IDs to vectors counting the messages received from each source worker.
+    messages_received: BTreeMap<usize, Vec<i64>>,
+    /// Stores for scheduled operators the time when they were scheduled.
+    schedule_starts: BTreeMap<usize, u128>,
+    /// Maps operator IDs to a vector recording the (count, elapsed_ns) values in each histogram
+    /// bucket.
+    schedules_data: BTreeMap<usize, Vec<(isize, i64)>>,
+}
+
+struct Park {
+    /// Time when the park occurred.
+    time_ns: u128,
+    /// Requested park time.
+    requested: Option<Duration>,
+}
+
+type Pusher<D> = Tee<Timestamp, (D, Timestamp, Diff)>;
+type OutputBuffer<'a, 'b, D> = ConsolidateBuffer<'a, 'b, Timestamp, D, Diff, Pusher<D>>;
+
+/// Bundled output buffers used by the demux operator.
+//
+// We use tuples rather than dedicated `*Datum` structs for `operates` and `addresses` to avoid
+// having to manually implement `Columnation`. If `Columnation` could be `#[derive]`ed, that
+// wouldn't be an issue.
+struct DemuxOutput<'a, 'b> {
+    operates: OutputBuffer<'a, 'b, (usize, String)>,
+    channels: OutputBuffer<'a, 'b, ChannelDatum>,
+    addresses: OutputBuffer<'a, 'b, (usize, Vec<usize>)>,
+    parks: OutputBuffer<'a, 'b, ParkDatum>,
+    messages_sent: OutputBuffer<'a, 'b, MessageDatum>,
+    messages_received: OutputBuffer<'a, 'b, MessageDatum>,
+    schedules_duration: OutputBuffer<'a, 'b, usize>,
+    schedules_histogram: OutputBuffer<'a, 'b, ScheduleHistogramDatum>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+struct ChannelDatum {
+    id: usize,
+    source: (usize, usize),
+    target: (usize, usize),
+}
+
+impl Columnation for ChannelDatum {
+    type InnerRegion = CloneRegion<Self>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+struct ParkDatum {
+    duration_pow: u128,
+    requested_pow: Option<u128>,
+}
+
+impl Columnation for ParkDatum {
+    type InnerRegion = CloneRegion<Self>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+struct MessageDatum {
+    channel: usize,
+    worker: usize,
+}
+
+impl Columnation for MessageDatum {
+    type InnerRegion = CloneRegion<Self>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+struct ScheduleHistogramDatum {
+    operator: usize,
+    duration_pow: u128,
+}
+
+impl Columnation for ScheduleHistogramDatum {
+    type InnerRegion = CloneRegion<Self>;
+}
+
+/// Event handler of the demux operator.
+struct DemuxHandler<'a, 'b, 'c> {
+    /// State kept by the demux operator.
+    state: &'a mut DemuxState,
+    /// Demux output buffers.
+    output: &'a mut DemuxOutput<'b, 'c>,
+    /// The logging interval specifying the time granularity for the updates.
+    logging_interval_ms: u128,
+    /// The number of timely workers.
+    peers: usize,
+    /// The current event time.
+    time: Duration,
+    /// A capability usable for emitting outputs.
+    cap: &'a InputCapability<Timestamp>,
+}
+
+impl DemuxHandler<'_, '_, '_> {
+    /// Return the timestamp associated with the current event, based on the event time and the
+    /// logging interval.
+    fn ts(&self) -> Timestamp {
+        let time_ms = self.time.as_millis();
+        let interval = self.logging_interval_ms;
+        let rounded = (time_ms / interval + 1) * interval;
+        rounded.try_into().expect("must fit")
+    }
+
+    /// Handle the given timely event.
+    fn handle(&mut self, event: TimelyEvent) {
+        use TimelyEvent::*;
+
+        match event {
+            Operates(e) => self.handle_operates(e),
+            Channels(e) => self.handle_channels(e),
+            Shutdown(e) => self.handle_shutdown(e),
+            Park(e) => self.handle_park(e),
+            Messages(e) => self.handle_messages(e),
+            Schedule(e) => self.handle_schedule(e),
+            _ => (),
+        }
+    }
+
+    fn handle_operates(&mut self, event: OperatesEvent) {
+        let ts = self.ts();
+        let datum = (event.id, event.name.clone());
+        self.output.operates.give(self.cap, (datum, ts, 1));
+
+        let datum = (event.id, event.addr.clone());
+        self.output.addresses.give(self.cap, (datum, ts, 1));
+
+        self.state.operators.insert(event.id, event);
+    }
+
+    fn handle_channels(&mut self, event: ChannelsEvent) {
+        let ts = self.ts();
+        let datum = ChannelDatum {
+            id: event.id,
+            source: event.source,
+            target: event.target,
+        };
+        self.output.channels.give(self.cap, (datum, ts, 1));
+
+        let datum = (event.id, event.scope_addr.clone());
+        self.output.addresses.give(self.cap, (datum, ts, 1));
+
+        let dataflow_id = event.scope_addr[0];
+        self.state
+            .dataflow_channels
+            .entry(dataflow_id)
+            .or_default()
+            .push(event);
+    }
+
+    fn handle_shutdown(&mut self, event: ShutdownEvent) {
+        // Dropped operators should result in a negative record for
+        // the `operates` collection, cancelling out the initial
+        // operator announcement.
+        // Remove logging for this operator.
+
+        let Some(operator) = self.state.operators.remove(&event.id) else {
+            error!(operator_id = ?event.id, "missing operator entry at time of shutdown");
+            return;
+        };
+
+        // Retract operator information.
+        let ts = self.ts();
+        let datum = (operator.id, operator.name);
+        self.output.operates.give(self.cap, (datum, ts, -1));
+
+        // Retract schedules information for the operator
+        if let Some(schedules) = self.state.schedules_data.remove(&event.id) {
+            for (bucket, (count, elapsed_ns)) in schedules
+                .into_iter()
+                .enumerate()
+                .filter(|(_, (count, _))| *count != 0)
+            {
+                self.output
+                    .schedules_duration
+                    .give(self.cap, (event.id, ts, -elapsed_ns));
+
+                let datum = ScheduleHistogramDatum {
+                    operator: event.id,
+                    duration_pow: 1 << bucket,
+                };
+                let diff = Diff::cast_from(-count);
+                self.output
+                    .schedules_histogram
+                    .give(self.cap, (datum, ts, diff));
+            }
+        }
+
+        if operator.addr.len() == 1 {
+            let dataflow_id = operator.addr[0];
+            self.handle_dataflow_shutdown(dataflow_id);
+        }
+
+        let datum = (operator.id, operator.addr);
+        self.output.addresses.give(self.cap, (datum, ts, -1));
+    }
+
+    fn handle_dataflow_shutdown(&mut self, dataflow_id: usize) {
+        // When a dataflow shuts down, we need to retract all its channels.
+
+        let Some(channels) = self.state.dataflow_channels.remove(&dataflow_id) else {
+            return;
+        };
+
+        let ts = self.ts();
+        for channel in channels {
+            // Retract channel description.
+            let datum = ChannelDatum {
+                id: channel.id,
+                source: channel.source,
+                target: channel.target,
+            };
+            self.output.channels.give(self.cap, (datum, ts, -1));
+
+            let datum = (channel.id, channel.scope_addr);
+            self.output.addresses.give(self.cap, (datum, ts, -1));
+
+            // Retract messages logged for this channel.
+            if let Some(sent) = self.state.messages_sent.remove(&channel.id) {
+                for (target_worker, count) in sent.iter().enumerate() {
+                    let datum = MessageDatum {
+                        channel: channel.id,
+                        worker: target_worker,
+                    };
+                    self.output
+                        .messages_sent
+                        .give(self.cap, (datum, ts, -count));
+                }
+            }
+            if let Some(received) = self.state.messages_received.remove(&channel.id) {
+                for (source_worker, count) in received.iter().enumerate() {
+                    let datum = MessageDatum {
+                        channel: channel.id,
+                        worker: source_worker,
+                    };
+                    self.output
+                        .messages_received
+                        .give(self.cap, (datum, ts, -count));
+                }
+            }
+        }
+    }
+
+    fn handle_park(&mut self, event: ParkEvent) {
+        let time_ns = self.time.as_nanos();
+        match event {
+            ParkEvent::Park(requested) => {
+                let park = Park { time_ns, requested };
+                let existing = self.state.last_park.replace(park);
+                if existing.is_some() {
+                    error!("park without a succeeding unpark");
+                }
+            }
+            ParkEvent::Unpark => {
+                let Some(park) = self.state.last_park.take() else {
+                    error!("unpark without a preceeding park");
+                    return;
+                };
+
+                let duration_ns = time_ns - park.time_ns;
+                let duration_pow = duration_ns.next_power_of_two();
+                let requested_pow = park.requested.map(|r| r.as_nanos().next_power_of_two());
+
+                let ts = self.ts();
+                let datum = ParkDatum {
+                    duration_pow,
+                    requested_pow,
+                };
+                self.output.parks.give(self.cap, (datum, ts, 1));
+            }
+        }
+    }
+
+    fn handle_messages(&mut self, event: MessagesEvent) {
+        let ts = self.ts();
+        let count = Diff::try_from(event.length).expect("must fit");
+
+        if event.is_send {
+            let datum = MessageDatum {
+                channel: event.channel,
+                worker: event.target,
+            };
+            self.output.messages_sent.give(self.cap, (datum, ts, count));
+
+            let sent_counts = self
+                .state
+                .messages_sent
+                .entry(event.channel)
+                .or_insert_with(|| vec![0; self.peers]);
+            sent_counts[event.target] += count;
+        } else {
+            let datum = MessageDatum {
+                channel: event.channel,
+                worker: event.source,
+            };
+            self.output
+                .messages_received
+                .give(self.cap, (datum, ts, count));
+
+            let received_counts = self
+                .state
+                .messages_received
+                .entry(event.channel)
+                .or_insert_with(|| vec![0; self.peers]);
+            received_counts[event.source] += count;
+        }
+    }
+
+    fn handle_schedule(&mut self, event: ScheduleEvent) {
+        let time_ns = self.time.as_nanos();
+
+        match event.start_stop {
+            timely::logging::StartStop::Start => {
+                let existing = self.state.schedule_starts.insert(event.id, time_ns);
+                if existing.is_some() {
+                    error!(operator_id = ?event.id, "schedule start without succeeding stop");
+                }
+            }
+            timely::logging::StartStop::Stop => {
+                let Some(start_time) = self.state.schedule_starts.remove(&event.id) else {
+                    error!(operator_id = ?event.id, "schedule stop without preceeding start");
+                    return;
+                };
+
+                let elapsed_ns = time_ns - start_time;
+                let elapsed_diff = Diff::try_from(elapsed_ns).expect("must fit");
+                let elapsed_pow = elapsed_ns.next_power_of_two();
+
+                let ts = self.ts();
+                let datum = event.id;
+                self.output
+                    .schedules_duration
+                    .give(self.cap, (datum, ts, elapsed_diff));
+
+                let datum = ScheduleHistogramDatum {
+                    operator: event.id,
+                    duration_pow: elapsed_pow,
+                };
+                self.output
+                    .schedules_histogram
+                    .give(self.cap, (datum, ts, 1));
+
+                // Record count and elapsed time for later retraction.
+                let index = usize::cast_from(elapsed_pow.trailing_zeros());
+                let data = self.state.schedules_data.entry(event.id).or_default();
+                grow_vec(data, index);
+                let (count, duration) = &mut data[index];
+                *count += 1;
+                *duration += elapsed_diff;
+            }
+        }
+    }
+}
+
+/// Grow the given vector so it fits the given index.
+///
+/// This does nothing if the vector is already large enough.
+fn grow_vec<T>(vec: &mut Vec<T>, index: usize)
+where
+    T: Clone + Default,
+{
+    if vec.len() <= index {
+        vec.resize(index + 1, Default::default());
+    }
 }

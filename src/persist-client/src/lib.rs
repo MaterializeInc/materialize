@@ -100,6 +100,7 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::async_runtime::CpuHeavyRuntime;
+use crate::cache::StateCache;
 use crate::cfg::PersistConfig;
 use crate::critical::{CriticalReaderId, SinceHandle};
 use crate::error::InvalidUsage;
@@ -252,6 +253,7 @@ pub struct PersistClient {
     consensus: Arc<dyn Consensus + Send + Sync>,
     metrics: Arc<Metrics>,
     cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+    shared_states: Arc<StateCache>,
 }
 
 impl PersistClient {
@@ -266,6 +268,7 @@ impl PersistClient {
         consensus: Arc<dyn Consensus + Send + Sync>,
         metrics: Arc<Metrics>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+        shared_states: Arc<StateCache>,
     ) -> Result<Self, ExternalError> {
         // TODO: Verify somehow that blob matches consensus to prevent
         // accidental misuse.
@@ -275,6 +278,7 @@ impl PersistClient {
             consensus,
             metrics,
             cpu_heavy_runtime,
+            shared_states,
         })
     }
 
@@ -355,6 +359,7 @@ impl PersistClient {
             shard_id,
             Arc::clone(&self.metrics),
             Arc::new(state_versions),
+            &self.shared_states,
         )
         .await?;
         let gc = GarbageCollector::new(machine.clone());
@@ -507,6 +512,7 @@ impl PersistClient {
             shard_id,
             Arc::clone(&self.metrics),
             Arc::new(state_versions),
+            &self.shared_states,
         )
         .await?;
         let gc = GarbageCollector::new(machine.clone());
@@ -559,6 +565,7 @@ impl PersistClient {
             shard_id,
             Arc::clone(&self.metrics),
             Arc::new(state_versions),
+            &self.shared_states,
         )
         .await?;
         let gc = GarbageCollector::new(machine.clone());
@@ -648,6 +655,7 @@ mod tests {
     use std::time::Duration;
 
     use differential_dataflow::consolidation::consolidate_updates;
+    use differential_dataflow::lattice::Lattice;
     use futures_task::noop_waker;
     use mz_ore::future::OreFutureExt;
     use mz_ore::now::NowFn;
@@ -656,9 +664,11 @@ mod tests {
     use mz_persist_types::codec_impls::{StringSchema, VecU8Schema};
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
+    use serde::{Deserialize, Serialize};
     use serde_json::json;
+    use timely::order::{PartialOrder, Product};
+    use timely::progress::timestamp::PathSummary;
     use timely::progress::Antichain;
-    use timely::PartialOrder;
     use tokio::task::JoinHandle;
 
     use crate::cache::PersistClientCache;
@@ -667,6 +677,68 @@ mod tests {
     use crate::read::ListenEvent;
 
     use super::*;
+
+    /// A product type that fits in Codec64. Used to test persist on partial orders
+    #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+    pub(crate) struct CodecProduct(Product<u32, u32>);
+
+    impl CodecProduct {
+        pub(crate) fn new(outer: u32, inner: u32) -> Self {
+            Self(Product::new(outer, inner))
+        }
+    }
+
+    impl Timestamp for CodecProduct {
+        type Summary = <Product<u32, u32> as Timestamp>::Summary;
+
+        fn minimum() -> Self {
+            Self(Product::minimum())
+        }
+    }
+
+    impl PathSummary<CodecProduct> for <Product<u32, u32> as Timestamp>::Summary {
+        fn results_in(&self, src: &CodecProduct) -> Option<CodecProduct> {
+            self.results_in(&src.0).map(CodecProduct)
+        }
+
+        fn followed_by(&self, other: &Self) -> Option<Self> {
+            PathSummary::<Product<u32, u32>>::followed_by(self, other)
+        }
+    }
+
+    impl PartialOrder for CodecProduct {
+        fn less_equal(&self, other: &Self) -> bool {
+            self.0.less_equal(&other.0)
+        }
+    }
+
+    impl Codec64 for CodecProduct {
+        fn codec_name() -> String {
+            "CodecProduct".to_owned()
+        }
+
+        fn encode(&self) -> [u8; 8] {
+            let [a, b, c, d] = u32::to_le_bytes(self.0.outer);
+            let [e, f, g, h] = u32::to_le_bytes(self.0.inner);
+            [a, b, c, d, e, f, g, h]
+        }
+
+        fn decode([a, b, c, d, e, f, g, h]: [u8; 8]) -> Self {
+            let outer = u32::from_le_bytes([a, b, c, d]);
+            let inner = u32::from_le_bytes([e, f, g, h]);
+            Self(Product::new(outer, inner))
+        }
+    }
+
+    impl Lattice for CodecProduct {
+        fn join(&self, other: &Self) -> Self {
+            Self(self.0.join(&other.0))
+        }
+
+        fn meet(&self, other: &Self) -> Self {
+            Self(self.0.meet(&other.0))
+        }
+    }
 
     pub fn new_test_client_cache() -> PersistClientCache {
         // Configure an aggressively small blob_target_size so we get some
@@ -864,7 +936,7 @@ mod tests {
         let shard_id0 = "s00000000-0000-0000-0000-000000000000"
             .parse::<ShardId>()
             .expect("invalid shard id");
-        let client = new_test_client().await;
+        let mut client = new_test_client().await;
 
         let (mut write0, mut read0) = client
             .expect_open::<String, String, u64, i64>(shard_id0)
@@ -883,6 +955,7 @@ mod tests {
                 (k.to_owned(), v.to_owned(), t.to_owned(), d.to_owned(), None)
             }
 
+            client.shared_states = Arc::new(StateCache::default());
             assert_eq!(
                 client
                     .open::<Vec<u8>, String, u64, i64>(
@@ -1030,7 +1103,7 @@ mod tests {
                     .await
                     .unwrap_err(),
                 InvalidUsage::UpdateBeyondUpper {
-                    max_ts: 3,
+                    ts: 3,
                     expected_upper: Antichain::from_elem(3),
                 },
             );

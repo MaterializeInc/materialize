@@ -13,27 +13,16 @@ This page describes several SQL queries you can run to diagnose performance
 issues with Materialize.
 
 {{< warning >}}
-The introspection sources and views used in the queries below are subject to
-future changes without notice.
+The queries below reference [introspection relations](/sql/system-catalog/mz_internal/#replica-introspection-relations), which are subject to future changes without notice.
 
-This is why these sources and views are all created in the `mz_internal` schema,
-and why it is not possible to create higher-level views depending on them.
+Due to the potential changes in introspection relations all relations below are created in the `mz_internal` schema, and it is not possible to create higher-level views dependent on them.
 {{< /warning >}}
 
 ## Limitations
 
-Introspection sources are maintained by independently collecting internal logging
-information within each of the replicas of a cluster. Thus, in a multi-replica
-cluster, the queries below need to be directed to a specific replica by issuing
-the command `SET cluster_replica = <replica_name>`. Note that once this command
-is issued, all subsequent `SELECT` queries, for introspection sources or not, will
-be directed to the targeted replica. The latter selection can be cancelled by
-issuing the command `RESET cluster_replica`.
-
-As a consequence of the above, you should expect the answers to the queries below
-to vary dependending on which cluster you are working in. In particular, indexes
-and dataflows are local to a cluster, so their introspection information will
-vary across clusters.
+The contents of introspection relations differ depending on the selected cluster and replica.
+As a consequence, you should expect the answers to the queries below to vary depending on which cluster you are working in.
+In particular, indexes and dataflows are local to a cluster, so their introspection information will vary across clusters.
 
 <!--
 [//]: # "TODO(joacoc) We should share ways for the user to diagnose and troubleshoot if and how fast a source is consuming."
@@ -47,30 +36,24 @@ results than you expect, you can identify which operators
 take the largest total amount of time.
 
 ```sql
--- Extract raw elapsed time information, by worker
-SELECT mdo.id, mdo.name, mdo.worker_id, mse.elapsed_ns
+-- Extract raw elapsed time information, summed across workers
+SELECT mdo.id, mdo.name, mse.elapsed_ns
 FROM mz_internal.mz_scheduling_elapsed AS mse,
      mz_internal.mz_dataflow_operators AS mdo
-WHERE
-    mse.id = mdo.id AND
-    mse.worker_id = mdo.worker_id
+WHERE mse.id = mdo.id
 ORDER BY elapsed_ns DESC;
 ```
 
 ```sql
--- Extract raw elapsed time information, summed across workers
-SELECT mdo.id, mdo.name, sum(mse.elapsed_ns) AS elapsed_ns
-FROM mz_internal.mz_scheduling_elapsed AS mse,
+-- Extract raw elapsed time information, by worker
+SELECT mdo.id, mdo.name, mse.worker_id, mse.elapsed_ns
+FROM mz_internal.mz_scheduling_elapsed_per_worker AS mse,
      mz_internal.mz_dataflow_operators AS mdo
-WHERE
-    mse.id = mdo.id AND
-    mse.worker_id = mdo.worker_id
-GROUP BY mdo.id, mdo.name
+WHERE mse.id = mdo.id
 ORDER BY elapsed_ns DESC;
 ```
 
-<!-- mz_raw_compute_operator_durations is not available yet. -->
-<!-- ### Why is Materialize unresponsive for seconds at a time?
+## Why is Materialize unresponsive for seconds at a time?
 
 Materialize operators get scheduled and try to
 behave themselves by returning control promptly, but
@@ -81,32 +64,27 @@ that took roughly that amount of time before it yielded,
 and incriminate the subject.
 
 ```sql
--- Extract raw scheduling histogram information, by worker.
-SELECT mdo.id, mdo.name, mdo.worker_id, mrcod.duration_ns, count
-FROM mz_internal.mz_raw_compute_operator_durations AS mrcod,
+-- Extract raw scheduling histogram information, summed across workers.
+SELECT mdo.id, mdo.name, mcodh.duration_ns, mcodh.count
+FROM mz_internal.mz_compute_operator_durations_histogram AS mcodh,
      mz_internal.mz_dataflow_operators AS mdo
-WHERE
-    mrcod.id = mdo.id AND
-    mrcod.worker_id = mdo.worker_id
-ORDER BY mrcod.duration_ns DESC;
+WHERE mcodh.id = mdo.id
+ORDER BY mcodh.duration_ns DESC;
 ```
 
 ```sql
--- Extract raw scheduling histogram information, summed across workers.
-SELECT mdo.id, mdo.name, mrcod.duration_ns, sum(mrcod.count) count
-FROM mz_internal.mz_raw_compute_operator_durations AS mrcod,
+-- Extract raw scheduling histogram information, by worker.
+SELECT mdo.id, mdo.name, mcodh.worker_id, mcodh.duration_ns, mcodh.count
+FROM mz_internal.mz_compute_operator_durations_histogram_per_worker AS mcodh,
      mz_internal.mz_dataflow_operators AS mdo
-WHERE
-    mrcod.id = mdo.id AND
-    mrcod.worker_id = mdo.worker_id
-GROUP BY mdo.id, mdo.name, mrcod.duration_ns
-ORDER BY mrcod.duration_ns DESC;
-``` -->
+WHERE mcodh.id = mdo.id
+ORDER BY mcodh.duration_ns DESC;
+```
 
 ## Why is Materialize using so much memory?
 
-The majority of Materialize's memory use is taken up by "arrangements", which
-are differential dataflow structures that maintain indexes for data
+Differential data flow structures called [arrangements](/overview/arrangements)
+take up most of Materialize's memory use. Arrangements maintain indexes for data
 as it changes. These queries extract the numbers of records and
 batches backing each of the arrangements. The reported records may
 exceed the number of logical records; the report reflects the uncompacted
@@ -114,26 +92,21 @@ state. The number of batches should be logarithmic-ish in this
 number, and anything significantly larger is probably a bug.
 
 ```sql
--- Extract arrangement records and batches, by worker.
-SELECT mdo.id, mdo.name, mdo.worker_id, mas.records, mas.batches
+-- Extract arrangement records and batches, summed across workers.
+SELECT mdo.id, mdo.name, mas.records, mas.batches
 FROM mz_internal.mz_arrangement_sizes AS mas,
      mz_internal.mz_dataflow_operators AS mdo
-WHERE
-    mas.operator_id = mdo.id AND
-    mas.worker_id = mdo.worker_id
+WHERE mas.operator_id = mdo.id
 ORDER BY mas.records DESC;
 ```
 
 ```sql
--- Extract arrangement records and batches, summed across workers.
-SELECT mdo.id, mdo.name, sum(mas.records) AS records, sum(mas.batches) AS batches
-FROM mz_internal.mz_arrangement_sizes AS mas,
+-- Extract arrangement records and batches, by worker.
+SELECT mdo.id, mdo.name, mas.worker_id, mas.records, mas.batches
+FROM mz_internal.mz_arrangement_sizes_per_worker AS mas,
      mz_internal.mz_dataflow_operators AS mdo
-WHERE
-    mas.operator_id = mdo.id AND
-    mas.worker_id = mdo.worker_id
-GROUP BY mdo.id, mdo.name
-ORDER BY sum(mas.records) DESC;
+WHERE mas.operator_id = mdo.id
+ORDER BY mas.records DESC;
 ```
 
 We've also bundled an interactive, web-based memory usage visualization tool to
@@ -172,13 +145,13 @@ SELECT
     avg_ns,
     elapsed_ns/avg_ns AS ratio
 FROM
-    mz_internal.mz_scheduling_elapsed mse,
+    mz_internal.mz_scheduling_elapsed_per_worker mse,
     (
         SELECT
             id,
             avg(elapsed_ns) AS avg_ns
         FROM
-            mz_internal.mz_scheduling_elapsed
+            mz_internal.mz_scheduling_elapsed_per_worker
         GROUP BY
             id
     ) aebi,
@@ -186,8 +159,7 @@ FROM
 WHERE
     mse.id = aebi.id AND
     mse.elapsed_ns > 2 * aebi.avg_ns AND
-    mse.id = dod.id AND
-    mse.worker_id = dod.worker_id
+    mse.id = dod.id
 ORDER BY ratio DESC;
 ```
 
@@ -199,7 +171,7 @@ defined by positions `0..n-1`. The example SQL query and result below shows an
 operator whose `id` is 515 that belongs to "subregion 5 of region 1 of dataflow
 21".
 ```sql
-SELECT * FROM mz_internal.mz_dataflow_addresses WHERE id=515 AND worker_id=0;
+SELECT * FROM mz_internal.mz_dataflow_addresses WHERE id=515;
 ```
 ```
  id  | worker_id | address
@@ -233,14 +205,11 @@ FROM
     FROM
       mz_internal.mz_dataflow_addresses mda
     WHERE
-      mda.worker_id = 0
-      AND list_length(mda.address) = 1) dataflows
+      list_length(mda.address) = 1) dataflows
 WHERE
-    mda.worker_id = 0
-    AND mda.id = <problematic_operator_id>
+    mda.id = 515
     AND mda.address[1] = dataflows.dataflow_address
-    AND mdo.id = dataflows.dataflow_operator
-    AND mdo.worker_id = 0;
+    AND mdo.id = dataflows.dataflow_operator;
 ```
 
 ## How many `SUBSCRIBE` commands are running?
@@ -271,14 +240,14 @@ WITH subscriptions AS (
 ),
 -- Object dependency:
 first_level_dependencies AS (
-	SELECT name, dataflow, export_id, import_id, worker_id
-	FROM mz_internal.mz_worker_compute_dependencies D
+	SELECT name, dataflow, export_id, import_id
+	FROM mz_internal.mz_compute_dependencies D
 	JOIN subscriptions S ON (D.export_id = S.dataflow)
 ),
 -- Second-level object dependency. In case the first dependency is an index:
 second_level_dependencies AS (
-	SELECT name, dataflow, D.export_id, D.import_id, D.worker_id
-	FROM mz_internal.mz_worker_compute_dependencies D
+	SELECT name, dataflow, D.export_id, D.import_id
+	FROM mz_internal.mz_compute_dependencies D
 	JOIN first_level_dependencies F ON (F.import_id = D.export_id)
 ),
 -- All dependencies together but prioritizing second-level dependencies:
@@ -293,7 +262,7 @@ dependencies AS (
     )
 )
 -- Join the dependency id with the object name.
-SELECT DISTINCT
+SELECT
     D.export_id,
     D.import_id,
     D.name,
@@ -408,7 +377,7 @@ If your sink reports a status of `starting` for more than a few minutes,
 ## How do I monitor sink ingestion progress?
 
 Repeatedly query the
-[`mz_sink_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics)
+[`mz_sink_statistics`](/sql/system-catalog/mz_internal/#mz_sink_statistics)
 table and look for ingestion statistics that advance over time:
 
 ```sql

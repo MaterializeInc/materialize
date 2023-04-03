@@ -568,3 +568,182 @@ Explained Query:
       Get materialize.public.json_table // { arity: 1, types: "(jsonb?)" }
 
 EOF
+
+# WITH MUTUALLY RECURSIVE support
+# -------------------------------
+
+# Single binding, value knowledge
+query T multiline
+EXPLAIN WITH(arity, types)
+WITH MUTUALLY RECURSIVE
+  c0(f1 integer, f2 integer) AS (
+    SELECT * FROM (
+      SELECT * FROM t1
+      UNION
+      SELECT * FROM c0
+    ) WHERE f1 = 3 AND f2 = 5
+  )
+SELECT f1, f2, f1 + f2 FROM c0;
+----
+Explained Query:
+  Return // { arity: 3, types: "(integer, integer, integer)" }
+    Map (8) // { arity: 3, types: "(integer, integer, integer)" }
+      Get l0 // { arity: 2, types: "(integer, integer)" }
+  With Mutually Recursive
+    cte l0 =
+      Distinct group_by=[3, 5] // { arity: 2, types: "(integer, integer)" }
+        Union // { arity: 0, types: "()" }
+          Project () // { arity: 0, types: "()" }
+            Filter (#0 = 3) AND (#1 = 5) // { arity: 2, types: "(integer, integer)" }
+              Get materialize.public.t1 // { arity: 2, types: "(integer, integer?)" }
+          Project () // { arity: 0, types: "()" }
+            Get l0 // { arity: 2, types: "(integer?, integer?)" }
+
+Source materialize.public.t1
+  filter=((#0 = 3) AND (#1 = 5))
+
+EOF
+
+# Single binding, NOT NULL knowledge
+query T multiline
+EXPLAIN WITH(arity, types)
+WITH MUTUALLY RECURSIVE
+  c0(f1 integer, f2 integer) AS (
+    SELECT * FROM (
+      SELECT * FROM t1
+      UNION
+      SELECT * FROM c0
+    ) WHERE f1 IS NOT NULL AND f2 IS NOT NULL
+  )
+SELECT f1, f2, f1 IS NOT NULL, f2 IS NULL FROM c0;
+----
+Explained Query:
+  Return // { arity: 4, types: "(integer?, integer?, boolean, boolean)" }
+    Map (true, false) // { arity: 4, types: "(integer?, integer?, boolean, boolean)" }
+      Get l0 // { arity: 2, types: "(integer?, integer?)" }
+  With Mutually Recursive
+    cte l0 =
+      Distinct group_by=[#0, #1] // { arity: 2, types: "(integer?, integer?)" }
+        Union // { arity: 2, types: "(integer?, integer?)" }
+          Filter (#1) IS NOT NULL // { arity: 2, types: "(integer, integer)" }
+            Get materialize.public.t1 // { arity: 2, types: "(integer, integer?)" }
+          Get l0 // { arity: 2, types: "(integer?, integer?)" }
+
+Source materialize.public.t1
+  filter=((#1) IS NOT NULL)
+
+EOF
+
+# Single binding, NOT NULL knowledge inside a UNION branch
+query T multiline
+EXPLAIN WITH(arity, types)
+WITH MUTUALLY RECURSIVE
+  c0(f1 integer, f2 integer) AS (
+    SELECT * FROM (
+      SELECT * FROM t1
+      UNION
+      SELECT * FROM c0 WHERE f1 IS NOT NULL AND f2 IS NOT NULL
+    )
+  )
+SELECT f1, f2, f1 IS NOT NULL, f2 IS NULL FROM c0;
+----
+Explained Query:
+  Return // { arity: 4, types: "(integer?, integer?, boolean, boolean)" }
+    Map (true, (#1) IS NULL) // { arity: 4, types: "(integer?, integer?, boolean, boolean)" }
+      Get l0 // { arity: 2, types: "(integer?, integer?)" }
+  With Mutually Recursive
+    cte l0 =
+      Distinct group_by=[#0, #1] // { arity: 2, types: "(integer?, integer?)" }
+        Union // { arity: 2, types: "(integer?, integer?)" }
+          Get materialize.public.t1 // { arity: 2, types: "(integer, integer?)" }
+          Filter (#1) IS NOT NULL // { arity: 2, types: "(integer?, integer)" }
+            Get l0 // { arity: 2, types: "(integer?, integer?)" }
+
+EOF
+
+# Multiple bindings, value knowledge
+query T multiline
+EXPLAIN WITH(arity, types)
+WITH MUTUALLY RECURSIVE
+  it(count integer) AS (
+    SELECT 1 UNION SELECT * FROM it WHERE count = 1
+  ),
+  c0(count integer, f1 integer, f2 integer) AS (
+    SELECT * FROM (
+      SELECT count * 2, f1, f2 FROM it, t1
+      UNION
+      SELECT * FROM c0
+    )
+  )
+SELECT * FROM c0;
+----
+Explained Query:
+  Return // { arity: 3, types: "(integer, integer?, integer?)" }
+    Get l1 // { arity: 3, types: "(integer, integer?, integer?)" }
+  With Mutually Recursive
+    cte l1 =
+      Distinct group_by=[2, #0, #1] // { arity: 3, types: "(integer, integer?, integer?)" }
+        Union // { arity: 2, types: "(integer?, integer?)" }
+          CrossJoin type=differential // { arity: 2, types: "(integer, integer?)" }
+            ArrangeBy keys=[[]] // { arity: 0, types: "()" }
+              Project () // { arity: 0, types: "()" }
+                Get l0 // { arity: 1, types: "(integer)" }
+            ArrangeBy keys=[[]] // { arity: 2, types: "(integer, integer?)" }
+              Get materialize.public.t1 // { arity: 2, types: "(integer, integer?)" }
+          Project (#1, #2) // { arity: 2, types: "(integer?, integer?)" }
+            Get l1 // { arity: 3, types: "(integer?, integer?, integer?)" }
+    cte l0 =
+      Distinct group_by=[1] // { arity: 1, types: "(integer)" }
+        Union // { arity: 0, types: "()" }
+          Project () // { arity: 0, types: "()" }
+            Get l0 // { arity: 1, types: "(integer?)" }
+          Constant // { arity: 0, types: "()" }
+            - ()
+
+EOF
+
+
+# Multiple bindings, NOT NULL knowledge
+#
+# This is currently masked by identical work done by the "non_nullable"
+# transform. I had to swap the order of "non_nullable" and "column_knowledge" to
+# see this transform in action in https://optimizer-trace.dev.materialize.com/.
+query T multiline
+EXPLAIN WITH(arity, types)
+WITH MUTUALLY RECURSIVE
+  it(count integer) AS (
+    SELECT 1 UNION SELECT * FROM it WHERE count IS NOT NULL
+  ),
+  c0(count_is_null boolean, f1 integer, f2 integer) AS (
+    SELECT * FROM (
+      SELECT count IS NULL, f1, f2 FROM it, t1
+      UNION
+      SELECT * FROM c0
+    )
+  )
+SELECT * FROM c0;
+----
+Explained Query:
+  Return // { arity: 3, types: "(boolean, integer?, integer?)" }
+    Get l1 // { arity: 3, types: "(boolean, integer?, integer?)" }
+  With Mutually Recursive
+    cte l1 =
+      Distinct group_by=[false, #0, #1] // { arity: 3, types: "(boolean, integer?, integer?)" }
+        Union // { arity: 2, types: "(integer?, integer?)" }
+          CrossJoin type=differential // { arity: 2, types: "(integer, integer?)" }
+            ArrangeBy keys=[[]] // { arity: 0, types: "()" }
+              Project () // { arity: 0, types: "()" }
+                Get l0 // { arity: 1, types: "(integer)" }
+            ArrangeBy keys=[[]] // { arity: 2, types: "(integer, integer?)" }
+              Get materialize.public.t1 // { arity: 2, types: "(integer, integer?)" }
+          Project (#1, #2) // { arity: 2, types: "(integer?, integer?)" }
+            Get l1 // { arity: 3, types: "(boolean?, integer?, integer?)" }
+    cte l0 =
+      Distinct group_by=[1] // { arity: 1, types: "(integer)" }
+        Union // { arity: 0, types: "()" }
+          Project () // { arity: 0, types: "()" }
+            Get l0 // { arity: 1, types: "(integer?)" }
+          Constant // { arity: 0, types: "()" }
+            - ()
+
+EOF

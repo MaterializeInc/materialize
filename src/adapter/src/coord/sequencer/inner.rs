@@ -41,13 +41,16 @@ use mz_ore::task;
 use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
-use mz_sql::catalog::{CatalogCluster, CatalogError, CatalogItemType, CatalogTypeDetails};
+use mz_sql::catalog::{
+    CatalogCluster, CatalogDatabase, CatalogError, CatalogItemType, CatalogSchema,
+    CatalogTypeDetails,
+};
 use mz_sql::catalog::{CatalogItem as SqlCatalogItem, CatalogRole};
-use mz_sql::names::QualifiedObjectName;
+use mz_sql::names::{QualifiedObjectName, RoleId};
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
-    AlterOptionParameter, AlterRolePlan, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan,
-    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, CopyFormat,
+    AlterOptionParameter, AlterOwnerPlan, AlterRolePlan, AlterSecretPlan, AlterSinkPlan,
+    AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, CopyFormat,
     CreateClusterPlan, CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
     CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
@@ -69,7 +72,7 @@ use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
 
 use crate::catalog::{
-    self, Catalog, CatalogItem, Cluster, Connection, DataSourceDesc, SerializedReplicaLocation,
+    self, Catalog, CatalogItem, Cluster, Connection, DataSourceDesc, Op, SerializedReplicaLocation,
     StorageSinkConnectionState, LINKED_CLUSTER_REPLICA_NAME,
 };
 use crate::command::{ExecuteResponse, Response};
@@ -77,10 +80,11 @@ use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::dataflows::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{FastPathPlan, PlannedPeek};
+use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampSource};
 use crate::coord::{
-    peek, Coordinator, Message, PendingReadTxn, PendingTxn, RealTimeRecencyContext,
+    introspection, peek, Coordinator, Message, PendingReadTxn, PendingTxn, RealTimeRecencyContext,
     SinkConnectionReady, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
@@ -139,6 +143,7 @@ impl Coordinator {
                                 &plan.name,
                                 &plan.cluster_config,
                                 &mut ops,
+                                session,
                             )
                             .await?;
                         DataSourceDesc::Ingestion(catalog::Ingestion {
@@ -174,13 +179,14 @@ impl Coordinator {
                 timeline: plan.timeline,
                 depends_on,
                 custom_logical_compaction_window: None,
-                is_retained_metrics_relation: false,
+                is_retained_metrics_object: false,
             };
             ops.push(catalog::Op::CreateItem {
                 id: source_id,
                 oid: source_oid,
                 name: plan.name.clone(),
                 item: CatalogItem::Source(source.clone()),
+                owner_id: *session.role_id(),
             });
             sources.push((source_id, source));
         }
@@ -307,6 +313,7 @@ impl Coordinator {
                 connection: connection.clone(),
                 depends_on,
             }),
+            owner_id: *session.role_id(),
         }];
 
         match self.catalog_transact(Some(session), ops).await {
@@ -373,6 +380,7 @@ impl Coordinator {
             name: plan.name.clone(),
             oid: db_oid,
             public_schema_oid: schema_oid,
+            owner_id: *session.role_id(),
         }];
         match self.catalog_transact(Some(session), ops).await {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase),
@@ -398,6 +406,7 @@ impl Coordinator {
             database_id: plan.database_spec,
             schema_name: plan.schema_name.clone(),
             oid,
+            owner_id: *session.role_id(),
         };
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema),
@@ -470,6 +479,7 @@ impl Coordinator {
             name: name.clone(),
             linked_object_id: None,
             introspection_sources,
+            owner_id: *session.role_id(),
         }];
 
         let azs = self.catalog().state().availability_zones();
@@ -564,6 +574,7 @@ impl Coordinator {
                 id: self.catalog_mut().allocate_replica_id().await?,
                 name: replica_name.clone(),
                 config,
+                owner_id: *session.role_id(),
             });
         }
 
@@ -713,6 +724,7 @@ impl Coordinator {
             id,
             name: name.clone(),
             config,
+            owner_id: *session.role_id(),
         };
 
         self.catalog_transact(Some(session), vec![op]).await?;
@@ -765,7 +777,7 @@ impl Coordinator {
             conn_id,
             depends_on,
             custom_logical_compaction_window: None,
-            is_retained_metrics_relation: false,
+            is_retained_metrics_object: false,
         };
         let table_oid = self.catalog_mut().allocate_oid()?;
         let ops = vec![catalog::Op::CreateItem {
@@ -773,6 +785,7 @@ impl Coordinator {
             oid: table_oid,
             name: name.clone(),
             item: CatalogItem::Table(table.clone()),
+            owner_id: *session.role_id(),
         }];
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => {
@@ -851,6 +864,7 @@ impl Coordinator {
             oid,
             name: name.clone(),
             item: CatalogItem::Secret(secret.clone()),
+            owner_id: *session.role_id(),
         }];
 
         match self.catalog_transact(Some(session), ops).await {
@@ -899,7 +913,7 @@ impl Coordinator {
 
         let mut ops = vec![];
         let cluster_id = return_if_err!(
-            self.create_linked_cluster_ops(id, &name, &plan_cluster_config, &mut ops)
+            self.create_linked_cluster_ops(id, &name, &plan_cluster_config, &mut ops, &session)
                 .await,
             tx,
             session
@@ -933,6 +947,7 @@ impl Coordinator {
             oid,
             name: name.clone(),
             item: CatalogItem::Sink(catalog_sink.clone()),
+            owner_id: *session.role_id(),
         });
 
         let from = self.catalog().get_entry(&catalog_sink.from);
@@ -1120,6 +1135,7 @@ impl Coordinator {
             oid: view_oid,
             name: name.clone(),
             item: CatalogItem::View(view),
+            owner_id: *session.role_id(),
         });
 
         Ok(ops)
@@ -1211,6 +1227,7 @@ impl Coordinator {
                 depends_on,
                 cluster_id,
             }),
+            owner_id: *session.role_id(),
         });
 
         match self
@@ -1302,6 +1319,8 @@ impl Coordinator {
             conn_id: None,
             depends_on,
             cluster_id,
+            is_retained_metrics_object: false,
+            custom_logical_compaction_window: None,
         };
         let oid = self.catalog_mut().allocate_oid()?;
         let op = catalog::Op::CreateItem {
@@ -1309,6 +1328,7 @@ impl Coordinator {
             oid,
             name: name.clone(),
             item: CatalogItem::Index(index),
+            owner_id: *session.role_id(),
         };
         match self
             .catalog_transact_with(Some(session), vec![op], |txn| {
@@ -1359,6 +1379,7 @@ impl Coordinator {
             oid,
             name: plan.name,
             item: CatalogItem::Type(typ),
+            owner_id: *session.role_id(),
         };
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(()) => Ok(ExecuteResponse::CreatedType),
@@ -1403,7 +1424,16 @@ impl Coordinator {
         session: &Session,
         plan: DropRolesPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let dropped_ids: BTreeSet<_> = plan.ids.iter().map(|(id, _)| id).collect();
+        let dropped_roles: BTreeMap<_, _> = plan
+            .ids
+            .iter()
+            .map(|(role_id, role_name)| (*role_id, role_name.as_str()))
+            .collect();
+
+        // Check to make sure that no object is owned by a dropped role.
+        self.validate_dropped_role_ownership(&dropped_roles)?;
+
+        let dropped_ids: BTreeSet<_> = dropped_roles.keys().collect();
         let mut ops = Vec::new();
 
         // If any role is a member of a dropped role, then we must revoke that membership.
@@ -1433,6 +1463,59 @@ impl Coordinator {
         );
         self.catalog_transact(Some(session), ops).await?;
         Ok(ExecuteResponse::DroppedRole)
+    }
+
+    fn validate_dropped_role_ownership(
+        &self,
+        dropped_roles: &BTreeMap<RoleId, &str>,
+    ) -> Result<(), AdapterError> {
+        let mut dependent_objects: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        for entry in self.catalog.entries() {
+            if let Some(role_name) = dropped_roles.get(entry.owner_id()) {
+                dependent_objects
+                    .entry(role_name.to_string())
+                    .or_default()
+                    .push(format!("{} {}", entry.item().typ(), entry.name().item));
+            }
+        }
+        for database in self.catalog.databases() {
+            if let Some(role_name) = dropped_roles.get(&database.owner_id) {
+                dependent_objects
+                    .entry(role_name.to_string())
+                    .or_default()
+                    .push(format!("database {}", database.name()));
+            }
+            for schema in database.schemas_by_id.values() {
+                if let Some(role_name) = dropped_roles.get(&schema.owner_id) {
+                    dependent_objects
+                        .entry(role_name.to_string())
+                        .or_default()
+                        .push(format!("schema {}", schema.name().schema));
+                }
+            }
+        }
+        for cluster in self.catalog.clusters() {
+            if let Some(role_name) = dropped_roles.get(&cluster.owner_id) {
+                dependent_objects
+                    .entry(role_name.to_string())
+                    .or_default()
+                    .push(format!("cluster {}", cluster.name()));
+            }
+            for replica in cluster.replicas_by_id.values() {
+                if let Some(role_name) = dropped_roles.get(&replica.owner_id) {
+                    dependent_objects
+                        .entry(role_name.to_string())
+                        .or_default()
+                        .push(format!("cluster replica {}", replica.name));
+                }
+            }
+        }
+
+        if !dependent_objects.is_empty() {
+            Err(AdapterError::DependentObjectOwnership(dependent_objects))
+        } else {
+            Ok(())
+        }
     }
 
     pub(super) async fn sequence_drop_clusters(
@@ -1499,10 +1582,14 @@ impl Coordinator {
             ObjectType::Type => ExecuteResponse::DroppedType,
             ObjectType::Secret => ExecuteResponse::DroppedSecret,
             ObjectType::Connection => ExecuteResponse::DroppedConnection,
-            ObjectType::Role | ObjectType::Cluster | ObjectType::ClusterReplica => {
+            ObjectType::Role
+            | ObjectType::Cluster
+            | ObjectType::ClusterReplica
+            | ObjectType::Database
+            | ObjectType::Schema => {
                 unreachable!("handled through their respective sequence_drop functions")
             }
-            ObjectType::Object => unreachable!("generic OBJECT cannot be dropped"),
+            ObjectType::Func => unreachable!("rejected by the parser"),
         })
     }
 
@@ -1733,7 +1820,11 @@ impl Coordinator {
             target_replica,
             timeline_context,
             in_immediate_multi_stmt_txn,
-        ) = return_if_err!(self.sequence_peek_begin_inner(&session, plan), tx, session);
+        ) = return_if_err!(
+            self.sequence_peek_begin_inner(&mut session, plan),
+            tx,
+            session
+        );
 
         match self.recent_timestamp(&session, source_ids.iter().cloned()) {
             Some(fut) => {
@@ -1799,7 +1890,7 @@ impl Coordinator {
 
     fn sequence_peek_begin_inner(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         plan: PeekPlan,
     ) -> Result<
         (
@@ -1832,7 +1923,17 @@ impl Coordinator {
         let view_id = self.allocate_transient_id()?;
         let index_id = self.allocate_transient_id()?;
 
-        let cluster = self.catalog().active_cluster(session)?;
+        // If our query only depends on system tables, a LaunchDarkly flag is enabled, and a
+        // session var is set, then we automatically run the query on the mz_introspection cluster
+        let cluster = match introspection::auto_run_on_introspection(
+            self.catalog(),
+            session,
+            source.depends_on(),
+        ) {
+            Some(cluster) => cluster,
+            None => self.catalog().active_cluster(session)?,
+        };
+
         let target_replica_name = session.vars().cluster_replica();
         let mut target_replica = target_replica_name
             .map(|name| {
@@ -2169,7 +2270,16 @@ impl Coordinator {
             up_to,
         } = plan;
 
-        let cluster = self.catalog().active_cluster(session)?;
+        // If our query only depends on system tables, then we optionally run it on the
+        // introspection cluster.
+        let cluster = match introspection::auto_run_on_introspection(
+            self.catalog(),
+            session,
+            depends_on.iter().copied(),
+        ) {
+            Some(cluster) => cluster,
+            None => self.catalog().active_cluster(session)?,
+        };
         let cluster_id = cluster.id;
 
         let target_replica_name = session.vars().cluster_replica();
@@ -3278,7 +3388,9 @@ impl Coordinator {
                         .expect("setting options on index")
                         .cluster_id;
                     let policy = match window {
-                        Some(time) => ReadPolicy::lag_writes_by(time.try_into()?),
+                        Some(time) => {
+                            ReadPolicy::lag_writes_by(time.try_into()?, SINCE_GRANULARITY)
+                        }
                         None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
                     };
                     self.update_compute_base_read_policy(cluster, id, policy);
@@ -3475,17 +3587,19 @@ impl Coordinator {
             Ok(())
         } else if var_name == Some(ENABLE_RBAC_CHECKS.name()) {
             Err(AdapterError::Unauthorized(
-                rbac::UnauthorizedError::superuser(format!(
-                    "toggle the '{}' system configuration parameter",
-                    ENABLE_RBAC_CHECKS.name()
-                )),
+                rbac::UnauthorizedError::Superuser {
+                    action: format!(
+                        "toggle the '{}' system configuration parameter",
+                        ENABLE_RBAC_CHECKS.name()
+                    ),
+                },
             ))
         } else {
             Err(AdapterError::Unauthorized(
-                rbac::UnauthorizedError::privilege(
-                    "alter system".into(),
-                    Some(format!("You must be the '{}' role", SYSTEM_USER.name)),
-                ),
+                rbac::UnauthorizedError::Privilege {
+                    action: "alter system".into(),
+                    reason: Some(format!("You must be the '{}' role", SYSTEM_USER.name)),
+                },
             ))
         }
     }
@@ -3584,6 +3698,20 @@ impl Coordinator {
             .map(|_| ExecuteResponse::RevokedRole)
     }
 
+    pub(super) async fn sequence_alter_owner(
+        &mut self,
+        session: &mut Session,
+        AlterOwnerPlan {
+            id,
+            object_type,
+            new_owner,
+        }: AlterOwnerPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        self.catalog_transact(Some(session), vec![Op::UpdateOwner { id, new_owner }])
+            .await
+            .map(|_| ExecuteResponse::AlteredObject(object_type))
+    }
+
     /// Generates the catalog operations to create a linked cluster for the
     /// source or sink with the given name.
     ///
@@ -3595,6 +3723,7 @@ impl Coordinator {
         name: &QualifiedObjectName,
         config: &SourceSinkClusterConfig,
         ops: &mut Vec<catalog::Op>,
+        session: &Session,
     ) -> Result<ClusterId, AdapterError> {
         let size = match config {
             SourceSinkClusterConfig::Linked { size } => size.clone(),
@@ -3611,8 +3740,10 @@ impl Coordinator {
             name: name.clone(),
             linked_object_id: Some(linked_object_id),
             introspection_sources,
+            owner_id: *session.role_id(),
         });
-        self.create_linked_cluster_replica_op(id, size, ops).await?;
+        self.create_linked_cluster_replica_op(id, size, ops, *session.role_id())
+            .await?;
         Ok(id)
     }
 
@@ -3623,6 +3754,7 @@ impl Coordinator {
         cluster_id: ClusterId,
         size: String,
         ops: &mut Vec<catalog::Op>,
+        owner_id: RoleId,
     ) -> Result<(), AdapterError> {
         let availability_zone = {
             let azs = self.catalog().state().availability_zones();
@@ -3663,6 +3795,7 @@ impl Coordinator {
                     idle_arrangement_merge_effort: None,
                 },
             },
+            owner_id,
         });
         Ok(())
     }
@@ -3694,8 +3827,13 @@ impl Coordinator {
                         coord_bail!("cannot change the cluster of a source or sink")
                     }
                 };
-                self.create_linked_cluster_replica_op(linked_cluster.id, size, &mut ops)
-                    .await?;
+                self.create_linked_cluster_replica_op(
+                    linked_cluster.id,
+                    size,
+                    &mut ops,
+                    linked_cluster.owner_id,
+                )
+                .await?;
             }
         }
         Ok(ops)

@@ -12,6 +12,7 @@
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::error::Error;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::bail;
@@ -32,6 +33,7 @@ use tracing::{debug, error, info, warn, Level};
 /// All code in Materialize that constructs Kafka clients should use this
 /// context or a custom context that delegates the `log` and `error` methods to
 /// this implementation.
+#[derive(Clone)]
 pub struct MzClientContext;
 
 impl ClientContext for MzClientContext {
@@ -70,11 +72,18 @@ impl ProducerContext for MzClientContext {
 }
 
 /// A client context that supports rewriting broker addresses.
+///
+/// This struct implements `Clone`, but it will likely hold onto
+/// ssh sessions if cloned for anything other than retries.
+///
+/// TODO(guswynn): this needs to be cleaned up when we re-evaluate how
+/// this pipeline works.
+#[derive(Clone)]
 pub struct BrokerRewritingClientContext<C> {
     inner: C,
     overrides: BTreeMap<BrokerAddr, BrokerAddr>,
     /// Opaque tokens to cleanup resources associated with overrides.
-    drop_tokens: Vec<Box<dyn Any + Send + Sync>>,
+    drop_tokens: Vec<Arc<dyn Any + Send + Sync>>,
 }
 
 impl<C> BrokerRewritingClientContext<C> {
@@ -110,7 +119,7 @@ impl<C> BrokerRewritingClientContext<C> {
         rewrite_port: Option<u16>,
         token: T,
     ) {
-        self.add_broker_rewrite_inner(broker, rewrite_host, rewrite_port, Some(Box::new(token)))
+        self.add_broker_rewrite_inner(broker, rewrite_host, rewrite_port, Some(Arc::new(token)))
     }
 
     fn add_broker_rewrite_inner(
@@ -118,7 +127,7 @@ impl<C> BrokerRewritingClientContext<C> {
         broker: &str,
         rewrite_host: &str,
         rewrite_port: Option<u16>,
-        token: Option<Box<dyn Any + Send + Sync>>,
+        token: Option<Arc<dyn Any + Send + Sync>>,
     ) {
         let mut parts = broker.splitn(2, ':');
         let broker = BrokerAddr {

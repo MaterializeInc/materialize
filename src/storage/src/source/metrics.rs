@@ -102,7 +102,6 @@ pub(super) struct PartitionSpecificMetrics {
     pub(super) closed_ts: UIntGaugeVec,
     pub(super) messages_ingested: GenericCounterVec<AtomicI64>,
     pub(super) partition_offset_max: IntGaugeVec,
-    pub(super) source_resume_upper: UIntGaugeVec,
 }
 
 impl PartitionSpecificMetrics {
@@ -133,11 +132,6 @@ impl PartitionSpecificMetrics {
                 name: "mz_kafka_partition_offset_max",
                 help: "High watermark offset on broker for partition",
                 var_labels: ["topic", "source_id", "partition_id"],
-            )),
-            source_resume_upper: registry.register(metric!(
-                name: "mz_source_resume_upper",
-                help: "The offset-domain upper that is used for initializing this partition",
-                var_labels: ["source_id", "partition_id"],
             )),
         }
     }

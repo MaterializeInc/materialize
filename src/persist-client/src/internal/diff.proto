@@ -1,0 +1,61 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+package mz_persist_client.internal.diff;
+
+enum ProtoStateField {
+    DEPRECATED_ROLLUPS = 0; // Proto doesn't let us reorder this down, sadly
+    ROLLUPS = 8;
+    HOSTNAME = 7;
+    LAST_GC_REQ = 1;
+    LEASED_READERS = 2;
+    CRITICAL_READERS = 6;
+    WRITERS = 3;
+    SINCE = 4;
+    SPINE = 5;
+}
+
+enum ProtoStateFieldDiffType {
+    INSERT = 0;
+    UPDATE = 1;
+    DELETE = 2;
+}
+
+// A columnar encoding of Vec<StateFieldDiff<K, V>> with heterogeneous K and V.
+//
+// - The number of diffs (len) == fields.len() == diff_types.len()
+// - Each diff is encoded into 1 data slice for the key and 1 (Insert, Delete)
+//   or 2 (Update) data slices for the val
+// - These data slices are concatenated together in data_bytes and the
+//   corresponding lengths of each slice in data_lens. (So number of data slices
+//   == data_lens.len().)
+// - We store the length of each data_slice, not e.g. an offset into data_bytes.
+//   This makes random access slower, but we only ever iterate (random access by
+//   diff idx would be tricky anyway because each diff gets a variable number of
+//   data slices based on it's type.) Storing the lengths, OTOH, compresses much
+//   better with protobuf varints.
+message ProtoStateFieldDiffs {
+    repeated ProtoStateField fields = 1;
+    repeated ProtoStateFieldDiffType diff_types = 2;
+    repeated uint64 data_lens = 3;
+    bytes data_bytes = 4;
+}
+
+message ProtoStateDiff {
+    string applier_version = 1;
+
+    uint64 seqno_from = 2;
+    uint64 seqno_to = 3;
+    uint64 walltime_ms = 6;
+    string latest_rollup_key = 4;
+
+    ProtoStateFieldDiffs field_diffs = 5;
+}

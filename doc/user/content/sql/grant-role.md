@@ -6,17 +6,12 @@ menu:
     parent: commands
 ---
 
-`GRANT` grants membership of one role to another role.
-
-## Conceptual framework
-
-Roles can be members of other roles and inherit all the attributes and
-privileges of the other roles.
+`GRANT` grants membership of one role to another role. Roles can be members of
+other roles, as well as inherit all the attributes and privileges of those roles.
 
 {{< warning >}}
-Roles in Materialize are currently limited in functionality. In the future they
-will be used for role-based access control. See GitHub issue {{% gh 11579 %}}
-for details.
+Currently, roles have limited functionality in Materialize. This is part of the
+work to enable **Role-based access control** (RBAC) in a future release {{% gh 11579 %}}.
 {{< /warning >}}
 
 
@@ -46,3 +41,4 @@ GRANT data_scientist TO joe, mike;
 - [DROP ROLE](../drop-role)
 - [DROP USER](../drop-user)
 - [REVOKE ROLE](../revoke-role)
+- [ALTER OWNER](../alter-owner)

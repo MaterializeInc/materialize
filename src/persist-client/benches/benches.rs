@@ -82,6 +82,7 @@ use criterion::{criterion_group, criterion_main, Bencher, BenchmarkGroup, Benchm
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_persist_client::cache::StateCache;
 use mz_persist_client::metrics::Metrics;
 use tempfile::TempDir;
 use timely::progress::{Antichain, Timestamp};
@@ -174,7 +175,15 @@ fn create_mem_mem_client() -> Result<PersistClient, ExternalError> {
     let consensus = Arc::new(MemConsensus::default());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
-    PersistClient::new(cfg, blob, consensus, metrics, cpu_heavy_runtime)
+    let shared_states = Arc::new(StateCache::default());
+    PersistClient::new(
+        cfg,
+        blob,
+        consensus,
+        metrics,
+        cpu_heavy_runtime,
+        shared_states,
+    )
 }
 
 async fn create_file_pg_client(
@@ -192,7 +201,15 @@ async fn create_file_pg_client(
     let consensus = Arc::clone(&postgres_consensus);
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
-    let client = PersistClient::new(cfg, blob, consensus, metrics, cpu_heavy_runtime)?;
+    let shared_states = Arc::new(StateCache::default());
+    let client = PersistClient::new(
+        cfg,
+        blob,
+        consensus,
+        metrics,
+        cpu_heavy_runtime,
+        shared_states,
+    )?;
     Ok(Some((postgres_consensus, client, dir)))
 }
 
@@ -213,7 +230,15 @@ async fn create_s3_pg_client(
     let consensus = Arc::clone(&postgres_consensus);
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
-    let client = PersistClient::new(cfg, blob, consensus, metrics, cpu_heavy_runtime)?;
+    let shared_states = Arc::new(StateCache::default());
+    let client = PersistClient::new(
+        cfg,
+        blob,
+        consensus,
+        metrics,
+        cpu_heavy_runtime,
+        shared_states,
+    )?;
     Ok(Some((postgres_consensus, client)))
 }
 

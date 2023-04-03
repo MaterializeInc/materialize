@@ -1,7 +1,7 @@
 [package]
 name = "mz-environmentd"
 description = "Manages a single Materialize environment."
-version = "0.48.0-dev"
+version = "0.50.0-dev"
 authors = ["Materialize, Inc."]
 license = "proprietary"
 edition.workspace = true
@@ -58,7 +58,7 @@ mz-stash = { path = "../stash" }
 mz-storage-client = { path = "../storage-client" }
 nix = "0.26.1"
 num_cpus = "1.14.0"
-openssl = { version = "0.10.43", features = ["vendored"] }
+openssl = { version = "0.10.48", features = ["vendored"] }
 openssl-sys = { version = "0.9.80", features = ["vendored"] }
 opentelemetry = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git", features = ["rt-tokio", "trace"] }
 prometheus = { version = "0.13.3", default-features = false }

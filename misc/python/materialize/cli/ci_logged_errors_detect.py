@@ -165,9 +165,6 @@ def annotate_logged_errors(log_files: List[str]) -> None:
                     allow_multiple_subelements=True,
                 )
                 test_case.add_failure_info(message=message, output=error.line)
-                dict_issue_number_to_test_case_index[issue.info["number"]] = len(
-                    junit_suite.test_cases
-                )
                 junit_suite.test_cases.append(test_case)
 
     junit_name = f"{step_key}_logged_errors" if step_key else "logged_errors"

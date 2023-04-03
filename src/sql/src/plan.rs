@@ -60,8 +60,8 @@ use crate::ast::{
 };
 use crate::catalog::{CatalogType, IdReference, RoleAttributes};
 use crate::names::{
-    Aug, DatabaseId, FullObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier, RoleId,
-    SchemaId,
+    Aug, DatabaseId, FullObjectName, ObjectId, QualifiedObjectName, ResolvedDatabaseSpecifier,
+    RoleId, SchemaId,
 };
 
 pub use self::expr::{
@@ -111,6 +111,7 @@ pub enum Plan {
     DropItems(DropItemsPlan),
     EmptyQuery,
     ShowAllVariables,
+    ShowCreate(SendRowsPlan),
     ShowVariable(ShowVariablePlan),
     SetVariable(SetVariablePlan),
     ResetVariable(ResetVariablePlan),
@@ -135,6 +136,7 @@ pub enum Plan {
     AlterSystemReset(AlterSystemResetPlan),
     AlterSystemResetAll(AlterSystemResetAllPlan),
     AlterRole(AlterRolePlan),
+    AlterOwner(AlterOwnerPlan),
     Declare(DeclarePlan),
     Fetch(FetchPlan),
     Close(ClosePlan),
@@ -173,6 +175,7 @@ impl Plan {
                 vec![PlanKind::AlterNoop, PlanKind::AlterSystemResetAll]
             }
             StatementKind::AlterSystemSet => vec![PlanKind::AlterNoop, PlanKind::AlterSystemSet],
+            StatementKind::AlterOwner => vec![PlanKind::AlterNoop, PlanKind::AlterOwner],
             StatementKind::Close => vec![PlanKind::Close],
             StatementKind::Commit => vec![PlanKind::CommitTransaction],
             StatementKind::Copy => vec![PlanKind::CopyFrom, PlanKind::Peek, PlanKind::Subscribe],
@@ -219,6 +222,7 @@ impl Plan {
                 PlanKind::Peek,
                 PlanKind::SendRows,
                 PlanKind::ShowVariable,
+                PlanKind::ShowCreate,
                 PlanKind::ShowAllVariables,
             ],
             StatementKind::StartTransaction => vec![PlanKind::StartTransaction],
@@ -263,12 +267,15 @@ impl Plan {
                 ObjectType::Role => "drop role",
                 ObjectType::Cluster => "drop cluster",
                 ObjectType::ClusterReplica => "drop cluster",
-                ObjectType::Object => "drop object",
                 ObjectType::Secret => "drop secret",
                 ObjectType::Connection => "drop connection",
+                ObjectType::Database => "drop database",
+                ObjectType::Schema => "drop schema",
+                ObjectType::Func => "drop function",
             },
             Plan::EmptyQuery => "do nothing",
             Plan::ShowAllVariables => "show all variables",
+            Plan::ShowCreate(_) => "show create",
             Plan::ShowVariable(_) => "show variable",
             Plan::SetVariable(_) => "set variable",
             Plan::ResetVariable(_) => "reset variable",
@@ -293,9 +300,11 @@ impl Plan {
                 ObjectType::Role => "alter role",
                 ObjectType::Cluster => "alter cluster",
                 ObjectType::ClusterReplica => "alter cluster replica",
-                ObjectType::Object => "alter object",
                 ObjectType::Secret => "alter secret",
                 ObjectType::Connection => "alter connection",
+                ObjectType::Database => "alter database",
+                ObjectType::Schema => "alter schema",
+                ObjectType::Func => "alter function",
             },
             Plan::AlterIndexSetOptions(_) => "alter index",
             Plan::AlterIndexResetOptions(_) => "alter index",
@@ -307,6 +316,23 @@ impl Plan {
             Plan::AlterSystemReset(_) => "alter system",
             Plan::AlterSystemResetAll(_) => "alter system",
             Plan::AlterRole(_) => "alter role",
+            Plan::AlterOwner(plan) => match plan.object_type {
+                ObjectType::Table => "alter table owner",
+                ObjectType::View => "alter view owner",
+                ObjectType::MaterializedView => "alter materialized view owner",
+                ObjectType::Source => "alter source owner",
+                ObjectType::Sink => "alter sink owner",
+                ObjectType::Index => "alter index owner",
+                ObjectType::Type => "alter type owner",
+                ObjectType::Role => "alter role owner",
+                ObjectType::Cluster => "alter cluster owner",
+                ObjectType::ClusterReplica => "alter cluster replica owner",
+                ObjectType::Secret => "alter secret owner",
+                ObjectType::Connection => "alter connection owner",
+                ObjectType::Database => "alter database owner",
+                ObjectType::Schema => "alter schema owner",
+                ObjectType::Func => "alter function owner",
+            },
             Plan::Declare(_) => "declare",
             Plan::Fetch(_) => "fetch",
             Plan::Close(_) => "close",
@@ -750,6 +776,13 @@ pub struct AlterRolePlan {
     pub id: RoleId,
     pub name: String,
     pub attributes: RoleAttributes,
+}
+
+#[derive(Debug)]
+pub struct AlterOwnerPlan {
+    pub id: ObjectId,
+    pub object_type: ObjectType,
+    pub new_owner: RoleId,
 }
 
 #[derive(Debug)]

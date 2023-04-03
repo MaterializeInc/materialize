@@ -64,11 +64,12 @@ The `mz_cluster_replicas` table contains a row for each cluster replica in the s
 
 Field               | Type      | Meaning
 --------------------|-----------|--------
-`id`                | [`uint8`] | Materialize's unique ID for the cluster replica.
+`id`                | [`text`]  | Materialize's unique ID for the cluster replica.
 `name`              | [`text`]  | The name of the cluster replica.
 `cluster_id`        | [`text`]  | The ID of the cluster to which the replica belongs. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
 `size`              | [`text`]  | The cluster replica's size, selected during creation.
 `availability_zone` | [`text`]  | The availability zone in which the cluster is running.
+`owner_id`          | [`text`]    | The role ID of the owner of the cluster replica. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 
 ### `mz_clusters`
 
@@ -78,6 +79,7 @@ Field          | Type       | Meaning
 ---------------|------------|--------
 `id`           | [`text`]   | Materialize's unique ID for the cluster.
 `name`         | [`text`]   | The name of the cluster.
+`owner_id`     | [`text`]    | The role ID of the owner of the cluster. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 
 ### `mz_columns`
 
@@ -105,16 +107,18 @@ Field            | Type        | Meaning
 `schema_id`      | [`uint8`]   | The ID of the schema to which the connection belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`           | [`text`]    | The name of the connection.
 `type`           | [`text`]    | The type of the connection: `confluent-schema-registry`, `kafka`, `postgres`, or `ssh-tunnel`.
+`owner_id`       | [`text`]    | The role ID of the owner of the connection. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 
 ### `mz_databases`
 
 The `mz_databases` table contains a row for each database in the system.
 
-Field  | Type       | Meaning
--------|------------|--------
-`id`   | [`uint8`]  | Materialize's unique ID for the database.
-`oid`  | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the database.
-`name` | [`text`]   | The name of the database.
+Field      | Type       | Meaning
+-----------|------------|--------
+`id`       | [`uint8`]  | Materialize's unique ID for the database.
+`oid`      | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the database.
+`name`     | [`text`]   | The name of the database.
+`owner_id` | [`text`]    | The role ID of the owner of the database. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 
 ### `mz_egress_ips`
 
@@ -129,16 +133,17 @@ Field       | Type     | Meaning
 
 The `mz_functions` table contains a row for each function in the system.
 
-Field                       | Type              | Meaning
-----------------------------|-------------------|--------
-`id`                        | [`text`]          | Materialize's unique ID for the function.
-`oid`                       | [`oid`]           | A [PostgreSQL-compatible OID][oid] for the function.
-`schema_id`                 | [`uint8`]         | The ID of the schema to which the function belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
-`name`                      | [`text`]          | The name of the function.
-`argument_type_ids`         | [`text array`]    | The ID of each argument's type. Each entry refers to `mz_types.id`.
-`variadic_argument_type_id` | [`text`]          | The ID of the variadic argument's type, or `NULL` if the function does not have a variadic argument. Refers to `mz_types.id`.
-`return_type_id`            | [`text`]          | The returned value's type, or `NULL` if the function does not return a value. Refers to `mz_types.id`. Note that for table functions with > 1 column, this type corresponds to [`record`].
-`returns_set`               | [`boolean`]       | Whether the function returns a set, i.e. the function is a table function.
+Field                       | Type           | Meaning
+----------------------------|----------------|--------
+`id`                        | [`text`]       | Materialize's unique ID for the function.
+`oid`                       | [`oid`]        | A [PostgreSQL-compatible OID][oid] for the function.
+`schema_id`                 | [`uint8`]      | The ID of the schema to which the function belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
+`name`                      | [`text`]       | The name of the function.
+`argument_type_ids`         | [`text array`] | The ID of each argument's type. Each entry refers to `mz_types.id`.
+`variadic_argument_type_id` | [`text`]       | The ID of the variadic argument's type, or `NULL` if the function does not have a variadic argument. Refers to `mz_types.id`.
+`return_type_id`            | [`text`]       | The returned value's type, or `NULL` if the function does not return a value. Refers to `mz_types.id`. Note that for table functions with > 1 column, this type corresponds to [`record`].
+`returns_set`               | [`boolean`]    | Whether the function returns a set, i.e. the function is a table function.
+`owner_id`                  | [`text`]       | The role ID of the owner of the function. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 
 ### `mz_indexes`
 
@@ -150,6 +155,7 @@ Field        | Type        | Meaning
 `oid`        | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the index.
 `name`       | [`text`]    | The name of the index.
 `on_id`      | [`text`]    | The ID of the relation on which the index is built.
+`owner_id`   | [`text`]    | The role ID of the owner of the index. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 
 ### `mz_index_columns`
 
@@ -219,6 +225,7 @@ Field          | Type      | Meaning
 `name`         | [`text`]  | The name of the materialized view.
 `cluster_id`   | [`text`]  | The ID of the cluster maintaining the materialized view. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
 `definition`   | [`text`]  | The materialized view definition (a `SELECT` query).
+`owner_id`     | [`text`]  | The role ID of the owner of the materialized view. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 
 ### `mz_objects`
 
@@ -236,6 +243,7 @@ Field       | Type       | Meaning
 `schema_id` | [`uint8`]  | The ID of the schema to which the object belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`      | [`text`]   | The name of the object.
 `type`      | [`text`]   | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
+`owner_id`  | [`text`]    | The role ID of the owner of the object. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 
 ### `mz_pseudo_types`
 
@@ -257,6 +265,7 @@ Field       | Type       | Meaning
 `schema_id` | [`uint8`]  | The ID of the schema to which the relation belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`      | [`text`]   | The name of the relation.
 `type`      | [`text`]   | The type of the relation: either `table`, `source`, `view`, or `materialized view`.
+`owner_id`  | [`text`]    | The role ID of the owner of the relation. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 
 ### `mz_roles`
 
@@ -292,6 +301,7 @@ Field         | Type       | Meaning
 `oid`         | [`oid`]    | A [PostgreSQL-compatible oid][oid] for the schema.
 `database_id` | [`uint8`]  | The ID of the database containing the schema. Corresponds to [`mz_databases.id`](/sql/system-catalog/mz_catalog/#mz_databases).
 `name`        | [`text`]   | The name of the schema.
+`owner_id`    | [`text`]    | The role ID of the owner of the schema. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 
 ### `mz_secrets`
 
@@ -302,6 +312,7 @@ Field            | Type        | Meaning
 `id`             | [`text`]    | The unique ID of the secret.
 `schema_id`      | [`uint8`]   | The ID of the schema to which the secret belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`           | [`text`]    | The name of the secret.
+`owner_id`       | [`text`]    | The role ID of the owner of the secret. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 
 ### `mz_ssh_tunnel_connections`
 
@@ -329,6 +340,7 @@ Field            | Type        | Meaning
 `size`           | [`text`]    | The size of the sink.
 `envelope_type`  | [`text`]    | The [envelope](/sql/create-sink/#envelopes) of the sink: `upsert`, or `debezium`.
 `cluster_id`     | [`text`]    | The ID of the cluster maintaining the sink. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
+`owner_id`       | [`text`]    | The role ID of the owner of the sink. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 
 ### `mz_sources`
 
@@ -345,6 +357,7 @@ Field            | Type       | Meaning
 `size`           | [`text`]   | The [size](/sql/create-source/#sizing-a-source) of the source.
 `envelope_type`  | [`text`]   | The [envelope](/sql/create-source/#envelopes) of the source: `none`, `upsert`, or `debezium`.
 `cluster_id`     | [`text`]   | The ID of the cluster maintaining the source. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
+`owner_id`       | [`text`]    | The role ID of the owner of the source. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 
 ### `mz_storage_usage`
 
@@ -368,6 +381,7 @@ Field            | Type       | Meaning
 `oid`            | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the table.
 `schema_id`      | [`uint8`]  | The ID of the schema to which the table belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`           | [`text`]   | The name of the table.
+`owner_id`       | [`text`]   | The role ID of the owner of the table. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 
 ### `mz_types`
 
@@ -379,6 +393,7 @@ Field          | Type       | Meaning
 `oid`          | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the type.
 `schema_id`    | [`uint8`]  | The ID of the schema to which the type belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`         | [`text`]   | The name of the type.
+`owner_id`     | [`text`]    | The role ID of the owner of the type. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 
 ### `mz_views`
 
@@ -391,6 +406,7 @@ Field          | Type        | Meaning
 `schema_id`    | [`uint8`]   | The ID of the schema to which the view belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`         | [`text`]    | The name of the view.
 `definition`   | [`text`]    | The view definition (a `SELECT` query).
+`owner_id`     | [`text`]    | The role ID of the owner of the view. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 
 [`bigint`]: /sql/types/bigint
 [`boolean`]: /sql/types/boolean

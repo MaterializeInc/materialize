@@ -13,6 +13,7 @@ use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
+use mz_compute_client::controller::NewReplicaId;
 use mz_controller::clusters::{
     ClusterId, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaAllocation, ReplicaId,
     ReplicaLocation,
@@ -21,6 +22,7 @@ use mz_expr::MirScalarExpr;
 use mz_orchestrator::{CpuLimit, MemoryLimit, ServiceProcessMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::now::SYSTEM_TIME;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::{Datum, Diff, GlobalId, Row};
@@ -41,13 +43,14 @@ use crate::catalog::builtin::{
     MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS,
     MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS,
     MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS,
-    MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS,
-    MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_SESSIONS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connection, DataSourceDesc, Database, Error, ErrorKind, Func, Index,
     MaterializedView, Sink, StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
+use crate::client::ConnectionId;
 use crate::subscribe::ActiveSubscribe;
 
 use super::AwsPrincipalContext;
@@ -91,6 +94,7 @@ impl CatalogState {
                 Datum::UInt64(database.id.0),
                 Datum::UInt32(database.oid),
                 Datum::String(database.name()),
+                Datum::String(&database.owner_id.to_string()),
             ]),
             diff,
         }
@@ -116,6 +120,7 @@ impl CatalogState {
                 Datum::UInt32(schema.oid),
                 Datum::from(database_id),
                 Datum::String(&schema.name.schema),
+                Datum::String(&schema.owner_id.to_string()),
             ]),
             diff,
         }
@@ -169,9 +174,14 @@ impl CatalogState {
 
     pub(super) fn pack_cluster_update(&self, name: &str, diff: Diff) -> BuiltinTableUpdate {
         let id = self.clusters_by_name[name];
+        let cluster = &self.clusters_by_id[&id];
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTERS),
-            row: Row::pack_slice(&[Datum::String(&id.to_string()), Datum::String(name)]),
+            row: Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::String(name),
+                Datum::String(&cluster.owner_id.to_string()),
+            ]),
             diff,
         }
     }
@@ -196,14 +206,18 @@ impl CatalogState {
             ReplicaLocation::Unmanaged(_) => (None, None),
         };
 
+        // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
+        let id = NewReplicaId::User(id);
+
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS),
             row: Row::pack_slice(&[
-                Datum::UInt64(id),
+                Datum::String(&id.to_string()),
                 Datum::String(name),
                 Datum::String(&cluster_id.to_string()),
                 Datum::from(size),
                 Datum::from(az),
+                Datum::String(&replica.owner_id.to_string()),
             ]),
             diff,
         }
@@ -239,10 +253,13 @@ impl CatalogState {
             ClusterStatus::NotReady => "not-ready",
         };
 
+        // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
+        let replica_id = NewReplicaId::User(replica_id);
+
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_STATUSES),
             row: Row::pack_slice(&[
-                Datum::UInt64(replica_id),
+                Datum::String(&replica_id.to_string()),
                 Datum::UInt64(process_id),
                 Datum::String(status),
                 Datum::TimestampTz(event.time.try_into().expect("must fit")),
@@ -264,12 +281,17 @@ impl CatalogState {
             )
             .id;
         let name = &entry.name().item;
+        let owner_id = entry.owner_id();
         let mut updates = match entry.item() {
             CatalogItem::Log(_) => self.pack_source_update(
-                id, oid, schema_id, name, "log", None, None, None, None, diff,
+                id, oid, schema_id, name, "log", None, None, None, None, owner_id, diff,
             ),
-            CatalogItem::Index(index) => self.pack_index_update(id, oid, name, index, diff),
-            CatalogItem::Table(_) => self.pack_table_update(id, oid, schema_id, name, diff),
+            CatalogItem::Index(index) => {
+                self.pack_index_update(id, oid, name, owner_id, index, diff)
+            }
+            CatalogItem::Table(_) => {
+                self.pack_table_update(id, oid, schema_id, name, owner_id, diff)
+            }
             CatalogItem::Source(source) => {
                 let source_type = source.source_type();
                 let connection_id = source.connection_id();
@@ -286,6 +308,7 @@ impl CatalogState {
                     self.get_storage_object_size(id),
                     envelope,
                     cluster_id.as_deref(),
+                    owner_id,
                     diff,
                 );
 
@@ -301,16 +324,24 @@ impl CatalogState {
 
                 updates
             }
-            CatalogItem::View(view) => self.pack_view_update(id, oid, schema_id, name, view, diff),
-            CatalogItem::MaterializedView(mview) => {
-                self.pack_materialized_view_update(id, oid, schema_id, name, mview, diff)
+            CatalogItem::View(view) => {
+                self.pack_view_update(id, oid, schema_id, name, owner_id, view, diff)
             }
-            CatalogItem::Sink(sink) => self.pack_sink_update(id, oid, schema_id, name, sink, diff),
-            CatalogItem::Type(ty) => self.pack_type_update(id, oid, schema_id, name, ty, diff),
-            CatalogItem::Func(func) => self.pack_func_update(id, schema_id, name, func, diff),
-            CatalogItem::Secret(_) => self.pack_secret_update(id, schema_id, name, diff),
+            CatalogItem::MaterializedView(mview) => {
+                self.pack_materialized_view_update(id, oid, schema_id, name, owner_id, mview, diff)
+            }
+            CatalogItem::Sink(sink) => {
+                self.pack_sink_update(id, oid, schema_id, name, owner_id, sink, diff)
+            }
+            CatalogItem::Type(ty) => {
+                self.pack_type_update(id, oid, schema_id, name, owner_id, ty, diff)
+            }
+            CatalogItem::Func(func) => {
+                self.pack_func_update(id, schema_id, name, owner_id, func, diff)
+            }
+            CatalogItem::Secret(_) => self.pack_secret_update(id, schema_id, name, owner_id, diff),
             CatalogItem::Connection(connection) => {
-                self.pack_connection_update(id, oid, schema_id, name, connection, diff)
+                self.pack_connection_update(id, oid, schema_id, name, owner_id, connection, diff)
             }
         };
 
@@ -358,6 +389,7 @@ impl CatalogState {
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
+        owner_id: &RoleId,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
@@ -367,6 +399,7 @@ impl CatalogState {
                 Datum::UInt32(oid),
                 Datum::UInt64(schema_id.into()),
                 Datum::String(name),
+                Datum::String(&owner_id.to_string()),
             ]),
             diff,
         }]
@@ -383,6 +416,7 @@ impl CatalogState {
         size: Option<&str>,
         envelope: Option<&str>,
         cluster_id: Option<&str>,
+        owner_id: &RoleId,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
@@ -397,6 +431,7 @@ impl CatalogState {
                 Datum::from(size),
                 Datum::from(envelope),
                 Datum::from(cluster_id),
+                Datum::String(&owner_id.to_string()),
             ]),
             diff,
         }]
@@ -424,6 +459,7 @@ impl CatalogState {
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
+        owner_id: &RoleId,
         connection: &Connection,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
@@ -448,6 +484,7 @@ impl CatalogState {
                     }
                     mz_storage_client::types::connections::Connection::Ssh { .. } => "ssh-tunnel",
                 }),
+                Datum::String(&owner_id.to_string()),
             ]),
             diff,
         }];
@@ -556,6 +593,7 @@ impl CatalogState {
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
+        owner_id: &RoleId,
         view: &View,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
@@ -580,6 +618,7 @@ impl CatalogState {
                 Datum::UInt64(schema_id.into()),
                 Datum::String(name),
                 Datum::String(&query_string),
+                Datum::String(&owner_id.to_string()),
             ]),
             diff,
         }]
@@ -591,6 +630,7 @@ impl CatalogState {
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
+        owner_id: &RoleId,
         mview: &MaterializedView,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
@@ -616,6 +656,7 @@ impl CatalogState {
                 Datum::String(name),
                 Datum::String(&mview.cluster_id.to_string()),
                 Datum::String(&query_string),
+                Datum::String(&owner_id.to_string()),
             ]),
             diff,
         }]
@@ -627,6 +668,7 @@ impl CatalogState {
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
+        owner_id: &RoleId,
         sink: &Sink,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
@@ -663,6 +705,7 @@ impl CatalogState {
                     Datum::from(self.get_storage_object_size(id)),
                     Datum::from(envelope),
                     Datum::String(&sink.cluster_id.to_string()),
+                    Datum::String(&owner_id.to_string()),
                 ]),
                 diff,
             });
@@ -675,6 +718,7 @@ impl CatalogState {
         id: GlobalId,
         oid: u32,
         name: &str,
+        owner_id: &RoleId,
         index: &Index,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
@@ -698,6 +742,7 @@ impl CatalogState {
                 Datum::String(name),
                 Datum::String(&index.on.to_string()),
                 Datum::String(&index.cluster_id.to_string()),
+                Datum::String(&owner_id.to_string()),
             ]),
             diff,
         });
@@ -746,6 +791,7 @@ impl CatalogState {
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
+        owner_id: &RoleId,
         typ: &Type,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
@@ -757,6 +803,7 @@ impl CatalogState {
                 Datum::UInt64(schema_id.into()),
                 Datum::String(name),
                 Datum::String(&TypeCategory::from_catalog_type(&typ.details.typ).to_string()),
+                Datum::String(&owner_id.to_string()),
             ]),
             diff,
         };
@@ -804,6 +851,7 @@ impl CatalogState {
         id: GlobalId,
         schema_id: &SchemaSpecifier,
         name: &str,
+        owner_id: &RoleId,
         func: &Func,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
@@ -850,6 +898,7 @@ impl CatalogState {
                             .as_deref(),
                     ),
                     func_impl_details.return_is_set.into(),
+                    Datum::String(&owner_id.to_string()),
                 ]),
                 diff,
             });
@@ -903,6 +952,7 @@ impl CatalogState {
         id: GlobalId,
         schema_id: &SchemaSpecifier,
         name: &str,
+        owner_id: &RoleId,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
@@ -911,6 +961,7 @@ impl CatalogState {
                 Datum::String(&id.to_string()),
                 Datum::UInt64(schema_id.into()),
                 Datum::String(name),
+                Datum::String(&owner_id.to_string()),
             ]),
             diff,
         }]
@@ -972,14 +1023,15 @@ impl CatalogState {
         last_heartbeat: DateTime<Utc>,
         diff: Diff,
     ) -> BuiltinTableUpdate {
-        let table = self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_HEARTBEATS);
-        let row = Row::pack_slice(&[
-            Datum::UInt64(id),
-            Datum::TimestampTz(last_heartbeat.try_into().expect("must fit")),
-        ]);
+        // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
+        let id = NewReplicaId::User(id);
+
         BuiltinTableUpdate {
-            id: table,
-            row,
+            id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_HEARTBEATS),
+            row: Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::TimestampTz(last_heartbeat.try_into().expect("must fit")),
+            ]),
             diff,
         }
     }
@@ -1015,6 +1067,10 @@ impl CatalogState {
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         let id = self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_METRICS);
+
+        // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
+        let replica_id = NewReplicaId::User(replica_id);
+
         let rows = updates.iter().enumerate().map(
             |(
                 process_id,
@@ -1024,7 +1080,7 @@ impl CatalogState {
                 },
             )| {
                 Row::pack_slice(&[
-                    replica_id.into(),
+                    Datum::String(&replica_id.to_string()),
                     u64::cast_from(process_id).into(),
                     (*cpu_nano_cores).into(),
                     (*memory_bytes).into(),
@@ -1079,9 +1135,13 @@ impl CatalogState {
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         let id = self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_FRONTIERS);
+
+        // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
+        let replica_id = NewReplicaId::User(replica_id);
+
         let rows = updates.into_iter().map(|(coll_id, time)| {
             Row::pack_slice(&[
-                replica_id.into(),
+                Datum::String(&replica_id.to_string()),
                 Datum::String(&coll_id.to_string()),
                 Datum::MzTimestamp(*time),
             ])
@@ -1117,6 +1177,28 @@ impl CatalogState {
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SUBSCRIPTIONS),
             row,
+            diff,
+        }
+    }
+
+    pub fn pack_session_update(
+        &self,
+        id: ConnectionId,
+        role_id: RoleId,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        // We use the system clock to determine when a session
+        // connected to Materialize. This is not intended to be 100%
+        // accurate and correct, so we don't burden the timestamp
+        // oracle with generating a more correct timestamp.
+        let connect_dt = mz_ore::now::to_datetime(SYSTEM_TIME());
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_SESSIONS),
+            row: Row::pack_slice(&[
+                Datum::UInt32(id),
+                Datum::String(&role_id.to_string()),
+                Datum::TimestampTz(connect_dt.try_into().expect("must fit")),
+            ]),
             diff,
         }
     }

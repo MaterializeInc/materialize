@@ -21,6 +21,7 @@ use arrow2::io::parquet::write::Encoding;
 
 use crate::columnar::sealed::ColumnRef;
 use crate::columnar::{ColumnFormat, Data, DataType, Schema};
+use crate::stats::DynStats;
 
 /// A columnar representation of one blob's worth of data.
 #[derive(Debug, Default)]
@@ -435,7 +436,35 @@ impl DynColumnRef {
         }
         self.0
             .data_fn(LenDataFn(self))
-            .expect("DynColumnRef DataType should have internally consistent")
+            .expect("DynColumnRef DataType should be internally consistent")
+    }
+
+    /// Computes statistics on this column using the default implementation of
+    /// `T::Stats::From`.
+    ///
+    /// See [Self::stats].
+    pub fn stats_default(&self) -> Box<dyn DynStats> {
+        struct StatsDataFn<'a>(&'a DynColumnRef);
+        impl DataFn<Result<Box<dyn DynStats>, String>> for StatsDataFn<'_> {
+            fn call<T: Data>(self) -> Result<Box<dyn DynStats>, String> {
+                let stats = self.0.stats::<T, _>(|x| T::Stats::from(x))?;
+                Ok(Box::new(stats))
+            }
+        }
+        self.0
+            .data_fn(StatsDataFn(self))
+            .expect("DynColumnRef DataType should be internally consistent")
+    }
+
+    /// Computes statistics on this column using the specified function.
+    ///
+    /// See [Self::stats_default].
+    pub fn stats<T: Data, F: FnOnce(&T::Col) -> T::Stats>(
+        &self,
+        stats_fn: F,
+    ) -> Result<T::Stats, String> {
+        let col = self.downcast::<T>()?;
+        Ok(stats_fn(col))
     }
 
     #[allow(clippy::borrowed_box)]
@@ -463,7 +492,7 @@ impl DynColumnRef {
         }
         self.0
             .data_fn(ToArrowDataFn(self))
-            .expect("DynColumnRef DataType should have internally consistent")
+            .expect("DynColumnRef DataType should be internally consistent")
     }
 }
 
@@ -532,13 +561,23 @@ pub struct ColumnsRef<'a> {
 }
 
 impl<'a> ColumnsRef<'a> {
-    /// Removes the named column from the set.
+    /// Removes the named typed column from the set.
     pub fn col<T: Data>(&mut self, name: &str) -> Result<&'a T::Col, String> {
-        let col = self
-            .cols
+        self.dyn_col(name)?.downcast::<T>()
+    }
+
+    /// Computes statistics for the named column and removes it from the set.
+    ///
+    /// TODO: Take a param here to allow Schemas to override the logic used.
+    pub fn stats(&mut self, name: &str) -> Result<Box<dyn DynStats>, String> {
+        Ok(self.dyn_col(name)?.stats_default())
+    }
+
+    /// Removes the named dynamic column from the set.
+    fn dyn_col(&mut self, name: &str) -> Result<&'a DynColumnRef, String> {
+        self.cols
             .remove(name)
-            .ok_or_else(|| format!("no col named {}", name))?;
-        col.downcast::<T>()
+            .ok_or_else(|| format!("no col named {}", name))
     }
 
     /// Verifies that all columns in the set have been removed.

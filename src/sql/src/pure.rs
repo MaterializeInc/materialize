@@ -293,11 +293,12 @@ pub async fn purify_create_source(
             let config = connection
                 .config(&*connection_context.secrets_reader)
                 .await?;
-            let publication_tables = mz_postgres_util::publication_info(&config, &publication)
-                .await
-                .map_err(|cause| PlanError::FetchingPostgresPublicationInfoFailed {
-                    cause: Arc::new(cause),
-                })?;
+            let publication_tables =
+                mz_postgres_util::publication_info(&config, &publication, None)
+                    .await
+                    .map_err(|cause| PlanError::FetchingPostgresPublicationInfoFailed {
+                        cause: Arc::new(cause),
+                    })?;
 
             // An index from table name -> schema name -> database name -> PostgresTableDesc
             let mut tables_by_name = BTreeMap::new();
@@ -337,18 +338,6 @@ pub async fn purify_create_source(
                     }
                     // The user manually selected a subset of upstream tables so we need to
                     // validate that the names actually exist and are not ambiguous
-
-                    // An index from table name -> schema name -> database name -> PostgresTableDesc
-                    let mut tables_by_name = BTreeMap::new();
-                    for table in &publication_tables {
-                        tables_by_name
-                            .entry(table.name.clone())
-                            .or_insert_with(BTreeMap::new)
-                            .entry(table.namespace.clone())
-                            .or_insert_with(BTreeMap::new)
-                            .entry(connection.database.clone())
-                            .or_insert(table);
-                    }
 
                     validated_requested_subsources.extend(subsource_gen(
                         subsources,
@@ -457,13 +446,52 @@ pub async fn purify_create_source(
                     };
 
                     let data_type = scx.resolve_type(ty)?;
+                    let mut options = vec![];
+
+                    if !c.nullable {
+                        options.push(mz_sql_parser::ast::ColumnOptionDef {
+                            name: None,
+                            option: mz_sql_parser::ast::ColumnOption::NotNull,
+                        });
+                    }
 
                     columns.push(ColumnDef {
                         name,
                         data_type,
                         collation: None,
-                        options: vec![],
+                        options,
                     });
+                }
+
+                let mut constraints = vec![];
+                for key in table.keys.clone() {
+                    let mut key_columns = vec![];
+
+                    for col_num in key.cols {
+                        key_columns.push(Ident::new(
+                            table
+                                .columns
+                                .iter()
+                                .find(|col| col.col_num == Some(col_num))
+                                .expect("key exists as column")
+                                .name
+                                .clone(),
+                        ))
+                    }
+
+                    let constraint = mz_sql_parser::ast::TableConstraint::Unique {
+                        name: Some(Ident::new(key.name)),
+                        columns: key_columns,
+                        is_primary: key.is_primary,
+                        nulls_not_distinct: key.nulls_not_distinct,
+                    };
+
+                    // We take the first constraint available to be the primary key.
+                    if key.is_primary {
+                        constraints.insert(0, constraint);
+                    } else {
+                        constraints.push(constraint);
+                    }
                 }
 
                 // Create the targeted AST node for the original CREATE SOURCE statement
@@ -489,7 +517,7 @@ pub async fn purify_create_source(
                     // replication stream*, if our assumptions change. Failure to do that could
                     // mean that an upstream table that started with an index was then altered to
                     // one without and now we're producing garbage data.
-                    constraints: vec![],
+                    constraints,
                     if_not_exists: false,
                     with_options: vec![CreateSubsourceOption {
                         name: CreateSubsourceOptionName::References,

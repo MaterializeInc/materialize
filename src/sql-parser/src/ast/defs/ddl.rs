@@ -1206,12 +1206,15 @@ impl_display!(S3KeySource);
 /// `ALTER TABLE ADD <constraint>` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TableConstraint<T: AstInfo> {
-    /// `[ CONSTRAINT <name> ] { PRIMARY KEY | UNIQUE } (<columns>)`
+    /// `[ CONSTRAINT <name> ] { PRIMARY KEY | UNIQUE (NULLS NOT DISTINCT)? } (<columns>)`
     Unique {
         name: Option<Ident>,
         columns: Vec<Ident>,
         /// Whether this is a `PRIMARY KEY` or just a `UNIQUE` constraint
         is_primary: bool,
+        // Where this constraint treats each NULL value as distinct; only available on `UNIQUE`
+        // constraints.
+        nulls_not_distinct: bool,
     },
     /// A referential integrity constraint (`[ CONSTRAINT <name> ] FOREIGN KEY (<columns>)
     /// REFERENCES <foreign_table> (<referred_columns>)`)
@@ -1235,12 +1238,16 @@ impl<T: AstInfo> AstDisplay for TableConstraint<T> {
                 name,
                 columns,
                 is_primary,
+                nulls_not_distinct,
             } => {
                 f.write_node(&display_constraint_name(name));
                 if *is_primary {
                     f.write_str("PRIMARY KEY ");
                 } else {
                     f.write_str("UNIQUE ");
+                    if *nulls_not_distinct {
+                        f.write_str("NULLS NOT DISTINCT ");
+                    }
                 }
                 f.write_str("(");
                 f.write_node(&display::comma_separated(columns));

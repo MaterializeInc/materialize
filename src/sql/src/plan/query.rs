@@ -1454,14 +1454,8 @@ fn plan_set_expr(
                     show::plan_show_create_materialized_view(qcx.scx, stmt.clone())?,
                     show::describe_show_create_materialized_view(qcx.scx, stmt)?,
                 ),
-                ShowStatement::ShowDatabases(stmt) => {
-                    show::show_databases(qcx.scx, stmt)?.plan_hir(qcx)
-                }
                 ShowStatement::ShowObjects(stmt) => {
                     show::show_objects(qcx.scx, stmt)?.plan_hir(qcx)
-                }
-                ShowStatement::ShowSchemas(stmt) => {
-                    show::show_schemas(qcx.scx, stmt)?.plan_hir(qcx)
                 }
                 ShowStatement::ShowVariable(_) => sql_bail!("unsupported SHOW statement"),
             }

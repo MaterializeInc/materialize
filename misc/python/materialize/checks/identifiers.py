@@ -59,6 +59,10 @@ def cluster() -> str:
 
 
 class Identifiers(Check):
+    def _can_run(self) -> bool:
+        # CREATE ROLE not compatible with older releases
+        return self.base_version >= MzVersion.parse("0.47.0-dev")
+
     # Some identifiers taken from https://github.com/minimaxir/big-list-of-naughty-strings
     # Under MIT license, Copyright (c) 2015-2020 Max Woolf
     IDENTS = [
@@ -264,7 +268,7 @@ class Identifiers(Check):
 
     def validate(self) -> Testdrive:
         cmds = f"""
-        > SHOW DATABASES WHERE name NOT LIKE 'to_be_created%';
+        > SHOW DATABASES WHERE name NOT LIKE 'to_be_created%' AND name NOT LIKE 'owner_db%';
         materialize
         {dq(self.ident["db"])}
 

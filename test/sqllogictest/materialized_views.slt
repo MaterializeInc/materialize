@@ -256,6 +256,13 @@ SHOW CREATE MATERIALIZED VIEW mv
 name                  create_sql
 materialize.public.mv CREATE␠MATERIALIZED␠VIEW␠"materialize"."public"."mv"␠IN␠CLUSTER␠"default"␠AS␠SELECT␠1
 
+# Test: SHOW CREATE MATERIALIZED VIEW as mz_introspection
+
+simple conn=mz_introspection,user=mz_introspection
+SHOW CREATE MATERIALIZED VIEW mv
+----
+materialize.public.mv,CREATE MATERIALIZED VIEW "materialize"."public"."mv" IN CLUSTER "default" AS SELECT 1
+COMPLETE 1
 
 # Test: SHOW MATERIALIZED VIEWS
 
@@ -346,7 +353,7 @@ mv_primary_idx  mv  default {?column?}
 # Test: Creating materialized views that depend on log sources is forbidden.
 
 statement error materialized view objects cannot depend on log sources
-CREATE OR REPLACE MATERIALIZED VIEW mv AS SELECT id, worker_id, name FROM mz_internal.mz_dataflow_operators;
+CREATE OR REPLACE MATERIALIZED VIEW mv AS SELECT id, name FROM mz_internal.mz_dataflow_operators;
 
 
 # Test: Attempting to use view commands on materialized views gives helpful errors.

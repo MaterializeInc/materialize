@@ -424,8 +424,8 @@ def alter_pg_table(c: Composition) -> None:
         dedent(
             """
                  $ postgres-execute connection=postgres://postgres:postgres@postgres
-                 ALTER TABLE t1 ADD COLUMN f3 INTEGER;
-                 INSERT INTO t1 VALUES (3, NULL, 4)
+                 ALTER TABLE t1 DROP COLUMN f1;
+                 INSERT INTO t1 VALUES (NULL)
                  """
         )
     )

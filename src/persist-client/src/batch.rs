@@ -31,6 +31,7 @@ use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Atomicity, Blob};
 use mz_persist_types::{Codec, Codec64};
+use mz_timely_util::order::Reverse;
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::InvalidUsage;
@@ -278,7 +279,7 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     lower: Antichain<T>,
-    max_ts: T,
+    inclusive_upper: Antichain<Reverse<T>>,
 
     shard_id: ShardId,
     blob: Arc<dyn Blob + Send + Sync>,
@@ -336,7 +337,7 @@ where
         );
         Self {
             lower,
-            max_ts: T::minimum(),
+            inclusive_upper: Antichain::new(),
             blob,
             buffer: BatchBuffer::new(
                 Arc::clone(&metrics),
@@ -354,7 +355,7 @@ where
             parts,
             shard_id,
             since,
-            // TODO: The default case would ideally be `[self.max_ts+1]` but
+            // TODO: The default case would ideally be `{t + 1 for t in self.inclusive_upper}` but
             // there's nothing that lets us increment a timestamp. An empty
             // antichain is guaranteed to correctly bound the data in this
             // part, but it doesn't really tell us anything. Figure out how
@@ -381,24 +382,19 @@ where
                 upper: registered_upper,
             });
         }
-        // when since is less-equal to upper, the upper is a strict bound on the updates' timestamp.
-        // because user batches would never have a since in advance of upper, this ensures that new
-        // updates are recorded with valid timestamps
-        if PartialOrder::less_than(&self.since, &registered_upper) {
-            if registered_upper.less_equal(&self.max_ts) {
-                return Err(InvalidUsage::UpdateBeyondUpper {
-                    max_ts: self.max_ts,
-                    expected_upper: registered_upper.clone(),
-                });
+        // when since is less than or equal to lower, the upper is a strict bound on the updates'
+        // timestamp because no compaction has been performed. Because user batches are always
+        // uncompacted, this ensures that new updates are recorded with valid timestamps.
+        // Otherwise, we can make no assumptions about the timestamps
+        if PartialOrder::less_equal(&self.since, &self.lower) {
+            for ts in self.inclusive_upper.iter() {
+                if registered_upper.less_equal(&ts.0) {
+                    return Err(InvalidUsage::UpdateBeyondUpper {
+                        ts: ts.0.clone(),
+                        expected_upper: registered_upper.clone(),
+                    });
+                }
             }
-        // but if since is in advance of the upper (e.g. from compaction, not from a user batch)
-        // then our updates will similarly have timestamps in advance of upper. this is OK, so
-        // long as we validate that they aren't beyond the since.
-        } else if self.since.less_than(&self.max_ts) {
-            return Err(InvalidUsage::UpdateBeyondSince {
-                max_ts: self.max_ts,
-                expected_since: self.since.clone(),
-            });
         }
 
         let remainder = self.buffer.drain();
@@ -440,7 +436,7 @@ where
             });
         }
 
-        self.max_ts.join_assign(ts);
+        self.inclusive_upper.insert(Reverse(ts.clone()));
 
         match self.buffer.push(key, val, ts, diff.clone()) {
             Some(part_to_flush) => {
@@ -848,7 +844,7 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
 mod tests {
     use crate::cache::PersistClientCache;
     use crate::internal::paths::{BlobKey, PartialBlobKey};
-    use crate::tests::all_ok;
+    use crate::tests::{all_ok, CodecProduct};
     use crate::PersistLocation;
 
     use super::*;
@@ -980,6 +976,58 @@ mod tests {
             .await;
 
         assert_eq!(batch.batch.parts.len(), 3);
+        for part in &batch.batch.parts {
+            match BlobKey::parse_ids(&part.key.complete(&shard_id)) {
+                Ok((shard, PartialBlobKey::Batch(writer, _))) => {
+                    assert_eq!(shard.to_string(), shard_id.to_string());
+                    assert_eq!(writer.to_string(), write.writer_id.to_string());
+                }
+                _ => panic!("unparseable blob key"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    async fn batch_builder_partial_order() {
+        mz_ore::test::init_logging();
+
+        let cache = PersistClientCache::new_no_metrics();
+        // Set blob_target_size to 0 so that each row gets forced into its own batch part
+        cache.cfg.dynamic.set_blob_target_size(0);
+        let client = cache
+            .open(PersistLocation {
+                blob_uri: "mem://".to_owned(),
+                consensus_uri: "mem://".to_owned(),
+            })
+            .await
+            .expect("client construction failed");
+        let shard_id = ShardId::new();
+        let (mut write, _) = client
+            .expect_open::<String, String, CodecProduct, i64>(shard_id)
+            .await;
+
+        let batch = write
+            .batch(
+                &[
+                    (
+                        ("1".to_owned(), "one".to_owned()),
+                        CodecProduct::new(0, 10),
+                        1,
+                    ),
+                    (
+                        ("2".to_owned(), "two".to_owned()),
+                        CodecProduct::new(10, 0),
+                        1,
+                    ),
+                ],
+                Antichain::from_elem(CodecProduct::new(0, 0)),
+                Antichain::from_iter([CodecProduct::new(0, 11), CodecProduct::new(10, 1)]),
+            )
+            .await
+            .expect("invalid usage");
+
+        assert_eq!(batch.batch.parts.len(), 2);
         for part in &batch.batch.parts {
             match BlobKey::parse_ids(&part.key.complete(&shard_id)) {
                 Ok((shard, PartialBlobKey::Batch(writer, _))) => {

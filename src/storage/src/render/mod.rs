@@ -65,27 +65,25 @@
 //! ### Detailed dataflow
 //!
 //! We are now ready to describe the detailed structure of the ingestion dataflow. The dataflow
-//! begins with the `source reader` operator which is rendered in a `FromTime` timely scope. This
-//! scope's timestamp is controlled by the [`crate::source::types::SourceReader::Time`] associated
-//! type and can be anything the source implementation desires.
+//! begins with the `source reader` dataflow fragment which is rendered in a `FromTime` timely
+//! scope. This scope's timestamp is controlled by the [`crate::source::types::SourceRender::Time`]
+//! associated type and can be anything the source implementation desires.
 //!
-//! As usual with timely operators, on construction an initial capability for the minimum timestamp
-//! is constructed for each of the operator's outputs. These capabilities are passed to the source
-//! implementation via the [`crate::source::types::SourceConnectionBuilder::into_reader`] method,
-//! which stores them in order to be able to produce messages in the future.
+//! Each source is free to render any arbitrary dataflow fragment in that scope as long as it
+//! produces the collections expected by the rest of the framework. The rendering is handled by the
+//! `[crate::source::types::SourceRender::render] method.
 //!
-//! Each source has three outputs. First, a health output, which is how the source communicates
-//! status updates about its heath. Second, a data output, which is the main output of a source and
-//! contains the data that will eventually be recorded in the persist shards. Finally, an upper
-//! frontier output, which is tracking the overall upstream upper frontier. The frontier presented
-//! at the upper output is independent of the upper frontier of the data output and is the one that
-//! drives reclocking. For example, it's possible that a source implementation queries the upstream
-//! system to learn what are the latest offsets for and set the upper output based on that, even
-//! before having started the actual ingestion, which would be presented as data and progress
-//! trickling in via the data output.
-//!
-//! Note: At the time of writing the data output is multiplexed with the health output via the
-//! [`crate::source::types::SourceMessageType`] enum but may be demultiplexed in the future.
+//! When rendering a source dataflow we expect three outputs. First, a health output, which is how
+//! the source communicates status updates about its health. Second, a data output, which is the
+//! main output of a source and contains the data that will eventually be recorded in the persist
+//! shard. Finally, an optional upper frontier output, which tracks the overall upstream upper
+//! frontier. When a source doesn't provide a dedicated progress output the framework derives one
+//! by observing the progress of the data output. This output (derived or not) is what drives
+//! reclocking. When a source provides a dedicated upper output, it can manage it independently of
+//! the data output frontier. For example, it's possible that a source implementation queries the
+//! upstream system to learn what are the latest offsets for and set the upper output based on
+//! that, even before having started the actual ingestion, which would be presented as data and
+//! progress trickling in via the data output.
 //!
 //! ```text
 //!                                                   resume upper

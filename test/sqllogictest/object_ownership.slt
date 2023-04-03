@@ -1,0 +1,1288 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+reset-server
+
+# Enable rbac checks.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER ROLE materialize CREATEDB CREATECLUSTER CREATEROLE;
+----
+COMPLETE 0
+
+# All objects on a fresh installation should be owned by mz_system (s1)
+
+# No builtin sinks
+query T
+SELECT owner_id FROM mz_sinks GROUP BY owner_id
+----
+
+query T
+SELECT owner_id FROM mz_indexes GROUP BY owner_id
+----
+s1
+
+# No builtin connections
+query T
+SELECT owner_id FROM mz_connections GROUP BY owner_id
+----
+
+query T
+SELECT owner_id FROM mz_types GROUP BY owner_id
+----
+s1
+
+query T
+SELECT owner_id FROM mz_functions GROUP BY owner_id
+----
+s1
+
+# No builtin secrets
+query T
+SELECT owner_id FROM mz_secrets GROUP BY owner_id
+----
+
+query T
+SELECT owner_id FROM mz_relations GROUP BY owner_id
+----
+s1
+
+query T
+SELECT owner_id FROM mz_tables GROUP BY owner_id
+----
+s1
+
+query T
+SELECT owner_id FROM mz_sources GROUP BY owner_id
+----
+s1
+
+query T
+SELECT owner_id FROM mz_views GROUP BY owner_id
+----
+s1
+
+# No builtin materialized views
+query T
+SELECT owner_id FROM mz_materialized_views GROUP BY owner_id
+----
+
+query T
+SELECT owner_id FROM mz_databases GROUP BY owner_id
+----
+s1
+
+query T
+SELECT owner_id FROM mz_clusters GROUP BY owner_id
+----
+s1
+
+query T
+SELECT owner_id FROM mz_cluster_replicas GROUP BY owner_id
+----
+s1
+
+query T
+SELECT owner_id FROM mz_schemas GROUP BY owner_id
+----
+s1
+
+# Test user made objects
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE joe CREATEDB CREATECLUSTER;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE group_materialize;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE group_no_one;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT group_materialize TO materialize;
+----
+COMPLETE 0
+
+## Tables
+
+statement ok
+CREATE TABLE mt (a INT);
+
+query T
+SELECT mz_roles.name
+  FROM mz_tables
+  LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
+  WHERE mz_tables.name = 'mt'
+----
+materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_relations
+  LEFT JOIN mz_roles ON mz_relations.owner_id = mz_roles.id
+  WHERE mz_relations.name = 'mt'
+----
+materialize
+
+statement error must be a member of "group_no_one"
+ALTER TABLE mt OWNER TO group_no_one
+
+statement ok
+ALTER TABLE mt OWNER TO group_materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_relations
+  LEFT JOIN mz_roles ON mz_relations.owner_id = mz_roles.id
+  WHERE mz_relations.name = 'mt'
+----
+group_materialize
+
+statement ok
+ALTER TABLE mt RENAME TO ICs
+
+statement ok
+DROP TABLE ICs
+
+simple conn=joe,user=joe
+CREATE TABLE jt (a INT);
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_tables
+  LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
+  WHERE mz_tables.name = 'jt'
+----
+joe
+
+query T
+SELECT mz_roles.name
+  FROM mz_relations
+  LEFT JOIN mz_roles ON mz_relations.owner_id = mz_roles.id
+  WHERE mz_relations.name = 'jt'
+----
+joe
+
+statement error must be owner of TABLE materialize.public.jt
+DROP TABLE jt
+
+statement error must be owner of TABLE materialize.public.jt
+ALTER TABLE jt RENAME TO cool
+
+statement error must be owner of TABLE materialize.public.jt
+ALTER TABLE jt OWNER TO group_materialize
+
+## Indexes
+
+statement ok
+CREATE TABLE mt (a INT);
+
+statement ok
+CREATE INDEX mt_ind ON mt(a);
+
+query T
+SELECT mz_roles.name
+  FROM mz_indexes
+  LEFT JOIN mz_roles ON mz_indexes.owner_id = mz_roles.id
+  WHERE mz_indexes.name = 'mt_ind'
+----
+materialize
+
+statement error must be a member of "group_no_one"
+ALTER INDEX mt_ind OWNER TO group_no_one
+
+statement ok
+ALTER INDEX mt_ind OWNER TO group_materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_indexes
+  LEFT JOIN mz_roles ON mz_indexes.owner_id = mz_roles.id
+  WHERE mz_indexes.name = 'mt_ind'
+----
+group_materialize
+
+statement ok
+ALTER INDEX mt_ind SET (LOGICAL COMPACTION WINDOW = 0)
+
+statement ok
+ALTER INDEX mt_ind RENAME TO ICs
+
+statement ok
+DROP INDEX ICs
+
+simple conn=joe,user=joe
+CREATE INDEX jt_ind ON jt(a);
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_indexes
+  LEFT JOIN mz_roles ON mz_indexes.owner_id = mz_roles.id
+  WHERE mz_indexes.name = 'jt_ind'
+----
+joe
+
+statement error must be owner of INDEX materialize.public.jt_ind
+DROP INDEX jt_ind
+
+statement error must be owner of INDEX materialize.public.jt_ind
+ALTER INDEX jt_ind RENAME TO cool
+
+statement error must be owner of INDEX materialize.public.jt_ind
+ALTER INDEX jt_ind OWNER TO group_materialize
+
+statement error must be owner of INDEX materialize.public.jt_ind
+ALTER INDEX jt_ind SET (LOGICAL COMPACTION WINDOW = 0)
+
+## Sources
+
+statement ok
+CREATE SOURCE ms FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+
+query T
+SELECT mz_roles.name
+  FROM mz_sources
+  LEFT JOIN mz_roles ON mz_sources.owner_id = mz_roles.id
+  WHERE mz_sources.name = 'ms'
+----
+materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_relations
+  LEFT JOIN mz_roles ON mz_relations.owner_id = mz_roles.id
+  WHERE mz_relations.name = 'ms'
+----
+materialize
+
+statement error must be a member of "group_no_one"
+ALTER SOURCE ms OWNER TO group_no_one
+
+statement ok
+ALTER SOURCE ms OWNER TO group_materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_relations
+  LEFT JOIN mz_roles ON mz_relations.owner_id = mz_roles.id
+  WHERE mz_relations.name = 'ms'
+----
+group_materialize
+
+statement ok
+ALTER SOURCE ms SET (SIZE = '4')
+
+statement ok
+ALTER SOURCE ms RENAME TO ICs
+
+statement ok
+DROP SOURCE ICs
+
+simple conn=joe,user=joe
+CREATE SOURCE js FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_sources
+  LEFT JOIN mz_roles ON mz_sources.owner_id = mz_roles.id
+  WHERE mz_sources.name = 'js'
+----
+joe
+
+query T
+SELECT mz_roles.name
+  FROM mz_relations
+  LEFT JOIN mz_roles ON mz_relations.owner_id = mz_roles.id
+  WHERE mz_relations.name = 'js'
+----
+joe
+
+statement error must be owner of SOURCE materialize.public.js
+DROP SOURCE js
+
+statement error must be owner of SOURCE materialize.public.js
+ALTER SOURCE js RENAME TO cool
+
+statement error must be owner of SOURCE materialize.public.js
+ALTER SOURCE js OWNER TO group_materialize
+
+statement error must be owner of SOURCE materialize.public.js
+ALTER SOURCE js SET (SIZE = '4')
+
+## Views
+
+statement ok
+CREATE VIEW mv AS SELECT 1;
+
+query T
+SELECT mz_roles.name
+  FROM mz_views
+  LEFT JOIN mz_roles ON mz_views.owner_id = mz_roles.id
+  WHERE mz_views.name = 'mv'
+----
+materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_relations
+  LEFT JOIN mz_roles ON mz_relations.owner_id = mz_roles.id
+  WHERE mz_relations.name = 'mv'
+----
+materialize
+
+statement error must be a member of "group_no_one"
+ALTER VIEW mv OWNER TO group_no_one
+
+statement ok
+ALTER VIEW mv OWNER TO group_materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_relations
+  LEFT JOIN mz_roles ON mz_relations.owner_id = mz_roles.id
+  WHERE mz_relations.name = 'mv'
+----
+group_materialize
+
+statement ok
+ALTER VIEW mv RENAME TO ICs
+
+statement ok
+DROP VIEW ICs
+
+simple conn=joe,user=joe
+CREATE VIEW jv AS SELECT 1;
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_views
+  LEFT JOIN mz_roles ON mz_views.owner_id = mz_roles.id
+  WHERE mz_views.name = 'jv'
+----
+joe
+
+query T
+SELECT mz_roles.name
+  FROM mz_relations
+  LEFT JOIN mz_roles ON mz_relations.owner_id = mz_roles.id
+  WHERE mz_relations.name = 'jv'
+----
+joe
+
+statement error must be owner of VIEW materialize.public.jv
+DROP VIEW jv
+
+statement error must be owner of VIEW materialize.public.jv
+ALTER VIEW jv RENAME TO cool
+
+statement error must be owner of VIEW materialize.public.jv
+ALTER VIEW jv OWNER TO group_materialize
+
+## Materialized Views
+
+statement ok
+CREATE MATERIALIZED VIEW mmv AS SELECT 1;
+
+query T
+SELECT mz_roles.name
+  FROM mz_materialized_views
+  LEFT JOIN mz_roles ON mz_materialized_views.owner_id = mz_roles.id
+  WHERE mz_materialized_views.name = 'mmv'
+----
+materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_relations
+  LEFT JOIN mz_roles ON mz_relations.owner_id = mz_roles.id
+  WHERE mz_relations.name = 'mmv'
+----
+materialize
+
+statement error must be a member of "group_no_one"
+ALTER MATERIALIZED VIEW mmv OWNER TO group_no_one
+
+statement ok
+ALTER MATERIALIZED VIEW mmv OWNER TO group_materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_relations
+  LEFT JOIN mz_roles ON mz_relations.owner_id = mz_roles.id
+  WHERE mz_relations.name = 'mmv'
+----
+group_materialize
+
+statement ok
+ALTER MATERIALIZED VIEW mmv RENAME TO ICs
+
+statement ok
+DROP MATERIALIZED VIEW ICs
+
+simple conn=joe,user=joe
+CREATE MATERIALIZED VIEW jmv AS SELECT 1;
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_materialized_views
+  LEFT JOIN mz_roles ON mz_materialized_views.owner_id = mz_roles.id
+  WHERE mz_materialized_views.name = 'jmv'
+----
+joe
+
+query T
+SELECT mz_roles.name
+  FROM mz_relations
+  LEFT JOIN mz_roles ON mz_relations.owner_id = mz_roles.id
+  WHERE mz_relations.name = 'jmv'
+----
+joe
+
+statement error must be owner of MATERIALIZED VIEW materialize.public.jmv
+DROP MATERIALIZED VIEW jmv
+
+statement error must be owner of MATERIALIZED VIEW materialize.public.jmv
+ALTER MATERIALIZED VIEW jmv RENAME TO cool
+
+statement error must be owner of MATERIALIZED VIEW materialize.public.jmv
+ALTER MATERIALIZED VIEW jmv OWNER TO group_materialize
+
+## Connections
+
+statement ok
+CREATE CONNECTION mc TO KAFKA (BROKER 'localhost:9092');
+
+query T
+SELECT mz_roles.name
+  FROM mz_connections
+  LEFT JOIN mz_roles ON mz_connections.owner_id = mz_roles.id
+  WHERE mz_connections.name = 'mc'
+----
+materialize
+
+statement error must be a member of "group_no_one"
+ALTER CONNECTION mc OWNER TO group_no_one
+
+statement ok
+ALTER CONNECTION mc OWNER TO group_materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_connections
+  LEFT JOIN mz_roles ON mz_connections.owner_id = mz_roles.id
+  WHERE mz_connections.name = 'mc'
+----
+group_materialize
+
+statement ok
+ALTER CONNECTION mc RENAME TO ICs
+
+statement ok
+DROP CONNECTION ICs
+
+statement ok
+CREATE CONNECTION mssh TO SSH TUNNEL (HOST 'ssh-bastion-host', USER 'mz', PORT 22);
+
+statement ok
+ALTER CONNECTION mssh ROTATE KEYS
+
+simple conn=joe,user=joe
+CREATE CONNECTION jc TO KAFKA (BROKER 'localhost:9092');
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_connections
+  LEFT JOIN mz_roles ON mz_connections.owner_id = mz_roles.id
+  WHERE mz_connections.name = 'jc'
+----
+joe
+
+statement error must be owner of CONNECTION materialize.public.jc
+DROP CONNECTION jc
+
+statement error must be owner of CONNECTION materialize.public.jc
+ALTER CONNECTION jc RENAME TO cool
+
+statement error must be owner of CONNECTION materialize.public.jc
+ALTER CONNECTION jc OWNER TO group_materialize
+
+simple conn=joe,user=joe
+CREATE CONNECTION jssh TO SSH TUNNEL (HOST 'ssh-bastion-host', USER 'mz', PORT 22);
+----
+COMPLETE 0
+
+statement error must be owner of CONNECTION materialize.public.jssh
+ALTER CONNECTION jssh ROTATE KEYS
+
+## Types
+
+statement ok
+CREATE TYPE mty AS LIST (ELEMENT TYPE=bool);
+
+query T
+SELECT mz_roles.name
+  FROM mz_types
+  LEFT JOIN mz_roles ON mz_types.owner_id = mz_roles.id
+  WHERE mz_types.name = 'mty'
+----
+materialize
+
+statement error must be a member of "group_no_one"
+ALTER TYPE mty OWNER TO group_no_one
+
+statement ok
+ALTER TYPE mty OWNER TO group_materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_types
+  LEFT JOIN mz_roles ON mz_types.owner_id = mz_roles.id
+  WHERE mz_types.name = 'mty'
+----
+group_materialize
+
+statement ok
+DROP TYPE mty
+
+simple conn=joe,user=joe
+CREATE TYPE jty AS LIST (ELEMENT TYPE=bool);
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_types
+  LEFT JOIN mz_roles ON mz_types.owner_id = mz_roles.id
+  WHERE mz_types.name = 'jty'
+----
+joe
+
+statement error must be owner of TYPE materialize.public.jty
+DROP TYPE jty
+
+statement error must be owner of TYPE materialize.public.jty
+ALTER TYPE jty OWNER TO group_materialize
+
+## Secrets
+
+statement ok
+CREATE SECRET mse AS decode('c2VjcmV0Cg==', 'base64');
+
+query T
+SELECT mz_roles.name
+  FROM mz_secrets
+  LEFT JOIN mz_roles ON mz_secrets.owner_id = mz_roles.id
+  WHERE mz_secrets.name = 'mse'
+----
+materialize
+
+statement error must be a member of "group_no_one"
+ALTER SECRET mse OWNER TO group_no_one
+
+statement ok
+ALTER SECRET mse OWNER TO group_materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_secrets
+  LEFT JOIN mz_roles ON mz_secrets.owner_id = mz_roles.id
+  WHERE mz_secrets.name = 'mse'
+----
+group_materialize
+
+statement ok
+ALTER SECRET mse AS decode('c2VjcmV0Cg==', 'base64');
+
+statement ok
+ALTER SECRET mse RENAME TO ICs
+
+statement ok
+DROP SECRET ICs
+
+simple conn=joe,user=joe
+CREATE SECRET jse AS decode('c2VjcmV0Cg==', 'base64');
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_secrets
+  LEFT JOIN mz_roles ON mz_secrets.owner_id = mz_roles.id
+  WHERE mz_secrets.name = 'jse'
+----
+joe
+
+statement error must be owner of SECRET materialize.public.jse
+DROP SECRET jse
+
+statement error must be owner of SECRET materialize.public.jse
+ALTER SECRET jse RENAME TO cool
+
+statement error must be owner of SECRET materialize.public.jse
+ALTER SECRET jse OWNER TO group_materialize
+
+statement error must be owner of SECRET materialize.public.jse
+ALTER SECRET jse AS decode('c2VjcmV0Cg==', 'base64');
+
+## Databases
+
+statement ok
+CREATE DATABASE mdb;
+
+query T
+SELECT mz_roles.name
+  FROM mz_databases
+  LEFT JOIN mz_roles ON mz_databases.owner_id = mz_roles.id
+  WHERE mz_databases.name = 'mdb'
+----
+materialize
+
+statement error must be a member of "group_no_one"
+ALTER DATABASE mdb OWNER TO group_no_one
+
+statement ok
+ALTER DATABASE mdb OWNER TO group_materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_databases
+  LEFT JOIN mz_roles ON mz_databases.owner_id = mz_roles.id
+  WHERE mz_databases.name = 'mdb'
+----
+group_materialize
+
+statement ok
+DROP DATABASE mdb
+
+simple conn=joe,user=joe
+CREATE DATABASE jdb;
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_databases
+  LEFT JOIN mz_roles ON mz_databases.owner_id = mz_roles.id
+  WHERE mz_databases.name = 'jdb'
+----
+joe
+
+statement error must be owner of DATABASE jdb
+DROP DATABASE jdb
+
+statement error must be owner of DATABASE jdb
+ALTER DATABASE jdb OWNER TO group_materialize
+
+## Schemas
+
+statement ok
+CREATE SCHEMA msc;
+
+query T
+SELECT mz_roles.name
+  FROM mz_schemas
+  LEFT JOIN mz_roles ON mz_schemas.owner_id = mz_roles.id
+  WHERE mz_schemas.name = 'msc'
+----
+materialize
+
+statement error must be a member of "group_no_one"
+ALTER SCHEMA msc OWNER TO group_no_one
+
+statement ok
+ALTER SCHEMA msc OWNER TO group_materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_schemas
+  LEFT JOIN mz_roles ON mz_schemas.owner_id = mz_roles.id
+  WHERE mz_schemas.name = 'msc'
+----
+group_materialize
+
+statement ok
+DROP SCHEMA msc
+
+simple conn=joe,user=joe
+CREATE SCHEMA jsc;
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_schemas
+  LEFT JOIN mz_roles ON mz_schemas.owner_id = mz_roles.id
+  WHERE mz_schemas.name = 'jsc'
+----
+joe
+
+statement error must be owner of SCHEMA materialize.jsc
+DROP SCHEMA jsc
+
+statement error must be owner of SCHEMA materialize.jsc
+ALTER SCHEMA jsc OWNER TO group_materialize
+
+statement ok
+CREATE SCHEMA jdb.msc_cross;
+
+query T
+SELECT mz_roles.name
+  FROM mz_schemas
+  LEFT JOIN mz_roles ON mz_schemas.owner_id = mz_roles.id
+  WHERE mz_schemas.name = 'msc_cross'
+----
+materialize
+
+## Clusters
+
+statement ok
+CREATE CLUSTER mclus REPLICAS (mr1 (SIZE '1'));
+
+query T
+SELECT mz_roles.name
+  FROM mz_clusters
+  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  WHERE mz_clusters.name = 'mclus'
+----
+materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
+  WHERE mz_cluster_replicas.name = 'mr1'
+----
+materialize
+
+statement error must be a member of "group_no_one"
+ALTER CLUSTER mclus OWNER TO group_no_one
+
+statement ok
+ALTER CLUSTER mclus OWNER TO group_materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_clusters
+  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  WHERE mz_clusters.name = 'mclus'
+----
+group_materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
+  WHERE mz_cluster_replicas.name = 'mr1'
+----
+materialize
+
+statement ok
+DROP CLUSTER mclus
+
+simple conn=joe,user=joe
+CREATE CLUSTER jclus REPLICAS (jr1 (SIZE '1'));
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_clusters
+  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  WHERE mz_clusters.name = 'jclus'
+----
+joe
+
+query T
+SELECT mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
+  WHERE mz_cluster_replicas.name = 'jr1'
+----
+joe
+
+statement error must be owner of CLUSTER jclus
+DROP CLUSTER jclus
+
+statement error must be owner of CLUSTER jclus
+ALTER CLUSTER jclus OWNER TO group_materialize
+
+## Cluster Replicas
+
+statement ok
+CREATE CLUSTER REPLICA default.mr2 SIZE '1';
+
+query T
+SELECT mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
+  WHERE mz_cluster_replicas.name = 'mr2'
+----
+materialize
+
+statement error must be a member of "group_no_one"
+ALTER CLUSTER REPLICA default.mr2 OWNER TO group_no_one
+
+statement ok
+ALTER CLUSTER REPLICA default.mr2 OWNER TO group_materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
+  WHERE mz_cluster_replicas.name = 'mr2'
+----
+group_materialize
+
+statement ok
+DROP CLUSTER REPLICA default.mr2
+
+simple conn=joe,user=joe
+CREATE CLUSTER REPLICA default.jr2 SIZE '1';
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
+  WHERE mz_cluster_replicas.name = 'jr2'
+----
+joe
+
+statement error must be owner of CLUSTER REPLICA default.jr2
+DROP CLUSTER REPLICA default.jr2
+
+statement error must be owner of CLUSTER REPLICA default.jr2
+ALTER CLUSTER REPLICA default.jr2 OWNER TO group_materialize
+
+statement ok
+CREATE CLUSTER REPLICA jclus.mr_cross SIZE '1';
+
+query T
+SELECT mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
+  WHERE mz_cluster_replicas.name = 'mr_cross'
+----
+materialize
+
+# Renaming does not change owner
+
+statement ok
+CREATE TABLE old_table ();
+
+query T
+SELECT mz_roles.name
+  FROM mz_tables
+  LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
+  WHERE mz_tables.name = 'old_table'
+----
+materialize
+
+simple conn=mz_system,user=mz_system
+ALTER TABLE mt RENAME TO new_table;
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_tables
+  LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
+  WHERE mz_tables.name = 'new_table'
+----
+materialize
+
+# Prevent dropping roles while owned objects exist
+
+## Tables
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+simple conn=owner1,user=owner
+CREATE TABLE t (a INT);
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner1,user=owner
+DROP TABLE t;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+## Indexes
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+statement ok
+create TABLE t (a INT);
+
+simple conn=owner2,user=owner
+CREATE INDEX ind ON t(a);
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner2,user=owner
+DROP INDEX ind;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+statement ok
+DROP TABLE t
+
+## Sources
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+simple conn=owner3,user=owner
+create SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner3,user=owner
+DROP SOURCE s;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+## Views
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+simple conn=owner4,user=owner
+CREATE VIEW v AS SELECT 1;
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner4,user=owner
+DROP VIEW v;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+## Materialized Views
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+simple conn=owner5,user=owner
+CREATE MATERIALIZED VIEW mvv AS SELECT 1;
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner5,user=owner
+DROP MATERIALIZED VIEW mvv;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+## Connections
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+simple conn=owner6,user=owner
+CREATE CONNECTION c TO KAFKA (BROKER 'localhost:9092');
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner6,user=owner
+DROP CONNECTION c;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+## Types
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+simple conn=owner7,user=owner
+CREATE TYPE ty AS LIST (ELEMENT TYPE=bool);
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner7,user=owner
+DROP TYPE ty;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+## Secrets
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+simple conn=owner8,user=owner
+CREATE SECRET se AS decode('c2VjcmV0Cg==', 'base64');
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner8,user=owner
+DROP SECRET se;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+## Databases
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+simple conn=owner9,user=owner
+CREATE DATABASE db;
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner9,user=owner
+DROP DATABASE db;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+## Schemas
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+simple conn=owner10,user=owner
+CREATE SCHEMA sc;
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner10,user=owner
+DROP SCHEMA sc;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+## Clusters
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+simple conn=owner11,user=owner
+CREATE CLUSTER clus REPLICAS (r1 (SIZE '1'));
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner11,user=owner
+DROP CLUSTER clus;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+## Cluster Replicas
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+simple conn=owner12,user=owner
+CREATE CLUSTER REPLICA default.r2 SIZE '1';
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner12,user=owner
+DROP CLUSTER REPLICA default.r2;
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+## Multiple Objects
+
+statement ok
+CREATE ROLE owner CREATEDB CREATECLUSTER
+
+simple conn=owner13,user=owner
+CREATE TABLE t (a INT)
+----
+COMPLETE 0
+
+simple conn=owner13,user=owner
+CREATE VIEW v AS SELECT 1
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner13,user=owner
+DROP TABLE t
+----
+COMPLETE 0
+
+statement error role "owner" cannot be dropped because some objects depend on it
+DROP ROLE owner
+
+simple conn=owner13,user=owner
+DROP VIEW v
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE owner
+
+# Prevent altering the owner of system resources
+
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER mz_system OWNER TO mz_system
+----
+db error: ERROR: system cluster 'mz_system' cannot be modified
+
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER REPLICA mz_system.r1 OWNER TO mz_system
+----
+db error: ERROR: system cluster 'mz_system' cannot be modified
+
+simple conn=mz_system,user=mz_system
+ALTER SCHEMA mz_catalog OWNER TO mz_system
+----
+db error: ERROR: cannot alter schema mz_catalog because it is required by the database system
+
+simple conn=mz_system,user=mz_system
+ALTER SOURCE mz_internal.mz_dataflow_operators OWNER TO mz_system
+----
+db error: ERROR: cannot alter item mz_internal.mz_dataflow_operators because it is required by the database system
+
+simple conn=mz_system,user=mz_system
+ALTER TABLE mz_views OWNER TO mz_system
+----
+db error: ERROR: cannot alter item mz_catalog.mz_views because it is required by the database system
+
+simple conn=mz_system,user=mz_system
+ALTER VIEW mz_relations OWNER TO mz_system
+----
+db error: ERROR: cannot alter item mz_catalog.mz_relations because it is required by the database system
+
+simple conn=mz_system,user=mz_system
+ALTER TYPE int4 OWNER TO mz_system
+----
+db error: ERROR: cannot alter item pg_catalog.int4 because it is required by the database system
+
+simple conn=mz_system,user=mz_system
+ALTER INDEX mz_internal.mz_show_databases_ind OWNER TO mz_system
+----
+db error: ERROR: cannot alter item mz_internal.mz_show_databases_ind because it is required by the database system
+
+# Superusers can alter the owner to a role that they are not a member of
+
+statement ok
+CREATE TABLE t ()
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE group1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER TABLE t OWNER TO group1;
+----
+COMPLETE 0
+
+statement ok
+CREATE ROLE group2;
+
+simple conn=mz_system,user=mz_system
+ALTER TABLE t OWNER TO group2;
+----
+COMPLETE 0
+
+# Disable rbac checks.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0

@@ -82,6 +82,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use mz_adapter::catalog::{Catalog, Op};
 use mz_ore::{now::SYSTEM_TIME, task::spawn};
 
+use mz_adapter::catalog::storage::MZ_SYSTEM_ROLE_ID;
 use tokio::runtime::Runtime;
 
 fn bench_transact(c: &mut Criterion) {
@@ -124,6 +125,7 @@ fn bench_transact(c: &mut Criterion) {
                     name: id.to_string(),
                     oid: id,
                     public_schema_oid: id,
+                    owner_id: MZ_SYSTEM_ROLE_ID,
                 }];
                 catalog
                     .transact(mz_repr::Timestamp::MIN, None, ops, |_| Ok(()))

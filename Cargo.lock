@@ -81,12 +81,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arc-swap"
-version = "0.4.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dabe5a181f83789739c194cbe5a897dde195078fac08568d09221fd6137a7ba8"
-
-[[package]]
 name = "array-init-cursor"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -127,6 +121,7 @@ dependencies = [
  "futures",
  "getrandom",
  "hash_hasher",
+ "multiversion",
  "num-traits",
  "parquet2",
  "rustc_version",
@@ -1882,6 +1877,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "enum_dispatch"
+version = "0.3.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11f36e95862220b211a6e2aa5eca09b4fa391b13cd52ceb8035a24bf65a79de2"
+dependencies = [
+ "once_cell",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "enumflags2"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3195,6 +3202,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5ce46fe64a9d73be07dcbe690a38ce1b293be448fd8ce1e6c1b8062c9f72c6a"
 
 [[package]]
+name = "multiversion"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "025c962a3dd3cc5e0e520aa9c612201d127dcdf28616974961a649dca64f5373"
+dependencies = [
+ "multiversion-macros",
+]
+
+[[package]]
+name = "multiversion-macros"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8a3e2bde382ebf960c1f3e79689fa5941625fe9bf694a1cb64af3e85faff3af"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "mysql_async"
 version = "0.31.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3307,6 +3334,7 @@ dependencies = [
  "enum-kinds",
  "fail",
  "futures",
+ "hex",
  "itertools",
  "launchdarkly-server-sdk",
  "maplit",
@@ -3550,7 +3578,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.48.0-dev"
+version = "0.50.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3698,7 +3726,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.48.0-dev"
+version = "0.50.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -3913,6 +3941,7 @@ dependencies = [
  "anyhow",
  "byteorder",
  "chrono",
+ "clap",
  "criterion",
  "differential-dataflow",
  "itertools",
@@ -4203,7 +4232,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.48.0-dev"
+version = "0.50.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4253,7 +4282,12 @@ dependencies = [
  "anyhow",
  "arrow2",
  "bytes",
+ "mz-proto",
  "parquet2",
+ "prost",
+ "prost-build",
+ "protobuf-src",
+ "serde",
  "workspace-hack",
 ]
 
@@ -4428,6 +4462,7 @@ dependencies = [
  "dec",
  "differential-dataflow",
  "enum-kinds",
+ "enum_dispatch",
  "fast-float",
  "hex",
  "itertools",
@@ -4782,6 +4817,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "timely",
  "tokio",
@@ -4834,6 +4870,7 @@ dependencies = [
  "mz-stash",
  "mz-timely-util",
  "once_cell",
+ "openssh",
  "prometheus",
  "proptest",
  "proptest-derive",
@@ -5220,13 +5257,14 @@ dependencies = [
 
 [[package]]
 name = "openssh"
-version = "0.9.8"
+version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "882ea878a02cb72a04424ff906def2b37007b61cf6572ee31dc0d0a912990763"
+checksum = "8ca6c277973fb549b36dd8980941b5ea3ecebea026f5b1f0060acde74d893c22"
 dependencies = [
  "dirs",
  "libc",
  "once_cell",
+ "openssh-mux-client",
  "shell-escape",
  "tempfile",
  "thiserror",
@@ -5235,10 +5273,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "openssl"
-version = "0.10.43"
+name = "openssh-mux-client"
+version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "020433887e44c27ff16365eaa2d380547a94544ad509aff6eb5b6e3e0b27b376"
+checksum = "88eac793af6170bcd6d4f39c3b7ba3f4227cab5680d7189ba30f9d174600b75f"
+dependencies = [
+ "once_cell",
+ "sendfd",
+ "serde",
+ "ssh_format",
+ "thiserror",
+ "tokio",
+ "tokio-io-utility",
+ "typed-builder",
+]
+
+[[package]]
+name = "openssl"
+version = "0.10.48"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "518915b97df115dd36109bfa429a48b8f737bd05508cf9588977b599648926d2"
 dependencies = [
  "bitflags",
  "cfg-if",
@@ -5277,9 +5331,9 @@ dependencies = [
 
 [[package]]
 name = "openssl-sys"
-version = "0.9.80"
+version = "0.9.83"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23bbbf7854cd45b83958ebe919f0e8e516793727652e27fda10a8384cfc790b7"
+checksum = "666416d899cf077260dac8698d60a60b435a46d57e82acb1be3d0dad87284e5b"
 dependencies = [
  "autocfg",
  "cc",
@@ -6496,6 +6550,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "sendfd"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "604b71b8fc267e13bb3023a2c901126c8f349393666a6d98ac1ae5729b701798"
+dependencies = [
+ "libc",
+ "tokio",
+]
+
+[[package]]
 name = "sentry"
 version = "0.29.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6784,11 +6848,10 @@ checksum = "43b2853a4d09f215c24cc5489c992ce46052d359b5109343cbafbf26bc62f8a3"
 
 [[package]]
 name = "signal-hook-registry"
-version = "1.2.0"
+version = "1.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94f478ede9f64724c5d173d7bb56099ec3e2d9fc2774aac65d34b8b890405f41"
+checksum = "d8229b473baa5980ac72ef434c4415e70c4b5e71b423043adb4ba059f89c99a1"
 dependencies = [
- "arc-swap",
  "libc",
 ]
 
@@ -6902,6 +6965,15 @@ dependencies = [
  "sha2",
  "signature",
  "zeroize",
+]
+
+[[package]]
+name = "ssh_format"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8701239872766d43b8a5f9a560ff7f002b48064fadea87f44a70507069fb482"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -7247,7 +7319,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#f2ea9600f06eac46d2b43fcdbb3257593d3759ec"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#134842aa6e1cce36a1d68bec3d79c1c3781cd11e"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7265,12 +7337,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#f2ea9600f06eac46d2b43fcdbb3257593d3759ec"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#134842aa6e1cce36a1d68bec3d79c1c3781cd11e"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#f2ea9600f06eac46d2b43fcdbb3257593d3759ec"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#134842aa6e1cce36a1d68bec3d79c1c3781cd11e"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7286,7 +7358,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#f2ea9600f06eac46d2b43fcdbb3257593d3759ec"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#134842aa6e1cce36a1d68bec3d79c1c3781cd11e"
 dependencies = [
  "columnation",
  "serde",
@@ -7295,7 +7367,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#f2ea9600f06eac46d2b43fcdbb3257593d3759ec"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#134842aa6e1cce36a1d68bec3d79c1c3781cd11e"
 
 [[package]]
 name = "tiny-keccak"
@@ -7359,6 +7431,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90c49f106be240de154571dd31fbe48acb10ba6c6dd6f6517ad603abffa42de9"
 dependencies = [
  "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
+name = "tokio-io-utility"
+version = "0.7.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6948d15bb5da6f565846828025df4d7b503df3890f0fcdb9a667de1c81bc1976"
+dependencies = [
  "tokio",
 ]
 
@@ -7731,6 +7812,17 @@ dependencies = [
  "cfg-if",
  "rand",
  "static_assertions",
+]
+
+[[package]]
+name = "typed-builder"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "89851716b67b937e393b3daa8423e67ddfc4bbbf1654bcf05488e95e0828db0c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -8162,7 +8254,6 @@ dependencies = [
  "futures-sink",
  "futures-task",
  "futures-util",
- "getrandom",
  "globset",
  "hashbrown",
  "hyper",

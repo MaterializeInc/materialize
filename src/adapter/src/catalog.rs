@@ -53,16 +53,16 @@ use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogError as SqlCatalogError,
+    CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogItemType,
     CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId, IdReference,
     NameReference, RoleAttributes, SessionCatalog, TypeReference,
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
-    Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
-    QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier, RoleId, SchemaId,
-    SchemaSpecifier, PUBLIC_ROLE_NAME,
+    Aug, DatabaseId, FullObjectName, FullSchemaName, ObjectId, ObjectQualifiers, PartialObjectName,
+    QualifiedObjectName, QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier,
+    RoleId, SchemaId, SchemaSpecifier, PUBLIC_ROLE_NAME,
 };
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
@@ -87,13 +87,13 @@ use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{
     Builtin, BuiltinLog, BuiltinRole, BuiltinTable, BuiltinType, Fingerprint, BUILTINS,
-    BUILTIN_PREFIXES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_SYSTEM_ROLE,
-    MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
+    BUILTIN_PREFIXES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA,
+    PG_CATALOG_SCHEMA,
 };
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
-use crate::catalog::storage::{BootstrapArgs, Transaction};
+use crate::catalog::storage::{BootstrapArgs, Transaction, MZ_SYSTEM_ROLE_ID};
 use crate::client::ConnectionId;
 use crate::config::{SynchronizedParameters, SystemParameterFrontend};
 use crate::coord::DEFAULT_LOGICAL_COMPACTION_WINDOW;
@@ -101,7 +101,7 @@ use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
 use crate::{AdapterError, DUMMY_AVAILABILITY_ZONE};
 
-use self::builtin::BuiltinSource;
+use self::builtin::{BuiltinCluster, BuiltinSource};
 
 mod builtin_table_updates;
 mod config;
@@ -324,6 +324,10 @@ impl CatalogState {
         &self.entry_by_id[id]
     }
 
+    pub fn get_entry_mut(&mut self, id: &GlobalId) -> &mut CatalogEntry {
+        self.entry_by_id.get_mut(id).expect("catalog out of sync")
+    }
+
     pub fn try_get_entry_in_schema(
         &self,
         name: &QualifiedObjectName,
@@ -392,8 +396,17 @@ impl CatalogState {
             .unwrap_or_else(|| panic!("unknown cluster {cluster_id}"))
     }
 
+    fn get_cluster_mut(&mut self, cluster_id: ClusterId) -> &mut Cluster {
+        self.try_get_cluster_mut(cluster_id)
+            .unwrap_or_else(|| panic!("unknown cluster {cluster_id}"))
+    }
+
     fn try_get_cluster(&self, cluster_id: ClusterId) -> Option<&Cluster> {
         self.clusters_by_id.get(&cluster_id)
+    }
+
+    fn try_get_cluster_mut(&mut self, cluster_id: ClusterId) -> Option<&mut Cluster> {
+        self.clusters_by_id.get_mut(&cluster_id)
     }
 
     fn get_linked_cluster(&self, object_id: GlobalId) -> Option<&Cluster> {
@@ -456,7 +469,7 @@ impl CatalogState {
                 .ok()
                 .map(|db| db.id()),
             search_path: Vec::new(),
-            role_id: self.resolve_builtin_role(&MZ_SYSTEM_ROLE),
+            role_id: MZ_SYSTEM_ROLE_ID,
             prepared_statements: None,
         };
         enable_features_required_for_catalog_open(&mut session_catalog);
@@ -513,6 +526,7 @@ impl CatalogState {
         oid: u32,
         name: QualifiedObjectName,
         item: CatalogItem,
+        owner_id: RoleId,
     ) {
         if !id.is_system() && !item.is_placeholder() {
             info!(
@@ -539,6 +553,7 @@ impl CatalogState {
             id,
             oid,
             used_by: Vec::new(),
+            owner_id,
         };
         for u in entry.uses() {
             match self.entry_by_id.get_mut(u) {
@@ -618,12 +633,19 @@ impl CatalogState {
         &self.database_by_id[database_id]
     }
 
+    fn get_database_mut(&mut self, database_id: &DatabaseId) -> &mut Database {
+        self.database_by_id
+            .get_mut(database_id)
+            .expect("catalog out of sync")
+    }
+
     fn insert_cluster(
         &mut self,
         id: ClusterId,
         name: String,
         linked_object_id: Option<GlobalId>,
         introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
+        owner_id: RoleId,
     ) {
         let mut log_indexes = BTreeMap::new();
         for (log, index_id) in introspection_source_indexes {
@@ -674,7 +696,10 @@ impl CatalogState {
                     conn_id: None,
                     depends_on: vec![log_id],
                     cluster_id: id,
+                    is_retained_metrics_object: false,
+                    custom_logical_compaction_window: None,
                 }),
+                MZ_SYSTEM_ROLE_ID,
             );
             log_indexes.insert(log.variant.clone(), index_id);
         }
@@ -689,6 +714,7 @@ impl CatalogState {
                 log_indexes,
                 replica_id_by_name: BTreeMap::new(),
                 replicas_by_id: BTreeMap::new(),
+                owner_id,
             },
         );
         assert!(self.clusters_by_name.insert(name, id).is_none());
@@ -706,6 +732,7 @@ impl CatalogState {
         replica_name: String,
         replica_id: ReplicaId,
         config: ReplicaConfig,
+        owner_id: RoleId,
     ) {
         let replica = ClusterReplica {
             name: replica_name.clone(),
@@ -719,6 +746,7 @@ impl CatalogState {
                 })
                 .collect(),
             config,
+            owner_id,
         };
         let cluster = self
             .clusters_by_id
@@ -972,13 +1000,6 @@ impl CatalogState {
         schema.items[builtin.name()].clone()
     }
 
-    /// Optimized lookup for a builtin role
-    ///
-    /// Panics if the builtin role doesn't exist in the catalog
-    pub fn resolve_builtin_role(&self, builtin: &'static BuiltinRole) -> RoleId {
-        self.roles_by_name[builtin.name]
-    }
-
     pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {
         &self.config
     }
@@ -1039,6 +1060,16 @@ impl CatalogState {
             .get(name)
             .ok_or_else(|| SqlCatalogError::UnknownCluster(name.to_string()))?;
         Ok(&self.clusters_by_id[id])
+    }
+
+    pub fn resolve_builtin_cluster(&self, cluster: &BuiltinCluster) -> &Cluster {
+        let id = self
+            .clusters_by_name
+            .get(cluster.name)
+            .expect("failed to lookup BuiltinCluster by name");
+        self.clusters_by_id
+            .get(id)
+            .expect("failed to lookup BuiltinCluster by ID")
     }
 
     /// Resolves [`PartialObjectName`] into a [`CatalogEntry`].
@@ -1317,6 +1348,7 @@ pub struct Database {
     pub oid: u32,
     pub schemas_by_id: BTreeMap<SchemaId, Schema>,
     pub schemas_by_name: BTreeMap<String, SchemaId>,
+    pub owner_id: RoleId,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -1327,6 +1359,7 @@ pub struct Schema {
     pub oid: u32,
     pub items: BTreeMap<String, GlobalId>,
     pub functions: BTreeMap<String, GlobalId>,
+    pub owner_id: RoleId,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -1397,6 +1430,7 @@ pub struct Cluster {
     pub bound_objects: BTreeSet<GlobalId>,
     pub replica_id_by_name: BTreeMap<String, ReplicaId>,
     pub replicas_by_id: BTreeMap<ReplicaId, ClusterReplica>,
+    pub owner_id: RoleId,
 }
 
 impl Cluster {
@@ -1419,6 +1453,7 @@ pub struct ClusterReplica {
     pub name: String,
     pub config: ReplicaConfig,
     pub process_status: BTreeMap<ProcessId, ClusterReplicaProcessStatus>,
+    pub owner_id: RoleId,
 }
 
 impl ClusterReplica {
@@ -1446,6 +1481,7 @@ pub struct CatalogEntry {
     id: GlobalId,
     oid: u32,
     name: QualifiedObjectName,
+    owner_id: RoleId,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1474,7 +1510,7 @@ pub struct Table {
     pub custom_logical_compaction_window: Option<Duration>,
     /// Whether the table's logical compaction window is controlled by
     /// METRICS_RETENTION
-    pub is_retained_metrics_relation: bool,
+    pub is_retained_metrics_object: bool,
 }
 
 impl Table {
@@ -1507,7 +1543,7 @@ pub struct Source {
     pub custom_logical_compaction_window: Option<Duration>,
     /// Whether the source's logical compaction window is controlled by
     /// METRICS_RETENTION
-    pub is_retained_metrics_relation: bool,
+    pub is_retained_metrics_object: bool,
 }
 
 impl Source {
@@ -1674,6 +1710,8 @@ pub struct Index {
     pub conn_id: Option<ConnectionId>,
     pub depends_on: Vec<GlobalId>,
     pub cluster_id: ClusterId,
+    pub custom_logical_compaction_window: Option<Duration>,
+    pub is_retained_metrics_object: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1909,7 +1947,29 @@ impl CatalogItem {
         }
     }
 
-    fn cluster_id(&self) -> Option<ClusterId> {
+    /// If the object is considered a "compute object"
+    /// (i.e., it is managed by the compute controller),
+    /// this function returns its cluster ID. Otherwise, it returns nothing.
+    ///
+    /// This function differs from `cluster_id` because while all
+    /// compute objects run on a cluster, the converse is not true.
+    pub fn is_compute_object_on_cluster(&self) -> Option<ClusterId> {
+        match self {
+            CatalogItem::Index(index) => Some(index.cluster_id),
+            CatalogItem::Table(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => None,
+        }
+    }
+
+    pub fn cluster_id(&self) -> Option<ClusterId> {
         match self {
             CatalogItem::MaterializedView(mv) => Some(mv.cluster_id),
             CatalogItem::Index(index) => Some(index.cluster_id),
@@ -1934,7 +1994,7 @@ impl CatalogItem {
         let custom_logical_compaction_window = match self {
             CatalogItem::Table(table) => table.custom_logical_compaction_window,
             CatalogItem::Source(source) => source.custom_logical_compaction_window,
-            CatalogItem::Index(_) => None,
+            CatalogItem::Index(index) => index.custom_logical_compaction_window,
             CatalogItem::MaterializedView(_) => None,
             CatalogItem::Log(_)
             | CatalogItem::View(_)
@@ -1950,15 +2010,15 @@ impl CatalogItem {
     /// Whether the item's logical compaction window
     /// is controlled by the METRICS_RETENTION
     /// system var.
-    pub fn is_retained_metrics_relation(&self) -> bool {
+    pub fn is_retained_metrics_object(&self) -> bool {
         match self {
-            CatalogItem::Table(table) => table.is_retained_metrics_relation,
-            CatalogItem::Source(source) => source.is_retained_metrics_relation,
+            CatalogItem::Table(table) => table.is_retained_metrics_object,
+            CatalogItem::Source(source) => source.is_retained_metrics_object,
+            CatalogItem::Index(index) => index.is_retained_metrics_object,
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Sink(_)
-            | CatalogItem::Index(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
@@ -2154,6 +2214,11 @@ impl CatalogEntry {
     pub fn conn_id(&self) -> Option<ConnectionId> {
         self.item.conn_id()
     }
+
+    /// Returns the role ID of the entry owner.
+    pub fn owner_id(&self) -> &RoleId {
+        &self.owner_id
+    }
 }
 
 struct AllocatedBuiltinSystemIds<T> {
@@ -2223,7 +2288,13 @@ pub struct BuiltinMigrationMetadata {
     pub previous_source_ids: Vec<GlobalId>,
     // Used to update in memory catalog state
     pub all_drop_ops: Vec<GlobalId>,
-    pub all_create_ops: Vec<(GlobalId, u32, QualifiedObjectName, CatalogItemRebuilder)>,
+    pub all_create_ops: Vec<(
+        GlobalId,
+        u32,
+        QualifiedObjectName,
+        RoleId,
+        CatalogItemRebuilder,
+    )>,
     pub introspection_source_index_updates:
         BTreeMap<ClusterId, Vec<(LogVariant, String, GlobalId)>>,
     // Used to update persisted on disk catalog state
@@ -2304,10 +2375,10 @@ impl Catalog {
             storage: Arc::new(Mutex::new(config.storage)),
         };
 
-        catalog.create_temporary_schema(SYSTEM_CONN_ID)?;
+        catalog.create_temporary_schema(SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
 
         let databases = catalog.storage().await.load_databases().await?;
-        for (id, name) in databases {
+        for (id, name, owner_id) in databases {
             let oid = catalog.allocate_oid()?;
             catalog.state.database_by_id.insert(
                 id.clone(),
@@ -2317,6 +2388,7 @@ impl Catalog {
                     oid,
                     schemas_by_id: BTreeMap::new(),
                     schemas_by_name: BTreeMap::new(),
+                    owner_id,
                 },
             );
             catalog
@@ -2326,7 +2398,7 @@ impl Catalog {
         }
 
         let schemas = catalog.storage().await.load_schemas().await?;
-        for (schema_id, schema_name, database_id) in schemas {
+        for (schema_id, schema_name, database_id, owner_id) in schemas {
             let oid = catalog.allocate_oid()?;
             let (schemas_by_id, schemas_by_name, database_spec) = match &database_id {
                 Some(database_id) => {
@@ -2358,6 +2430,7 @@ impl Catalog {
                     oid,
                     items: BTreeMap::new(),
                     functions: BTreeMap::new(),
+                    owner_id,
                 },
             );
             schemas_by_name.insert(schema_name.clone(), schema_id);
@@ -2373,7 +2446,9 @@ impl Catalog {
                     name: role.name,
                     id,
                     oid,
-                    attributes: role.attributes,
+                    attributes: role
+                        .attributes
+                        .expect("serialized role was not properly migrated"),
                     membership: role
                         .membership
                         .expect("serialized role was not properly migrated"),
@@ -2451,6 +2526,7 @@ impl Catalog {
                                 variant: log.variant.clone(),
                                 has_storage_collection: false,
                             }),
+                            MZ_SYSTEM_ROLE_ID,
                         );
                     }
 
@@ -2467,10 +2543,11 @@ impl Catalog {
                                 conn_id: None,
                                 depends_on: vec![],
                                 custom_logical_compaction_window: table
-                                    .is_retained_metrics_relation
+                                    .is_retained_metrics_object
                                     .then(|| catalog.state.system_config().metrics_retention()),
-                                is_retained_metrics_relation: table.is_retained_metrics_relation,
+                                is_retained_metrics_object: table.is_retained_metrics_object,
                             }),
+                            MZ_SYSTEM_ROLE_ID,
                         );
                     }
                     Builtin::Index(_) => {
@@ -2494,7 +2571,9 @@ impl Catalog {
                             )
                         });
                         let oid = catalog.allocate_oid()?;
-                        catalog.state.insert_item(id, oid, name, item);
+                        catalog
+                            .state
+                            .insert_item(id, oid, name, item, MZ_SYSTEM_ROLE_ID);
                     }
 
                     Builtin::Type(_) => unreachable!("loaded separately"),
@@ -2506,6 +2585,7 @@ impl Catalog {
                             oid,
                             name.clone(),
                             CatalogItem::Func(Func { inner: func.inner }),
+                            MZ_SYSTEM_ROLE_ID,
                         );
                     }
 
@@ -2527,10 +2607,11 @@ impl Catalog {
                                 timeline: Timeline::EpochMilliseconds,
                                 depends_on: vec![],
                                 custom_logical_compaction_window: coll
-                                    .is_retained_metrics_relation
+                                    .is_retained_metrics_object
                                     .then(|| catalog.state.system_config().metrics_retention()),
-                                is_retained_metrics_relation: coll.is_retained_metrics_relation,
+                                is_retained_metrics_object: coll.is_retained_metrics_object,
                             }),
+                            MZ_SYSTEM_ROLE_ID,
                         );
                     }
                 }
@@ -2538,7 +2619,7 @@ impl Catalog {
         }
 
         let clusters = catalog.storage().await.load_clusters().await?;
-        for (id, name, linked_object_id) in clusters {
+        for (id, name, linked_object_id, owner_id) in clusters {
             let introspection_source_index_gids = catalog
                 .storage()
                 .await
@@ -2572,11 +2653,11 @@ impl Catalog {
 
             catalog
                 .state
-                .insert_cluster(id, name, linked_object_id, all_indexes);
+                .insert_cluster(id, name, linked_object_id, all_indexes, owner_id);
         }
 
         let replicas = catalog.storage().await.load_cluster_replicas().await?;
-        for (cluster_id, replica_id, name, serialized_config) in replicas {
+        for (cluster_id, replica_id, name, serialized_config, owner_id) in replicas {
             let logging = ReplicaLogging {
                 log_logging: serialized_config.logging.log_logging,
                 interval: serialized_config.logging.interval,
@@ -2594,12 +2675,12 @@ impl Catalog {
             catalog
                 .storage()
                 .await
-                .set_replica_config(replica_id, cluster_id, name.clone(), &config)
+                .set_replica_config(replica_id, cluster_id, name.clone(), &config, owner_id)
                 .await?;
 
             catalog
                 .state
-                .insert_cluster_replica(cluster_id, name, replica_id, config);
+                .insert_cluster_replica(cluster_id, name, replica_id, config, owner_id);
         }
 
         for (builtin, id) in builtin_indexes {
@@ -2613,7 +2694,7 @@ impl Catalog {
             };
             match builtin {
                 Builtin::Index(index) => {
-                    let item = catalog
+                    let mut item = catalog
                         .parse_item(
                             id,
                             index.sql.into(),
@@ -2629,8 +2710,19 @@ impl Catalog {
                                 index.name, e
                             )
                         });
+                    let CatalogItem::Index(catalog_index) = &mut item else {
+                        panic!("internal error: builtin index {}'s SQL does not begin with \"CREATE INDEX\".", index.name);
+                    };
+                    if index.is_retained_metrics_object {
+                        catalog_index.is_retained_metrics_object = true;
+                        catalog_index.custom_logical_compaction_window =
+                            Some(catalog.state.system_config().metrics_retention());
+                    }
+
                     let oid = catalog.allocate_oid()?;
-                    catalog.state.insert_item(id, oid, name, item);
+                    catalog
+                        .state
+                        .insert_item(id, oid, name, item, MZ_SYSTEM_ROLE_ID);
                 }
                 Builtin::Log(_)
                 | Builtin::Table(_)
@@ -2667,13 +2759,15 @@ impl Catalog {
             .unwrap_or_else(|| "new".to_string());
 
         if !config.skip_migrations {
-            migrate::migrate(&mut catalog).await.map_err(|e| {
-                Error::new(ErrorKind::FailedMigration {
-                    last_seen_version: last_seen_version.clone(),
-                    this_version: catalog.config().build_info.version,
-                    cause: e.to_string(),
-                })
-            })?;
+            migrate::migrate(&mut catalog, config.connection_context)
+                .await
+                .map_err(|e| {
+                    Error::new(ErrorKind::FailedMigration {
+                        last_seen_version: last_seen_version.clone(),
+                        this_version: catalog.config().build_info.version,
+                        cause: e.to_string(),
+                    })
+                })?;
             catalog
                 .storage()
                 .await
@@ -3024,6 +3118,7 @@ impl Catalog {
                     details: typ.details.clone(),
                     depends_on: vec![],
                 }),
+                MZ_SYSTEM_ROLE_ID,
             );
         }
 
@@ -3249,9 +3344,13 @@ impl Catalog {
                     .push((new_id, schema_id, name.item.clone()));
             }
             let item_rebuilder = CatalogItemRebuilder::new(entry, new_id, &ancestor_ids);
-            migration_metadata
-                .all_create_ops
-                .push((new_id, entry.oid, name, item_rebuilder));
+            migration_metadata.all_create_ops.push((
+                new_id,
+                entry.oid,
+                name,
+                entry.owner_id,
+                item_rebuilder,
+            ));
         }
 
         // Reverse drop commands.
@@ -3294,9 +3393,10 @@ impl Catalog {
         for id in migration_metadata.all_drop_ops.drain(..) {
             self.state.drop_item(id);
         }
-        for (id, oid, name, item_rebuilder) in migration_metadata.all_create_ops.drain(..) {
+        for (id, oid, name, owner_id, item_rebuilder) in migration_metadata.all_create_ops.drain(..)
+        {
             let item = item_rebuilder.build(self);
-            self.state.insert_item(id, oid, name, item);
+            self.state.insert_item(id, oid, name, item, owner_id);
         }
         for (cluster_id, updates) in &migration_metadata.introspection_source_index_updates {
             let log_indexes = &mut self
@@ -3323,9 +3423,10 @@ impl Catalog {
         let mut tx = storage.transaction().await?;
         tx.remove_items(migration_metadata.user_drop_ops.drain(..).collect())?;
         for (id, schema_id, name) in migration_metadata.user_create_ops.drain(..) {
-            let item = self.get_entry(&id).item();
+            let entry = self.get_entry(&id);
+            let item = entry.item();
             let serialized_item = Self::serialize_item(item);
-            tx.insert_item(id, schema_id, &name, serialized_item)?;
+            tx.insert_item(id, schema_id, &name, serialized_item, entry.owner_id)?;
         }
         tx.update_system_object_mappings(std::mem::take(
             &mut migration_metadata.migrated_system_object_mappings,
@@ -3373,7 +3474,7 @@ impl Catalog {
         let mut awaiting_id_dependencies: BTreeMap<GlobalId, Vec<_>> = BTreeMap::new();
         let mut awaiting_name_dependencies: BTreeMap<String, Vec<_>> = BTreeMap::new();
         let mut items: VecDeque<_> = tx.loaded_items().into_iter().collect();
-        while let Some((id, name, def)) = items.pop_front() {
+        while let Some((id, name, def, owner_id)) = items.pop_front() {
             let d_c = def.clone();
             // TODO(benesch): a better way of detecting when a view has depended
             // upon a non-existent logging view. This is fine for now because
@@ -3396,7 +3497,7 @@ impl Catalog {
                     awaiting_id_dependencies
                         .entry(missing_dep)
                         .or_default()
-                        .push((id, name, def));
+                        .push((id, name, def, owner_id));
                     continue;
                 }
                 // If we were missing a dependency, wait for it to be added.
@@ -3408,13 +3509,13 @@ impl Catalog {
                             awaiting_id_dependencies
                                 .entry(id)
                                 .or_default()
-                                .push((id, name, def));
+                                .push((id, name, def, owner_id));
                         }
                         Err(_) => {
                             awaiting_name_dependencies
                                 .entry(missing_dep)
                                 .or_default()
-                                .push((id, name, def));
+                                .push((id, name, def, owner_id));
                         }
                     }
                     continue;
@@ -3437,12 +3538,12 @@ impl Catalog {
                 items.extend(dependent_items);
             }
 
-            c.state.insert_item(id, oid, name, item);
+            c.state.insert_item(id, oid, name, item, owner_id);
         }
 
         // Error on any unsatisfied dependencies.
         if let Some((missing_dep, mut dependents)) = awaiting_id_dependencies.into_iter().next() {
-            let (id, name, _def) = dependents.remove(0);
+            let (id, name, _owner_id, _def) = dependents.remove(0);
             return Err(Error::new(ErrorKind::Corruption {
                 detail: format!(
                     "failed to deserialize item {} ({}): {}",
@@ -3454,7 +3555,7 @@ impl Catalog {
         }
 
         if let Some((missing_dep, mut dependents)) = awaiting_name_dependencies.into_iter().next() {
-            let (id, name, _def) = dependents.remove(0);
+            let (id, name, _def, _owner_id) = dependents.remove(0);
             return Err(Error::new(ErrorKind::Corruption {
                 detail: format!(
                     "failed to deserialize item {} ({}): {}",
@@ -3545,6 +3646,7 @@ impl Catalog {
             system_parameter_frontend: None,
             // when debugging, no reaping
             storage_usage_retention_period: None,
+            connection_context: None,
         })
         .await?;
         Ok(catalog)
@@ -3598,8 +3700,7 @@ impl Catalog {
     // Leaving the system's search path empty allows us to catch issues
     // where catalog object names have not been normalized correctly.
     pub fn for_system_session(&self) -> ConnCatalog {
-        let role_id = self.resolve_builin_role(&MZ_SYSTEM_ROLE);
-        self.for_sessionless_user(role_id)
+        self.for_sessionless_user(MZ_SYSTEM_ROLE_ID)
     }
 
     async fn storage<'a>(&'a self) -> MutexGuard<'a, storage::Connection> {
@@ -3766,11 +3867,6 @@ impl Catalog {
         self.state.resolve_builtin_source(builtin)
     }
 
-    /// Resolves a `BuiltinRole`.
-    pub fn resolve_builin_role(&self, builtin: &'static BuiltinRole) -> RoleId {
-        self.state.resolve_builtin_role(builtin)
-    }
-
     /// Resolves `name` to a function [`CatalogEntry`].
     pub fn resolve_function(
         &self,
@@ -3785,6 +3881,15 @@ impl Catalog {
 
     pub fn resolve_cluster(&self, name: &str) -> Result<&Cluster, SqlCatalogError> {
         self.state.resolve_cluster(name)
+    }
+
+    /// Resolves a [`Cluster`] for a [`BuiltinCluster`]
+    ///
+    /// # Panics
+    /// * If the [`BuiltinCluster`] doesn't exist.
+    ///
+    pub fn resolve_builtin_cluster(&self, cluster: &BuiltinCluster) -> &Cluster {
+        self.state.resolve_builtin_cluster(cluster)
     }
 
     pub fn active_cluster(&self, session: &Session) -> Result<&Cluster, AdapterError> {
@@ -3888,7 +3993,11 @@ impl Catalog {
 
     /// Creates a new schema in the `Catalog` for temporary items
     /// indicated by the TEMPORARY or TEMP keywords.
-    pub fn create_temporary_schema(&mut self, conn_id: ConnectionId) -> Result<(), Error> {
+    pub fn create_temporary_schema(
+        &mut self,
+        conn_id: ConnectionId,
+        owner_id: RoleId,
+    ) -> Result<(), Error> {
         let oid = self.allocate_oid()?;
         self.state.temporary_schemas.insert(
             conn_id,
@@ -3901,6 +4010,7 @@ impl Catalog {
                 oid,
                 items: BTreeMap::new(),
                 functions: BTreeMap::new(),
+                owner_id,
             },
         );
         Ok(())
@@ -4068,6 +4178,7 @@ impl Catalog {
                 oid: _,
                 name,
                 item,
+                owner_id: _,
             } = op
             {
                 if let Some(conn_id) = item.conn_id() {
@@ -4548,9 +4659,10 @@ impl Catalog {
                     name,
                     oid,
                     public_schema_oid,
+                    owner_id,
                 } => {
-                    let database_id = tx.insert_database(&name)?;
-                    let schema_id = tx.insert_schema(database_id, DEFAULT_SCHEMA)?;
+                    let database_id = tx.insert_database(&name, owner_id)?;
+                    let schema_id = tx.insert_schema(database_id, DEFAULT_SCHEMA, owner_id)?;
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -4573,6 +4685,7 @@ impl Catalog {
                             oid,
                             schemas_by_id: BTreeMap::new(),
                             schemas_by_name: BTreeMap::new(),
+                            owner_id,
                         },
                     );
                     state
@@ -4602,12 +4715,14 @@ impl Catalog {
                         public_schema_oid,
                         database_id,
                         DEFAULT_SCHEMA.to_string(),
+                        owner_id,
                     )?;
                 }
                 Op::CreateSchema {
                     database_id,
                     schema_name,
                     oid,
+                    owner_id,
                 } => {
                     if is_reserved_name(&schema_name) {
                         return Err(AdapterError::Catalog(Error::new(
@@ -4622,7 +4737,7 @@ impl Catalog {
                             )));
                         }
                     };
-                    let schema_id = tx.insert_schema(database_id, &schema_name)?;
+                    let schema_id = tx.insert_schema(database_id, &schema_name, owner_id)?;
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -4644,6 +4759,7 @@ impl Catalog {
                         oid,
                         database_id,
                         schema_name,
+                        owner_id,
                     )?;
                 }
                 Op::CreateRole {
@@ -4659,7 +4775,7 @@ impl Catalog {
                     let membership = RoleMembership::new();
                     let serialized_role = SerializedRole {
                         name: name.clone(),
-                        attributes: attributes.clone(),
+                        attributes: Some(attributes.clone()),
                         membership: Some(membership.clone()),
                     };
                     let id = tx.insert_user_role(serialized_role)?;
@@ -4697,13 +4813,20 @@ impl Catalog {
                     name,
                     linked_object_id,
                     introspection_sources,
+                    owner_id,
                 } => {
                     if is_reserved_name(&name) {
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReservedClusterName(name),
                         )));
                     }
-                    tx.insert_user_cluster(id, &name, linked_object_id, &introspection_sources)?;
+                    tx.insert_user_cluster(
+                        id,
+                        &name,
+                        linked_object_id,
+                        &introspection_sources,
+                        owner_id,
+                    )?;
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -4720,7 +4843,13 @@ impl Catalog {
                     info!("create cluster {}", name);
                     let introspection_source_ids: Vec<GlobalId> =
                         introspection_sources.iter().map(|(_, id)| *id).collect();
-                    state.insert_cluster(id, name.clone(), linked_object_id, introspection_sources);
+                    state.insert_cluster(
+                        id,
+                        name.clone(),
+                        linked_object_id,
+                        introspection_sources,
+                        owner_id,
+                    );
                     builtin_table_updates.push(state.pack_cluster_update(&name, 1));
                     if let Some(linked_object_id) = linked_object_id {
                         builtin_table_updates.push(state.pack_cluster_link_update(
@@ -4738,6 +4867,7 @@ impl Catalog {
                     id,
                     name,
                     config,
+                    owner_id,
                 } => {
                     if is_reserved_name(&name) {
                         return Err(AdapterError::Catalog(Error::new(
@@ -4754,7 +4884,13 @@ impl Catalog {
                             ErrorKind::ReadOnlyCluster(cluster.name.clone()),
                         )));
                     }
-                    tx.insert_cluster_replica(cluster_id, id, &name, &config.clone().into())?;
+                    tx.insert_cluster_replica(
+                        cluster_id,
+                        id,
+                        &name,
+                        &config.clone().into(),
+                        owner_id,
+                    )?;
                     if let ReplicaLocation::Managed(ManagedReplicaLocation { size, .. }) =
                         &config.location
                     {
@@ -4779,7 +4915,7 @@ impl Catalog {
                         )?;
                     }
                     let num_processes = config.location.num_processes();
-                    state.insert_cluster_replica(cluster_id, name.clone(), id, config);
+                    state.insert_cluster_replica(cluster_id, name.clone(), id, config, owner_id);
                     builtin_table_updates
                         .push(state.pack_cluster_replica_update(cluster_id, &name, 1));
                     for process_id in 0..num_processes {
@@ -4797,6 +4933,7 @@ impl Catalog {
                     oid,
                     name,
                     item,
+                    owner_id,
                 } => {
                     state.ensure_no_unstable_uses(&item)?;
 
@@ -4848,7 +4985,7 @@ impl Catalog {
                         }
                         let schema_id = name.qualifiers.schema_spec.clone().into();
                         let serialized_item = Self::serialize_item(&item);
-                        tx.insert_item(id, schema_id, &name.item, serialized_item)?;
+                        tx.insert_item(id, schema_id, &name.item, serialized_item, owner_id)?;
                     }
 
                     if Self::should_audit_log_item(&item) {
@@ -4890,7 +5027,7 @@ impl Catalog {
                             details,
                         )?;
                     }
-                    state.insert_item(id, oid, name, item);
+                    state.insert_item(id, oid, name, item, owner_id);
                     builtin_table_updates.extend(state.pack_item_update(id, 1));
                 }
                 Op::DropDatabase { id } => {
@@ -5301,6 +5438,106 @@ impl Catalog {
                         update_item(state, builtin_table_updates, id, to_name, to_item)?;
                     }
                 }
+                Op::UpdateOwner { id, new_owner } => match id {
+                    ObjectId::Cluster(id) => {
+                        let cluster_name = state.get_cluster(id).name().to_string();
+                        if id.is_system() {
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReadOnlyCluster(cluster_name),
+                            )));
+                        }
+                        builtin_table_updates.push(state.pack_cluster_update(&cluster_name, -1));
+                        let cluster = state.get_cluster_mut(id);
+                        cluster.owner_id = new_owner;
+                        tx.update_cluster(id, cluster)?;
+                        builtin_table_updates.push(state.pack_cluster_update(&cluster_name, 1));
+                    }
+                    ObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                        let cluster = state.get_cluster(cluster_id);
+                        if cluster_id.is_system() {
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReadOnlyCluster(cluster.name().to_string()),
+                            )));
+                        }
+                        let replica_name = cluster
+                            .replicas_by_id
+                            .get(&replica_id)
+                            .expect("catalog out of sync")
+                            .name
+                            .clone();
+                        if is_reserved_name(&replica_name) {
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReservedReplicaName(replica_name),
+                            )));
+                        }
+                        builtin_table_updates.push(state.pack_cluster_replica_update(
+                            cluster_id,
+                            &replica_name,
+                            -1,
+                        ));
+                        let cluster = state.get_cluster_mut(cluster_id);
+                        let replica = cluster
+                            .replicas_by_id
+                            .get_mut(&replica_id)
+                            .expect("catalog out of sync");
+                        replica.owner_id = new_owner;
+                        tx.update_cluster_replica(cluster_id, replica_id, replica)?;
+                        builtin_table_updates.push(state.pack_cluster_replica_update(
+                            cluster_id,
+                            &replica_name,
+                            1,
+                        ));
+                    }
+                    ObjectId::Database(id) => {
+                        let database = state.get_database(&id);
+                        builtin_table_updates.push(state.pack_database_update(database, -1));
+                        let database = state.get_database_mut(&id);
+                        database.owner_id = new_owner;
+                        let database = state.get_database(&id);
+                        tx.update_database(id, database)?;
+                        builtin_table_updates.push(state.pack_database_update(database, 1));
+                    }
+                    ObjectId::Schema((database_id, schema_id)) => {
+                        builtin_table_updates.push(state.pack_schema_update(
+                            &ResolvedDatabaseSpecifier::Id(database_id),
+                            &schema_id,
+                            -1,
+                        ));
+                        let database = state.get_database_mut(&database_id);
+                        let schema = database
+                            .schemas_by_id
+                            .get_mut(&schema_id)
+                            .expect("catalog out of sync");
+                        schema.owner_id = new_owner;
+                        tx.update_schema(Some(database_id), schema_id, schema)?;
+                        builtin_table_updates.push(state.pack_schema_update(
+                            &ResolvedDatabaseSpecifier::Id(database_id),
+                            &schema_id,
+                            1,
+                        ));
+                    }
+                    ObjectId::Item(id) => {
+                        if id.is_system() {
+                            let entry = state.get_entry(&id);
+                            let full_name = state.resolve_full_name(
+                                entry.name(),
+                                session.map(|session| session.conn_id()),
+                            );
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReadOnlyItem(full_name.to_string()),
+                            )));
+                        }
+                        builtin_table_updates.extend(state.pack_item_update(id, -1));
+                        let entry = state.get_entry_mut(&id);
+                        entry.owner_id = new_owner;
+                        tx.update_item(
+                            id,
+                            &entry.name().item,
+                            &Self::serialize_item(entry.item()),
+                        )?;
+                        builtin_table_updates.extend(state.pack_item_update(id, 1));
+                    }
+                },
                 Op::UpdateClusterReplicaStatus { event } => {
                     builtin_table_updates.push(state.pack_cluster_replica_status_update(
                         event.cluster_id,
@@ -5442,6 +5679,7 @@ impl Catalog {
             oid: u32,
             database_id: DatabaseId,
             schema_name: String,
+            owner_id: RoleId,
         ) -> Result<(), AdapterError> {
             info!(
                 "create schema {}.{}",
@@ -5463,6 +5701,7 @@ impl Catalog {
                     oid,
                     items: BTreeMap::new(),
                     functions: BTreeMap::new(),
+                    owner_id,
                 },
             );
             db.schemas_by_name.insert(schema_name, id.clone());
@@ -5558,7 +5797,7 @@ impl Catalog {
                 conn_id: None,
                 depends_on,
                 custom_logical_compaction_window: None,
-                is_retained_metrics_relation: false,
+                is_retained_metrics_object: false,
             }),
             Plan::CreateSource(CreateSourcePlan {
                 source,
@@ -5590,7 +5829,7 @@ impl Catalog {
                 timeline,
                 depends_on,
                 custom_logical_compaction_window: None,
-                is_retained_metrics_relation: false,
+                is_retained_metrics_object: false,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let optimizer = Optimizer::logical_optimizer();
@@ -5625,6 +5864,8 @@ impl Catalog {
                 conn_id: None,
                 depends_on,
                 cluster_id: index.cluster_id,
+                custom_logical_compaction_window: None,
+                is_retained_metrics_object: false,
             }),
             Plan::CreateSink(CreateSinkPlan {
                 sink,
@@ -5878,11 +6119,13 @@ pub enum Op {
         name: String,
         oid: u32,
         public_schema_oid: u32,
+        owner_id: RoleId,
     },
     CreateSchema {
         database_id: ResolvedDatabaseSpecifier,
         schema_name: String,
         oid: u32,
+        owner_id: RoleId,
     },
     CreateRole {
         name: String,
@@ -5894,18 +6137,21 @@ pub enum Op {
         name: String,
         linked_object_id: Option<GlobalId>,
         introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
+        owner_id: RoleId,
     },
     CreateClusterReplica {
         cluster_id: ClusterId,
         id: ReplicaId,
         name: String,
         config: ReplicaConfig,
+        owner_id: RoleId,
     },
     CreateItem {
         id: GlobalId,
         oid: u32,
         name: QualifiedObjectName,
         item: CatalogItem,
+        owner_id: RoleId,
     },
     DropDatabase {
         id: DatabaseId,
@@ -5939,6 +6185,10 @@ pub enum Op {
         id: GlobalId,
         current_full_name: FullObjectName,
         to_name: String,
+    },
+    UpdateOwner {
+        id: ObjectId,
+        new_owner: RoleId,
     },
     RevokeRole {
         role_id: RoleId,
@@ -6073,7 +6323,8 @@ impl From<ReplicaLocation> for SerializedReplicaLocation {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct SerializedRole {
     pub name: String,
-    pub attributes: RoleAttributes,
+    // TODO(jkosh44): Remove Option when stash consolidation bug is fixed
+    pub attributes: Option<RoleAttributes>,
     // TODO(jkosh44): Remove Option in v0.49.0
     pub membership: Option<RoleMembership>,
 }
@@ -6082,7 +6333,7 @@ impl From<Role> for SerializedRole {
     fn from(role: Role) -> Self {
         SerializedRole {
             name: role.name,
-            attributes: role.attributes,
+            attributes: Some(role.attributes),
             membership: Some(role.membership),
         }
     }
@@ -6092,7 +6343,7 @@ impl From<&BuiltinRole> for SerializedRole {
     fn from(role: &BuiltinRole) -> Self {
         SerializedRole {
             name: role.name.to_string(),
-            attributes: role.attributes.clone(),
+            attributes: Some(role.attributes.clone()),
             membership: Some(RoleMembership::new()),
         }
     }
@@ -6381,12 +6632,34 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self.state.clusters_by_id[&id]
     }
 
+    fn get_cluster_replica(
+        &self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+    ) -> &dyn mz_sql::catalog::CatalogClusterReplica {
+        let cluster = self.get_cluster(cluster_id);
+        cluster.replica(replica_id)
+    }
+
     fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName {
         self.state.find_available_name(name, self.conn_id)
     }
 
     fn resolve_full_name(&self, name: &QualifiedObjectName) -> FullObjectName {
         self.state.resolve_full_name(name, Some(self.conn_id))
+    }
+
+    fn resolve_full_schema_name(&self, name: &QualifiedSchemaName) -> FullSchemaName {
+        let database = match &name.database {
+            ResolvedDatabaseSpecifier::Ambient => RawDatabaseSpecifier::Ambient,
+            ResolvedDatabaseSpecifier::Id(id) => {
+                RawDatabaseSpecifier::Name(self.get_database(id).name().to_string())
+            }
+        };
+        FullSchemaName {
+            database,
+            schema: name.schema.clone(),
+        }
     }
 
     fn config(&self) -> &mz_sql::catalog::CatalogConfig {
@@ -6408,6 +6681,23 @@ impl SessionCatalog for ConnCatalog<'_> {
     fn system_vars_mut(&mut self) -> &mut SystemVars {
         &mut self.state.to_mut().system_configuration
     }
+
+    fn get_owner_id(&self, id: &ObjectId) -> RoleId {
+        match id {
+            ObjectId::Cluster(id) => self.get_cluster(*id).owner_id(),
+            ObjectId::ClusterReplica((cluster_id, replica_id)) => self
+                .get_cluster_replica(*cluster_id, *replica_id)
+                .owner_id(),
+            ObjectId::Database(id) => self.get_database(id).owner_id(),
+            ObjectId::Schema((database_id, schema_id)) => self
+                .get_schema(
+                    &ResolvedDatabaseSpecifier::Id(*database_id),
+                    &SchemaSpecifier::Id(*schema_id),
+                )
+                .owner_id(),
+            ObjectId::Item(id) => self.get_item(id).owner_id(),
+        }
+    }
 }
 
 impl mz_sql::catalog::CatalogDatabase for Database {
@@ -6421,6 +6711,10 @@ impl mz_sql::catalog::CatalogDatabase for Database {
 
     fn has_schemas(&self) -> bool {
         !self.schemas_by_name.is_empty()
+    }
+
+    fn owner_id(&self) -> RoleId {
+        self.owner_id
     }
 }
 
@@ -6439,6 +6733,10 @@ impl mz_sql::catalog::CatalogSchema for Schema {
 
     fn has_items(&self) -> bool {
         !self.items.is_empty()
+    }
+
+    fn owner_id(&self) -> RoleId {
+        self.owner_id
     }
 }
 
@@ -6495,6 +6793,24 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
 
     fn replicas(&self) -> &BTreeMap<String, ReplicaId> {
         &self.replica_id_by_name
+    }
+
+    fn replica(&self, id: ReplicaId) -> &dyn CatalogClusterReplica {
+        self.replicas_by_id.get(&id).expect("catalog out of sync")
+    }
+
+    fn owner_id(&self) -> RoleId {
+        self.owner_id
+    }
+}
+
+impl mz_sql::catalog::CatalogClusterReplica<'_> for ClusterReplica {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn owner_id(&self) -> RoleId {
+        self.owner_id
     }
 }
 
@@ -6584,6 +6900,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
     fn subsources(&self) -> Vec<GlobalId> {
         self.subsources()
     }
+
+    fn owner_id(&self) -> RoleId {
+        self.owner_id
+    }
 }
 
 #[cfg(test)]
@@ -6609,6 +6929,7 @@ mod tests {
     use mz_sql_parser::ast::Expr;
     use mz_stash::DebugStashFactory;
 
+    use crate::catalog::storage::MZ_SYSTEM_ROLE_ID;
     use crate::catalog::{
         Catalog, CatalogItem, Index, MaterializedView, Op, Table, SYSTEM_CONN_ID,
     };
@@ -6709,6 +7030,7 @@ mod tests {
                         name: "test".to_string(),
                         oid: 1,
                         public_schema_oid: 2,
+                        owner_id: MZ_SYSTEM_ROLE_ID,
                     }],
                     |_catalog| Ok(()),
                 )
@@ -6892,7 +7214,7 @@ mod tests {
                         conn_id: None,
                         depends_on: vec![],
                         custom_logical_compaction_window: None,
-                        is_retained_metrics_relation: false,
+                        is_retained_metrics_object: false,
                     }),
                     SimplifiedItem::MaterializedView { depends_on } => {
                         let table_list = depends_on.iter().join(",");
@@ -6924,6 +7246,8 @@ mod tests {
                             conn_id: None,
                             depends_on: vec![on_id],
                             cluster_id: ClusterId::User(1),
+                            custom_logical_compaction_window: None,
+                            is_retained_metrics_object: false,
                         })
                     }
                 };
@@ -6989,6 +7313,7 @@ mod tests {
                             item: name,
                         },
                         item,
+                        owner_id: MZ_SYSTEM_ROLE_ID,
                     }],
                     |_| Ok(()),
                 )
@@ -7473,7 +7798,7 @@ mod tests {
                     migration_metadata
                         .all_create_ops
                         .into_iter()
-                        .map(|(_, _, name, _)| name.item)
+                        .map(|(_, _, name, _, _)| name.item)
                         .collect::<Vec<_>>(),
                     test_case.expected_all_create_ops,
                     "{} test failed with wrong all create ops",
@@ -7574,6 +7899,7 @@ mod tests {
                         },
                         oid: 1,
                         id,
+                        owner_id: MZ_SYSTEM_ROLE_ID,
                     }],
                     |_catalog| Ok(()),
                 )

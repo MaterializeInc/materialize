@@ -25,7 +25,7 @@ unicode-width = "0.1.10"
 [build-dependencies]
 anyhow = "1.0.66"
 mz-ore = { path = "../ore", default-features = false }
-mz-walkabout = { path = "../walkabout" }
+mz-walkabout = { path = "../walkabout", default-features = false }
 phf = { version = "0.11.1", features = ["uncased"] }
 phf_codegen = "0.11.1"
 uncased = "0.9.7"

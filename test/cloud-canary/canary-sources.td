@@ -36,5 +36,7 @@ abc:abc
   ENVELOPE NONE
   WITH (SIZE '3xsmall');
 
+> CREATE DEFAULT INDEX ON bytes;
+
 > SELECT COUNT(*) > 0 from bytes
 true

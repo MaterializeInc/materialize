@@ -53,6 +53,7 @@ use std::fmt::Debug;
 use crate::codec_impls::UnitSchema;
 use crate::columnar::sealed::ColumnRef;
 use crate::part::{ColumnsMut, ColumnsRef, PartBuilder};
+use crate::stats::DynStats;
 use crate::Codec;
 
 /// A type understood by persist.
@@ -80,10 +81,6 @@ pub trait Data: Debug + Send + Sync + Sized + 'static {
 
     /// The associated reference type of [Self] used for reads and writes on
     /// columns of this type.
-    ///
-    /// TODO: We may want to eventually separate this into In and Out types
-    /// because one wants to be covariant and the other wants to be
-    /// contravariant.
     type Ref<'a>
     where
         Self: 'a;
@@ -93,6 +90,9 @@ pub trait Data: Debug + Send + Sync + Sized + 'static {
 
     /// The exclusive builder of columns of this type of data.
     type Mut: ColumnPush<Self> + Default;
+
+    /// The statistics type of columns of this type of data.
+    type Stats: DynStats + for<'a> From<&'a Self::Col>;
 }
 
 /// A type that may be retrieved from a column of `[T]`.

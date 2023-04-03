@@ -14,7 +14,7 @@ user documentation, if you haven't already:
 
   1. [Get Started](https://materialize.com/docs/get-started/)
   2. [What Is Materialized?](https://materialize.com/docs/overview/what-is-materialize/)
-  3. [Architecture Overview](https://materialize.com/docs/overview/architecture/)
+  3. [Architecture Overview](https://materialize.com/blog/materialize-architecture/)
 
 Then, once you're up to speed, dive into the [developer guide](guide.md). The
 guide is intended to be skimmed from start to finish, to give you the lay of the

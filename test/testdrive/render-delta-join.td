@@ -48,23 +48,23 @@ count
 > SET cluster_replica = r1
 
 > SELECT
-    sum(sent) as sent
+    sent
   FROM
     mz_internal.mz_dataflow_channels AS channels
     LEFT JOIN mz_internal.mz_message_counts AS counts
-        ON channels.id = counts.channel_id AND channels.worker_id = counts.from_worker_id
-  WHERE id IN
+        ON channels.id = counts.channel_id
+  WHERE
+    id IN
         (SELECT id
          FROM mz_internal.mz_dataflow_addresses
          WHERE address[1] =
-             (SELECT DISTINCT address[1]
+             (SELECT address[1]
               FROM mz_internal.mz_dataflow_addresses
               WHERE id =
-                  (SELECT DISTINCT id
+                  (SELECT id
                    FROM mz_internal.mz_dataflows
                    WHERE name LIKE '%.delta_join%')))
-  GROUP BY id, from_index, to_index, from_port, to_port
-  HAVING sum(sent) > 100
+    AND sent > 100
   ORDER BY sent;
 sent
 ----

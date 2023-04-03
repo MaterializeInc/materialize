@@ -342,6 +342,7 @@ pub struct RunnerInner {
     internal_server_addr: SocketAddr,
     // Drop order matters for these fields.
     client: tokio_postgres::Client,
+    system_client: tokio_postgres::Client,
     clients: BTreeMap<String, tokio_postgres::Client>,
     auto_index_tables: bool,
     auto_transactions: bool,
@@ -694,8 +695,10 @@ impl<'a> Runner<'a> {
     async fn reset_database(&mut self) -> Result<(), anyhow::Error> {
         let inner = self.inner.as_mut().expect("RunnerInner missing");
 
+        inner.client.batch_execute("ROLLBACK;").await?;
+
         inner
-            .client
+            .system_client
             .batch_execute(
                 "ROLLBACK;
                  SET cluster = mz_introspection;
@@ -705,18 +708,18 @@ impl<'a> Runner<'a> {
 
         // Drop all databases, then recreate the `materialize` database.
         for row in inner
-            .client
+            .system_client
             .query("SELECT name FROM mz_databases", &[])
             .await?
         {
             let name: &str = row.get("name");
             inner
-                .client
+                .system_client
                 .batch_execute(&format!("DROP DATABASE {name}"))
                 .await?;
         }
         inner
-            .client
+            .system_client
             .batch_execute("CREATE DATABASE materialize")
             .await?;
 
@@ -725,7 +728,7 @@ impl<'a> Runner<'a> {
         // on a cluster replica is exceptionally slow.
         let mut needs_default_cluster = true;
         for row in inner
-            .client
+            .system_client
             .query("SELECT name FROM mz_clusters WHERE id LIKE 'u%'", &[])
             .await?
         {
@@ -733,7 +736,7 @@ impl<'a> Runner<'a> {
                 "default" => needs_default_cluster = false,
                 name => {
                     inner
-                        .client
+                        .system_client
                         .batch_execute(&format!("DROP CLUSTER {name}"))
                         .await?
                 }
@@ -741,13 +744,13 @@ impl<'a> Runner<'a> {
         }
         if needs_default_cluster {
             inner
-                .client
+                .system_client
                 .batch_execute("CREATE CLUSTER default REPLICAS ()")
                 .await?;
         }
         let mut needs_default_replica = true;
         for row in inner
-            .client
+            .system_client
             .query(
                 "SELECT name, size FROM mz_cluster_replicas
                  WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'default')",
@@ -759,7 +762,7 @@ impl<'a> Runner<'a> {
                 ("r1", "1") => needs_default_replica = false,
                 (name, _) => {
                     inner
-                        .client
+                        .system_client
                         .batch_execute(&format!("DROP CLUSTER REPLICA default.{name}"))
                         .await?
                 }
@@ -767,12 +770,13 @@ impl<'a> Runner<'a> {
         }
         if needs_default_replica {
             inner
-                .client
+                .system_client
                 .batch_execute("CREATE CLUSTER REPLICA default.r1 SIZE '1'")
                 .await?;
         }
 
         inner.client = connect(inner.server_addr, None).await;
+        inner.system_client = connect(inner.internal_server_addr, Some("mz_system")).await;
         inner.clients = BTreeMap::new();
 
         Ok(())
@@ -934,13 +938,11 @@ impl RunnerInner {
 
         // Some sqllogic tests require more than the default amount of tables, so we increase the
         // limit for all tests.
-        {
-            let system_client = connect(internal_server_addr, Some("mz_system")).await;
-            system_client
-                .simple_query("ALTER SYSTEM SET max_tables = 100")
-                .await
-                .unwrap();
-        }
+        let system_client = connect(internal_server_addr, Some("mz_system")).await;
+        system_client
+            .simple_query("ALTER SYSTEM SET max_tables = 100")
+            .await
+            .unwrap();
 
         Ok(RunnerInner {
             server_addr,
@@ -949,6 +951,7 @@ impl RunnerInner {
             _server_thread: server_thread.join_on_drop(),
             _temp_dir: temp_dir,
             client,
+            system_client,
             clients: BTreeMap::new(),
             auto_index_tables: config.auto_index_tables,
             auto_transactions: config.auto_transactions,
@@ -1303,7 +1306,7 @@ impl RunnerInner {
             None => &self.client,
             Some(name) => {
                 if !self.clients.contains_key(name) {
-                    let addr = if matches!(user, Some("mz_system")) {
+                    let addr = if matches!(user, Some("mz_system") | Some("mz_introspection")) {
                         self.internal_server_addr
                     } else {
                         self.server_addr

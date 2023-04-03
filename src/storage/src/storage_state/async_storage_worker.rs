@@ -38,7 +38,7 @@ use mz_storage_client::types::sources::{
 };
 
 use crate::source::reclock::{ReclockBatch, ReclockFollower};
-use crate::source::types::{SourceConnectionBuilder, SourceReader};
+use crate::source::types::SourceRender;
 
 /// A worker that can execute commands that come in on a channel and returns
 /// responses on another channel. This is useful in places where we can't
@@ -76,13 +76,13 @@ async fn reclock_resume_frontier<C, IntoTime>(
     persist_clients: &PersistClientCache,
     ingestion_description: &IngestionDescription<CollectionMetadata>,
     resume_upper: &Antichain<IntoTime>,
-) -> Antichain<<C::Reader as SourceReader>::Time>
+) -> Antichain<C::Time>
 where
-    C: SourceConnection + SourceConnectionBuilder,
+    C: SourceConnection + SourceRender,
     IntoTime: Timestamp + Lattice + Codec64 + Display,
 {
     if **resume_upper == [IntoTime::minimum()] {
-        return Antichain::from_elem(<C::Reader as SourceReader>::Time::minimum());
+        return Antichain::from_elem(C::Time::minimum());
     }
 
     let metadata = &ingestion_description.ingestion_metadata;
@@ -119,7 +119,7 @@ where
                     for ((k, v), t, d) in updates {
                         let row: Row = k.expect("invalid binding").0.expect("invalid binding");
                         let _v: () = v.expect("invalid binding");
-                        let from_ts = <C::Reader as SourceReader>::Time::decode_row(&row);
+                        let from_ts = C::Time::decode_row(&row);
                         remap_updates.push((from_ts, t, d));
                     }
                 }

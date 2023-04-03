@@ -81,13 +81,22 @@ fn main() {
     env::set_var("PROTOC", protobuf_src::protoc());
 
     prost_build::Config::new()
+        .extern_path(".mz_persist_types", "::mz_persist_types")
         .extern_path(".mz_proto", "::mz_proto")
-        .type_attribute(".mz_persist_client.internal", "#[derive(serde::Serialize)]")
+        // Note(parkertimmerman): We purposefully omit `.mz_persist_client.internal.diff` from here
+        // because we want to use `bytes::Bytes` for the types in that package, and `Bytes` doesn't
+        // implement `serde::Serialize`
+        .type_attribute(
+            ".mz_persist_client.internal.state",
+            "#[derive(serde::Serialize)]",
+        )
         .btree_map(["."])
+        .bytes([".mz_persist_client.internal.diff.ProtoStateFieldDiffs"])
         .compile_protos(
             &[
                 "persist-client/src/cfg.proto",
                 "persist-client/src/internal/state.proto",
+                "persist-client/src/internal/diff.proto",
             ],
             &[".."],
         )

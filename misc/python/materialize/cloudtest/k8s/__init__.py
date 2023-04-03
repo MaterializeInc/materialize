@@ -314,3 +314,21 @@ class K8sSecret(K8sResource):
         core_v1_api.create_namespaced_secret(
             body=self.secret, namespace=self.namespace()  # type: ignore
         )
+
+
+def cluster_pod_name(cluster_id: str, replica_id: str, process: int = 0) -> str:
+    # Replica IDs now appear as `GlobalId`s in `mz_cluster_replicas`, while
+    # the pod names still contain only the numeric ID.
+    # TODO(teskje): Change pod names to contain the replica `GlobalId`.
+    replica_id = replica_id.lstrip("u")
+
+    return f"pod/cluster-{cluster_id}-replica-{replica_id}-{process}"
+
+
+def cluster_service_name(cluster_id: str, replica_id: str) -> str:
+    # Replica IDs now appear as `GlobalId`s in `mz_cluster_replicas`, while
+    # the pod names still contain only the numeric ID.
+    # TODO(teskje): Change pod names to contain the replica `GlobalId`.
+    replica_id = replica_id.lstrip("u")
+
+    return f"service/cluster-{cluster_id}-replica-{replica_id}"

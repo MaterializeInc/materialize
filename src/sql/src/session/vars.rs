@@ -7,8 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::any::Any;
 use std::borrow::Borrow;
+use std::collections::BTreeMap;
 use std::fmt;
+use std::fmt::Debug;
 use std::time::Duration;
 
 use const_format::concatcp;
@@ -621,6 +624,30 @@ pub const ENABLE_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+/// This is separate from the [`AUTO_ROUTE_INTROSPECTION_QUERIES`] `ServerVar` so we can
+/// independently roll out this feature via LaunchDarkly without effecting user's ability
+/// to disable the behavior for there sessions.
+pub const ENABLE_AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_auto_route_introspection_queries"),
+    value: &false,
+    description:
+        "Whether the feature to force queries that depends only on system tables to run on the mz_introspection cluster, is enabled (Materialize).",
+    internal: true,
+    safe: true,
+};
+
+/// This is separate from the [`ENABLE_AUTO_ROUTE_INTROSPECTION_QUERIES`] `ServerVar` so we
+/// can independently roll out this feature via LaunchDarkly. Users can set this var as
+/// a session variable, while we can control the feature overall with the former.
+pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("auto_route_introspection_queries"),
+    value: &true,
+    description:
+        "Whether to force queries that depend only on system tables, to run on the mz_introspection cluster (Materialize).",
+    internal: false,
+    safe: true,
+};
+
 /// Represents the input to a variable.
 ///
 /// Each variable has different rules for how it handles each style of input.
@@ -718,6 +745,7 @@ pub struct SessionVars {
     real_time_recency: SessionVar<bool>,
     emit_timestamp_notice: SessionVar<bool>,
     emit_trace_id_notice: SessionVar<bool>,
+    auto_route_introspection_queries: SessionVar<bool>,
     // Inputs to computed variables.
     build_info: &'static BuildInfo,
     user: User,
@@ -752,6 +780,7 @@ impl SessionVars {
             real_time_recency: SessionVar::new(&REAL_TIME_RECENCY),
             emit_timestamp_notice: SessionVar::new(&EMIT_TIMESTAMP_NOTICE),
             emit_trace_id_notice: SessionVar::new(&EMIT_TRACE_ID_NOTICE),
+            auto_route_introspection_queries: SessionVar::new(&AUTO_ROUTE_INTROSPECTION_QUERIES),
             build_info,
             user,
         }
@@ -760,8 +789,10 @@ impl SessionVars {
     /// Returns an iterator over the configuration parameters and their current
     /// values for this session.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        let vars: [&dyn Var; 25] = [
-            &self.application_name,
+        // `as` is ok to use to cast to a trait object.
+        #[allow(clippy::as_conversions)]
+        let vars = [
+            &self.application_name as &dyn Var,
             &self.client_encoding,
             &self.client_min_messages,
             &self.cluster,
@@ -784,6 +815,7 @@ impl SessionVars {
             &self.real_time_recency,
             &self.emit_timestamp_notice,
             &self.emit_trace_id_notice,
+            &self.auto_route_introspection_queries,
             self.build_info,
             &self.user,
         ];
@@ -873,6 +905,8 @@ impl SessionVars {
             Ok(&self.emit_timestamp_notice)
         } else if name == EMIT_TRACE_ID_NOTICE.name {
             Ok(&self.emit_trace_id_notice)
+        } else if name == AUTO_ROUTE_INTROSPECTION_QUERIES.name {
+            Ok(&self.auto_route_introspection_queries)
         } else if name == IS_SUPERUSER_NAME {
             Ok(&self.user)
         } else {
@@ -1009,6 +1043,8 @@ impl SessionVars {
             self.emit_timestamp_notice.set(input, local)
         } else if name == EMIT_TRACE_ID_NOTICE.name {
             self.emit_trace_id_notice.set(input, local)
+        } else if name == AUTO_ROUTE_INTROSPECTION_QUERIES.name {
+            self.auto_route_introspection_queries.set(input, local)
         } else if name == IS_SUPERUSER_NAME {
             Err(VarError::ReadOnlyParameter(self.user.name()))
         } else {
@@ -1057,6 +1093,8 @@ impl SessionVars {
             self.emit_timestamp_notice.reset(local);
         } else if name == EMIT_TRACE_ID_NOTICE.name {
             self.emit_trace_id_notice.reset(local);
+        } else if name == AUTO_ROUTE_INTROSPECTION_QUERIES.name {
+            self.auto_route_introspection_queries.reset(local);
         } else if name == CLIENT_ENCODING.name
             || name == DATE_STYLE.name
             || name == FAILPOINTS.name
@@ -1103,6 +1141,7 @@ impl SessionVars {
             real_time_recency,
             emit_timestamp_notice,
             emit_trace_id_notice,
+            auto_route_introspection_queries,
             build_info: _,
             user: _,
         } = self;
@@ -1121,6 +1160,7 @@ impl SessionVars {
         real_time_recency.end_transaction(action);
         emit_timestamp_notice.end_transaction(action);
         emit_trace_id_notice.end_transaction(action);
+        auto_route_introspection_queries.end_transaction(action);
     }
 
     /// Returns the value of the `application_name` configuration parameter.
@@ -1245,6 +1285,11 @@ impl SessionVars {
         *self.emit_trace_id_notice.value()
     }
 
+    /// Returns the value of `auto_route_introspection_queries` configuration parameter.
+    pub fn auto_route_introspection_queries(&self) -> bool {
+        *self.auto_route_introspection_queries.value()
+    }
+
     /// Returns the value of `is_superuser` configuration parameter.
     pub fn is_superuser(&self) -> bool {
         self.user.is_superuser()
@@ -1268,142 +1313,91 @@ impl SessionVars {
 /// On disk variables.
 ///
 /// See [`SessionVars`] for more details on the Materialize configuration model.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SystemVars {
-    // internal bookkeeping
-    config_has_synced_once: SystemVar<bool>,
-
-    // limits
-    max_aws_privatelink_connections: SystemVar<u32>,
-    max_tables: SystemVar<u32>,
-    max_sources: SystemVar<u32>,
-    max_sinks: SystemVar<u32>,
-    max_materialized_views: SystemVar<u32>,
-    max_clusters: SystemVar<u32>,
-    max_replicas_per_cluster: SystemVar<u32>,
-    max_databases: SystemVar<u32>,
-    max_schemas_per_database: SystemVar<u32>,
-    max_objects_per_schema: SystemVar<u32>,
-    max_secrets: SystemVar<u32>,
-    max_roles: SystemVar<u32>,
-    max_result_size: SystemVar<u32>,
-    allowed_cluster_replica_sizes: SystemVar<Vec<Ident>>,
-
-    // features
-    enable_with_mutually_recursive: SystemVar<bool>,
-    enable_rbac_checks: SystemVar<bool>,
-
-    // storage configuration
-    enable_multi_worker_storage_persist_sink: SystemVar<bool>,
-
-    // persist configuration
-    persist_blob_target_size: SystemVar<usize>,
-    persist_compaction_minimum_timeout: SystemVar<Duration>,
-    persist_sink_minimum_batch_updates: SystemVar<usize>,
-    persist_stats_collection_enabled: SystemVar<bool>,
-    persist_stats_filter_enabled: SystemVar<bool>,
-
-    persist_next_listen_batch_retryer_initial_backoff: SystemVar<Duration>,
-    persist_next_listen_batch_retryer_multiplier: SystemVar<u32>,
-    persist_next_listen_batch_retryer_clamp: SystemVar<Duration>,
-
-    // crdb configuration
-    crdb_connect_timeout: SystemVar<Duration>,
-
-    // dataflow configuration
-    dataflow_max_inflight_bytes: SystemVar<usize>,
-
-    // misc
-    metrics_retention: SystemVar<Duration>,
-
-    // testing
-    mock_audit_event_timestamp: SystemVar<Option<mz_repr::Timestamp>>,
+    vars: BTreeMap<&'static UncasedStr, Box<dyn VarMut>>,
 }
 
-impl Default for SystemVars {
-    fn default() -> Self {
+impl Clone for SystemVars {
+    fn clone(&self) -> Self {
         SystemVars {
-            config_has_synced_once: SystemVar::new(&CONFIG_HAS_SYNCED_ONCE),
-            max_aws_privatelink_connections: SystemVar::new(&MAX_AWS_PRIVATELINK_CONNECTIONS),
-            max_tables: SystemVar::new(&MAX_TABLES),
-            max_sources: SystemVar::new(&MAX_SOURCES),
-            max_sinks: SystemVar::new(&MAX_SINKS),
-            max_materialized_views: SystemVar::new(&MAX_MATERIALIZED_VIEWS),
-            max_clusters: SystemVar::new(&MAX_CLUSTERS),
-            max_replicas_per_cluster: SystemVar::new(&MAX_REPLICAS_PER_CLUSTER),
-            max_databases: SystemVar::new(&MAX_DATABASES),
-            max_schemas_per_database: SystemVar::new(&MAX_SCHEMAS_PER_DATABASE),
-            max_objects_per_schema: SystemVar::new(&MAX_OBJECTS_PER_SCHEMA),
-            max_secrets: SystemVar::new(&MAX_SECRETS),
-            max_roles: SystemVar::new(&MAX_ROLES),
-            max_result_size: SystemVar::new(&MAX_RESULT_SIZE),
-            allowed_cluster_replica_sizes: SystemVar::new(&ALLOWED_CLUSTER_REPLICA_SIZES),
-            enable_multi_worker_storage_persist_sink: SystemVar::new(
-                &ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK,
-            ),
-            persist_blob_target_size: SystemVar::new(&PERSIST_BLOB_TARGET_SIZE),
-            persist_compaction_minimum_timeout: SystemVar::new(&PERSIST_COMPACTION_MINIMUM_TIMEOUT),
-            crdb_connect_timeout: SystemVar::new(&CRDB_CONNECT_TIMEOUT),
-            dataflow_max_inflight_bytes: SystemVar::new(&DATAFLOW_MAX_INFLIGHT_BYTES),
-            persist_sink_minimum_batch_updates: SystemVar::new(&PERSIST_SINK_MINIMUM_BATCH_UPDATES),
-            persist_next_listen_batch_retryer_initial_backoff: SystemVar::new(
-                &PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF,
-            ),
-            persist_next_listen_batch_retryer_multiplier: SystemVar::new(
-                &PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER,
-            ),
-            persist_next_listen_batch_retryer_clamp: SystemVar::new(
-                &PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP,
-            ),
-            persist_stats_collection_enabled: SystemVar::new(&PERSIST_STATS_COLLECTION_ENABLED),
-            persist_stats_filter_enabled: SystemVar::new(&PERSIST_STATS_FILTER_ENABLED),
-            metrics_retention: SystemVar::new(&METRICS_RETENTION),
-            mock_audit_event_timestamp: SystemVar::new(&MOCK_AUDIT_EVENT_TIMESTAMP),
-            enable_with_mutually_recursive: SystemVar::new(&ENABLE_WITH_MUTUALLY_RECURSIVE),
-            enable_rbac_checks: SystemVar::new(&ENABLE_RBAC_CHECKS),
+            vars: self.vars.iter().map(|(k, v)| (*k, v.clone_var())).collect(),
         }
     }
 }
 
+impl Default for SystemVars {
+    fn default() -> Self {
+        SystemVars::empty()
+            .with_var(&CONFIG_HAS_SYNCED_ONCE)
+            .with_var(&MAX_AWS_PRIVATELINK_CONNECTIONS)
+            .with_var(&MAX_TABLES)
+            .with_var(&MAX_SOURCES)
+            .with_var(&MAX_SINKS)
+            .with_var(&MAX_MATERIALIZED_VIEWS)
+            .with_var(&MAX_CLUSTERS)
+            .with_var(&MAX_REPLICAS_PER_CLUSTER)
+            .with_var(&MAX_DATABASES)
+            .with_var(&MAX_SCHEMAS_PER_DATABASE)
+            .with_var(&MAX_OBJECTS_PER_SCHEMA)
+            .with_var(&MAX_SECRETS)
+            .with_var(&MAX_ROLES)
+            .with_var(&MAX_RESULT_SIZE)
+            .with_var(&ALLOWED_CLUSTER_REPLICA_SIZES)
+            .with_var(&ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK)
+            .with_var(&PERSIST_BLOB_TARGET_SIZE)
+            .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
+            .with_var(&CRDB_CONNECT_TIMEOUT)
+            .with_var(&DATAFLOW_MAX_INFLIGHT_BYTES)
+            .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
+            .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
+            .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER)
+            .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP)
+            .with_var(&PERSIST_STATS_COLLECTION_ENABLED)
+            .with_var(&PERSIST_STATS_FILTER_ENABLED)
+            .with_var(&METRICS_RETENTION)
+            .with_var(&MOCK_AUDIT_EVENT_TIMESTAMP)
+            .with_var(&ENABLE_WITH_MUTUALLY_RECURSIVE)
+            .with_var(&ENABLE_RBAC_CHECKS)
+            .with_var(&ENABLE_AUTO_ROUTE_INTROSPECTION_QUERIES)
+    }
+}
+
 impl SystemVars {
+    fn empty() -> Self {
+        SystemVars {
+            vars: Default::default(),
+        }
+    }
+
+    fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
+    where
+        V: Value + Debug + Eq + Clone + 'static,
+        V::Owned: Debug + Eq + Send + Clone + Sync,
+    {
+        self.vars.insert(var.name, Box::new(SystemVar::new(var)));
+        self
+    }
+
+    fn expect_value<V>(&self, var: &ServerVar<V>) -> &V
+    where
+        V: Value + Debug + Eq + Clone + 'static,
+        V::Owned: Debug + Eq + Send + Clone + Sync,
+    {
+        let var = self
+            .vars
+            .get(var.name)
+            .expect("provided var should be in state");
+
+        var.value_any()
+            .downcast_ref()
+            .expect("provided var type should matched stored var")
+    }
+
     /// Returns an iterator over the configuration parameters and their current
     /// values on disk.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        // `as` is ok to use to cast to a trait object.
-        #[allow(clippy::as_conversions)]
-        let vars = [
-            &self.config_has_synced_once as &dyn Var,
-            &self.max_aws_privatelink_connections,
-            &self.max_tables,
-            &self.max_sources,
-            &self.max_sinks,
-            &self.max_materialized_views,
-            &self.max_clusters,
-            &self.max_replicas_per_cluster,
-            &self.max_databases,
-            &self.max_schemas_per_database,
-            &self.max_objects_per_schema,
-            &self.max_secrets,
-            &self.max_roles,
-            &self.max_result_size,
-            &self.allowed_cluster_replica_sizes,
-            &self.enable_multi_worker_storage_persist_sink,
-            &self.persist_blob_target_size,
-            &self.persist_compaction_minimum_timeout,
-            &self.persist_next_listen_batch_retryer_initial_backoff,
-            &self.persist_next_listen_batch_retryer_multiplier,
-            &self.persist_next_listen_batch_retryer_clamp,
-            &self.crdb_connect_timeout,
-            &self.dataflow_max_inflight_bytes,
-            &self.persist_sink_minimum_batch_updates,
-            &self.persist_stats_collection_enabled,
-            &self.persist_stats_filter_enabled,
-            &self.metrics_retention,
-            &self.mock_audit_event_timestamp,
-            &self.enable_with_mutually_recursive,
-            &self.enable_rbac_checks,
-        ];
-        vars.into_iter()
+        self.vars.values().map(|v| v.as_var())
     }
 
     /// Returns an iterator over the configuration parameters and their current
@@ -1430,69 +1424,10 @@ impl SystemVars {
     /// The call will return an error:
     /// 1. If `name` does not refer to a valid [`SystemVars`] field.
     pub fn get(&self, name: &str) -> Result<&dyn Var, VarError> {
-        if name == CONFIG_HAS_SYNCED_ONCE.name {
-            Ok(&self.config_has_synced_once)
-        } else if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
-            Ok(&self.max_aws_privatelink_connections)
-        } else if name == MAX_TABLES.name {
-            Ok(&self.max_tables)
-        } else if name == MAX_SOURCES.name {
-            Ok(&self.max_sources)
-        } else if name == MAX_SINKS.name {
-            Ok(&self.max_sinks)
-        } else if name == MAX_MATERIALIZED_VIEWS.name {
-            Ok(&self.max_materialized_views)
-        } else if name == MAX_CLUSTERS.name {
-            Ok(&self.max_clusters)
-        } else if name == MAX_REPLICAS_PER_CLUSTER.name {
-            Ok(&self.max_replicas_per_cluster)
-        } else if name == MAX_DATABASES.name {
-            Ok(&self.max_databases)
-        } else if name == MAX_SCHEMAS_PER_DATABASE.name {
-            Ok(&self.max_schemas_per_database)
-        } else if name == MAX_OBJECTS_PER_SCHEMA.name {
-            Ok(&self.max_objects_per_schema)
-        } else if name == MAX_SECRETS.name {
-            Ok(&self.max_secrets)
-        } else if name == MAX_ROLES.name {
-            Ok(&self.max_roles)
-        } else if name == MAX_RESULT_SIZE.name {
-            Ok(&self.max_result_size)
-        } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
-            Ok(&self.allowed_cluster_replica_sizes)
-        } else if name == ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK.name {
-            Ok(&self.enable_multi_worker_storage_persist_sink)
-        } else if name == PERSIST_BLOB_TARGET_SIZE.name {
-            Ok(&self.persist_blob_target_size)
-        } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
-            Ok(&self.persist_compaction_minimum_timeout)
-        } else if name == CRDB_CONNECT_TIMEOUT.name {
-            Ok(&self.crdb_connect_timeout)
-        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name {
-            Ok(&self.persist_next_listen_batch_retryer_multiplier)
-        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name {
-            Ok(&self.persist_next_listen_batch_retryer_clamp)
-        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name {
-            Ok(&self.persist_next_listen_batch_retryer_initial_backoff)
-        } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
-            Ok(&self.dataflow_max_inflight_bytes)
-        } else if name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name {
-            Ok(&self.persist_sink_minimum_batch_updates)
-        } else if name == PERSIST_STATS_COLLECTION_ENABLED.name {
-            Ok(&self.persist_stats_collection_enabled)
-        } else if name == PERSIST_STATS_FILTER_ENABLED.name {
-            Ok(&self.persist_stats_filter_enabled)
-        } else if name == METRICS_RETENTION.name {
-            Ok(&self.metrics_retention)
-        } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
-            Ok(&self.mock_audit_event_timestamp)
-        } else if name == ENABLE_WITH_MUTUALLY_RECURSIVE.name {
-            Ok(&self.enable_with_mutually_recursive)
-        } else if name == ENABLE_RBAC_CHECKS.name {
-            Ok(&self.enable_rbac_checks)
-        } else {
-            Err(VarError::UnknownParameter(name.into()))
-        }
+        self.vars
+            .get(UncasedStr::new(name))
+            .map(|v| v.as_var())
+            .ok_or_else(|| VarError::UnknownParameter(name.into()))
     }
 
     /// Check if the given `values` is the default value for the [`Var`]
@@ -1505,73 +1440,10 @@ impl SystemVars {
     /// 2. If `values` does not represent a valid [`SystemVars`] value for
     ///    `name`.
     pub fn is_default(&self, name: &str, input: VarInput) -> Result<bool, VarError> {
-        if name == CONFIG_HAS_SYNCED_ONCE.name {
-            self.config_has_synced_once.is_default(input)
-        } else if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
-            self.max_aws_privatelink_connections.is_default(input)
-        } else if name == MAX_TABLES.name {
-            self.max_tables.is_default(input)
-        } else if name == MAX_SOURCES.name {
-            self.max_sources.is_default(input)
-        } else if name == MAX_SINKS.name {
-            self.max_sinks.is_default(input)
-        } else if name == MAX_MATERIALIZED_VIEWS.name {
-            self.max_materialized_views.is_default(input)
-        } else if name == MAX_CLUSTERS.name {
-            self.max_clusters.is_default(input)
-        } else if name == MAX_REPLICAS_PER_CLUSTER.name {
-            self.max_replicas_per_cluster.is_default(input)
-        } else if name == MAX_DATABASES.name {
-            self.max_databases.is_default(input)
-        } else if name == MAX_SCHEMAS_PER_DATABASE.name {
-            self.max_schemas_per_database.is_default(input)
-        } else if name == MAX_OBJECTS_PER_SCHEMA.name {
-            self.max_objects_per_schema.is_default(input)
-        } else if name == MAX_SECRETS.name {
-            self.max_secrets.is_default(input)
-        } else if name == MAX_ROLES.name {
-            self.max_roles.is_default(input)
-        } else if name == MAX_RESULT_SIZE.name {
-            self.max_result_size.is_default(input)
-        } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
-            self.allowed_cluster_replica_sizes.is_default(input)
-        } else if name == ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK.name {
-            self.enable_multi_worker_storage_persist_sink
-                .is_default(input)
-        } else if name == PERSIST_BLOB_TARGET_SIZE.name {
-            self.persist_blob_target_size.is_default(input)
-        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name {
-            self.persist_next_listen_batch_retryer_initial_backoff
-                .is_default(input)
-        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name {
-            self.persist_next_listen_batch_retryer_multiplier
-                .is_default(input)
-        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name {
-            self.persist_next_listen_batch_retryer_clamp
-                .is_default(input)
-        } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
-            self.persist_compaction_minimum_timeout.is_default(input)
-        } else if name == CRDB_CONNECT_TIMEOUT.name {
-            self.crdb_connect_timeout.is_default(input)
-        } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
-            self.dataflow_max_inflight_bytes.is_default(input)
-        } else if name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name {
-            self.persist_sink_minimum_batch_updates.is_default(input)
-        } else if name == PERSIST_STATS_COLLECTION_ENABLED.name {
-            self.persist_stats_collection_enabled.is_default(input)
-        } else if name == PERSIST_STATS_FILTER_ENABLED.name {
-            self.persist_stats_filter_enabled.is_default(input)
-        } else if name == METRICS_RETENTION.name {
-            self.metrics_retention.is_default(input)
-        } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
-            self.mock_audit_event_timestamp.is_default(input)
-        } else if name == ENABLE_WITH_MUTUALLY_RECURSIVE.name {
-            self.enable_with_mutually_recursive.is_default(input)
-        } else if name == ENABLE_RBAC_CHECKS.name {
-            self.enable_rbac_checks.is_default(input)
-        } else {
-            Err(VarError::UnknownParameter(name.into()))
-        }
+        self.vars
+            .get(UncasedStr::new(name))
+            .ok_or_else(|| VarError::UnknownParameter(name.into()))
+            .and_then(|v| v.is_default(input))
     }
 
     /// Sets the configuration parameter named `name` to the value represented
@@ -1593,70 +1465,10 @@ impl SystemVars {
     /// 2. If `value` does not represent a valid [`SystemVars`] value for
     ///    `name`.
     pub fn set(&mut self, name: &str, input: VarInput) -> Result<bool, VarError> {
-        if name == CONFIG_HAS_SYNCED_ONCE.name {
-            self.config_has_synced_once.set(input)
-        } else if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
-            self.max_aws_privatelink_connections.set(input)
-        } else if name == MAX_TABLES.name {
-            self.max_tables.set(input)
-        } else if name == MAX_SOURCES.name {
-            self.max_sources.set(input)
-        } else if name == MAX_SINKS.name {
-            self.max_sinks.set(input)
-        } else if name == MAX_MATERIALIZED_VIEWS.name {
-            self.max_materialized_views.set(input)
-        } else if name == MAX_CLUSTERS.name {
-            self.max_clusters.set(input)
-        } else if name == MAX_REPLICAS_PER_CLUSTER.name {
-            self.max_replicas_per_cluster.set(input)
-        } else if name == MAX_DATABASES.name {
-            self.max_databases.set(input)
-        } else if name == MAX_SCHEMAS_PER_DATABASE.name {
-            self.max_schemas_per_database.set(input)
-        } else if name == MAX_OBJECTS_PER_SCHEMA.name {
-            self.max_objects_per_schema.set(input)
-        } else if name == MAX_SECRETS.name {
-            self.max_secrets.set(input)
-        } else if name == MAX_ROLES.name {
-            self.max_roles.set(input)
-        } else if name == MAX_RESULT_SIZE.name {
-            self.max_result_size.set(input)
-        } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
-            self.allowed_cluster_replica_sizes.set(input)
-        } else if name == PERSIST_BLOB_TARGET_SIZE.name {
-            self.persist_blob_target_size.set(input)
-        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name {
-            self.persist_next_listen_batch_retryer_initial_backoff
-                .set(input)
-        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name {
-            self.persist_next_listen_batch_retryer_multiplier.set(input)
-        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name {
-            self.persist_next_listen_batch_retryer_clamp.set(input)
-        } else if name == ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK.name {
-            self.enable_multi_worker_storage_persist_sink.set(input)
-        } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
-            self.persist_compaction_minimum_timeout.set(input)
-        } else if name == CRDB_CONNECT_TIMEOUT.name {
-            self.crdb_connect_timeout.set(input)
-        } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
-            self.dataflow_max_inflight_bytes.set(input)
-        } else if name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name {
-            self.persist_sink_minimum_batch_updates.set(input)
-        } else if name == PERSIST_STATS_COLLECTION_ENABLED.name {
-            self.persist_stats_collection_enabled.set(input)
-        } else if name == PERSIST_STATS_FILTER_ENABLED.name {
-            self.persist_stats_filter_enabled.set(input)
-        } else if name == METRICS_RETENTION.name {
-            self.metrics_retention.set(input)
-        } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
-            self.mock_audit_event_timestamp.set(input)
-        } else if name == ENABLE_WITH_MUTUALLY_RECURSIVE.name {
-            self.enable_with_mutually_recursive.set(input)
-        } else if name == ENABLE_RBAC_CHECKS.name {
-            self.enable_rbac_checks.set(input)
-        } else {
-            Err(VarError::UnknownParameter(name.into()))
-        }
+        self.vars
+            .get_mut(UncasedStr::new(name))
+            .ok_or_else(|| VarError::UnknownParameter(name.into()))
+            .and_then(|v| v.set(input))
     }
 
     /// Sets the configuration parameter named `name` to its default value.
@@ -1673,147 +1485,85 @@ impl SystemVars {
     /// The call will return an error:
     /// 1. If `name` does not refer to a valid [`SystemVars`] field.
     pub fn reset(&mut self, name: &str) -> Result<bool, VarError> {
-        if name == CONFIG_HAS_SYNCED_ONCE.name {
-            Ok(self.config_has_synced_once.reset())
-        } else if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
-            Ok(self.max_aws_privatelink_connections.reset())
-        } else if name == MAX_TABLES.name {
-            Ok(self.max_tables.reset())
-        } else if name == MAX_SOURCES.name {
-            Ok(self.max_sources.reset())
-        } else if name == MAX_SINKS.name {
-            Ok(self.max_sinks.reset())
-        } else if name == MAX_MATERIALIZED_VIEWS.name {
-            Ok(self.max_materialized_views.reset())
-        } else if name == MAX_CLUSTERS.name {
-            Ok(self.max_clusters.reset())
-        } else if name == MAX_REPLICAS_PER_CLUSTER.name {
-            Ok(self.max_replicas_per_cluster.reset())
-        } else if name == MAX_DATABASES.name {
-            Ok(self.max_databases.reset())
-        } else if name == MAX_SCHEMAS_PER_DATABASE.name {
-            Ok(self.max_schemas_per_database.reset())
-        } else if name == MAX_OBJECTS_PER_SCHEMA.name {
-            Ok(self.max_objects_per_schema.reset())
-        } else if name == MAX_SECRETS.name {
-            Ok(self.max_secrets.reset())
-        } else if name == MAX_ROLES.name {
-            Ok(self.max_roles.reset())
-        } else if name == MAX_RESULT_SIZE.name {
-            Ok(self.max_result_size.reset())
-        } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
-            Ok(self.allowed_cluster_replica_sizes.reset())
-        } else if name == PERSIST_BLOB_TARGET_SIZE.name {
-            Ok(self.persist_blob_target_size.reset())
-        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name {
-            Ok(self
-                .persist_next_listen_batch_retryer_initial_backoff
-                .reset())
-        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name {
-            Ok(self.persist_next_listen_batch_retryer_multiplier.reset())
-        } else if name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name {
-            Ok(self.persist_next_listen_batch_retryer_clamp.reset())
-        } else if name == ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK.name {
-            Ok(self.enable_multi_worker_storage_persist_sink.reset())
-        } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
-            Ok(self.persist_compaction_minimum_timeout.reset())
-        } else if name == CRDB_CONNECT_TIMEOUT.name {
-            Ok(self.crdb_connect_timeout.reset())
-        } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
-            Ok(self.dataflow_max_inflight_bytes.reset())
-        } else if name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name {
-            Ok(self.persist_sink_minimum_batch_updates.reset())
-        } else if name == PERSIST_STATS_COLLECTION_ENABLED.name {
-            Ok(self.persist_stats_collection_enabled.reset())
-        } else if name == PERSIST_STATS_FILTER_ENABLED.name {
-            Ok(self.persist_stats_filter_enabled.reset())
-        } else if name == METRICS_RETENTION.name {
-            Ok(self.metrics_retention.reset())
-        } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
-            Ok(self.mock_audit_event_timestamp.reset())
-        } else if name == ENABLE_WITH_MUTUALLY_RECURSIVE.name {
-            Ok(self.enable_with_mutually_recursive.reset())
-        } else if name == ENABLE_RBAC_CHECKS.name {
-            Ok(self.enable_rbac_checks.reset())
-        } else {
-            Err(VarError::UnknownParameter(name.into()))
-        }
+        self.vars
+            .get_mut(UncasedStr::new(name))
+            .ok_or_else(|| VarError::UnknownParameter(name.into()))
+            .map(|v| v.reset())
     }
 
     /// Returns the `config_has_synced_once` configuration parameter.
     pub fn config_has_synced_once(&self) -> bool {
-        *self.config_has_synced_once.value()
+        *self.expect_value(&CONFIG_HAS_SYNCED_ONCE)
     }
 
     /// Returns the value of the `max_aws_privatelink_connections` configuration parameter.
     pub fn max_aws_privatelink_connections(&self) -> u32 {
-        *self.max_aws_privatelink_connections.value()
+        *self.expect_value(&MAX_AWS_PRIVATELINK_CONNECTIONS)
     }
 
     /// Returns the value of the `max_tables` configuration parameter.
     pub fn max_tables(&self) -> u32 {
-        *self.max_tables.value()
+        *self.expect_value(&MAX_TABLES)
     }
 
     /// Returns the value of the `max_sources` configuration parameter.
     pub fn max_sources(&self) -> u32 {
-        *self.max_sources.value()
+        *self.expect_value(&MAX_SOURCES)
     }
 
     /// Returns the value of the `max_sinks` configuration parameter.
     pub fn max_sinks(&self) -> u32 {
-        *self.max_sinks.value()
+        *self.expect_value(&MAX_SINKS)
     }
 
     /// Returns the value of the `max_materialized_views` configuration parameter.
     pub fn max_materialized_views(&self) -> u32 {
-        *self.max_materialized_views.value()
+        *self.expect_value(&MAX_MATERIALIZED_VIEWS)
     }
 
     /// Returns the value of the `max_clusters` configuration parameter.
     pub fn max_clusters(&self) -> u32 {
-        *self.max_clusters.value()
+        *self.expect_value(&MAX_CLUSTERS)
     }
 
     /// Returns the value of the `max_replicas_per_cluster` configuration parameter.
     pub fn max_replicas_per_cluster(&self) -> u32 {
-        *self.max_replicas_per_cluster.value()
+        *self.expect_value(&MAX_REPLICAS_PER_CLUSTER)
     }
 
     /// Returns the value of the `max_databases` configuration parameter.
     pub fn max_databases(&self) -> u32 {
-        *self.max_databases.value()
+        *self.expect_value(&MAX_DATABASES)
     }
 
     /// Returns the value of the `max_schemas_per_database` configuration parameter.
     pub fn max_schemas_per_database(&self) -> u32 {
-        *self.max_schemas_per_database.value()
+        *self.expect_value(&MAX_SCHEMAS_PER_DATABASE)
     }
 
     /// Returns the value of the `max_objects_per_schema` configuration parameter.
     pub fn max_objects_per_schema(&self) -> u32 {
-        *self.max_objects_per_schema.value()
+        *self.expect_value(&MAX_OBJECTS_PER_SCHEMA)
     }
 
     /// Returns the value of the `max_secrets` configuration parameter.
     pub fn max_secrets(&self) -> u32 {
-        *self.max_secrets.value()
+        *self.expect_value(&MAX_SECRETS)
     }
 
     /// Returns the value of the `max_roles` configuration parameter.
     pub fn max_roles(&self) -> u32 {
-        *self.max_roles.value()
+        *self.expect_value(&MAX_ROLES)
     }
 
     /// Returns the value of the `max_result_size` configuration parameter.
     pub fn max_result_size(&self) -> u32 {
-        *self.max_result_size.value()
+        *self.expect_value(&MAX_RESULT_SIZE)
     }
 
     /// Returns the value of the `allowed_cluster_replica_sizes` configuration parameter.
     pub fn allowed_cluster_replica_sizes(&self) -> Vec<String> {
-        self.allowed_cluster_replica_sizes
-            .value()
+        self.expect_value(&ALLOWED_CLUSTER_REPLICA_SIZES)
             .into_iter()
             .map(|s| s.as_str().into())
             .collect()
@@ -1821,86 +1571,93 @@ impl SystemVars {
 
     /// Returns the `enable_multi_worker_storage_persist_sink` configuration parameter.
     pub fn enable_multi_worker_storage_persist_sink(&self) -> bool {
-        *self.enable_multi_worker_storage_persist_sink.value()
+        *self.expect_value(&ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK)
     }
 
     /// Returns the `persist_blob_target_size` configuration parameter.
     pub fn persist_blob_target_size(&self) -> usize {
-        *self.persist_blob_target_size.value()
+        *self.expect_value(&PERSIST_BLOB_TARGET_SIZE)
     }
 
     /// Returns the `persist_next_listen_batch_retryer_initial_backoff` configuration parameter.
     pub fn persist_next_listen_batch_retryer_initial_backoff(&self) -> Duration {
-        *self
-            .persist_next_listen_batch_retryer_initial_backoff
-            .value()
+        *self.expect_value(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
     }
 
     /// Returns the `persist_next_listen_batch_retryer_multiplier` configuration parameter.
     pub fn persist_next_listen_batch_retryer_multiplier(&self) -> u32 {
-        *self.persist_next_listen_batch_retryer_multiplier.value()
+        *self.expect_value(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER)
     }
 
     /// Returns the `persist_next_listen_batch_retryer_clamp` configuration parameter.
     pub fn persist_next_listen_batch_retryer_clamp(&self) -> Duration {
-        *self.persist_next_listen_batch_retryer_clamp.value()
+        *self.expect_value(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP)
     }
 
     /// Returns the `persist_compaction_minimum_timeout` configuration parameter.
     pub fn persist_compaction_minimum_timeout(&self) -> Duration {
-        *self.persist_compaction_minimum_timeout.value()
+        *self.expect_value(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
     }
 
     /// Returns the `crdb_connect_timeout` configuration parameter.
     pub fn crdb_connect_timeout(&self) -> Duration {
-        *self.crdb_connect_timeout.value()
+        *self.expect_value(&CRDB_CONNECT_TIMEOUT)
     }
 
     /// Returns the `dataflow_max_inflight_bytes` configuration parameter.
     pub fn dataflow_max_inflight_bytes(&self) -> usize {
-        *self.dataflow_max_inflight_bytes.value()
+        *self.expect_value(&DATAFLOW_MAX_INFLIGHT_BYTES)
     }
 
     /// Returns the `persist_sink_minimum_batch_updates` configuration parameter.
     pub fn persist_sink_minimum_batch_updates(&self) -> usize {
-        *self.persist_sink_minimum_batch_updates.value()
+        *self.expect_value(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
     }
 
     /// Returns the `persist_stats_collection_enabled` configuration parameter.
     pub fn persist_stats_collection_enabled(&self) -> bool {
-        *self.persist_stats_collection_enabled.value()
+        *self.expect_value(&PERSIST_STATS_COLLECTION_ENABLED)
     }
 
     /// Returns the `persist_stats_filter_enabled` configuration parameter.
     pub fn persist_stats_filter_enabled(&self) -> bool {
-        *self.persist_stats_filter_enabled.value()
+        *self.expect_value(&PERSIST_STATS_FILTER_ENABLED)
     }
 
     /// Returns the `metrics_retention` configuration parameter.
     pub fn metrics_retention(&self) -> Duration {
-        *self.metrics_retention.value()
+        *self.expect_value(&METRICS_RETENTION)
     }
 
     /// Returns the `mock_audit_event_timestamp` configuration parameter.
     pub fn mock_audit_event_timestamp(&self) -> Option<mz_repr::Timestamp> {
-        *self.mock_audit_event_timestamp.value()
+        *self.expect_value(&MOCK_AUDIT_EVENT_TIMESTAMP)
     }
 
     /// Returns the `enable_with_mutually_recursive` configuration parameter.
     pub fn enable_with_mutually_recursive(&self) -> bool {
-        *self.enable_with_mutually_recursive.value()
+        *self.expect_value(&ENABLE_WITH_MUTUALLY_RECURSIVE)
     }
 
     /// Sets the `enable_with_mutually_recursive` configuration parameter.
     pub fn set_enable_with_mutually_recursive(&mut self, value: bool) -> bool {
-        self.enable_with_mutually_recursive
+        self.vars
+            .get_mut(ENABLE_WITH_MUTUALLY_RECURSIVE.name)
+            .expect("var known to exist")
             .set(VarInput::Flat(value.format().as_str()))
             .expect("valid parameter value")
     }
 
     /// Returns the `enable_rbac_checks` configuration parameter.
     pub fn enable_rbac_checks(&self) -> bool {
-        *self.enable_rbac_checks.value()
+        *self.expect_value(&ENABLE_RBAC_CHECKS)
+    }
+
+    /// Returns the `enable_auto_route_introspection_queries` configuration parameter.
+    ///
+    /// Note: this is generally intended to be set via LaunchDarkly
+    pub fn enable_auto_route_introspection_queries(&self) -> bool {
+        *self.expect_value(&ENABLE_AUTO_ROUTE_INTROSPECTION_QUERIES)
     }
 }
 
@@ -1941,6 +1698,29 @@ pub trait Var: fmt::Debug {
     fn experimental(&self) -> bool {
         self.name().ends_with("_experimental")
     }
+}
+
+/// A `Var` with additional methods for mutating the value, as well as
+/// helpers that enable various operations in a `dyn` context.
+pub trait VarMut: Var + Send + Sync {
+    /// Upcast to Var, for use with `dyn`.
+    fn as_var(&self) -> &dyn Var;
+
+    /// Return the value as `dyn Any`.
+    fn value_any(&self) -> &(dyn Any + 'static);
+
+    /// Clone, but object safe and specialized to `VarMut`.
+    fn clone_var(&self) -> Box<dyn VarMut>;
+
+    /// Return whether or not `input` is equal to this var's default value,
+    /// if there is one.
+    fn is_default(&self, input: VarInput) -> Result<bool, VarError>;
+
+    /// Parse the input and update the stored value to match.
+    fn set(&mut self, input: VarInput) -> Result<bool, VarError>;
+
+    /// Reset the stored value to the default.
+    fn reset(&mut self) -> bool;
 }
 
 /// A `ServerVar` is the default value for a configuration parameter.
@@ -1987,20 +1767,34 @@ where
 
 /// A `SystemVar` is persisted on disk value for a configuration parameter. If unset,
 /// the server default is used instead.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct SystemVar<V>
 where
     V: Value + fmt::Debug + ?Sized + 'static,
-    V::Owned: fmt::Debug + PartialEq + Eq,
+    V::Owned: fmt::Debug,
 {
     persisted_value: Option<V::Owned>,
     parent: &'static ServerVar<V>,
 }
 
+// The derived `Clone` implementation requires `V: Clone`, which is not needed.
+impl<V> Clone for SystemVar<V>
+where
+    V: Value + fmt::Debug + ?Sized + 'static,
+    V::Owned: fmt::Debug + Clone,
+{
+    fn clone(&self) -> Self {
+        SystemVar {
+            persisted_value: self.persisted_value.clone(),
+            parent: self.parent,
+        }
+    }
+}
+
 impl<V> SystemVar<V>
 where
-    V: Value + fmt::Debug + PartialEq + Eq + ?Sized + 'static,
-    V::Owned: fmt::Debug + PartialEq + Eq + PartialEq + Eq,
+    V: Value + fmt::Debug + Eq + ?Sized + 'static,
+    V::Owned: fmt::Debug,
 {
     fn new(parent: &'static ServerVar<V>) -> SystemVar<V> {
         SystemVar {
@@ -2009,27 +1803,8 @@ where
         }
     }
 
-    fn set(&mut self, input: VarInput) -> Result<bool, VarError> {
-        match V::parse(input) {
-            Ok(v) => {
-                if self.persisted_value.as_ref() != Some(&v) {
-                    self.persisted_value = Some(v);
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
-            }
-            Err(()) => Err(VarError::InvalidParameterType(self.parent)),
-        }
-    }
-
-    fn reset(&mut self) -> bool {
-        if self.persisted_value.as_ref() != None {
-            self.persisted_value = None;
-            true
-        } else {
-            false
-        }
+    fn persisted_value(&self) -> Option<&V> {
+        self.persisted_value.as_ref().map(|v| v.borrow())
     }
 
     fn value(&self) -> &V {
@@ -2038,19 +1813,12 @@ where
             .map(|v| v.borrow())
             .unwrap_or(self.parent.value)
     }
-
-    fn is_default(&self, input: VarInput) -> Result<bool, VarError> {
-        match V::parse(input) {
-            Ok(v) => Ok(self.parent.value == v.borrow()),
-            Err(()) => Err(VarError::InvalidParameterType(self.parent)),
-        }
-    }
 }
 
 impl<V> Var for SystemVar<V>
 where
-    V: Value + ToOwned + fmt::Debug + PartialEq + Eq + ?Sized + 'static,
-    V::Owned: fmt::Debug + PartialEq + Eq + PartialEq + Eq,
+    V: Value + fmt::Debug + Eq + ?Sized + 'static,
+    V::Owned: fmt::Debug,
 {
     fn name(&self) -> &'static str {
         self.parent.name()
@@ -2074,6 +1842,55 @@ where
 
     fn safe(&self) -> bool {
         self.parent.safe()
+    }
+}
+
+impl<V> VarMut for SystemVar<V>
+where
+    V: Value + fmt::Debug + Eq + 'static,
+    V::Owned: fmt::Debug + Clone + Send + Sync,
+{
+    fn as_var(&self) -> &dyn Var {
+        self
+    }
+
+    fn value_any(&self) -> &(dyn Any + 'static) {
+        let value = SystemVar::value(self);
+        value
+    }
+
+    fn clone_var(&self) -> Box<dyn VarMut> {
+        Box::new(self.clone())
+    }
+
+    fn is_default(&self, input: VarInput) -> Result<bool, VarError> {
+        match V::parse(input) {
+            Ok(v) => Ok(self.parent.value == v.borrow()),
+            Err(()) => Err(VarError::InvalidParameterType(self.parent)),
+        }
+    }
+
+    fn set(&mut self, input: VarInput) -> Result<bool, VarError> {
+        match V::parse(input) {
+            Ok(v) => {
+                if self.persisted_value() != Some(v.borrow()) {
+                    self.persisted_value = Some(v);
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            }
+            Err(()) => Err(VarError::InvalidParameterType(self.parent)),
+        }
+    }
+
+    fn reset(&mut self) -> bool {
+        if self.persisted_value() != None {
+            self.persisted_value = None;
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -2152,7 +1969,7 @@ where
 
 impl<V> Var for SessionVar<V>
 where
-    V: Value + ToOwned + fmt::Debug + ?Sized + 'static,
+    V: Value + fmt::Debug + ?Sized + 'static,
     V::Owned: fmt::Debug,
 {
     fn name(&self) -> &'static str {

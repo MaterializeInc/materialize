@@ -178,6 +178,18 @@ impl<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> Future
         let state: &'handle mut NextFutState<T, D, P> =
             self.state.take().expect("future polled after completion");
 
+        // Check for frontier notifications first, to urge operators to retire pending work
+        let mut shared_frontiers = state.shared_frontiers.borrow_mut();
+        let (ref frontier, ref mut pending) = shared_frontiers[state.index];
+        if *pending {
+            *pending = false;
+            return Poll::Ready(Some(Event::Progress(frontier.clone())));
+        } else if frontier.is_empty() {
+            // If the frontier is empty and is not pending it means that there is no more data left
+            return Poll::Ready(None);
+        };
+        drop(shared_frontiers);
+
         // This type serves as a type-level function that "shows" the `polonius` function how to
         // create a version of the output type with a specific lifetime 'lt. It does this by
         // implementing the `WithLifetime` trait for all lifetimes 'lt and setting the associated
@@ -192,28 +204,15 @@ impl<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> Future
         {
             Ok((cap, data)) => Poll::Ready(Some(Event::Data(cap, data))),
             Err((state, ())) => {
-                // There is no more data but there may be a pending frontier notification
-                let mut shared_frontiers = state.shared_frontiers.borrow_mut();
-                let (ref frontier, ref mut pending) = shared_frontiers[state.index];
-                if *pending {
-                    *pending = false;
-                    Poll::Ready(Some(Event::Progress(frontier.clone())))
-                } else if frontier.is_empty() {
-                    // If the frontier is empty and is not pending it means that there is no more
-                    // data left in this input stream
-                    Poll::Ready(None)
-                } else {
-                    drop(shared_frontiers);
-                    // Nothing else to produce so install the provided waker in the reactor
-                    state
-                        .reactor_registry
-                        .upgrade()
-                        .expect("handle outlived its operator")
-                        .borrow_mut()
-                        .push(cx.waker().clone());
-                    self.state = Some(state);
-                    Poll::Pending
-                }
+                // Nothing else to produce so install the provided waker in the reactor
+                state
+                    .reactor_registry
+                    .upgrade()
+                    .expect("handle outlived its operator")
+                    .borrow_mut()
+                    .push(cx.waker().clone());
+                self.state = Some(state);
+                Poll::Pending
             }
         }
     }
@@ -528,6 +527,11 @@ impl<G: Scope> OperatorBuilder<G> {
     /// Creates operator info for the operator.
     pub fn operator_info(&self) -> OperatorInfo {
         self.builder.operator_info()
+    }
+
+    /// Returns the activator for the operator.
+    pub fn activator(&self) -> &Activator {
+        &self.activator
     }
 }
 

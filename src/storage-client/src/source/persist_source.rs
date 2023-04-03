@@ -34,7 +34,7 @@ use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 
 use crate::controller::CollectionMetadata;
 use crate::types::errors::DataflowError;
-use crate::types::sources::SourceData;
+use crate::types::sources::{SourceData, SOURCE_DATA_ERROR};
 
 pub use mz_persist_client::operators::shard_source::FlowControl;
 use mz_timely_util::buffer::ConsolidateBuffer;
@@ -313,33 +313,50 @@ struct PersistSourceDataStatsImpl<'a> {
 
 impl PersistSourceDataStats for PersistSourceDataStatsImpl<'_> {
     fn len(&self) -> Option<usize> {
-        None
+        Some(self.stats.key.len)
     }
 
     fn err_count(&self) -> Option<usize> {
-        None
+        // Counter-intuitive: We can easily calculate the number of errors that
+        // were None from the column stats, but not how many were Some. So, what
+        // we do is count the number of Nones, which is the number of Oks, and
+        // then subtract that from the total.
+        let num_results = self.stats.key.len;
+        let num_oks = self
+            .stats
+            .key
+            .col::<Option<Vec<u8>>>(SOURCE_DATA_ERROR)
+            .expect("stats type should match column")
+            .map(|x| x.none);
+        num_oks.map(|num_oks| num_results - num_oks)
     }
 
     fn col_min<'a>(&'a self, name: &str, _arena: &'a RowArena) -> Option<Datum<'a>> {
         // The `RowArena` is unused now, but it will be needed for things like
         // e.g. `Datum::List`.
         self.stats
-            .opt_u64_key_col_min_max_nulls(name)
-            .map(|(min, _, _)| Datum::UInt64(min))
+            .key
+            .col::<Option<u64>>(name)
+            .ok()?
+            .map(|x| Datum::UInt64(x.some.lower))
     }
 
     fn col_max<'a>(&'a self, name: &str, _arena: &'a RowArena) -> Option<Datum<'a>> {
         // The `RowArena` is unused now, but it will be needed for things like
         // e.g. `Datum::List`.
         self.stats
-            .opt_u64_key_col_min_max_nulls(name)
-            .map(|(_, max, _)| Datum::UInt64(max))
+            .key
+            .col::<Option<u64>>(name)
+            .ok()?
+            .map(|x| Datum::UInt64(x.some.upper))
     }
 
     fn col_null_count(&self, name: &str) -> Option<usize> {
         self.stats
-            .opt_u64_key_col_min_max_nulls(name)
-            .map(|(_, _, nulls)| nulls)
+            .key
+            .col::<Option<u64>>(name)
+            .ok()?
+            .map(|x| x.none)
     }
 
     fn row_min(&self, _row: &mut Row) -> Option<usize> {

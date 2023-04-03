@@ -38,15 +38,17 @@ impl Identity {
         for cert in cert_iter {
             certs.push(cert)?;
         }
-        let mut pkcs_builder = Pkcs12::builder();
-        pkcs_builder.ca(certs);
         // We build a PKCS #12 archive solely to have something to pass to
         // `reqwest::Identity::from_pkcs12_der`, so the password and friendly
         // name don't matter.
         let pass = String::new();
         let friendly_name = "";
-        let der = pkcs_builder
-            .build(&pass, friendly_name, &pkey, &cert)?
+        let der = Pkcs12::builder()
+            .name(friendly_name)
+            .pkey(&pkey)
+            .cert(&cert)
+            .ca(certs)
+            .build2(&pass)?
             .to_der()?;
         Ok(Identity { der, pass })
     }

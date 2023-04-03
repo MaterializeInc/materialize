@@ -44,26 +44,27 @@ mz_catalog
 mz_internal
 pg_catalog
 $ psql-execute command=\dn
-\   List of schemas
-    Name     | Owner
--------------+-------
- mz_catalog  |
- mz_internal |
- public      |
+\     List of schemas
+    Name     |   Owner
+-------------+-----------
+ mz_catalog  | mz_system
+ mz_internal | mz_system
+ public      | mz_system
+
 
 $ psql-execute command="\dn mz_catalog"
-\  List of schemas
-    Name    | Owner
-------------+-------
- mz_catalog |
+\    List of schemas
+    Name    |   Owner
+------------+-----------
+ mz_catalog | mz_system
 
 
 $ psql-execute command="\dn mz_*"
-\   List of schemas
-    Name     | Owner
--------------+-------
- mz_catalog  |
- mz_internal |
+\     List of schemas
+    Name     |   Owner
+-------------+-----------
+ mz_catalog  | mz_system
+ mz_internal | mz_system
 
 # What objects do we have by default?
 > SHOW OBJECTS
@@ -120,11 +121,12 @@ materialize
 
 # ...and also in `\l`
 $ psql-execute command="\l"
-\                          List of databases
-    Name     | Owner | Encoding | Collate | Ctype | Access privileges
--------------+-------+----------+---------+-------+-------------------
- d           |       | UTF8     | C       | C     |
- materialize |       | UTF8     | C       | C     |
+\                             List of databases
+    Name     |    Owner    | Encoding | Collate | Ctype | Access privileges
+-------------+-------------+----------+---------+-------+-------------------
+ d           | materialize | UTF8     | C       | C     |
+ materialize | mz_system   | UTF8     | C       | C     |
+
 
 
 > SELECT name FROM mz_databases
@@ -252,7 +254,7 @@ public.bool
 > DROP DATABASE foo
 
 ! DROP OBJECT v1
-contains:Expected one of CONNECTION or CLUSTER or DATABASE or INDEX or MATERIALIZED or ROLE or SECRET or SCHEMA or SINK or SOURCE or TABLE or TYPE or USER or VIEW, found identifier
+contains:Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION, found identifier
 
 > SHOW OBJECTS
 name        type
@@ -504,30 +506,30 @@ SELECT ${arg.replicas} > 1;
 > SHOW SOURCES FROM mz_internal
 name                                           type   size
 ------------------------------------------------------------
-mz_active_peeks                                   log   <null>
-mz_arrangement_batches_internal                   log   <null>
-mz_arrangement_records_internal                   log   <null>
-mz_arrangement_sharing_internal                   log   <null>
-mz_compute_exports                                log   <null>
-mz_compute_operator_durations_histogram_internal  log   <null>
-mz_dataflow_addresses                             log   <null>
-mz_dataflow_channels                              log   <null>
-mz_dataflow_operator_reachability_internal        log   <null>
-mz_dataflow_operators                             log   <null>
-mz_message_counts_received_internal               log   <null>
-mz_message_counts_sent_internal                   log   <null>
-mz_peek_durations_histogram_internal              log   <null>
-mz_scheduling_elapsed_internal                    log   <null>
-mz_scheduling_parks_histogram_internal            log   <null>
-mz_sink_statistics                                source <null>
-mz_sink_status_history                            source <null>
-mz_source_statistics                              source <null>
-mz_source_status_history                          source <null>
-mz_storage_shards                                 source <null>
-mz_worker_compute_delays_histogram_internal       log   <null>
-mz_worker_compute_dependencies                    log   <null>
-mz_worker_compute_frontiers                       log   <null>
-mz_worker_compute_import_frontiers                log   <null>
+mz_active_peeks_per_worker                   log   <null>
+mz_arrangement_batches_raw                   log   <null>
+mz_arrangement_records_raw                   log   <null>
+mz_arrangement_sharing_raw                   log   <null>
+mz_compute_delays_histogram_raw              log   <null>
+mz_compute_dependencies_per_worker           log   <null>
+mz_compute_exports_per_worker                log   <null>
+mz_compute_frontiers_per_worker              log   <null>
+mz_compute_import_frontiers_per_worker       log   <null>
+mz_compute_operator_durations_histogram_raw  log   <null>
+mz_dataflow_addresses_per_worker             log   <null>
+mz_dataflow_channels_per_worker              log   <null>
+mz_dataflow_operator_reachability_raw        log   <null>
+mz_dataflow_operators_per_worker             log   <null>
+mz_message_counts_received_raw               log   <null>
+mz_message_counts_sent_raw                   log   <null>
+mz_peek_durations_histogram_raw              log   <null>
+mz_scheduling_elapsed_raw                    log   <null>
+mz_scheduling_parks_histogram_raw            log   <null>
+mz_sink_statistics                           source <null>
+mz_sink_status_history                       source <null>
+mz_source_statistics                         source <null>
+mz_source_status_history                     source <null>
+mz_storage_shards                            source <null>
 
 > SHOW TABLES FROM mz_internal
 name
@@ -539,6 +541,7 @@ mz_cluster_replica_metrics
 mz_cluster_replica_sizes
 mz_cluster_replica_statuses
 mz_postgres_sources
+mz_sessions
 mz_storage_usage_by_shard
 mz_subscriptions
 mz_view_foreign_keys
@@ -548,30 +551,51 @@ mz_object_dependencies
 > SHOW VIEWS FROM mz_internal
 name
 -------------------------------------
+mz_active_peeks
 mz_arrangement_sharing
+mz_arrangement_sharing_per_worker
 mz_arrangement_sizes
+mz_arrangement_sizes_per_worker
 mz_cluster_replica_utilization
+mz_compute_delays_histogram
+mz_compute_delays_histogram_per_worker
+mz_compute_dependencies
+mz_compute_exports
 mz_compute_frontiers
 mz_compute_import_frontiers
 mz_compute_operator_durations_histogram
+mz_compute_operator_durations_histogram_per_worker
+mz_dataflow_addresses
 mz_dataflow_channel_operators
+mz_dataflow_channel_operators_per_worker
+mz_dataflow_channels
 mz_dataflow_operator_dataflows
+mz_dataflow_operator_dataflows_per_worker
 mz_dataflow_operator_parents
+mz_dataflow_operator_parents_per_worker
+mz_dataflow_arrangement_sizes
 mz_dataflow_operator_reachability
+mz_dataflow_operator_reachability_per_worker
+mz_dataflow_operators
 mz_dataflows
+mz_dataflows_per_worker
 mz_message_counts
+mz_message_counts_per_worker
 mz_peek_durations_histogram
+mz_peek_durations_histogram_per_worker
 mz_records_per_dataflow
-mz_records_per_dataflow_global
 mz_records_per_dataflow_operator
+mz_records_per_dataflow_operator_per_worker
+mz_records_per_dataflow_per_worker
 mz_scheduling_elapsed
+mz_scheduling_elapsed_per_worker
 mz_scheduling_parks_histogram
+mz_scheduling_parks_histogram_per_worker
 mz_show_cluster_replicas
 mz_show_indexes
 mz_show_materialized_views
 mz_sink_statuses
 mz_source_statuses
-mz_worker_compute_delays_histogram
 
 > SET database = materialize
 
@@ -586,11 +610,11 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-42
+43
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-75
+78
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2
@@ -598,20 +622,31 @@ test_table
 > CREATE TABLE tester2.test_table (a int)
 
 $ psql-execute command="\dt tester.*"
-\          List of relations
- Schema |    Name    | Type  | Owner
---------+------------+-------+-------
- tester | test_table | table |
+\             List of relations
+ Schema |    Name    | Type  |    Owner
+--------+------------+-------+-------------
+ tester | test_table | table | materialize
 
 $ psql-execute command="\dt tester.test_table"
-\          List of relations
- Schema |    Name    | Type  | Owner
---------+------------+-------+-------
- tester | test_table | table |
+\             List of relations
+ Schema |    Name    | Type  |    Owner
+--------+------------+-------+-------------
+ tester | test_table | table | materialize
 
 $ psql-execute command="\dt *.test_table"
-\          List of relations
- Schema  |    Name    | Type  | Owner
----------+------------+-------+-------
- tester  | test_table | table |
- tester2 | test_table | table |
+\             List of relations
+ Schema  |    Name    | Type  |    Owner
+---------+------------+-------+-------------
+ tester  | test_table | table | materialize
+ tester2 | test_table | table | materialize
+
+> CREATE TYPE type1 AS LIST (ELEMENT TYPE = text)
+
+> SHOW TYPES
+type1
+
+$ psql-execute command="\dT"
+\      List of data types
+ Schema | Name  | Description
+--------+-------+-------------
+ public | type1 |

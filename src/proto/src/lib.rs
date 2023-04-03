@@ -445,6 +445,26 @@ impl RustType<u32> for u16 {
     }
 }
 
+impl RustType<i32> for i8 {
+    fn into_proto(&self) -> i32 {
+        i32::from(*self)
+    }
+
+    fn from_proto(proto: i32) -> Result<Self, TryFromProtoError> {
+        i8::try_from(proto).map_err(TryFromProtoError::from)
+    }
+}
+
+impl RustType<i32> for i16 {
+    fn into_proto(&self) -> i32 {
+        i32::from(*self)
+    }
+
+    fn from_proto(repr: i32) -> Result<Self, TryFromProtoError> {
+        i16::try_from(repr).map_err(TryFromProtoError::from)
+    }
+}
+
 impl RustType<ProtoU128> for u128 {
     // TODO(benesch): add a trait for explicitly performing truncating casts.
     #[allow(clippy::as_conversions)]

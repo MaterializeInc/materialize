@@ -12,7 +12,7 @@
 //! This module houses the entry points for planning a SQL statement.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
@@ -112,6 +112,7 @@ pub fn describe(
         // DDL statements.
         Statement::AlterConnection(stmt) => ddl::describe_alter_connection(&scx, stmt)?,
         Statement::AlterIndex(stmt) => ddl::describe_alter_index_options(&scx, stmt)?,
+        Statement::AlterOwner(stmt) => ddl::describe_alter_owner(&scx, stmt)?,
         Statement::AlterObjectRename(stmt) => ddl::describe_alter_object_rename(&scx, stmt)?,
         Statement::AlterRole(stmt) => ddl::describe_alter_role(&scx, stmt)?,
         Statement::AlterSecret(stmt) => ddl::describe_alter_secret_options(&scx, stmt)?,
@@ -171,14 +172,8 @@ pub fn describe(
         Statement::Show(ShowStatement::ShowCreateMaterializedView(stmt)) => {
             show::describe_show_create_materialized_view(&scx, stmt)?
         }
-        Statement::Show(ShowStatement::ShowDatabases(stmt)) => {
-            show::show_databases(&scx, stmt)?.describe()?
-        }
         Statement::Show(ShowStatement::ShowObjects(stmt)) => {
             show::show_objects(&scx, stmt)?.describe()?
-        }
-        Statement::Show(ShowStatement::ShowSchemas(stmt)) => {
-            show::show_schemas(&scx, stmt)?.describe()?
         }
 
         // SCL statements.
@@ -255,6 +250,7 @@ pub fn plan(
         // DDL statements.
         Statement::AlterConnection(stmt) => ddl::plan_alter_connection(scx, stmt),
         Statement::AlterIndex(stmt) => ddl::plan_alter_index_options(scx, stmt),
+        Statement::AlterOwner(stmt) => ddl::plan_alter_owner(scx, stmt),
         Statement::AlterObjectRename(stmt) => ddl::plan_alter_object_rename(scx, stmt),
         Statement::AlterRole(stmt) => ddl::plan_alter_role(scx, stmt),
         Statement::AlterSecret(stmt) => ddl::plan_alter_secret(scx, stmt),
@@ -301,31 +297,27 @@ pub fn plan(
         // `SHOW` statements.
         Statement::Show(ShowStatement::ShowColumns(stmt)) => show::show_columns(scx, stmt)?.plan(),
         Statement::Show(ShowStatement::ShowCreateConnection(stmt)) => {
-            show::plan_show_create_connection(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_connection(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateIndex(stmt)) => {
-            show::plan_show_create_index(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_index(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateSink(stmt)) => {
-            show::plan_show_create_sink(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_sink(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateSource(stmt)) => {
-            show::plan_show_create_source(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_source(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateTable(stmt)) => {
-            show::plan_show_create_table(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_table(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateView(stmt)) => {
-            show::plan_show_create_view(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_view(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateMaterializedView(stmt)) => {
-            show::plan_show_create_materialized_view(scx, stmt).map(Plan::SendRows)
-        }
-        Statement::Show(ShowStatement::ShowDatabases(stmt)) => {
-            show::show_databases(scx, stmt)?.plan()
+            show::plan_show_create_materialized_view(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowObjects(stmt)) => show::show_objects(scx, stmt)?.plan(),
-        Statement::Show(ShowStatement::ShowSchemas(stmt)) => show::show_schemas(scx, stmt)?.plan(),
 
         // SCL statements.
         Statement::Close(stmt) => scl::plan_close(scx, stmt),
@@ -789,6 +781,7 @@ impl<'a> StatementContext<'a> {
         desc: &RelationDesc,
     ) -> Result<(Vec<ColumnDef<Aug>>, Vec<TableConstraint<Aug>>), PlanError> {
         let mut columns = vec![];
+        let mut null_cols = BTreeSet::new();
         for (column_name, column_type) in desc.iter() {
             let name = Ident::new(column_name.as_str().to_owned());
 
@@ -796,6 +789,7 @@ impl<'a> StatementContext<'a> {
             let data_type = self.resolve_type(ty)?;
 
             let options = if !column_type.nullable {
+                null_cols.insert(columns.len());
                 vec![mz_sql_parser::ast::ColumnOptionDef {
                     name: None,
                     option: mz_sql_parser::ast::ColumnOption::NotNull,
@@ -816,12 +810,18 @@ impl<'a> StatementContext<'a> {
         for key in desc.typ().keys.iter() {
             let mut col_names = vec![];
             for col_idx in key {
+                if !null_cols.contains(col_idx) {
+                    // Note that alternatively we could support NULL values in keys with `NULLS NOT
+                    // DISTINCT` semantics, which treats `NULL` as a distinct value.
+                    sql_bail!("[internal error] key columns must be NOT NULL when generating table constraints");
+                }
                 col_names.push(columns[*col_idx].name.clone());
             }
             table_constraints.push(TableConstraint::Unique {
                 name: None,
                 columns: col_names,
                 is_primary: false,
+                nulls_not_distinct: false,
             });
         }
 

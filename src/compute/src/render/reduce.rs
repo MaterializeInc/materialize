@@ -41,7 +41,7 @@ use mz_timely_util::reduce::ReduceExt;
 
 use crate::render::context::{Arrangement, CollectionBundle, Context};
 use crate::render::reduce::monoids::ReductionMonoid;
-use crate::render::ArrangementFlavor;
+use crate::render::{ArrangementFlavor, MaybeValidatingRow};
 use crate::typedefs::{ErrValSpine, RowKeySpine, RowSpine};
 
 /// Render a dataflow based on the provided plan.
@@ -90,8 +90,16 @@ where
     let arrangement_or_bundle: ArrangementOrCollection<G> = match plan {
         // If we have no aggregations or just a single type of reduction, we
         // can go ahead and render them directly.
-        ReducePlan::Distinct => build_distinct(debug_name, collection).into(),
-        ReducePlan::DistinctNegated => build_distinct_retractions(debug_name, collection).into(),
+        ReducePlan::Distinct => {
+            let (arranged_output, errs) = build_distinct(debug_name, collection);
+            err_collection = err_collection.concat(&errs);
+            arranged_output.into()
+        }
+        ReducePlan::DistinctNegated => {
+            let (output, errs) = build_distinct_retractions(debug_name, collection);
+            err_collection = err_collection.concat(&errs);
+            output.into()
+        }
         ReducePlan::Accumulable(expr) => {
             let (arranged_output, errs) = build_accumulable(debug_name, collection, expr);
             err_collection = err_collection.concat(&errs);
@@ -437,58 +445,98 @@ where
 
 /// Build the dataflow to compute the set of distinct keys.
 fn build_distinct<G>(
-    _debug_name: &str,
+    debug_name: &str,
     collection: Collection<G, (Row, Row), Diff>,
-) -> Arrangement<G, Row>
+) -> (Arrangement<G, Row>, Collection<G, DataflowError, Diff>)
 where
     G: Scope,
     G::Timestamp: Lattice,
 {
-    collection
+    let debug_name = debug_name.to_string();
+    let (output, errors) = collection
         .arrange_named::<RowSpine<_, _, _, _>>("Arranged DistinctBy")
-        .reduce_abelian::<_, RowSpine<_, _, _, _>>("DistinctBy", {
+        .reduce_pair::<_, RowSpine<_, _, _, _>, _, ErrValSpine<_, _, _>>(
+            "DistinctBy",
+            "DistinctByErrorCheck",
             |_key, _input, output| {
                 // We're pushing an empty row here because the key is implicitly added by the
                 // arrangement, and the permutation logic takes care of using the key part of the
                 // output.
                 output.push((Row::default(), 1));
-            }
-        })
+            },
+            move |_key, input: &[(_, Diff)], output| {
+                for (row, count) in input.iter() {
+                    if count.is_positive() {
+                        continue;
+                    }
+                    let message = "Non-positive multiplicity in DistinctBy";
+                    warn!(?row, ?count, debug_name, "[customer-data] {message}");
+                    error!("{message}");
+                    output.push((
+                        DataflowError::EvalError(EvalError::Internal(message.to_string()).into()),
+                        1,
+                    ));
+                    return;
+                }
+            },
+        );
+    (output, errors.as_collection(|_k, v| v.clone()))
 }
 
 /// Build the dataflow to compute the set of distinct keys.
 ///
 /// This implementation maintains the rows that don't appear in the output.
 fn build_distinct_retractions<G, T>(
-    _debug_name: &str,
+    debug_name: &str,
     collection: Collection<G, (Row, Row), Diff>,
-) -> Collection<G, Row, Diff>
+) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
 {
-    let negated_result = collection
+    let debug_name = debug_name.to_string();
+    let (negated_result, errs) = collection
         .arrange_named::<RowSpine<Row, _, _, _>>("Arranged DistinctBy Retractions input")
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("Reduce DistinctBy Retractions", {
-            |key, input, output| {
-                output.push((key.clone(), -1));
+            move |key, input, output| {
+                for (row, count) in input.iter() {
+                    if count.is_positive() {
+                        continue;
+                    }
+                    let message = "Non-positive multiplicity in DistinctBy Retractions";
+                    warn!(?row, ?count, debug_name, "[customer-data] {message}");
+                    error!("{message}");
+                    output.push((Err(message.to_string()), 1));
+                    return;
+                }
+
+                output.push((Ok(key.clone()), -1));
                 output.extend(
                     input
                         .iter()
-                        .map(|(values, count)| ((*values).clone(), *count)),
+                        .map(|(values, count)| (Ok((*values).clone()), *count)),
                 );
             }
         })
-        .as_collection(|k, v| (k.clone(), v.clone()));
+        .as_collection(|k, v| (k.clone(), v.clone()))
+        .map_fallible("Demux Errors", |(key, result)| match result {
+            Ok(row) => Ok((key, row)),
+            Err(message) => Err(DataflowError::EvalError(
+                EvalError::Internal(message).into(),
+            )),
+        });
     use timely::dataflow::operators::Map;
-    negated_result
-        .negate()
-        .concat(&collection)
-        .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated DistinctBy Retractions")
-        .inner
-        .map(|((k, _), time, count)| (k, time, count))
-        .as_collection()
+    (
+        negated_result
+            .negate()
+            .concat(&collection)
+            .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated DistinctBy Retractions")
+            .inner
+            .map(|((k, _), time, count)| (k, time, count))
+            .as_collection(),
+        errs,
+    )
 }
 
 /// Build the dataflow to compute and arrange multiple non-accumulable,
@@ -651,18 +699,41 @@ where
         let mut stage = input.map(move |(key, values)| ((key, values.hashed()), values));
         let mut validating = true;
         for b in buckets.into_iter() {
-            let (stage_output, stage_errs) =
-                build_bucketed_stage(debug_name, stage, aggr_funcs.clone(), b, validating);
-            stage = stage_output;
-            assert!((validating && stage_errs.is_some()) || (!validating && stage_errs.is_none()));
+            let input = stage.map(move |((key, hash), values)| ((key, hash % b), values));
 
             // We only want the first stage to perform validation of whether invalid accumulations
             // were observed in the input. Subsequently, we will either produce an error in the error
             // stream or produce correct data in the output stream.
-            if let Some(errs) = stage_errs {
+            let negated_output = if validating {
+                let (oks, errs) = build_bucketed_negated_output::<_, Result<Vec<Row>, (Row, u64)>>(
+                    debug_name,
+                    &input,
+                    aggr_funcs.clone(),
+                )
+                .map_fallible(
+                    "Checked Invalid Accumulations",
+                    |(key, result)| match result {
+                        Err((key, _)) => {
+                            let message = format!(
+                                "Invalid data in source, saw negative accumulation for \
+                                         key {key:?} in hierarchical mins-maxes aggregate"
+                            );
+                            Err(EvalError::Internal(message).into())
+                        }
+                        Ok(values) => Ok((key, values)),
+                    },
+                );
                 validating = false;
                 err_output = Some(errs.leave_region());
-            }
+                oks
+            } else {
+                build_bucketed_negated_output::<_, Vec<Row>>(debug_name, &input, aggr_funcs.clone())
+            };
+
+            stage = negated_output
+                .negate()
+                .concat(&input)
+                .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated MinsMaxesHierarchical");
         }
 
         // Discard the hash from the key and return to the format of the input data.
@@ -721,103 +792,66 @@ where
 /// `validating` indicates whether we want this stage to perform error detection
 /// for invalid accumulations. Once a stage is clean of such errors, subsequent
 /// stages can skip validation.
-fn build_bucketed_stage<G>(
+fn build_bucketed_negated_output<G, R>(
     debug_name: &str,
-    input: Collection<G, ((Row, u64), Vec<Row>), Diff>,
+    input: &Collection<G, ((Row, u64), Vec<Row>), Diff>,
     aggrs: Vec<AggregateFunc>,
-    buckets: u64,
-    validating: bool,
-) -> (
-    Collection<G, ((Row, u64), Vec<Row>), Diff>,
-    Option<Collection<G, DataflowError, Diff>>,
-)
+) -> Collection<G, ((Row, u64), R), Diff>
 where
     G: Scope,
     G::Timestamp: Lattice,
+    R: MaybeValidatingRow<Vec<Row>, (Row, u64)>,
 {
-    let input = input.map(move |((key, hash), values)| ((key, hash % buckets), values));
-
     let debug_name = debug_name.to_string();
     let arranged_input =
         input.arrange_named::<RowSpine<_, Vec<Row>, _, _>>("Arranged MinsMaxesHierarchical input");
 
-    #[inline]
-    fn inner<C: Fn(Vec<Row>) -> R, R>(
-        aggrs: &[AggregateFunc],
-        source: &[(&Vec<Row>, Diff)],
-        target: &mut Vec<(R, Diff)>,
-        logic: C,
-    ) {
-        let mut output = Vec::with_capacity(aggrs.len());
-        for (aggr_index, func) in aggrs.iter().enumerate() {
-            let iter = source
-                .iter()
-                .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
-            output.push(Row::pack_slice(&[func.eval(iter, &RowArena::new())]));
-        }
-        // We only want to arrange the parts of the input that are not part of the output.
-        // More specifically, we want to arrange it so that `input.concat(&output.negate())`
-        // gives us the intended value of this aggregate function. Also we assume that regardless
-        // of the multiplicity of the final result in the input, we only want to have one copy
-        // in the output.
-        target.push((logic(output), -1));
-        target.extend(
-            source
-                .iter()
-                .map(|(values, cnt)| (logic((*values).clone()), *cnt)),
-        );
-    }
-
-    let (negated_output, stage_errs) = if validating {
-        let (negated_output, errs) = arranged_input
-        .reduce_abelian::<_,RowSpine<_,Result<_,_>,_,_>>("Reduced Fallibly MinsMaxesHierarchical", {
+    arranged_input
+        .reduce_abelian::<_, RowSpine<_, _, _, _>>(
+            "Reduced Fallibly MinsMaxesHierarchical",
             move |key, source, target| {
-                // Should negative accumulations reach us, we should loudly complain.
-                if source.iter().any(|(_val, cnt)| cnt <= &0) {
-                    for (val, cnt) in source.iter() {
-                        // XXX: This reports user data, which we perhaps should not do!
-                        if *cnt <= 0 {
-                            warn!("[customer-data] Non-positive accumulation in MinsMaxesHierarchical: \
-                                key: {key:?}\tvalue: {val:?}\tcount: {cnt:?} in dataflow {debug_name}");
-                            soft_assert_or_log!(
-                                false,
-                                "Non-positive accumulation in MinsMaxesHierarchical"
-                            );
+                if let Some(err) = R::into_error() {
+                    // Should negative accumulations reach us, we should loudly complain.
+                    for (value, count) in source.iter() {
+                        if count.is_positive() {
+                            continue;
                         }
+                        let message = "Non-positive accumulation in MinsMaxesHierarchical";
+                        warn!(
+                            ?key,
+                            ?value,
+                            ?count,
+                            debug_name,
+                            "[customer-data] {message}"
+                        );
+                        error!("{message}");
+                        // After complaining, output an error here so that we can eventually
+                        // report it in an error stream.
+                        target.push((err(key.clone()), -1));
+                        return;
                     }
-                    // After complaining, output an error here so that we can eventually
-                    // report it in an error stream.
-                    target.push((Err(format!("Invalid data in source, saw negative accumulation for \
-                        key {key:?} in hierarchical mins-maxes aggregate")), 1));
-                } else {
-                    inner(&aggrs, source, target, Ok);
                 }
-            }
-        })
-        .as_collection(|k,v| (k.clone(), v.clone()))
-        .map_fallible("Checked Invalid Accumulations", |(key, result)| {
-            match result {
-                Err(message) => Err(EvalError::Internal(message).into()),
-                Ok(values) => Ok((key, values)),
-            }
-        });
-        (negated_output, Some(errs))
-    } else {
-        let negated_output = arranged_input
-            .reduce_abelian::<_, RowSpine<_, _, _, _>>("Reduced MinsMaxesHierarchical", {
-                move |_key, source, target| {
-                    inner(&aggrs, source, target, std::convert::identity);
+                let mut output = Vec::with_capacity(aggrs.len());
+                for (aggr_index, func) in aggrs.iter().enumerate() {
+                    let iter = source
+                        .iter()
+                        .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
+                    output.push(Row::pack_slice(&[func.eval(iter, &RowArena::new())]));
                 }
-            })
-            .as_collection(|k, v| (k.clone(), v.clone()));
-        (negated_output, None)
-    };
-
-    let stage_output = negated_output
-        .negate()
-        .concat(&input)
-        .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated MinsMaxesHierarchical");
-    (stage_output, stage_errs)
+                // We only want to arrange the parts of the input that are not part of the output.
+                // More specifically, we want to arrange it so that `input.concat(&output.negate())`
+                // gives us the intended value of this aggregate function. Also we assume that regardless
+                // of the multiplicity of the final result in the input, we only want to have one copy
+                // in the output.
+                target.push((R::ok(output), -1));
+                target.extend(
+                    source
+                        .iter()
+                        .map(|(values, cnt)| (R::ok((*values).clone()), *cnt)),
+                );
+            },
+        )
+        .as_collection(|k, v| (k.clone(), v.clone()))
 }
 
 /// Build the dataflow to compute and arrange multiple hierarchical aggregations

@@ -7,25 +7,28 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::any::Any;
 use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::error::Error;
 use std::future;
+use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail};
-use futures::{FutureExt, Stream, StreamExt};
+use differential_dataflow::{AsCollection, Collection};
+use futures::StreamExt;
 use once_cell::sync::Lazy;
 use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
 };
 use timely::dataflow::operators::to_stream::Event;
 use timely::dataflow::operators::Capability;
+use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
-use timely::scheduling::SyncActivator;
-use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_postgres::error::DbError;
 use tokio_postgres::replication::LogicalReplicationStream;
@@ -41,19 +44,14 @@ use mz_postgres_util::desc::PostgresTableDesc;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::SourceErrorDetails;
-use mz_storage_client::types::sources::{
-    encoding::SourceDataEncoding, MzOffset, PostgresSourceConnection,
-};
+use mz_storage_client::types::sources::{MzOffset, PostgresSourceConnection, SourceTimestamp};
+use mz_timely_util::antichain::AntichainExt;
+use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
 
 use self::metrics::PgSourceMetrics;
-use super::metrics::SourceBaseMetrics;
-use crate::source::commit::LogCommitter;
 
-use crate::source::source_reader_pipeline::HealthStatus;
-use crate::source::types::{HealthStatusUpdate, OffsetCommitter, SourceConnectionBuilder};
-use crate::source::{
-    NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
-};
+use crate::source::types::{HealthStatus, HealthStatusUpdate, SourceReaderMetrics, SourceRender};
+use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 mod metrics;
 
@@ -199,10 +197,6 @@ enum InternalMessage {
 pub struct PostgresSourceReader {
     receiver_stream: Receiver<InternalMessage>,
 
-    // Postgres sources support single-threaded ingestion only, so only one of
-    // the `PostgresSourceReader`s will actually produce data.
-    active_read_worker: bool,
-
     /// The lsn we last emitted data at. Used to fabricate timestamps for errors. This should
     /// ideally go away and only emit errors that we can associate with source timestamps
     last_lsn: PgLsn,
@@ -216,7 +210,6 @@ pub struct PostgresSourceReader {
 /// the offsets (lsns) to the replication stream
 /// through a channel
 pub struct PgOffsetCommitter {
-    logger: LogCommitter,
     resume_lsn: Arc<AtomicU64>,
 }
 
@@ -247,44 +240,66 @@ struct PostgresTaskInfo {
     resume_lsn: Arc<AtomicU64>,
 }
 
-impl SourceConnectionBuilder for PostgresSourceConnection {
-    type Reader = PostgresSourceReader;
-    type OffsetCommitter = PgOffsetCommitter;
+impl SourceRender for PostgresSourceConnection {
+    type Key = ();
+    type Value = Row;
+    type Time = MzOffset;
 
-    fn into_reader(
+    fn render<G: Scope<Timestamp = MzOffset>>(
         self,
-        _source_name: String,
-        source_id: GlobalId,
-        worker_id: usize,
-        worker_count: usize,
-        consumer_activator: SyncActivator,
-        mut data_capability: Capability<MzOffset>,
-        mut upper_capability: Capability<MzOffset>,
-        resume_upper: Antichain<MzOffset>,
-        _encoding: SourceDataEncoding,
-        metrics: SourceBaseMetrics,
+        scope: &mut G,
+        config: RawSourceCreationConfig,
         connection_context: ConnectionContext,
-    ) -> Result<(Self::Reader, Self::OffsetCommitter), anyhow::Error> {
-        let active_read_worker =
-            crate::source::responsible_for(&source_id, worker_id, worker_count, ());
+        resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+    ) -> (
+        Collection<G, Result<SourceMessage<(), Row>, SourceReaderError>, Diff>,
+        Option<Stream<G, Infallible>>,
+        Stream<G, HealthStatusUpdate>,
+        Rc<dyn Any>,
+    ) {
+        let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
-        // TODO: figure out the best default here; currently this is optimized
-        // for the speed to pass pg-cdc-resumption tests on a local machine.
-        let (dataflow_tx, dataflow_rx) = tokio::sync::mpsc::channel(50_000);
+        let (mut data_output, stream) = builder.new_output();
+        let (mut _upper_output, progress) = builder.new_output();
+        let (mut health_output, health_stream) = builder.new_output();
 
-        // TODO(petrosagg): handle the empty frontier correctly. Currenty the framework code never
-        // constructs a reader when the resumption frontier is the empty antichain
-        let start_offset = resume_upper.into_option().unwrap();
-        data_capability.downgrade(&start_offset);
-        upper_capability.downgrade(&start_offset);
+        let button = builder.build(move |mut capabilities| async move {
+            let health_capability = capabilities.pop().unwrap();
+            let mut upper_capability = capabilities.pop().unwrap();
+            let mut data_capability = capabilities.pop().unwrap();
+            assert!(capabilities.is_empty());
 
-        let resume_lsn = Arc::new(AtomicU64::new(start_offset.offset));
+            let active_read_worker = crate::source::responsible_for(
+                &config.id,
+                config.worker_id,
+                config.worker_count,
+                (),
+            );
 
-        let connection_config = TokioHandle::current()
-            .block_on(self.connection.config(&*connection_context.secrets_reader))
-            .expect("Postgres connection unexpectedly missing secrets");
+            if !active_read_worker {
+                return;
+            }
 
-        if active_read_worker {
+            // TODO: figure out the best default here; currently this is optimized
+            // for the speed to pass pg-cdc-resumption tests on a local machine.
+            let (dataflow_tx, dataflow_rx) = tokio::sync::mpsc::channel(50_000);
+
+            let resume_upper =
+                Antichain::from_iter(config.source_resume_upper.iter().map(MzOffset::decode_row));
+            let Some(start_offset) = resume_upper.into_option() else {
+                return;
+            };
+            data_capability.downgrade(&start_offset);
+            upper_capability.downgrade(&start_offset);
+
+            let resume_lsn = Arc::new(AtomicU64::new(start_offset.offset));
+
+            let connection_config = self
+                .connection
+                .config(&*connection_context.secrets_reader)
+                .await
+                .expect("Postgres connection unexpectedly missing secrets");
+
             let mut source_tables = BTreeMap::new();
             let tables_iter = self.publication_details.tables.iter();
 
@@ -309,107 +324,118 @@ impl SourceConnectionBuilder for PostgresSourceConnection {
             }
 
             let task_info = PostgresTaskInfo {
-                source_id,
+                source_id: config.id,
                 connection_config,
                 publication: self.publication,
                 slot: self.publication_details.slot,
                 replication_lsn: start_offset.offset.into(),
-                metrics: PgSourceMetrics::new(&metrics, source_id),
+                metrics: PgSourceMetrics::new(&config.base_metrics, config.id),
                 source_tables,
-                row_sender: RowSender::new(dataflow_tx.clone(), consumer_activator),
+                row_sender: RowSender::new(dataflow_tx.clone()),
                 sender: dataflow_tx,
                 resume_lsn: Arc::clone(&resume_lsn),
             };
 
-            task::spawn(
-                || format!("postgres_source:{}", source_id),
-                postgres_replication_loop(task_info),
-            );
-        }
+            task::spawn(|| format!("postgres_source:{}", config.id), {
+                postgres_replication_loop(task_info)
+            });
 
-        Ok((
-            PostgresSourceReader {
+            let source_metrics = SourceReaderMetrics::new(&config.base_metrics, config.id);
+            let offset_commit_metrics = source_metrics.offset_commit_metrics();
+
+            let mut reader = PostgresSourceReader {
                 receiver_stream: dataflow_rx,
-                active_read_worker,
                 last_lsn: start_offset.offset.into(),
                 data_capability,
                 upper_capability,
-            },
-            PgOffsetCommitter {
-                logger: LogCommitter {
-                    source_id,
-                    worker_id,
-                    worker_count,
-                },
-                resume_lsn,
-            },
-        ))
-    }
-}
+            };
 
-impl SourceReader for PostgresSourceReader {
-    type Key = ();
-    type Value = Row;
-    type Time = MzOffset;
-    type Diff = Diff;
-
-    // TODO(guswynn): use `next` instead of using a channel
-    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Time, Self::Diff> {
-        if !self.active_read_worker {
-            return NextMessage::Finished;
-        }
-
-        // TODO(guswynn): consider if `try_recv` is better or the same as `now_or_never`
-        let ret = match self.receiver_stream.recv().now_or_never() {
-            Some(Some(InternalMessage::Value {
-                output,
-                value,
-                diff,
-                lsn,
-                end,
-            })) => {
-                self.last_lsn = lsn;
-                let msg = SourceMessage {
-                    output,
-                    upstream_time_millis: None,
-                    key: (),
-                    value,
-                    headers: None,
-                };
-
-                let ts = lsn.into();
-                let cap = self.data_capability.delayed(&ts);
-                let next_ts = ts + 1;
-                self.upper_capability.downgrade(&next_ts);
-                if end {
-                    self.data_capability.downgrade(&next_ts);
+            let offset_committer = PgOffsetCommitter { resume_lsn };
+            let offset_commit_loop = async move {
+                tokio::pin!(resume_uppers);
+                while let Some(frontier) = resume_uppers.next().await {
+                    tracing::trace!(
+                        "timely-{} source({}) committing offsets: resume_upper={}",
+                        config.id,
+                        config.worker_id,
+                        frontier.pretty()
+                    );
+                    if let Err(e) = offset_committer.commit_offsets(frontier.clone()) {
+                        offset_commit_metrics.offset_commit_failures.inc();
+                        tracing::warn!(
+                            %e,
+                            "timely-{} source({}) failed to commit offsets: resume_upper={}",
+                            config.id,
+                            config.worker_id,
+                            frontier.pretty()
+                        );
+                    }
                 }
-                NextMessage::Ready(SourceMessageType::Message(Ok(msg), cap, diff))
-            }
-            Some(Some(InternalMessage::Status(update))) => {
-                NextMessage::Ready(SourceMessageType::SourceStatus(update))
-            }
-            Some(Some(InternalMessage::Err(err))) => {
-                // XXX(petrosagg): we are fabricating a timestamp here!!
-                let non_definite_ts = MzOffset::from(self.last_lsn) + 1;
+            };
+            tokio::pin!(offset_commit_loop);
 
-                let cap = self.data_capability.delayed(&non_definite_ts);
-                let next_ts = non_definite_ts + 1;
-                self.data_capability.downgrade(&next_ts);
-                self.upper_capability.downgrade(&next_ts);
-                NextMessage::Ready(SourceMessageType::Message(Err(err), cap, 1))
-            }
-            None => NextMessage::Pending,
-            Some(None) => NextMessage::Finished,
-        };
+            loop {
+                tokio::select! {
+                    message = reader.receiver_stream.recv() => match message {
+                        Some(InternalMessage::Value {
+                            output,
+                            value,
+                            diff,
+                            lsn,
+                            end,
+                        }) => {
+                            reader.last_lsn = lsn;
+                            let msg = SourceMessage {
+                                output,
+                                upstream_time_millis: None,
+                                key: (),
+                                value,
+                                headers: None,
+                            };
 
-        ret
+                            let ts = lsn.into();
+                            let cap = reader.data_capability.delayed(&ts);
+                            let next_ts = ts + 1;
+                            reader.upper_capability.downgrade(&next_ts);
+                            if end {
+                                reader.data_capability.downgrade(&next_ts);
+                            }
+                            data_output.give(&cap, (Ok(msg), *cap.time(), diff)).await;
+                        }
+                        Some(InternalMessage::Status(update)) => {
+                            health_output.give(&health_capability, update).await;
+                        }
+                        Some(InternalMessage::Err(err)) => {
+                            // XXX(petrosagg): we are fabricating a timestamp here!!
+                            let non_definite_ts = MzOffset::from(reader.last_lsn) + 1;
+
+                            let cap = reader.data_capability.delayed(&non_definite_ts);
+                            let next_ts = non_definite_ts + 1;
+                            reader.data_capability.downgrade(&next_ts);
+                            reader.upper_capability.downgrade(&next_ts);
+                            data_output.give(&cap, (Err(err), *cap.time(), 1)).await;
+                        }
+                        None => return,
+                    },
+                    // This future is not cancel safe but we are only passing a reference to it in
+                    // the select! loop so the future stays on the stack and never gets cancelled
+                    // until the end of the function.
+                    _ = offset_commit_loop.as_mut() => {},
+                }
+            }
+        });
+
+        (
+            stream.as_collection(),
+            Some(progress),
+            health_stream,
+            Rc::new(button.press_on_drop()),
+        )
     }
 }
 
-#[async_trait::async_trait]
-impl OffsetCommitter<MzOffset> for PgOffsetCommitter {
-    async fn commit_offsets(&self, frontier: Antichain<MzOffset>) -> Result<(), anyhow::Error> {
+impl PgOffsetCommitter {
+    fn commit_offsets(&self, frontier: Antichain<MzOffset>) -> Result<(), anyhow::Error> {
         if let Some(offset) = frontier.as_option() {
             // TODO(petrosagg): this minus one is very suspicious. It is replicating the previous
             // behaviour where the commit offset was calculated by calling
@@ -418,7 +444,6 @@ impl OffsetCommitter<MzOffset> for PgOffsetCommitter {
             self.resume_lsn
                 .store(offset.offset.saturating_sub(1), Ordering::SeqCst);
         }
-        self.logger.commit_offsets(frontier).await?;
 
         Ok(())
     }
@@ -490,11 +515,6 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
                         inner: SourceErrorDetails::Initialization(e.to_string()),
                     }))
                     .await;
-                task_info
-                    .row_sender
-                    .activator
-                    .activate()
-                    .expect("postgres reader activation failed");
                 return;
             }
         }
@@ -512,12 +532,14 @@ async fn postgres_replication_loop_inner(
         let publication_tables = mz_postgres_util::publication_info(
             &task_info.connection_config,
             &task_info.publication,
+            None,
         )
         .await
         .err_indefinite()?;
 
         // Validate publication tables against the state snapshot
-        validate_tables(&task_info.source_tables, publication_tables).err_definite()?;
+        determine_table_compatibility(&task_info.source_tables, publication_tables)
+            .err_definite()?;
 
         let client = task_info
             .connection_config
@@ -716,16 +738,14 @@ struct RowMessage {
 /// Internally, this type uses asserts to uphold the first requirement.
 struct RowSender {
     sender: Sender<InternalMessage>,
-    activator: SyncActivator,
     buffered_message: Option<RowMessage>,
 }
 
 impl RowSender {
     /// Create a new `RowSender`.
-    pub fn new(sender: Sender<InternalMessage>, activator: SyncActivator) -> Self {
+    pub fn new(sender: Sender<InternalMessage>) -> Self {
         Self {
             sender,
-            activator,
             buffered_message: None,
         }
     }
@@ -770,44 +790,46 @@ impl RowSender {
     }
 
     async fn send_row_inner(&self, output: usize, row: Row, lsn: PgLsn, diff: i64, end: bool) {
-        // a closed receiver means the source has been shutdown
-        // (dropped or the process is dying), so just continue on
-        // without activation
-        if let Ok(_) = self
-            .sender
-            .send(InternalMessage::Value {
-                output,
-                value: row,
-                lsn,
-                diff,
-                end,
-            })
-            .await
-        {
-            self.activator
-                .activate()
-                .expect("postgres reader activation failed");
-        }
+        let message = InternalMessage::Value {
+            output,
+            value: row,
+            lsn,
+            diff,
+            end,
+        };
+        // a closed receiver means the source has been shutdown (dropped or the process is dying),
+        // so just continue on without activation
+        let _ = self.sender.send(message).await;
     }
 }
 
-/// Validates that all expected tables exist in the publication tables and they have the same schema
-fn validate_tables(
+/// Determines if a set of [`SourceTable`]s and a set of [`PostgresTableDesc`]
+/// are compatible with one another in a way that Materialize can handle.
+///
+/// The returned `BTreeMap` represents the order in which ingested data from
+/// tables must be projected to recover the expected ordering (i.e. their
+/// schemas have changed). Tables without an entry in the returned `BTreeMap` do
+/// not require projection (i.e. their schemas have not changed).
+///
+/// # Errors
+/// - If `source_tables` is not a strict subset of `tables`, based on the
+///   tables' OIDs.
+/// - If any object in `tables` is incompatible with its representation in
+///   `source_tables`, e.g. no longer contains all of the columns identified in
+///   `source_tables`.
+fn determine_table_compatibility(
     source_tables: &BTreeMap<u32, SourceTable>,
     tables: Vec<PostgresTableDesc>,
 ) -> Result<(), anyhow::Error> {
     let pub_tables: BTreeMap<u32, PostgresTableDesc> =
         tables.into_iter().map(|t| (t.oid, t)).collect();
+
     for (id, info) in source_tables.iter() {
         match pub_tables.get(id) {
             Some(pub_schema) => {
-                if pub_schema != &info.desc {
-                    warn!(
-                        "Error validating table in publication. Expected: {:?} Actual: {:?}",
-                        &info.desc, pub_schema
-                    );
-                    bail!("Schema for table {} differs, recreate Materialize source to use new schema", info.desc.name)
-                }
+                // Keep this method in sync with the check in response to
+                // Relation messages in the replication stream.
+                info.desc.determine_compatibility(pub_schema)?;
             }
             None => {
                 warn!(
@@ -815,13 +837,14 @@ fn validate_tables(
                     info.desc.name, id
                 );
                 bail!(
-                    "Publication missing expected table {} with oid {}",
+                    "source table {} with oid {} has been dropped",
                     info.desc.name,
-                    id
+                    info.desc.oid
                 )
             }
         }
     }
+
     Ok(())
 }
 
@@ -855,7 +878,7 @@ fn produce_snapshot<'a>(
     client: &'a Client,
     metrics: &'a PgSourceMetrics,
     source_tables: &'a BTreeMap<u32, SourceTable>,
-) -> impl Stream<Item = Result<(usize, Row), ReplicationError>> + 'a {
+) -> impl futures::Stream<Item = Result<(usize, Row), ReplicationError>> + 'a {
     async_stream::try_stream! {
         // Scratch space to use while evaluating casts
         let mut datum_vec = DatumVec::new();
@@ -884,7 +907,7 @@ fn produce_snapshot<'a>(
                 // and list of string-encoded values, e.g. Row{ 16391 , ["1", "2"] }
                 let parser = mz_pgcopy::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
 
-                let mut raw_values = parser.iter_raw(info.desc.columns.len());
+                let mut raw_values = parser.iter_raw_truncating(info.desc.columns.len());
                 while let Some(raw_value) = raw_values.next() {
                     match raw_value.err_definite()? {
                         Some(value) => {
@@ -910,13 +933,14 @@ fn produce_snapshot<'a>(
 /// Packs a Tuple received in the replication stream into a Row packer.
 fn datums_from_tuple<'a, T>(
     rel_id: u32,
+    len: usize,
     tuple_data: T,
     datums: &mut Vec<Datum<'a>>,
 ) -> Result<(), anyhow::Error>
 where
     T: IntoIterator<Item = &'a TupleData>,
 {
-    for val in tuple_data.into_iter() {
+    for val in tuple_data.into_iter().take(len) {
         let datum = match val {
             TupleData::Null => Datum::Null,
             TupleData::UnchangedToast => bail!(
@@ -954,7 +978,8 @@ async fn produce_replication<'a>(
     committed_lsn: Arc<AtomicU64>,
     metrics: &'a PgSourceMetrics,
     source_tables: &'a BTreeMap<u32, SourceTable>,
-) -> impl Stream<Item = Result<Event<[PgLsn; 1], (usize, Row, Diff)>, ReplicationError>> + 'a {
+) -> impl futures::Stream<Item = Result<Event<[PgLsn; 1], (usize, Row, Diff)>, ReplicationError>> + 'a
+{
     use ReplicationError::*;
     use ReplicationMessage::*;
     async_stream::try_stream!({
@@ -1029,7 +1054,15 @@ async fn produce_replication<'a>(
                             let info = source_tables.get(&rel_id).unwrap();
                             let new_tuple = insert.tuple().tuple_data();
                             let mut datums = datum_vec.borrow();
-                            datums_from_tuple(rel_id, new_tuple, &mut *datums).err_definite()?;
+
+                            datums_from_tuple(
+                                rel_id,
+                                info.desc.columns.len(),
+                                new_tuple,
+                                &mut *datums,
+                            )
+                            .err_definite()?;
+
                             let row = cast_row(&info.casts, &datums).err_definite()?;
                             inserts.push((info.output_index, row));
                         }
@@ -1052,8 +1085,15 @@ async fn produce_replication<'a>(
                                 .tuple_data();
 
                             let mut old_datums = datum_vec.borrow();
-                            datums_from_tuple(rel_id, old_tuple, &mut *old_datums)
-                                .err_definite()?;
+
+                            datums_from_tuple(
+                                rel_id,
+                                info.desc.columns.len(),
+                                old_tuple,
+                                &mut *old_datums,
+                            )
+                            .err_definite()?;
+
                             let old_row = cast_row(&info.casts, &old_datums).err_definite()?;
                             deletes.push((info.output_index, old_row));
                             drop(old_datums);
@@ -1070,8 +1110,15 @@ async fn produce_replication<'a>(
                                     _ => new,
                                 });
                             let mut new_datums = datum_vec.borrow();
-                            datums_from_tuple(rel_id, new_tuple, &mut *new_datums)
-                                .err_definite()?;
+
+                            datums_from_tuple(
+                                rel_id,
+                                info.desc.columns.len(),
+                                new_tuple,
+                                &mut *new_datums,
+                            )
+                            .err_definite()?;
+
                             let new_row = cast_row(&info.casts, &new_datums).err_definite()?;
                             inserts.push((info.output_index, new_row));
                         }
@@ -1093,7 +1140,15 @@ async fn produce_replication<'a>(
                                 .err_definite()?
                                 .tuple_data();
                             let mut datums = datum_vec.borrow();
-                            datums_from_tuple(rel_id, old_tuple, &mut *datums).err_definite()?;
+
+                            datums_from_tuple(
+                                rel_id,
+                                info.desc.columns.len(),
+                                old_tuple,
+                                &mut *datums,
+                            )
+                            .err_definite()?;
+
                             let row = cast_row(&info.casts, &datums).err_definite()?;
                             deletes.push((info.output_index, row));
                         }
@@ -1115,55 +1170,36 @@ async fn produce_replication<'a>(
                             last_data_message = Instant::now();
                             let rel_id = relation.rel_id();
                             if let Some(info) = source_tables.get(&rel_id) {
-                                // Start with the cheapest check first, this will catch the majority of alters
-                                if info.desc.columns.len() != relation.columns().len() {
-                                    warn!(
-                                        "alter table detected on {} with id {}",
-                                        info.desc.name, info.desc.oid
-                                    );
-                                    return Err(Definite(anyhow!(
-                                        "source table {} with oid {} has been altered",
-                                        info.desc.name,
-                                        info.desc.oid
-                                    )))?;
-                                }
-                                let same_name = info.desc.name == relation.name().unwrap();
-                                let same_namespace =
-                                    info.desc.namespace == relation.namespace().unwrap();
-                                if !same_name || !same_namespace {
-                                    warn!(
-                                        "table name changed on {}.{} with id {} to {}.{}",
-                                        info.desc.namespace,
-                                        info.desc.name,
-                                        info.desc.oid,
-                                        relation.namespace().unwrap(),
-                                        relation.name().unwrap()
-                                    );
-                                    return Err(Definite(anyhow!(
-                                        "source table {} with oid {} has been altered",
-                                        info.desc.name,
-                                        info.desc.oid
-                                    )))?;
-                                }
-                                // Relation messages do not include nullability/primary_key data so we
-                                // check the name, type_oid, and type_mod explicitly and error if any
-                                // of them differ
-                                for (src, rel) in info.desc.columns.iter().zip(relation.columns()) {
-                                    let same_name = src.name == rel.name().unwrap();
-                                    let rel_typoid = u32::try_from(rel.type_id()).unwrap();
-                                    let same_typoid = src.type_oid == rel_typoid;
-                                    let same_typmod = src.type_mod == rel.type_modifier();
+                                // Because the replication stream doesn't include columns'
+                                // attnums, we need to check the current local schema against
+                                // the current remote schema to ensure e.g. we haven't received
+                                // a schema update with the same terminal column name which is
+                                // actually a different column.
+                                let current_publication_info = mz_postgres_util::publication_info(
+                                    &client_config,
+                                    publication,
+                                    Some(rel_id),
+                                )
+                                .await
+                                .err_indefinite()?;
 
-                                    if !same_name || !same_typoid || !same_typmod {
+                                match current_publication_info.get(0) {
+                                    Some(desc) => {
+                                        // Keep this method in sync with the check in
+                                        // validate_tables.
+                                        info.desc
+                                            .determine_compatibility(desc)
+                                            .map_err(Definite)?;
+                                    }
+                                    None => {
                                         warn!(
-                                            "alter table error: name {}, oid {}, old_schema {:?}, new_schema {:?}",
+                                            "alter table error, table removed from upstream source: name {}, oid {}, old_schema {:?}",
                                             info.desc.name,
                                             info.desc.oid,
                                             info.desc.columns,
-                                            relation.columns()
                                         );
                                         return Err(Definite(anyhow!(
-                                            "source table {} with oid {} has been altered",
+                                            "source table {} with oid {} has been dropped",
                                             info.desc.name,
                                             info.desc.oid
                                         )))?;

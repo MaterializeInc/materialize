@@ -31,6 +31,7 @@ def workflow_start_two_mzs(c: Composition, parser: WorkflowArgumentParser) -> No
             if args.this_tag
             else None,
             ports=["6875:6875"],
+            use_default_volumes=False,
         ),
         Materialized(
             name="mz_other",
@@ -38,6 +39,7 @@ def workflow_start_two_mzs(c: Composition, parser: WorkflowArgumentParser) -> No
             if args.other_tag
             else None,
             ports=["16875:6875"],
+            use_default_volumes=False,
         ),
     ):
         for mz in ["mz_this", "mz_other"]:

@@ -18,7 +18,7 @@ pub mod reduce;
 pub mod top_k;
 pub mod union;
 
-use crate::TransformArgs;
+use crate::{all, TransformArgs};
 use mz_expr::MirRelationExpr;
 
 /// Fuses multiple like operators together when possible.
@@ -27,7 +27,15 @@ pub struct Fusion;
 
 impl crate::Transform for Fusion {
     fn recursion_safe(&self) -> bool {
-        true
+        // Keep this in sync with the actions called in `Fusion::action`!
+        all![
+            filter::Filter.recursion_safe(),
+            map::Map.recursion_safe(),
+            project::Project.recursion_safe(),
+            negate::Negate.recursion_safe(),
+            top_k::TopK.recursion_safe(),
+            union::Union.recursion_safe(),
+        ]
     }
 
     #[tracing::instrument(

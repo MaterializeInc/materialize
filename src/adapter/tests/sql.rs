@@ -90,6 +90,7 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
+use mz_adapter::catalog::storage::MZ_SYSTEM_ROLE_ID;
 use mz_adapter::catalog::{Catalog, CatalogItem, Op, Table, SYSTEM_CONN_ID};
 use mz_adapter::session::{Session, DEFAULT_DATABASE_NAME};
 use mz_ore::now::NOW_ZERO;
@@ -159,8 +160,9 @@ async fn datadriven() {
                                             conn_id: None,
                                             depends_on: vec![],
                                             custom_logical_compaction_window: None,
-                                            is_retained_metrics_relation: false,
+                                            is_retained_metrics_object: false,
                                         }),
+                                        owner_id: MZ_SYSTEM_ROLE_ID,
                                     }],
                                     |_| Ok(()),
                                 )

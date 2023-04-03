@@ -1270,6 +1270,9 @@ fn test_explain_timestamp_json() {
 #[test]
 fn test_utilization_hold() {
     const THIRTY_DAYS_MS: u64 = 30 * 24 * 60 * 60 * 1000;
+    // `mz_introspection` tests indexes, `default` tests tables.
+    // The bool determines whether we are testing indexes.
+    const CLUSTERS_TO_TRY: &[(&str, bool)] = &[("mz_introspection", true), ("default", false)];
 
     let now_millis = u64::try_from(
         SystemTime::now()
@@ -1300,22 +1303,40 @@ fn test_utilization_hold() {
 
     let q =
         "EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM mz_internal.mz_cluster_replica_utilization";
-    let row = client.query_one(q, &[]).unwrap();
-    let explain: String = row.get(0);
-    let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+    for (cluster, should_be_indexed) in CLUSTERS_TO_TRY {
+        client
+            .execute(&format!("SET cluster={cluster}"), &[])
+            .unwrap();
 
-    // If we're not in EpochMilliseconds, the timestamp math below is invalid, so assert that here.
-    assert!(matches!(
-        explain.determination.timestamp_context,
-        TimestampContext::TimelineTimestamp(Timeline::EpochMilliseconds, _)
-    ));
-    let since = explain
-        .determination
-        .since
-        .into_option()
-        .expect("The since must be finite");
-    let past_since = Timestamp::from(past_millis);
-    assert!(since.less_equal(&past_since));
+        let row = client.query_one(q, &[]).unwrap();
+        let explain: String = row.get(0);
+        let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+        // Assert that we actually used the indexes/tables, as required
+        for s in &explain.sources {
+            if *should_be_indexed {
+                assert!(s.name.ends_with("compute)"));
+            } else {
+                assert!(s.name.ends_with("storage)"));
+            }
+        }
+
+        // If we're not in EpochMilliseconds, the timestamp math below is invalid, so assert that here.
+        assert!(matches!(
+            explain.determination.timestamp_context,
+            TimestampContext::TimelineTimestamp(Timeline::EpochMilliseconds, _)
+        ));
+        let since = explain
+            .determination
+            .since
+            .into_option()
+            .expect("The since must be finite");
+        let past_since = Timestamp::from(past_millis);
+        assert!(since.less_equal(&past_since));
+        // Assert we aren't lagging by more than 30 days + 1 second.
+        // If we ever make the since granularity configurable, this line will
+        // need to be changed.
+        assert!(past_since.less_equal(&since.checked_add(1000).unwrap()));
+    }
 
     // Check that we can turn off retention
     let mut sys_client = server
@@ -1328,16 +1349,23 @@ fn test_utilization_hold() {
         .execute("ALTER SYSTEM SET metrics_retention='1s'", &[])
         .unwrap();
 
-    let row = client.query_one(q, &[]).unwrap();
-    let explain: String = row.get(0);
-    let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
-    let since = explain
-        .determination
-        .since
-        .into_option()
-        .expect("The since must be finite");
-    // Check that since is not more than 2 seconds in the past
-    assert!(Timestamp::new(now_millis).less_equal(&since.step_forward_by(&Timestamp::new(2000))));
+    for (cluster, _) in CLUSTERS_TO_TRY {
+        client
+            .execute(&format!("SET cluster={cluster}"), &[])
+            .unwrap();
+        let row = client.query_one(q, &[]).unwrap();
+        let explain: String = row.get(0);
+        let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+        let since = explain
+            .determination
+            .since
+            .into_option()
+            .expect("The since must be finite");
+        // Check that since is not more than 2 seconds in the past
+        assert!(
+            Timestamp::new(now_millis).less_equal(&since.step_forward_by(&Timestamp::new(2000)))
+        );
+    }
 }
 
 // Test that a query that causes a compute instance to panic will resolve
@@ -2526,4 +2554,382 @@ fn test_timelines_persist_after_failed_transaction() {
 
     // Dropping the source should also work now.
     client.batch_execute("DROP SOURCE counter").unwrap();
+}
+
+// This can almost be tested with SLT using the simple directive, but
+// we have no way to disconnect sessions using SLT.
+#[test]
+fn test_mz_sessions() {
+    let config = util::Config::default().unsafe_mode();
+    let server = util::start_server(config).unwrap();
+
+    let mut foo_client = server
+        .pg_config()
+        .user("foo")
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    // Active session appears in mz_sessions.
+    assert_eq!(
+        foo_client
+            .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
+            .unwrap()
+            .get::<_, i64>(0),
+        1,
+    );
+    let foo_session_row = foo_client
+        .query_one("SELECT id::int8, role_id FROM mz_internal.mz_sessions", &[])
+        .unwrap();
+    let foo_conn_id = foo_session_row.get::<_, i64>("id");
+    let foo_role_id = foo_session_row.get::<_, String>("role_id");
+    assert_eq!(
+        foo_client
+            .query_one("SELECT name FROM mz_roles WHERE id = $1", &[&foo_role_id])
+            .unwrap()
+            .get::<_, String>(0),
+        "foo",
+    );
+
+    // Concurrent session appears in mz_sessions and is removed from mz_sessions.
+    {
+        let _bar_client = server
+            .pg_config()
+            .user("bar")
+            .connect(postgres::NoTls)
+            .unwrap();
+        assert_eq!(
+            foo_client
+                .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
+                .unwrap()
+                .get::<_, i64>(0),
+            2,
+        );
+        let bar_session_row = foo_client
+            .query_one(
+                &format!("SELECT role_id FROM mz_internal.mz_sessions WHERE id <> {foo_conn_id}"),
+                &[],
+            )
+            .unwrap();
+        let bar_role_id = bar_session_row.get::<_, String>("role_id");
+        assert_eq!(
+            foo_client
+                .query_one("SELECT name FROM mz_roles WHERE id = $1", &[&bar_role_id])
+                .unwrap()
+                .get::<_, String>(0),
+            "bar",
+        );
+    }
+
+    assert_eq!(
+        foo_client
+            .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
+            .unwrap()
+            .get::<_, i64>(0),
+        1,
+    );
+    assert_eq!(
+        foo_client
+            .query_one("SELECT id::int8 FROM mz_internal.mz_sessions", &[])
+            .unwrap()
+            .get::<_, i64>("id"),
+        foo_conn_id,
+    );
+
+    // Concurrent session, with the same name as active session,
+    // appears in mz_sessions and is removed from mz_sessions.
+    {
+        let _other_foo_client = server
+            .pg_config()
+            .user("foo")
+            .connect(postgres::NoTls)
+            .unwrap();
+        assert_eq!(
+            foo_client
+                .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
+                .unwrap()
+                .get::<_, i64>(0),
+            2,
+        );
+        let other_foo_session_row = foo_client
+            .query_one(
+                &format!("SELECT id::int8, role_id FROM mz_internal.mz_sessions WHERE id <> {foo_conn_id}"),
+                &[],
+            )
+            .unwrap();
+        let other_foo_conn_id = other_foo_session_row.get::<_, i64>("id");
+        let other_foo_role_id = other_foo_session_row.get::<_, String>("role_id");
+        assert_ne!(foo_conn_id, other_foo_conn_id);
+        assert_eq!(foo_role_id, other_foo_role_id);
+    }
+
+    assert_eq!(
+        foo_client
+            .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
+            .unwrap()
+            .get::<_, i64>(0),
+        1,
+    );
+    assert_eq!(
+        foo_client
+            .query_one("SELECT id::int8 FROM mz_internal.mz_sessions", &[])
+            .unwrap()
+            .get::<_, i64>("id"),
+        foo_conn_id,
+    );
+}
+
+#[test]
+fn test_auto_run_on_introspection_feature_enabled() {
+    // unsafe_mode enables the feature as a whole
+    let config = util::Config::default().unsafe_mode();
+    let server = util::start_server(config).unwrap();
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let mut client = server
+        .pg_config()
+        .notice_callback(move |notice| {
+            tx.unbounded_send(notice).unwrap();
+        })
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    let mut assert_introspection_notice = |expected| {
+        match (rx.try_next(), expected) {
+            (Ok(Some(notice)), true) => {
+                let msg = notice.message();
+                let expected = "query was automatically run on the \"mz_introspection\" cluster";
+                assert_eq!(msg, expected);
+            }
+            (Err(_), false) => (),
+            (_, true) => panic!("Didn't get the expected notice!"),
+            (res, false) => panic!("Got a notice, but it wasn't expected! {:?}", res),
+        }
+        // Drain the channel of any other notices
+        while let Ok(Some(_)) = rx.try_next() {}
+    };
+
+    // The notice we assert on only gets emitted at the DEBUG level
+    client
+        .execute("SET client_min_messages = debug", &[])
+        .unwrap();
+
+    // Queries with no dependencies should not get run on the introspection cluster
+    let _row = client.query_one("SELECT 1;", &[]).unwrap();
+    assert_introspection_notice(false);
+
+    // Queries that only depend on system tables, __should__ get run on the introspection cluster
+    let _row = client
+        .query_one("SELECT * FROM mz_functions LIMIT 1", &[])
+        .unwrap();
+    assert_introspection_notice(true);
+
+    let _row = client
+        .query_one("SELECT * FROM pg_attribute LIMIT 1", &[])
+        .unwrap();
+    assert_introspection_notice(true);
+
+    let _row = client
+        .query_one(
+            "SELECT * FROM mz_internal.mz_cluster_replica_heartbeats LIMIT 1",
+            &[],
+        )
+        .unwrap();
+    assert_introspection_notice(true);
+
+    // Start our subscribe.
+    client
+        .batch_execute("BEGIN; DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM mz_functions);")
+        .unwrap();
+    assert_introspection_notice(false);
+
+    // Fetch all of the rows.
+    client.batch_execute("FETCH ALL c").unwrap();
+    assert_introspection_notice(true);
+
+    // End the subscribe.
+    client.batch_execute("COMMIT").unwrap();
+    assert_introspection_notice(false);
+
+    // ... even more complex queries that depend on multiple system tables
+    let _rows = client
+        .query("SELECT mz_types.name, mz_types.id FROM mz_types JOIN mz_base_types ON mz_types.id = mz_base_types.id", &[])
+        .unwrap();
+    assert_introspection_notice(true);
+
+    client
+        .execute(
+            "CREATE VIEW user_made AS SELECT name FROM mz_functions;",
+            &[],
+        )
+        .unwrap();
+    assert_introspection_notice(false);
+
+    // But querying user made objects should not result in queries being run on mz_introspection.
+    let _row = client
+        .query_one("SELECT * FROM user_made LIMIT 1", &[])
+        .unwrap();
+    assert_introspection_notice(false);
+}
+
+#[test]
+fn test_auto_run_on_introspection_feature_disabled() {
+    // unsafe_mode enables the feature as a whole
+    let config = util::Config::default().unsafe_mode();
+    let server = util::start_server(config).unwrap();
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let mut client = server
+        .pg_config()
+        .notice_callback(move |notice| {
+            tx.unbounded_send(notice).unwrap();
+        })
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    let mut assert_introspection_notice = |expected| {
+        match (rx.try_next(), expected) {
+            (Ok(Some(notice)), true) => {
+                let msg = notice.message();
+                let expected = "query was automatically run on the \"mz_introspection\" cluster";
+                assert_eq!(msg, expected);
+            }
+            (Err(_), false) => (),
+            (_, true) => panic!("Didn't get the expected notice!"),
+            (res, false) => panic!("Got a notice, but it wasn't expected! {:?}", res),
+        }
+        // Drain the channel of any other notices
+        while let Ok(Some(_)) = rx.try_next() {}
+    };
+
+    // The notice we assert on only gets emitted at the DEBUG level
+    client
+        .execute("SET client_min_messages = debug", &[])
+        .unwrap();
+    // Disable the feature, as a user would
+    client
+        .execute("SET auto_route_introspection_queries = false", &[])
+        .unwrap();
+
+    // Nothing should emit the notice
+
+    let _row = client
+        .query_one("SELECT * FROM mz_functions LIMIT 1", &[])
+        .unwrap();
+    assert_introspection_notice(false);
+
+    let _row = client
+        .query_one("SELECT * FROM pg_attribute LIMIT 1", &[])
+        .unwrap();
+    assert_introspection_notice(false);
+
+    let _row = client
+        .query_one(
+            "SELECT * FROM mz_internal.mz_cluster_replica_heartbeats LIMIT 1",
+            &[],
+        )
+        .unwrap();
+    assert_introspection_notice(false);
+
+    let _rows = client
+        .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
+        .unwrap();
+    assert_introspection_notice(false);
+
+    let _rows = client
+        .query(
+            "SELECT * FROM mz_internal.mz_dataflow_operator_parents",
+            &[],
+        )
+        .unwrap();
+    assert_introspection_notice(false);
+
+    client
+        .batch_execute("BEGIN; DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM mz_functions);")
+        .unwrap();
+    assert_introspection_notice(false);
+
+    client.batch_execute("FETCH ALL c").unwrap();
+    assert_introspection_notice(false);
+
+    client.batch_execute("COMMIT").unwrap();
+    assert_introspection_notice(false);
+}
+
+#[test]
+fn test_auto_run_on_introspection_per_replica_relations() {
+    // unsafe_mode enables the feature as a whole
+    let config = util::Config::default().unsafe_mode();
+    let server = util::start_server(config).unwrap();
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let mut client = server
+        .pg_config()
+        .notice_callback(move |notice| {
+            tx.unbounded_send(notice).unwrap();
+        })
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    let mut assert_introspection_notice = |expected| {
+        match (rx.try_next(), expected) {
+            (Ok(Some(notice)), true) => {
+                let msg = notice.message();
+                let expected = "query was automatically run on the \"mz_introspection\" cluster";
+                assert_eq!(msg, expected);
+            }
+            (Err(_), false) => (),
+            (_, true) => panic!("Didn't get the expected notice!"),
+            (res, false) => panic!("Got a notice, but it wasn't expected! {:?}", res),
+        }
+        // Drain the channel of any other notices
+        while let Ok(Some(_)) = rx.try_next() {}
+    };
+
+    // The notice we assert on only gets emitted at the DEBUG level
+    client
+        .execute("SET client_min_messages = debug", &[])
+        .unwrap();
+
+    // Disable the feature, as a user would
+    client
+        .execute("SET auto_route_introspection_queries = false", &[])
+        .unwrap();
+
+    // If a system object is a per-replica relation we do not want to automatically run
+    // it on the mz_introspection cluster
+
+    // `mz_active_peeks` is a per-replica relation
+    let _rows = client
+        .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
+        .unwrap();
+    assert_introspection_notice(false);
+
+    // `mz_dataflow_operator_parents` is a VIEW that depends on per-replica relations
+    let _rows = client
+        .query(
+            "SELECT * FROM mz_internal.mz_dataflow_operator_parents",
+            &[],
+        )
+        .unwrap();
+    assert_introspection_notice(false);
+
+    // Enable the feature
+    client
+        .execute("SET auto_route_introspection_queries = true", &[])
+        .unwrap();
+
+    // Even after enabling the feature we still shouldn't emit any notices
+
+    let _rows = client
+        .query(
+            "SELECT * FROM mz_internal.mz_dataflow_operator_parents",
+            &[],
+        )
+        .unwrap();
+    assert_introspection_notice(false);
+
+    let _rows = client
+        .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
+        .unwrap();
+    assert_introspection_notice(false);
 }

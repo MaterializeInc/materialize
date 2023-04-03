@@ -144,6 +144,7 @@ Forward
 From
 Full
 Fullname
+Function
 Generator
 Grant
 Greatest
@@ -246,6 +247,7 @@ Order
 Ordinality
 Outer
 Over
+Owner
 Partition
 Password
 Physical

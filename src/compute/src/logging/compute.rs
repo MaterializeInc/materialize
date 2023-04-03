@@ -22,7 +22,6 @@ use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::{Counter, Tee};
-use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Filter, InspectCore};
 use timely::dataflow::{Scope, StreamCore};
@@ -34,11 +33,12 @@ use uuid::Uuid;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, Timestamp};
-use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;
 
 use crate::logging::{ComputeLog, LogVariant};
 use crate::typedefs::{KeysValsHandle, RowSpine};
+
+use super::EventQueue;
 
 /// Type alias for a logger of compute events.
 pub type Logger = timely::logging_core::Logger<ComputeEvent, WorkerIdentifier>;
@@ -105,34 +105,35 @@ impl Peek {
 /// Params
 /// * `worker`: The Timely worker hosting the log analysis dataflow.
 /// * `config`: Logging configuration.
-/// * `event_source`: The source to read compute log events from.
-/// * `activator`: A handle to acknowledge activations.
+/// * `event_queue`: The source to read compute log events from.
 ///
 /// Returns a map from log variant to a tuple of a trace handle and a dataflow drop token.
-pub fn construct<A: Allocate>(
+pub(super) fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &mz_compute_client::logging::LoggingConfig,
-    event_source: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, ComputeEvent)>>,
-    activator: RcActivator,
+    event_queue: EventQueue<ComputeEvent>,
 ) -> BTreeMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
+    let worker_id = worker.index();
 
     worker.dataflow_named("Dataflow: compute logging", move |scope| {
-        let worker = scope.index();
-
-        let (mut compute_logs, token) =
-            Some(event_source).mz_replay(scope, "compute logs", config.interval, activator.clone());
+        let (mut logs, token) = Some(event_queue.link).mz_replay(
+            scope,
+            "compute logs",
+            config.interval,
+            event_queue.activator,
+        );
 
         // If logging is disabled, we still need to install the indexes, but we can leave them
         // empty. We do so by immediately filtering all logs events.
         if !config.enable_logging {
-            compute_logs = compute_logs.filter(|_| false);
+            logs = logs.filter(|_| false);
         }
 
         // Build a demux operator that splits the replayed event stream up into the separate
         // logging streams.
         let mut demux = OperatorBuilder::new("Compute Logging Demux".to_string(), scope.clone());
-        let mut input = demux.new_input(&compute_logs, Pipeline);
+        let mut input = demux.new_input(&logs, Pipeline);
         let (mut export_out, export) = demux.new_output();
         let (mut dependency_out, dependency) = demux.new_output();
         let (mut frontier_out, frontier) = demux.new_output();
@@ -170,7 +171,7 @@ pub fn construct<A: Allocate>(
                         // We expect the logging infrastructure to not shuffle events between
                         // workers and this code relies on the assumption that each worker handles
                         // its own events.
-                        assert_eq!(logger_id, worker);
+                        assert_eq!(logger_id, worker_id);
 
                         DemuxHandler {
                             state: &mut demux_state,
@@ -188,7 +189,7 @@ pub fn construct<A: Allocate>(
         let dataflow_current = export.as_collection().map(move |datum| {
             Row::pack_slice(&[
                 Datum::String(&datum.id.to_string()),
-                Datum::UInt64(u64::cast_from(worker)),
+                Datum::UInt64(u64::cast_from(worker_id)),
                 Datum::UInt64(u64::cast_from(datum.dataflow_id)),
             ])
         });
@@ -196,13 +197,13 @@ pub fn construct<A: Allocate>(
             Row::pack_slice(&[
                 Datum::String(&datum.export_id.to_string()),
                 Datum::String(&datum.import_id.to_string()),
-                Datum::UInt64(u64::cast_from(worker)),
+                Datum::UInt64(u64::cast_from(worker_id)),
             ])
         });
         let frontier_current = frontier.as_collection().map(move |datum| {
             Row::pack_slice(&[
                 Datum::String(&datum.export_id.to_string()),
-                Datum::UInt64(u64::cast_from(worker)),
+                Datum::UInt64(u64::cast_from(worker_id)),
                 Datum::MzTimestamp(datum.frontier),
             ])
         });
@@ -210,7 +211,7 @@ pub fn construct<A: Allocate>(
             Row::pack_slice(&[
                 Datum::String(&datum.export_id.to_string()),
                 Datum::String(&datum.import_id.to_string()),
-                Datum::UInt64(u64::cast_from(worker)),
+                Datum::UInt64(u64::cast_from(worker_id)),
                 Datum::MzTimestamp(datum.frontier),
             ])
         });
@@ -218,21 +219,21 @@ pub fn construct<A: Allocate>(
             Row::pack_slice(&[
                 Datum::String(&datum.export_id.to_string()),
                 Datum::String(&datum.import_id.to_string()),
-                Datum::UInt64(u64::cast_from(worker)),
+                Datum::UInt64(u64::cast_from(worker_id)),
                 Datum::UInt64(datum.delay_pow.try_into().expect("pow too big")),
             ])
         });
         let peek_current = peek.as_collection().map(move |datum| {
             Row::pack_slice(&[
                 Datum::Uuid(datum.uuid),
-                Datum::UInt64(u64::cast_from(worker)),
+                Datum::UInt64(u64::cast_from(worker_id)),
                 Datum::String(&datum.id.to_string()),
                 Datum::MzTimestamp(datum.time),
             ])
         });
         let peek_duration = peek_duration.as_collection().map(move |bucket| {
             Row::pack_slice(&[
-                Datum::UInt64(u64::cast_from(worker)),
+                Datum::UInt64(u64::cast_from(worker_id)),
                 Datum::UInt64(bucket.try_into().expect("pow too big")),
             ])
         });
@@ -300,11 +301,11 @@ pub fn construct<A: Allocate>(
 /// State maintained by the demux operator.
 #[derive(Default)]
 struct DemuxState {
-    // Maps dataflow exports to dataflow IDs.
+    /// Maps dataflow exports to dataflow IDs.
     export_dataflows: BTreeMap<GlobalId, usize>,
-    // Maps dataflow exports to their imports and frontier delay tracking state.
+    /// Maps dataflow exports to their imports and frontier delay tracking state.
     export_imports: BTreeMap<GlobalId, BTreeMap<GlobalId, FrontierDelayState>>,
-    // Maps pending peeks to their installation time (in ns).
+    /// Maps pending peeks to their installation time (in ns).
     peek_stash: BTreeMap<Uuid, u128>,
 }
 
@@ -390,17 +391,19 @@ impl DemuxHandler<'_, '_> {
 
     /// Handle the given compute event.
     fn handle(&mut self, event: ComputeEvent) {
+        use ComputeEvent::*;
+
         match event {
-            ComputeEvent::Export { id, dataflow_index } => self.handle_export(id, dataflow_index),
-            ComputeEvent::ExportDropped { id } => self.handle_export_dropped(id),
-            ComputeEvent::ExportDependency {
+            Export { id, dataflow_index } => self.handle_export(id, dataflow_index),
+            ExportDropped { id } => self.handle_export_dropped(id),
+            ExportDependency {
                 export_id,
                 import_id,
             } => self.handle_export_dependency(export_id, import_id),
-            ComputeEvent::Peek(peek, true) => self.handle_peek_install(peek),
-            ComputeEvent::Peek(peek, false) => self.handle_peek_retire(peek),
-            ComputeEvent::Frontier { id, time, diff } => self.handle_frontier(id, time, diff),
-            ComputeEvent::ImportFrontier {
+            Peek(peek, true) => self.handle_peek_install(peek),
+            Peek(peek, false) => self.handle_peek_retire(peek),
+            Frontier { id, time, diff } => self.handle_frontier(id, time, diff),
+            ImportFrontier {
                 import_id,
                 export_id,
                 time,

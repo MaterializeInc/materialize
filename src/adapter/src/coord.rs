@@ -145,6 +145,7 @@ mod command_handler;
 mod dataflows;
 mod ddl;
 mod indexes;
+mod introspection;
 mod message_handler;
 mod read_policy;
 mod sequencer;
@@ -1372,6 +1373,7 @@ pub async fn serve(
             aws_privatelink_availability_zones,
             system_parameter_frontend,
             storage_usage_retention_period,
+            connection_context: Some(connection_context.clone()),
         })
         .await?;
     let session_id = catalog.config().session_id;
