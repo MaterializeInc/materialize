@@ -80,7 +80,7 @@ impl ClientConfig {
     }
 
     /// Adds a `Proxy` to the list of proxies that the client will use.
-    pub fn proxy(mut self, proxy: Proxy) -> ClientConfig {
+    pub fn add_proxy(mut self, proxy: Proxy) -> ClientConfig {
         self.proxies.push(proxy);
         self
     }

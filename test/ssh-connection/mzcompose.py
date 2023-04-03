@@ -69,26 +69,36 @@ def workflow_pg_via_ssh_tunnel(c: Composition) -> None:
 
 
 def workflow_kafka_csr_via_ssh_tunnel(c: Composition) -> None:
-    c.up("zookeeper", "kafka", "schema-registry", "materialized", "ssh-bastion-host")
+    # Configure the SSH bastion host to allow only two connections to be
+    # initiated simultaneously. This is enough to establish *one* Kafka SSH
+    # tunnel and *one* Confluent Schema Registry tunnel simultaneously.
+    # Combined with using a large cluster in kafka-source.td, this ensures that
+    # we only create one SSH tunnel per Kafka broker, rather than one SSH tunnel
+    # per Kafka broker per worker.
+    with c.override(SshBastionHost(max_startups="2")):
+        c.up(
+            "zookeeper", "kafka", "schema-registry", "materialized", "ssh-bastion-host"
+        )
 
-    c.run("testdrive", "setup.td")
+        c.run("testdrive", "setup.td")
 
-    public_key = c.sql_query("select public_key_1 from mz_ssh_tunnel_connections;")[0][
-        0
-    ]
+        public_key = c.sql_query("select public_key_1 from mz_ssh_tunnel_connections;")[
+            0
+        ][0]
 
-    c.exec(
-        "ssh-bastion-host",
-        "bash",
-        "-c",
-        f"echo '{public_key}' > /etc/authorized_keys/mz",
-    )
+        c.exec(
+            "ssh-bastion-host",
+            "bash",
+            "-c",
+            f"echo '{public_key}' > /etc/authorized_keys/mz",
+        )
 
-    c.run("testdrive", "--no-reset", "kafka-source.td")
-    c.kill("ssh-bastion-host")
-    c.run("testdrive", "--no-reset", "kafka-source-after-ssh-failure.td")
-    c.up("ssh-bastion-host")
-    c.run("testdrive", "--no-reset", "kafka-source-after-ssh-restart.td")
+        c.run("testdrive", "--no-reset", "kafka-source.td")
+        c.kill("ssh-bastion-host")
+        c.run("testdrive", "--no-reset", "kafka-source-after-ssh-failure.td")
+
+        c.up("ssh-bastion-host")
+        c.run("testdrive", "--no-reset", "kafka-source-after-ssh-restart.td")
 
 
 # Test that if we restart the bastion AND change its server keys(s), we can

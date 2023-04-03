@@ -34,8 +34,9 @@ use mz_repr::url::any_url;
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_ssh_util::tunnel::{SshTunnelConfig, SshTunnelHandle};
+use mz_ssh_util::tunnel::SshTunnelConfig;
 
+use crate::ssh_tunnels::{ManagedSshTunnelHandle, SshTunnelManager};
 use crate::types::connections::aws::AwsConfig;
 
 pub mod aws;
@@ -119,6 +120,8 @@ pub struct ConnectionContext {
     pub aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     /// A secrets reader.
     pub secrets_reader: Arc<dyn SecretsReader>,
+    /// A manager for SSH tunnels.
+    pub ssh_tunnel_manager: SshTunnelManager,
 }
 
 impl ConnectionContext {
@@ -138,6 +141,7 @@ impl ConnectionContext {
             librdkafka_log_level: mz_ore::tracing::target_level(filter, "librdkafka"),
             aws_external_id_prefix,
             secrets_reader,
+            ssh_tunnel_manager: SshTunnelManager::default(),
         }
     }
 
@@ -147,6 +151,7 @@ impl ConnectionContext {
             librdkafka_log_level: tracing::Level::INFO,
             aws_external_id_prefix: None,
             secrets_reader,
+            ssh_tunnel_manager: SshTunnelManager::default(),
         }
     }
 }
@@ -584,7 +589,7 @@ impl CsrConnection {
                 // computed for every request. This ensures that, if the tunnel
                 // fails and restarts at a new address, requests will start
                 // using the new tunnel address.
-                client_config = client_config.proxy(mz_ccsr::Proxy::custom(move |url| {
+                client_config = client_config.add_proxy(mz_ccsr::Proxy::custom(move |url| {
                     let addr = ssh_tunnel.local_addr();
                     let mut url = url.clone();
                     url.set_host(Some(&addr.ip().to_string()))
@@ -1031,19 +1036,15 @@ impl SshTunnel {
         connection_context: &ConnectionContext,
         remote_host: &str,
         remote_port: u16,
-    ) -> Result<SshTunnelHandle, anyhow::Error> {
-        let secret = connection_context
-            .secrets_reader
-            .read(self.connection_id)
-            .await?;
-        let key_set = SshKeyPairSet::from_bytes(&secret)?;
-        let key_pair = key_set.primary().clone();
-        let config = SshTunnelConfig {
-            host: self.connection.host.clone(),
-            port: self.connection.port,
-            user: self.connection.user.clone(),
-            key_pair,
-        };
-        config.connect(remote_host, remote_port).await
+    ) -> Result<ManagedSshTunnelHandle, anyhow::Error> {
+        connection_context
+            .ssh_tunnel_manager
+            .connect(
+                &*connection_context.secrets_reader,
+                self,
+                remote_host,
+                remote_port,
+            )
+            .await
     }
 }
