@@ -11,6 +11,7 @@ from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
+from materialize.util import MzVersion
 
 
 class RenameIndex(Check):
@@ -28,8 +29,7 @@ class RenameIndex(Check):
 
     def manipulate(self) -> List[Testdrive]:
         fix_ownership = (
-            dedent(
-                """
+            """
                 # When upgrading from old version without roles the indexes are
                 # owned by default_role, thus we have to change the owner
                 # before altering them:
@@ -37,7 +37,6 @@ class RenameIndex(Check):
                 ALTER INDEX rename_index_index1 OWNER TO materialize;
                 ALTER INDEX rename_index_index2 OWNER TO materialize;
                 """
-            )
             if self.base_version >= MzVersion.parse("0.46.0-dev")
             else ""
         )

@@ -44,6 +44,10 @@ class ReplaceEnvironmentdStatefulSet(Action):
         stateful_set.tag = self.new_tag
         stateful_set.replace()
 
+    def join(self, e: Executor) -> None:
+        # execute is blocking already
+        pass
+
 
 class CloudtestUpgrade(Scenario):
     """A Platform Checks scenario that performs an upgrade in cloudtest/K8s"""

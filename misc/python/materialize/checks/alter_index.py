@@ -11,6 +11,7 @@ from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
+from materialize.util import MzVersion
 
 
 def schema() -> str:
@@ -66,8 +67,7 @@ class AlterIndex(Check):
 
     def manipulate(self) -> List[Testdrive]:
         fix_ownership = (
-            dedent(
-                """
+            """
                 # When upgrading from old version without roles the indexes are
                 # owned by default_role, thus we have to change the owner
                 # before altering them:
@@ -75,7 +75,6 @@ class AlterIndex(Check):
                 ALTER INDEX alter_index_table_primary_idx OWNER TO materialize;
                 ALTER INDEX alter_index_source_primary_idx OWNER TO materialize;
                 """
-            )
             if self.base_version >= MzVersion.parse("0.46.0-dev")
             else ""
         )

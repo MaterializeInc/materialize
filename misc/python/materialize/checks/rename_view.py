@@ -11,6 +11,7 @@ from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
+from materialize.util import MzVersion
 
 
 class RenameView(Check):
@@ -28,8 +29,7 @@ class RenameView(Check):
 
     def manipulate(self) -> List[Testdrive]:
         fix_ownership = (
-            dedent(
-                """
+            """
                 # When upgrading from old version without roles the views are
                 # owned by default_role, thus we have to change the owner
                 # before dropping them:
@@ -37,7 +37,6 @@ class RenameView(Check):
                 ALTER VIEW rename_view_viewB2 OWNER TO materialize;
                 ALTER VIEW rename_view_viewA2 OWNER TO materialize;
                 """
-            )
             if self.base_version >= MzVersion.parse("0.46.0-dev")
             else ""
         )

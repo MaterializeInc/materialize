@@ -66,13 +66,11 @@ class Scenario:
 
     def run(self) -> None:
         actions = self.actions()
-        if isinstance(actions[0], StartMz):
-            # The first action is StartMz, configure it implicitly afterwards
-            actions.insert(1, ConfigureMz())
-        else:
-            actions.insert(0, ConfigureMz())
+        # The first action is StartMz, configure it implicitly afterwards
+        actions.insert(1 if isinstance(actions[0], StartMz) else 0, ConfigureMz(self))
         for action in actions:
             action.execute(self.executor)
+            action.join(self.executor)
 
 
 class NoRestartNoUpgrade(Scenario):

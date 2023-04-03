@@ -78,7 +78,10 @@ class Owners(Check):
         )
 
     def _can_run(self) -> bool:
-        return self.base_version >= MzVersion.parse("0.47.0-dev")
+        # The code works from 0.47.0, but object owner only works from 0.48.0.
+        # For the combinations of upgrade tests this is difficult to handle, so
+        # instead only run the test from 0.48.0 on.
+        return self.base_version >= MzVersion.parse("0.48.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(
@@ -99,12 +102,6 @@ class Owners(Check):
         ]
 
     def validate(self) -> Testdrive:
-        owner1 = (
-            "default_owner"
-            if self.base_version < MzVersion.parse("0.48.0-dev")
-            else "owner_role_01"
-        )
-        # TODO: Fix owners in dbs, schemas, types after #18414 is fixed
         return Testdrive(
             # materialize role is not allowed to drop the objects since it is
             # not the owner, verify this:
@@ -121,8 +118,8 @@ class Owners(Check):
                 \\                             List of databases
                    Name    |     Owner     | Encoding | Collate | Ctype | Access privileges
                 -----------+---------------+----------+---------+-------+-------------------
-                 owner_db1 | {owner1} | UTF8     | C       | C     |
-                 owner_db2 | {owner1} | UTF8     | C       | C     |
+                 owner_db1 | owner_role_01 | UTF8     | C       | C     |
+                 owner_db2 | owner_role_01 | UTF8     | C       | C     |
                  owner_db3 | owner_role_01 | UTF8     | C       | C     |
                  owner_db4 | owner_role_02 | UTF8     | C       | C     |
                  owner_db5 | owner_role_01 | UTF8     | C       | C     |
@@ -133,8 +130,8 @@ class Owners(Check):
                 \\        List of schemas
                      Name      |     Owner
                 ---------------+---------------
-                 owner_schema1 | {owner1}
-                 owner_schema2 | {owner1}
+                 owner_schema1 | owner_role_01
+                 owner_schema2 | owner_role_01
                  owner_schema3 | owner_role_01
                  owner_schema4 | owner_role_02
                  owner_schema5 | owner_role_01
@@ -145,8 +142,8 @@ class Owners(Check):
                 \\             List of relations
                  Schema |   Name   | Type  |     Owner
                 --------+----------+-------+---------------
-                 public | owner_t1 | table | {owner1}
-                 public | owner_t2 | table | {owner1}
+                 public | owner_t1 | table | owner_role_01
+                 public | owner_t2 | table | owner_role_01
                  public | owner_t3 | table | owner_role_01
                  public | owner_t4 | table | owner_role_02
                  public | owner_t5 | table | owner_role_01
@@ -157,8 +154,8 @@ class Owners(Check):
                 \\                  List of relations
                  Schema |   Name   | Type  |     Owner     |  Table
                 --------+----------+-------+---------------+----------
-                 public | owner_i1 | index | {owner1} | owner_t1
-                 public | owner_i2 | index | {owner1} | owner_t2
+                 public | owner_i1 | index | owner_role_01 | owner_t1
+                 public | owner_i2 | index | owner_role_01 | owner_t2
                  public | owner_i3 | index | owner_role_01 | owner_t3
                  public | owner_i4 | index | owner_role_02 | owner_t4
                  public | owner_i5 | index | owner_role_01 | owner_t5
@@ -169,8 +166,8 @@ class Owners(Check):
                 \\            List of relations
                  Schema |   Name   | Type |     Owner
                 --------+----------+------+---------------
-                 public | owner_v1 | view | {owner1}
-                 public | owner_v2 | view | {owner1}
+                 public | owner_v1 | view | owner_role_01
+                 public | owner_v2 | view | owner_role_01
                  public | owner_v3 | view | owner_role_01
                  public | owner_v4 | view | owner_role_02
                  public | owner_v5 | view | owner_role_01
@@ -181,8 +178,8 @@ class Owners(Check):
                 \\                   List of relations
                  Schema |   Name    |       Type        |     Owner
                 --------+-----------+-------------------+---------------
-                 public | owner_mv1 | materialized view | {owner1}
-                 public | owner_mv2 | materialized view | {owner1}
+                 public | owner_mv1 | materialized view | owner_role_01
+                 public | owner_mv2 | materialized view | owner_role_01
                  public | owner_mv3 | materialized view | owner_role_01
                  public | owner_mv4 | materialized view | owner_role_02
                  public | owner_mv5 | materialized view | owner_role_01
@@ -190,8 +187,8 @@ class Owners(Check):
                  public | owner_mv7 | materialized view | owner_role_03
 
                 > SELECT mz_types.name, mz_roles.name FROM mz_types JOIN mz_roles ON mz_types.owner_id = mz_roles.id WHERE mz_types.name LIKE 'owner_type%'
-                owner_type1 {owner1}
-                owner_type2 {owner1}
+                owner_type1 owner_role_01
+                owner_type2 owner_role_01
                 owner_type3 owner_role_01
                 owner_type4 owner_role_02
                 owner_type5 owner_role_01
@@ -199,8 +196,8 @@ class Owners(Check):
                 owner_type7 owner_role_03
 
                 > SELECT mz_secrets.name, mz_roles.name FROM mz_secrets JOIN mz_roles ON mz_secrets.owner_id = mz_roles.id WHERE mz_secrets.name LIKE 'owner_secret%'
-                owner_secret1 {owner1}
-                owner_secret2 {owner1}
+                owner_secret1 owner_role_01
+                owner_secret2 owner_role_01
                 owner_secret3 owner_role_01
                 owner_secret4 owner_role_02
                 owner_secret5 owner_role_01
@@ -208,16 +205,16 @@ class Owners(Check):
                 owner_secret7 owner_role_03
 
                 > SELECT mz_sources.name, mz_roles.name FROM mz_sources JOIN mz_roles ON mz_sources.owner_id = mz_roles.id WHERE mz_sources.name LIKE 'owner_source%' AND type = 'load-generator'
-                owner_source1 {owner1}
+                owner_source1 owner_role_01
 
                 > SELECT mz_sinks.name, mz_roles.name FROM mz_sinks JOIN mz_roles ON mz_sinks.owner_id = mz_roles.id WHERE mz_sinks.name LIKE 'owner_sink%'
-                owner_sink1 {owner1}
+                owner_sink1 owner_role_01
 
                 > SELECT mz_clusters.name, mz_roles.name FROM mz_clusters JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id WHERE mz_clusters.name LIKE 'owner_cluster%'
-                owner_cluster1 {owner1}
+                owner_cluster1 owner_role_01
 
                 > SELECT mz_cluster_replicas.name, mz_roles.name FROM mz_cluster_replicas JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id WHERE mz_cluster_replicas.name LIKE 'owner_cluster_r%'
-                owner_cluster_r1 {owner1}
+                owner_cluster_r1 owner_role_01
                 """
             )
             + self._drop_objects("owner_role_01", 5)
