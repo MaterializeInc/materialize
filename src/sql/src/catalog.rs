@@ -32,15 +32,15 @@ use mz_expr::MirScalarExpr;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
-use mz_sql_parser::ast::UnresolvedObjectName;
+use mz_sql_parser::ast::UnresolvedItemName;
 use mz_sql_parser::ast::{Expr, ObjectType};
 use mz_storage_client::types::connections::Connection;
 use mz_storage_client::types::sources::SourceDesc;
 
 use crate::func::Func;
 use crate::names::{
-    Aug, DatabaseId, FullObjectName, FullSchemaName, ObjectId, PartialObjectName,
-    QualifiedObjectName, QualifiedSchemaName, ResolvedDatabaseSpecifier, RoleId, SchemaSpecifier,
+    Aug, DatabaseId, FullItemName, FullSchemaName, ObjectId, PartialItemName, QualifiedItemName,
+    QualifiedSchemaName, ResolvedDatabaseSpecifier, RoleId, SchemaSpecifier,
 };
 use crate::normalize;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
@@ -174,14 +174,13 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     ///
     /// Note that it is not an error if the named item appears in more than one
     /// of the search schemas. The catalog implementation must choose one.
-    fn resolve_item(&self, item_name: &PartialObjectName)
-        -> Result<&dyn CatalogItem, CatalogError>;
+    fn resolve_item(&self, item_name: &PartialItemName) -> Result<&dyn CatalogItem, CatalogError>;
 
     /// Performs the same operation as [`SessionCatalog::resolve_item`] but for
     /// functions within the catalog.
     fn resolve_function(
         &self,
-        item_name: &PartialObjectName,
+        item_name: &PartialItemName,
     ) -> Result<&dyn CatalogItem, CatalogError>;
 
     /// Gets an item by its ID.
@@ -193,7 +192,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     fn get_item(&self, id: &GlobalId) -> &dyn CatalogItem;
 
     /// Reports whether the specified type exists in the catalog.
-    fn item_exists(&self, name: &QualifiedObjectName) -> bool;
+    fn item_exists(&self, name: &QualifiedItemName) -> bool;
 
     /// Gets a cluster by ID.
     fn get_cluster(&self, id: ClusterId) -> &dyn CatalogCluster;
@@ -208,10 +207,10 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Finds a name like `name` that is not already in use.
     ///
     /// If `name` itself is available, it is returned unchanged.
-    fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName;
+    fn find_available_name(&self, name: QualifiedItemName) -> QualifiedItemName;
 
     /// Returns a fully qualified human readable name from fully qualified non-human readable name
-    fn resolve_full_name(&self, name: &QualifiedObjectName) -> FullObjectName;
+    fn resolve_full_name(&self, name: &QualifiedItemName) -> FullItemName;
 
     /// Returns a fully qualified human readable schema name from fully qualified non-human
     /// readable schema name
@@ -478,7 +477,7 @@ pub trait CatalogClusterReplica<'a> {
 /// catalog, and refers to the various entities that belong to a schema.
 pub trait CatalogItem {
     /// Returns the fully qualified name of the catalog item.
-    fn name(&self) -> &QualifiedObjectName;
+    fn name(&self) -> &QualifiedItemName;
 
     /// Returns a stable ID for the catalog item.
     fn id(&self) -> GlobalId;
@@ -490,7 +489,7 @@ pub trait CatalogItem {
     ///
     /// If the catalog item is not of a type that produces data (i.e., a sink or
     /// an index), it returns an error.
-    fn desc(&self, name: &FullObjectName) -> Result<Cow<RelationDesc>, CatalogError>;
+    fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, CatalogError>;
 
     /// Returns the resolved function.
     ///
@@ -1015,14 +1014,14 @@ impl<'a, T> ErsatzCatalog<'a, T> {
     /// describes.
     ///
     /// # Errors
-    /// - If `item` cannot be normalized to a [`PartialObjectName`]
-    /// - If the normalized `PartialObjectName` does not resolve to an item in
+    /// - If `item` cannot be normalized to a [`PartialItemName`]
+    /// - If the normalized `PartialItemName` does not resolve to an item in
     ///   `self.0`.
     pub fn resolve(
         &self,
-        item: UnresolvedObjectName,
-    ) -> Result<(UnresolvedObjectName, &'a T), PlanError> {
-        let name = normalize::unresolved_object_name(item)?;
+        item: UnresolvedItemName,
+    ) -> Result<(UnresolvedItemName, &'a T), PlanError> {
+        let name = normalize::unresolved_item_name(item)?;
 
         let schemas = match self.0.get(&name.item) {
             Some(schemas) => schemas,
@@ -1060,7 +1059,7 @@ impl<'a, T> ErsatzCatalog<'a, T> {
         };
 
         Ok((
-            UnresolvedObjectName::qualified(&[database, schema, &name.item]),
+            UnresolvedItemName::qualified(&[database, schema, &name.item]),
             desc,
         ))
     }

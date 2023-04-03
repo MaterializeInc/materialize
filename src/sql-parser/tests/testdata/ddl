@@ -29,7 +29,7 @@ CREATE TABLE uk_cities (
 ----
 CREATE TABLE uk_cities (name varchar(100) NOT NULL, lat float8 NULL, lng float8, constrained int4 NULL CONSTRAINT pkey PRIMARY KEY NOT NULL UNIQUE CHECK (constrained > 0), ref int4 REFERENCES othertable (a, b))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("uk_cities")]), columns: [ColumnDef { name: Ident("name"), data_type: Other { name: Name(UnresolvedObjectName([Ident("varchar")])), typ_mod: [100] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("lat"), data_type: Other { name: Name(UnresolvedObjectName([Ident("float8")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Null }] }, ColumnDef { name: Ident("lng"), data_type: Other { name: Name(UnresolvedObjectName([Ident("float8")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("constrained"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Null }, ColumnOptionDef { name: Some(Ident("pkey")), option: Unique { is_primary: true } }, ColumnOptionDef { name: None, option: NotNull }, ColumnOptionDef { name: None, option: Unique { is_primary: false } }, ColumnOptionDef { name: None, option: Check(Op { op: Op { namespace: [], op: ">" }, expr1: Identifier([Ident("constrained")]), expr2: Some(Value(Number("0"))) }) }] }, ColumnDef { name: Ident("ref"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: ForeignKey { foreign_table: UnresolvedObjectName([Ident("othertable")]), referred_columns: [Ident("a"), Ident("b")] } }] }], constraints: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("uk_cities")]), columns: [ColumnDef { name: Ident("name"), data_type: Other { name: Name(UnresolvedItemName([Ident("varchar")])), typ_mod: [100] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("lat"), data_type: Other { name: Name(UnresolvedItemName([Ident("float8")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Null }] }, ColumnDef { name: Ident("lng"), data_type: Other { name: Name(UnresolvedItemName([Ident("float8")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("constrained"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Null }, ColumnOptionDef { name: Some(Ident("pkey")), option: Unique { is_primary: true } }, ColumnOptionDef { name: None, option: NotNull }, ColumnOptionDef { name: None, option: Unique { is_primary: false } }, ColumnOptionDef { name: None, option: Check(Op { op: Op { namespace: [], op: ">" }, expr1: Identifier([Ident("constrained")]), expr2: Some(Value(Number("0"))) }) }] }, ColumnDef { name: Ident("ref"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: ForeignKey { foreign_table: UnresolvedItemName([Ident("othertable")]), referred_columns: [Ident("a"), Ident("b")] } }] }], constraints: [], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE t (a int NOT NULL GARBAGE)
@@ -50,7 +50,7 @@ CREATE TABLE types_table (char_col char, bpchar_col bpchar, text_col text, bool_
 ----
 CREATE TABLE types_table (char_col bpchar, bpchar_col bpchar, text_col text, bool_col bool, date_col date, time_col time, timestamp_col timestamp, uuid_col uuid, double_col float8)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("types_table")]), columns: [ColumnDef { name: Ident("char_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("bpchar")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("bpchar_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("bpchar")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("text_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("text")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("bool_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("bool")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("date_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("date")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("time_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("time")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("timestamp_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamp")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("uuid_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("uuid")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("double_col"), data_type: Other { name: Name(UnresolvedObjectName([Ident("float8")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("types_table")]), columns: [ColumnDef { name: Ident("char_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("bpchar")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("bpchar_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("bpchar")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("text_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("bool_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("bool")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("date_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("date")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("time_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("time")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("timestamp_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamp")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("uuid_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("uuid")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("double_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("float8")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE t
@@ -64,14 +64,14 @@ CREATE TABLE t ()
 ----
 CREATE TABLE t ()
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [], constraints: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [], constraints: [], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TEMP TABLE t ()
 ----
 CREATE TEMPORARY TABLE t ()
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [], constraints: [], if_not_exists: false, temporary: true })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [], constraints: [], if_not_exists: false, temporary: true })
 
 parse-statement
 CREATE TABLE foo (bar int,)
@@ -85,14 +85,14 @@ CREATE TABLE foo (bar int list)
 ----
 CREATE TABLE foo (bar int4 list)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("bar"), data_type: List(Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }), collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("bar"), data_type: List(Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }), collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE foo (bar int list list)
 ----
 CREATE TABLE foo (bar int4 list list)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("bar"), data_type: List(List(Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] })), collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("bar"), data_type: List(List(Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] })), collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE tab (foo int,
@@ -106,112 +106,112 @@ CREATE TABLE foo (id int, CONSTRAINT address_pkey PRIMARY KEY (address_id))
 ----
 CREATE TABLE foo (id int4, CONSTRAINT address_pkey PRIMARY KEY (address_id))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: Some(Ident("address_pkey")), columns: [Ident("address_id")], is_primary: true, nulls_not_distinct: false }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: Some(Ident("address_pkey")), columns: [Ident("address_id")], is_primary: true, nulls_not_distinct: false }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE foo (id int, CONSTRAINT uk_task UNIQUE (report_date, task_id))
 ----
 CREATE TABLE foo (id int4, CONSTRAINT uk_task UNIQUE (report_date, task_id))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: Some(Ident("uk_task")), columns: [Ident("report_date"), Ident("task_id")], is_primary: false, nulls_not_distinct: false }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: Some(Ident("uk_task")), columns: [Ident("report_date"), Ident("task_id")], is_primary: false, nulls_not_distinct: false }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE foo (id int, CONSTRAINT uk_task UNIQUE NULLS NOT DISTINCT (report_date, task_id))
 ----
 CREATE TABLE foo (id int4, CONSTRAINT uk_task UNIQUE NULLS NOT DISTINCT (report_date, task_id))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: Some(Ident("uk_task")), columns: [Ident("report_date"), Ident("task_id")], is_primary: false, nulls_not_distinct: true }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: Some(Ident("uk_task")), columns: [Ident("report_date"), Ident("task_id")], is_primary: false, nulls_not_distinct: true }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE foo (id int, CONSTRAINT customer_address_id_fkey FOREIGN KEY (address_id) REFERENCES public.address(address_id))
 ----
 CREATE TABLE foo (id int4, CONSTRAINT customer_address_id_fkey FOREIGN KEY (address_id) REFERENCES public.address(address_id))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [ForeignKey { name: Some(Ident("customer_address_id_fkey")), columns: [Ident("address_id")], foreign_table: Name(UnresolvedObjectName([Ident("public"), Ident("address")])), referred_columns: [Ident("address_id")] }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [ForeignKey { name: Some(Ident("customer_address_id_fkey")), columns: [Ident("address_id")], foreign_table: Name(UnresolvedItemName([Ident("public"), Ident("address")])), referred_columns: [Ident("address_id")] }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TEMPORARY TABLE foo (id int, CONSTRAINT ck CHECK (rtrim(ltrim(ref_code)) <> ''))
 ----
 CREATE TEMPORARY TABLE foo (id int4, CONSTRAINT ck CHECK (rtrim(ltrim(ref_code)) <> ''))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: Some(Ident("ck")), expr: Op { op: Op { namespace: [], op: "<>" }, expr1: Function(Function { name: UnresolvedObjectName([Ident("rtrim")]), args: Args { args: [Function(Function { name: UnresolvedObjectName([Ident("ltrim")]), args: Args { args: [Identifier([Ident("ref_code")])], order_by: [] }, filter: None, over: None, distinct: false })], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(String(""))) } }], if_not_exists: false, temporary: true })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: Some(Ident("ck")), expr: Op { op: Op { namespace: [], op: "<>" }, expr1: Function(Function { name: UnresolvedItemName([Ident("rtrim")]), args: Args { args: [Function(Function { name: UnresolvedItemName([Ident("ltrim")]), args: Args { args: [Identifier([Ident("ref_code")])], order_by: [] }, filter: None, over: None, distinct: false })], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(String(""))) } }], if_not_exists: false, temporary: true })
 
 parse-statement
 CREATE TABLE foo (id int, PRIMARY KEY (foo, bar))
 ----
 CREATE TABLE foo (id int4, PRIMARY KEY (foo, bar))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: None, columns: [Ident("foo"), Ident("bar")], is_primary: true, nulls_not_distinct: false }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: None, columns: [Ident("foo"), Ident("bar")], is_primary: true, nulls_not_distinct: false }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE foo (id int, UNIQUE (id))
 ----
 CREATE TABLE foo (id int4, UNIQUE (id))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: None, columns: [Ident("id")], is_primary: false, nulls_not_distinct: false }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: None, columns: [Ident("id")], is_primary: false, nulls_not_distinct: false }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE foo (id int, FOREIGN KEY (foo, bar) REFERENCES anothertable(foo, bar))
 ----
 CREATE TABLE foo (id int4, FOREIGN KEY (foo, bar) REFERENCES anothertable(foo, bar))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [ForeignKey { name: None, columns: [Ident("foo"), Ident("bar")], foreign_table: Name(UnresolvedObjectName([Ident("anothertable")])), referred_columns: [Ident("foo"), Ident("bar")] }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [ForeignKey { name: None, columns: [Ident("foo"), Ident("bar")], foreign_table: Name(UnresolvedItemName([Ident("anothertable")])), referred_columns: [Ident("foo"), Ident("bar")] }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE foo (id int, CHECK (end_date > start_date OR end_date IS NULL))
 ----
 CREATE TABLE foo (id int4, CHECK (end_date > start_date OR end_date IS NULL))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: Or { left: Op { op: Op { namespace: [], op: ">" }, expr1: Identifier([Ident("end_date")]), expr2: Some(Identifier([Ident("start_date")])) }, right: IsExpr { expr: Identifier([Ident("end_date")]), construct: Null, negated: false } } }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: Or { left: Op { op: Op { namespace: [], op: ">" }, expr1: Identifier([Ident("end_date")]), expr2: Some(Identifier([Ident("start_date")])) }, right: IsExpr { expr: Identifier([Ident("end_date")]), construct: Null, negated: false } } }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE foo (id int, CHECK (end_date > start_date OR end_date IS UNKNOWN))
 ----
 CREATE TABLE foo (id int4, CHECK (end_date > start_date OR end_date IS UNKNOWN))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: Or { left: Op { op: Op { namespace: [], op: ">" }, expr1: Identifier([Ident("end_date")]), expr2: Some(Identifier([Ident("start_date")])) }, right: IsExpr { expr: Identifier([Ident("end_date")]), construct: Unknown, negated: false } } }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: Or { left: Op { op: Op { namespace: [], op: ">" }, expr1: Identifier([Ident("end_date")]), expr2: Some(Identifier([Ident("start_date")])) }, right: IsExpr { expr: Identifier([Ident("end_date")]), construct: Unknown, negated: false } } }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE foo (id int, CHECK (start_date IS TRUE))
 ----
 CREATE TABLE foo (id int4, CHECK (start_date IS TRUE))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: IsExpr { expr: Identifier([Ident("start_date")]), construct: True, negated: false } }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: IsExpr { expr: Identifier([Ident("start_date")]), construct: True, negated: false } }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TEMP TABLE t (c schema.type)
 ----
 CREATE TEMPORARY TABLE t (c schema.type)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedObjectName([Ident("schema"), Ident("type")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: true })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("schema"), Ident("type")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: true })
 
 parse-statement
 CREATE TABLE t (c db.schema.type)
 ----
 CREATE TABLE t (c db.schema.type)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedObjectName([Ident("db"), Ident("schema"), Ident("type")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("type")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE t (c "db"."schema"."type")
 ----
 CREATE TABLE t (c db.schema.type)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedObjectName([Ident("db"), Ident("schema"), Ident("type")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("type")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE t (c something.db.schema.type)
 ----
 CREATE TABLE t (c something.db.schema.type)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedObjectName([Ident("something"), Ident("db"), Ident("schema"), Ident("type")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("something"), Ident("db"), Ident("schema"), Ident("type")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TEMP TABLE t (c db.schema.type(0,1,100))
 ----
 CREATE TEMPORARY TABLE t (c db.schema.type(0, 1, 100))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedObjectName([Ident("db"), Ident("schema"), Ident("type")])), typ_mod: [0, 1, 100] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: true })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("type")])), typ_mod: [0, 1, 100] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: true })
 
 parse-statement
 CREATE TABLE t (c time with time zone (0,1,100))
@@ -239,14 +239,14 @@ CREATE TABLE t (c "type"(1))
 ----
 CREATE TABLE t (c type(1))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedObjectName([Ident("type")])), typ_mod: [1] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("type")])), typ_mod: [1] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE t (c "type"(1) list list)
 ----
 CREATE TABLE t (c type(1) list list)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: List(List(Other { name: Name(UnresolvedObjectName([Ident("type")])), typ_mod: [1] })), collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: List(List(Other { name: Name(UnresolvedItemName([Ident("type")])), typ_mod: [1] })), collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE DATABASE IF EXISTS foo
@@ -288,35 +288,35 @@ CREATE VIEW myschema.myview AS SELECT foo FROM bar
 ----
 CREATE VIEW myschema.myview AS SELECT foo FROM bar
 =>
-CreateView(CreateViewStatement { if_exists: Error, temporary: false, definition: ViewDefinition { name: UnresolvedObjectName([Ident("myschema"), Ident("myview")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
+CreateView(CreateViewStatement { if_exists: Error, temporary: false, definition: ViewDefinition { name: UnresolvedItemName([Ident("myschema"), Ident("myview")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
 
 parse-statement
 CREATE TEMPORARY VIEW myview AS SELECT foo FROM bar
 ----
 CREATE TEMPORARY VIEW myview AS SELECT foo FROM bar
 =>
-CreateView(CreateViewStatement { if_exists: Error, temporary: true, definition: ViewDefinition { name: UnresolvedObjectName([Ident("myview")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
+CreateView(CreateViewStatement { if_exists: Error, temporary: true, definition: ViewDefinition { name: UnresolvedItemName([Ident("myview")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
 
 parse-statement
 CREATE TEMP VIEW myview AS SELECT foo FROM bar
 ----
 CREATE TEMPORARY VIEW myview AS SELECT foo FROM bar
 =>
-CreateView(CreateViewStatement { if_exists: Error, temporary: true, definition: ViewDefinition { name: UnresolvedObjectName([Ident("myview")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
+CreateView(CreateViewStatement { if_exists: Error, temporary: true, definition: ViewDefinition { name: UnresolvedItemName([Ident("myview")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
 
 parse-statement
 CREATE OR REPLACE VIEW v AS SELECT 1
 ----
 CREATE OR REPLACE VIEW v AS SELECT 1
 =>
-CreateView(CreateViewStatement { if_exists: Replace, temporary: false, definition: ViewDefinition { name: UnresolvedObjectName([Ident("v")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
+CreateView(CreateViewStatement { if_exists: Replace, temporary: false, definition: ViewDefinition { name: UnresolvedItemName([Ident("v")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
 
 parse-statement
 CREATE VIEW IF NOT EXISTS v AS SELECT 1
 ----
 CREATE VIEW IF NOT EXISTS v AS SELECT 1
 =>
-CreateView(CreateViewStatement { if_exists: Skip, temporary: false, definition: ViewDefinition { name: UnresolvedObjectName([Ident("v")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
+CreateView(CreateViewStatement { if_exists: Skip, temporary: false, definition: ViewDefinition { name: UnresolvedItemName([Ident("v")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
 
 parse-statement
 CREATE OR REPLACE VIEW IF NOT EXISTS v AS SELECT 1
@@ -330,91 +330,91 @@ CREATE VIEW v (has, cols) AS SELECT 1, 2
 ----
 CREATE VIEW v (has, cols) AS SELECT 1, 2
 =>
-CreateView(CreateViewStatement { if_exists: Error, temporary: false, definition: ViewDefinition { name: UnresolvedObjectName([Ident("v")]), columns: [Ident("has"), Ident("cols")], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }, Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
+CreateView(CreateViewStatement { if_exists: Error, temporary: false, definition: ViewDefinition { name: UnresolvedItemName([Ident("v")]), columns: [Ident("has"), Ident("cols")], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }, Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
 
 parse-statement
 CREATE VIEW IF NOT EXISTS myschema.myview AS SELECT foo FROM bar
 ----
 CREATE VIEW IF NOT EXISTS myschema.myview AS SELECT foo FROM bar
 =>
-CreateView(CreateViewStatement { if_exists: Skip, temporary: false, definition: ViewDefinition { name: UnresolvedObjectName([Ident("myschema"), Ident("myview")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
+CreateView(CreateViewStatement { if_exists: Skip, temporary: false, definition: ViewDefinition { name: UnresolvedItemName([Ident("myschema"), Ident("myview")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
 
 parse-statement
 CREATE MATERIALIZED VIEW myschema.myview AS SELECT foo FROM bar
 ----
 CREATE MATERIALIZED VIEW myschema.myview AS SELECT foo FROM bar
 =>
-CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedObjectName([Ident("myschema"), Ident("myview")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
+CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("myschema"), Ident("myview")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
 
 parse-statement
 CREATE OR REPLACE MATERIALIZED VIEW v AS SELECT 1
 ----
 CREATE OR REPLACE MATERIALIZED VIEW v AS SELECT 1
 =>
-CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Replace, name: UnresolvedObjectName([Ident("v")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
+CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Replace, name: UnresolvedItemName([Ident("v")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
 
 parse-statement
 CREATE MATERIALIZED VIEW IF NOT EXISTS v AS SELECT 1
 ----
 CREATE MATERIALIZED VIEW IF NOT EXISTS v AS SELECT 1
 =>
-CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Skip, name: UnresolvedObjectName([Ident("v")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
+CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Skip, name: UnresolvedItemName([Ident("v")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
 
 parse-statement
 CREATE MATERIALIZED VIEW v (has, cols) AS SELECT 1, 2
 ----
 CREATE MATERIALIZED VIEW v (has, cols) AS SELECT 1, 2
 =>
-CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedObjectName([Ident("v")]), columns: [Ident("has"), Ident("cols")], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }, Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
+CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("v")]), columns: [Ident("has"), Ident("cols")], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }, Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
 
 parse-statement
 CREATE MATERIALIZED VIEW v IN CLUSTER bar AS SELECT 1
 ----
 CREATE MATERIALIZED VIEW v IN CLUSTER bar AS SELECT 1
 =>
-CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedObjectName([Ident("v")]), columns: [], in_cluster: Some(Unresolved(Ident("bar"))), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
+CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("v")]), columns: [], in_cluster: Some(Unresolved(Ident("bar"))), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
 
 parse-statement
 CREATE MATERIALIZED VIEW v IN CLUSTER [1] AS SELECT 1
 ----
 CREATE MATERIALIZED VIEW v IN CLUSTER [1] AS SELECT 1
 =>
-CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedObjectName([Ident("v")]), columns: [], in_cluster: Some(Resolved("1")), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
+CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("v")]), columns: [], in_cluster: Some(Resolved("1")), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
 
 parse-statement
 CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES ('use1-az1', 'use1-az4'))
 ----
 CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME = 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES = ('use1-az1', 'use1-az4'))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("privatelinkconn")]), connection: AwsPrivatelink { with_options: [AwsPrivatelinkConnectionOption { name: ServiceName, value: Some(Value(String("com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc"))) }, AwsPrivatelinkConnectionOption { name: AvailabilityZones, value: Some(Sequence([Value(String("use1-az1")), Value(String("use1-az4"))])) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("privatelinkconn")]), connection: AwsPrivatelink { with_options: [AwsPrivatelinkConnectionOption { name: ServiceName, value: Some(Value(String("com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc"))) }, AwsPrivatelinkConnectionOption { name: AvailabilityZones, value: Some(Sequence([Value(String("use1-az1")), Value(String("use1-az4"))])) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CONNECTION privatelinkconn FOR AWS PRIVATELINK SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES ('use1-az1', 'use1-az4')
 ----
 CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME = 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES = ('use1-az1', 'use1-az4'))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("privatelinkconn")]), connection: AwsPrivatelink { with_options: [AwsPrivatelinkConnectionOption { name: ServiceName, value: Some(Value(String("com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc"))) }, AwsPrivatelinkConnectionOption { name: AvailabilityZones, value: Some(Sequence([Value(String("use1-az1")), Value(String("use1-az4"))])) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("privatelinkconn")]), connection: AwsPrivatelink { with_options: [AwsPrivatelinkConnectionOption { name: ServiceName, value: Some(Value(String("com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc"))) }, AwsPrivatelinkConnectionOption { name: AvailabilityZones, value: Some(Sequence([Value(String("use1-az1")), Value(String("use1-az4"))])) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CONNECTION pgconn FOR postgres HOST foo, PORT 1234, SSL CERTIFICATE AUTHORITY 'foo', SSH TUNNEL tun
 ----
 CREATE CONNECTION pgconn TO POSTGRES (HOST = foo, PORT = 1234, SSL CERTIFICATE AUTHORITY = 'foo', SSH TUNNEL = tun)
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("pgconn")]), connection: Postgres { with_options: [PostgresConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, PostgresConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("foo"))) }, PostgresConnectionOption { name: SshTunnel, value: Some(Object(Name(UnresolvedObjectName([Ident("tun")])))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("pgconn")]), connection: Postgres { with_options: [PostgresConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, PostgresConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("foo"))) }, PostgresConnectionOption { name: SshTunnel, value: Some(Item(Name(UnresolvedItemName([Ident("tun")])))) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK db.schema.item, PORT 1234)
 ----
 CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK = db.schema.item, PORT = 1234)
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("pgconn")]), connection: Postgres { with_options: [PostgresConnectionOption { name: AwsPrivatelink, value: Some(Object(Name(UnresolvedObjectName([Ident("db"), Ident("schema"), Ident("item")])))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("pgconn")]), connection: Postgres { with_options: [PostgresConnectionOption { name: AwsPrivatelink, value: Some(Item(Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK db.schema.item, PORT 1234, HOST foo)
 ----
 CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK = db.schema.item, PORT = 1234, HOST = foo)
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("pgconn")]), connection: Postgres { with_options: [PostgresConnectionOption { name: AwsPrivatelink, value: Some(Object(Name(UnresolvedObjectName([Ident("db"), Ident("schema"), Ident("item")])))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, PostgresConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("pgconn")]), connection: Postgres { with_options: [PostgresConnectionOption { name: AwsPrivatelink, value: Some(Item(Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, PostgresConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }] }, if_not_exists: false })
 
 
 parse-statement
@@ -422,42 +422,42 @@ CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red');
 ----
 CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (REPLICATION FACTOR = 7, RETENTION MS = 10000, RETENTION BYTES = 10000000000, TOPIC 'topic') FORMAT BYTES
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (REPLICATION FACTOR = 7, RETENTION MS = 10000, RETENTION BYTES = 10000000000, TOPIC = 'topic') FORMAT BYTES
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: ReplicationFactor, value: Some(Value(Number("7"))) }, KafkaConfigOption { name: RetentionMs, value: Some(Value(Number("10000"))) }, KafkaConfigOption { name: RetentionBytes, value: Some(Value(Number("10000000000"))) }, KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [] })
+CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: ReplicationFactor, value: Some(Value(Number("7"))) }, KafkaConfigOption { name: RetentionMs, value: Some(Value(Number("10000"))) }, KafkaConfigOption { name: RetentionBytes, value: Some(Value(Number("10000000000"))) }, KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [] })
 
 parse-statement
 CREATE SOURCE psychic IN CLUSTER c FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red');
 ----
 CREATE SOURCE psychic IN CLUSTER c FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), in_cluster: Some(Unresolved(Ident("c"))), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: Some(Unresolved(Ident("c"))), col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) FORMAT BYTES
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') KEY (a, b) FORMAT BYTES
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }) }, format: Some(Bytes), envelope: None, with_options: [] })
+CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }) }, format: Some(Bytes), envelope: None, with_options: [] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) NOT ENFORCED FORMAT BYTES
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') KEY (a, b) NOT ENFORCED FORMAT BYTES
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: true }) }, format: Some(Bytes), envelope: None, with_options: [] })
+CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: true }) }, format: Some(Bytes), envelope: None, with_options: [] })
 
 parse-statement
 CREATE SINK foo IN CLUSTER c FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) NOT ENFORCED FORMAT BYTES
 ----
 CREATE SINK foo IN CLUSTER c FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') KEY (a, b) NOT ENFORCED FORMAT BYTES
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: Some(Unresolved(Ident("c"))), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: true }) }, format: Some(Bytes), envelope: None, with_options: [] })
+CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: Some(Unresolved(Ident("c"))), if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: true }) }, format: Some(Bytes), envelope: None, with_options: [] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT BYTES) FORMAT BYTES
@@ -485,105 +485,105 @@ CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES 
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES WITH (SNAPSHOT = true)
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(true))) }] })
+CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(true))) }] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES WITH (SNAPSHOT = false)
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES WITH (SNAPSHOT = false)
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(false))) }] })
+CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(false))) }] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES WITH (SIZE = 'xlarge')
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES WITH (SIZE = 'xlarge')
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Size, value: Some(Value(String("xlarge"))) }] })
+CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Size, value: Some(Value(String("xlarge"))) }] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES WITH (SIZE = 'xlarge', SNAPSHOT = true)
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES WITH (SIZE = 'xlarge', SNAPSHOT = true)
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Size, value: Some(Value(String("xlarge"))) }, CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(true))) }] })
+CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Size, value: Some(Value(String("xlarge"))) }, CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(true))) }] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES WITH (SIZE = 'xlarge', SNAPSHOT = true)
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES WITH (SIZE = 'xlarge', SNAPSHOT = true)
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Size, value: Some(Value(String("xlarge"))) }, CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(true))) }] })
+CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Size, value: Some(Value(String("xlarge"))) }, CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(true))) }] })
 
 parse-statement
 CREATE INDEX foo ON myschema.bar (a, b)
 ----
 CREATE INDEX foo ON myschema.bar (a, b)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX foo ON myschema.bar USING arrangement (a, b)
 ----
 CREATE INDEX foo ON myschema.bar (a, b)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX foo ON myschema.bar (a, b) WITH (LOGICAL COMPACTION WINDOW = 0)
 ----
 CREATE INDEX foo ON myschema.bar (a, b) WITH (LOGICAL COMPACTION WINDOW = 0)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [IndexOption { name: LogicalCompactionWindow, value: Some(Value(Number("0"))) }], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [IndexOption { name: LogicalCompactionWindow, value: Some(Value(Number("0"))) }], if_not_exists: false })
 
 parse-statement
 CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop WHERE boop.z = z)), delta)
 ----
 CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop WHERE boop.z = z)), delta)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("fizz")), in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("baz")])), key_parts: Some([Function(Function { name: UnresolvedObjectName([Ident("ascii")]), args: Args { args: [Identifier([Ident("x")])], order_by: [] }, filter: None, over: None, distinct: false }), IsExpr { expr: Identifier([Ident("a")]), construct: Null, negated: true }, Nested(Exists(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("y")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("boop")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("boop"), Ident("z")]), expr2: Some(Identifier([Ident("z")])) }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None })), Identifier([Ident("delta")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("fizz")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("baz")])), key_parts: Some([Function(Function { name: UnresolvedItemName([Ident("ascii")]), args: Args { args: [Identifier([Ident("x")])], order_by: [] }, filter: None, over: None, distinct: false }), IsExpr { expr: Identifier([Ident("a")]), construct: Null, negated: true }, Nested(Exists(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("y")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("boop")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("boop"), Ident("z")]), expr2: Some(Identifier([Ident("z")])) }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None })), Identifier([Ident("delta")])]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX ind ON tab ((col + 1))
 ----
 CREATE INDEX ind ON tab ((col + 1))
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("ind")), in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("tab")])), key_parts: Some([Nested(Op { op: Op { namespace: [], op: "+" }, expr1: Identifier([Ident("col")]), expr2: Some(Value(Number("1"))) })]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("ind")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("tab")])), key_parts: Some([Nested(Op { op: Op { namespace: [], op: "+" }, expr1: Identifier([Ident("col")]), expr2: Some(Value(Number("1"))) })]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX qualifiers ON no_parentheses (alpha.omega)
 ----
 CREATE INDEX qualifiers ON no_parentheses (alpha.omega)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("qualifiers")), in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("no_parentheses")])), key_parts: Some([Identifier([Ident("alpha"), Ident("omega")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("qualifiers")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("no_parentheses")])), key_parts: Some([Identifier([Ident("alpha"), Ident("omega")])]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX foo IN CLUSTER bar ON myschema.bar (a, b)
 ----
 CREATE INDEX foo IN CLUSTER bar ON myschema.bar (a, b)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: Some(Unresolved(Ident("bar"))), on_name: Name(UnresolvedObjectName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: Some(Unresolved(Ident("bar"))), on_name: Name(UnresolvedItemName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX foo IN CLUSTER [1] ON myschema.bar (a, b)
 ----
 CREATE INDEX foo IN CLUSTER [1] ON myschema.bar (a, b)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: Some(Resolved("1")), on_name: Name(UnresolvedObjectName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: Some(Resolved("1")), on_name: Name(UnresolvedItemName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE DEFAULT INDEX ON tab
 ----
 CREATE DEFAULT INDEX ON tab
 =>
-CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("tab")])), key_parts: None, with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: Name(UnresolvedItemName([Ident("tab")])), key_parts: None, with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE DEFAULT INDEX IF NOT EXISTS ON tab
 ----
 CREATE DEFAULT INDEX IF NOT EXISTS ON tab
 =>
-CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("tab")])), key_parts: None, with_options: [], if_not_exists: true })
+CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: Name(UnresolvedItemName([Ident("tab")])), key_parts: None, with_options: [], if_not_exists: true })
 
 parse-statement
 CREATE DEFAULT INDEX ON tab (a, b)
@@ -604,7 +604,7 @@ CREATE INDEX ON tab (a, b)
 ----
 CREATE INDEX ON tab (a, b)
 =>
-CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("tab")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: Name(UnresolvedItemName([Ident("tab")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX IF NOT EXISTS ON tab (a, b)
@@ -695,14 +695,14 @@ DROP TABLE foo
 ----
 DROP TABLE foo
 =>
-DropObjects(DropObjectsStatement { object_type: Table, if_exists: false, names: [UnresolvedObjectName([Ident("foo")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: Table, if_exists: false, names: [UnresolvedItemName([Ident("foo")])], cascade: false })
 
 parse-statement
 DROP TABLE IF EXISTS foo, bar CASCADE
 ----
 DROP TABLE IF EXISTS foo, bar CASCADE
 =>
-DropObjects(DropObjectsStatement { object_type: Table, if_exists: true, names: [UnresolvedObjectName([Ident("foo")]), UnresolvedObjectName([Ident("bar")])], cascade: true })
+DropObjects(DropObjectsStatement { object_type: Table, if_exists: true, names: [UnresolvedItemName([Ident("foo")]), UnresolvedItemName([Ident("bar")])], cascade: true })
 
 parse-statement
 DROP TABLE
@@ -723,63 +723,63 @@ DROP VIEW myschema.myview
 ----
 DROP VIEW myschema.myview
 =>
-DropObjects(DropObjectsStatement { object_type: View, if_exists: false, names: [UnresolvedObjectName([Ident("myschema"), Ident("myview")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: View, if_exists: false, names: [UnresolvedItemName([Ident("myschema"), Ident("myview")])], cascade: false })
 
 parse-statement
 DROP MATERIALIZED VIEW myschema.myview
 ----
 DROP MATERIALIZED VIEW myschema.myview
 =>
-DropObjects(DropObjectsStatement { object_type: MaterializedView, if_exists: false, names: [UnresolvedObjectName([Ident("myschema"), Ident("myview")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: MaterializedView, if_exists: false, names: [UnresolvedItemName([Ident("myschema"), Ident("myview")])], cascade: false })
 
 parse-statement
 DROP SOURCE myschema.mydatasource
 ----
 DROP SOURCE myschema.mydatasource
 =>
-DropObjects(DropObjectsStatement { object_type: Source, if_exists: false, names: [UnresolvedObjectName([Ident("myschema"), Ident("mydatasource")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: Source, if_exists: false, names: [UnresolvedItemName([Ident("myschema"), Ident("mydatasource")])], cascade: false })
 
 parse-statement
 DROP INDEX IF EXISTS myschema.myindex
 ----
 DROP INDEX IF EXISTS myschema.myindex
 =>
-DropObjects(DropObjectsStatement { object_type: Index, if_exists: true, names: [UnresolvedObjectName([Ident("myschema"), Ident("myindex")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: Index, if_exists: true, names: [UnresolvedItemName([Ident("myschema"), Ident("myindex")])], cascade: false })
 
 parse-statement
 SUBSCRIBE foo.bar
 ----
 SUBSCRIBE foo.bar
 =>
-Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: None })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: None })
 
 parse-statement
 SUBSCRIBE TO foo.bar
 ----
 SUBSCRIBE foo.bar
 =>
-Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: None })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: None })
 
 parse-statement
 SUBSCRIBE foo.bar AS OF 123
 ----
 SUBSCRIBE foo.bar AS OF 123
 =>
-Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Value(Number("123")))), up_to: None })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Value(Number("123")))), up_to: None })
 
 parse-statement
 SUBSCRIBE foo.bar AS OF now()
 ----
 SUBSCRIBE foo.bar AS OF now()
 =>
-Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: None })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: None })
 
 parse-statement
 SUBSCRIBE foo.bar WITH (SNAPSHOT) AS OF now()
 ----
 SUBSCRIBE foo.bar WITH (SNAPSHOT) AS OF now()
 =>
-Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [SubscribeOption { name: Snapshot, value: None }], as_of: Some(At(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: None })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [SubscribeOption { name: Snapshot, value: None }], as_of: Some(At(Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: None })
 
 parse-statement
 SUBSCRIBE foo.bar WITH (SNAPSHOT = false, TIMESTAMPS) AS OF now()
@@ -793,28 +793,28 @@ SUBSCRIBE foo.bar WITH (SNAPSHOT false)
 ----
 SUBSCRIBE foo.bar WITH (SNAPSHOT = false)
 =>
-Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [SubscribeOption { name: Snapshot, value: Some(Value(Boolean(false))) }], as_of: None, up_to: None })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [SubscribeOption { name: Snapshot, value: Some(Value(Boolean(false))) }], as_of: None, up_to: None })
 
 parse-statement
 SUBSCRIBE (SELECT * FROM a)
 ----
 SUBSCRIBE (SELECT * FROM a)
 =>
-Subscribe(SubscribeStatement { relation: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: [], as_of: None, up_to: None })
+Subscribe(SubscribeStatement { relation: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("a")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: [], as_of: None, up_to: None })
 
 parse-statement
 SUBSCRIBE foo.bar AS OF now() UP TO now() + interval '1' day
 ----
 SUBSCRIBE foo.bar AS OF now() UP TO now() + INTERVAL '1' DAY
 =>
-Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: Some(Op { op: Op { namespace: [], op: "+" }, expr1: Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(Interval(IntervalValue { value: "1", precision_high: Year, precision_low: Day, fsec_max_precision: None }))) }) })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: Some(Op { op: Op { namespace: [], op: "+" }, expr1: Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(Interval(IntervalValue { value: "1", precision_high: Year, precision_low: Day, fsec_max_precision: None }))) }) })
 
 parse-statement
 SUBSCRIBE foo.bar UP TO now() + interval '1' day
 ----
 SUBSCRIBE foo.bar UP TO now() + INTERVAL '1' DAY
 =>
-Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: Some(Op { op: Op { namespace: [], op: "+" }, expr1: Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(Interval(IntervalValue { value: "1", precision_high: Year, precision_low: Day, fsec_max_precision: None }))) }) })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: Some(Op { op: Op { namespace: [], op: "+" }, expr1: Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(Interval(IntervalValue { value: "1", precision_high: Year, precision_low: Day, fsec_max_precision: None }))) }) })
 
 parse-statement
 CREATE TABLE public.customer (
@@ -928,14 +928,14 @@ ALTER SOURCE name SET (SIZE LARGE)
 ----
 ALTER SOURCE name SET (SIZE = large)
 =>
-AlterSource(AlterSourceStatement { source_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: SetOptions([CreateSourceOption { name: Size, value: Some(Ident(Ident("large"))) }]) })
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("name")]), if_exists: false, action: SetOptions([CreateSourceOption { name: Size, value: Some(Ident(Ident("large"))) }]) })
 
 parse-statement
 ALTER SOURCE name RESET (SIZE)
 ----
 ALTER SOURCE name RESET (SIZE)
 =>
-AlterSource(AlterSourceStatement { source_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: ResetOptions([Size]) })
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("name")]), if_exists: false, action: ResetOptions([Size]) })
 
 
 parse-statement
@@ -964,21 +964,21 @@ ALTER SINK name SET (SIZE LARGE)
 ----
 ALTER SINK name SET (SIZE = large)
 =>
-AlterSink(AlterSinkStatement { sink_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: SetOptions([CreateSinkOption { name: Size, value: Some(Ident(Ident("large"))) }]) })
+AlterSink(AlterSinkStatement { sink_name: UnresolvedItemName([Ident("name")]), if_exists: false, action: SetOptions([CreateSinkOption { name: Size, value: Some(Ident(Ident("large"))) }]) })
 
 parse-statement
 ALTER SINK name RESET (SIZE)
 ----
 ALTER SINK name RESET (SIZE)
 =>
-AlterSink(AlterSinkStatement { sink_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: ResetOptions([Size]) })
+AlterSink(AlterSinkStatement { sink_name: UnresolvedItemName([Ident("name")]), if_exists: false, action: ResetOptions([Size]) })
 
 parse-statement
 ALTER INDEX name RENAME TO name2
 ----
 ALTER INDEX name RENAME TO name2
 =>
-AlterObjectRename(AlterObjectRenameStatement { object_type: Index, if_exists: false, name: UnresolvedObjectName([Ident("name")]), to_item_name: Ident("name2") })
+AlterObjectRename(AlterObjectRenameStatement { object_type: Index, if_exists: false, name: UnresolvedItemName([Ident("name")]), to_item_name: Ident("name2") })
 
 parse-statement
 ALTER INDEX i1 misplaced
@@ -999,14 +999,14 @@ ALTER VIEW name RENAME TO name2
 ----
 ALTER VIEW name RENAME TO name2
 =>
-AlterObjectRename(AlterObjectRenameStatement { object_type: View, if_exists: false, name: UnresolvedObjectName([Ident("name")]), to_item_name: Ident("name2") })
+AlterObjectRename(AlterObjectRenameStatement { object_type: View, if_exists: false, name: UnresolvedItemName([Ident("name")]), to_item_name: Ident("name2") })
 
 parse-statement
 ALTER MATERIALIZED VIEW name RENAME TO name2
 ----
 ALTER MATERIALIZED VIEW name RENAME TO name2
 =>
-AlterObjectRename(AlterObjectRenameStatement { object_type: MaterializedView, if_exists: false, name: UnresolvedObjectName([Ident("name")]), to_item_name: Ident("name2") })
+AlterObjectRename(AlterObjectRenameStatement { object_type: MaterializedView, if_exists: false, name: UnresolvedItemName([Ident("name")]), to_item_name: Ident("name2") })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS ()
@@ -1154,21 +1154,21 @@ DROP CLUSTER cluster
 ----
 DROP CLUSTER cluster
 =>
-DropClusters(DropClustersStatement { if_exists: false, names: [UnresolvedObjectName([Ident("cluster")])], cascade: false })
+DropClusters(DropClustersStatement { if_exists: false, names: [UnresolvedItemName([Ident("cluster")])], cascade: false })
 
 parse-statement
 DROP CLUSTER IF EXISTS cluster
 ----
 DROP CLUSTER IF EXISTS cluster
 =>
-DropClusters(DropClustersStatement { if_exists: true, names: [UnresolvedObjectName([Ident("cluster")])], cascade: false })
+DropClusters(DropClustersStatement { if_exists: true, names: [UnresolvedItemName([Ident("cluster")])], cascade: false })
 
 parse-statement
 DROP CLUSTER IF EXISTS cluster RESTRICT
 ----
 DROP CLUSTER IF EXISTS cluster
 =>
-DropClusters(DropClustersStatement { if_exists: true, names: [UnresolvedObjectName([Ident("cluster")])], cascade: false })
+DropClusters(DropClustersStatement { if_exists: true, names: [UnresolvedItemName([Ident("cluster")])], cascade: false })
 
 parse-statement
 DROP CLUSTER REPLICA r1, r2
@@ -1196,35 +1196,35 @@ DROP CLUSTER IF EXISTS cluster CASCADE
 ----
 DROP CLUSTER IF EXISTS cluster CASCADE
 =>
-DropClusters(DropClustersStatement { if_exists: true, names: [UnresolvedObjectName([Ident("cluster")])], cascade: true })
+DropClusters(DropClustersStatement { if_exists: true, names: [UnresolvedItemName([Ident("cluster")])], cascade: true })
 
 parse-statement
 CREATE SECRET secret AS decode('c2VjcmV0Cg==', 'base64')
 ----
 CREATE SECRET secret AS decode('c2VjcmV0Cg==', 'base64')
 =>
-CreateSecret(CreateSecretStatement { name: UnresolvedObjectName([Ident("secret")]), if_not_exists: false, value: Function(Function { name: UnresolvedObjectName([Ident("decode")]), args: Args { args: [Value(String("c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
+CreateSecret(CreateSecretStatement { name: UnresolvedItemName([Ident("secret")]), if_not_exists: false, value: Function(Function { name: UnresolvedItemName([Ident("decode")]), args: Args { args: [Value(String("c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
 
 parse-statement
 CREATE SECRET IF NOT EXISTS secret AS decode('c2VjcmV0Cg==', 'base64')
 ----
 CREATE SECRET IF NOT EXISTS secret AS decode('c2VjcmV0Cg==', 'base64')
 =>
-CreateSecret(CreateSecretStatement { name: UnresolvedObjectName([Ident("secret")]), if_not_exists: true, value: Function(Function { name: UnresolvedObjectName([Ident("decode")]), args: Args { args: [Value(String("c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
+CreateSecret(CreateSecretStatement { name: UnresolvedItemName([Ident("secret")]), if_not_exists: true, value: Function(Function { name: UnresolvedItemName([Ident("decode")]), args: Args { args: [Value(String("c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
 
 parse-statement
 DROP SECRET secret
 ----
 DROP SECRET secret
 =>
-DropObjects(DropObjectsStatement { object_type: Secret, if_exists: false, names: [UnresolvedObjectName([Ident("secret")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: Secret, if_exists: false, names: [UnresolvedItemName([Ident("secret")])], cascade: false })
 
 parse-statement
 DROP SECRET IF EXISTS secret
 ----
 DROP SECRET IF EXISTS secret
 =>
-DropObjects(DropObjectsStatement { object_type: Secret, if_exists: true, names: [UnresolvedObjectName([Ident("secret")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: Secret, if_exists: true, names: [UnresolvedItemName([Ident("secret")])], cascade: false })
 
 parse-statement
 SHOW SECRETS
@@ -1238,21 +1238,21 @@ ALTER SECRET secret RENAME TO secret2
 ----
 ALTER SECRET secret RENAME TO secret2
 =>
-AlterObjectRename(AlterObjectRenameStatement { object_type: Secret, if_exists: false, name: UnresolvedObjectName([Ident("secret")]), to_item_name: Ident("secret2") })
+AlterObjectRename(AlterObjectRenameStatement { object_type: Secret, if_exists: false, name: UnresolvedItemName([Ident("secret")]), to_item_name: Ident("secret2") })
 
 parse-statement
 ALTER SECRET secret AS decode('new c2VjcmV0Cg==', 'base64')
 ----
 ALTER SECRET secret AS decode('new c2VjcmV0Cg==', 'base64')
 =>
-AlterSecret(AlterSecretStatement { name: UnresolvedObjectName([Ident("secret")]), if_exists: false, value: Function(Function { name: UnresolvedObjectName([Ident("decode")]), args: Args { args: [Value(String("new c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
+AlterSecret(AlterSecretStatement { name: UnresolvedItemName([Ident("secret")]), if_exists: false, value: Function(Function { name: UnresolvedItemName([Ident("decode")]), args: Args { args: [Value(String("new c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
 
 parse-statement
 CREATE CONNECTION conn1 FOR KAFKA BROKER 'kafka:1234', SSL KEY = 'foo', SSL CERTIFICATE = 'qux';
 ----
 CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234', SSL KEY = 'foo', SSL CERTIFICATE = 'qux')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: Direct })) }, KafkaConnectionOption { name: SslKey, value: Some(Value(String("foo"))) }, KafkaConnectionOption { name: SslCertificate, value: Some(Value(String("qux"))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: Direct })) }, KafkaConnectionOption { name: SslKey, value: Some(Value(String("foo"))) }, KafkaConnectionOption { name: SslCertificate, value: Some(Value(String("qux"))) }] }, if_not_exists: false })
 
 parse-statement roundtrip
 CREATE CONNECTION conn1 TO KAFKA (BROKER 'kafka:1234', SSL KEY = 'foo', SSL CERTIFICATE = 'qux');
@@ -1264,21 +1264,21 @@ CREATE CONNECTION conn1 FOR KAFKA BROKER 'kafka:1234', PROGRESS TOPIC 'my-materi
 ----
 CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234', PROGRESS TOPIC = 'my-materialize-progress-topic')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: Direct })) }, KafkaConnectionOption { name: ProgressTopic, value: Some(Value(String("my-materialize-progress-topic"))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: Direct })) }, KafkaConnectionOption { name: ProgressTopic, value: Some(Value(String("my-materialize-progress-topic"))) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CONNECTION conn1 TO KAFKA (BROKER 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1);
 ----
 CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1)
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CONNECTION conn1 TO KAFKA (BROKER 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093));
 ----
 CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) })) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) })) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CONNECTION conn1 TO KAFKA (
@@ -1291,7 +1291,7 @@ CREATE CONNECTION conn1 TO KAFKA (
 ----
 CREATE CONNECTION conn1 TO KAFKA (BROKERS = ('kafka:9092' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9092), 'kafka:9093' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093), 'kafka:9094' USING AWS PRIVATELINK aws.privatelink.c1))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9092"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9094", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })])) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9092"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9094", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })])) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CONNECTION conn1 TO KAFKA (
@@ -1304,7 +1304,7 @@ CREATE CONNECTION conn1 TO KAFKA (
 ----
 CREATE CONNECTION conn1 TO KAFKA (BROKERS = ('kafka:9092' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9092), 'kafka:9093' USING AWS PRIVATELINK aws.privatelink.c1 (PORT 9093), 'kafka:9094' USING AWS PRIVATELINK aws.privatelink.c1))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9092"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9094", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedObjectName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })])) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9092"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9093"))) }] }) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9094", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("aws"), Ident("privatelink"), Ident("c1")])), options: [] }) })])) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CONNECTION conn1 TO KAFKA (
@@ -1327,28 +1327,28 @@ CREATE CONNECTION conn1 TO KAFKA (
 ----
 CREATE CONNECTION conn1 TO KAFKA (BROKERS = ('kafka:9092'USING SSH TUNNEL tunn, 'kafka:9093'USING SSH TUNNEL tunn))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", tunnel: SshTunnel(Name(UnresolvedObjectName([Ident("tunn")]))) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", tunnel: SshTunnel(Name(UnresolvedObjectName([Ident("tunn")]))) })])) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "kafka:9092", tunnel: SshTunnel(Name(UnresolvedItemName([Ident("tunn")]))) }), ConnectionKafkaBroker(KafkaBroker { address: "kafka:9093", tunnel: SshTunnel(Name(UnresolvedItemName([Ident("tunn")]))) })])) }] }, if_not_exists: false })
 
 parse-statement
 DROP CONNECTION conn1
 ----
 DROP CONNECTION conn1
 =>
-DropObjects(DropObjectsStatement { object_type: Connection, if_exists: false, names: [UnresolvedObjectName([Ident("conn1")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: Connection, if_exists: false, names: [UnresolvedItemName([Ident("conn1")])], cascade: false })
 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT BYTES
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT BYTES
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
 CREATE CONNECTION conn1 FOR CONFLUENT SCHEMA REGISTRY URL 'http://localhost:8081', USERNAME 'user', PASSWORD 'word'
 ----
 CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (URL = 'http://localhost:8081', USERNAME = 'user', PASSWORD = 'word')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Csr { with_options: [CsrConnectionOption { name: Url, value: Some(Value(String("http://localhost:8081"))) }, CsrConnectionOption { name: Username, value: Some(Value(String("user"))) }, CsrConnectionOption { name: Password, value: Some(Value(String("word"))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Csr { with_options: [CsrConnectionOption { name: Url, value: Some(Value(String("http://localhost:8081"))) }, CsrConnectionOption { name: Username, value: Some(Value(String("user"))) }, CsrConnectionOption { name: Password, value: Some(Value(String("word"))) }] }, if_not_exists: false })
 
 parse-statement roundtrip
 CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (URL = 'http://localhost:8081', USERNAME = 'user', PASSWORD = 'word')
@@ -1361,14 +1361,14 @@ CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK db.schema.
 ----
 CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK = db.schema.item, PORT = 8080)
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Csr { with_options: [CsrConnectionOption { name: AwsPrivatelink, value: Some(Object(Name(UnresolvedObjectName([Ident("db"), Ident("schema"), Ident("item")])))) }, CsrConnectionOption { name: Port, value: Some(Value(Number("8080"))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Csr { with_options: [CsrConnectionOption { name: AwsPrivatelink, value: Some(Item(Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])))) }, CsrConnectionOption { name: Port, value: Some(Value(Number("8080"))) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (SSH TUNNEL ssh)
 ----
 CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (SSH TUNNEL = ssh)
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Csr { with_options: [CsrConnectionOption { name: SshTunnel, value: Some(Object(Name(UnresolvedObjectName([Ident("ssh")])))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Csr { with_options: [CsrConnectionOption { name: SshTunnel, value: Some(Item(Name(UnresolvedItemName([Ident("ssh")])))) }] }, if_not_exists: false })
 
 
 parse-statement
@@ -1376,7 +1376,7 @@ CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK db.schema.
 ----
 CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK = db.schema.item, PORT = 8080, URL = 'http://localhost:8081')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Csr { with_options: [CsrConnectionOption { name: AwsPrivatelink, value: Some(Object(Name(UnresolvedObjectName([Ident("db"), Ident("schema"), Ident("item")])))) }, CsrConnectionOption { name: Port, value: Some(Value(Number("8080"))) }, CsrConnectionOption { name: Url, value: Some(Value(String("http://localhost:8081"))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection: Csr { with_options: [CsrConnectionOption { name: AwsPrivatelink, value: Some(Item(Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])))) }, CsrConnectionOption { name: Port, value: Some(Value(Number("8080"))) }, CsrConnectionOption { name: Url, value: Some(Value(String("http://localhost:8081"))) }] }, if_not_exists: false })
 
 
 parse-statement
@@ -1384,7 +1384,7 @@ CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT AVRO USING C
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedObjectName([Ident("conn2")])), options: [] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Debezium(Plain)), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Debezium(Plain)), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 
 parse-statement
@@ -1392,7 +1392,7 @@ CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT PROTOBUF USI
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Protobuf(Csr { csr_connection: CsrConnectionProtobuf { connection: CsrConnection { connection: Name(UnresolvedObjectName([Ident("conn2")])), options: [] }, seed: None } })), envelope: Some(Debezium(Plain)), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Protobuf(Csr { csr_connection: CsrConnectionProtobuf { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [] }, seed: None } })), envelope: Some(Debezium(Plain)), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') ENVELOPE DEBEZIUM (TRANSACTION METADATA (SOURCE a.b.c, COLLECTION 'foo'))
@@ -1436,7 +1436,7 @@ CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL HOST 'ssh-bastion', PORT 1234, US
 ----
 CREATE CONNECTION my_ssh_tunnel TO SSH TUNNEL (HOST = 'ssh-bastion', PORT = 1234, USER = 'blah')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("my_ssh_tunnel")]), connection: Ssh { with_options: [SshConnectionOption { name: Host, value: Some(Value(String("ssh-bastion"))) }, SshConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, SshConnectionOption { name: User, value: Some(Value(String("blah"))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("my_ssh_tunnel")]), connection: Ssh { with_options: [SshConnectionOption { name: Host, value: Some(Value(String("ssh-bastion"))) }, SshConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, SshConnectionOption { name: User, value: Some(Value(String("blah"))) }] }, if_not_exists: false })
 
 parse-statement roundtrip
 CREATE CONNECTION my_ssh_tunnel TO SSH TUNNEL (HOST 'ssh-bastion', PORT 1234, USER 'blah')
@@ -1448,21 +1448,21 @@ CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
 ----
 CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("lg")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Counter, options: [] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("lg")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Counter, options: [] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
 CREATE SOURCE lg FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1s')
 ----
 CREATE SOURCE lg FROM LOAD GENERATOR COUNTER (TICK INTERVAL = '1s')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("lg")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Counter, options: [LoadGeneratorOption { name: TickInterval, value: Some(Value(String("1s"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("lg")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Counter, options: [LoadGeneratorOption { name: TickInterval, value: Some(Value(String("1s"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
 CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') with (SIZE 'small');
 ----
 CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') WITH (SIZE = 'small')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
 ALTER SYSTEM SET wal_level TO logical
@@ -1588,28 +1588,28 @@ CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FO
 ----
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR ALL TABLES
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: Some(All), progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: Some(All), progress_subsource: None })
 
 parse-statement
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR ALL TABLES WITH (SIZE = 'small');
 ----
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR ALL TABLES WITH (SIZE = 'small')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(All), progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(All), progress_subsource: None })
 
 parse-statement
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (TEXT COLUMNS = [foo, foo.bar, foo.bar.qux, foo.bar.qux.qax, foo.bar.qux.qax.baz]) FOR ALL TABLES WITH (SIZE = 'small');
 ----
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (TEXT COLUMNS = (foo, foo.bar, foo.bar.qux, foo.bar.qux.qax, foo.bar.qux.qax.baz)) FOR ALL TABLES WITH (SIZE = 'small')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pg")])), options: [PgConfigOption { name: TextColumns, value: Some(Sequence([UnresolvedObjectName(UnresolvedObjectName([Ident("foo")])), UnresolvedObjectName(UnresolvedObjectName([Ident("foo"), Ident("bar")])), UnresolvedObjectName(UnresolvedObjectName([Ident("foo"), Ident("bar"), Ident("qux")])), UnresolvedObjectName(UnresolvedObjectName([Ident("foo"), Ident("bar"), Ident("qux"), Ident("qax")])), UnresolvedObjectName(UnresolvedObjectName([Ident("foo"), Ident("bar"), Ident("qux"), Ident("qax"), Ident("baz")]))])) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(All), progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: TextColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("foo")])), UnresolvedItemName(UnresolvedItemName([Ident("foo"), Ident("bar")])), UnresolvedItemName(UnresolvedItemName([Ident("foo"), Ident("bar"), Ident("qux")])), UnresolvedItemName(UnresolvedItemName([Ident("foo"), Ident("bar"), Ident("qux"), Ident("qax")])), UnresolvedItemName(UnresolvedItemName([Ident("foo"), Ident("bar"), Ident("qux"), Ident("qax"), Ident("baz")]))])) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(All), progress_subsource: None })
 
 parse-statement
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES (foo, bar as qux, baz into zop) WITH (SIZE = 'small');
 ----
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR TABLES (foo, bar AS qux, baz AS zop) WITH (SIZE = 'small')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(Subset([CreateSourceSubsource { reference: UnresolvedObjectName([Ident("foo")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedObjectName([Ident("bar")]), subsource: Some(Deferred(UnresolvedObjectName([Ident("qux")]))) }, CreateSourceSubsource { reference: UnresolvedObjectName([Ident("baz")]), subsource: Some(Deferred(UnresolvedObjectName([Ident("zop")]))) }])), progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(Subset([CreateSourceSubsource { reference: UnresolvedItemName([Ident("foo")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("bar")]), subsource: Some(Deferred(UnresolvedItemName([Ident("qux")]))) }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("baz")]), subsource: Some(Deferred(UnresolvedItemName([Ident("zop")]))) }])), progress_subsource: None })
 
 parse-statement
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES ([s1 AS foo.bar]) WITH (SIZE = 'small');
@@ -1623,7 +1623,7 @@ CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FO
 ----
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR TABLES (baz AS [s1 AS foo.bar]) WITH (SIZE = 'small')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(Subset([CreateSourceSubsource { reference: UnresolvedObjectName([Ident("baz")]), subsource: Some(Named(Id("s1", UnresolvedObjectName([Ident("foo"), Ident("bar")])))) }])), progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(Subset([CreateSourceSubsource { reference: UnresolvedItemName([Ident("baz")]), subsource: Some(Named(Id("s1", UnresolvedItemName([Ident("foo"), Ident("bar")])))) }])), progress_subsource: None })
 
 parse-statement
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES ([s1 AS foo.bar] AS baz) WITH (SIZE = 'small');
@@ -1644,7 +1644,7 @@ CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FO
 ----
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR ALL TABLES EXPOSE PROGRESS AS foo.bar WITH (SIZE = 'small')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(All), progress_subsource: Some(Deferred(UnresolvedObjectName([Ident("foo"), Ident("bar")]))) })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(All), progress_subsource: Some(Deferred(UnresolvedItemName([Ident("foo"), Ident("bar")]))) })
 
 parse-statement
 GRANT admin TO joe
@@ -1777,109 +1777,109 @@ ALTER TABLE foo OWNER TO joe
 ----
 ALTER TABLE foo OWNER TO joe
 =>
-AlterOwner(AlterOwnerStatement { object_type: Table, if_exists: false, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Table, if_exists: false, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER TABLE IF EXISTS foo OWNER TO joe
 ----
 ALTER TABLE IF EXISTS foo OWNER TO joe
 =>
-AlterOwner(AlterOwnerStatement { object_type: Table, if_exists: true, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Table, if_exists: true, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER SINK foo OWNER TO joe
 ----
 ALTER SINK foo OWNER TO joe
 =>
-AlterOwner(AlterOwnerStatement { object_type: Sink, if_exists: false, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Sink, if_exists: false, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER SINK IF EXISTS foo OWNER TO joe
 ----
 ALTER SINK IF EXISTS foo OWNER TO joe
 =>
-AlterOwner(AlterOwnerStatement { object_type: Sink, if_exists: true, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Sink, if_exists: true, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER SOURCE foo OWNER TO joe
 ----
 ALTER SOURCE foo OWNER TO joe
 =>
-AlterOwner(AlterOwnerStatement { object_type: Source, if_exists: false, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Source, if_exists: false, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER SOURCE IF EXISTS foo OWNER TO joe
 ----
 ALTER SOURCE IF EXISTS foo OWNER TO joe
 =>
-AlterOwner(AlterOwnerStatement { object_type: Source, if_exists: true, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Source, if_exists: true, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER INDEX foo OWNER TO joe
 ----
 ALTER INDEX foo OWNER TO joe
 =>
-AlterOwner(AlterOwnerStatement { object_type: Index, if_exists: false, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Index, if_exists: false, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER INDEX IF EXISTS foo OWNER TO joe
 ----
 ALTER INDEX IF EXISTS foo OWNER TO joe
 =>
-AlterOwner(AlterOwnerStatement { object_type: Index, if_exists: true, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Index, if_exists: true, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER SECRET foo OWNER TO joe
 ----
 ALTER SECRET foo OWNER TO joe
 =>
-AlterOwner(AlterOwnerStatement { object_type: Secret, if_exists: false, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Secret, if_exists: false, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER SECRET IF EXISTS foo OWNER TO joe
 ----
 ALTER SECRET IF EXISTS foo OWNER TO joe
 =>
-AlterOwner(AlterOwnerStatement { object_type: Secret, if_exists: true, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Secret, if_exists: true, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER CONNECTION foo OWNER TO joe
 ----
 ALTER CONNECTION foo OWNER TO joe
 =>
-AlterOwner(AlterOwnerStatement { object_type: Connection, if_exists: false, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Connection, if_exists: false, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER CONNECTION IF EXISTS foo OWNER TO joe
 ----
 ALTER CONNECTION IF EXISTS foo OWNER TO joe
 =>
-AlterOwner(AlterOwnerStatement { object_type: Connection, if_exists: true, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: Connection, if_exists: true, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER VIEW foo OWNER TO joe
 ----
 ALTER VIEW foo OWNER TO joe
 =>
-AlterOwner(AlterOwnerStatement { object_type: View, if_exists: false, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: View, if_exists: false, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER VIEW IF EXISTS foo OWNER TO joe
 ----
 ALTER VIEW IF EXISTS foo OWNER TO joe
 =>
-AlterOwner(AlterOwnerStatement { object_type: View, if_exists: true, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: View, if_exists: true, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER MATERIALIZED VIEW foo OWNER TO joe
 ----
 ALTER MATERIALIZED VIEW foo OWNER TO joe
 =>
-AlterOwner(AlterOwnerStatement { object_type: MaterializedView, if_exists: false, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: MaterializedView, if_exists: false, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
 
 parse-statement
 ALTER MATERIALIZED VIEW IF EXISTS foo OWNER TO joe
 ----
 ALTER MATERIALIZED VIEW IF EXISTS foo OWNER TO joe
 =>
-AlterOwner(AlterOwnerStatement { object_type: MaterializedView, if_exists: true, name: Item(UnresolvedObjectName([Ident("foo")])), new_owner: Ident("joe") })
+AlterOwner(AlterOwnerStatement { object_type: MaterializedView, if_exists: true, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })

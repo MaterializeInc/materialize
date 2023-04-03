@@ -18,8 +18,8 @@ use mz_repr::strconv;
 use mz_repr::GlobalId;
 use mz_storage_client::types::connections::StringOrSecret;
 
-use crate::ast::{AstInfo, IntervalValue, UnresolvedObjectName, Value, WithOptionValue};
-use crate::names::{ResolvedDataType, ResolvedObjectName};
+use crate::ast::{AstInfo, IntervalValue, UnresolvedItemName, Value, WithOptionValue};
+use crate::names::{ResolvedDataType, ResolvedItemName};
 use crate::plan::{Aug, PlanError};
 
 pub trait TryFromValue<T>: Sized {
@@ -76,7 +76,7 @@ impl From<&Object> for GlobalId {
 impl TryFromValue<WithOptionValue<Aug>> for Object {
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         Ok(match v {
-            WithOptionValue::Object(ResolvedObjectName::Object { id, .. }) => Object(id),
+            WithOptionValue::Item(ResolvedItemName::Item { id, .. }) => Object(id),
             _ => sql_bail!("must provide an object"),
         })
     }
@@ -91,10 +91,10 @@ impl ImpliedValue for Object {
     }
 }
 
-impl TryFromValue<WithOptionValue<Aug>> for UnresolvedObjectName {
+impl TryFromValue<WithOptionValue<Aug>> for UnresolvedItemName {
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         Ok(match v {
-            WithOptionValue::UnresolvedObjectName(name) => name,
+            WithOptionValue::UnresolvedItemName(name) => name,
             _ => sql_bail!("must provide an object name"),
         })
     }
@@ -103,7 +103,7 @@ impl TryFromValue<WithOptionValue<Aug>> for UnresolvedObjectName {
     }
 }
 
-impl ImpliedValue for UnresolvedObjectName {
+impl ImpliedValue for UnresolvedItemName {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide an object name")
     }
@@ -130,7 +130,7 @@ impl ImpliedValue for ResolvedDataType {
 impl TryFromValue<WithOptionValue<Aug>> for StringOrSecret {
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         Ok(match v {
-            WithOptionValue::Secret(ResolvedObjectName::Object { id, .. }) => {
+            WithOptionValue::Secret(ResolvedItemName::Item { id, .. }) => {
                 StringOrSecret::Secret(id)
             }
             v => StringOrSecret::String(String::try_from_value(v)?),
@@ -408,8 +408,8 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
             WithOptionValue::Value(v) => V::try_from_value(v),
             WithOptionValue::Ident(i) => V::try_from_value(Value::String(i.into_string())),
             WithOptionValue::Sequence(_)
-            | WithOptionValue::Object(_)
-            | WithOptionValue::UnresolvedObjectName(_)
+            | WithOptionValue::Item(_)
+            | WithOptionValue::UnresolvedItemName(_)
             | WithOptionValue::Secret(_)
             | WithOptionValue::DataType(_)
             | WithOptionValue::ClusterReplicas(_)
@@ -417,8 +417,8 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
                 "incompatible value types: cannot convert {} to {}",
                 match v {
                     WithOptionValue::Sequence(_) => "sequences",
-                    WithOptionValue::Object(_) => "object references",
-                    WithOptionValue::UnresolvedObjectName(_) => "object names",
+                    WithOptionValue::Item(_) => "object references",
+                    WithOptionValue::UnresolvedItemName(_) => "object names",
                     WithOptionValue::Secret(_) => "secrets",
                     WithOptionValue::DataType(_) => "data types",
                     WithOptionValue::ClusterReplicas(_) => "cluster replicas",

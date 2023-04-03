@@ -36,9 +36,9 @@ use mz_sql_parser::ast::{
     AlterOwnerStatement, AlterRoleStatement, AlterSinkAction, AlterSinkStatement,
     AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
     AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
-    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredObjectName,
-    GrantRoleStatement, RevokeRoleStatement, SshConnectionOption, UnresolvedName,
-    UnresolvedObjectName, UnresolvedSchemaName, Value,
+    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
+    GrantRoleStatement, RevokeRoleStatement, SshConnectionOption, UnresolvedItemName,
+    UnresolvedName, UnresolvedSchemaName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -91,9 +91,9 @@ use crate::catalog::{
 };
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
-    Aug, DatabaseId, FullSchemaName, ObjectId, PartialObjectName, QualifiedObjectName,
+    Aug, DatabaseId, FullSchemaName, ObjectId, PartialItemName, QualifiedItemName,
     RawDatabaseSpecifier, ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier,
-    ResolvedObjectName, RoleId, SchemaId, SchemaSpecifier,
+    ResolvedItemName, RoleId, SchemaId, SchemaSpecifier,
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
@@ -112,9 +112,9 @@ use crate::plan::{
     CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
     CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
     DropClusterReplicasPlan, DropClustersPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
-    DropSchemaPlan, FullObjectName, GrantRolePlan, HirScalarExpr, Index, Ingestion,
-    MaterializedView, Params, Plan, QueryContext, ReplicaConfig, RevokeRolePlan, RotateKeysPlan,
-    Secret, Sink, Source, SourceSinkClusterConfig, Table, Type, View,
+    DropSchemaPlan, FullItemName, GrantRolePlan, HirScalarExpr, Index, Ingestion, MaterializedView,
+    Params, Plan, QueryContext, ReplicaConfig, RevokeRolePlan, RotateKeysPlan, Secret, Sink,
+    Source, SourceSinkClusterConfig, Table, Type, View,
 };
 
 pub fn describe_create_database(
@@ -313,14 +313,14 @@ pub fn plan_create_table(
 
     let temporary = *temporary;
     let name = if temporary {
-        scx.allocate_temporary_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?
+        scx.allocate_temporary_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?
     } else {
-        scx.allocate_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?
+        scx.allocate_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?
     };
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
-    let partial_name = PartialObjectName::from(full_name.clone());
+    let partial_name = PartialItemName::from(full_name.clone());
     if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
         return Err(PlanError::ItemAlreadyExists {
             name: full_name.to_string(),
@@ -370,7 +370,7 @@ generate_extracted_config!(
     PgConfigOption,
     (Details, String),
     (Publication, String),
-    (TextColumns, Vec::<UnresolvedObjectName>, Default(vec![]))
+    (TextColumns, Vec::<UnresolvedItemName>, Default(vec![]))
 );
 
 pub fn plan_create_source(
@@ -589,10 +589,7 @@ pub fn plan_create_source(
             for name in text_columns {
                 let (qual, col) = match name.0.split_last().expect("must have at least one element")
                 {
-                    (col, qual) => (
-                        UnresolvedObjectName(qual.to_vec()),
-                        col.as_str().to_string(),
-                    ),
+                    (col, qual) => (UnresolvedItemName(qual.to_vec()), col.as_str().to_string()),
                 };
 
                 let (_name, table_desc) = publication_catalog
@@ -747,7 +744,7 @@ pub fn plan_create_source(
                 let r = table_casts.insert(i + 1, column_casts);
                 assert!(r.is_none(), "cannot have table defined multiple times");
 
-                let name = FullObjectName {
+                let name = FullItemName {
                     database: RawDatabaseSpecifier::Name(connection.database.clone()),
                     schema: table.namespace.clone(),
                     item: table.name.clone(),
@@ -821,7 +818,7 @@ pub fn plan_create_source(
                 let name = subsource.reference.clone();
 
                 let target = match &subsource.subsource {
-                    Some(DeferredObjectName::Named(target)) => target.clone(),
+                    Some(DeferredItemName::Named(target)) => target.clone(),
                     _ => {
                         sql_bail!("[internal error] subsources must be named during purification")
                     }
@@ -850,8 +847,8 @@ pub fn plan_create_source(
         };
 
         let target_id = match target {
-            ResolvedObjectName::Object { id, .. } => id,
-            ResolvedObjectName::Cte { .. } | ResolvedObjectName::Error => {
+            ResolvedItemName::Item { id, .. } => id,
+            ResolvedItemName::Cte { .. } | ResolvedItemName::Error => {
                 sql_bail!("[internal error] invalid target id")
             }
         };
@@ -1007,24 +1004,24 @@ pub fn plan_create_source(
     let progress_subsource = progress_subsource
         .as_ref()
         .map(|name| match name {
-            DeferredObjectName::Named(name) => match name {
-                ResolvedObjectName::Object { id, .. } => Ok(*id),
-                ResolvedObjectName::Cte { .. } | ResolvedObjectName::Error => {
+            DeferredItemName::Named(name) => match name {
+                ResolvedItemName::Item { id, .. } => Ok(*id),
+                ResolvedItemName::Cte { .. } | ResolvedItemName::Error => {
                     sql_bail!("[internal error] invalid target id")
                 }
             },
-            DeferredObjectName::Deferred(_) => {
+            DeferredItemName::Deferred(_) => {
                 sql_bail!("[internal error] progress subsource must be named during purification")
             }
         })
         .transpose()?;
 
     let if_not_exists = *if_not_exists;
-    let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.clone())?)?;
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
-    let partial_name = PartialObjectName::from(full_name.clone());
+    let partial_name = PartialItemName::from(full_name.clone());
     if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
         return Err(PlanError::ItemAlreadyExists {
             name: full_name.to_string(),
@@ -1203,7 +1200,7 @@ pub fn plan_create_subsource(
     }
 
     let if_not_exists = *if_not_exists;
-    let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.clone())?)?;
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
     let create_sql = normalize::create_statement(scx, Statement::CreateSubsource(stmt))?;
 
     let typ = RelationType::new(column_types).with_keys(keys);
@@ -1243,7 +1240,7 @@ pub(crate) fn load_generator_ast_to_generator(
 ) -> Result<
     (
         LoadGenerator,
-        Option<BTreeMap<FullObjectName, (usize, RelationDesc)>>,
+        Option<BTreeMap<FullItemName, (usize, RelationDesc)>>,
     ),
     PlanError,
 > {
@@ -1300,7 +1297,7 @@ pub(crate) fn load_generator_ast_to_generator(
 
     let mut available_subsources = BTreeMap::new();
     for (i, (name, desc)) in load_generator.views().iter().enumerate() {
-        let name = FullObjectName {
+        let name = FullItemName {
             database: RawDatabaseSpecifier::Name("mz_load_generators".to_owned()),
             schema: match load_generator {
                 LoadGenerator::Counter { .. } => "counter".into(),
@@ -1654,7 +1651,7 @@ pub fn plan_view(
     def: &mut ViewDefinition<Aug>,
     params: &Params,
     temporary: bool,
-) -> Result<(QualifiedObjectName, View), PlanError> {
+) -> Result<(QualifiedItemName, View), PlanError> {
     let create_sql = normalize::create_statement(
         scx,
         Statement::CreateView(CreateViewStatement {
@@ -1682,9 +1679,9 @@ pub fn plan_view(
     let relation_expr = expr.optimize_and_lower(&scx.into())?;
 
     let name = if temporary {
-        scx.allocate_temporary_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?
+        scx.allocate_temporary_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?
     } else {
-        scx.allocate_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?
+        scx.allocate_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?
     };
 
     plan_utils::maybe_rename_columns(format!("view {}", name), &mut desc, columns)?;
@@ -1714,7 +1711,7 @@ pub fn plan_create_view(
         if_exists,
         definition,
     } = &mut stmt;
-    let partial_name = normalize::unresolved_object_name(definition.name.clone())?;
+    let partial_name = normalize::unresolved_item_name(definition.name.clone())?;
     let (name, view) = plan_view(scx, definition, params, *temporary)?;
 
     let replace = if *if_exists == IfExistsBehavior::Replace {
@@ -1736,7 +1733,7 @@ pub fn plan_create_view(
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
-    let partial_name = PartialObjectName::from(full_name.clone());
+    let partial_name = PartialItemName::from(full_name.clone());
     if let (IfExistsBehavior::Error, Ok(item)) =
         (*if_exists, scx.catalog.resolve_item(&partial_name))
     {
@@ -1779,7 +1776,7 @@ pub fn plan_create_materialized_view(
     let create_sql =
         normalize::create_statement(scx, Statement::CreateMaterializedView(stmt.clone()))?;
 
-    let partial_name = normalize::unresolved_object_name(stmt.name)?;
+    let partial_name = normalize::unresolved_item_name(stmt.name)?;
     let name = scx.allocate_qualified_name(partial_name.clone())?;
 
     let query::PlannedQuery {
@@ -1824,7 +1821,7 @@ pub fn plan_create_materialized_view(
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
-    let partial_name = PartialObjectName::from(full_name.clone());
+    let partial_name = PartialItemName::from(full_name.clone());
     if let (IfExistsBehavior::Error, Ok(item)) =
         (stmt.if_exists, scx.catalog.resolve_item(&partial_name))
     {
@@ -1893,11 +1890,11 @@ pub fn plan_create_sink(
         Some(Envelope::CdcV2) => bail_unsupported!("CDCv2 sinks"),
         Some(Envelope::None) => bail_unsupported!("\"ENVELOPE NONE\" sinks"),
     };
-    let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
-    let partial_name = PartialObjectName::from(full_name.clone());
+    let partial_name = PartialItemName::from(full_name.clone());
     if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
         return Err(PlanError::ItemAlreadyExists {
             name: full_name.to_string(),
@@ -2292,12 +2289,12 @@ pub fn plan_create_index(
     let keys = query::plan_index_exprs(scx, &on_desc, filled_key_parts.clone())?;
 
     let index_name = if let Some(name) = name {
-        QualifiedObjectName {
+        QualifiedItemName {
             qualifiers: on.name().qualifiers.clone(),
             item: normalize::ident(name.clone()),
         }
     } else {
-        let mut idx_name = QualifiedObjectName {
+        let mut idx_name = QualifiedItemName {
             qualifiers: on.name().qualifiers.clone(),
             item: on.name().item.clone(),
         };
@@ -2331,7 +2328,7 @@ pub fn plan_create_index(
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&index_name);
-    let partial_name = PartialObjectName::from(full_name.clone());
+    let partial_name = PartialItemName::from(full_name.clone());
     if let (false, Ok(item)) = (*if_not_exists, scx.catalog.resolve_item(&partial_name)) {
         return Err(PlanError::ItemAlreadyExists {
             name: full_name.to_string(),
@@ -2353,7 +2350,7 @@ pub fn plan_create_index(
     *name = Some(Ident::new(index_name.item.clone()));
     *key_parts = Some(filled_key_parts);
     let if_not_exists = *if_not_exists;
-    if let ResolvedObjectName::Object { print_id, .. } = &mut stmt.on_name {
+    if let ResolvedItemName::Item { print_id, .. } = &mut stmt.on_name {
         *print_id = false;
     }
     let create_sql = normalize::create_statement(scx, Statement::CreateIndex(stmt))?;
@@ -2472,11 +2469,11 @@ pub fn plan_create_type(
         }
     };
 
-    let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
-    let partial_name = PartialObjectName::from(full_name.clone());
+    let partial_name = PartialItemName::from(full_name.clone());
     if let Ok(item) = scx.catalog.resolve_item(&partial_name) {
         return Err(PlanError::ItemAlreadyExists {
             name: full_name.to_string(),
@@ -2793,7 +2790,7 @@ pub fn plan_create_secret(
         value,
     } = &stmt;
 
-    let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?;
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?;
     let mut create_sql_statement = stmt.clone();
     create_sql_statement.value = Expr::Value(Value::String("********".to_string()));
     let create_sql =
@@ -2867,7 +2864,7 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                     )?;
 
                     let id = match &aws_privatelink.connection {
-                        ResolvedObjectName::Object { id, .. } => id,
+                        ResolvedItemName::Item { id, .. } => id,
                         _ => sql_bail!(
                             "internal error: Kafka PrivateLink connection was not resolved"
                         ),
@@ -2896,7 +2893,7 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                 }
                 KafkaBrokerTunnel::SshTunnel(ssh) => {
                     let id = match &ssh {
-                        ResolvedObjectName::Object { id, .. } => id,
+                        ResolvedItemName::Item { id, .. } => id,
                         _ => sql_bail!(
                             "internal error: Kafka SSH tunnel connection was not resolved"
                         ),
@@ -3277,11 +3274,11 @@ pub fn plan_create_connection(
             Connection::Ssh(connection)
         }
     };
-    let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
-    let partial_name = PartialObjectName::from(full_name.clone());
+    let partial_name = PartialItemName::from(full_name.clone());
     if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
         return Err(PlanError::ItemAlreadyExists {
             name: full_name.to_string(),
@@ -3651,7 +3648,7 @@ pub fn plan_alter_index_options(
         action: actions,
     }: AlterIndexStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let index_name = normalize::unresolved_object_name(index_name)?;
+    let index_name = normalize::unresolved_item_name(index_name)?;
     let entry = match scx.catalog.resolve_item(&index_name) {
         Ok(index) => index,
         Err(_) if if_exists => {
@@ -3815,7 +3812,7 @@ fn plan_alter_item_owner(
     scx: &StatementContext,
     object_type: ObjectType,
     if_exists: bool,
-    name: UnresolvedObjectName,
+    name: UnresolvedItemName,
     new_owner: RoleId,
 ) -> Result<Plan, PlanError> {
     match resolve_object(scx, name, if_exists)? {
@@ -3887,7 +3884,7 @@ pub fn plan_alter_object_rename(
                     format!("{object_type}").to_lowercase()
                 )
             }
-            let proposed_name = QualifiedObjectName {
+            let proposed_name = QualifiedItemName {
                 qualifiers: entry.name().qualifiers.clone(),
                 item: to_item_name.clone().into_string(),
             };
@@ -3921,7 +3918,7 @@ pub fn plan_alter_secret(
         if_exists,
         value,
     } = stmt;
-    let name = normalize::unresolved_object_name(name)?;
+    let name = normalize::unresolved_item_name(name)?;
     let entry = match scx.catalog.resolve_item(&name) {
         Ok(secret) => secret,
         Err(_) if if_exists => {
@@ -3963,7 +3960,7 @@ pub fn plan_alter_sink(
         action,
     } = stmt;
 
-    let sink_name = normalize::unresolved_object_name(sink_name)?;
+    let sink_name = normalize::unresolved_item_name(sink_name)?;
     let entry = match scx.catalog.resolve_item(&sink_name) {
         Ok(sink) => sink,
         Err(_) if if_exists => {
@@ -4039,7 +4036,7 @@ pub fn plan_alter_source(
         if_exists,
         action,
     } = stmt;
-    let source_name = normalize::unresolved_object_name(source_name)?;
+    let source_name = normalize::unresolved_item_name(source_name)?;
     let entry = match scx.catalog.resolve_item(&source_name) {
         Ok(source) => source,
         Err(_) if if_exists => {
@@ -4157,7 +4154,7 @@ pub fn plan_alter_connection(
     stmt: AlterConnectionStatement,
 ) -> Result<Plan, PlanError> {
     let AlterConnectionStatement { name, if_exists } = stmt;
-    let name = normalize::unresolved_object_name(name)?;
+    let name = normalize::unresolved_item_name(name)?;
     let entry = match scx.catalog.resolve_item(&name) {
         Ok(connection) => connection,
         Err(_) if if_exists => {
@@ -4334,10 +4331,10 @@ fn resolve_schema<'a>(
 
 fn resolve_object<'a>(
     scx: &'a StatementContext,
-    name: UnresolvedObjectName,
+    name: UnresolvedItemName,
     if_exists: bool,
 ) -> Result<Option<&'a dyn CatalogItem>, PlanError> {
-    let name = normalize::unresolved_object_name(name)?;
+    let name = normalize::unresolved_item_name(name)?;
     match scx.catalog.resolve_item(&name) {
         Ok(item) => Ok(Some(item)),
         // TODO(benesch/jkosh44): generate a notice indicating items do not exist.

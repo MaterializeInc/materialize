@@ -27,12 +27,12 @@ use mz_repr::strconv;
 use mz_repr::ColumnName;
 use mz_repr::GlobalId;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::UnresolvedObjectName;
+use mz_sql_parser::ast::UnresolvedItemName;
 use mz_sql_parser::parser::ParserError;
 
 use crate::catalog::{CatalogError, CatalogItemType};
-use crate::names::PartialObjectName;
-use crate::names::ResolvedObjectName;
+use crate::names::PartialItemName;
+use crate::names::ResolvedItemName;
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
 
@@ -49,19 +49,19 @@ pub enum PlanError {
         documentation_link: String,
     },
     UnknownColumn {
-        table: Option<PartialObjectName>,
+        table: Option<PartialItemName>,
         column: ColumnName,
     },
     UngroupedColumn {
-        table: Option<PartialObjectName>,
+        table: Option<PartialItemName>,
         column: ColumnName,
     },
     WrongJoinTypeForLateralColumn {
-        table: Option<PartialObjectName>,
+        table: Option<PartialItemName>,
         column: ColumnName,
     },
     AmbiguousColumn(ColumnName),
-    AmbiguousTable(PartialObjectName),
+    AmbiguousTable(PartialItemName),
     UnknownColumnInUsingClause {
         column: ColumnName,
         join_side: JoinSide,
@@ -85,9 +85,9 @@ pub enum PlanError {
     InvalidNumericMaxScale(InvalidNumericMaxScaleError),
     InvalidCharLength(InvalidCharLengthError),
     InvalidId(GlobalId),
-    InvalidObject(Box<ResolvedObjectName>),
+    InvalidObject(Box<ResolvedItemName>),
     InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),
-    InvalidSecret(Box<ResolvedObjectName>),
+    InvalidSecret(Box<ResolvedItemName>),
     InvalidTemporarySchema,
     Parser(ParserError),
     DropViewOnMaterializedView(String),
@@ -119,7 +119,7 @@ pub enum PlanError {
         err: Box<PlanError>,
     },
     UnexpectedDuplicateReference {
-        name: UnresolvedObjectName,
+        name: UnresolvedItemName,
     },
     /// Declaration of a recursive type did not match the inferred type.
     RecursiveTypeMismatch(String, Vec<String>, Vec<String>),
@@ -466,7 +466,7 @@ impl From<ParserError> for PlanError {
 }
 
 struct ColumnDisplay<'a> {
-    table: &'a Option<PartialObjectName>,
+    table: &'a Option<PartialItemName>,
     column: &'a ColumnName,
 }
 

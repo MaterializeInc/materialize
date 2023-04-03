@@ -79,7 +79,7 @@ use mz_secrets::SecretsController;
 use mz_sql::ast::{Expr, Raw, ShowStatement, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql_parser::{
-    ast::{display::AstDisplay, CreateIndexStatement, RawObjectName, Statement as AstStatement},
+    ast::{display::AstDisplay, CreateIndexStatement, RawItemName, Statement as AstStatement},
     parser,
 };
 use mz_stash::StashFactory;
@@ -1704,7 +1704,7 @@ fn mutate(sql: &str) -> Vec<String> {
                 AstStatement::<Raw>::CreateIndex(CreateIndexStatement {
                     name: None,
                     in_cluster: None,
-                    on_name: RawObjectName::Name(stmt.name.clone()),
+                    on_name: RawItemName::Name(stmt.name.clone()),
                     key_parts: Some(
                         stmt.columns
                             .iter()

@@ -22,7 +22,7 @@ use std::fmt;
 use std::mem;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, Ident, OrderByExpr, Query, UnresolvedObjectName, Value};
+use crate::ast::{AstInfo, Ident, OrderByExpr, Query, UnresolvedItemName, Value};
 
 /// An SQL expression of any type.
 ///
@@ -110,7 +110,7 @@ pub enum Expr<T: AstInfo> {
     /// `expr COLLATE collation`
     Collate {
         expr: Box<Expr<T>>,
-        collation: UnresolvedObjectName,
+        collation: UnresolvedItemName,
     },
     /// `COALESCE(<expr>, ...)` or `GREATEST(<expr>, ...)` or `LEAST(<expr>`, ...)
     ///
@@ -587,7 +587,7 @@ impl<T: AstInfo> Expr<T> {
 
     pub fn call(name: Vec<&str>, args: Vec<Expr<T>>) -> Expr<T> {
         Expr::Function(Function {
-            name: UnresolvedObjectName(name.into_iter().map(Into::into).collect()),
+            name: UnresolvedItemName(name.into_iter().map(Into::into).collect()),
             args: FunctionArgs::args(args),
             filter: None,
             over: None,
@@ -796,7 +796,7 @@ impl_display!(WindowFrameBound);
 /// A function call
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Function<T: AstInfo> {
-    pub name: UnresolvedObjectName,
+    pub name: UnresolvedItemName,
     pub args: FunctionArgs<T>,
     // aggregate functions may specify e.g. `COUNT(DISTINCT X) FILTER (WHERE ...)`
     pub filter: Option<Box<Expr<T>>>,

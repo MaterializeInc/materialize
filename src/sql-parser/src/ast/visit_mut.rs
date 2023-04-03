@@ -25,7 +25,7 @@
 //! invoking the right visitor method of each of its fields.
 //!
 //! ```
-//! # use mz_sql_parser::ast::{Expr, Function, FunctionArgs, UnresolvedObjectName, WindowSpec, AstInfo};
+//! # use mz_sql_parser::ast::{Expr, Function, FunctionArgs, UnresolvedItemName, WindowSpec, AstInfo};
 //! #
 //! pub trait VisitMut<'ast, T: AstInfo> {
 //!     /* ... */
@@ -35,7 +35,7 @@
 //!     }
 //!
 //!     /* ... */
-//!     # fn visit_unresolved_object_name_mut(&mut self, node: &'ast mut UnresolvedObjectName);
+//!     # fn visit_unresolved_item_name_mut(&mut self, node: &'ast mut UnresolvedItemName);
 //!     # fn visit_function_args_mut(&mut self, node: &'ast mut FunctionArgs<T>);
 //!     # fn visit_expr_mut(&mut self, node: &'ast mut Expr<T>);
 //!     # fn visit_window_spec_mut(&mut self, node: &'ast mut WindowSpec<T>);
@@ -45,7 +45,7 @@
 //! where
 //!     V: VisitMut<'ast, T> + ?Sized,
 //! {
-//!     visitor.visit_unresolved_object_name_mut(&mut node.name);
+//!     visitor.visit_unresolved_item_name_mut(&mut node.name);
 //!     visitor.visit_function_args_mut(&mut node.args);
 //!     if let Some(filter) = &mut node.filter {
 //!         visitor.visit_expr_mut(&mut *filter);

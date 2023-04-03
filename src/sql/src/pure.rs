@@ -32,9 +32,9 @@ use mz_repr::{strconv, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CsrConnection, CsrSeedAvro,
-    CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, DeferredObjectName, Envelope, Ident,
+    CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, DeferredItemName, Envelope, Ident,
     KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection,
-    PgConfigOption, PgConfigOptionName, ReaderSchemaSelectionStrategy, UnresolvedObjectName,
+    PgConfigOption, PgConfigOptionName, ReaderSchemaSelectionStrategy, UnresolvedItemName,
 };
 use mz_storage_client::types::connections::{Connection, ConnectionContext};
 use mz_storage_client::types::sources::PostgresSourcePublicationDetails;
@@ -56,15 +56,15 @@ use crate::plan::StatementContext;
 fn subsource_gen<'a, T>(
     selected_subsources: &mut Vec<CreateSourceSubsource<Aug>>,
     catalog: &ErsatzCatalog<'a, T>,
-    source_name: &mut UnresolvedObjectName,
-) -> Result<Vec<(UnresolvedObjectName, UnresolvedObjectName, &'a T)>, PlanError> {
+    source_name: &mut UnresolvedItemName,
+) -> Result<Vec<(UnresolvedItemName, UnresolvedItemName, &'a T)>, PlanError> {
     let mut validated_requested_subsources = vec![];
 
     for subsource in selected_subsources {
         let subsource_name = match &subsource.subsource {
             Some(name) => match name {
-                DeferredObjectName::Deferred(name) => {
-                    let partial = normalize::unresolved_object_name(name.clone())?;
+                DeferredItemName::Deferred(name) => {
+                    let partial = normalize::unresolved_item_name(name.clone())?;
                     match partial.schema {
                         Some(_) => name.clone(),
                         // In cases when a prefix is not provided for the deferred name
@@ -72,7 +72,7 @@ fn subsource_gen<'a, T>(
                         None => subsource_name_gen(source_name, &partial.item)?,
                     }
                 }
-                DeferredObjectName::Named(..) => {
+                DeferredItemName::Named(..) => {
                     unreachable!("already errored on this condition")
                 }
             },
@@ -83,7 +83,7 @@ fn subsource_gen<'a, T>(
                 // the schema of the reference.
                 subsource_name_gen(
                     source_name,
-                    &normalize::unresolved_object_name(subsource.reference.clone())?.item,
+                    &normalize::unresolved_item_name(subsource.reference.clone())?.item,
                 )?
             }
         };
@@ -101,12 +101,12 @@ fn subsource_gen<'a, T>(
 /// For eg. if source is `a.b`, then `a` will be prepended to the subsource name
 /// so that it's generated in the same schema as source
 fn subsource_name_gen(
-    source_name: &UnresolvedObjectName,
+    source_name: &UnresolvedItemName,
     subsource_name: &String,
-) -> Result<UnresolvedObjectName, PlanError> {
-    let mut partial = normalize::unresolved_object_name(source_name.clone())?;
+) -> Result<UnresolvedItemName, PlanError> {
+    let mut partial = normalize::unresolved_item_name(source_name.clone())?;
     partial.item = subsource_name.to_string();
-    Ok(UnresolvedObjectName::from(partial))
+    Ok(UnresolvedItemName::from(partial))
 }
 
 /// Purifies a statement, removing any dependencies on external state.
@@ -136,9 +136,9 @@ pub async fn purify_create_source(
         ..
     } = &mut stmt;
 
-    fn named_subsource_err(name: &Option<DeferredObjectName<Aug>>) -> Result<(), PlanError> {
+    fn named_subsource_err(name: &Option<DeferredItemName<Aug>>) -> Result<(), PlanError> {
         match name {
-            Some(DeferredObjectName::Named(_)) => {
+            Some(DeferredItemName::Named(_)) => {
                 sql_bail!("Cannot manually ID qualify subsources")
             }
             _ => Ok(()),
@@ -323,7 +323,7 @@ pub async fn purify_create_source(
                         sql_bail!("FOR ALL TABLES is only valid for non-empty publications");
                     }
                     for table in &publication_tables {
-                        let upstream_name = UnresolvedObjectName::qualified(&[
+                        let upstream_name = UnresolvedItemName::qualified(&[
                             &connection.database,
                             &table.namespace,
                             &table.name,
@@ -366,7 +366,7 @@ pub async fn purify_create_source(
                     (col, qual) => (qual.to_vec(), col.as_str().to_string()),
                 };
 
-                let qual_name = UnresolvedObjectName(qual);
+                let qual_name = UnresolvedItemName(qual);
 
                 let (mut fully_qualified_name, desc) = publication_catalog
                     .resolve(qual_name)
@@ -380,7 +380,7 @@ pub async fn purify_create_source(
                         option_name: PgConfigOptionName::TextColumns.to_ast_string(),
                         err: Box::new(PlanError::UnknownColumn {
                             table: Some(
-                                normalize::unresolved_object_name(fully_qualified_name)
+                                normalize::unresolved_item_name(fully_qualified_name)
                                     .expect("known to be of valid len"),
                             ),
                             column: mz_repr::ColumnName::from(col),
@@ -414,7 +414,7 @@ pub async fn purify_create_source(
             {
                 let seq = text_columns
                     .into_iter()
-                    .map(WithOptionValue::UnresolvedObjectName)
+                    .map(WithOptionValue::UnresolvedItemName)
                     .collect();
                 text_cols_option.value = Some(WithOptionValue::Sequence(seq));
             }
@@ -437,7 +437,7 @@ pub async fn purify_create_source(
                                 let mut full_name = upstream_name.0.clone();
                                 full_name.push(name);
                                 unsupported_cols.push((
-                                    UnresolvedObjectName(full_name).to_ast_string(),
+                                    UnresolvedItemName(full_name).to_ast_string(),
                                     Oid(c.type_oid),
                                 ));
                                 continue;
@@ -498,11 +498,11 @@ pub async fn purify_create_source(
                 let transient_id = GlobalId::Transient(get_transient_subsource_id());
 
                 let subsource =
-                    scx.allocate_resolved_object_name(transient_id, subsource_name.clone())?;
+                    scx.allocate_resolved_item_name(transient_id, subsource_name.clone())?;
 
                 targeted_subsources.push(CreateSourceSubsource {
                     reference: upstream_name,
-                    subsource: Some(DeferredObjectName::Named(subsource)),
+                    subsource: Some(DeferredItemName::Named(subsource)),
                 });
 
                 // Create the subsource statement
@@ -569,7 +569,7 @@ pub async fn purify_create_source(
                         }
                     };
                     for (name, (_, desc)) in available_subsources {
-                        let upstream_name = UnresolvedObjectName::from(name.clone());
+                        let upstream_name = UnresolvedItemName::from(name.clone());
                         let subsource_name = subsource_name_gen(source_name, &name.item)?;
                         validated_requested_subsources.push((upstream_name, subsource_name, desc));
                     }
@@ -622,11 +622,11 @@ pub async fn purify_create_source(
                 let transient_id = GlobalId::Transient(get_transient_subsource_id());
 
                 let subsource =
-                    scx.allocate_resolved_object_name(transient_id, subsource_name.clone())?;
+                    scx.allocate_resolved_item_name(transient_id, subsource_name.clone())?;
 
                 targeted_subsources.push(CreateSourceSubsource {
                     reference: upstream_name,
-                    subsource: Some(DeferredObjectName::Named(subsource)),
+                    subsource: Some(DeferredItemName::Named(subsource)),
                 });
 
                 // Create the subsource statement
@@ -662,25 +662,25 @@ pub async fn purify_create_source(
     // Take name from input or generate name
     let (name, subsource) = match progress_subsource {
         Some(name) => match name {
-            DeferredObjectName::Deferred(name) => (
+            DeferredItemName::Deferred(name) => (
                 name.clone(),
-                scx.allocate_resolved_object_name(transient_id, name.clone())?,
+                scx.allocate_resolved_item_name(transient_id, name.clone())?,
             ),
-            DeferredObjectName::Named(_) => unreachable!("already checked for this value"),
+            DeferredItemName::Named(_) => unreachable!("already checked for this value"),
         },
         None => {
             let (item, prefix) = source_name.0.split_last().unwrap();
             let mut suggested_name = prefix.to_vec();
             suggested_name.push(format!("{}_progress", item).into());
 
-            let partial = normalize::unresolved_object_name(UnresolvedObjectName(suggested_name))?;
+            let partial = normalize::unresolved_item_name(UnresolvedItemName(suggested_name))?;
             let qualified = scx.allocate_qualified_name(partial)?;
             let found_name = scx.catalog.find_available_name(qualified);
             let full_name = scx.catalog.resolve_full_name(&found_name);
 
             (
-                UnresolvedObjectName::from(full_name.clone()),
-                crate::names::ResolvedObjectName::Object {
+                UnresolvedItemName::from(full_name.clone()),
+                crate::names::ResolvedItemName::Item {
                     id: transient_id,
                     qualifiers: found_name.qualifiers,
                     full_name,
@@ -692,7 +692,7 @@ pub async fn purify_create_source(
 
     let (columns, constraints) = scx.relation_desc_into_table_defs(progress_desc)?;
 
-    *progress_subsource = Some(DeferredObjectName::Named(subsource));
+    *progress_subsource = Some(DeferredItemName::Named(subsource));
 
     // Create the subsource statement
     let subsource = CreateSubsourceStatement {

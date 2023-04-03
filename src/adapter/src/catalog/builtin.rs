@@ -3688,7 +3688,7 @@ mod tests {
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID};
     use mz_sql::catalog::{CatalogSchema, SessionCatalog};
     use mz_sql::func::OP_IMPLS;
-    use mz_sql::names::{PartialObjectName, ResolvedDatabaseSpecifier};
+    use mz_sql::names::{PartialItemName, ResolvedDatabaseSpecifier};
 
     use crate::catalog::{Catalog, CatalogItem, SYSTEM_CONN_ID};
 
@@ -3799,7 +3799,7 @@ mod tests {
             let conn_catalog = catalog.for_system_session();
             let resolve_type_oid = |item: &str| {
                 conn_catalog
-                    .resolve_item(&PartialObjectName {
+                    .resolve_item(&PartialItemName {
                         database: None,
                         // All functions we check exist in PG, so the types must, as
                         // well
@@ -3894,7 +3894,7 @@ mod tests {
                             .resolve_entry(
                                 None,
                                 &vec![(ResolvedDatabaseSpecifier::Ambient, schema.id().clone())],
-                                &PartialObjectName {
+                                &PartialItemName {
                                     database: None,
                                     schema: Some(schema.name().schema.clone()),
                                     item: ty.name.to_string(),
@@ -4031,7 +4031,7 @@ mod tests {
                 view.schema == PG_CATALOG_SCHEMA || view.schema == INFORMATION_SCHEMA
             }) {
                 let item = conn_catalog
-                    .resolve_item(&PartialObjectName {
+                    .resolve_item(&PartialItemName {
                         database: None,
                         schema: Some(view.schema.to_string()),
                         item: view.name.to_string(),

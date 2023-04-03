@@ -62,13 +62,13 @@ use mz_sql_parser::ast::{
     HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator,
     Limit, OrderByExpr, Query, Select, SelectItem, SelectOption, SelectOptionName, SetExpr,
     SetOperator, ShowStatement, SubscriptPosition, TableAlias, TableFactor, TableFunction,
-    TableWithJoins, UnresolvedObjectName, UpdateStatement, Value, Values, WindowFrame,
+    TableWithJoins, UnresolvedItemName, UpdateStatement, Value, Values, WindowFrame,
     WindowFrameBound, WindowFrameUnits, WindowSpec,
 };
 
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
 use crate::func::{self, Func, FuncSpec};
-use crate::names::{Aug, PartialObjectName, ResolvedDataType, ResolvedObjectName};
+use crate::names::{Aug, PartialItemName, ResolvedDataType, ResolvedItemName};
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
@@ -172,7 +172,7 @@ fn try_push_projection_order_by(
 
 pub fn plan_insert_query(
     scx: &StatementContext,
-    table_name: ResolvedObjectName,
+    table_name: ResolvedItemName,
     columns: Vec<Ident>,
     source: InsertSource<Aug>,
     returning: Vec<SelectItem<Aug>>,
@@ -319,7 +319,7 @@ pub fn plan_insert_query(
     }
 
     let returning = {
-        let (scope, typ) = if let ResolvedObjectName::Object { full_name, .. } = table_name {
+        let (scope, typ) = if let ResolvedItemName::Item { full_name, .. } = table_name {
             let desc = table.desc(&full_name)?;
             let scope = Scope::from_source(Some(full_name.clone().into()), desc.iter_names());
             let typ = desc.typ().clone();
@@ -376,7 +376,7 @@ pub fn plan_insert_query(
 
 pub fn plan_copy_from(
     scx: &StatementContext,
-    table_name: ResolvedObjectName,
+    table_name: ResolvedItemName,
     columns: Vec<Ident>,
 ) -> Result<(GlobalId, RelationDesc, Vec<usize>), PlanError> {
     let table = scx.get_item_by_resolved_name(&table_name)?;
@@ -558,7 +558,7 @@ pub fn plan_update_query(
 
 pub fn plan_mutation_query_inner(
     qcx: QueryContext,
-    table_name: ResolvedObjectName,
+    table_name: ResolvedItemName,
     alias: Option<TableAlias>,
     using: Vec<TableWithJoins<Aug>>,
     assignments: Vec<Assignment<Aug>>,
@@ -566,7 +566,7 @@ pub fn plan_mutation_query_inner(
 ) -> Result<ReadThenWritePlan, PlanError> {
     // Get global ID.
     let id = match table_name {
-        ResolvedObjectName::Object { id, .. } => id,
+        ResolvedItemName::Item { id, .. } => id,
         _ => sql_bail!("cannot mutate non-user table"),
     };
 
@@ -2084,7 +2084,7 @@ fn plan_scalar_table_funcs(
         // A single table-function might return several columns as a record
         let num_cols = scope.len();
         for i in 0..scope.len() {
-            scope.items[i].table_name = Some(PartialObjectName {
+            scope.items[i].table_name = Some(PartialItemName {
                 database: None,
                 schema: None,
                 item: id.clone(),
@@ -2102,7 +2102,7 @@ fn plan_scalar_table_funcs(
     let mut i = 0;
     for (id, num_cols) in table_funcs.values().zip(num_cols) {
         for _ in 0..num_cols {
-            scope.items[i].table_name = Some(PartialObjectName {
+            scope.items[i].table_name = Some(PartialItemName {
                 database: None,
                 schema: None,
                 item: id.clone(),
@@ -2114,7 +2114,7 @@ fn plan_scalar_table_funcs(
         // Ordinality column. This doubles as the
         // `is_exists_column_for_a_table_function_that_was_in_the_target_list` later on
         // because it only needs to be NULL or not.
-        scope.items[i].table_name = Some(PartialObjectName {
+        scope.items[i].table_name = Some(PartialItemName {
             database: None,
             schema: None,
             item: id.clone(),
@@ -2443,7 +2443,7 @@ fn plan_rows_from(
 fn plan_rows_from_internal<'a>(
     qcx: &QueryContext,
     functions: impl IntoIterator<Item = &'a TableFunction<Aug>>,
-    table_name: Option<&UnresolvedObjectName>,
+    table_name: Option<&UnresolvedItemName>,
 ) -> Result<(HirRelationExpr, Scope, Vec<usize>), PlanError> {
     let mut functions = functions.into_iter();
     let mut num_cols = Vec::new();
@@ -2558,9 +2558,9 @@ fn plan_table_function_internal(
     qcx: &QueryContext,
     TableFunction { name, args }: &TableFunction<Aug>,
     with_ordinality: bool,
-    table_name: Option<&UnresolvedObjectName>,
+    table_name: Option<&UnresolvedItemName>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
-    if *name == UnresolvedObjectName::unqualified("values") {
+    if *name == UnresolvedItemName::unqualified("values") {
         // Produce a nice error message for the common typo
         // `SELECT * FROM VALUES (1)`.
         sql_bail!("VALUES expression in FROM clause must be surrounded by parentheses");
@@ -2588,12 +2588,12 @@ fn plan_table_function_internal(
             plan_exprs(ecx, args)?
         }
     };
-    let resolved_name = normalize::unresolved_object_name(name.clone())?;
+    let resolved_name = normalize::unresolved_item_name(name.clone())?;
     let table_name = match table_name {
-        Some(table_name) => normalize::unresolved_object_name(table_name.clone())?.item,
+        Some(table_name) => normalize::unresolved_item_name(table_name.clone())?.item,
         None => resolved_name.item.clone(),
     };
-    let scope_name = Some(PartialObjectName {
+    let scope_name = Some(PartialItemName {
         database: None,
         schema: None,
         item: table_name,
@@ -2650,7 +2650,7 @@ fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scop
         let table_name = normalize::ident(name.to_owned());
         for (i, item) in scope.items.iter_mut().enumerate() {
             item.table_name = if item.allow_unqualified_references {
-                Some(PartialObjectName {
+                Some(PartialItemName {
                     database: None,
                     schema: None,
                     item: table_name.clone(),
@@ -2747,7 +2747,7 @@ fn invent_column_name(
                 _ => None,
             },
             Expr::Function(func) => {
-                let name = normalize::unresolved_object_name(func.name.clone()).ok()?;
+                let name = normalize::unresolved_item_name(func.name.clone()).ok()?;
                 if name.schema.as_deref() == Some("mz_internal") {
                     None
                 } else {
@@ -2825,7 +2825,7 @@ fn expand_select_item<'a>(
         } => {
             *ecx.qcx.scx.ambiguous_columns.borrow_mut() = true;
             let table_name =
-                normalize::unresolved_object_name(UnresolvedObjectName(table_name.clone()))?;
+                normalize::unresolved_item_name(UnresolvedItemName(table_name.clone()))?;
             let out: Vec<_> = ecx
                 .scope
                 .items
@@ -2862,7 +2862,7 @@ fn expand_select_item<'a>(
                 if let [name] = ident.as_slice() {
                     if let Ok(items) = ecx.scope.items_from_table(
                         &[],
-                        &PartialObjectName {
+                        &PartialItemName {
                             database: None,
                             schema: None,
                             item: name.as_str().to_string(),
@@ -3874,7 +3874,7 @@ where
 fn plan_collate(
     ecx: &ExprContext,
     expr: &Expr<Aug>,
-    collation: &UnresolvedObjectName,
+    collation: &UnresolvedItemName,
 ) -> Result<CoercibleScalarExpr, PlanError> {
     if collation.0.len() == 2
         && collation.0[0] == Ident::new("pg_catalog")
@@ -4134,7 +4134,7 @@ fn plan_aggregate(
         bail_unsupported!("aggregate window functions");
     }
 
-    let name = normalize::unresolved_object_name(name.clone())?;
+    let name = normalize::unresolved_item_name(name.clone())?;
 
     // We follow PostgreSQL's rule here for mapping `count(*)` into the
     // generalized function selection framework. The rule is simple: the user
@@ -4224,7 +4224,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
 
     // If the name is qualified, it must refer to a column in a table.
     if !names.is_empty() {
-        let table_name = normalize::unresolved_object_name(UnresolvedObjectName(names))?;
+        let table_name = normalize::unresolved_item_name(UnresolvedItemName(names))?;
         let i = ecx
             .scope
             .resolve_table_column(&ecx.qcx.outer_scopes, &table_name, &col_name)?;
@@ -4242,7 +4242,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
     // to a table.
     let items = ecx.scope.items_from_table(
         &ecx.qcx.outer_scopes,
-        &PartialObjectName {
+        &PartialItemName {
             database: None,
             schema: None,
             item: col_name.as_str().to_owned(),
@@ -4325,7 +4325,7 @@ fn plan_function<'a>(
         distinct,
     }: &'a Function<Aug>,
 ) -> Result<HirScalarExpr, PlanError> {
-    let unresolved_name = normalize::unresolved_object_name(name.clone())?;
+    let unresolved_name = normalize::unresolved_item_name(name.clone())?;
 
     let impls = match resolve_func(ecx, name, args)? {
         Func::Aggregate(_) if ecx.allow_aggregates => {
@@ -4445,7 +4445,7 @@ fn plan_function<'a>(
 /// If the name does not specify a known built-in function, returns an error.
 pub fn resolve_func(
     ecx: &ExprContext,
-    name: &UnresolvedObjectName,
+    name: &UnresolvedItemName,
     args: &mz_sql_parser::ast::FunctionArgs<Aug>,
 ) -> Result<&'static Func, PlanError> {
     if let Ok(i) = ecx.qcx.scx.resolve_function(name.clone()) {
@@ -4482,7 +4482,7 @@ pub fn resolve_func(
         Some((i, q)) if i.as_str().starts_with("json_") => {
             let mut jsonb_version = q.to_vec();
             jsonb_version.push(Ident::new(i.as_str().replace("json_", "jsonb_")));
-            let jsonb_version = UnresolvedObjectName(jsonb_version);
+            let jsonb_version = UnresolvedItemName(jsonb_version);
             match resolve_func(ecx, &jsonb_version, args) {
                 Ok(_) => Some(format!("Try using {}", jsonb_version)),
                 Err(_) => None,
@@ -5235,10 +5235,10 @@ impl<'a> QueryContext<'a> {
     /// CTE.
     pub fn resolve_table_name(
         &self,
-        object: ResolvedObjectName,
+        object: ResolvedItemName,
     ) -> Result<(HirRelationExpr, Scope), PlanError> {
         match object {
-            ResolvedObjectName::Object { id, full_name, .. } => {
+            ResolvedItemName::Item { id, full_name, .. } => {
                 let name = full_name.into();
                 let item = self.scx.get_item(&id);
                 let desc = item
@@ -5253,7 +5253,7 @@ impl<'a> QueryContext<'a> {
 
                 Ok((expr, scope))
             }
-            ResolvedObjectName::Cte { id, name } => {
+            ResolvedItemName::Cte { id, name } => {
                 let name = name.into();
                 let cte = self.ctes.get(&id).unwrap();
                 let expr = HirRelationExpr::Get {
@@ -5265,7 +5265,7 @@ impl<'a> QueryContext<'a> {
 
                 Ok((expr, scope))
             }
-            ResolvedObjectName::Error => unreachable!("should have been caught in name resolution"),
+            ResolvedItemName::Error => unreachable!("should have been caught in name resolution"),
         }
     }
 

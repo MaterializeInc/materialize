@@ -31,7 +31,7 @@ use crate::ast::{
 };
 use crate::catalog::{CatalogItemType, SessionCatalog};
 use crate::names::{
-    self, Aug, NameSimplifier, ResolvedClusterName, ResolvedDatabaseName, ResolvedObjectName,
+    self, Aug, NameSimplifier, ResolvedClusterName, ResolvedDatabaseName, ResolvedItemName,
     ResolvedSchemaName,
 };
 use crate::parse;
@@ -469,7 +469,7 @@ fn show_all_objects<'a>(
 pub fn show_indexes<'a>(
     scx: &'a StatementContext<'a>,
     from_schema: Option<ResolvedSchemaName>,
-    on_object: Option<ResolvedObjectName>,
+    on_object: Option<ResolvedItemName>,
     in_cluster: Option<ResolvedClusterName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {

@@ -16,19 +16,19 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
-    ColumnDef, RawObjectName, ShowStatement, TableConstraint, UnresolvedDatabaseName,
+    ColumnDef, RawItemName, ShowStatement, TableConstraint, UnresolvedDatabaseName,
     UnresolvedSchemaName,
 };
 use mz_storage_client::types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
 
-use crate::ast::{Ident, ObjectType, Statement, UnresolvedObjectName};
+use crate::ast::{Ident, ObjectType, Statement, UnresolvedItemName};
 use crate::catalog::{
     CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, SessionCatalog,
 };
 use crate::names::{
-    self, Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName,
-    QualifiedObjectName, RawDatabaseSpecifier, ResolvedDataType, ResolvedDatabaseSpecifier,
-    ResolvedObjectName, ResolvedSchemaName, SchemaSpecifier,
+    self, Aug, DatabaseId, FullItemName, ItemQualifiers, PartialItemName, QualifiedItemName,
+    RawDatabaseSpecifier, ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedItemName,
+    ResolvedSchemaName, SchemaSpecifier,
 };
 use crate::normalize;
 use crate::plan::error::PlanError;
@@ -437,7 +437,7 @@ impl<'a> StatementContext<'a> {
         self.pcx.ok_or_else(|| sql_err!("no plan context"))
     }
 
-    pub fn allocate_full_name(&self, name: PartialObjectName) -> Result<FullObjectName, PlanError> {
+    pub fn allocate_full_name(&self, name: PartialItemName) -> Result<FullItemName, PlanError> {
         let (database, schema): (RawDatabaseSpecifier, String) = match (name.database, name.schema)
         {
             (None, None) => {
@@ -473,7 +473,7 @@ impl<'a> StatementContext<'a> {
             (Some(database), Some(schema)) => (RawDatabaseSpecifier::Name(database), schema),
         };
         let item = name.item;
-        Ok(FullObjectName {
+        Ok(FullItemName {
             database,
             schema,
             item,
@@ -482,8 +482,8 @@ impl<'a> StatementContext<'a> {
 
     pub fn allocate_qualified_name(
         &self,
-        name: PartialObjectName,
-    ) -> Result<QualifiedObjectName, PlanError> {
+        name: PartialItemName,
+    ) -> Result<QualifiedItemName, PlanError> {
         let full_name = self.allocate_full_name(name)?;
         let database_spec = match full_name.database {
             RawDatabaseSpecifier::Ambient => ResolvedDatabaseSpecifier::Ambient,
@@ -496,8 +496,8 @@ impl<'a> StatementContext<'a> {
             .resolve_schema_in_database(&database_spec, &Ident::new(full_name.schema))?
             .id()
             .clone();
-        Ok(QualifiedObjectName {
-            qualifiers: ObjectQualifiers {
+        Ok(QualifiedItemName {
+            qualifiers: ItemQualifiers {
                 database_spec,
                 schema_spec,
             },
@@ -505,8 +505,8 @@ impl<'a> StatementContext<'a> {
         })
     }
 
-    pub fn allocate_temporary_full_name(&self, name: PartialObjectName) -> FullObjectName {
-        FullObjectName {
+    pub fn allocate_temporary_full_name(&self, name: PartialItemName) -> FullItemName {
+        FullItemName {
             database: RawDatabaseSpecifier::Ambient,
             schema: name.schema.unwrap_or_else(|| "mz_temp".to_owned()),
             item: name.item,
@@ -515,8 +515,8 @@ impl<'a> StatementContext<'a> {
 
     pub fn allocate_temporary_qualified_name(
         &self,
-        name: PartialObjectName,
-    ) -> Result<QualifiedObjectName, PlanError> {
+        name: PartialItemName,
+    ) -> Result<QualifiedItemName, PlanError> {
         if let Some(name) = name.schema {
             if name
                 != self
@@ -531,8 +531,8 @@ impl<'a> StatementContext<'a> {
             }
         }
 
-        Ok(QualifiedObjectName {
-            qualifiers: ObjectQualifiers {
+        Ok(QualifiedItemName {
+            qualifiers: ItemQualifiers {
                 database_spec: ResolvedDatabaseSpecifier::Ambient,
                 schema_spec: SchemaSpecifier::Temporary,
             },
@@ -540,17 +540,17 @@ impl<'a> StatementContext<'a> {
         })
     }
 
-    // Creates a `ResolvedObjectName::Object` from a `GlobalId` and an
-    // `UnresolvedObjectName`.
-    pub fn allocate_resolved_object_name(
+    // Creates a `ResolvedItemName::Item` from a `GlobalId` and an
+    // `UnresolvedItemName`.
+    pub fn allocate_resolved_item_name(
         &self,
         id: GlobalId,
-        name: UnresolvedObjectName,
-    ) -> Result<ResolvedObjectName, PlanError> {
-        let partial = normalize::unresolved_object_name(name)?;
+        name: UnresolvedItemName,
+    ) -> Result<ResolvedItemName, PlanError> {
+        let partial = normalize::unresolved_item_name(name)?;
         let qualified = self.allocate_qualified_name(partial.clone())?;
         let full_name = self.allocate_full_name(partial)?;
-        Ok(ResolvedObjectName::Object {
+        Ok(ResolvedItemName::Item {
             id,
             qualifiers: qualified.qualifiers,
             full_name,
@@ -623,17 +623,17 @@ impl<'a> StatementContext<'a> {
         self.catalog.get_schema(database_spec, schema_spec)
     }
 
-    pub fn item_exists(&self, name: &QualifiedObjectName) -> bool {
+    pub fn item_exists(&self, name: &QualifiedItemName) -> bool {
         self.catalog.item_exists(name)
     }
 
-    pub fn resolve_item(&self, name: RawObjectName) -> Result<&dyn CatalogItem, PlanError> {
+    pub fn resolve_item(&self, name: RawItemName) -> Result<&dyn CatalogItem, PlanError> {
         match name {
-            RawObjectName::Name(name) => {
-                let name = normalize::unresolved_object_name(name)?;
+            RawItemName::Name(name) => {
+                let name = normalize::unresolved_item_name(name)?;
                 Ok(self.catalog.resolve_item(&name)?)
             }
-            RawObjectName::Id(id, _) => {
+            RawItemName::Id(id, _) => {
                 let gid = id.parse()?;
                 Ok(self.catalog.get_item(&gid))
             }
@@ -646,20 +646,20 @@ impl<'a> StatementContext<'a> {
 
     pub fn get_item_by_resolved_name(
         &self,
-        name: &ResolvedObjectName,
+        name: &ResolvedItemName,
     ) -> Result<&dyn CatalogItem, PlanError> {
         match name {
-            ResolvedObjectName::Object { id, .. } => Ok(self.get_item(id)),
-            ResolvedObjectName::Cte { .. } => sql_bail!("non-user item"),
-            ResolvedObjectName::Error => unreachable!("should have been caught in name resolution"),
+            ResolvedItemName::Item { id, .. } => Ok(self.get_item(id)),
+            ResolvedItemName::Cte { .. } => sql_bail!("non-user item"),
+            ResolvedItemName::Error => unreachable!("should have been caught in name resolution"),
         }
     }
 
     pub fn resolve_function(
         &self,
-        name: UnresolvedObjectName,
+        name: UnresolvedItemName,
     ) -> Result<&dyn CatalogItem, PlanError> {
-        let name = normalize::unresolved_object_name(name)?;
+        let name = normalize::unresolved_item_name(name)?;
         Ok(self.catalog.resolve_function(&name)?)
     }
 

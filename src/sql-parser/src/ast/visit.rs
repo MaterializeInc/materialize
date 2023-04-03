@@ -26,7 +26,7 @@
 //! by invoking the right visitor method of each of its fields.
 //!
 //! ```
-//! # use mz_sql_parser::ast::{Expr, Function, FunctionArgs, UnresolvedObjectName, WindowSpec, Raw, AstInfo};
+//! # use mz_sql_parser::ast::{Expr, Function, FunctionArgs, UnresolvedItemName, WindowSpec, Raw, AstInfo};
 //! #
 //! pub trait Visit<'ast, T: AstInfo> {
 //!     /* ... */
@@ -36,7 +36,7 @@
 //!     }
 //!
 //!     /* ... */
-//!     # fn visit_unresolved_object_name(&mut self, node: &'ast UnresolvedObjectName);
+//!     # fn visit_unresolved_item_name(&mut self, node: &'ast UnresolvedItemName);
 //!     # fn visit_function_args(&mut self, node: &'ast FunctionArgs<T>);
 //!     # fn visit_expr(&mut self, node: &'ast Expr<T>);
 //!     # fn visit_window_spec(&mut self, node: &'ast WindowSpec<T>);
@@ -46,7 +46,7 @@
 //! where
 //!     V: Visit<'ast, T> + ?Sized,
 //! {
-//!     visitor.visit_unresolved_object_name(&node.name);
+//!     visitor.visit_unresolved_item_name(&node.name);
 //!     visitor.visit_function_args(&node.args);
 //!     if let Some(filter) = &node.filter {
 //!         visitor.visit_expr(&*filter);
@@ -105,7 +105,7 @@
 //! ```
 //! use std::error::Error;
 //!
-//! use mz_sql_parser::ast::{Ident, Raw, AstInfo, RawObjectName};
+//! use mz_sql_parser::ast::{Ident, Raw, AstInfo, RawItemName};
 //! use mz_sql_parser::ast::visit::{self, Visit};
 //!
 //! struct IdentCollector<'ast> {
@@ -117,9 +117,9 @@
 //!         self.idents.push(node);
 //!         visit::visit_ident(self, node);
 //!     }
-//!     fn visit_object_name(&mut self, name: &'ast <Raw as AstInfo>::ObjectName) {
+//!     fn visit_item_name(&mut self, name: &'ast <Raw as AstInfo>::ItemName) {
 //!         match name {
-//!             RawObjectName::Name(n) | RawObjectName::Id(_, n) => {
+//!             RawItemName::Name(n) | RawItemName::Id(_, n) => {
 //!                 for node in &n.0 {
 //!                     self.idents.push(node);
 //!                     visit::visit_ident(self, node);

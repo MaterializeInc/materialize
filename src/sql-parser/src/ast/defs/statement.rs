@@ -29,9 +29,9 @@ use enum_kinds::EnumKind;
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     AstInfo, ColumnDef, CreateConnection, CreateSinkConnection, CreateSourceConnection,
-    CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, DeferredObjectName, Envelope,
+    CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, DeferredItemName, Envelope,
     Expr, Format, Ident, KeyConstraint, Query, SelectItem, SourceIncludeMetadata, TableAlias,
-    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedName, UnresolvedObjectName,
+    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedName,
     UnresolvedSchemaName, Value,
 };
 
@@ -184,7 +184,7 @@ impl_display_t!(SelectStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct InsertStatement<T: AstInfo> {
     /// TABLE
-    pub table_name: T::ObjectName,
+    pub table_name: T::ItemName,
     /// COLUMNS
     pub columns: Vec<Ident>,
     /// A SQL query that specifies what to insert.
@@ -215,7 +215,7 @@ impl_display_t!(InsertStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CopyRelation<T: AstInfo> {
     Table {
-        name: T::ObjectName,
+        name: T::ItemName,
         columns: Vec<Ident>,
     },
     Select(SelectStatement<T>),
@@ -346,7 +346,7 @@ impl_display_t!(CopyStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UpdateStatement<T: AstInfo> {
     /// `FROM`
-    pub table_name: T::ObjectName,
+    pub table_name: T::ItemName,
     /// Column assignments
     pub assignments: Vec<Assignment<T>>,
     /// WHERE
@@ -373,7 +373,7 @@ impl_display_t!(UpdateStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DeleteStatement<T: AstInfo> {
     /// `FROM`
-    pub table_name: T::ObjectName,
+    pub table_name: T::ItemName,
     /// `AS`
     pub alias: Option<TableAlias>,
     /// `USING`
@@ -459,7 +459,7 @@ impl_display_t!(KafkaBroker);
 pub enum KafkaBrokerTunnel<T: AstInfo> {
     Direct,
     AwsPrivatelink(KafkaBrokerAwsPrivatelink<T>),
-    SshTunnel(T::ObjectName),
+    SshTunnel(T::ItemName),
 }
 
 impl<T: AstInfo> AstDisplay for KafkaBrokerTunnel<T> {
@@ -516,7 +516,7 @@ impl_display_t!(KafkaBrokerAwsPrivatelinkOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct KafkaBrokerAwsPrivatelink<T: AstInfo> {
-    pub connection: T::ObjectName,
+    pub connection: T::ItemName,
     pub options: Vec<KafkaBrokerAwsPrivatelinkOption<T>>,
 }
 
@@ -536,7 +536,7 @@ impl_display_t!(KafkaBrokerAwsPrivatelink);
 /// `CREATE CONNECTION`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateConnectionStatement<T: AstInfo> {
-    pub name: UnresolvedObjectName,
+    pub name: UnresolvedItemName,
     pub connection: CreateConnection<T>,
     pub if_not_exists: bool,
 }
@@ -557,7 +557,7 @@ impl_display_t!(CreateConnectionStatement);
 /// `CREATE SOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSourceStatement<T: AstInfo> {
-    pub name: UnresolvedObjectName,
+    pub name: UnresolvedItemName,
     pub in_cluster: Option<T::ClusterName>,
     pub col_names: Vec<Ident>,
     pub connection: CreateSourceConnection<T>,
@@ -568,7 +568,7 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub key_constraint: Option<KeyConstraint>,
     pub with_options: Vec<CreateSourceOption<T>>,
     pub referenced_subsources: Option<ReferencedSubsources<T>>,
-    pub progress_subsource: Option<DeferredObjectName<T>>,
+    pub progress_subsource: Option<DeferredItemName<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
@@ -630,8 +630,8 @@ impl_display_t!(CreateSourceStatement);
 /// A selected subsource in a FOR TABLES (..) statement
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSourceSubsource<T: AstInfo> {
-    pub reference: UnresolvedObjectName,
-    pub subsource: Option<DeferredObjectName<T>>,
+    pub reference: UnresolvedItemName,
+    pub subsource: Option<DeferredItemName<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceSubsource<T> {
@@ -706,7 +706,7 @@ impl<T: AstInfo> AstDisplay for CreateSubsourceOption<T> {
 /// `CREATE SUBSOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSubsourceStatement<T: AstInfo> {
-    pub name: UnresolvedObjectName,
+    pub name: UnresolvedItemName,
     pub columns: Vec<ColumnDef<T>>,
     pub constraints: Vec<TableConstraint<T>>,
     pub if_not_exists: bool,
@@ -776,10 +776,10 @@ impl<T: AstInfo> AstDisplay for CreateSinkOption<T> {
 /// `CREATE SINK`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSinkStatement<T: AstInfo> {
-    pub name: UnresolvedObjectName,
+    pub name: UnresolvedItemName,
     pub in_cluster: Option<T::ClusterName>,
     pub if_not_exists: bool,
-    pub from: T::ObjectName,
+    pub from: T::ItemName,
     pub connection: CreateSinkConnection<T>,
     pub format: Option<Format<T>>,
     pub envelope: Option<Envelope>,
@@ -822,7 +822,7 @@ impl_display_t!(CreateSinkStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ViewDefinition<T: AstInfo> {
     /// View name
-    pub name: UnresolvedObjectName,
+    pub name: UnresolvedItemName,
     pub columns: Vec<Ident>,
     pub query: Query<T>,
 }
@@ -877,7 +877,7 @@ impl_display_t!(CreateViewStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateMaterializedViewStatement<T: AstInfo> {
     pub if_exists: IfExistsBehavior,
-    pub name: UnresolvedObjectName,
+    pub name: UnresolvedItemName,
     pub columns: Vec<Ident>,
     pub in_cluster: Option<T::ClusterName>,
     pub query: Query<T>,
@@ -920,7 +920,7 @@ impl_display_t!(CreateMaterializedViewStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateTableStatement<T: AstInfo> {
     /// Table name
-    pub name: UnresolvedObjectName,
+    pub name: UnresolvedItemName,
     /// Optional schema
     pub columns: Vec<ColumnDef<T>>,
     pub constraints: Vec<TableConstraint<T>>,
@@ -957,7 +957,7 @@ pub struct CreateIndexStatement<T: AstInfo> {
     pub name: Option<Ident>,
     pub in_cluster: Option<T::ClusterName>,
     /// `ON` table or view name
-    pub on_name: T::ObjectName,
+    pub on_name: T::ItemName,
     /// Expressions that form part of the index key. If not included, the
     /// key_parts will be inferred from the named object.
     pub key_parts: Option<Vec<Expr<T>>>,
@@ -1104,7 +1104,7 @@ impl_display!(RoleAttribute);
 /// A `CREATE SECRET` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSecretStatement<T: AstInfo> {
-    pub name: UnresolvedObjectName,
+    pub name: UnresolvedItemName,
     pub if_not_exists: bool,
     pub value: Expr<T>,
 }
@@ -1126,7 +1126,7 @@ impl_display_t!(CreateSecretStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateTypeStatement<T: AstInfo> {
     /// Name of the created type.
-    pub name: UnresolvedObjectName,
+    pub name: UnresolvedItemName,
     /// The new type's "base type".
     pub as_type: CreateTypeAs<T>,
 }
@@ -1432,7 +1432,7 @@ impl_display_t!(AlterOwnerStatement);
 pub struct AlterObjectRenameStatement {
     pub object_type: ObjectType,
     pub if_exists: bool,
-    pub name: UnresolvedObjectName,
+    pub name: UnresolvedItemName,
     pub to_item_name: Ident,
 }
 
@@ -1460,7 +1460,7 @@ pub enum AlterIndexAction<T: AstInfo> {
 /// `ALTER INDEX ... {RESET, SET}`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlterIndexStatement<T: AstInfo> {
-    pub index_name: UnresolvedObjectName,
+    pub index_name: UnresolvedItemName,
     pub if_exists: bool,
     pub action: AlterIndexAction<T>,
 }
@@ -1499,7 +1499,7 @@ pub enum AlterSinkAction<T: AstInfo> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlterSinkStatement<T: AstInfo> {
-    pub sink_name: UnresolvedObjectName,
+    pub sink_name: UnresolvedItemName,
     pub if_exists: bool,
     pub action: AlterSinkAction<T>,
 }
@@ -1536,7 +1536,7 @@ pub enum AlterSourceAction<T: AstInfo> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlterSourceStatement<T: AstInfo> {
-    pub source_name: UnresolvedObjectName,
+    pub source_name: UnresolvedItemName,
     pub if_exists: bool,
     pub action: AlterSourceAction<T>,
 }
@@ -1570,7 +1570,7 @@ impl_display_t!(AlterSourceStatement);
 /// `ALTER SECRET ... AS`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlterSecretStatement<T: AstInfo> {
-    pub name: UnresolvedObjectName,
+    pub name: UnresolvedItemName,
     pub if_exists: bool,
     pub value: Expr<T>,
 }
@@ -1592,7 +1592,7 @@ impl_display_t!(AlterSecretStatement);
 /// `ALTER CONNECTION ... ROTATE KEYS`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlterConnectionStatement {
-    pub name: UnresolvedObjectName,
+    pub name: UnresolvedItemName,
     pub if_exists: bool,
 }
 
@@ -1713,7 +1713,7 @@ pub struct DropObjectsStatement {
     /// An optional `IF EXISTS` clause. (Non-standard.)
     pub if_exists: bool,
     /// One or more objects to drop. (ANSI SQL requires exactly one.)
-    pub names: Vec<UnresolvedObjectName>,
+    pub names: Vec<UnresolvedItemName>,
     /// Whether `CASCADE` was specified. This will be `false` when
     /// `RESTRICT` or no drop behavior at all was specified.
     pub cascade: bool,
@@ -1740,7 +1740,7 @@ pub struct DropRolesStatement {
     /// An optional `IF EXISTS` clause. (Non-standard.)
     pub if_exists: bool,
     /// One or more objects to drop. (ANSI SQL requires exactly one.)
-    pub names: Vec<UnresolvedObjectName>,
+    pub names: Vec<UnresolvedItemName>,
 }
 
 impl AstDisplay for DropRolesStatement {
@@ -1759,7 +1759,7 @@ pub struct DropClustersStatement {
     /// An optional `IF EXISTS` clause. (Non-standard.)
     pub if_exists: bool,
     /// One or more objects to drop. (ANSI SQL requires exactly one.)
-    pub names: Vec<UnresolvedObjectName>,
+    pub names: Vec<UnresolvedItemName>,
     /// Whether `CASCADE` was specified. This will be `false` when
     /// `RESTRICT` or no drop behavior at all was specified.
     pub cascade: bool,
@@ -1876,7 +1876,7 @@ pub enum ShowObjectType<T: AstInfo> {
     },
     Index {
         in_cluster: Option<T::ClusterName>,
-        on_object: Option<T::ObjectName>,
+        on_object: Option<T::ItemName>,
     },
     Table,
     View,
@@ -1972,7 +1972,7 @@ impl_display_t!(ShowObjectsStatement);
 /// Note: this is a MySQL-specific statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ShowColumnsStatement<T: AstInfo> {
-    pub table_name: T::ObjectName,
+    pub table_name: T::ItemName,
     pub filter: Option<ShowStatementFilter<T>>,
 }
 
@@ -1992,7 +1992,7 @@ impl_display_t!(ShowColumnsStatement);
 /// `SHOW CREATE VIEW <view>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ShowCreateViewStatement<T: AstInfo> {
-    pub view_name: T::ObjectName,
+    pub view_name: T::ItemName,
 }
 
 impl<T: AstInfo> AstDisplay for ShowCreateViewStatement<T> {
@@ -2006,7 +2006,7 @@ impl_display_t!(ShowCreateViewStatement);
 /// `SHOW CREATE MATERIALIZED VIEW <name>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ShowCreateMaterializedViewStatement<T: AstInfo> {
-    pub materialized_view_name: T::ObjectName,
+    pub materialized_view_name: T::ItemName,
 }
 
 impl<T: AstInfo> AstDisplay for ShowCreateMaterializedViewStatement<T> {
@@ -2020,7 +2020,7 @@ impl_display_t!(ShowCreateMaterializedViewStatement);
 /// `SHOW CREATE SOURCE <source>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ShowCreateSourceStatement<T: AstInfo> {
-    pub source_name: T::ObjectName,
+    pub source_name: T::ItemName,
 }
 
 impl<T: AstInfo> AstDisplay for ShowCreateSourceStatement<T> {
@@ -2034,7 +2034,7 @@ impl_display_t!(ShowCreateSourceStatement);
 /// `SHOW CREATE TABLE <table>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ShowCreateTableStatement<T: AstInfo> {
-    pub table_name: T::ObjectName,
+    pub table_name: T::ItemName,
 }
 
 impl<T: AstInfo> AstDisplay for ShowCreateTableStatement<T> {
@@ -2048,7 +2048,7 @@ impl_display_t!(ShowCreateTableStatement);
 /// `SHOW CREATE SINK <sink>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ShowCreateSinkStatement<T: AstInfo> {
-    pub sink_name: T::ObjectName,
+    pub sink_name: T::ItemName,
 }
 
 impl<T: AstInfo> AstDisplay for ShowCreateSinkStatement<T> {
@@ -2062,7 +2062,7 @@ impl_display_t!(ShowCreateSinkStatement);
 /// `SHOW CREATE INDEX <index>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ShowCreateIndexStatement<T: AstInfo> {
-    pub index_name: T::ObjectName,
+    pub index_name: T::ItemName,
 }
 
 impl<T: AstInfo> AstDisplay for ShowCreateIndexStatement<T> {
@@ -2075,7 +2075,7 @@ impl_display_t!(ShowCreateIndexStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ShowCreateConnectionStatement<T: AstInfo> {
-    pub connection_name: T::ObjectName,
+    pub connection_name: T::ItemName,
 }
 
 impl<T: AstInfo> AstDisplay for ShowCreateConnectionStatement<T> {
@@ -2216,7 +2216,7 @@ impl_display_t!(SubscribeStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SubscribeRelation<T: AstInfo> {
-    Name(T::ObjectName),
+    Name(T::ItemName),
     Query(Query<T>),
 }
 
@@ -2372,9 +2372,9 @@ pub enum WithOptionValue<T: AstInfo> {
     Value(Value),
     Ident(Ident),
     DataType(T::DataType),
-    Secret(T::ObjectName),
-    Object(T::ObjectName),
-    UnresolvedObjectName(UnresolvedObjectName),
+    Secret(T::ItemName),
+    Item(T::ItemName),
+    UnresolvedItemName(UnresolvedItemName),
     Sequence(Vec<WithOptionValue<T>>),
     // Special cases.
     ClusterReplicas(Vec<ReplicaDefinition<T>>),
@@ -2396,8 +2396,8 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 f.write_str("SECRET ");
                 f.write_node(name)
             }
-            WithOptionValue::Object(obj) => f.write_node(obj),
-            WithOptionValue::UnresolvedObjectName(r) => f.write_node(r),
+            WithOptionValue::Item(obj) => f.write_node(obj),
+            WithOptionValue::UnresolvedItemName(r) => f.write_node(r),
             WithOptionValue::ClusterReplicas(replicas) => {
                 f.write_str("(");
                 f.write_node(&display::comma_separated(replicas));
@@ -2582,8 +2582,8 @@ impl_display!(ExplainStage);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Explainee<T: AstInfo> {
-    View(T::ObjectName),
-    MaterializedView(T::ObjectName),
+    View(T::ItemName),
+    MaterializedView(T::ItemName),
     Query(Query<T>),
 }
 

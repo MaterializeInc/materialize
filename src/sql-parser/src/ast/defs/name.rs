@@ -102,44 +102,40 @@ impl AstDisplay for Ident {
 }
 impl_display!(Ident);
 
-/// A name of a table, view, custom type, etc., possibly multi-part, i.e. db.schema.obj
-/// TODO(jkosh44) There still seems to be some confusion as to what the definition of "Object" is
-///  in the parser and planner. This struct is only used for items that live in a schema, which in
-///  other parts of the code we refer to as "Item" or "Entry". "Object" tends to include clusters,
-///  replicas, databases, and schemas, which have their own struct for names.
+/// A name of a table, view, custom type, etc. that lives in a schema, possibly multi-part, i.e. db.schema.obj
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct UnresolvedObjectName(pub Vec<Ident>);
+pub struct UnresolvedItemName(pub Vec<Ident>);
 
 pub enum CatalogName {
-    ObjectName(Vec<Ident>),
+    ItemName(Vec<Ident>),
     FuncName(Vec<Ident>),
 }
 
-impl UnresolvedObjectName {
-    /// Creates an `ObjectName` with a single [`Ident`], i.e. it appears as
+impl UnresolvedItemName {
+    /// Creates an `ItemName` with a single [`Ident`], i.e. it appears as
     /// "unqualified".
-    pub fn unqualified(n: &str) -> UnresolvedObjectName {
-        UnresolvedObjectName(vec![Ident::new(n)])
+    pub fn unqualified(n: &str) -> UnresolvedItemName {
+        UnresolvedItemName(vec![Ident::new(n)])
     }
 
-    /// Creates an `ObjectName` with an [`Ident`] for each element of `n`.
+    /// Creates an `ItemName` with an [`Ident`] for each element of `n`.
     ///
     /// Panics if passed an in ineligible `&[&str]` whose length is 0 or greater
     /// than 3.
-    pub fn qualified(n: &[&str]) -> UnresolvedObjectName {
+    pub fn qualified(n: &[&str]) -> UnresolvedItemName {
         assert!(n.len() <= 3 && n.len() > 0);
-        UnresolvedObjectName(n.iter().map(|n| (*n).into()).collect::<Vec<_>>())
+        UnresolvedItemName(n.iter().map(|n| (*n).into()).collect::<Vec<_>>())
     }
 }
 
-impl AstDisplay for UnresolvedObjectName {
+impl AstDisplay for UnresolvedItemName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         display::separated(&self.0, ".").fmt(f);
     }
 }
-impl_display!(UnresolvedObjectName);
+impl_display!(UnresolvedItemName);
 
-impl AstDisplay for &UnresolvedObjectName {
+impl AstDisplay for &UnresolvedItemName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         display::separated(&self.0, ".").fmt(f);
     }
@@ -167,23 +163,23 @@ impl AstDisplay for UnresolvedDatabaseName {
 }
 impl_display!(UnresolvedDatabaseName);
 
-// The name of an object not yet created during name resolution, which should be
-// resolveable as an object name later.
+// The name of an item not yet created during name resolution, which should be
+// resolveable as an item name later.
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub enum DeferredObjectName<T: AstInfo> {
-    Named(T::ObjectName),
-    Deferred(UnresolvedObjectName),
+pub enum DeferredItemName<T: AstInfo> {
+    Named(T::ItemName),
+    Deferred(UnresolvedItemName),
 }
 
-impl<T: AstInfo> AstDisplay for DeferredObjectName<T> {
+impl<T: AstInfo> AstDisplay for DeferredItemName<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            DeferredObjectName::Named(o) => f.write_node(o),
-            DeferredObjectName::Deferred(o) => f.write_node(o),
+            DeferredItemName::Named(o) => f.write_node(o),
+            DeferredItemName::Deferred(o) => f.write_node(o),
         }
     }
 }
-impl_display_t!(DeferredObjectName);
+impl_display_t!(DeferredItemName);
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum UnresolvedName {
@@ -191,7 +187,7 @@ pub enum UnresolvedName {
     ClusterReplica(QualifiedReplica),
     Database(UnresolvedDatabaseName),
     Schema(UnresolvedSchemaName),
-    Item(UnresolvedObjectName),
+    Item(UnresolvedItemName),
 }
 
 impl AstDisplay for UnresolvedName {

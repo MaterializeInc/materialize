@@ -19,10 +19,10 @@ use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_sql_parser::ast::visit_mut::{self, VisitMut, VisitMutNode};
 use mz_sql_parser::ast::{
     Expr, Function, FunctionArgs, Ident, Op, OrderByExpr, Query, Select, SelectItem, TableAlias,
-    TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName, Value,
+    TableFactor, TableFunction, TableWithJoins, UnresolvedItemName, Value,
 };
 
-use crate::names::{Aug, PartialObjectName, ResolvedDataType};
+use crate::names::{Aug, PartialItemName, ResolvedDataType};
 use crate::normalize;
 use crate::plan::{PlanError, StatementContext};
 
@@ -72,7 +72,7 @@ impl<'a> FuncRewriter<'a> {
         }
     }
 
-    fn resolve_known_valid_data_type(&self, name: &PartialObjectName) -> ResolvedDataType {
+    fn resolve_known_valid_data_type(&self, name: &PartialItemName) -> ResolvedDataType {
         let item = self
             .scx
             .catalog
@@ -89,7 +89,7 @@ impl<'a> FuncRewriter<'a> {
     }
 
     fn int32_data_type(&self) -> ResolvedDataType {
-        self.resolve_known_valid_data_type(&PartialObjectName {
+        self.resolve_known_valid_data_type(&PartialItemName {
             database: None,
             schema: Some("pg_catalog".into()),
             item: "int4".into(),
@@ -108,7 +108,7 @@ impl<'a> FuncRewriter<'a> {
     }
 
     fn plan_agg(
-        name: UnresolvedObjectName,
+        name: UnresolvedItemName,
         expr: Expr<Aug>,
         order_by: Vec<OrderByExpr<Aug>>,
         filter: Option<Box<Expr<Aug>>>,
@@ -128,7 +128,7 @@ impl<'a> FuncRewriter<'a> {
 
     fn plan_avg(expr: Expr<Aug>, filter: Option<Box<Expr<Aug>>>, distinct: bool) -> Expr<Aug> {
         let sum = Self::plan_agg(
-            UnresolvedObjectName::qualified(&["pg_catalog", "sum"]),
+            UnresolvedItemName::qualified(&["pg_catalog", "sum"]),
             expr.clone(),
             vec![],
             filter.clone(),
@@ -136,7 +136,7 @@ impl<'a> FuncRewriter<'a> {
         )
         .call_unary(vec!["mz_internal", "mz_avg_promotion"]);
         let count = Self::plan_agg(
-            UnresolvedObjectName::qualified(&["pg_catalog", "count"]),
+            UnresolvedItemName::qualified(&["pg_catalog", "count"]),
             expr,
             vec![],
             filter,
@@ -168,14 +168,14 @@ impl<'a> FuncRewriter<'a> {
         let expr = expr.call_unary(vec!["mz_internal", "mz_avg_promotion"]);
         let expr_squared = expr.clone().multiply(expr.clone());
         let sum_squares = Self::plan_agg(
-            UnresolvedObjectName::qualified(&["pg_catalog", "sum"]),
+            UnresolvedItemName::qualified(&["pg_catalog", "sum"]),
             expr_squared,
             vec![],
             filter.clone(),
             distinct,
         );
         let sum = Self::plan_agg(
-            UnresolvedObjectName::qualified(&["pg_catalog", "sum"]),
+            UnresolvedItemName::qualified(&["pg_catalog", "sum"]),
             expr.clone(),
             vec![],
             filter.clone(),
@@ -183,7 +183,7 @@ impl<'a> FuncRewriter<'a> {
         );
         let sum_squared = sum.clone().multiply(sum);
         let count = Self::plan_agg(
-            UnresolvedObjectName::qualified(&["pg_catalog", "count"]),
+            UnresolvedItemName::qualified(&["pg_catalog", "count"]),
             expr,
             vec![],
             filter,
@@ -226,7 +226,7 @@ impl<'a> FuncRewriter<'a> {
         // would perform an explicit cast, and to match PostgreSQL we must
         // perform only an implicit cast.
         let sum = Self::plan_agg(
-            UnresolvedObjectName::qualified(&["pg_catalog", "sum"]),
+            UnresolvedItemName::qualified(&["pg_catalog", "sum"]),
             expr.negate().cast(self.int32_data_type()),
             vec![],
             filter,
@@ -253,7 +253,7 @@ impl<'a> FuncRewriter<'a> {
         // but that performs an explicit cast, and to match PostgreSQL we must
         // perform only an implicit cast.
         let sum = Self::plan_agg(
-            UnresolvedObjectName::qualified(&["pg_catalog", "sum"]),
+            UnresolvedItemName::qualified(&["pg_catalog", "sum"]),
             expr.or(Expr::Value(Value::Boolean(false)))
                 .cast(self.int32_data_type()),
             vec![],
@@ -272,7 +272,7 @@ impl<'a> FuncRewriter<'a> {
                 distinct,
                 over: None,
             }) => {
-                let name = normalize::unresolved_object_name(name.clone()).ok()?;
+                let name = normalize::unresolved_item_name(name.clone()).ok()?;
                 if let Some(database) = &name.database {
                     // If a database name is provided, we need only verify that
                     // the database exists, as presently functions can only
@@ -459,7 +459,7 @@ impl Desugarer {
                     .from(TableWithJoins {
                         relation: TableFactor::Function {
                             function: TableFunction {
-                                name: UnresolvedObjectName(vec![
+                                name: UnresolvedItemName(vec![
                                     Ident::new("mz_catalog"),
                                     Ident::new("unnest"),
                                 ]),
