@@ -72,9 +72,11 @@ tonic-build = "0.8.2"
 
 [dev-dependencies]
 datadriven = { version = "0.6.0", features = ["async"] }
+rocksdb = { version = "0.20.1", default-features = false, features = ["snappy"] }
 itertools = "0.10.5"
 tokio = { version = "1.24.2", features = ["test-util"] }
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux
 normal = ["inotify", "workspace-hack"]
+development = ["rocksdb"]
