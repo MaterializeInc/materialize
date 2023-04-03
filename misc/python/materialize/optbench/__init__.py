@@ -7,14 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from pathlib import Path
+from importlib import resources
+from importlib.abc import Traversable
 from typing import List
 
-from pkg_resources import resource_filename
 
-
-def resource_path(name: str) -> Path:
-    return Path(resource_filename(__name__, name))
+def resource_path(name: str) -> Traversable:
+    return resources.files(__package__) / name
 
 
 def scenarios() -> List[str]:
@@ -23,14 +22,14 @@ def scenarios() -> List[str]:
     of files located in both the `schema` and `workload` resource paths.
     """
     schema_files = {
-        p.stem
+        p.name.removesuffix(".sql")
         for p in resource_path("schema").iterdir()
-        if p.is_file() and p.suffix == ".sql"
+        if p.is_file() and p.name.endswith(".sql")
     }
     workload_files = {
-        p.stem
+        p.name.removesuffix(".sql")
         for p in resource_path("workload").iterdir()
-        if p.is_file() and p.suffix == ".sql"
+        if p.is_file() and p.name.endswith(".sql")
     }
 
     return sorted(schema_files.intersection(workload_files))
@@ -40,10 +39,10 @@ class Scenario:
     def __init__(self, value: str) -> None:
         self.value = value
 
-    def schema_path(self) -> Path:
+    def schema_path(self) -> Traversable:
         return resource_path(f"schema/{self}.sql")
 
-    def workload_path(self) -> Path:
+    def workload_path(self) -> Traversable:
         return resource_path(f"workload/{self}.sql")
 
     def __str__(self) -> str:
