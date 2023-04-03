@@ -140,6 +140,7 @@ impl PersistConfig {
                 stats_collection_enabled: AtomicBool::new(Self::DEFAULT_STATS_COLLECTION_ENABLED),
                 stats_filter_enabled: AtomicBool::new(Self::DEFAULT_STATS_FILTER_ENABLED),
                 batch_cas_enabled: AtomicBool::new(Self::DEFAULT_BATCH_CAS_ENABLED),
+                batch_cas_max_size: AtomicUsize::new(Self::DEFAULT_BATCH_CAS_MAX_SIZE),
                 connection_pool_batch_cas_max_size: AtomicUsize::new(
                     Self::DEFAULT_CONNECTION_POOL_BATCH_CAS_MAX_SIZE,
                 ),
@@ -195,6 +196,8 @@ impl PersistConfig {
     pub const DEFAULT_STATS_FILTER_ENABLED: bool = false;
     /// Default value for [`DynamicConfig::batch_cas_enabled`].
     pub const DEFAULT_BATCH_CAS_ENABLED: bool = false;
+    /// Default value for [`DynamicConfig::batch_cas_max_size`].
+    pub const DEFAULT_BATCH_CAS_MAX_SIZE: usize = 5;
     /// Default value for [`DynamicConfig::connection_pool_batch_cas_max_size`].
     pub const DEFAULT_CONNECTION_POOL_BATCH_CAS_MAX_SIZE: usize = 5;
 
@@ -256,7 +259,9 @@ impl ConsensusKnobs for PersistConfig {
     }
 
     fn max_batch_cas_size(&self) -> usize {
-        0
+        self.dynamic
+            .batch_cas_max_size
+            .load(DynamicConfig::LOAD_ORDERING)
     }
 }
 
@@ -296,8 +301,8 @@ pub struct DynamicConfig {
     stats_filter_enabled: AtomicBool,
 
     batch_cas_enabled: AtomicBool,
+    batch_cas_max_size: AtomicUsize,
     connection_pool_batch_cas_max_size: AtomicUsize,
-    // max_batch_cas_size: usize,
 
     // NB: These parameters are not atomically updated together in LD.
     // We put them under a single RwLock to reduce the cost of reads
@@ -563,6 +568,8 @@ pub struct PersistParameters {
     /// WIP
     pub batch_cas_enabled: Option<bool>,
     /// WIP
+    pub batch_cas_max_size: Option<usize>,
+    /// WIP
     pub connection_pool_batch_cas_max_size: Option<usize>,
 }
 
@@ -580,6 +587,7 @@ impl PersistParameters {
             stats_collection_enabled: self_stats_collection_enabled,
             stats_filter_enabled: self_stats_filter_enabled,
             batch_cas_enabled: self_batch_cas_enabled,
+            batch_cas_max_size: self_batch_cas_max_size,
             connection_pool_batch_cas_max_size: self_connection_pool_batch_cas_max_size,
         } = self;
         let Self {
@@ -591,6 +599,7 @@ impl PersistParameters {
             stats_collection_enabled: other_stats_collection_enabled,
             stats_filter_enabled: other_stats_filter_enabled,
             batch_cas_enabled: other_batch_cas_enabled,
+            batch_cas_max_size: other_batch_cas_max_size,
             connection_pool_batch_cas_max_size: other_connection_pool_batch_cas_max_size,
         } = other;
         if let Some(v) = other_blob_target_size {
@@ -617,6 +626,9 @@ impl PersistParameters {
         if let Some(v) = other_batch_cas_enabled {
             *self_batch_cas_enabled = Some(v)
         }
+        if let Some(v) = other_batch_cas_max_size {
+            *self_batch_cas_max_size = Some(v)
+        }
         if let Some(v) = other_connection_pool_batch_cas_max_size {
             *self_connection_pool_batch_cas_max_size = Some(v)
         }
@@ -637,6 +649,7 @@ impl PersistParameters {
             stats_collection_enabled,
             stats_filter_enabled,
             batch_cas_enabled,
+            batch_cas_max_size,
             connection_pool_batch_cas_max_size,
         } = self;
         blob_target_size.is_none()
@@ -647,6 +660,7 @@ impl PersistParameters {
             && stats_collection_enabled.is_none()
             && stats_filter_enabled.is_none()
             && batch_cas_enabled.is_none()
+            && batch_cas_max_size.is_none()
             && connection_pool_batch_cas_max_size.is_none()
     }
 
@@ -666,6 +680,7 @@ impl PersistParameters {
             stats_collection_enabled,
             stats_filter_enabled,
             batch_cas_enabled,
+            batch_cas_max_size,
             connection_pool_batch_cas_max_size,
         } = self;
         if let Some(blob_target_size) = blob_target_size {
@@ -712,6 +727,11 @@ impl PersistParameters {
                 .batch_cas_enabled
                 .store(*batch_cas_enabled, DynamicConfig::STORE_ORDERING);
         }
+        if let Some(batch_cas_max_size) = batch_cas_max_size {
+            cfg.dynamic
+                .batch_cas_max_size
+                .store(*batch_cas_max_size, DynamicConfig::STORE_ORDERING);
+        }
         if let Some(connection_pool_batch_cas_max_size) = connection_pool_batch_cas_max_size {
             cfg.dynamic.connection_pool_batch_cas_max_size.store(
                 *connection_pool_batch_cas_max_size,
@@ -732,6 +752,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             stats_collection_enabled: self.stats_collection_enabled.into_proto(),
             stats_filter_enabled: self.stats_filter_enabled.into_proto(),
             batch_cas_enabled: self.batch_cas_enabled.into_proto(),
+            batch_cas_max_size: self.batch_cas_max_size.into_proto(),
             connection_pool_batch_cas_max_size: self
                 .connection_pool_batch_cas_max_size
                 .into_proto(),
@@ -748,6 +769,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             stats_collection_enabled: proto.stats_collection_enabled.into_rust()?,
             stats_filter_enabled: proto.stats_filter_enabled.into_rust()?,
             batch_cas_enabled: proto.batch_cas_enabled.into_rust()?,
+            batch_cas_max_size: proto.batch_cas_max_size.into_rust()?,
             connection_pool_batch_cas_max_size: proto
                 .connection_pool_batch_cas_max_size
                 .into_rust()?,

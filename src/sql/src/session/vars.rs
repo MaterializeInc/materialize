@@ -569,6 +569,15 @@ const PERSIST_BATCH_CAS_ENABLED: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+/// Controls [`mz_persist_client::cfg::DynamicConfig::batch_cas_max_size`].
+const PERSIST_BATCH_CAS_MAX_SIZE: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("persist_batch_cas_max_size"),
+    value: &PersistConfig::DEFAULT_BATCH_CAS_MAX_SIZE,
+    description: "WIP",
+    internal: true,
+    safe: true,
+};
+
 /// Controls [`mz_persist_client::cfg::DynamicConfig::connection_pool_batch_cas_max_size`].
 const PERSIST_BATCH_CAS_POOL_SIZE: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_batch_cas_pool_size"),
@@ -1374,6 +1383,7 @@ impl Default for SystemVars {
             .with_var(&PERSIST_STATS_COLLECTION_ENABLED)
             .with_var(&PERSIST_STATS_FILTER_ENABLED)
             .with_var(&PERSIST_BATCH_CAS_ENABLED)
+            .with_var(&PERSIST_BATCH_CAS_MAX_SIZE)
             .with_var(&PERSIST_BATCH_CAS_POOL_SIZE)
             .with_var(&METRICS_RETENTION)
             .with_var(&MOCK_AUDIT_EVENT_TIMESTAMP)
@@ -1647,6 +1657,11 @@ impl SystemVars {
     /// WIP
     pub fn persist_batch_cas_enabled(&self) -> bool {
         *self.expect_value(&PERSIST_BATCH_CAS_ENABLED)
+    }
+
+    /// WIP
+    pub fn persist_batch_cas_max_size(&self) -> usize {
+        *self.expect_value(&PERSIST_BATCH_CAS_MAX_SIZE)
     }
 
     /// WIP
@@ -2654,4 +2669,5 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_STATS_FILTER_ENABLED.name()
         || name == PERSIST_BATCH_CAS_ENABLED.name()
         || name == PERSIST_BATCH_CAS_POOL_SIZE.name()
+        || name == PERSIST_BATCH_CAS_MAX_SIZE.name()
 }

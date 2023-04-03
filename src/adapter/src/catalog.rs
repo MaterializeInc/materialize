@@ -6064,6 +6064,7 @@ impl Catalog {
             stats_collection_enabled: Some(config.persist_stats_collection_enabled()),
             stats_filter_enabled: Some(config.persist_stats_filter_enabled()),
             batch_cas_enabled: Some(config.persist_batch_cas_enabled()),
+            batch_cas_max_size: Some(config.persist_batch_cas_max_size()),
             connection_pool_batch_cas_max_size: Some(config.persist_batch_cas_pool_size()),
         }
     }

@@ -272,7 +272,7 @@ impl PostgresConsensus {
 
                     batch.push(cas);
 
-                    if batch.len() == 5 {
+                    if batch.len() >= s.knobs.max_batch_cas_size() {
                         break;
                     }
                 }
