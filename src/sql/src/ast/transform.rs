@@ -22,7 +22,7 @@ use crate::ast::{
     CreateViewStatement, Expr, Ident, Query, Raw, RawObjectName, Statement, UnresolvedObjectName,
     ViewDefinition,
 };
-use crate::names::FullObjectName;
+use crate::names::FullItemName;
 
 /// Changes the `name` used in an item's `CREATE` statement. To complete a
 /// rename operation, you must also call `create_stmt_rename_refs` on all dependent
@@ -73,7 +73,7 @@ pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String
 ///   check, but will be more meaningful once the first restriction is lifted.
 pub fn create_stmt_rename_refs(
     create_stmt: &mut Statement<Raw>,
-    from_name: FullObjectName,
+    from_name: FullItemName,
     to_item_name: String,
 ) -> Result<(), String> {
     let from_object = UnresolvedObjectName::from(from_name.clone());
@@ -113,7 +113,7 @@ pub fn create_stmt_rename_refs(
 }
 
 /// Rewrites `query`'s references of `from` to `to` or errors if too ambiguous.
-fn rewrite_query(from: FullObjectName, to: String, query: &mut Query<Raw>) -> Result<(), String> {
+fn rewrite_query(from: FullItemName, to: String, query: &mut Query<Raw>) -> Result<(), String> {
     let from_ident = Ident::new(from.item.clone());
     let to_ident = Ident::new(to);
     let qual_depth =
@@ -292,7 +292,7 @@ struct CreateSqlRewriter {
 
 impl CreateSqlRewriter {
     fn rewrite_query_with_qual_depth(
-        from_name: FullObjectName,
+        from_name: FullItemName,
         to_name: Ident,
         qual_depth: usize,
         query: &mut Query<Raw>,

@@ -319,7 +319,7 @@ pub fn plan_insert_query(
     }
 
     let returning = {
-        let (scope, typ) = if let ResolvedItemName::Object { full_name, .. } = table_name {
+        let (scope, typ) = if let ResolvedItemName::Item { full_name, .. } = table_name {
             let desc = table.desc(&full_name)?;
             let scope = Scope::from_source(Some(full_name.clone().into()), desc.iter_names());
             let typ = desc.typ().clone();
@@ -566,7 +566,7 @@ pub fn plan_mutation_query_inner(
 ) -> Result<ReadThenWritePlan, PlanError> {
     // Get global ID.
     let id = match table_name {
-        ResolvedItemName::Object { id, .. } => id,
+        ResolvedItemName::Item { id, .. } => id,
         _ => sql_bail!("cannot mutate non-user table"),
     };
 
@@ -5238,7 +5238,7 @@ impl<'a> QueryContext<'a> {
         object: ResolvedItemName,
     ) -> Result<(HirRelationExpr, Scope), PlanError> {
         match object {
-            ResolvedItemName::Object { id, full_name, .. } => {
+            ResolvedItemName::Item { id, full_name, .. } => {
                 let name = full_name.into();
                 let item = self.scx.get_item(&id);
                 let desc = item

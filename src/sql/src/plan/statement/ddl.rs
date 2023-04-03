@@ -112,7 +112,7 @@ use crate::plan::{
     CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
     CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
     DropClusterReplicasPlan, DropClustersPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
-    DropSchemaPlan, FullObjectName, GrantRolePlan, HirScalarExpr, Index, Ingestion,
+    DropSchemaPlan, FullItemName, GrantRolePlan, HirScalarExpr, Index, Ingestion,
     MaterializedView, Params, Plan, QueryContext, ReplicaConfig, RevokeRolePlan, RotateKeysPlan,
     Secret, Sink, Source, SourceSinkClusterConfig, Table, Type, View,
 };
@@ -747,7 +747,7 @@ pub fn plan_create_source(
                 let r = table_casts.insert(i + 1, column_casts);
                 assert!(r.is_none(), "cannot have table defined multiple times");
 
-                let name = FullObjectName {
+                let name = FullItemName {
                     database: RawDatabaseSpecifier::Name(connection.database.clone()),
                     schema: table.namespace.clone(),
                     item: table.name.clone(),
@@ -850,7 +850,7 @@ pub fn plan_create_source(
         };
 
         let target_id = match target {
-            ResolvedItemName::Object { id, .. } => id,
+            ResolvedItemName::Item { id, .. } => id,
             ResolvedItemName::Cte { .. } | ResolvedItemName::Error => {
                 sql_bail!("[internal error] invalid target id")
             }
@@ -1008,7 +1008,7 @@ pub fn plan_create_source(
         .as_ref()
         .map(|name| match name {
             DeferredObjectName::Named(name) => match name {
-                ResolvedItemName::Object { id, .. } => Ok(*id),
+                ResolvedItemName::Item { id, .. } => Ok(*id),
                 ResolvedItemName::Cte { .. } | ResolvedItemName::Error => {
                     sql_bail!("[internal error] invalid target id")
                 }
@@ -1243,7 +1243,7 @@ pub(crate) fn load_generator_ast_to_generator(
 ) -> Result<
     (
         LoadGenerator,
-        Option<BTreeMap<FullObjectName, (usize, RelationDesc)>>,
+        Option<BTreeMap<FullItemName, (usize, RelationDesc)>>,
     ),
     PlanError,
 > {
@@ -1300,7 +1300,7 @@ pub(crate) fn load_generator_ast_to_generator(
 
     let mut available_subsources = BTreeMap::new();
     for (i, (name, desc)) in load_generator.views().iter().enumerate() {
-        let name = FullObjectName {
+        let name = FullItemName {
             database: RawDatabaseSpecifier::Name("mz_load_generators".to_owned()),
             schema: match load_generator {
                 LoadGenerator::Counter { .. } => "counter".into(),
@@ -2353,7 +2353,7 @@ pub fn plan_create_index(
     *name = Some(Ident::new(index_name.item.clone()));
     *key_parts = Some(filled_key_parts);
     let if_not_exists = *if_not_exists;
-    if let ResolvedItemName::Object { print_id, .. } = &mut stmt.on_name {
+    if let ResolvedItemName::Item { print_id, .. } = &mut stmt.on_name {
         *print_id = false;
     }
     let create_sql = normalize::create_statement(scx, Statement::CreateIndex(stmt))?;
@@ -2867,7 +2867,7 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                     )?;
 
                     let id = match &aws_privatelink.connection {
-                        ResolvedItemName::Object { id, .. } => id,
+                        ResolvedItemName::Item { id, .. } => id,
                         _ => sql_bail!(
                             "internal error: Kafka PrivateLink connection was not resolved"
                         ),
@@ -2896,7 +2896,7 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                 }
                 KafkaBrokerTunnel::SshTunnel(ssh) => {
                     let id = match &ssh {
-                        ResolvedItemName::Object { id, .. } => id,
+                        ResolvedItemName::Item { id, .. } => id,
                         _ => sql_bail!(
                             "internal error: Kafka SSH tunnel connection was not resolved"
                         ),

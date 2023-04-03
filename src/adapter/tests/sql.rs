@@ -97,7 +97,7 @@ use mz_ore::now::NOW_ZERO;
 use mz_repr::RelationDesc;
 use mz_sql::ast::{Expr, Statement};
 use mz_sql::catalog::CatalogDatabase;
-use mz_sql::names::{self, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier};
+use mz_sql::names::{self, ItemQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier};
 use mz_sql::plan::{PlanContext, QueryContext, QueryLifetime, StatementContext};
 use mz_sql::DEFAULT_SCHEMA;
 
@@ -147,7 +147,7 @@ async fn datadriven() {
                                         id,
                                         oid,
                                         name: QualifiedObjectName {
-                                            qualifiers: ObjectQualifiers {
+                                            qualifiers: ItemQualifiers {
                                                 database_spec,
                                                 schema_spec,
                                             },

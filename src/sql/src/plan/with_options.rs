@@ -76,7 +76,7 @@ impl From<&Object> for GlobalId {
 impl TryFromValue<WithOptionValue<Aug>> for Object {
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         Ok(match v {
-            WithOptionValue::Object(ResolvedItemName::Object { id, .. }) => Object(id),
+            WithOptionValue::Object(ResolvedItemName::Item { id, .. }) => Object(id),
             _ => sql_bail!("must provide an object"),
         })
     }
@@ -130,7 +130,7 @@ impl ImpliedValue for ResolvedDataType {
 impl TryFromValue<WithOptionValue<Aug>> for StringOrSecret {
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         Ok(match v {
-            WithOptionValue::Secret(ResolvedItemName::Object { id, .. }) => {
+            WithOptionValue::Secret(ResolvedItemName::Item { id, .. }) => {
                 StringOrSecret::Secret(id)
             }
             v => StringOrSecret::String(String::try_from_value(v)?),

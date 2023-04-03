@@ -19,7 +19,7 @@ use mz_controller::clusters::ClusterId;
 use mz_ore::halt;
 use mz_ore::soft_assert;
 use mz_repr::{GlobalId, RelationDesc, Row, ScalarType};
-use mz_sql::names::FullObjectName;
+use mz_sql::names::FullItemName;
 use mz_sql::plan::StatementDesc;
 use mz_sql::session::vars::Var;
 use mz_sql_parser::ast::display::AstDisplay;
@@ -188,7 +188,7 @@ pub(crate) fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
 pub fn index_sql(
     index_name: String,
     cluster_id: ClusterId,
-    view_name: FullObjectName,
+    view_name: FullItemName,
     view_desc: &RelationDesc,
     keys: &[usize],
 ) -> String {

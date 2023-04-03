@@ -29,7 +29,7 @@ use mz_sql::catalog::{
     CatalogSchema, RoleAttributes,
 };
 use mz_sql::names::{
-    DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, RoleId, SchemaId,
+    DatabaseId, ItemQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, RoleId, SchemaId,
     SchemaSpecifier, PUBLIC_ROLE_NAME,
 };
 use mz_stash::{AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
@@ -1365,7 +1365,7 @@ impl<'a> Transaction<'a> {
             items.push((
                 k.gid,
                 QualifiedObjectName {
-                    qualifiers: ObjectQualifiers {
+                    qualifiers: ItemQualifiers {
                         database_spec,
                         schema_spec: SchemaSpecifier::from(v.schema_id),
                     },

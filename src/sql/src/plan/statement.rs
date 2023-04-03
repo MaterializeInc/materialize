@@ -26,7 +26,7 @@ use crate::catalog::{
     CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, SessionCatalog,
 };
 use crate::names::{
-    self, Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName,
+    self, Aug, DatabaseId, FullItemName, ItemQualifiers, PartialObjectName,
     QualifiedObjectName, RawDatabaseSpecifier, ResolvedDataType, ResolvedDatabaseSpecifier,
     ResolvedItemName, ResolvedSchemaName, SchemaSpecifier,
 };
@@ -437,7 +437,7 @@ impl<'a> StatementContext<'a> {
         self.pcx.ok_or_else(|| sql_err!("no plan context"))
     }
 
-    pub fn allocate_full_name(&self, name: PartialObjectName) -> Result<FullObjectName, PlanError> {
+    pub fn allocate_full_name(&self, name: PartialObjectName) -> Result<FullItemName, PlanError> {
         let (database, schema): (RawDatabaseSpecifier, String) = match (name.database, name.schema)
         {
             (None, None) => {
@@ -473,7 +473,7 @@ impl<'a> StatementContext<'a> {
             (Some(database), Some(schema)) => (RawDatabaseSpecifier::Name(database), schema),
         };
         let item = name.item;
-        Ok(FullObjectName {
+        Ok(FullItemName {
             database,
             schema,
             item,
@@ -497,7 +497,7 @@ impl<'a> StatementContext<'a> {
             .id()
             .clone();
         Ok(QualifiedObjectName {
-            qualifiers: ObjectQualifiers {
+            qualifiers: ItemQualifiers {
                 database_spec,
                 schema_spec,
             },
@@ -505,8 +505,8 @@ impl<'a> StatementContext<'a> {
         })
     }
 
-    pub fn allocate_temporary_full_name(&self, name: PartialObjectName) -> FullObjectName {
-        FullObjectName {
+    pub fn allocate_temporary_full_name(&self, name: PartialObjectName) -> FullItemName {
+        FullItemName {
             database: RawDatabaseSpecifier::Ambient,
             schema: name.schema.unwrap_or_else(|| "mz_temp".to_owned()),
             item: name.item,
@@ -532,7 +532,7 @@ impl<'a> StatementContext<'a> {
         }
 
         Ok(QualifiedObjectName {
-            qualifiers: ObjectQualifiers {
+            qualifiers: ItemQualifiers {
                 database_spec: ResolvedDatabaseSpecifier::Ambient,
                 schema_spec: SchemaSpecifier::Temporary,
             },
@@ -550,7 +550,7 @@ impl<'a> StatementContext<'a> {
         let partial = normalize::unresolved_object_name(name)?;
         let qualified = self.allocate_qualified_name(partial.clone())?;
         let full_name = self.allocate_full_name(partial)?;
-        Ok(ResolvedItemName::Object {
+        Ok(ResolvedItemName::Item {
             id,
             qualifiers: qualified.qualifiers,
             full_name,
@@ -649,7 +649,7 @@ impl<'a> StatementContext<'a> {
         name: &ResolvedItemName,
     ) -> Result<&dyn CatalogItem, PlanError> {
         match name {
-            ResolvedItemName::Object { id, .. } => Ok(self.get_item(id)),
+            ResolvedItemName::Item { id, .. } => Ok(self.get_item(id)),
             ResolvedItemName::Cte { .. } => sql_bail!("non-user item"),
             ResolvedItemName::Error => unreachable!("should have been caught in name resolution"),
         }

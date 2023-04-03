@@ -39,7 +39,7 @@ use mz_storage_client::types::sources::SourceDesc;
 
 use crate::func::Func;
 use crate::names::{
-    Aug, DatabaseId, FullObjectName, FullSchemaName, ObjectId, PartialObjectName,
+    Aug, DatabaseId, FullItemName, FullSchemaName, ObjectId, PartialObjectName,
     QualifiedObjectName, QualifiedSchemaName, ResolvedDatabaseSpecifier, RoleId, SchemaSpecifier,
 };
 use crate::normalize;
@@ -211,7 +211,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName;
 
     /// Returns a fully qualified human readable name from fully qualified non-human readable name
-    fn resolve_full_name(&self, name: &QualifiedObjectName) -> FullObjectName;
+    fn resolve_full_name(&self, name: &QualifiedObjectName) -> FullItemName;
 
     /// Returns a fully qualified human readable schema name from fully qualified non-human
     /// readable schema name
@@ -490,7 +490,7 @@ pub trait CatalogItem {
     ///
     /// If the catalog item is not of a type that produces data (i.e., a sink or
     /// an index), it returns an error.
-    fn desc(&self, name: &FullObjectName) -> Result<Cow<RelationDesc>, CatalogError>;
+    fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, CatalogError>;
 
     /// Returns the resolved function.
     ///

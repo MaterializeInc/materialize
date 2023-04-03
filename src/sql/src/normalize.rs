@@ -30,7 +30,7 @@ use mz_sql_parser::ast::{
 };
 
 use crate::names::{
-    Aug, FullObjectName, PartialObjectName, PartialSchemaName, RawDatabaseSpecifier,
+    Aug, FullItemName, PartialObjectName, PartialSchemaName, RawDatabaseSpecifier,
 };
 use crate::plan::error::PlanError;
 use crate::plan::statement::StatementContext;
@@ -132,7 +132,7 @@ impl From<SqlValueOrSecret> for Option<Value> {
 /// Unnormalizes an object name.
 ///
 /// This is the inverse of the [`unresolved_object_name`] function.
-pub fn unresolve(name: FullObjectName) -> UnresolvedObjectName {
+pub fn unresolve(name: FullItemName) -> UnresolvedObjectName {
     let mut out = vec![];
     if let RawDatabaseSpecifier::Name(n) = name.database {
         out.push(Ident::new(n));
@@ -144,14 +144,14 @@ pub fn unresolve(name: FullObjectName) -> UnresolvedObjectName {
 
 /// Converts an `UnresolvedObjectName` to a `FullObjectName` if the
 /// `UnresolvedObjectName` is fully specified. Otherwise returns an error.
-pub fn full_name(mut raw_name: UnresolvedObjectName) -> Result<FullObjectName, PlanError> {
+pub fn full_name(mut raw_name: UnresolvedObjectName) -> Result<FullItemName, PlanError> {
     match raw_name.0.len() {
-        3 => Ok(FullObjectName {
+        3 => Ok(FullItemName {
             item: ident(raw_name.0.pop().unwrap()),
             schema: ident(raw_name.0.pop().unwrap()),
             database: RawDatabaseSpecifier::Name(ident(raw_name.0.pop().unwrap())),
         }),
-        2 => Ok(FullObjectName {
+        2 => Ok(FullItemName {
             item: ident(raw_name.0.pop().unwrap()),
             schema: ident(raw_name.0.pop().unwrap()),
             database: RawDatabaseSpecifier::Ambient,

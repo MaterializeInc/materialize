@@ -41,11 +41,11 @@ use crate::plan::PlanError;
 /// Catalog names compare case sensitively. Use
 /// [`normalize::unresolved_object_name`] to
 /// perform proper case folding if converting an [`UnresolvedObjectName`] to a
-/// `FullObjectName`.
+/// `FullItemName`.
 ///
 /// [`normalize::unresolved_object_name`]: crate::normalize::unresolved_object_name
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
-pub struct FullObjectName {
+pub struct FullItemName {
     /// The database name.
     pub database: RawDatabaseSpecifier,
     /// The schema name.
@@ -54,7 +54,7 @@ pub struct FullObjectName {
     pub item: String,
 }
 
-impl fmt::Display for FullObjectName {
+impl fmt::Display for FullItemName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let RawDatabaseSpecifier::Name(database) = &self.database {
             write!(f, "{}.", database)?;
@@ -63,8 +63,8 @@ impl fmt::Display for FullObjectName {
     }
 }
 
-impl From<FullObjectName> for UnresolvedObjectName {
-    fn from(full_name: FullObjectName) -> UnresolvedObjectName {
+impl From<FullItemName> for UnresolvedObjectName {
+    fn from(full_name: FullItemName) -> UnresolvedObjectName {
         let mut name_parts = Vec::new();
         if let RawDatabaseSpecifier::Name(database) = full_name.database {
             name_parts.push(Ident::new(database));
@@ -79,7 +79,7 @@ impl From<FullObjectName> for UnresolvedObjectName {
 /// and schema.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct QualifiedObjectName {
-    pub qualifiers: ObjectQualifiers,
+    pub qualifiers: ItemQualifiers,
     pub item: String,
 }
 
@@ -131,8 +131,8 @@ impl fmt::Display for PartialObjectName {
     }
 }
 
-impl From<FullObjectName> for PartialObjectName {
-    fn from(n: FullObjectName) -> PartialObjectName {
+impl From<FullItemName> for PartialObjectName {
+    fn from(n: FullItemName) -> PartialObjectName {
         let database = match n.database {
             RawDatabaseSpecifier::Ambient => None,
             RawDatabaseSpecifier::Name(name) => Some(name),
@@ -362,17 +362,17 @@ impl From<SchemaSpecifier> for u64 {
 pub struct Aug;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ObjectQualifiers {
+pub struct ItemQualifiers {
     pub database_spec: ResolvedDatabaseSpecifier,
     pub schema_spec: SchemaSpecifier,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ResolvedItemName {
-    Object {
+    Item {
         id: GlobalId,
-        qualifiers: ObjectQualifiers,
-        full_name: FullObjectName,
+        qualifiers: ItemQualifiers,
+        full_name: FullItemName,
         // Whether this object, when printed out, should use [id AS name] syntax. We
         // want this for things like tables and sources, but not for things like
         // types.
@@ -388,7 +388,7 @@ pub enum ResolvedItemName {
 impl ResolvedItemName {
     pub fn full_name_str(&self) -> String {
         match self {
-            ResolvedItemName::Object { full_name, .. } => full_name.to_string(),
+            ResolvedItemName::Item { full_name, .. } => full_name.to_string(),
             ResolvedItemName::Cte { name, .. } => name.clone(),
             ResolvedItemName::Error => "error in name resolution".to_string(),
         }
@@ -398,7 +398,7 @@ impl ResolvedItemName {
 impl AstDisplay for ResolvedItemName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            ResolvedItemName::Object {
+            ResolvedItemName::Item {
                 id,
                 qualifiers: _,
                 full_name,
@@ -513,8 +513,8 @@ pub enum ResolvedDataType {
     },
     Named {
         id: GlobalId,
-        qualifiers: ObjectQualifiers,
-        full_name: FullObjectName,
+        qualifiers: ItemQualifiers,
+        full_name: FullItemName,
         modifiers: Vec<i64>,
         print_id: bool,
     },
@@ -995,7 +995,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                             item.item_type(),
                             CatalogItemType::Func | CatalogItemType::Type
                         );
-                        ResolvedItemName::Object {
+                        ResolvedItemName::Item {
                             id: item.id(),
                             qualifiers: item.name().qualifiers.clone(),
                             full_name: self.catalog.resolve_full_name(item.name()),
@@ -1040,7 +1040,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                         return ResolvedItemName::Error;
                     }
                 };
-                ResolvedItemName::Object {
+                ResolvedItemName::Item {
                     id: gid,
                     qualifiers: item.name().qualifiers.clone(),
                     full_name,
@@ -1182,7 +1182,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             Secret(secret) => {
                 let object_name = self.fold_object_name(secret);
                 match &object_name {
-                    ResolvedItemName::Object { id, .. } => {
+                    ResolvedItemName::Item { id, .. } => {
                         let item = self.catalog.get_item(id);
                         if item.item_type() != CatalogItemType::Secret {
                             self.status =
@@ -1199,7 +1199,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             Object(obj) => {
                 let object_name = self.fold_object_name(obj);
                 match &object_name {
-                    ResolvedItemName::Object { .. } => {}
+                    ResolvedItemName::Item { .. } => {}
                     ResolvedItemName::Cte { .. } => {
                         self.status = Err(PlanError::InvalidObject(Box::new(object_name.clone())));
                     }
@@ -1291,7 +1291,7 @@ impl<'a> TransientResolver<'a> {
 impl Fold<Aug, Aug> for TransientResolver<'_> {
     fn fold_object_name(&mut self, object_name: ResolvedItemName) -> ResolvedItemName {
         match object_name {
-            ResolvedItemName::Object {
+            ResolvedItemName::Item {
                 id: transient_id @ GlobalId::Transient(_),
                 qualifiers,
                 full_name,
@@ -1300,7 +1300,7 @@ impl Fold<Aug, Aug> for TransientResolver<'_> {
                 let id = match self.allocation.get(&transient_id) {
                     Some(id) => *id,
                     None => {
-                        let obj = ResolvedItemName::Object {
+                        let obj = ResolvedItemName::Item {
                             id: transient_id,
                             qualifiers: qualifiers.clone(),
                             full_name: full_name.clone(),
@@ -1310,7 +1310,7 @@ impl Fold<Aug, Aug> for TransientResolver<'_> {
                         transient_id
                     }
                 };
-                ResolvedItemName::Object {
+                ResolvedItemName::Item {
                     id,
                     qualifiers,
                     full_name,
@@ -1375,7 +1375,7 @@ pub struct DependencyVisitor {
 
 impl<'ast> Visit<'ast, Aug> for DependencyVisitor {
     fn visit_object_name(&mut self, object_name: &'ast <Aug as AstInfo>::ObjectName) {
-        if let ResolvedItemName::Object { id, .. } = object_name {
+        if let ResolvedItemName::Item { id, .. } = object_name {
             self.ids.insert(*id);
         }
     }
@@ -1420,7 +1420,7 @@ impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
     }
 
     fn visit_object_name_mut(&mut self, name: &mut ResolvedItemName) {
-        if let ResolvedItemName::Object {
+        if let ResolvedItemName::Item {
             id,
             full_name,
             print_id,

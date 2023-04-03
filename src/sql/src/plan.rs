@@ -60,7 +60,7 @@ use crate::ast::{
 };
 use crate::catalog::{CatalogType, IdReference, RoleAttributes};
 use crate::names::{
-    Aug, DatabaseId, FullObjectName, ObjectId, QualifiedObjectName, ResolvedDatabaseSpecifier,
+    Aug, DatabaseId, FullItemName, ObjectId, QualifiedObjectName, ResolvedDatabaseSpecifier,
     RoleId, SchemaId,
 };
 
@@ -746,7 +746,7 @@ pub struct AlterSourcePlan {
 #[derive(Debug)]
 pub struct AlterItemRenamePlan {
     pub id: GlobalId,
-    pub current_full_name: FullObjectName,
+    pub current_full_name: FullItemName,
     pub to_name: String,
     pub object_type: ObjectType,
 }
