@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::bail;
 use mz_ore::error::ErrorExt;
-use rdkafka::client::ClientContext;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
 use tokio::time::Duration;
@@ -212,18 +211,13 @@ pub async fn create_consumer(
     connection_context: &ConnectionContext,
     kafka_connection: &KafkaConnection,
     topic: &str,
-) -> Result<Arc<BaseConsumer<BrokerRewritingClientContext<KafkaErrCheckContext>>>, PlanError> {
+) -> Result<Arc<BaseConsumer<BrokerRewritingClientContext<MzClientContext>>>, PlanError> {
     let consumer: BaseConsumer<_> = kafka_connection
-        .create_with_context(
-            connection_context,
-            KafkaErrCheckContext::default(),
-            &BTreeMap::new(),
-        )
+        .create_with_context(connection_context, MzClientContext, &BTreeMap::new())
         .await
         .map_err(|e| sql_err!("{}", e.display_with_causes()))?;
     let consumer = Arc::new(consumer);
 
-    let context = Arc::clone(consumer.context());
     let owned_topic = String::from(topic);
     // Wait for a metadata request for up to two seconds. This greatly
     // increases the probability that we'll see a connection error if
@@ -235,16 +229,11 @@ pub async fn create_consumer(
     // ensure that at least one metadata request succeeds.
     task::spawn_blocking(move || format!("kafka_get_metadata:{topic}"), {
         let consumer = Arc::clone(&consumer);
-        move || {
-            let _ = consumer.fetch_metadata(Some(&owned_topic), Duration::from_secs(2));
-        }
+        move || consumer.fetch_metadata(Some(&owned_topic), Duration::from_secs(2))
     })
     .await
-    .map_err(|e| sql_err!("{}", e))?;
-    let error = context.inner().error.lock().expect("lock poisoned");
-    if let Some(error) = &*error {
-        sql_bail!("librdkafka: {}", error)
-    }
+    .map_err(|e| sql_err!("{}", e))?
+    .map_err(|e| sql_err!("librdkafka: {}", e.display_with_causes()))?;
     Ok(consumer)
 }
 
@@ -365,6 +354,7 @@ pub struct KafkaErrCheckContext {
     pub error: Arc<Mutex<Option<String>>>,
 }
 
+/*
 impl ConsumerContext for KafkaErrCheckContext {}
 
 impl ClientContext for KafkaErrCheckContext {
@@ -398,3 +388,4 @@ impl ClientContext for KafkaErrCheckContext {
         MzClientContext.error(error, reason)
     }
 }
+*/
