@@ -20,6 +20,15 @@ use crate::{
 };
 
 const AUTH_PATH: [&str; 5] = ["identity", "resources", "auth", "v1", "api-token"];
+const REFRESH_AUTH_PATH: [&str; 7] = [
+    "identity",
+    "resources",
+    "auth",
+    "v1",
+    "api-token",
+    "token",
+    "refresh",
+];
 const USERS_PATH: [&str; 4] = ["identity", "resources", "users", "v3"];
 const CREATE_USERS_PATH: [&str; 5] = ["frontegg", "identity", "resources", "users", "v2"];
 const APP_PASSWORDS_PATH: [&str; 5] = ["identity", "resources", "users", "api-tokens", "v1"];
@@ -39,7 +48,9 @@ pub mod user;
 #[serde(rename_all = "camelCase")]
 pub struct AuthenticationResponse {
     pub access_token: String,
-    pub expires_in: u64,
+    pub expires: String,
+    pub expires_in: i64,
+    pub refresh_token: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,10 +60,21 @@ pub struct AuthenticationRequest<'a> {
     pub secret: &'a str,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshRequest<'a> {
+    pub refreshToken: &'a str,
+}
+
 #[derive(Debug, Clone)]
 pub struct Auth {
     pub token: String,
+    /// Refresh at indicates the time at which the token should be refreshed.
+    /// It equals the expiring time / 2
     pub refresh_at: SystemTime,
+    pub expires: String,
+    pub expires_in: i64,
+    pub refresh_token: String,
 }
 
 /// An API client for Frontegg.
@@ -145,23 +167,41 @@ impl Client {
     /// and returns the authentication token.
     pub async fn auth(&self) -> Result<Auth, FronteggError> {
         let mut auth = self.auth.lock().await;
+        let mut req;
         match &*auth {
-            Some(auth) if SystemTime::now() < auth.refresh_at => {
-                return Ok(auth.clone());
+            Some(auth) => {
+                if SystemTime::now() < auth.refresh_at {
+                    return Ok(auth.clone());
+                } else {
+                    // Auth is available in the client but needs a refresh request.
+                    req = self.build_request(Method::POST, REFRESH_AUTH_PATH);
+                    let refresh_request = RefreshRequest {
+                        refreshToken: auth.refresh_token.as_str(),
+                    };
+                    req = req.json(&refresh_request);
+                }
             }
-            _ => (),
+            _ => {
+                // No auth available in the client, request a new one.
+                req = self.build_request(Method::POST, AUTH_PATH);
+                let authentication_request = AuthenticationRequest {
+                    client_id: &self.app_password.client_id.to_string(),
+                    secret: &self.app_password.secret_key.to_string(),
+                };
+                req = req.json(&authentication_request);
+            }
         }
-        let req = self.build_request(Method::POST, AUTH_PATH);
-        let authentication_request = AuthenticationRequest {
-            client_id: &self.app_password.client_id.to_string(),
-            secret: &self.app_password.secret_key.to_string(),
-        };
-        let req = req.json(&authentication_request);
+
+        // Do the request
         let res: AuthenticationResponse = self.send_unauthenticated_request(req).await?;
         *auth = Some(Auth {
             token: res.access_token.clone(),
             // Refresh twice as frequently as we need to, to be safe.
-            refresh_at: SystemTime::now() + (Duration::from_secs(res.expires_in) / 2),
+            refresh_at: SystemTime::now()
+                + (Duration::from_secs(res.expires_in.try_into().unwrap()) / 2),
+            refresh_token: res.refresh_token,
+            expires: res.expires,
+            expires_in: res.expires_in,
         });
         Ok(auth.clone().unwrap())
     }

@@ -75,26 +75,21 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
+use std::future::Future;
 use std::time::Duration;
-use std::{future::Future, time::SystemTime};
 
-use claims::Claims;
-use client::Auth;
-use config::{ClientBuilder, ClientConfig};
 use derivative::Derivative;
-use error::FronteggError;
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use reqwest::Client;
+use thiserror::Error;
 use tracing::warn;
 use uuid::Uuid;
 
-use mz_ore::now::NowFn;
+use mz_ore::{now::NowFn, retry::Retry};
+
+use crate::app_password::{AppPassword, AppPasswordParseError};
 
 pub mod app_password;
-pub mod claims;
-pub mod client;
-pub mod config;
-pub mod error;
-pub mod parse;
 
 pub struct FronteggConfig {
     /// URL for the token endpoint, including full path.
@@ -105,6 +100,8 @@ pub struct FronteggConfig {
     pub tenant_id: Uuid,
     /// Function to provide system time to validate exp (expires at) field of JWTs.
     pub now: NowFn,
+    /// Number of seconds before which to attempt to renew an expiring token.
+    pub refresh_before_secs: i64,
     /// Name of admin role.
     pub admin_role: String,
 }
@@ -118,15 +115,20 @@ pub struct FronteggAuthentication {
     tenant_id: Uuid,
     now: NowFn,
     validation: Validation,
+    refresh_before_secs: i64,
     admin_role: String,
+
+    // Reqwest HTTP client pool.
+    client: Client,
 }
+
+pub const REFRESH_SUFFIX: &str = "/token/refresh";
 
 impl FronteggAuthentication {
     /// Creates a new frontegg auth. `jwk_rsa_pem` is the RSA public key to
     /// validate the JWTs. `tenant_id` must be parseable as a UUID.
     pub fn new(config: FronteggConfig) -> Self {
         let mut validation = Validation::new(Algorithm::RS256);
-
         // We validate with our own now function.
         validation.validate_exp = false;
         Self {
@@ -135,30 +137,74 @@ impl FronteggAuthentication {
             tenant_id: config.tenant_id,
             now: config.now,
             validation,
+            refresh_before_secs: config.refresh_before_secs,
             admin_role: config.admin_role,
+            client: Client::builder()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .expect("must build Client"),
         }
     }
 
-    /// Authenticates to Frontegg using a Materialize app-password and returns
-    /// an access token with a target system time for renewal
-    pub async fn auth(&self, password: &str) -> Result<Auth, FronteggError> {
-        let client = ClientBuilder::default()
-            .endpoint(self.admin_endpoint.parse().unwrap())
-            .build(ClientConfig {
-                app_password: password.parse()?,
-            });
+    async fn request<T, F, U>(&self, f: F) -> Result<T, FronteggError>
+    where
+        F: Copy + Fn(Client) -> U,
+        U: Future<Output = Result<T, FronteggError>>,
+    {
+        Retry::default()
+            .clamp_backoff(Duration::from_secs(1))
+            .max_duration(Duration::from_secs(30))
+            .retry_async_canceling(|state| async move {
+                // Return a Result<Result<T, FronteggError>, FronteggError> so we can
+                // differentiate a retryable or not error.
+                match f(self.client.clone()).await {
+                    Err(FronteggError::ReqwestError(err)) if err.is_timeout() => {
+                        warn!("frontegg timeout, attempt {}: {}", state.i, err);
+                        Err(FronteggError::from(err))
+                    }
+                    v => Ok(v),
+                }
+            })
+            .await?
+    }
 
-        Ok(client.auth().await.unwrap())
+    /// Exchanges a password for a JWT token.
+    pub async fn exchange_password_for_token(
+        &self,
+        password: &str,
+    ) -> Result<ApiTokenResponse, FronteggError> {
+        let password: AppPassword = password.parse()?;
+        self.exchange_client_secret_for_token(password.client_id, password.secret_key)
+            .await
+    }
+
+    /// Exchanges a client id and secret for a jwt token.
+    pub async fn exchange_client_secret_for_token(
+        &self,
+        client_id: Uuid,
+        secret: Uuid,
+    ) -> Result<ApiTokenResponse, FronteggError> {
+        self.request(|client| async move {
+            let res: ApiTokenResponse = client
+                .post(&self.admin_endpoint)
+                .json(&ApiTokenArgs { client_id, secret })
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<ApiTokenResponse>()
+                .await?;
+            Ok(res)
+        })
+        .await
     }
 
     /// Validates an access token and its `tenant_id`.
-    /// Returns the token claims
-    pub fn validate_token(
+    pub fn validate_access_token(
         &self,
-        token: String,
+        token: &str,
         expected_email: Option<&str>,
     ) -> Result<Claims, FronteggError> {
-        let msg = decode::<Claims>(&token, &self.decoding_key, &self.validation)?;
+        let msg = decode::<Claims>(token, &self.decoding_key, &self.validation)?;
         if msg.claims.exp < self.now.as_secs() {
             return Err(FronteggError::TokenExpired);
         }
@@ -182,46 +228,50 @@ impl FronteggAuthentication {
     ///
     /// The claims contained in the provided access token and all updated
     /// claims will be processed by `claims_processor`.
-    pub async fn continuously_validate(
+    pub fn continuously_validate_access_token(
         &self,
-        password: &str,
+        mut token: ApiTokenResponse,
         expected_email: String,
         mut claims_processor: impl FnMut(Claims),
     ) -> Result<impl Future<Output = ()>, FronteggError> {
         // Do an initial full validity check of the token.
-        let client = ClientBuilder::default()
-            .endpoint(self.admin_endpoint.parse().unwrap())
-            .build(ClientConfig {
-                app_password: password.parse()?,
-            });
-        let mut auth = client.auth().await.unwrap();
-        let claims = self.validate_token(auth.token.clone(), Some(&expected_email))?;
+        let mut claims = self.validate_access_token(&token.access_token, Some(&expected_email))?;
         claims_processor(claims.clone());
         let frontegg = self.clone();
 
         // This future resolves once the token expiry time has been reached. It will
         // repeatedly attempt to refresh the token before it expires.
         let expire_future = async move {
+            let refresh_url = format!("{}{}", frontegg.admin_endpoint, REFRESH_SUFFIX);
             loop {
-                let current_time = SystemTime::now();
-
-                let sleep_time = auth
-                    .refresh_at
-                    .duration_since(current_time)
-                    .unwrap_or(Duration::from_millis(0));
-                tokio::time::sleep(sleep_time).await;
+                let expire_in = claims.exp - frontegg.now.as_secs();
+                let check_in = u64::try_from(expire_in - frontegg.refresh_before_secs).unwrap_or(0);
+                tokio::time::sleep(Duration::from_secs(check_in)).await;
 
                 let refresh_request = async {
+                    let refresh = RefreshToken {
+                        refresh_token: token.refresh_token,
+                    };
                     loop {
                         let resp = async {
-                            let auth = client.auth().await.unwrap();
-                            let claims = frontegg
-                                .validate_token(auth.token.clone(), Some(&expected_email))?;
-                            Ok::<(Auth, Claims), anyhow::Error>((auth, claims))
+                            let token = frontegg
+                                .client
+                                .post(&refresh_url)
+                                .json(&refresh)
+                                .send()
+                                .await?
+                                .error_for_status()?
+                                .json::<ApiTokenResponse>()
+                                .await?;
+                            let claims = frontegg.validate_access_token(
+                                &token.access_token,
+                                Some(&expected_email),
+                            )?;
+                            Ok::<(ApiTokenResponse, Claims), anyhow::Error>((token, claims))
                         };
                         match resp.await {
-                            Ok((auth, claims)) => {
-                                return (auth, claims);
+                            Ok((token, claims)) => {
+                                return (token, claims);
                             }
                             Err(_) => {
                                 // Some error occurred, retry again later. 5 seconds chosen arbitrarily.
@@ -230,18 +280,15 @@ impl FronteggAuthentication {
                         }
                     }
                 };
-
-                let sleep_time = auth
-                    .refresh_at
-                    .duration_since(current_time)
-                    .unwrap_or(Duration::from_millis(0));
-                let expire_in = tokio::time::sleep(sleep_time);
+                let expire_in = u64::try_from(claims.exp - frontegg.now.as_secs()).unwrap_or(0);
+                let expire_in = tokio::time::sleep(Duration::from_secs(expire_in));
 
                 tokio::select! {
                     _ = expire_in => return (),
-                    (refresh_auth, refresh_claims) = refresh_request => {
-                        auth = refresh_auth;
-                        claims_processor(refresh_claims.clone());
+                    (refresh_token, refresh_claims) = refresh_request => {
+                        token = refresh_token;
+                        claims = refresh_claims;
+                        claims_processor(claims.clone());
                     },
                 };
             }
@@ -256,4 +303,70 @@ impl FronteggAuthentication {
     pub fn admin_role(&self) -> &str {
         &self.admin_role
     }
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiTokenArgs {
+    pub client_id: Uuid,
+    pub secret: Uuid,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshToken {
+    pub refresh_token: String,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiTokenResponse {
+    pub expires: String,
+    pub expires_in: i64,
+    pub access_token: String,
+    pub refresh_token: String,
+}
+
+// TODO: Do we care about the sub? Do we need to validate the sub or other
+// things, even if unused?
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Claims {
+    pub exp: i64,
+    pub email: String,
+    pub sub: Uuid,
+    pub user_id: Option<Uuid>,
+    pub tenant_id: Uuid,
+    pub roles: Vec<String>,
+    pub permissions: Vec<String>,
+}
+
+impl Claims {
+    /// Extracts the most specific user ID present in the token.
+    pub fn best_user_id(&self) -> Uuid {
+        self.user_id.unwrap_or(self.sub)
+    }
+
+    /// Returns true if the claims belong to a frontegg admin.
+    pub fn admin(&self, admin_name: &str) -> bool {
+        self.roles.iter().any(|role| role == admin_name)
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum FronteggError {
+    #[error(transparent)]
+    InvalidPasswordFormat(#[from] AppPasswordParseError),
+    #[error("invalid token format: {0}")]
+    InvalidTokenFormat(#[from] jsonwebtoken::errors::Error),
+    #[error("authentication token exchange failed: {0}")]
+    ReqwestError(#[from] reqwest::Error),
+    #[error("authentication token expired")]
+    TokenExpired,
+    #[error("unauthorized organization")]
+    UnauthorizedTenant,
+    #[error("email in access token did not match the expected email")]
+    WrongEmail,
+    #[error("request timeout")]
+    Timeout(#[from] tokio::time::error::Elapsed),
 }

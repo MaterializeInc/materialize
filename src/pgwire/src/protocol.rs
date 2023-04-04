@@ -17,7 +17,6 @@ use std::mem;
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{pending, BoxFuture, FutureExt};
 use itertools::izip;
-use mz_frontegg_auth::claims::Claims;
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
@@ -28,7 +27,7 @@ use mz_adapter::session::{
     EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, TransactionStatus,
 };
 use mz_adapter::{AdapterNotice, ExecuteResponse, PeekResponseUnary, RowsFuture};
-use mz_frontegg_auth::FronteggAuthentication;
+use mz_frontegg_auth::{Claims, FronteggAuthentication};
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::str::StrExt;
@@ -181,13 +180,15 @@ where
         let admin_role = frontegg.admin_role();
         let external_metadata_rx = session.retain_external_metadata_transmitter();
         match frontegg
-            .continuously_validate(&password, user.clone(), move |claims| {
-                let external_metadata = convert_claims_to_external_metadata(claims, admin_role);
-                // Ignore error if client has hung up.
-                let _ = external_metadata_rx.send(external_metadata);
-            })
+            .exchange_password_for_token(&password)
             .await
-        {
+            .and_then(|token| {
+                frontegg.continuously_validate_access_token(token, user.clone(), move |claims| {
+                    let external_metadata = convert_claims_to_external_metadata(claims, admin_role);
+                    // Ignore error if client has hung up.
+                    let _ = external_metadata_rx.send(external_metadata);
+                })
+            }) {
             Ok(is_expired) => {
                 // Make sure to apply the initial claims.
                 session.apply_external_metadata_updates();

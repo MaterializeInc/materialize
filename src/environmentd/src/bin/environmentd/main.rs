@@ -612,6 +612,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 decoding_key: DecodingKey::from_rsa_pem(jwk.as_bytes())?,
                 tenant_id,
                 now: mz_ore::now::SYSTEM_TIME.clone(),
+                refresh_before_secs: 60,
                 admin_role,
             }))
         }
