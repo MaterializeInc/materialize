@@ -893,7 +893,7 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
             .metrics
             .codecs
             .state_diff
-            .decode(|| StateDiff::decode(&self.cfg.build_version, diff.data.clone()));
+            .decode(|| StateDiff::decode(&self.cfg.build_version, diff.data));
 
         // A bit hacky, but the first diff in StateVersionsIter is always a
         // no-op.
