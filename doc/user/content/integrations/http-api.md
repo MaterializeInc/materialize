@@ -73,7 +73,7 @@ You can optionally specify session variables for each request, as a URL-encoded 
 https://<MZ host address>/api/sql?options=<object>
 ```
 
-For example, this is how you could specify the the `application_name` session variable with Javascript:
+For example, this is how you could specify the `application_name` session variable with JavaScript:
 
 ```javascript
 // Create and encode our parameters object.
