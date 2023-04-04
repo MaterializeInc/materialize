@@ -20,6 +20,14 @@ body:
       label: Documentation request
   - type: textarea
     attributes:
+      label: Affected Pages
+      description: |
+          Link to the pages relevant to your documentation change request.
+      value:
+    validations:
+      required: false
+  - type: textarea
+    attributes:
       label: Related work
       description: |
         If relevant, link to related work that can provide more context (e.g. design documents, tracking issues).
