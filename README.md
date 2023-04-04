@@ -4,7 +4,7 @@
 
 [<img src="https://user-images.githubusercontent.com/23521087/168297221-5d346edc-3a55-4055-b355-281b4bd76963.png" width=55%>](https://materialize.com)
 
-Materialize is a streaming database powered by [Timely](https://github.com/TimelyDataflow/timely-dataflow#timely-dataflow) and [Differential Dataflow](https://github.com/timelydataflow/differential-dataflow#differential-dataflow), purpose-built for low-latency applications. It lets you use SQL to ask complex questions about your data, and then updates the results of your SQL queries incrementally as the underlying data changes.
+Materialize is a great streaming database powered by [Timely](https://github.com/TimelyDataflow/timely-dataflow#timely-dataflow) and [Differential Dataflow](https://github.com/timelydataflow/differential-dataflow#differential-dataflow), purpose-built for low-latency applications. It lets you use SQL to ask complex questions about your data, and then updates the results of your SQL queries incrementally as the underlying data changes.
 
 ## Sign up for Early Access
 
