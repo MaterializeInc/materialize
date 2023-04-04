@@ -34,6 +34,8 @@ The API:
     - `DECLARE`
     - `FETCH`
     - `SUBSCRIBE`
+- Supports specifying run-time configuration parameters ([session variables](https://www.postgresql.org/docs/current/sql-set.html))
+  via URL query parameters.
 
 ### Transactional semantics
 
@@ -62,6 +64,26 @@ Accessing the endpoint requires [basic authentication](https://developer.mozilla
 
 * **User ID:** Your email to access Materialize.
 * **Password:** Your app password.
+
+#### Query Parameters
+
+You can optionally specify session variables for each request, as a URL-encoded JSON object, with the `options` query parameter:
+
+```
+https://<MZ host address>/api/sql?options=<object>
+```
+
+For example, this is how you could specify the `application_name` session variable with JavaScript:
+
+```javascript
+// Create and encode our parameters object.
+const options = { application_name: "my_app" };
+const encoded = encodeURIComponent(JSON.stringify(options));
+
+// Add the object to our URL as the "options" query parameter.
+const url = new URL(`https://${mzHostAddress}/api/sql`);
+url.searchParams.append("options", encoded);
+```
 
 ### Input format
 
