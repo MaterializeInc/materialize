@@ -22,7 +22,7 @@ body:
     attributes:
       label: Affected Pages
       description: |
-          Link to the pages relevant to your documentation change request.
+        If available, link any pages relevant to your documentation change request.
       value:
     validations:
       required: false
