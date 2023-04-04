@@ -1014,6 +1014,7 @@ Used Indexes:
 EOF
 
 # Regression test for https://github.com/MaterializeInc/materialize/issues/15696
+# CREATE INDEX should call reduce on index expressions.
 
 statement ok
 CREATE TABLE bar(a BOOL, b BOOL);
@@ -1032,3 +1033,80 @@ Used Indexes:
   - materialize.public.bar_expr_idx
 
 EOF
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/18410
+# We should resist the temptation to do an index lookup in the following test; `preserves_uniqueness` should be checked
+# not just on the inverse cast, but on the original cast as well.
+
+statement ok
+CREATE TABLE t3 ( c0 FLOAT );
+
+statement ok
+INSERT INTO t3 VALUES (-0.1), (0.6), (1), (0);
+
+statement ok
+CREATE INDEX t3i0 ON t3 (c0);
+
+query T multiline
+EXPLAIN WITH(arity, join_impls)
+SELECT * FROM t3 WHERE NOT (((t3.c0)::INT != 0));
+----
+Explained Query (fast path):
+  Filter (0 = double_to_integer(#0))
+    ReadExistingIndex materialize.public.t3i0
+
+Used Indexes:
+  - materialize.public.t3i0
+
+EOF
+
+query R rowsort
+SELECT * FROM t3 WHERE NOT (((t3.c0)::INT != 0));
+----
+-0.1
+0
+
+# Float index lookup should work. (No casts in this test.)
+# Also tests that deduplication works between `t3.c0 != -0.1` and `-0.1 != t3.c0`:
+# `-0.1` should appear in lookup_values only once!
+
+query T multiline
+EXPLAIN WITH(arity, join_impls)
+SELECT * FROM t3 WHERE NOT ((t3.c0 != 0.6) AND (t3.c0 != -0.1) AND (t3.c0 != 0.1) AND (-0.1 != t3.c0));
+----
+Explained Query (fast path):
+  Project (#0)
+    ReadExistingIndex materialize.public.t3i0 lookup_values=[(0.6); (0.1); (-0.1)]
+
+Used Indexes:
+  - materialize.public.t3i0
+
+EOF
+
+query R rowsort
+SELECT * FROM t3 WHERE NOT ((t3.c0 != 0.6) AND (t3.c0 != -0.1) AND (t3.c0 != 0.1) AND (-0.1 != t3.c0));
+----
+-0.1
+0.6
+
+# The following (rounding) cast will be executed by the constant folding in `MirScalarExpr::reduce`. We should look up
+# the rounded value.
+
+query T multiline
+EXPLAIN WITH(arity, join_impls)
+SELECT * FROM t3 WHERE t3.c0 = 0.8::INT OR t3.c0 = -0.1;
+----
+Explained Query (fast path):
+  Project (#0)
+    ReadExistingIndex materialize.public.t3i0 lookup_values=[(1); (-0.1)]
+
+Used Indexes:
+  - materialize.public.t3i0
+
+EOF
+
+query R rowsort
+SELECT * FROM t3 WHERE t3.c0 = 0.8::INT OR t3.c0 = -0.1;
+----
+-0.1
+1

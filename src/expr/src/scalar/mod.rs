@@ -452,10 +452,13 @@ impl MirScalarExpr {
         } = expr
         {
             if let Some(inverse_func) = func.inverse() {
-                // We don't want to insert a function call that doesn't preserve
+                // We don't want to remove a function call that doesn't preserve uniqueness, e.g.,
+                // if `f` is a float, we don't want to inverse-cast `f::INT = 0`, because the
+                // inserted int-to-float cast wouldn't be able to invert the rounding.
+                // Also, we don't want to insert a function call that doesn't preserve
                 // uniqueness. E.g., if `a` has an integer type, we don't want to do
                 // a surprise rounding for `WHERE a = 3.14`.
-                if inverse_func.preserves_uniqueness() {
+                if func.preserves_uniqueness() && inverse_func.preserves_uniqueness() {
                     let lit_inv = eval(&MirScalarExpr::CallUnary {
                         func: inverse_func,
                         expr: Box::new(literal.clone()),
