@@ -66,7 +66,8 @@ Accessing the endpoint requires [basic authentication](https://developer.mozilla
 * **Password:** Your app password.
 
 #### Query Parameters
-You can optionally specify session variables for each request, as a URL encoded JSON object, with the `options` query parameter:
+
+You can optionally specify session variables for each request, as a URL-encoded JSON object, with the `options` query parameter:
 
 ```
 https://<MZ host address>/api/sql?options=<object>
