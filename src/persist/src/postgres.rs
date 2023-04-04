@@ -246,76 +246,59 @@ impl PostgresConsensus {
         Ok(pg)
     }
 
+    fn add_cas_to_batch(
+        batch: &mut BTreeMap<String, BatchableCompareAndSet>,
+        candidate: BatchableCompareAndSet,
+    ) -> bool {
+        let entry = batch.entry(candidate.key.clone());
+
+        match entry {
+            Entry::Vacant(entry) => {
+                entry.insert(candidate);
+                true
+            }
+            Entry::Occupied(entry) => {
+                let existing = entry.get();
+                // our CaS is greater than a pending request, we can replace the
+                // pending request because it must be out-of-date at this point
+                if &existing.expected < &candidate.expected {
+                    let (key, old) = entry.remove_entry();
+                    let _ = old.tx.send(Ok(false));
+                    batch.insert(key, candidate);
+
+                    true
+                } else {
+                    // otherwise, someone beat us to add a pending CaS request, send
+                    // an early-return to our caller without needing to ping CRDB
+                    let _ = candidate.tx.send(Ok(false));
+                    false
+                }
+            }
+        }
+    }
+
     fn start_task(&self, mut rx: UnboundedReceiver<BatchableCompareAndSet>) {
         let mut s = self.clone();
         let _ = mz_ore::task::spawn(|| format!("compare_and_set_batcher"), async move {
+            let mut last_batch_submitted = Instant::now();
             let mut batch = BTreeMap::new();
 
-            fn add_cas_to_batch(
-                entry: Entry<String, BatchableCompareAndSet>,
-                candidate: BatchableCompareAndSet,
-            ) {
-                match entry {
-                    Entry::Vacant(entry) => {
-                        entry.insert(candidate);
-                        return;
-                    }
-                    Entry::Occupied(entry) => {
-                        let existing = entry.get();
-                        // our CaS is greater than a pending request, we can replace the
-                        // pending request because it must be out-of-date at this point
-                        if &existing.expected < &candidate.expected {
-                            let old = entry.remove();
-                            let _ = old.tx.send(Ok(false));
-                            *entry.into_mut() = candidate;
-
-                            continue 'batchable;
-                        } else {
-                            // otherwise, someone beat us to add a pending CaS request, send
-                            // an early-return to our caller without needing to ping CRDB
-                            let _ = candidate.tx.send(Ok(false));
-                            continue 'batchable;
-                        }
-                    }
-                }
-            }
-
             'blocking: while let Some(cas) = rx.recv().await {
+                PostgresConsensus::add_cas_to_batch(&mut batch, cas);
+
                 'batchable: while let Ok(cas) = rx.try_recv() {
                     let cas = cas;
-                    let entry = batch.entry(cas.key.clone());
-
-                    match entry {
-                        Entry::Vacant(entry) => {
-                            entry.insert(cas);
-                        }
-                        Entry::Occupied(entry) => {
-                            let existing = entry.get();
-                            // our CaS is greater than a pending request, we can replace the
-                            // pending request because it must be out-of-date at this point
-                            if &existing.expected < &cas.expected {
-                                let old = entry.remove();
-                                let _ = old.tx.send(Ok(false));
-
-                                *entry.into_mut() = cas;
-
-                                continue 'batchable;
-                            } else {
-                                // otherwise, someone beat us to add a pending CaS request, send
-                                // an early-return to our caller without needing to ping CRDB
-                                let _ = cas.tx.send(Ok(false));
-                                continue 'batchable;
-                            }
-                        }
-                    }
+                    PostgresConsensus::add_cas_to_batch(&mut batch, cas);
 
                     if batch.len() >= s.knobs.max_batch_cas_size() {
-                        break;
+                        break 'batchable;
                     }
                 }
 
-                if batch.is_empty() {
-                    continue;
+                if batch.len() < s.knobs.max_batch_cas_size()
+                    && last_batch_submitted.elapsed() < Duration::from_millis(1000)
+                {
+                    continue 'blocking;
                 }
 
                 let pool = &mut s.batch_write_pool;
@@ -323,7 +306,11 @@ impl PostgresConsensus {
                 info!("Pool: {:?}", pool.status());
                 let client = pool.get().await.expect("WIP");
 
+                last_batch_submitted = Instant::now();
+                let moved_batch = std::mem::take(&mut batch);
+
                 let _ = mz_ore::task::spawn(|| format!("WIP"), async move {
+                    let batch = moved_batch;
                     info!("Batch size: {}", batch.len());
 
                     // WIP: Gotta pull these into functions!
@@ -333,12 +320,12 @@ impl PostgresConsensus {
                     let mut cas_batch_values = vec![];
                     let mut seqno_queries = vec![];
                     let mut slices = vec![];
-                    for cas in &batch {
+                    for (_, cas) in &batch {
                         slices.push(cas.new.data.as_ref());
                     }
                     let slices = slices;
 
-                    for (i, cas) in batch.iter().enumerate() {
+                    for (i, (_, cas)) in batch.iter().enumerate() {
                         cas_batch_values.push(format!(
                             "(${}::text, ${}::bigint, ${}::bigint, ${}::bytea)",
                             param_count,
@@ -389,7 +376,7 @@ impl PostgresConsensus {
                         successful_cas.push((shard, seqno));
                     }
 
-                    for entry in batch {
+                    for (_, entry) in batch {
                         if successful_cas.contains(&(entry.key.clone(), entry.new.seqno.clone())) {
                             let _ = entry.tx.send(Ok(true));
                         } else {
