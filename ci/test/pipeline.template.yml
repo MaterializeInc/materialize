@@ -39,7 +39,7 @@ steps:
       queue: builder-linux-aarch64
 
   - id: check-merge-with-target
-    label: Assess if merge with the target branch satisfies checks
+    label: Merge skew cargo check
     command: bin/ci-builder run stable ci/test/check-merge-with-target.sh
     inputs:
       - Cargo.lock
