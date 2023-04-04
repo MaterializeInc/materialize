@@ -77,18 +77,18 @@ impl<C: AsMut<Indent>> DisplayText<C> for PushdownInfo {
 }
 
 #[allow(missing_debug_implementations)]
-pub struct ExplainMultiPlanSource<'a> {
+pub struct ExplainSource<'a> {
     pub id: String,
     pub op: &'a MapFilterProject,
     pub pushdown_info: Option<PushdownInfo>,
 }
 
-impl<'a> ExplainMultiPlanSource<'a> {
+impl<'a> ExplainSource<'a> {
     pub fn new(
         id: String,
         op: &'a MapFilterProject,
         context: &ExplainContext<'a>,
-    ) -> ExplainMultiPlanSource<'a> {
+    ) -> ExplainSource<'a> {
         let pushdown_info = if context.config.mfp_pushdown {
             // Placeholder! Runs through the pushdown process with a mocked stats impl to
             // figure out which columns have pushdown-able predicates.
@@ -128,7 +128,7 @@ impl<'a> ExplainMultiPlanSource<'a> {
             None
         };
 
-        ExplainMultiPlanSource {
+        ExplainSource {
             id,
             op,
             pushdown_info,
@@ -145,7 +145,7 @@ pub struct ExplainMultiPlan<'a, T> {
     pub context: &'a ExplainContext<'a>,
     // Maps the names of the sources to the linear operators that will be
     // on them.
-    pub sources: Vec<ExplainMultiPlanSource<'a>>,
+    pub sources: Vec<ExplainSource<'a>>,
     // elements of the vector are in topological order
     pub plans: Vec<(String, AnnotatedPlan<'a, T>)>,
 }

@@ -9,7 +9,7 @@
 
 //! `EXPLAIN AS JSON` support for structures defined in this crate.
 
-use crate::explain::ExplainMultiPlanSource;
+use crate::explain::ExplainSource;
 use mz_repr::explain::json::DisplayJson;
 
 use super::{ExplainMultiPlan, ExplainSinglePlan};
@@ -43,7 +43,7 @@ where
         let sources = self
             .sources
             .iter()
-            .map(|ExplainMultiPlanSource { id, op, .. }| {
+            .map(|ExplainSource { id, op, .. }| {
                 serde_json::json!({
                     "id": id,
                     "op": op

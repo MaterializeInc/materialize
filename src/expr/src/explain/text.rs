@@ -20,7 +20,7 @@ use mz_repr::explain::{
 use mz_repr::{GlobalId, Row};
 
 use super::{ExplainMultiPlan, ExplainSinglePlan};
-use crate::explain::ExplainMultiPlanSource;
+use crate::explain::ExplainSource;
 use crate::{
     AggregateExpr, Id, JoinImplementation, JoinInputCharacteristics, MapFilterProject,
     MirRelationExpr, MirScalarExpr, RowSetFinishing,
@@ -98,26 +98,24 @@ where
         if self
             .sources
             .iter()
-            .any(|ExplainMultiPlanSource { op, .. }| !op.is_identity())
+            .any(|ExplainSource { op, .. }| !op.is_identity())
         {
             // render one blank line between the plans and sources
             writeln!(f, "")?;
             // render sources
-            for ExplainMultiPlanSource {
+            for ExplainSource {
                 id,
                 op,
                 pushdown_info,
             } in self
                 .sources
                 .iter()
-                .filter(|ExplainMultiPlanSource { op, .. }| !op.is_identity())
+                .filter(|ExplainSource { op, .. }| !op.is_identity())
             {
                 writeln!(f, "{}Source {}", ctx.indent, id)?;
                 ctx.indented(|ctx| {
                     op.fmt_text(f, ctx)?;
-                    if let Some(info) = pushdown_info {
-                        info.fmt_text(f, ctx)?;
-                    }
+                    pushdown_info.fmt_text(f, ctx)?;
                     Ok(())
                 })?;
             }
