@@ -137,6 +137,7 @@ impl Value {
             (Datum::Float64(f), ScalarType::Float64) => Some(Value::Float8(*f)),
             (Datum::Numeric(d), ScalarType::Numeric { .. }) => Some(Value::Numeric(Numeric(d))),
             (Datum::MzTimestamp(t), ScalarType::MzTimestamp) => Some(Value::MzTimestamp(t)),
+            (Datum::MzAclItem(mai), ScalarType::MzAclItem) => Some(Value::MzAclItem(mai)),
             (Datum::Date(d), ScalarType::Date) => Some(Value::Date(d)),
             (Datum::Time(t), ScalarType::Time) => Some(Value::Time(t)),
             (Datum::Timestamp(ts), ScalarType::Timestamp) => Some(Value::Timestamp(ts)),

@@ -658,9 +658,9 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             })
         }
         Tag::MzAclItem => {
-            let mz_acl_item = MzAclItem::decode_binary(&data[*offset..MzAclItem::binary_size()])
+            const N: usize = MzAclItem::binary_size();
+            let mz_acl_item = MzAclItem::decode_binary(&read_byte_array::<N>(data, offset))
                 .expect("invalid mz_aclitem");
-            *offset += MzAclItem::binary_size();
             Datum::MzAclItem(mz_acl_item)
         }
     }

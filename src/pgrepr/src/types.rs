@@ -919,7 +919,7 @@ impl Type {
                 .try_into()
                 .expect("must fit"),
             Type::Range { .. } => -1,
-            Type::MzAclItem => i16::try_from(MzAclItem::binary_size()).expect("known to fit"),
+            Type::MzAclItem => MzAclItem::binary_size().try_into().expect("must fit"),
         }
     }
 

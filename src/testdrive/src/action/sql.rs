@@ -735,6 +735,18 @@ impl<'a> FromSql<'a> for MzTimestamp {
     }
 }
 
+struct MzAclItem(String);
+
+impl<'a> FromSql<'a> for MzAclItem {
+    fn from_sql(_ty: &Type, raw: &'a [u8]) -> Result<Self, Box<dyn Error + Sync + Send>> {
+        Ok(MzAclItem(std::str::from_utf8(raw)?.to_string()))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        ty.oid() == mz_pgrepr::oid::TYPE_MZ_ACL_ITEM_OID
+    }
+}
+
 struct TestdriveRow<'a>(&'a Vec<String>);
 
 impl Display for TestdriveRow<'_> {
