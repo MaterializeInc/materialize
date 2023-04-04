@@ -9,9 +9,7 @@
 
 //! Connection types.
 
-use std::any::Any;
 use std::collections::BTreeMap;
-use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,18 +17,17 @@ use anyhow::{anyhow, Context};
 use itertools::Itertools;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
+use rdkafka::client::BrokerAddr;
 use rdkafka::config::FromClientConfigAndContext;
 use rdkafka::ClientContext;
 use serde::{Deserialize, Serialize};
 use tokio::net;
-use tokio::sync::oneshot::channel;
 use tokio_postgres::config::SslMode;
-use tracing::warn;
 use url::Url;
 
 use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::AwsExternalIdPrefix;
-use mz_kafka_util::client::BrokerRewritingClientContext;
+use mz_kafka_util::client::{BrokerRewrite, BrokerRewritingClientContext};
 use mz_proto::tokio_postgres::any_ssl_mode;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
@@ -39,6 +36,7 @@ use mz_secrets::SecretsReader;
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_ssh_util::tunnel::SshTunnelConfig;
 
+use crate::ssh_tunnels::{ManagedSshTunnelHandle, SshTunnelManager};
 use crate::types::connections::aws::AwsConfig;
 
 pub mod aws;
@@ -122,6 +120,8 @@ pub struct ConnectionContext {
     pub aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     /// A secrets reader.
     pub secrets_reader: Arc<dyn SecretsReader>,
+    /// A manager for SSH tunnels.
+    pub ssh_tunnel_manager: SshTunnelManager,
 }
 
 impl ConnectionContext {
@@ -141,6 +141,7 @@ impl ConnectionContext {
             librdkafka_log_level: mz_ore::tracing::target_level(filter, "librdkafka"),
             aws_external_id_prefix,
             secrets_reader,
+            ssh_tunnel_manager: SshTunnelManager::default(),
         }
     }
 
@@ -150,6 +151,7 @@ impl ConnectionContext {
             librdkafka_log_level: tracing::Level::INFO,
             aws_external_id_prefix: None,
             secrets_reader,
+            ssh_tunnel_manager: SshTunnelManager::default(),
         }
     }
 }
@@ -358,51 +360,46 @@ impl KafkaConnection {
 
         let mut context = BrokerRewritingClientContext::new(context);
         for broker in &self.brokers {
+            let mut addr_parts = broker.address.splitn(2, ':');
+            let addr = BrokerAddr {
+                host: addr_parts
+                    .next()
+                    .context("BROKER is not address:port")?
+                    .into(),
+                port: addr_parts.next().unwrap_or("9092").into(),
+            };
             match &broker.tunnel {
                 Tunnel::Direct => {
                     // By default, don't override broker address lookup.
                 }
                 Tunnel::AwsPrivatelink(aws_privatelink) => {
-                    context.add_broker_rewrite(
-                        &broker.address,
-                        &mz_cloud_resources::vpc_endpoint_host(
-                            aws_privatelink.connection_id,
-                            aws_privatelink.availability_zone.as_deref(),
-                        ),
-                        aws_privatelink.port,
+                    let host = mz_cloud_resources::vpc_endpoint_host(
+                        aws_privatelink.connection_id,
+                        aws_privatelink.availability_zone.as_deref(),
                     );
+                    let port = aws_privatelink.port;
+                    context.add_broker_rewrite(addr, move || BrokerRewrite {
+                        host: host.clone(),
+                        port,
+                    });
                 }
                 Tunnel::Ssh(ssh_tunnel) => {
-                    // Extract the host address pieces...
-                    let mut broker_iter = broker.address.splitn(2, ':');
-
-                    let broker_host = broker_iter.next().context("BROKER is not address:port")?;
-                    let broker_port: u16 = broker_iter
-                        .next()
-                        .unwrap_or("9092")
-                        .parse()
-                        .context("BROKER port is not an integer")?;
-
-                    let (local_port, token) = ssh_tunnel
-                        .build_ssh_tunnel_for_url(
-                            &*connection_context.secrets_reader,
-                            broker_host,
-                            broker_port,
-                            "kafka",
+                    let ssh_tunnel = ssh_tunnel
+                        .connect(
+                            connection_context,
+                            &addr.host,
+                            addr.port.parse().context("parsing broker port")?,
                         )
                         .await
                         .context("creating ssh tunnel")?;
 
-                    context.add_broker_rewrite_with_token(
-                        &broker.address,
-                        // This should never be `"localhost"`, as that causes reliability
-                        // problems, _probably_ related to resolving to ipv6.
-                        "127.0.0.1",
-                        Some(local_port),
-                        // Note, this does double-boxing, but its only relevant during dropping,
-                        // so not a performance problem.
-                        token,
-                    );
+                    context.add_broker_rewrite(addr, move || {
+                        let addr = ssh_tunnel.local_addr();
+                        BrokerRewrite {
+                            host: addr.ip().to_string(),
+                            port: Some(addr.port()),
+                        }
+                    });
                 }
             }
         }
@@ -502,20 +499,6 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
     }
 }
 
-/// A `mz_ccsr::Client` optionally enriched with a keep-alive tokens.
-#[derive(Debug)]
-pub struct CsrClient {
-    inner: mz_ccsr::Client,
-    _drop_token: Option<Box<dyn Any + Send + Sync>>,
-}
-
-impl Deref for CsrClient {
-    type Target = mz_ccsr::Client;
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
 /// A connection to a Confluent Schema Registry.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct CsrConnection {
@@ -536,18 +519,26 @@ impl CsrConnection {
     /// Constructs a schema registry client from the connection.
     pub async fn connect(
         &self,
-        secrets_reader: &dyn SecretsReader,
-    ) -> Result<CsrClient, anyhow::Error> {
+        connection_context: &ConnectionContext,
+    ) -> Result<mz_ccsr::Client, anyhow::Error> {
         let mut client_config = mz_ccsr::ClientConfig::new(self.url.clone());
         if let Some(root_cert) = &self.tls_root_cert {
-            let root_cert = root_cert.get_string(secrets_reader).await?;
+            let root_cert = root_cert
+                .get_string(&*connection_context.secrets_reader)
+                .await?;
             let root_cert = Certificate::from_pem(root_cert.as_bytes())?;
             client_config = client_config.add_root_certificate(root_cert);
         }
 
         if let Some(tls_identity) = &self.tls_identity {
-            let key = secrets_reader.read_string(tls_identity.key).await?;
-            let cert = tls_identity.cert.get_string(secrets_reader).await?;
+            let key = &connection_context
+                .secrets_reader
+                .read_string(tls_identity.key)
+                .await?;
+            let cert = tls_identity
+                .cert
+                .get_string(&*connection_context.secrets_reader)
+                .await?;
             // `reqwest` expects identity `pem` files to contain one key and
             // at least one certificate.
             let mut buf = Vec::new();
@@ -559,15 +550,22 @@ impl CsrConnection {
         }
 
         if let Some(http_auth) = &self.http_auth {
-            let username = http_auth.username.get_string(secrets_reader).await?;
+            let username = http_auth
+                .username
+                .get_string(&*connection_context.secrets_reader)
+                .await?;
             let password = match http_auth.password {
                 None => None,
-                Some(password) => Some(secrets_reader.read_string(password).await?),
+                Some(password) => Some(
+                    connection_context
+                        .secrets_reader
+                        .read_string(password)
+                        .await?,
+                ),
             };
             client_config = client_config.auth(username, password);
         }
 
-        let mut drop_token = None;
         match &self.tunnel {
             Tunnel::Direct => {}
             Tunnel::Ssh(ssh_tunnel) => {
@@ -577,20 +575,28 @@ impl CsrConnection {
                     .host_str()
                     .ok_or_else(|| anyhow!("url missing host"))?;
 
-                let (local_port, token) = ssh_tunnel
-                    .build_ssh_tunnel_for_url(
-                        secrets_reader,
+                let ssh_tunnel = ssh_tunnel
+                    .connect(
+                        connection_context,
                         host,
                         // Default to the default http port, but this
                         // could default to 8081...
                         self.url.port().unwrap_or(80),
-                        "csr",
                     )
                     .await?;
 
-                client_config = client_config
-                    .override_url(Url::parse(&format!("http://localhost:{}", local_port)).unwrap());
-                drop_token = Some(token);
+                // Install the SSH tunnel as a proxy whose URL is dynamically
+                // computed for every request. This ensures that, if the tunnel
+                // fails and restarts at a new address, requests will start
+                // using the new tunnel address.
+                client_config = client_config.add_proxy(mz_ccsr::Proxy::custom(move |url| {
+                    let addr = ssh_tunnel.local_addr();
+                    let mut url = url.clone();
+                    url.set_host(Some(&addr.ip().to_string()))
+                        .expect("cannot fail");
+                    url.set_port(Some(addr.port())).expect("cannot fail");
+                    Some(url)
+                }));
             }
             Tunnel::AwsPrivatelink(connection) => {
                 assert!(connection.port.is_none());
@@ -618,10 +624,7 @@ impl CsrConnection {
             }
         }
 
-        Ok(CsrClient {
-            inner: client_config.build()?,
-            _drop_token: drop_token,
-        })
+        client_config.build()
     }
 }
 
@@ -1026,54 +1029,22 @@ impl RustType<ProtoSshTunnel> for SshTunnel {
 }
 
 impl SshTunnel {
-    /// Setup and ssh tunnel to `remote_host:remote_port`, returning the local port
-    /// and a drop token for the session.
-    async fn build_ssh_tunnel_for_url(
+    /// Like [`SshTunnelConfig::connect`], but the SSH key is loaded from a
+    /// secret.
+    async fn connect(
         &self,
-        secrets_reader: &dyn SecretsReader,
+        connection_context: &ConnectionContext,
         remote_host: &str,
         remote_port: u16,
-        debug_str: &str,
-    ) -> Result<(u16, Box<dyn Any + Send + Sync>), anyhow::Error> {
-        // Setup the config...
-        let secret = secrets_reader.read(self.connection_id).await?;
-        let key_set = SshKeyPairSet::from_bytes(&secret)?;
-        let key_pair = key_set.primary().clone();
-        let ssh_tunnel_config = SshTunnelConfig {
-            host: self.connection.host.clone(),
-            port: self.connection.port,
-            user: self.connection.user.clone(),
-            key_pair,
-        };
-
-        // ...build the tunnel...
-        let (session, local_port) = ssh_tunnel_config.connect(remote_host, remote_port).await?;
-
-        // ...record it in the broker lookup, with a task that
-        // will shutdown the session on drop.
-        let (tx, mut rx) = channel::<()>();
-        mz_ore::task::spawn(|| format!("{}_ssh_session", debug_str), async move {
-            loop {
-                match tokio::time::timeout(Duration::from_secs(30), &mut rx).await {
-                    Ok(_) => break,
-                    Err(_) => {
-                        if let Err(e) = session.check().await {
-                            warn!(
-                                "ssh tunnel at port {local_port} failed to check: {:#}",
-                                anyhow!(e)
-                            );
-                        }
-                    }
-                }
-            }
-            if let Err(e) = session.close().await {
-                // Convert to `anyhow::Error` to include error source via the
-                // alternate `Display` implementation, which can contain key
-                // details about the nature of the failure.
-                // TODO(guswynn): abstract this out to `mz_ore`.
-                warn!("failed to close ssh tunnel: {:#}", anyhow!(e));
-            }
-        });
-        Ok((local_port, Box::new(tx)))
+    ) -> Result<ManagedSshTunnelHandle, anyhow::Error> {
+        connection_context
+            .ssh_tunnel_manager
+            .connect(
+                &*connection_context.secrets_reader,
+                self,
+                remote_host,
+                remote_port,
+            )
+            .await
     }
 }

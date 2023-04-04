@@ -218,9 +218,7 @@ async fn build_kafka(
             csr_connection,
             ..
         } => {
-            let ccsr = csr_connection
-                .connect(&*connection_context.secrets_reader)
-                .await?;
+            let ccsr = csr_connection.connect(&connection_context).await?;
             let (key_schema_id, value_schema_id) = publish_kafka_schemas(
                 &ccsr,
                 &builder.topic_name,

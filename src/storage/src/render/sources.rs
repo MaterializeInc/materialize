@@ -251,6 +251,7 @@ where
                 SourceType::Delimited(s) => s,
                 _ => unreachable!("Attempted to create non-delimited CDCv2 source"),
             };
+
             // TODO(petrosagg): this should move to the envelope section below and
             // made to work with a stream of Rows instead of decoding Avro directly
             let connection_context = storage_state.connection_context.clone();

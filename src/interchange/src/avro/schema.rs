@@ -38,7 +38,6 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::ops::Deref;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -291,16 +290,16 @@ fn validate_schema_2(
     })
 }
 
-pub struct ConfluentAvroResolver<C> {
+pub struct ConfluentAvroResolver {
     reader_schema: Schema,
-    writer_schemas: Option<SchemaCache<C>>,
+    writer_schemas: Option<SchemaCache>,
     confluent_wire_format: bool,
 }
 
-impl<C: Deref<Target = mz_ccsr::Client>> ConfluentAvroResolver<C> {
+impl ConfluentAvroResolver {
     pub fn new(
         reader_schema: &str,
-        ccsr_client: Option<C>,
+        ccsr_client: Option<mz_ccsr::Client>,
         confluent_wire_format: bool,
     ) -> anyhow::Result<Self> {
         let reader_schema = parse_schema(reader_schema)?;
@@ -351,7 +350,7 @@ impl<C: Deref<Target = mz_ccsr::Client>> ConfluentAvroResolver<C> {
     }
 }
 
-impl<C> fmt::Debug for ConfluentAvroResolver<C> {
+impl fmt::Debug for ConfluentAvroResolver {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("ConfluentAvroResolver")
             .field("reader_schema", &self.reader_schema)
@@ -368,13 +367,13 @@ impl<C> fmt::Debug for ConfluentAvroResolver<C> {
 }
 
 #[derive(Debug)]
-struct SchemaCache<C> {
+struct SchemaCache {
     cache: BTreeMap<i32, Result<Schema, AvroError>>,
-    ccsr_client: C,
+    ccsr_client: mz_ccsr::Client,
 }
 
-impl<C: Deref<Target = mz_ccsr::Client>> SchemaCache<C> {
-    fn new(ccsr_client: C) -> Result<SchemaCache<C>, anyhow::Error> {
+impl SchemaCache {
+    fn new(ccsr_client: mz_ccsr::Client) -> Result<SchemaCache, anyhow::Error> {
         Ok(SchemaCache {
             cache: BTreeMap::new(),
             ccsr_client,

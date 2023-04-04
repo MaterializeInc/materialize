@@ -119,7 +119,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let schema = fs::read_to_string(&args.schema_file)
         .await
         .context("reading schema file")?;
-    let ccsr_client: Option<Box<mz_ccsr::Client>> = None;
+    let ccsr_client: Option<mz_ccsr::Client> = None;
     let debug_name = String::from("avro-decode");
     let confluent_wire_format = false;
     let mut decoder = Decoder::new(&schema, ccsr_client, debug_name, confluent_wire_format)

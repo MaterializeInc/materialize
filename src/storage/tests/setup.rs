@@ -215,11 +215,10 @@ where
 
             let persist_clients = Arc::new(persist_cache);
 
-            let connection_context = mz_storage_client::types::connections::ConnectionContext {
-                librdkafka_log_level: tracing::Level::INFO,
-                aws_external_id_prefix: None,
-                secrets_reader: Arc::new(mz_secrets::InMemorySecretsController::new()),
-            };
+            let connection_context =
+                mz_storage_client::types::connections::ConnectionContext::for_tests(Arc::new(
+                    mz_secrets::InMemorySecretsController::new(),
+                ));
 
             let (_fake_tx, fake_rx) = crossbeam_channel::bounded(1);
 
