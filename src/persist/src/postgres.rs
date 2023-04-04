@@ -27,6 +27,8 @@ use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
 use postgres_openssl::MakeTlsConnector;
+use std::collections::btree_map::Entry;
+use std::collections::BTreeMap;
 use std::fmt::Formatter;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -247,19 +249,56 @@ impl PostgresConsensus {
     fn start_task(&self, mut rx: UnboundedReceiver<BatchableCompareAndSet>) {
         let mut s = self.clone();
         let _ = mz_ore::task::spawn(|| format!("compare_and_set_batcher"), async move {
-            while let Some(cas) = rx.recv().await {
-                let mut batch = vec![cas];
+            let mut batch = BTreeMap::new();
 
-                // TODO: avoid the O(n^2) build up here
+            fn add_cas_to_batch(
+                entry: Entry<String, BatchableCompareAndSet>,
+                candidate: BatchableCompareAndSet,
+            ) {
+                match entry {
+                    Entry::Vacant(entry) => {
+                        entry.insert(candidate);
+                        return;
+                    }
+                    Entry::Occupied(entry) => {
+                        let existing = entry.get();
+                        // our CaS is greater than a pending request, we can replace the
+                        // pending request because it must be out-of-date at this point
+                        if &existing.expected < &candidate.expected {
+                            let old = entry.remove();
+                            let _ = old.tx.send(Ok(false));
+                            *entry.into_mut() = candidate;
+
+                            continue 'batchable;
+                        } else {
+                            // otherwise, someone beat us to add a pending CaS request, send
+                            // an early-return to our caller without needing to ping CRDB
+                            let _ = candidate.tx.send(Ok(false));
+                            continue 'batchable;
+                        }
+                    }
+                }
+            }
+
+            'blocking: while let Some(cas) = rx.recv().await {
                 'batchable: while let Ok(cas) = rx.try_recv() {
                     let cas = cas;
-                    for existing_cas in batch.iter_mut() {
-                        if &existing_cas.key == &cas.key {
+                    let entry = batch.entry(cas.key.clone());
+
+                    match entry {
+                        Entry::Vacant(entry) => {
+                            entry.insert(cas);
+                        }
+                        Entry::Occupied(entry) => {
+                            let existing = entry.get();
                             // our CaS is greater than a pending request, we can replace the
                             // pending request because it must be out-of-date at this point
-                            if &existing_cas.expected < &cas.expected {
-                                let old = std::mem::replace(existing_cas, cas);
+                            if &existing.expected < &cas.expected {
+                                let old = entry.remove();
                                 let _ = old.tx.send(Ok(false));
+
+                                *entry.into_mut() = cas;
+
                                 continue 'batchable;
                             } else {
                                 // otherwise, someone beat us to add a pending CaS request, send
@@ -269,8 +308,6 @@ impl PostgresConsensus {
                             }
                         }
                     }
-
-                    batch.push(cas);
 
                     if batch.len() >= s.knobs.max_batch_cas_size() {
                         break;
