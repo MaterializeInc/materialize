@@ -87,8 +87,8 @@ impl ColumnType {
             (true, Bool) => f.call::<Option<bool>>(),
             (false, Int16) => f.call::<i16>(),
             (true, Int16) => f.call::<Option<i16>>(),
-            (false, Int32 | Date) => f.call::<i32>(),
-            (true, Int32 | Date) => f.call::<Option<i32>>(),
+            (false, Int32) => f.call::<i32>(),
+            (true, Int32) => f.call::<Option<i32>>(),
             (false, Int64) => f.call::<i64>(),
             (true, Int64) => f.call::<Option<i64>>(),
             (false, UInt16) => f.call::<u16>(),
@@ -112,6 +112,7 @@ impl ColumnType {
             (
                 _,
                 Numeric { .. }
+                | Date
                 | Time
                 | Timestamp
                 | TimestampTz
