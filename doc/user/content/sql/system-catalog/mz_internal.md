@@ -116,6 +116,15 @@ Field        | Type       | Meaning
 `export_id ` | [`text`]   | The ID of the index, materialized view, or subscription that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
 `time`       | [`mz_timestamp`] | The next timestamp at which the output may change.
 
+### `mz_cluster_replica_heartbeats` 
+
+The `mz_cluster_replica_heartbeats` table gives the last known heartbeat of all extant cluster replicas.
+
+Field            | Type                         | Meaning
+-----------------|------------------------------|--------
+`replica_id`     | [`text`]                     | The ID of a cluster replica.
+`last_heartbeat` | [`timestamp with time zone`] | The time of the replica's last heartbeat.
+
 ### `mz_sessions`
 
 The `mz_sessions` table contains a row for each active session in the system.
