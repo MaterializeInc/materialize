@@ -103,6 +103,17 @@ steps:
     agents:
       queue: linux-x86_64
 
+  - id: check-merge-with-target
+    label: Assess if merge with the target branch satisfies checks
+    command: bin/ci-builder run stable ci/test/check-merge-with-target.sh
+    inputs:
+      - Cargo.lock
+      - "**/Cargo.toml"
+      - "**/*.rs"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+
   - id: preview-docs
     label: Preview docs
     command: bin/ci-builder run stable ci/test/preview-docs.sh
