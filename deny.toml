@@ -9,7 +9,16 @@ multiple-versions = "deny"
 skip = [
     # One-time exception for base64 due to its prevalence in the crate graph.
     # Do NOT add other exceptions to this list.
-    { name = "base64", version = "0.13.1" }
+    { name = "base64", version = "0.13.1" },
+    # `syn` is a core crate that a huge part of the ecosystem either directly, or
+    # transitively depends on. They just released v2.0 which not all crates have
+    # migrated to yet.
+    { name = "syn", version = "1.0.107" },
+    # `tokio` depends on a newer version of socket2, we are okay with _temporarily_
+    # allowing these duplicate dependencies until the rest of the ecosystem catches
+    # up.
+    { name = "socket2", version = "0.4.9" },
+    { name = "windows-sys", version = "0.42.0" },
 ]
 
 # Use `tracing` instead.

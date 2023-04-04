@@ -54,7 +54,7 @@ k8s-openapi = { version = "0.16.0", features = ["v1_24"] }
 kube = { version = "0.77.0", features = ["derive", "runtime", "ws"] }
 kube-client = { version = "0.77.0", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
 kube-core = { version = "0.77.0", default-features = false, features = ["jsonpatch", "schema", "ws"] }
-libc = { version = "0.2.138", features = ["extra_traits", "use_std"] }
+libc = { version = "0.2.140", features = ["extra_traits", "use_std"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 lru = { version = "0.8.1" }
 memchr = { version = "2.5.0", features = ["use_std"] }
@@ -72,12 +72,12 @@ phf = { version = "0.11.1", features = ["uncased"] }
 phf_shared = { version = "0.11.1", features = ["uncased"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
-proc-macro2 = { version = "1.0.47", features = ["span-locations"] }
+proc-macro2 = { version = "1.0.54", features = ["span-locations"] }
 prometheus = { version = "0.13.3", default-features = false, features = ["process"] }
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 prost-reflect = { version = "0.9.2", default-features = false, features = ["serde"] }
 prost-types = { version = "0.11.2" }
-quote = { version = "1.0.23" }
+quote = { version = "1.0.26" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 regex = { version = "1.7.0" }
@@ -91,11 +91,10 @@ serde = { version = "1.0.152", features = ["alloc", "derive"] }
 serde_json = { version = "1.0.89", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value"] }
 sha2 = { version = "0.10.6" }
 smallvec = { version = "1.10.0", default-features = false, features = ["serde", "union", "write"] }
-socket2 = { version = "0.4.7", default-features = false, features = ["all"] }
 syn = { version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
 textwrap = { version = "0.15.0", default-features = false, features = ["terminal_size"] }
 time = { version = "0.3.17", features = ["macros", "quickcheck", "serde-well-known"] }
-tokio = { version = "1.24.2", features = ["full", "test-util", "tracing"] }
+tokio = { version = "1.27.0", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.11", features = ["net", "sync"] }
 tokio-util = { version = "0.7.4", features = ["codec", "compat", "io", "time"] }
@@ -152,7 +151,7 @@ k8s-openapi = { version = "0.16.0", features = ["v1_24"] }
 kube = { version = "0.77.0", features = ["derive", "runtime", "ws"] }
 kube-client = { version = "0.77.0", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
 kube-core = { version = "0.77.0", default-features = false, features = ["jsonpatch", "schema", "ws"] }
-libc = { version = "0.2.138", features = ["extra_traits", "use_std"] }
+libc = { version = "0.2.140", features = ["extra_traits", "use_std"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 lru = { version = "0.8.1" }
 memchr = { version = "2.5.0", features = ["use_std"] }
@@ -170,12 +169,12 @@ phf = { version = "0.11.1", features = ["uncased"] }
 phf_shared = { version = "0.11.1", features = ["uncased"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
-proc-macro2 = { version = "1.0.47", features = ["span-locations"] }
+proc-macro2 = { version = "1.0.54", features = ["span-locations"] }
 prometheus = { version = "0.13.3", default-features = false, features = ["process"] }
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 prost-reflect = { version = "0.9.2", default-features = false, features = ["serde"] }
 prost-types = { version = "0.11.2" }
-quote = { version = "1.0.23" }
+quote = { version = "1.0.26" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 regex = { version = "1.7.0" }
@@ -189,12 +188,11 @@ serde = { version = "1.0.152", features = ["alloc", "derive"] }
 serde_json = { version = "1.0.89", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value"] }
 sha2 = { version = "0.10.6" }
 smallvec = { version = "1.10.0", default-features = false, features = ["serde", "union", "write"] }
-socket2 = { version = "0.4.7", default-features = false, features = ["all"] }
 syn = { version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
 textwrap = { version = "0.15.0", default-features = false, features = ["terminal_size"] }
 time = { version = "0.3.17", features = ["macros", "quickcheck", "serde-well-known"] }
 time-macros = { version = "0.2.6", default-features = false, features = ["formatting", "parsing", "serde"] }
-tokio = { version = "1.24.2", features = ["full", "test-util", "tracing"] }
+tokio = { version = "1.27.0", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.11", features = ["net", "sync"] }
 tokio-util = { version = "0.7.4", features = ["codec", "compat", "io", "time"] }
