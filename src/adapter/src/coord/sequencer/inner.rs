@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use futures::future::BoxFuture;
+use itertools::Itertools;
 use maplit::btreeset;
 use mz_transform::Optimizer;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
@@ -69,7 +70,7 @@ use mz_sql::session::vars::{Var, ENABLE_RBAC_CHECKS};
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
-use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
+use mz_storage_client::types::sources::{IngestionDescription, SourceConnection, SourceExport};
 
 use crate::catalog::{
     self, Catalog, CatalogItem, Cluster, Connection, DataSourceDesc, Op, SerializedReplicaLocation,
@@ -131,6 +132,12 @@ impl Coordinator {
             })
             .collect::<BTreeMap<_, _>>();
 
+        // Track any external dependencies we want to provision before committing the create to the
+        // catalog. We will also ensure we retain information to deprovision them in the case of
+        // failure.
+        let mut external_provisions = vec![];
+        let mut external_deprovisions = vec![];
+
         for (source_id, plan, depends_on) in plans {
             let source_oid = self.catalog_mut().allocate_oid()?;
             let source = catalog::Source {
@@ -146,6 +153,16 @@ impl Coordinator {
                                 session,
                             )
                             .await?;
+
+                        let (provision, deprovision) = ingestion
+                            .desc
+                            .connection
+                            .external_dependencies(&*self.connection_context.secrets_reader)
+                            .await?;
+
+                        external_provisions.extend(provision);
+                        external_deprovisions.extend(deprovision);
+
                         DataSourceDesc::Ingestion(catalog::Ingestion {
                             desc: ingestion.desc,
                             source_imports: ingestion.source_imports,
@@ -190,6 +207,26 @@ impl Coordinator {
             });
             sources.push((source_id, source));
         }
+
+        // This should always be the very last thing we do before attempting to perform a catalog
+        // transaction. Try to provision any external resources; if we fail, deprovision any items
+        // we previously provisioned.
+        let mut pending_deprovisions = vec![];
+        for (provision, deprovision) in external_provisions
+            .into_iter()
+            .zip_eq(external_deprovisions.into_iter())
+        {
+            match provision.await {
+                Ok(()) => pending_deprovisions.push(deprovision),
+                Err(e) => {
+                    for deprovision in pending_deprovisions {
+                        deprovision.await;
+                    }
+                    return Err(AdapterError::Unstructured(e));
+                }
+            }
+        }
+
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => {
                 let mut source_ids = Vec::with_capacity(sources.len());
@@ -272,13 +309,25 @@ impl Coordinator {
                 kind: catalog::ErrorKind::ItemAlreadyExists(id, _),
                 ..
             })) if if_not_exists_ids.contains_key(&id) => {
+                // Deprovision any other resources because we know we're failing.
+                for deprovision in pending_deprovisions {
+                    deprovision.await;
+                }
+
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: if_not_exists_ids[&id].item.clone(),
                     ty: "source",
                 });
                 Ok(ExecuteResponse::CreatedSource)
             }
-            Err(err) => Err(err),
+            Err(err) => {
+                // Deprovision any other resources because we know we're failing.
+                for deprovision in pending_deprovisions {
+                    deprovision.await;
+                }
+
+                Err(err)
+            }
         }
     }
 

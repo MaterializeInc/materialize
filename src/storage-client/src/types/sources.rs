@@ -21,6 +21,8 @@ use async_trait::async_trait;
 use bytes::BufMut;
 use dec::OrderedDecimal;
 use differential_dataflow::lattice::Lattice;
+use futures::future::BoxFuture;
+use futures::FutureExt;
 use itertools::Itertools;
 use once_cell::sync::Lazy;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
@@ -1341,6 +1343,7 @@ impl UnplannedSourceEnvelope {
 }
 
 /// A connection to an external system
+#[async_trait]
 pub trait SourceConnection: Clone {
     /// The name of the external system (e.g kafka, postgres, etc).
     fn name(&self) -> &'static str;
@@ -1367,6 +1370,19 @@ pub trait SourceConnection: Clone {
     /// The available metadata columns in the order specified by the user. This only identifies the
     /// kinds of columns that this source offers without any further information.
     fn metadata_column_types(&self) -> Vec<IncludedColumnSource>;
+
+    /// Stateless async functions that provision external dependencies, along with functions to
+    /// deprovision them in the case of an error during some other provisioning operation.
+    async fn external_dependencies(
+        &self,
+        _secrets_reader: &dyn mz_secrets::SecretsReader,
+    ) -> Result<
+        (
+            Vec<BoxFuture<'static, Result<(), anyhow::Error>>>,
+            Vec<BoxFuture<'static, ()>>,
+        ),
+        anyhow::Error,
+    >;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1401,6 +1417,7 @@ pub static KAFKA_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         .with_column("offset", ScalarType::UInt64.nullable(true))
 });
 
+#[async_trait]
 impl SourceConnection for KafkaSourceConnection {
     fn name(&self) -> &'static str {
         "kafka"
@@ -1482,6 +1499,19 @@ impl SourceConnection for KafkaSourceConnection {
         }
 
         items.into_values().collect()
+    }
+
+    async fn external_dependencies(
+        &self,
+        _secrets_reader: &dyn mz_secrets::SecretsReader,
+    ) -> Result<
+        (
+            Vec<BoxFuture<'static, Result<(), anyhow::Error>>>,
+            Vec<BoxFuture<'static, ()>>,
+        ),
+        anyhow::Error,
+    > {
+        Ok((vec![], vec![]))
     }
 }
 
@@ -1748,6 +1778,7 @@ impl From<TestScriptSourceConnection> for GenericSourceConnection {
     }
 }
 
+#[async_trait]
 impl SourceConnection for GenericSourceConnection {
     fn name(&self) -> &'static str {
         match self {
@@ -1809,6 +1840,24 @@ impl SourceConnection for GenericSourceConnection {
             Self::Postgres(conn) => conn.metadata_column_types(),
             Self::LoadGenerator(conn) => conn.metadata_column_types(),
             Self::TestScript(conn) => conn.metadata_column_types(),
+        }
+    }
+
+    async fn external_dependencies(
+        &self,
+        secrets_reader: &dyn mz_secrets::SecretsReader,
+    ) -> Result<
+        (
+            Vec<BoxFuture<'static, Result<(), anyhow::Error>>>,
+            Vec<BoxFuture<'static, ()>>,
+        ),
+        anyhow::Error,
+    > {
+        match self {
+            Self::Kafka(conn) => conn.external_dependencies(secrets_reader).await,
+            Self::Postgres(conn) => conn.external_dependencies(secrets_reader).await,
+            Self::LoadGenerator(conn) => conn.external_dependencies(secrets_reader).await,
+            Self::TestScript(conn) => conn.external_dependencies(secrets_reader).await,
         }
     }
 }
@@ -1891,6 +1940,7 @@ impl Arbitrary for PostgresSourceConnection {
 pub static PG_PROGRESS_DESC: Lazy<RelationDesc> =
     Lazy::new(|| RelationDesc::empty().with_column("lsn", ScalarType::UInt64.nullable(true)));
 
+#[async_trait]
 impl SourceConnection for PostgresSourceConnection {
     fn name(&self) -> &'static str {
         "postgres"
@@ -1918,6 +1968,53 @@ impl SourceConnection for PostgresSourceConnection {
 
     fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
         vec![]
+    }
+
+    async fn external_dependencies(
+        &self,
+        secrets_reader: &dyn mz_secrets::SecretsReader,
+    ) -> Result<
+        (
+            Vec<BoxFuture<'static, Result<(), anyhow::Error>>>,
+            Vec<BoxFuture<'static, ()>>,
+        ),
+        anyhow::Error,
+    > {
+        let provision_config = self.connection.config(secrets_reader).await?;
+        let deprovision_config = provision_config.clone();
+        let provision_slot = self.publication_details.slot.clone();
+        let deprovision_slot = provision_slot.clone();
+
+        let provision_replication_slot = async move {
+            let client = provision_config.connect_replication().await?;
+            let _ = client
+                .simple_query("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ;")
+                .await?;
+            let _ = client
+                .simple_query(&format!(
+                    r#"CREATE_REPLICATION_SLOT {:?} LOGICAL "pgoutput" USE_SNAPSHOT"#,
+                    provision_slot
+                ))
+                .await?;
+            tracing::info!("provisioned PG replication slot {:?}", provision_slot);
+            Ok(())
+        }
+        .boxed();
+
+        let deprovision_replication_slot = async move {
+            let _ = mz_postgres_util::drop_replication_slots(
+                deprovision_config,
+                &[deprovision_slot.as_str()],
+            )
+            .await;
+            tracing::info!("deprovisioned PG replication slot {:?}", deprovision_slot);
+        }
+        .boxed();
+
+        Ok((
+            vec![provision_replication_slot],
+            vec![deprovision_replication_slot],
+        ))
     }
 }
 
@@ -2024,6 +2121,7 @@ pub struct LoadGeneratorSourceConnection {
 pub static LOAD_GEN_PROGRESS_DESC: Lazy<RelationDesc> =
     Lazy::new(|| RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true)));
 
+#[async_trait]
 impl SourceConnection for LoadGeneratorSourceConnection {
     fn name(&self) -> &'static str {
         "load-generator"
@@ -2051,6 +2149,19 @@ impl SourceConnection for LoadGeneratorSourceConnection {
 
     fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
         vec![]
+    }
+
+    async fn external_dependencies(
+        &self,
+        _secrets_reader: &dyn mz_secrets::SecretsReader,
+    ) -> Result<
+        (
+            Vec<BoxFuture<'static, Result<(), anyhow::Error>>>,
+            Vec<BoxFuture<'static, ()>>,
+        ),
+        anyhow::Error,
+    > {
+        Ok((vec![], vec![]))
     }
 }
 
@@ -2370,6 +2481,7 @@ pub struct TestScriptSourceConnection {
 pub static TEST_SCRIPT_PROGRESS_DESC: Lazy<RelationDesc> =
     Lazy::new(|| RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true)));
 
+#[async_trait]
 impl SourceConnection for TestScriptSourceConnection {
     fn name(&self) -> &'static str {
         "testscript"
@@ -2397,6 +2509,19 @@ impl SourceConnection for TestScriptSourceConnection {
 
     fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
         vec![]
+    }
+
+    async fn external_dependencies(
+        &self,
+        _secrets_reader: &dyn mz_secrets::SecretsReader,
+    ) -> Result<
+        (
+            Vec<BoxFuture<'static, Result<(), anyhow::Error>>>,
+            Vec<BoxFuture<'static, ()>>,
+        ),
+        anyhow::Error,
+    > {
+        Ok((vec![], vec![]))
     }
 }
 
