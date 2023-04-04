@@ -31,6 +31,8 @@ The API:
     - `COPY`
     - `DECLARE`
     - `FETCH`
+- Supports specifying run-time configuration parameters ([session variables](https://www.postgresql.org/docs/current/sql-set.html))
+  via the initial authentication message.
 
 ### Transactional semantics
 
@@ -69,7 +71,7 @@ To authenticate using a token, send an initial text or binary message containing
 
 ```
 {
-	"token": "<Your access token>",
+    "token": "<Your access token>",
     "options": { <Optional map of session variables> }
 }
 ```
@@ -181,8 +183,8 @@ You can model these with the following TypeScript definitions:
 
 ```typescript
 type Auth =
-    | { user: string; password: string }
-    | { token: string }
+    | { user: string; password: string; options?: { [name: string]: string } }
+    | { token: string; options?: { [name: string]: string } }
     ;
 
 interface Simple {

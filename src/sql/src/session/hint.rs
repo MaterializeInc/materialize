@@ -19,6 +19,8 @@ const PSQL_LABEL: &str = "psql";
 const DBT_LABEL: &str = "dbt";
 /// Prometheus label for [`ApplicationNameHint::WebConsole`].
 const WEB_CONSOLE_LABEL: &str = "web_console";
+/// Prometheus label for [`ApplicationNameHint::MzPsql`].
+const MZ_PSQL_LABEL: &str = "mz_psql";
 
 /// A hint for what application is making a request to the adapter.
 ///
@@ -41,6 +43,8 @@ pub enum ApplicationNameHint {
     Dbt(Private),
     /// Request came from our web console.
     WebConsole(Private),
+    /// Request came from the `psql` shell spawned by `mz`.
+    MzPsql(Private),
 }
 
 impl ApplicationNameHint {
@@ -49,6 +53,7 @@ impl ApplicationNameHint {
             "psql" => ApplicationNameHint::Psql(Private),
             "dbt" => ApplicationNameHint::Dbt(Private),
             "web_console" => ApplicationNameHint::WebConsole(Private),
+            "mz_psql" => ApplicationNameHint::MzPsql(Private),
             "" => ApplicationNameHint::Unspecified(Private),
             // TODO(parkertimmerman): We should keep some record of these "unrecognized"
             // names, and possibly support more popular ones in the future.
@@ -63,6 +68,7 @@ impl ApplicationNameHint {
             ApplicationNameHint::Psql(_) => PSQL_LABEL,
             ApplicationNameHint::Dbt(_) => DBT_LABEL,
             ApplicationNameHint::WebConsole(_) => WEB_CONSOLE_LABEL,
+            ApplicationNameHint::MzPsql(_) => MZ_PSQL_LABEL,
         }
     }
 }
