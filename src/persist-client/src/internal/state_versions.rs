@@ -888,11 +888,12 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
             Some(x) => x,
             None => return None,
         };
+        let data = diff.data.clone();
         let diff = self
             .metrics
             .codecs
             .state_diff
-            .decode(|| StateDiff::decode(&self.cfg.build_version, diff.data));
+            .decode(|| StateDiff::decode(&self.cfg.build_version, diff.data.clone()));
 
         // A bit hacky, but the first diff in StateVersionsIter is always a
         // no-op.
@@ -913,7 +914,8 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
         }
 
         let diff_seqno_to = diff.seqno_to;
-        self.state.apply_diffs(&self.metrics, std::iter::once(diff));
+        self.state
+            .apply_diffs(&self.metrics, std::iter::once((diff, data)));
         assert_eq!(self.state.seqno, diff_seqno_to);
         #[cfg(debug_assertions)]
         {
