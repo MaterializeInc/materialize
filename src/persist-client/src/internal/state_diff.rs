@@ -11,7 +11,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
@@ -255,35 +255,42 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
                 // No-op.
                 return None;
             }
+            let data = x.data.clone();
             let diff = metrics
                 .codecs
                 .state_diff
                 .decode(|| StateDiff::decode(&cfg.build_version, x.data));
             assert_eq!(diff.seqno_from, state_seqno);
             state_seqno = diff.seqno_to;
-            Some(diff)
+            Some((diff, data))
         });
         self.apply_diffs(metrics, diffs);
     }
 }
 
-impl<T: Timestamp + Lattice> State<T> {
-    pub fn apply_diffs<I: IntoIterator<Item = StateDiff<T>>>(
+impl<T: Timestamp + Lattice + Codec64> State<T> {
+    pub fn apply_diffs<I: IntoIterator<Item = (StateDiff<T>, Bytes)>>(
         &mut self,
         metrics: &Metrics,
         diffs: I,
     ) {
-        for diff in diffs {
+        for (diff, data) in diffs {
             // TODO: This could special-case batch apply for diffs where it's
             // more efficient (in particular, spine batches that hit the slow
             // path).
-            let pretty_diff = format!("{:?}", diff);
             match self.apply_diff(metrics, diff) {
                 Ok(()) => {}
-                Err(err) => panic!(
-                    "state diff should apply cleanly: {} diff {} state {:?}",
-                    err, pretty_diff, self
-                ),
+                Err(err) => {
+                    // Having the full diff in the error message is critical for debugging any
+                    // issues that may arise from diff application. We pass along the original
+                    // Bytes it decoded from just so we can decode in this error path, while
+                    // avoiding any extraneous clones in the expected Ok path.
+                    let diff = StateDiff::<T>::decode(&self.applier_version, data);
+                    panic!(
+                        "state diff should apply cleanly: {} diff {:?} state {:?}",
+                        err, diff, self
+                    )
+                }
             }
         }
     }
