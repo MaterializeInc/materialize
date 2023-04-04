@@ -873,6 +873,10 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
         }
     }
 
+    pub fn len(&self) -> usize {
+        self.diffs.len()
+    }
+
     /// Advances first to some starting state (in practice, usually the first
     /// live state), and then through each successive state, for as many diffs
     /// as this iterator was initialized with.
