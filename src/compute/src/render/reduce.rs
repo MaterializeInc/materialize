@@ -434,10 +434,7 @@ where
                     let message = "Non-positive multiplicity in DistinctBy";
                     warn!(?row, ?count, debug_name, "[customer-data] {message}");
                     error!("{message}");
-                    output.push((
-                        DataflowError::EvalError(EvalError::Internal(message.to_string()).into()),
-                        1,
-                    ));
+                    output.push((EvalError::Internal(message.to_string()).into(), 1));
                     return;
                 }
             },
@@ -484,9 +481,7 @@ where
         .as_collection(|k, v| (k.clone(), v.clone()))
         .map_fallible("Demux Errors", |(key, result)| match result {
             Ok(row) => Ok((key, row)),
-            Err(message) => Err(DataflowError::EvalError(
-                EvalError::Internal(message).into(),
-            )),
+            Err(message) => Err(EvalError::Internal(message).into()),
         });
     use timely::dataflow::operators::Map;
     (
@@ -598,7 +593,7 @@ where
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .map_fallible("Demux Errors", move |(key, result)| match result {
                         Ok(()) => Ok(key),
-                        Err(m) => Err(DataflowError::from(EvalError::Internal(m))),
+                        Err(m) => Err(EvalError::Internal(m).into()),
                     });
             err_output = Some(errs);
             partial = oks;
@@ -645,10 +640,7 @@ where
                     let message = "Non-positive accumulation in ReduceInaccumulable";
                     warn!(?value, ?count, debug_name, "[customer-data] {message}");
                     error!("{message}");
-                    target.push((
-                        DataflowError::from(EvalError::Internal(message.to_string())),
-                        1,
-                    ));
+                    target.push((EvalError::Internal(message.to_string()).into(), 1));
                     return;
                 }
             },
@@ -801,10 +793,7 @@ where
                             let message = "Non-positive accumulation in ReduceMinsMaxes";
                             warn!(?val, ?count, debug_name, "[customer-data] {message}");
                             error!("{message}");
-                            target.push((
-                                DataflowError::from(EvalError::Internal(message.to_string())),
-                                1,
-                            ));
+                            target.push((EvalError::Internal(message.to_string()).into(), 1));
                             return;
                         }
                     },
@@ -940,7 +929,7 @@ where
         );
         error!("Non-monotonic input to ReduceMonotonic");
         let m = "tried to build a monotonic reduction on non-monotonic input".to_string();
-        (DataflowError::from(EvalError::Internal(m)), 1)
+        (EvalError::Internal(m).into(), 1)
     });
     // We can place our rows directly into the diff field, and
     // only keep the relevant one corresponding to evaluating our
