@@ -15,12 +15,15 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
+ci_collapsed_heading "Configure git"
 BUILDKITE_REPO_REF="buildkite-origin"
-git remote add "$BUILDKITE_REPO_REF" "$BUILDKITE_REPO"
+run git remote add "$BUILDKITE_REPO_REF" "$BUILDKITE_REPO"
+run git config --global user.email "buildkite@materialize.com"
+run git config --global user.name "Buildkite"
 
-git fetch "$BUILDKITE_REPO_REF" "$BUILDKITE_PULL_REQUEST_BASE_BRANCH"
-git config --global user.email "buildkite@materialize.com"
-git config --global user.name "Buildkite"
-git merge "$BUILDKITE_REPO_REF"/"$BUILDKITE_PULL_REQUEST_BASE_BRANCH" --message "Merge"
+ci_collapsed_heading "Fetch and merge target branch"
+run git fetch "$BUILDKITE_REPO_REF" "$BUILDKITE_PULL_REQUEST_BASE_BRANCH"
+run git merge "$BUILDKITE_REPO_REF"/"$BUILDKITE_PULL_REQUEST_BASE_BRANCH" --message "Merge"
 
-cargo check
+ci_collapsed_heading "Conduct checks"
+run cargo check
