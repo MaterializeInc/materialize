@@ -25,8 +25,10 @@ use tokio_postgres::{types::ToSql, Client};
 use tracing::info;
 
 use crate::{
-    consolidate_kv, consolidate_updates_kv, postgres::CountedStatements, AntichainFormatter,
-    AppendBatch, Data, Diff, Id, InternalStashError, Stash, StashCollection, StashError, Timestamp,
+    consolidate_kv, consolidate_updates_kv,
+    postgres::{ConsolidateRequest, CountedStatements},
+    AntichainFormatter, AppendBatch, Data, Diff, Id, InternalStashError, Stash, StashCollection,
+    StashError, Timestamp,
 };
 
 impl Stash {
@@ -71,7 +73,7 @@ pub struct Transaction<'a> {
     client: &'a Client,
     // The set of consolidations that need to be performed if the transaction
     // succeeds.
-    consolidations: mpsc::UnboundedSender<(Id, Antichain<Timestamp>)>,
+    consolidations: mpsc::UnboundedSender<ConsolidateRequest>,
     // Savepoint state to enforce the invariant that only one SAVEPOINT is
     // active at once.
     savepoint: Arc<Mutex<bool>>,
@@ -296,7 +298,13 @@ impl<'a> Transaction<'a> {
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn consolidate(&self, id: Id) -> Result<(), StashError> {
         let since = self.since(id).await?;
-        self.consolidations.send((id, since)).unwrap();
+        self.consolidations
+            .send(ConsolidateRequest {
+                id,
+                since,
+                done: None,
+            })
+            .unwrap();
         Ok(())
     }
 
@@ -629,7 +637,11 @@ impl<'a> Transaction<'a> {
                                     },
                                 )
                                 .await?;
-                            Ok::<_, StashError>((collection_id, self.since(collection_id).await?))
+                            Ok::<_, StashError>(ConsolidateRequest {
+                                id: collection_id,
+                                since: self.since(collection_id).await?,
+                                done: None,
+                            })
                         },
                     );
                     try_join_all(futures).await

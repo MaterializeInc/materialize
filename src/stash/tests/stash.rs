@@ -81,7 +81,7 @@ use std::{
     time::Duration,
 };
 
-use futures::{Future, StreamExt};
+use futures::Future;
 use postgres_openssl::MakeTlsConnector;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -89,10 +89,7 @@ use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use tokio_postgres::Config;
 
-use mz_ore::{
-    assert_contains, collections::CollectionExt, metrics::MetricsRegistry, retry::Retry,
-    task::spawn,
-};
+use mz_ore::{assert_contains, collections::CollectionExt, metrics::MetricsRegistry, task::spawn};
 
 use mz_stash::{
     Stash, StashCollection, StashError, StashFactory, TableTransaction, Timestamp, TypedCollection,
@@ -302,36 +299,21 @@ async fn test_stash_postgres() {
             .await
             .unwrap();
 
-        // Commit the transaction and wait for background consolidation to occur, so
-        // retry in a loop until peek_raw only sees a single row.
-        let stream = Retry::default().into_retry_stream();
-        tokio::pin!(stream);
-        let mut ok = false;
-        while stream.next().await.is_some() {
-            let (raw_rows, rows) = stash
-                .with_transaction(move |tx| {
-                    Box::pin(async move {
-                        let col = CS2.from_tx(&tx).await?;
-                        let raw_rows = tx.peek_raw(col.id).await?.collect::<Vec<_>>();
-                        let rows = tx.peek_one(col).await.unwrap();
-                        Ok((raw_rows, rows))
-                    })
+        // Wait for consolidation to occur, then expect that peek_raw sees a single row.
+        stash.consolidate_now(col1.id).await.unwrap();
+        let (raw_rows, rows) = stash
+            .with_transaction(move |tx| {
+                Box::pin(async move {
+                    let col = CS2.from_tx(&tx).await?;
+                    let raw_rows = tx.peek_raw(col.id).await?.collect::<Vec<_>>();
+                    let rows = tx.peek_one(col).await.unwrap();
+                    Ok((raw_rows, rows))
                 })
-                .await
-                .unwrap();
-
-            // There should be exactly one raw row.
-            if raw_rows.len() != 1 {
-                continue;
-            }
-            let expect = BTreeMap::from([(S2 { a: 1, b: Some(3) }, 2)]);
-            if rows != expect {
-                continue;
-            }
-            ok = true;
-            break;
-        }
-        assert!(ok);
+            })
+            .await
+            .unwrap();
+        assert_eq!(raw_rows.len(), 1);
+        assert_eq!(rows, BTreeMap::from([(S2 { a: 1, b: Some(3) }, 2)]));
     }
     // Test readonly.
     {

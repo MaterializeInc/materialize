@@ -34,7 +34,7 @@ use mz_sql::names::{
     DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId,
     SchemaSpecifier, PUBLIC_ROLE_NAME,
 };
-use mz_stash::{AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
+use mz_stash::{AppendBatch, Data, Id, Stash, StashError, TableTransaction, TypedCollection};
 use mz_storage_client::types::sources::Timeline;
 
 use crate::catalog;
@@ -620,28 +620,44 @@ async fn migrate(
 // in both cases has been populated to None, which consolidate removes. We do need to fix the
 // on-disk data so we can remove the theoretically unneeded Option.
 async fn fix_incorrect_retractions(stash: &mut Stash) -> Result<(), StashError> {
-    stash
+    let consolidate_ids = stash
         .with_transaction(|tx| {
             Box::pin(async move {
-                tx.collection_fix_unconsolidated_rows(COLLECTION_DATABASE.from_tx(&tx).await?)
-                    .await?;
-                tx.collection_fix_unconsolidated_rows(COLLECTION_SCHEMA.from_tx(&tx).await?)
-                    .await?;
-                tx.collection_fix_unconsolidated_rows(COLLECTION_ROLE.from_tx(&tx).await?)
-                    .await?;
-                tx.collection_fix_unconsolidated_rows(COLLECTION_ITEM.from_tx(&tx).await?)
-                    .await?;
-                tx.collection_fix_unconsolidated_rows(COLLECTION_CLUSTERS.from_tx(&tx).await?)
-                    .await?;
-                tx.collection_fix_unconsolidated_rows(
-                    COLLECTION_CLUSTER_REPLICAS.from_tx(&tx).await?,
-                )
-                .await?;
-
-                Ok(())
+                async fn fix<'tx, K, V>(
+                    tx: &'tx mz_stash::Transaction<'tx>,
+                    typed: &TypedCollection<K, V>,
+                    ids: &mut Vec<Id>,
+                ) -> Result<(), StashError>
+                where
+                    K: Data,
+                    V: Data,
+                {
+                    let col = typed.from_tx(tx).await?;
+                    tx.collection_fix_unconsolidated_rows(col).await?;
+                    ids.push(col.id);
+                    Ok(())
+                }
+                let mut ids = Vec::new();
+                // The only collections that broke are ones that added an Option field. We don't
+                // need to run the fix function (which does a full scan) on everything.
+                fix(&tx, &COLLECTION_DATABASE, &mut ids).await?;
+                fix(&tx, &COLLECTION_DATABASE, &mut ids).await?;
+                fix(&tx, &COLLECTION_SCHEMA, &mut ids).await?;
+                fix(&tx, &COLLECTION_ROLE, &mut ids).await?;
+                fix(&tx, &COLLECTION_ITEM, &mut ids).await?;
+                fix(&tx, &COLLECTION_CLUSTERS, &mut ids).await?;
+                fix(&tx, &COLLECTION_CLUSTER_REPLICAS, &mut ids).await?;
+                Ok(ids)
             })
         })
-        .await
+        .await?;
+
+    // Wait for consolidation so we know the rows are no longer on disk, and so we can use updated Rust
+    // structs for next release.
+    for id in consolidate_ids {
+        stash.consolidate_now(id).await?;
+    }
+    Ok(())
 }
 
 fn add_new_builtin_clusters_migration(
@@ -2061,7 +2077,7 @@ impl<'a> Transaction<'a> {
         async fn add_batch<'tx, K, V>(
             tx: &'tx mz_stash::Transaction<'tx>,
             batches: &mut Vec<AppendBatch>,
-            migration_retractions: &mut Vec<BoxFuture<'tx, Result<(), StashError>>>,
+            migration_retractions: &mut Vec<BoxFuture<'tx, Result<Id, StashError>>>,
             typed: &'tx TypedCollection<K, V>,
             changes: &[(K, V, mz_stash::Diff)],
         ) -> Result<(), StashError>
@@ -2079,7 +2095,10 @@ impl<'a> Transaction<'a> {
                 collection.append_to_batch(&mut batch, k, v, *diff);
             }
             batches.push(batch);
-            migration_retractions.push(Box::pin(tx.collection_fix_unconsolidated_rows(collection)));
+            migration_retractions.push(Box::pin(async move {
+                tx.collection_fix_unconsolidated_rows(collection).await?;
+                Ok(collection.id)
+            }));
             Ok(())
         }
 
@@ -2105,11 +2124,13 @@ impl<'a> Transaction<'a> {
         let audit_log_updates = Arc::new(self.audit_log_updates);
         let storage_usage_updates = Arc::new(self.storage_usage_updates);
 
-        self.stash
+        let consolidate_ids = self
+            .stash
             .with_transaction(move |tx| {
                 Box::pin(async move {
                     let mut batches = Vec::new();
                     let mut migration_retractions = Vec::new();
+                    let mut consolidate_ids = Vec::new();
 
                     add_batch(
                         &tx,
@@ -2236,14 +2257,22 @@ impl<'a> Transaction<'a> {
                     if fix_migration_retractions {
                         // Run the unconsolidated rows cleanup fns.
                         for fut in migration_retractions {
-                            fut.await?;
+                            // Wait for consolidations of fixed collections so that we're guaranteed
+                            // any future envd boot will not observe old raw rows so that we can
+                            // always use new structs.
+                            consolidate_ids.push(fut.await?);
                         }
                     }
 
-                    Ok(())
+                    Ok(consolidate_ids)
                 })
             })
             .await?;
+
+        for id in consolidate_ids {
+            self.stash.consolidate_now(id).await?;
+        }
+
         Ok(())
     }
 }
