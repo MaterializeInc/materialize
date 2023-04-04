@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from textwrap import dedent
 from typing import List, Optional
 
 import pytest
@@ -45,24 +44,9 @@ class ReplaceEnvironmentdStatefulSet(Action):
         stateful_set.tag = self.new_tag
         stateful_set.replace()
 
-
-class LiftClusterLimits(Action):
-    def execute(self, e: Executor) -> None:
-        e.testdrive(
-            input=dedent(
-                """
-                $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-
-                $ postgres-execute connection=mz_system
-                ALTER SYSTEM SET max_tables = 1000;
-
-                ALTER SYSTEM SET max_sources = 1000;
-
-                ALTER SYSTEM SET max_materialized_views = 1000;
-                ALTER SYSTEM SET max_objects_per_schema = 1000;
-                """
-            )
-        )
+    def join(self, e: Executor) -> None:
+        # execute is blocking already
+        pass
 
 
 class CloudtestUpgrade(Scenario):
@@ -73,7 +57,6 @@ class CloudtestUpgrade(Scenario):
 
     def actions(self) -> List[Action]:
         return [
-            LiftClusterLimits(),
             Initialize(self),
             Manipulate(self, phase=1),
             ReplaceEnvironmentdStatefulSet(new_tag=None),

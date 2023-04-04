@@ -58,6 +58,7 @@ class Initialize(Action):
             print(f"Running initialize() from {check}")
             check.start_initialize(e)
 
+    def join(self, e: Executor) -> None:
         for check in self.checks:
             check.join_initialize(e)
 
@@ -80,6 +81,8 @@ class Manipulate(Action):
             print(f"Running manipulate() from {check}")
             check.start_manipulate(e, self.phase)
 
+    def join(self, e: Executor) -> None:
+        assert self.phase is not None
         for check in self.checks:
             check.join_manipulate(e, self.phase)
 
@@ -93,5 +96,6 @@ class Validate(Action):
             print(f"Running validate() from {check}")
             check.start_validate(e)
 
+    def join(self, e: Executor) -> None:
         for check in self.checks:
             check.join_validate(e)

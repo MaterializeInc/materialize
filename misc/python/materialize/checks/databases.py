@@ -11,6 +11,7 @@ from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
+from materialize.util import MzVersion
 
 
 class CheckDatabaseCreate(Check):
@@ -67,6 +68,18 @@ class CheckDatabaseCreate(Check):
 
 class CheckDatabaseDrop(Check):
     def manipulate(self) -> List[Testdrive]:
+        fix_ownership = (
+            """
+                # When upgrading from old version without roles the database is
+                # owned by default_role, thus we have to change the owner
+                # before dropping it:
+                $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+                ALTER DATABASE to_be_dropped OWNER TO materialize;
+                """
+            if self.base_version >= MzVersion.parse("0.46.0-dev")
+            else ""
+        )
+
         return [
             Testdrive(dedent(s))
             for s in [
@@ -75,7 +88,8 @@ class CheckDatabaseDrop(Check):
                 > SET DATABASE=to_be_dropped;
                 > CREATE TABLE t1 (f1 INTEGER);
                 """,
-                """
+                fix_ownership
+                + """
                 > DROP DATABASE to_be_dropped CASCADE;
                 """,
             ]

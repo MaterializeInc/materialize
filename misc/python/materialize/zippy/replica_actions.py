@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import random
+from textwrap import dedent
 from typing import List, Optional, Set, Type
 
 from materialize.mzcompose import Composition
@@ -24,7 +25,16 @@ class DropDefaultReplica(Action):
         return {MzIsRunning}
 
     def run(self, c: Composition) -> None:
-        c.testdrive("> DROP CLUSTER REPLICA default.r1;")
+        # Default cluster is not owned by materialize, thus can't be dropped by
+        # it if enable_rbac_checks is on.
+        c.testdrive(
+            dedent(
+                """
+            $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+            DROP CLUSTER REPLICA default.r1
+            """
+            )
+        )
 
 
 class CreateReplica(Action):

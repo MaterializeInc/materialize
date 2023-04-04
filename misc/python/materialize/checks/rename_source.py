@@ -11,6 +11,7 @@ from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
+from materialize.util import MzVersion
 
 
 class RenameSource(Check):
@@ -58,6 +59,18 @@ class RenameSource(Check):
         )
 
     def manipulate(self) -> List[Testdrive]:
+        fix_ownership = (
+            """
+                # When upgrading from old version without roles the source is
+                # owned by default_role, thus we have to change the owner
+                # before dropping it:
+                $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+                ALTER SOURCE rename_source2 OWNER TO materialize;
+                """
+            if self.base_version >= MzVersion.parse("0.46.0-dev")
+            else ""
+        )
+
         return [
             Testdrive(self._source_schema() + dedent(s))
             for s in [
@@ -68,7 +81,8 @@ class RenameSource(Check):
                 $ kafka-ingest format=avro topic=rename-source schema=${rename-source-schema}
                 {"f1": "E"}
                 """,
-                """
+                fix_ownership
+                + """
                 $ kafka-ingest format=avro topic=rename-source schema=${rename-source-schema}
                 {"f1": "F"}
                 > ALTER SOURCE rename_source2 RENAME to rename_source3;

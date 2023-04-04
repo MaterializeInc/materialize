@@ -13,6 +13,7 @@ from typing import List, Optional, Type
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.checks import Check
 from materialize.checks.executors import Executor
+from materialize.checks.mzcompose_actions import ConfigureMz
 from materialize.checks.mzcompose_actions import (
     DropCreateDefaultReplica as DropCreateDefaultReplicaAction,
 )
@@ -64,8 +65,12 @@ class Scenario:
         return self._base_version
 
     def run(self) -> None:
-        for action in self.actions():
+        actions = self.actions()
+        # The first action is StartMz, configure it implicitly afterwards
+        actions.insert(1 if isinstance(actions[0], StartMz) else 0, ConfigureMz(self))
+        for action in actions:
             action.execute(self.executor)
+            action.join(self.executor)
 
 
 class NoRestartNoUpgrade(Scenario):
