@@ -15,11 +15,9 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-ci_try git fetch "$BUILDKITE_REPO"
-ci_try git config --global user.email "buildkite@materialize.com"
-ci_try git config --global user.name "Buildkite"
-ci_try git merge origin/"$BUILDKITE_PULL_REQUEST_BASE_BRANCH" --message "Merge"
+git fetch "$BUILDKITE_REPO"
+git config --global user.email "buildkite@materialize.com"
+git config --global user.name "Buildkite"
+git merge origin/"$BUILDKITE_PULL_REQUEST_BASE_BRANCH" --message "Merge"
 
-ci_try cargo check
-
-ci_status_report
+cargo check
