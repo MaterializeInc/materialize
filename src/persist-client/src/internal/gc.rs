@@ -298,10 +298,12 @@ where
 
         let mut deleteable_batch_blobs = BTreeSet::new();
         let mut deleteable_rollup_blobs = Vec::new();
-        let mut live_diffs = 0;
         let mut seqno_held_parts = BTreeSet::new();
-
         let mut state_count = 0;
+        let shard_metrics = machine.applier.metrics.shards.shard(&req.shard_id);
+        shard_metrics
+            .gc_live_diffs
+            .set(u64::cast_from(states.len()));
 
         while let Some(state) = states.next() {
             if state_count % 1000 == 0 {
@@ -325,7 +327,6 @@ where
                     });
                 }
                 Ordering::Equal => {
-                    live_diffs += 1;
                     state.collections.trace.map_batches(|b| {
                         for part in b.parts.iter() {
                             // It's okay (expected) if the key doesn't exist in
@@ -450,7 +451,6 @@ where
 
         // Finally, apply the remaining diffs to calculate metrics.
         while let Some(state) = states.next() {
-            live_diffs += 1;
             state.collections.trace.map_batches(|b| {
                 for part in b.parts.iter() {
                     seqno_held_parts.insert(part.key.to_owned());
@@ -467,11 +467,9 @@ where
             }
         });
 
-        let shard_metrics = machine.applier.metrics.shards.shard(&req.shard_id);
         shard_metrics
             .gc_seqno_held_parts
             .set(u64::cast_from(seqno_held_parts.len()));
-        shard_metrics.gc_live_diffs.set(live_diffs);
         report_step_timing(&machine.applier.metrics.gc.steps.finish_seconds);
 
         maintenance
