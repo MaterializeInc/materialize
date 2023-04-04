@@ -14,7 +14,7 @@ use anyhow::{anyhow, Context};
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
 use rdkafka::ClientContext;
 
-use mz_kafka_util::client::MzClientContext;
+use mz_kafka_util::client::{MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT};
 use mz_ore::collections::CollectionExt;
 
 use crate::types::connections::ConnectionContext;
@@ -53,7 +53,7 @@ where
     if partition_count == -1 || replication_factor == -1 {
         let metadata = client
             .inner()
-            .fetch_metadata(None, Duration::from_secs(5))
+            .fetch_metadata(None, DEFAULT_FETCH_METADATA_TIMEOUT)
             .with_context(|| {
                 format!(
                     "error fetching metadata when creating new topic {} for sink",
