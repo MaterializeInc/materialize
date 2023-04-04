@@ -15,6 +15,8 @@
 
 //! Result utilities.
 
+use std::convert::Infallible;
+
 use crate::display::DisplayExt;
 
 /// Extension methods for [`std::result::Result`].
@@ -40,11 +42,9 @@ pub trait ResultExt<T, E> {
 
     /// Safely unwraps a `Result<T, Infallible>`, where [`Infallible`] is a type that represents when
     /// an error cannot occur.
-    ///
-    /// [`Infallible`]: core::convert::Infallible
     fn infallible_unwrap(self) -> T
     where
-        E: Into<core::convert::Infallible>;
+        E: Into<Infallible>;
 }
 
 impl<T, E> ResultExt<T, E> for Result<T, E> {
@@ -71,7 +71,7 @@ impl<T, E> ResultExt<T, E> for Result<T, E> {
 
     fn infallible_unwrap(self) -> T
     where
-        E: Into<core::convert::Infallible>,
+        E: Into<Infallible>,
     {
         match self {
             Ok(t) => t,
@@ -79,7 +79,7 @@ impl<T, E> ResultExt<T, E> for Result<T, E> {
                 let _infallible = e.into();
 
                 // This code will forever be unreachable because Infallible is an enum
-                // with no variants, so it's impossible to consturct. If it ever does
+                // with no variants, so it's impossible to construct. If it ever does
                 // become possible to construct this will become a compile time error
                 // since there will be a variant we're not matching on.
                 #[allow(unreachable_code)]
