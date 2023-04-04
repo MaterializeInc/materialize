@@ -53,3 +53,17 @@ contains:Non-positive accumulation in ReduceInaccumulable
 # regression scenario per #17509
 ! SELECT MAX(data) FROM data;
 contains:Invalid data in source, saw non-positive accumulation
+
+# verify that some reduction in a collation plan catches a negative
+# multiplicity.
+! SELECT
+    data,
+    COUNT(DISTINCT data),
+    STRING_AGG(data::text || '1',  ','),
+    MIN(data),
+    MAX(DISTINCT data),
+    SUM(data),
+    STRING_AGG(data::text || '2',  ',')
+  FROM data
+  GROUP BY data
+contains:Non-positive accumulation in ReduceInaccumulable
