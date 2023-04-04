@@ -203,6 +203,7 @@ mod tests {
                     subtree_size: false,
                     timing: false,
                     types: format_contains("types"),
+                    ..ExplainConfig::default()
                 };
 
                 let context = ExplainContext {

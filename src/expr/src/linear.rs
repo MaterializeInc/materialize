@@ -1432,7 +1432,7 @@ pub mod plan {
 
     use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
     use mz_repr::stats::PersistSourceDataStats;
-    use mz_repr::{Datum, Diff, RelationDesc, Row, RowArena};
+    use mz_repr::{Datum, Diff, Row, RowArena};
 
     use crate::{
         func, BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, ProtoMfpPlan,
@@ -1888,7 +1888,6 @@ pub mod plan {
     /// min/max) about the data contained in it.
     #[derive(Debug)]
     pub struct MfpPushdown {
-        relation_desc: RelationDesc,
         // TODO(mfp): Probably some preprocessing we could do to make
         // `should_fetch` calls more efficient.
         mfp: MfpPlan,
@@ -1898,14 +1897,10 @@ pub mod plan {
         /// Returns a new [MfpPushdown] for the given [MfpPlan] and support
         /// info.
         pub fn new(
-            relation_desc: RelationDesc,
             mfp: &MfpPlan,
             // TODO: timestamp/as_of and until.
         ) -> Self {
-            MfpPushdown {
-                relation_desc,
-                mfp: mfp.clone(),
-            }
+            MfpPushdown { mfp: mfp.clone() }
         }
 
         /// Returns `false` if a chunk of data with the given statistics would
@@ -1962,21 +1957,20 @@ pub mod plan {
                 // Should the `col_min` and `col_max` methods instead take
                 // indexes? That would allow us to remove the RelationDesc from
                 // MfpPushdown.
-                let col_name = self.relation_desc.get_name(col_idx);
                 let min_or_max = match func {
-                    BinaryFunc::Lt | BinaryFunc::Lte => stats.col_min(col_name.as_str(), &arena)?,
-                    BinaryFunc::Gt | BinaryFunc::Gte => stats.col_max(col_name.as_str(), &arena)?,
+                    BinaryFunc::Lt | BinaryFunc::Lte => stats.col_min(col_idx, &arena)?,
+                    BinaryFunc::Gt | BinaryFunc::Gte => stats.col_max(col_idx, &arena)?,
                     _ => return None,
                 };
                 if !Self::zero_column_references(expr2)? {
                     return None;
                 }
-                let mut datums = Vec::with_capacity(self.relation_desc.arity());
+                let mut datums = Vec::with_capacity(self.mfp.mfp.input_arity);
                 while datums.len() < col_idx {
                     datums.push(Datum::Null);
                 }
                 datums.push(min_or_max);
-                while datums.len() < self.relation_desc.arity() {
+                while datums.len() < self.mfp.mfp.input_arity {
                     datums.push(Datum::Null);
                 }
                 match expr.eval(datums.as_slice(), &arena) {
@@ -2013,7 +2007,9 @@ pub mod plan {
                     // preserves_uniqueness to mark an inverse function safe for
                     // applying on both sides of an inequality.
                     func:
-                        UnaryFunc::CastUint64ToNumeric(..) | UnaryFunc::CastUint64ToMzTimestamp(..),
+                        UnaryFunc::CastUint64ToNumeric(..)
+                        | UnaryFunc::CastUint64ToMzTimestamp(..)
+                        | UnaryFunc::CastTimestampToMzTimestamp(..),
                     expr,
                 } => Self::one_column_reference(expr),
                 _ => None,
