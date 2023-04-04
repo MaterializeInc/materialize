@@ -36,6 +36,7 @@ _uint4
 _uint8
 _interval
 _jsonb
+_mz_aclitem
 _mz_timestamp
 _numeric
 _numrange
@@ -84,6 +85,7 @@ interval
 jsonb
 list
 map
+mz_aclitem
 mz_timestamp
 numeric
 numrange

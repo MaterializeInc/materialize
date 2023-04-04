@@ -13,7 +13,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
 
-use anyhow::anyhow;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use uncased::UncasedStr;
@@ -22,6 +21,7 @@ use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::LocalId;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
+use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 
 use crate::ast::display::{AstDisplay, AstFormatter};
@@ -685,66 +685,6 @@ impl FromStr for DatabaseId {
 }
 
 pub static PUBLIC_ROLE_NAME: Lazy<&UncasedStr> = Lazy::new(|| UncasedStr::new("PUBLIC"));
-
-/// The identifier for a role.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub enum RoleId {
-    System(u64),
-    User(u64),
-    Public,
-}
-
-impl RoleId {
-    pub fn is_system(&self) -> bool {
-        matches!(self, Self::System(_))
-    }
-
-    pub fn is_user(&self) -> bool {
-        matches!(self, Self::User(_))
-    }
-
-    pub fn is_public(&self) -> bool {
-        matches!(self, Self::Public)
-    }
-}
-
-impl FromStr for RoleId {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() < 2 {
-            return Err(anyhow!("couldn't parse role id {}", s));
-        }
-        match s.chars().next().unwrap() {
-            's' => {
-                let val: u64 = s[1..].parse()?;
-                Ok(Self::System(val))
-            }
-            'u' => {
-                let val: u64 = s[1..].parse()?;
-                Ok(Self::User(val))
-            }
-            'p' => Ok(Self::Public),
-            _ => Err(anyhow!("couldn't parse role id {}", s)),
-        }
-    }
-}
-
-impl fmt::Display for RoleId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::System(id) => write!(f, "s{}", id),
-            Self::User(id) => write!(f, "u{}", id),
-            Self::Public => write!(f, "p"),
-        }
-    }
-}
-
-impl AstDisplay for RoleId {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(format!("{}", self));
-    }
-}
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum ObjectId {

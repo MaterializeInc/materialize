@@ -34,6 +34,7 @@ use crate::adt::array::{
 };
 use crate::adt::date::Date;
 use crate::adt::interval::Interval;
+use crate::adt::mz_acl_item::MzAclItem;
 use crate::adt::numeric;
 use crate::adt::numeric::Numeric;
 use crate::adt::range::{
@@ -400,6 +401,7 @@ enum Tag {
     UInt64,
     MzTimestamp,
     Range,
+    MzAclItem,
 }
 
 // --------------------------------------------------------------------------------
@@ -655,6 +657,12 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
                 inner: Some(RangeInner { lower, upper }),
             })
         }
+        Tag::MzAclItem => {
+            const N: usize = MzAclItem::binary_size();
+            let mz_acl_item = MzAclItem::decode_binary(&read_byte_array::<N>(data, offset))
+                .expect("invalid mz_aclitem");
+            Datum::MzAclItem(mz_acl_item)
+        }
     }
 }
 
@@ -891,6 +899,10 @@ where
                 }
             }
         }
+        Datum::MzAclItem(mz_acl_item) => {
+            data.push(Tag::MzAclItem.into());
+            data.extend_from_slice(&mz_acl_item.encode_binary());
+        }
     }
 }
 
@@ -990,6 +1002,7 @@ pub fn datum_size(datum: &Datum) -> usize {
                     .sum(),
             }
         }
+        Datum::MzAclItem(_) => 1 + MzAclItem::binary_size(),
     }
 }
 

@@ -23,13 +23,14 @@ use mz_controller::clusters::{ClusterId, ReplicaConfig, ReplicaId};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError as SqlCatalogError, CatalogItemType,
     CatalogSchema, RoleAttributes,
 };
 use mz_sql::names::{
-    DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, RoleId, SchemaId,
+    DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId,
     SchemaSpecifier, PUBLIC_ROLE_NAME,
 };
 use mz_stash::{AppendBatch, Stash, StashError, TableTransaction, TypedCollection};

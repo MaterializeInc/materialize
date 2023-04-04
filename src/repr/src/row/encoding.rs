@@ -124,7 +124,8 @@ impl ColumnType {
                 | Map { .. }
                 | Int2Vector
                 | MzTimestamp
-                | Range { .. },
+                | Range { .. }
+                | MzAclItem,
             ) => f.call::<TodoDatumToPersist>(),
         }
     }
@@ -542,6 +543,7 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
                     })
                 }),
             })),
+            Datum::MzAclItem(x) => DatumType::MzAclItem(x.into_proto()),
         };
         ProtoDatum {
             datum_type: Some(datum_type),
@@ -689,6 +691,7 @@ impl RowPacker<'_> {
                     }
                 }
             }
+            Some(DatumType::MzAclItem(x)) => self.push(Datum::MzAclItem(x.clone().into_rust()?)),
             None => return Err("unknown datum type".into()),
         };
         Ok(())

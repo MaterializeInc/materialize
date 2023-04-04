@@ -55,6 +55,7 @@ use crate::adt::date::Date;
 use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
+use crate::adt::mz_acl_item::MzAclItem;
 use crate::adt::numeric::{self, Numeric, NUMERIC_DATUM_MAX_PRECISION};
 use crate::adt::range::{Range, RangeBound, RangeInner};
 use crate::adt::timestamp::CheckedTimestamp;
@@ -1438,6 +1439,22 @@ where
         }
     }
     Ok(())
+}
+
+/// Writes an `mz_acl_item` to `buf`.
+pub fn format_mz_acl_item<F>(buf: &mut F, mz_acl_item: MzAclItem) -> Nestable
+where
+    F: FormatBuffer,
+{
+    write!(buf, "{mz_acl_item}");
+    Nestable::Yes
+}
+
+/// Parses an MzAclItem from `s`.
+pub fn parse_mz_acl_item(s: &str) -> Result<MzAclItem, ParseError> {
+    s.trim()
+        .parse()
+        .map_err(|e| ParseError::invalid_input_syntax("mz_aclitem", s).with_details(e))
 }
 
 pub trait ElementEscaper {

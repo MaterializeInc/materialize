@@ -45,6 +45,7 @@ use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
+use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_client::types::instances::StorageInstanceId;
@@ -60,8 +61,7 @@ use crate::ast::{
 };
 use crate::catalog::{CatalogType, IdReference, RoleAttributes};
 use crate::names::{
-    Aug, DatabaseId, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, RoleId,
-    SchemaId,
+    Aug, DatabaseId, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId,
 };
 
 pub use self::expr::{

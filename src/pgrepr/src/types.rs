@@ -14,6 +14,7 @@ use std::mem::size_of;
 use once_cell::sync::Lazy;
 
 use mz_repr::adt::char::{CharLength as AdtCharLength, InvalidCharLengthError};
+use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::adt::numeric::{
     InvalidNumericMaxScaleError, NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION,
 };
@@ -145,11 +146,13 @@ pub enum Type {
     Int2Vector,
     /// A Materialize timestamp.
     MzTimestamp,
-    /// A range of values of the inner type
+    /// A range of values of the inner type.
     Range {
-        /// The domain type
+        /// The domain type.
         element_type: Box<Type>,
     },
+    /// A list of privileges granted to a role.
+    MzAclItem,
 }
 
 /// An unpacked [`typmod`](Type::typmod) for a [`Type`].
@@ -470,6 +473,26 @@ pub static MZ_TIMESTAMP_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
     )
 });
 
+/// An anonymous [`Type::MzAclItem`], akin to [`postgres_types::Type::TEXT`].
+pub static MZ_ACL_ITEM: Lazy<postgres_types::Type> = Lazy::new(|| {
+    postgres_types::Type::new(
+        "mz_aclitem".to_owned(),
+        oid::TYPE_MZ_ACL_ITEM_OID,
+        postgres_types::Kind::Pseudo,
+        "mz_catalog".to_owned(),
+    )
+});
+
+/// An anonymous [`Type::Array`], akin to [`postgres_types::Type::TEXT_ARRAY`].
+pub static MZ_ACL_ITEM_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
+    postgres_types::Type::new(
+        "mz_aclitem_array".to_owned(),
+        oid::TYPE_MZ_ACL_ITEM_ARRAY_OID,
+        postgres_types::Kind::Pseudo,
+        "mz_catalog".to_owned(),
+    )
+});
+
 impl Type {
     /// Returns the type corresponding to the provided OID, if the OID is known.
     pub fn from_oid(oid: u32) -> Result<Type, TypeFromOidError> {
@@ -684,6 +707,7 @@ impl Type {
                     Type::Date => &postgres_types::Type::DATE_RANGE_ARRAY,
                     _ => unreachable!(),
                 },
+                Type::MzAclItem => &MZ_ACL_ITEM_ARRAY,
             },
             Type::Bool => &postgres_types::Type::BOOL,
             Type::Bytea => &postgres_types::Type::BYTEA,
@@ -727,6 +751,7 @@ impl Type {
                 Type::Date => &postgres_types::Type::DATE_RANGE,
                 t => unreachable!("{t:?} is not a range element type"),
             },
+            Type::MzAclItem => &MZ_ACL_ITEM,
         }
     }
 
@@ -846,7 +871,8 @@ impl Type {
             | Type::Uuid
             | Type::MzTimestamp
             | Type::VarChar { max_length: None }
-            | Type::Range { .. } => None,
+            | Type::Range { .. }
+            | Type::MzAclItem => None,
         }
     }
 
@@ -893,6 +919,7 @@ impl Type {
                 .try_into()
                 .expect("must fit"),
             Type::Range { .. } => -1,
+            Type::MzAclItem => MzAclItem::binary_size().try_into().expect("must fit"),
         }
     }
 
@@ -1014,6 +1041,7 @@ impl TryFrom<&Type> for ScalarType {
             Type::Range { element_type } => Ok(ScalarType::Range {
                 element_type: Box::new(TryFrom::try_from(&**element_type)?),
             }),
+            Type::MzAclItem => Ok(ScalarType::MzAclItem),
         }
     }
 }
@@ -1165,6 +1193,7 @@ impl From<&ScalarType> for Type {
             ScalarType::Range { element_type } => Type::Range {
                 element_type: Box::new(From::from(&**element_type)),
             },
+            ScalarType::MzAclItem => Type::MzAclItem,
         }
     }
 }

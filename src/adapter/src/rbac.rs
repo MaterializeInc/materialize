@@ -14,8 +14,9 @@ use std::fmt::Formatter;
 use itertools::Itertools;
 
 use mz_ore::str::StrExt;
+use mz_repr::role_id::RoleId;
 use mz_sql::catalog::SessionCatalog;
-use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier, RoleId, SchemaSpecifier};
+use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_sql::plan::{AlterOwnerPlan, Plan};
 use mz_sql_parser::ast::{ObjectType, QualifiedReplica};
 

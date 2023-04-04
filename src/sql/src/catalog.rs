@@ -31,6 +31,7 @@ use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::MirScalarExpr;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::explain::ExprHumanizer;
+use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
 use mz_sql_parser::ast::UnresolvedItemName;
 use mz_sql_parser::ast::{Expr, ObjectType};
@@ -40,7 +41,7 @@ use mz_storage_client::types::sources::SourceDesc;
 use crate::func::Func;
 use crate::names::{
     Aug, DatabaseId, FullItemName, FullSchemaName, ObjectId, PartialItemName, QualifiedItemName,
-    QualifiedSchemaName, ResolvedDatabaseSpecifier, RoleId, SchemaSpecifier,
+    QualifiedSchemaName, ResolvedDatabaseSpecifier, SchemaSpecifier,
 };
 use crate::normalize;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
@@ -684,6 +685,7 @@ pub enum CatalogType<T: TypeReference> {
     Uuid,
     VarChar,
     Int2Vector,
+    MzAclItem,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

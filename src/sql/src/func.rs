@@ -70,7 +70,9 @@ impl TypeCategory {
         match typ {
             ScalarType::Array(..) | ScalarType::Int2Vector => Self::Array,
             ScalarType::Bool => Self::Boolean,
-            ScalarType::Bytes | ScalarType::Jsonb | ScalarType::Uuid => Self::UserDefined,
+            ScalarType::Bytes | ScalarType::Jsonb | ScalarType::Uuid | ScalarType::MzAclItem => {
+                Self::UserDefined
+            }
             ScalarType::Date
             | ScalarType::Time
             | ScalarType::Timestamp
@@ -137,7 +139,10 @@ impl TypeCategory {
         match catalog_type {
             CatalogType::Array { .. } | CatalogType::Int2Vector => Self::Array,
             CatalogType::Bool => Self::Boolean,
-            CatalogType::Bytes | CatalogType::Jsonb | CatalogType::Uuid => Self::UserDefined,
+            CatalogType::Bytes
+            | CatalogType::Jsonb
+            | CatalogType::Uuid
+            | CatalogType::MzAclItem => Self::UserDefined,
             CatalogType::Date
             | CatalogType::Time
             | CatalogType::Timestamp
@@ -841,6 +846,7 @@ impl From<ScalarBaseType> for ParamType {
             RegType => ScalarType::RegType,
             Int2Vector => ScalarType::Int2Vector,
             MzTimestamp => ScalarType::MzTimestamp,
+            MzAclItem => ScalarType::MzAclItem,
         };
         ParamType::Plain(s)
     }

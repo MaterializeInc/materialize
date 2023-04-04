@@ -22,6 +22,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::jsonb::JsonbRef;
+use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::adt::range::{Range, RangeInner};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::strconv::{self, Nestable};
@@ -107,6 +108,8 @@ pub enum Value {
     MzTimestamp(mz_repr::Timestamp),
     /// A contiguous range of values along a domain.
     Range(Range<Box<Value>>),
+    /// A list of privileges granted to a role.
+    MzAclItem(MzAclItem),
 }
 
 impl Value {
@@ -134,6 +137,7 @@ impl Value {
             (Datum::Float64(f), ScalarType::Float64) => Some(Value::Float8(*f)),
             (Datum::Numeric(d), ScalarType::Numeric { .. }) => Some(Value::Numeric(Numeric(d))),
             (Datum::MzTimestamp(t), ScalarType::MzTimestamp) => Some(Value::MzTimestamp(t)),
+            (Datum::MzAclItem(mai), ScalarType::MzAclItem) => Some(Value::MzAclItem(mai)),
             (Datum::Date(d), ScalarType::Date) => Some(Value::Date(d)),
             (Datum::Time(t), ScalarType::Time) => Some(Value::Time(t)),
             (Datum::Timestamp(ts), ScalarType::Timestamp) => Some(Value::Timestamp(ts)),
@@ -296,6 +300,7 @@ impl Value {
 
                 buf.make_datum(|packer| packer.push_range(range).unwrap())
             }
+            Value::MzAclItem(mz_acl_item) => Datum::MzAclItem(mz_acl_item),
         }
     }
 
@@ -376,6 +381,7 @@ impl Value {
                 None => Ok::<_, ()>(buf.write_null()),
             })
             .expect("provided closure never fails"),
+            Value::MzAclItem(mz_acl_item) => strconv::format_mz_acl_item(buf, *mz_acl_item),
         }
     }
 
@@ -503,6 +509,10 @@ impl Value {
                 }
                 Ok(postgres_types::IsNull::No)
             }
+            Value::MzAclItem(mz_acl_item) => {
+                buf.extend_from_slice(&mz_acl_item.encode_binary());
+                Ok(postgres_types::IsNull::No)
+            }
         }
         .expect("encode_binary should never trigger a to_sql failure");
         if let IsNull::Yes = is_null {
@@ -598,6 +608,7 @@ impl Value {
             Type::Range { element_type } => Value::Range(strconv::parse_range(s, |elem_text| {
                 Value::decode_text(element_type, elem_text.as_bytes()).map(Box::new)
             })?),
+            Type::MzAclItem => Value::MzAclItem(strconv::parse_mz_acl_item(s)?),
         })
     }
 
@@ -656,6 +667,10 @@ impl Value {
                 Ok(Value::MzTimestamp(t))
             }
             Type::Range { .. } => Err("binary decoding of range types is not implemented".into()),
+            Type::MzAclItem => {
+                let mz_acl_item = MzAclItem::decode_binary(raw)?;
+                Ok(Value::MzAclItem(mz_acl_item))
+            }
         }
     }
 }

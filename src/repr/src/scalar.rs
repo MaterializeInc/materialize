@@ -35,6 +35,7 @@ use crate::adt::char::{Char, CharLength};
 use crate::adt::date::Date;
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
+use crate::adt::mz_acl_item::{AclMode, MzAclItem};
 use crate::adt::numeric::{Numeric, NumericMaxScale};
 use crate::adt::range::{Range, RangeLowerBound, RangeUpperBound};
 use crate::adt::system::{Oid, PgLegacyChar, RegClass, RegProc, RegType};
@@ -45,6 +46,7 @@ use crate::{ColumnName, ColumnType, DatumList, DatumMap, GlobalId, Row, RowArena
 
 pub use crate::relation_and_scalar::proto_scalar_type::ProtoRecordField;
 pub use crate::relation_and_scalar::ProtoScalarType;
+use crate::role_id::RoleId;
 
 /// A single value.
 ///
@@ -126,6 +128,8 @@ pub enum Datum<'a> {
     MzTimestamp(crate::Timestamp),
     /// A range of values, e.g. [-1, 1).
     Range(Range<DatumNested<'a>>),
+    /// A list of privileges granted to a user.
+    MzAclItem(MzAclItem),
     /// A placeholder value.
     ///
     /// Dummy values are never meant to be observed. Many operations on `Datum`
@@ -741,6 +745,19 @@ impl<'a> Datum<'a> {
         }
     }
 
+    /// Unwraps the mz_acl_item value within this datum.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the datum is not [`Datum::MzAclItem`].
+    #[track_caller]
+    pub fn unwrap_mz_acl_item(&self) -> MzAclItem {
+        match self {
+            Datum::MzAclItem(mz_acl_item) => *mz_acl_item,
+            _ => panic!("Datum::unwrap_mz_acl_item called on {:?}", self),
+        }
+    }
+
     /// Reports whether this datum is an instance of the specified column type.
     pub fn is_instance_of(self, column_type: &ColumnType) -> bool {
         fn is_instance_of_scalar(datum: Datum, scalar_type: &ScalarType) -> bool {
@@ -856,6 +873,8 @@ impl<'a> Datum<'a> {
                         }
                     }
                     (Datum::Range(_), _) => false,
+                    (Datum::MzAclItem(_), ScalarType::MzAclItem) => true,
+                    (Datum::MzAclItem(_), _) => false,
                 }
             }
         }
@@ -1137,6 +1156,7 @@ impl fmt::Display for Datum<'_> {
             Datum::JsonNull => f.write_str("json_null"),
             Datum::Dummy => f.write_str("dummy"),
             Datum::Range(i) => write!(f, "{}", i),
+            Datum::MzAclItem(mz_acl_item) => write!(f, "{mz_acl_item}"),
         }
     }
 }
@@ -1272,6 +1292,8 @@ pub enum ScalarType {
     Range {
         element_type: Box<ScalarType>,
     },
+    /// The type of [`Datum::MzAclItem`]
+    MzAclItem,
 }
 
 impl RustType<ProtoRecordField> for (ColumnName, ColumnType) {
@@ -1357,6 +1379,7 @@ impl RustType<ProtoScalarType> for ScalarType {
                 ScalarType::Range { element_type } => Range(Box::new(ProtoRange {
                     element_type: Some(element_type.into_proto()),
                 })),
+                ScalarType::MzAclItem => MzAclItem(()),
             }),
         }
     }
@@ -1436,6 +1459,7 @@ impl RustType<ProtoScalarType> for ScalarType {
                         .into_rust_if_some("ProtoRange::element_type")?,
                 ),
             }),
+            MzAclItem(()) => Ok(ScalarType::MzAclItem),
         }
     }
 }
@@ -2582,6 +2606,40 @@ impl<'a> ScalarType {
             ])
         });
         static RANGE: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
+        static MZACLITEM: Lazy<Row> = Lazy::new(|| {
+            Row::pack_slice(&[
+                Datum::MzAclItem(MzAclItem {
+                    grantee: RoleId::Public,
+                    grantor: RoleId::Public,
+                    acl_mode: AclMode::empty(),
+                }),
+                Datum::MzAclItem(MzAclItem {
+                    grantee: RoleId::Public,
+                    grantor: RoleId::Public,
+                    acl_mode: AclMode::all(),
+                }),
+                Datum::MzAclItem(MzAclItem {
+                    grantee: RoleId::User(42),
+                    grantor: RoleId::Public,
+                    acl_mode: AclMode::empty(),
+                }),
+                Datum::MzAclItem(MzAclItem {
+                    grantee: RoleId::User(42),
+                    grantor: RoleId::Public,
+                    acl_mode: AclMode::all(),
+                }),
+                Datum::MzAclItem(MzAclItem {
+                    grantee: RoleId::Public,
+                    grantor: RoleId::User(42),
+                    acl_mode: AclMode::empty(),
+                }),
+                Datum::MzAclItem(MzAclItem {
+                    grantee: RoleId::Public,
+                    grantor: RoleId::User(42),
+                    acl_mode: AclMode::all(),
+                }),
+            ])
+        });
 
         match self {
             ScalarType::Bool => (*BOOL).iter(),
@@ -2617,6 +2675,7 @@ impl<'a> ScalarType {
             ScalarType::Int2Vector => (*INT2VECTOR).iter(),
             ScalarType::MzTimestamp => (*MZTIMESTAMP).iter(),
             ScalarType::Range { .. } => (*RANGE).iter(),
+            ScalarType::MzAclItem { .. } => (*MZACLITEM).iter(),
         }
     }
 
@@ -2660,6 +2719,7 @@ impl<'a> ScalarType {
             ScalarType::RegClass,
             ScalarType::Int2Vector,
             ScalarType::MzTimestamp,
+            ScalarType::MzAclItem,
             // TODO: Fill in some variants of these.
             /*
             ScalarType::Array(_),
