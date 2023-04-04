@@ -92,7 +92,7 @@ serde_json = { version = "1.0.89", features = ["alloc", "arbitrary_precision", "
 sha2 = { version = "0.10.6" }
 smallvec = { version = "1.10.0", default-features = false, features = ["serde", "union", "write"] }
 syn = { version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
-textwrap = { version = "0.15.0", default-features = false, features = ["terminal_size"] }
+textwrap = { version = "0.16.0", default-features = false, features = ["terminal_size"] }
 time = { version = "0.3.17", features = ["macros", "quickcheck", "serde-well-known"] }
 tokio = { version = "1.27.0", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
@@ -189,7 +189,7 @@ serde_json = { version = "1.0.89", features = ["alloc", "arbitrary_precision", "
 sha2 = { version = "0.10.6" }
 smallvec = { version = "1.10.0", default-features = false, features = ["serde", "union", "write"] }
 syn = { version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
-textwrap = { version = "0.15.0", default-features = false, features = ["terminal_size"] }
+textwrap = { version = "0.16.0", default-features = false, features = ["terminal_size"] }
 time = { version = "0.3.17", features = ["macros", "quickcheck", "serde-well-known"] }
 time-macros = { version = "0.2.6", default-features = false, features = ["formatting", "parsing", "serde"] }
 tokio = { version = "1.27.0", features = ["full", "test-util", "tracing"] }
