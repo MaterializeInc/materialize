@@ -112,6 +112,34 @@ impl ColumnKnowledge {
                     Ok(body_knowledge)
                 }
                 MirRelationExpr::LetRec { ids, values, body } => {
+                    // It’s a bit tricky to see that it can't happen in the following code that a
+                    // removal of a `Filter x IS NOT NULL` invalidates the removal itself due to the
+                    // non-null knowledge that is the basis of the removal coming through a
+                    // recursive binding from the removed thing itself. Proof sketch:
+                    // Assume that we are removing a null filter based on the knowledge that we have
+                    // in a certain iteration. Let’s call this knowledge k. We need to examine two
+                    // cases:
+                    // 1. In all the earlier iterations, there was never a null coming into this
+                    //    filter. In this case, we already didn’t need the filter in earlier
+                    //    iterations, so it’s ok that we removed it.
+                    // 2. There was a null coming into this filter in one of the earlier iterations.
+                    //    (This would be bad, because the filter that we are removing actually
+                    //    _did something_.) Recall that our analysis computes an upper bound on the
+                    //    ideal knowledge (i.e., on whether the actual collection during run time
+                    //    will contain a null). This is true for every iteration of this analysis
+                    //    fixpoint loop. This means that in that step that had the null, our
+                    //    knowledge (let’s call this k’) must have indicated that a null might come
+                    //    into the filter. At the end of our fixpoint loop, our final knowledge is a
+                    //    join of all knowledges, including k’. But then our final knowledge can’t
+                    //    actually be k, because k’ is weaker. Therefore, we have arrived at a
+                    //    contradiction, i.e., case 2. is impossible: we can’t be acting on the
+                    //    basis of k, because a weaker k’ is our final knowledge instead.
+                    // (A similar reasoning applies to `ReduceElision` removing Distincts from
+                    // unique key knowledge propagated by `refresh_types`, but it's simpler there:
+                    // key inference is monotonic, and therefore earlier iterations are always
+                    // tighter, and therefore if we don't need a Distinct in a certain iteration,
+                    // then earlier iterations also didn't need it.)
+
                     // Set knowledge[i][j] = DatumKnowledge::bottom() for each
                     // column j and CTE i. This corresponds to the normal
                     // evaluation semantics where each recursive CTE is

@@ -87,6 +87,9 @@ Explained Query:
 EOF
 
 ## Test consolidation of independent recursive query blocks.
+## Also note that the Distincts are removed by ReduceElision. This might be suspicious at first glance, because the
+## basis for removing each of these Distincts is actually itself. But this is ok, which is explained in a comment at the
+## beginning of the `LetRec` case in `ColumnKnowledge`.
 query T multiline
 EXPLAIN SELECT * FROM (
     WITH MUTUALLY RECURSIVE
@@ -107,10 +110,8 @@ Explained Query:
       Get l1
   With Mutually Recursive
     cte l1 =
-      Distinct group_by=[#0]
-        Get l1
+      Get l1
     cte l0 =
-      Distinct group_by=[#0]
-        Get l0
+      Get l0
 
 EOF

@@ -165,6 +165,7 @@ pub use renumbering::renumber_bindings;
 // Support methods that are unlikely to be useful to other modules.
 mod support {
 
+    use itertools::Itertools;
     use std::collections::BTreeMap;
 
     use mz_expr::{Id, LocalId, MirRelationExpr};
@@ -199,7 +200,15 @@ mod support {
     /// we do not error if the type weakens, even though that may be something we want to look into.
     pub(super) fn refresh_types(expr: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
         let mut types = BTreeMap::new();
-        refresh_types_helper(expr, &mut types)
+        let mut prev_types;
+        loop {
+            prev_types = types.clone();
+            refresh_types_helper(expr, &mut types)?;
+            if types == prev_types {
+                break;
+            }
+        }
+        Ok(())
     }
 
     /// Provided some existing type refreshment information, continue
@@ -209,16 +218,34 @@ mod support {
     ) -> Result<(), crate::TransformError> {
         if let MirRelationExpr::LetRec { ids, values, body } = expr {
             for (id, value) in ids.iter().zip(values.iter_mut()) {
+                // Note that there can be an interleaving between steps of an outer and an inner
+                // WMR, i.e., it is not the case that we perform all steps of an inner WMR before
+                // performing a step in an outer WMR. This is fine, because we are in a lattice, so
+                // eventually we'll reach the same fixpoint.
                 refresh_types_helper(value, types)?;
                 let typ = value.typ();
-                let prior = types.insert(*id, typ);
-                assert!(prior.is_none());
+                let prior = types.insert(*id, typ.clone());
+                // Assert that the constraints not weakened. If this assert fails, then
+                // `refresh_types` might diverge.
+                // (Note that `prior` can't come from a shadowed binding, because there is no
+                // shadowing.)
+                assert!(prior.iter().all(|prior| {
+                    // We have no less keys
+                    prior.keys.iter().all(|key| typ.keys.contains(key))
+                        // And no more nullability. Note that new nulls _can_ get introduced in the
+                        // actual collections, but our nullability _analysis_ should be monotonic.
+                        && prior
+                            .column_types
+                            .iter()
+                            .zip_eq(typ.column_types.iter())
+                            .all(|(prior_col_type, new_col_type)| {
+                                !(!prior_col_type.nullable && new_col_type.nullable) &&
+                                // Also assert that the base type didn't change.
+                                prior_col_type.scalar_type.base_eq(&new_col_type.scalar_type)
+                            })
+                }));
             }
             refresh_types_helper(body, types)?;
-            // Not strictly necessary, but good hygiene.
-            for id in ids.iter() {
-                types.remove(id);
-            }
             Ok(())
         } else {
             refresh_types_effector(expr, types)

@@ -89,8 +89,8 @@ EOF
 
 # Similar to the previous test, but
 #  - Has UNION instead of UNION ALL. This means that there is a Distinct at the root of l0.
-#  - The second input of the UNION has a DISTINCT. This should be eliminated later by `ReduceElision` after we make the
-#    unique key inference smarter for `LetRec`.
+#  - The second input of the UNION originally has a DISTINCT. This is eliminated by `ReduceElision` because unique key
+#    inference propagates the key knowledge from the root of l0 into the `Get l0`.
 query T multiline
 EXPLAIN WITH(arity, join_impls, keys)
 WITH MUTUALLY RECURSIVE
@@ -120,10 +120,193 @@ Explained Query:
                   Get materialize.public.x // { arity: 2, keys: "()" }
             ArrangeBy keys=[[#1]] // { arity: 2, keys: "([1])" }
               Get materialize.public.y // { arity: 2, keys: "([1])" }
-          Distinct group_by=[#0..=#3] // { arity: 4, keys: "([0, 1, 2, 3])" }
-            Get l0 // { arity: 4, keys: "()" }
+          Get l0 // { arity: 4, keys: "([0, 1, 2, 3])" }
 
 Source materialize.public.x
   filter=((#1) IS NOT NULL)
+
+EOF
+
+statement ok
+CREATE TABLE init(n int, m int, s string);
+
+# There should be DISTINCTs remaining in this test only at the roots of ctes; DISTINCTs on Gets should be eliminated.
+
+query T multiline
+EXPLAIN WITH(arity, join_impls, keys)
+WITH MUTUALLY RECURSIVE
+  c0(n int) AS (
+    (SELECT n FROM init)
+    UNION ALL
+    (SELECT DISTINCT * FROM c2)
+  ),
+  c1(n int) AS (
+    (SELECT n+n FROM c0)
+    UNION
+    (SELECT n+3 FROM c0)
+  ),
+  c2(n int) AS (
+    (SELECT * FROM c0)
+    UNION ALL
+    (SELECT DISTINCT * FROM c1)
+    UNION DISTINCT
+    (SELECT * FROM c1)
+  )
+SELECT DISTINCT * FROM c2;
+----
+Explained Query:
+  Return // { arity: 1, keys: "([0])" }
+    Get l2 // { arity: 1, keys: "([0])" }
+  With Mutually Recursive
+    cte l2 =
+      Distinct group_by=[#0] // { arity: 1, keys: "([0])" }
+        Union // { arity: 1, keys: "()" }
+          Get l0 // { arity: 1, keys: "()" }
+          Get l1 // { arity: 1, keys: "([0])" }
+          Get l1 // { arity: 1, keys: "([0])" }
+    cte l1 =
+      Distinct group_by=[#0] // { arity: 1, keys: "([0])" }
+        Union // { arity: 1, keys: "()" }
+          Project (#1) // { arity: 1, keys: "()" }
+            Map ((#0 + #0)) // { arity: 2, keys: "()" }
+              Get l0 // { arity: 1, keys: "()" }
+          Project (#1) // { arity: 1, keys: "()" }
+            Map ((#0 + 3)) // { arity: 2, keys: "()" }
+              Get l0 // { arity: 1, keys: "()" }
+    cte l0 =
+      Union // { arity: 1, keys: "()" }
+        Project (#0) // { arity: 1, keys: "()" }
+          Get materialize.public.init // { arity: 3, keys: "()" }
+        Get l2 // { arity: 1, keys: "([0])" }
+
+EOF
+
+# This is almost the same test as before, but I reversed the order of let bindings.
+
+query T multiline
+EXPLAIN WITH(arity, join_impls, keys)
+WITH MUTUALLY RECURSIVE
+  c0(n int) AS (
+      (SELECT * FROM c2)
+      UNION ALL
+      (SELECT DISTINCT * FROM c1)
+      UNION DISTINCT
+      (SELECT * FROM c1)
+  ),
+  c1(n int) AS (
+    (SELECT n+n FROM c2)
+    UNION
+    (SELECT n+3 FROM c2)
+  ),
+  c2(n int) AS (
+      (SELECT n FROM init)
+      UNION ALL
+      (SELECT DISTINCT * FROM c0)
+  )
+SELECT DISTINCT * FROM c0;
+----
+Explained Query:
+  Return // { arity: 1, keys: "([0])" }
+    Get l0 // { arity: 1, keys: "([0])" }
+  With Mutually Recursive
+    cte l2 =
+      Union // { arity: 1, keys: "()" }
+        Project (#0) // { arity: 1, keys: "()" }
+          Get materialize.public.init // { arity: 3, keys: "()" }
+        Get l0 // { arity: 1, keys: "([0])" }
+    cte l1 =
+      Distinct group_by=[#0] // { arity: 1, keys: "([0])" }
+        Union // { arity: 1, keys: "()" }
+          Project (#1) // { arity: 1, keys: "()" }
+            Map ((#0 + #0)) // { arity: 2, keys: "()" }
+              Get l2 // { arity: 1, keys: "()" }
+          Project (#1) // { arity: 1, keys: "()" }
+            Map ((#0 + 3)) // { arity: 2, keys: "()" }
+              Get l2 // { arity: 1, keys: "()" }
+    cte l0 =
+      Distinct group_by=[#0] // { arity: 1, keys: "([0])" }
+        Union // { arity: 1, keys: "()" }
+          Get l2 // { arity: 1, keys: "()" }
+          Get l1 // { arity: 1, keys: "([0])" }
+          Get l1 // { arity: 1, keys: "([0])" }
+
+EOF
+
+# Some trickier key inference: propagates c2 -> c1 -> c0, and then back into the `Get c0` inside `c2`, and also to the
+# body. The only Distinct that should remain is at the root of l2/c2.
+
+query T multiline
+EXPLAIN WITH(arity, join_impls, keys)
+WITH MUTUALLY RECURSIVE
+  c0(n int) AS (
+      SELECT * FROM c1
+  ),
+  c1(n int) AS (
+    SELECT -n FROM c2
+  ),
+  c2(n int) AS (
+      (SELECT DISTINCT * FROM c0)
+      UNION DISTINCT
+      (SELECT n FROM init)
+  )
+SELECT DISTINCT * FROM c0;
+----
+Explained Query:
+  Return // { arity: 1, keys: "([0])" }
+    Get l0 // { arity: 1, keys: "([0])" }
+  With Mutually Recursive
+    cte l2 =
+      Distinct group_by=[#0] // { arity: 1, keys: "([0])" }
+        Union // { arity: 1, keys: "()" }
+          Get l0 // { arity: 1, keys: "([0])" }
+          Project (#0) // { arity: 1, keys: "()" }
+            Get materialize.public.init // { arity: 3, keys: "()" }
+    cte l1 =
+      Project (#1) // { arity: 1, keys: "([0])" }
+        Map (-(#0)) // { arity: 2, keys: "([0], [1])" }
+          Get l2 // { arity: 1, keys: "([0])" }
+    cte l0 =
+      Get l1 // { arity: 1, keys: "([0])" }
+
+EOF
+
+# Negative test. Similar to the previous one, but the `n/2` destroys the key.
+
+query T multiline
+EXPLAIN WITH(arity, join_impls, keys)
+WITH MUTUALLY RECURSIVE
+  c0(n int) AS (
+      SELECT n/2 FROM c1
+  ),
+  c1(n int) AS (
+    SELECT -n FROM c2
+  ),
+  c2(n int) AS (
+      (SELECT DISTINCT * FROM c0)
+      UNION DISTINCT
+      (SELECT n FROM init)
+  )
+SELECT DISTINCT * FROM c0;
+----
+Explained Query:
+  Return // { arity: 1, keys: "([0])" }
+    Distinct group_by=[#0] // { arity: 1, keys: "([0])" }
+      Get l0 // { arity: 1, keys: "()" }
+  With Mutually Recursive
+    cte l2 =
+      Distinct group_by=[#0] // { arity: 1, keys: "([0])" }
+        Union // { arity: 1, keys: "()" }
+          Distinct group_by=[#0] // { arity: 1, keys: "([0])" }
+            Get l0 // { arity: 1, keys: "()" }
+          Project (#0) // { arity: 1, keys: "()" }
+            Get materialize.public.init // { arity: 3, keys: "()" }
+    cte l1 =
+      Project (#1) // { arity: 1, keys: "([0])" }
+        Map (-(#0)) // { arity: 2, keys: "([0], [1])" }
+          Get l2 // { arity: 1, keys: "([0])" }
+    cte l0 =
+      Project (#1) // { arity: 1, keys: "()" }
+        Map ((#0 / 2)) // { arity: 2, keys: "([0])" }
+          Get l1 // { arity: 1, keys: "([0])" }
 
 EOF

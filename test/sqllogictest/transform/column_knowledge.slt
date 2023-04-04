@@ -597,7 +597,7 @@ Explained Query:
             Filter (#0 = 3) AND (#1 = 5) // { arity: 2, types: "(integer, integer)" }
               Get materialize.public.t1 // { arity: 2, types: "(integer, integer?)" }
           Project () // { arity: 0, types: "()" }
-            Get l0 // { arity: 2, types: "(integer?, integer?)" }
+            Get l0 // { arity: 2, types: "(integer, integer)" }
 
 Source materialize.public.t1
   filter=((#0 = 3) AND (#1 = 5))
@@ -618,16 +618,16 @@ WITH MUTUALLY RECURSIVE
 SELECT f1, f2, f1 IS NOT NULL, f2 IS NULL FROM c0;
 ----
 Explained Query:
-  Return // { arity: 4, types: "(integer?, integer?, boolean, boolean)" }
-    Map (true, false) // { arity: 4, types: "(integer?, integer?, boolean, boolean)" }
-      Get l0 // { arity: 2, types: "(integer?, integer?)" }
+  Return // { arity: 4, types: "(integer, integer, boolean, boolean)" }
+    Map (true, false) // { arity: 4, types: "(integer, integer, boolean, boolean)" }
+      Get l0 // { arity: 2, types: "(integer, integer)" }
   With Mutually Recursive
     cte l0 =
-      Distinct group_by=[#0, #1] // { arity: 2, types: "(integer?, integer?)" }
-        Union // { arity: 2, types: "(integer?, integer?)" }
+      Distinct group_by=[#0, #1] // { arity: 2, types: "(integer, integer)" }
+        Union // { arity: 2, types: "(integer, integer)" }
           Filter (#1) IS NOT NULL // { arity: 2, types: "(integer, integer)" }
             Get materialize.public.t1 // { arity: 2, types: "(integer, integer?)" }
-          Get l0 // { arity: 2, types: "(integer?, integer?)" }
+          Get l0 // { arity: 2, types: "(integer, integer)" }
 
 Source materialize.public.t1
   filter=((#1) IS NOT NULL)
@@ -648,16 +648,16 @@ WITH MUTUALLY RECURSIVE
 SELECT f1, f2, f1 IS NOT NULL, f2 IS NULL FROM c0;
 ----
 Explained Query:
-  Return // { arity: 4, types: "(integer?, integer?, boolean, boolean)" }
-    Map (true, (#1) IS NULL) // { arity: 4, types: "(integer?, integer?, boolean, boolean)" }
-      Get l0 // { arity: 2, types: "(integer?, integer?)" }
+  Return // { arity: 4, types: "(integer, integer?, boolean, boolean)" }
+    Map (true, (#1) IS NULL) // { arity: 4, types: "(integer, integer?, boolean, boolean)" }
+      Get l0 // { arity: 2, types: "(integer, integer?)" }
   With Mutually Recursive
     cte l0 =
-      Distinct group_by=[#0, #1] // { arity: 2, types: "(integer?, integer?)" }
-        Union // { arity: 2, types: "(integer?, integer?)" }
+      Distinct group_by=[#0, #1] // { arity: 2, types: "(integer, integer?)" }
+        Union // { arity: 2, types: "(integer, integer?)" }
           Get materialize.public.t1 // { arity: 2, types: "(integer, integer?)" }
-          Filter (#1) IS NOT NULL // { arity: 2, types: "(integer?, integer)" }
-            Get l0 // { arity: 2, types: "(integer?, integer?)" }
+          Filter (#1) IS NOT NULL // { arity: 2, types: "(integer, integer)" }
+            Get l0 // { arity: 2, types: "(integer, integer?)" }
 
 EOF
 
@@ -691,12 +691,12 @@ Explained Query:
             ArrangeBy keys=[[]] // { arity: 2, types: "(integer, integer?)" }
               Get materialize.public.t1 // { arity: 2, types: "(integer, integer?)" }
           Project (#1, #2) // { arity: 2, types: "(integer?, integer?)" }
-            Get l1 // { arity: 3, types: "(integer?, integer?, integer?)" }
+            Get l1 // { arity: 3, types: "(integer, integer?, integer?)" }
     cte l0 =
       Distinct group_by=[1] // { arity: 1, types: "(integer)" }
         Union // { arity: 0, types: "()" }
           Project () // { arity: 0, types: "()" }
-            Get l0 // { arity: 1, types: "(integer?)" }
+            Get l0 // { arity: 1, types: "(integer)" }
           Constant // { arity: 0, types: "()" }
             - ()
 
@@ -737,13 +737,40 @@ Explained Query:
             ArrangeBy keys=[[]] // { arity: 2, types: "(integer, integer?)" }
               Get materialize.public.t1 // { arity: 2, types: "(integer, integer?)" }
           Project (#1, #2) // { arity: 2, types: "(integer?, integer?)" }
-            Get l1 // { arity: 3, types: "(boolean?, integer?, integer?)" }
+            Get l1 // { arity: 3, types: "(boolean, integer?, integer?)" }
     cte l0 =
       Distinct group_by=[1] // { arity: 1, types: "(integer)" }
         Union // { arity: 0, types: "()" }
           Project () // { arity: 0, types: "()" }
-            Get l0 // { arity: 1, types: "(integer?)" }
+            Get l0 // { arity: 1, types: "(integer)" }
           Constant // { arity: 0, types: "()" }
             - ()
+
+EOF
+
+# The `x IS NOT NULL` being removed might be suspicious at first glance, because the basis for removing it is actually
+# itself! But this is ok, because everything will be empty here. If the example were more realistic, e.g., we were to
+# add a union with an actual initial collection that might introduce nulls, then the Filter wouldn't be removed. This is
+# explained in more detail in the comment at the beginning of the `LetRec` case in `ColumnKnowledge`.
+# Note: if we later add a run of `NormalizeLets` in our compiler pipeline after `ColumnKnowledge`, then the types will
+# change to `integer?`. This is fine.
+query T multiline
+EXPLAIN WITH(arity, types)
+WITH MUTUALLY RECURSIVE
+  c0(x int) AS (
+    SELECT x+1
+    FROM c0
+    WHERE x IS NOT NULL
+  )
+SELECT * FROM c0;
+----
+Explained Query:
+  Return // { arity: 1, types: "(integer)" }
+    Get l0 // { arity: 1, types: "(integer)" }
+  With Mutually Recursive
+    cte l0 =
+      Project (#1) // { arity: 1, types: "(integer)" }
+        Map ((#0 + 1)) // { arity: 2, types: "(integer, integer)" }
+          Get l0 // { arity: 1, types: "(integer)" }
 
 EOF

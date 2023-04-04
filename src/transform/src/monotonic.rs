@@ -132,13 +132,30 @@ impl MonotonicFlag {
                     // assume all bindings were monotonic, and iteratively remove
                     // any that are determined to be non-monotonic; only once this
                     // concludes can we apply any transformations, however.
+                    //
+                    // ggevay: As a shortcut solution, would the cloning trick that
+                    // we have in ColumnKnowledge work also here (temporarily)?
                     let mut added = true;
                     while added {
                         added = false;
                         for (id, value) in ids.iter().zip(&mut *values) {
-                            if !locals.contains(id) && self.apply(value, mon_ids, locals)? {
-                                added = true;
-                                locals.insert(*id);
+                            if self.apply(value, mon_ids, locals)? {
+                                if !locals.contains(id) {
+                                    added = true;
+                                    locals.insert(*id);
+                                }
+                            } else {
+                                // ggevay: It wasn't obvious to me at all why it is ok to never
+                                // remove stuff from `locals` (which, btw., ensures that we reach a
+                                // fixpoint). In every iteration we get essentially new collections
+                                // in each of the ids, so why can't an id be suddenly less monotonic
+                                // in a new iteration? The answer is that (get this) MonotonicFlag
+                                // is monotonic: if we flip an input to monotonic, the result either
+                                // stays non-monotonic, stays monotonic, or flips from non-monotonic
+                                // to monotonic, but can't flip from monotonic to non-monotonic.
+                                // This assert would catch if this monotonicity property is
+                                // violated.
+                                assert!(!locals.contains(id));
                             }
                         }
                     }

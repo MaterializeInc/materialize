@@ -7094,6 +7094,10 @@ mod test {
     // `UnaryFunc::introduces_nulls` and `UnaryFunc::propagates_nulls`.
     // Currently, only unit variants of UnaryFunc are tested because those are
     // the easiest to construct in bulk.
+    //
+    // Also tests the monotonicity of nullability analysis.
+    //
+    // TODO: This test is currently broken: The `f_types.is_empty()` is always false.
     #[test]
     fn unary_func_introduces_nulls() {
         // Dummy columns to test the nullability of `UnaryFunc::output_type`.
@@ -7129,6 +7133,14 @@ mod test {
                         unary_unit_variant.propagates_nulls()
                     );
                 }
+                // Our nullability analysis should be monotonic, i.e., it shouldn't happen that a
+                // function goes from nullable input to non-nullable output but also goes from
+                // non-nullable input to nullable output. In other words, if we flip the input from
+                // nullable to non-nullable, then the output should either stay nullable, stay
+                // non-nullable, or flip from nullable to non-nullable, but it shouldn't flip from
+                // non-nullable to nullable.
+                // This is needed because we run nullability analysis in a fixpoint loop for WMR.
+                assert!(!(!output_on_nullable_input && output_on_nonnullable_input));
             }
         }
     }

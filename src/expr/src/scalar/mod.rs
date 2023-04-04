@@ -1711,6 +1711,10 @@ impl MirScalarExpr {
         }
     }
 
+    // Note that our nullability analysis should be monotonic, i.e., it shouldn't happen that for a
+    // certain expression we say
+    // non-nullable output for nullable input, but
+    // nullable output for non-nullable input!
     pub fn typ(&self, column_types: &[ColumnType]) -> ColumnType {
         match self {
             MirScalarExpr::Column(i) => column_types[*i].clone(),
