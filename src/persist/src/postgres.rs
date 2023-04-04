@@ -33,6 +33,7 @@ use std::fmt::Formatter;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{debug, info, warn};
 
@@ -280,25 +281,38 @@ impl PostgresConsensus {
     fn start_task(&self, mut rx: UnboundedReceiver<BatchableCompareAndSet>) {
         let mut s = self.clone();
         let _ = mz_ore::task::spawn(|| format!("compare_and_set_batcher"), async move {
-            let mut last_batch_submitted = Instant::now();
+            let mut must_flush_interval = tokio::time::interval(Duration::from_millis(1000));
             let mut batch = BTreeMap::new();
 
-            'blocking: while let Some(cas) = rx.recv().await {
-                PostgresConsensus::add_cas_to_batch(&mut batch, cas);
+            loop {
+                let should_proceed = select! {
+                    Some(cas) = rx.recv() => {
+                        PostgresConsensus::add_cas_to_batch(&mut batch, cas);
+                        if batch.len() >= s.knobs.max_batch_cas_size() {
+                            info!("batch-size based flush");
+                            return true;
+                        }
 
-                'batchable: while let Ok(cas) = rx.try_recv() {
-                    let cas = cas;
-                    PostgresConsensus::add_cas_to_batch(&mut batch, cas);
+                        while let Ok(cas) = rx.try_recv() {
+                            let cas = cas;
+                            PostgresConsensus::add_cas_to_batch(&mut batch, cas);
 
-                    if batch.len() >= s.knobs.max_batch_cas_size() {
-                        break 'batchable;
+                            if batch.len() >= s.knobs.max_batch_cas_size() {
+                                info!("batch-size based flush");
+                                return true;
+                            }
+                        }
+
+                        false
                     }
-                }
+                    _ = must_flush_interval.tick() => {
+                        info!("time-based flush");
+                        !batch.is_empty()
+                    }
+                };
 
-                if batch.len() < s.knobs.max_batch_cas_size()
-                    && last_batch_submitted.elapsed() < Duration::from_millis(1000)
-                {
-                    continue 'blocking;
+                if !should_proceed {
+                    continue;
                 }
 
                 let pool = &mut s.batch_write_pool;
@@ -306,7 +320,6 @@ impl PostgresConsensus {
                 info!("Pool: {:?}", pool.status());
                 let client = pool.get().await.expect("WIP");
 
-                last_batch_submitted = Instant::now();
                 let moved_batch = std::mem::take(&mut batch);
 
                 let _ = mz_ore::task::spawn(|| format!("WIP"), async move {
@@ -384,6 +397,8 @@ impl PostgresConsensus {
                         }
                     }
                 });
+
+                must_flush_interval = tokio::time::interval(Duration::from_millis(1000));
             }
         });
     }
