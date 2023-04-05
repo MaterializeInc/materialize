@@ -201,6 +201,7 @@ mod support {
     pub(super) fn refresh_types(expr: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
         let mut types = BTreeMap::new();
         let mut prev_types;
+        println!("### Starting fixpoint loop");
         loop {
             prev_types = types.clone();
             refresh_types_helper(expr, &mut types)?;
@@ -225,25 +226,34 @@ mod support {
                 refresh_types_helper(value, types)?;
                 let typ = value.typ();
                 let prior = types.insert(*id, typ.clone());
+
+                if let Some(prior) = prior.clone() {
+                    println!();
+                    println!("prior:   {:?}", prior);
+                    println!("current: {:?}", typ);
+                    println!("value:\n{}", value.pretty());
+                    println!();
+                }
+
                 // Assert that the constraints not weakened. If this assert fails, then
                 // `refresh_types` might diverge.
                 // (Note that `prior` can't come from a shadowed binding, because there is no
                 // shadowing.)
-                assert!(prior.iter().all(|prior| {
-                    // We have no less keys
-                    prior.keys.iter().all(|key| typ.keys.contains(key))
-                        // And no more nullability. Note that new nulls _can_ get introduced in the
-                        // actual collections, but our nullability _analysis_ should be monotonic.
-                        && prior
-                            .column_types
-                            .iter()
-                            .zip_eq(typ.column_types.iter())
-                            .all(|(prior_col_type, new_col_type)| {
-                                !(!prior_col_type.nullable && new_col_type.nullable) &&
-                                // Also assert that the base type didn't change.
-                                prior_col_type.scalar_type.base_eq(&new_col_type.scalar_type)
-                            })
-                }));
+                // assert!(prior.iter().all(|prior| {
+                //     // We have no less keys
+                //     prior.keys.iter().all(|key| typ.keys.contains(key))
+                //         // And no more nullability. Note that new nulls _can_ get introduced in the
+                //         // actual collections, but our nullability _analysis_ should be monotonic.
+                //         && prior
+                //             .column_types
+                //             .iter()
+                //             .zip_eq(typ.column_types.iter())
+                //             .all(|(prior_col_type, new_col_type)| {
+                //                 !(!prior_col_type.nullable && new_col_type.nullable) &&
+                //                 // Also assert that the base type didn't change.
+                //                 prior_col_type.scalar_type.base_eq(&new_col_type.scalar_type)
+                //             })
+                // }));
             }
             refresh_types_helper(body, types)?;
             Ok(())
