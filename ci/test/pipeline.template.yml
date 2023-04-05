@@ -48,6 +48,7 @@ steps:
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
+    if: "build.pull_request.id != null"
 
   - id: devel-docker-tags
     label: Tag development docker images
