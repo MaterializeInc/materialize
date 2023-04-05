@@ -589,6 +589,7 @@ impl MirRelationExpr {
                 offset,
                 monotonic,
                 input,
+                expected_group_size,
             } => {
                 FmtNode {
                     fmt_root: |f, ctx| {
@@ -608,6 +609,9 @@ impl MirRelationExpr {
                             write!(f, " offset={}", offset)?
                         }
                         write!(f, " monotonic={}", monotonic)?;
+                        if let Some(expected_group_size) = expected_group_size {
+                            write!(f, " expected_group_size={}", expected_group_size)?;
+                        }
                         self.fmt_attributes(f, ctx)
                     },
                     fmt_children: |f, ctx| input.fmt_text(f, ctx),

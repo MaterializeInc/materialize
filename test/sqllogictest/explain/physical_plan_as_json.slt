@@ -455,7 +455,8 @@ SELECT * FROM ov
               ],
               "limit": 5,
               "offset": 0,
-              "arity": 2
+              "arity": 2,
+              "expected_group_size": null
             }
           }
         }
@@ -698,7 +699,8 @@ VIEW ov
               ],
               "limit": 5,
               "offset": 0,
-              "arity": 2
+              "arity": 2,
+              "expected_group_size": null
             }
           }
         }

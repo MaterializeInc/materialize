@@ -906,7 +906,8 @@ VIEW ov
           ],
           "limit": 5,
           "offset": 0,
-          "monotonic": false
+          "monotonic": false,
+          "expected_group_size": null
         }
       }
     }
@@ -2136,7 +2137,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                           "order_key": [],
                           "limit": 1,
                           "offset": 0,
-                          "monotonic": false
+                          "monotonic": false,
+                          "expected_group_size": null
                         }
                       },
                       "body": {
@@ -2321,7 +2323,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                               "order_key": [],
                               "limit": 1,
                               "offset": 0,
-                              "monotonic": false
+                              "monotonic": false,
+                              "expected_group_size": null
                             }
                           },
                           "body": {

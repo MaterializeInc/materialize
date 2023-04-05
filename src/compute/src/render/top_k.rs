@@ -148,6 +148,7 @@ where
                     offset,
                     limit,
                     arity,
+                    expected_group_size,
                 }) => {
                     let (oks, errs) = build_topk(
                         ok_input,
@@ -156,6 +157,7 @@ where
                         offset,
                         limit,
                         arity,
+                        expected_group_size,
                         &self.debug_name,
                     );
                     err_collection = err_collection.concat(&errs);
@@ -176,6 +178,7 @@ where
             offset: usize,
             limit: Option<usize>,
             arity: usize,
+            _expected_group_size: Option<u64>,
             debug_name: &str,
         ) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
         where

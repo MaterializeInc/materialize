@@ -212,6 +212,7 @@ impl HirRelationExpr {
                 limit,
                 offset,
                 input,
+                expected_group_size,
             } => {
                 write!(f, "{}TopK", ctx.indent)?;
                 if group_key.len() > 0 {
@@ -227,6 +228,9 @@ impl HirRelationExpr {
                 }
                 if offset > &0 {
                     write!(f, " offset={}", offset)?
+                }
+                if let Some(expected_group_size) = expected_group_size {
+                    write!(f, " expected_group_size={}", expected_group_size)?;
                 }
                 writeln!(f)?;
                 ctx.indented(|ctx| input.fmt_text(f, ctx))?;

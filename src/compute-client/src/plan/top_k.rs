@@ -46,6 +46,7 @@ impl TopKPlan {
     /// * `limit` - An optional limit of how many rows should be revealed.
     /// * `arity` - The number of columns in the input and output.
     /// * `monotonic` - `true` if the input is monotonic.
+    /// * `expected_group_size` - A hint about how many rows will have the same group key.
     pub(crate) fn create_from(
         group_key: Vec<usize>,
         order_key: Vec<ColumnOrder>,
@@ -53,6 +54,7 @@ impl TopKPlan {
         limit: Option<usize>,
         arity: usize,
         monotonic: bool,
+        expected_group_size: Option<u64>,
     ) -> Self {
         if monotonic && offset == 0 && limit == Some(1) {
             TopKPlan::MonotonicTop1(MonotonicTop1Plan {
@@ -82,6 +84,7 @@ impl TopKPlan {
                 offset,
                 limit,
                 arity,
+                expected_group_size,
             })
         }
     }
@@ -202,6 +205,8 @@ pub struct BasicTopKPlan {
     pub offset: usize,
     /// The number of columns in the input and output.
     pub arity: usize,
+    /// Hint: how many rows will have the same group key.
+    pub expected_group_size: Option<u64>,
 }
 
 impl RustType<ProtoBasicTopKPlan> for BasicTopKPlan {
@@ -212,6 +217,7 @@ impl RustType<ProtoBasicTopKPlan> for BasicTopKPlan {
             limit: self.limit.into_proto(),
             offset: self.offset.into_proto(),
             arity: self.arity.into_proto(),
+            expected_group_size: self.expected_group_size.into_proto(),
         }
     }
 
@@ -222,6 +228,7 @@ impl RustType<ProtoBasicTopKPlan> for BasicTopKPlan {
             limit: proto.limit.into_rust()?,
             offset: proto.offset.into_rust()?,
             arity: proto.arity.into_rust()?,
+            expected_group_size: proto.expected_group_size.into_rust()?,
         })
     }
 }

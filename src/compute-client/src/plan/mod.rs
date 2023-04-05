@@ -1329,6 +1329,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 limit,
                 offset,
                 monotonic,
+                expected_group_size,
             } => {
                 let arity = input.arity();
                 let (input, keys) = Self::from_mir_inner(input, arrangements, debug_info)?;
@@ -1340,6 +1341,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     *limit,
                     arity,
                     *monotonic,
+                    *expected_group_size,
                 );
 
                 // We don't have an MFP here -- install an operator to permute the
