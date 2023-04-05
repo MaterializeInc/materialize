@@ -569,15 +569,9 @@ def workflow_test_github_15496(c: Composition) -> None:
 
             > INSERT INTO base VALUES (1, -1), (1, -1);
 
-            # Run a query that would generate a panic before the fix. Note that
-            # we expect the query to succeed for now, but follow-up work might
-            # eventually lead us to favor a SQL-level error for such a query, as
-            # tracked by issue #17178.
-            # Note that we employ below a query hint to hit the case of not yet
-            # generating a SQL-level error, given the partial fix to bucketed
-            # aggregates introduced in PR #17918.
-            > SELECT SUM(data), MAX(data) FROM data OPTIONS (EXPECTED GROUP SIZE = 1);
-            <null> <null>
+            # Run a query that would generate a panic before the fix.
+            ! SELECT SUM(data), MAX(data) FROM data OPTIONS (EXPECTED GROUP SIZE = 1);
+            contains:Non-positive accumulation in ReduceMinsMaxes
             """
             )
         )
@@ -864,10 +858,10 @@ def workflow_test_github_17509(c: Composition) -> None:
 
             # The query below would return a null previously, but now fails cleanly.
             ! SELECT MAX(data) FROM data;
-            contains:Invalid data in source, saw negative accumulation for key
+            contains:Invalid data in source, saw non-positive accumulation for key
 
             ! SELECT data, MAX(data) FROM data GROUP BY data;
-            contains:Invalid data in source, saw negative accumulation for key
+            contains:Invalid data in source, saw non-positive accumulation for key
 
             # Repairing the error must be possible.
             > INSERT INTO base VALUES (1, 2), (2, 1);

@@ -127,6 +127,19 @@ impl RustType<ProtoReductionType> for ReductionType {
     }
 }
 
+impl TryFrom<&ReducePlan> for ReductionType {
+    type Error = ();
+
+    fn try_from(plan: &ReducePlan) -> Result<Self, Self::Error> {
+        match plan {
+            ReducePlan::Hierarchical(_) => Ok(ReductionType::Hierarchical),
+            ReducePlan::Accumulable(_) => Ok(ReductionType::Accumulable),
+            ReducePlan::Basic(_) => Ok(ReductionType::Basic),
+            _ => Err(()),
+        }
+    }
+}
+
 /// A `ReducePlan` provides a concise description for how we will
 /// execute a given reduce expression.
 ///

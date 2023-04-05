@@ -287,9 +287,7 @@ where
                             let message = "Negative multiplicities in TopK";
                             warn!(?k, ?h, ?v, debug_name, "[customer-data] {message}");
                             error!(message);
-                            Err(DataflowError::EvalError(
-                                EvalError::Internal(message.to_string()).into(),
-                            ))
+                            Err(EvalError::Internal(message.to_string()).into())
                         }
                         Ok(t) => Ok(((k, h), t)),
                     });
@@ -447,7 +445,7 @@ where
                 );
                 error!("Non-monotonic input to MonotonicTop1");
                 let m = "tried to build monotonic top-1 on non-monotonic input".to_string();
-                (DataflowError::from(EvalError::Internal(m)), 1)
+                (EvalError::Internal(m).into(), 1)
             });
             let partial = partial.explode_one(move |(group_key, row)| {
                 (
