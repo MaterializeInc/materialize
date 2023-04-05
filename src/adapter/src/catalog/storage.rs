@@ -13,6 +13,7 @@ use std::iter::once;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::future::BoxFuture;
 use itertools::{max, Itertools};
 use serde::{Deserialize, Serialize};
 
@@ -33,7 +34,7 @@ use mz_sql::names::{
     DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId,
     SchemaSpecifier, PUBLIC_ROLE_NAME,
 };
-use mz_stash::{AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
+use mz_stash::{AppendBatch, Data, Id, Stash, StashError, TableTransaction, TypedCollection};
 use mz_storage_client::types::sources::Timeline;
 
 use crate::catalog;
@@ -584,6 +585,12 @@ async fn migrate(
         // midway failure).
     ];
 
+    // Before the pre-migration validity check, fix the broken collections.
+    //
+    // Released with version 0.50. Remove in a future version so that we can remove some then
+    // unneeded Option types.
+    fix_incorrect_retractions(stash).await?;
+
     let mut txn = transaction(stash).await?;
     for (i, migration) in migrations
         .iter()
@@ -595,7 +602,61 @@ async fn migrate(
     }
     add_new_builtin_clusters_migration(&mut txn)?;
     add_new_builtin_cluster_replicas_migration(&mut txn, bootstrap_args)?;
-    txn.commit().await?;
+    txn.commit_fix_migration_retractions().await?;
+
+    Ok(())
+}
+
+// Some releases added fields to structs (which is only possible by using an Option, otherwise
+// serializing the old data into the new struct would always fail). If a storage transaction ever
+// then mutated one of those (either in a migration or user action), a retraction would be emitted
+// for the old row. However, the retraction wouldn't match any on-disk rows because on-disk didn't
+// contain the new field, and the retraction rows would contain something like `field: null` (the
+// default serde_json Rust encoding for a None Option). Thus we'd end up with: a +1 diff for the old
+// row, a -1 diff retracting a non-existent row, and a +1 diff for the new row.
+//
+// Interestingly, this doesn't cause any correctness issues on restart because, since we consolidate
+// in Rust, the +1 diff of the old row and -1 retraction DO cancel eachother out because the Option
+// in both cases has been populated to None, which consolidate removes. We do need to fix the
+// on-disk data so we can remove the theoretically unneeded Option.
+async fn fix_incorrect_retractions(stash: &mut Stash) -> Result<(), StashError> {
+    let consolidate_ids = stash
+        .with_transaction(|tx| {
+            Box::pin(async move {
+                async fn fix<'tx, K, V>(
+                    tx: &'tx mz_stash::Transaction<'tx>,
+                    typed: &TypedCollection<K, V>,
+                    ids: &mut Vec<Id>,
+                ) -> Result<(), StashError>
+                where
+                    K: Data,
+                    V: Data,
+                {
+                    let col = typed.from_tx(tx).await?;
+                    if tx.collection_fix_unconsolidated_rows(col).await? {
+                        ids.push(col.id);
+                    }
+                    Ok(())
+                }
+                let mut ids = Vec::new();
+                // The only collections that broke are ones that added an Option field. We don't
+                // need to run the fix function (which does a full scan) on everything.
+                fix(&tx, &COLLECTION_DATABASE, &mut ids).await?;
+                fix(&tx, &COLLECTION_SCHEMA, &mut ids).await?;
+                fix(&tx, &COLLECTION_ROLE, &mut ids).await?;
+                fix(&tx, &COLLECTION_ITEM, &mut ids).await?;
+                fix(&tx, &COLLECTION_CLUSTERS, &mut ids).await?;
+                fix(&tx, &COLLECTION_CLUSTER_REPLICAS, &mut ids).await?;
+                Ok(ids)
+            })
+        })
+        .await?;
+
+    // Wait for consolidation so we know the rows are no longer on disk, and so we can use updated Rust
+    // structs for next release.
+    for id in consolidate_ids {
+        stash.consolidate_now(id).await?;
+    }
     Ok(())
 }
 
@@ -1993,17 +2054,31 @@ impl<'a> Transaction<'a> {
         assert!(prev.is_some());
     }
 
-    /// Commits the storage transaction to the stash. Any error returned
-    /// indicates the stash may be in an indeterminate state and needs to be
-    /// fully re-read before proceeding. In general, this must be fatal to the
-    /// calling process. We do not panic/halt inside this function itself so
+    /// Commits the storage transaction to the stash. Any error returned indicates the stash may be
+    /// in an indeterminate state and needs to be fully re-read before proceeding. In general, this
+    /// must be fatal to the calling process. We do not panic/halt inside this function itself so
     /// that errors can bubble up during initialization.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn commit(self) -> Result<(), Error> {
+        self.commit_inner(false).await
+    }
+
+    /// Like `commit`, but fixes retractions during migration.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn commit_fix_migration_retractions(self) -> Result<(), Error> {
+        self.commit_inner(true).await
+    }
+
+    /// If `fix_migration_retractions` is true, additionally fix collections that have retracted
+    /// non-existent JSON rows, but whose Rust consolidations are the same (i.e., an Option field
+    /// was added, so we no longer know how to retract the None variant).
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn commit_inner(self, fix_migration_retractions: bool) -> Result<(), Error> {
         async fn add_batch<'tx, K, V>(
             tx: &'tx mz_stash::Transaction<'tx>,
             batches: &mut Vec<AppendBatch>,
-            typed: &TypedCollection<K, V>,
+            migration_retractions: &mut Vec<BoxFuture<'tx, Result<Option<Id>, StashError>>>,
+            typed: &'tx TypedCollection<K, V>,
             changes: &[(K, V, mz_stash::Diff)],
         ) -> Result<(), StashError>
         where
@@ -2013,13 +2088,23 @@ impl<'a> Transaction<'a> {
             if changes.is_empty() {
                 return Ok(());
             }
-            let collection = tx.collection::<K, V>(typed.name()).await?;
+            let collection = typed.from_tx(tx).await?;
             let upper = tx.upper(collection.id).await?;
             let mut batch = collection.make_batch_lower(upper)?;
+            let mut has_negative_diff = false;
             for (k, v, diff) in changes {
                 collection.append_to_batch(&mut batch, k, v, *diff);
+                if *diff < 0 {
+                    has_negative_diff = true;
+                }
             }
             batches.push(batch);
+            if has_negative_diff {
+                migration_retractions.push(Box::pin(async move {
+                    let fixed = tx.collection_fix_unconsolidated_rows(collection).await?;
+                    Ok(fixed.then_some(collection.id))
+                }));
+            }
             Ok(())
         }
 
@@ -2045,18 +2130,58 @@ impl<'a> Transaction<'a> {
         let audit_log_updates = Arc::new(self.audit_log_updates);
         let storage_usage_updates = Arc::new(self.storage_usage_updates);
 
-        self.stash
+        let consolidate_ids = self
+            .stash
             .with_transaction(move |tx| {
                 Box::pin(async move {
                     let mut batches = Vec::new();
-                    add_batch(&tx, &mut batches, &COLLECTION_DATABASE, &databases).await?;
-                    add_batch(&tx, &mut batches, &COLLECTION_SCHEMA, &schemas).await?;
-                    add_batch(&tx, &mut batches, &COLLECTION_ITEM, &items).await?;
-                    add_batch(&tx, &mut batches, &COLLECTION_ROLE, &roles).await?;
-                    add_batch(&tx, &mut batches, &COLLECTION_CLUSTERS, &clusters).await?;
+                    let mut migration_retractions = Vec::new();
+                    let mut consolidate_ids = Vec::new();
+
                     add_batch(
                         &tx,
                         &mut batches,
+                        &mut migration_retractions,
+                        &COLLECTION_DATABASE,
+                        &databases,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &mut migration_retractions,
+                        &COLLECTION_SCHEMA,
+                        &schemas,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &mut migration_retractions,
+                        &COLLECTION_ITEM,
+                        &items,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &mut migration_retractions,
+                        &COLLECTION_ROLE,
+                        &roles,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &mut migration_retractions,
+                        &COLLECTION_CLUSTERS,
+                        &clusters,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &mut migration_retractions,
                         &COLLECTION_CLUSTER_REPLICAS,
                         &cluster_replicas,
                     )
@@ -2064,17 +2189,47 @@ impl<'a> Transaction<'a> {
                     add_batch(
                         &tx,
                         &mut batches,
+                        &mut migration_retractions,
                         &COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX,
                         &introspection_sources,
                     )
                     .await?;
-                    add_batch(&tx, &mut batches, &COLLECTION_ID_ALLOC, &id_allocator).await?;
-                    add_batch(&tx, &mut batches, &COLLECTION_CONFIG, &configs).await?;
-                    add_batch(&tx, &mut batches, &COLLECTION_SETTING, &settings).await?;
-                    add_batch(&tx, &mut batches, &COLLECTION_TIMESTAMP, &timestamps).await?;
                     add_batch(
                         &tx,
                         &mut batches,
+                        &mut migration_retractions,
+                        &COLLECTION_ID_ALLOC,
+                        &id_allocator,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &mut migration_retractions,
+                        &COLLECTION_CONFIG,
+                        &configs,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &mut migration_retractions,
+                        &COLLECTION_SETTING,
+                        &settings,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &mut migration_retractions,
+                        &COLLECTION_TIMESTAMP,
+                        &timestamps,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &mut migration_retractions,
                         &COLLECTION_SYSTEM_GID_MAPPING,
                         &system_gid_mapping,
                     )
@@ -2082,23 +2237,48 @@ impl<'a> Transaction<'a> {
                     add_batch(
                         &tx,
                         &mut batches,
+                        &mut migration_retractions,
                         &COLLECTION_SYSTEM_CONFIGURATION,
                         &system_configurations,
                     )
                     .await?;
-                    add_batch(&tx, &mut batches, &COLLECTION_AUDIT_LOG, &audit_log_updates).await?;
                     add_batch(
                         &tx,
                         &mut batches,
+                        &mut migration_retractions,
+                        &COLLECTION_AUDIT_LOG,
+                        &audit_log_updates,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &mut migration_retractions,
                         &COLLECTION_STORAGE_USAGE,
                         &storage_usage_updates,
                     )
                     .await?;
                     tx.append(batches).await?;
-                    Ok(())
+
+                    if fix_migration_retractions {
+                        // Run the unconsolidated rows cleanup fns.
+                        for fut in migration_retractions {
+                            // Wait for consolidations of fixed collections so that we're guaranteed
+                            // any future envd boot will not observe old raw rows so that we can
+                            // always use new structs.
+                            consolidate_ids.extend(fut.await?);
+                        }
+                    }
+
+                    Ok(consolidate_ids)
                 })
             })
             .await?;
+
+        for id in consolidate_ids {
+            self.stash.consolidate_now(id).await?;
+        }
+
         Ok(())
     }
 }

@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::num::NonZeroI64;
 use std::sync::{Arc, Mutex};
@@ -23,7 +23,7 @@ use prometheus::{IntCounter, IntCounterVec};
 use rand::Rng;
 
 use timely::progress::Antichain;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::Interval;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Config, Statement};
@@ -432,9 +432,16 @@ pub struct Stash {
     statements: Option<PreparedStatements>,
     epoch: Option<NonZeroI64>,
     nonce: [u8; 16],
-    pub(crate) sinces_tx: mpsc::UnboundedSender<(Id, Antichain<Timestamp>)>,
+    pub(crate) sinces_tx: mpsc::UnboundedSender<ConsolidateRequest>,
     pub(crate) collections: BTreeMap<String, Id>,
     metrics: Arc<Metrics>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ConsolidateRequest {
+    pub(crate) id: Id,
+    pub(crate) since: Antichain<Timestamp>,
+    pub(crate) done: Option<oneshot::Sender<()>>,
 }
 
 impl std::fmt::Debug for Stash {
@@ -991,9 +998,27 @@ impl Stash {
             .await
     }
 
-    pub async fn collections(&mut self) -> Result<BTreeSet<String>, StashError> {
+    pub async fn collections(&mut self) -> Result<BTreeMap<Id, String>, StashError> {
         self.with_transaction(move |tx| Box::pin(async move { tx.collections().await }))
             .await
+    }
+
+    /// Performs a synchronous consolidation (the rows are guaranteed to be removed from disk after this
+    /// future resolves).
+    pub async fn consolidate_now(&mut self, id: Id) -> Result<(), StashError> {
+        let since = self
+            .with_transaction(move |tx| Box::pin(async move { tx.since(id).await }))
+            .await?;
+        let (tx, rx) = oneshot::channel();
+        self.sinces_tx
+            .send(ConsolidateRequest {
+                id,
+                since,
+                done: Some(tx),
+            })
+            .expect("consolidator unexpectedly gone");
+        rx.await.expect("consolidator unexpectedly gone");
+        Ok(())
     }
 
     pub async fn consolidate(&mut self, collection: Id) -> Result<(), StashError> {
@@ -1011,7 +1036,11 @@ impl Stash {
         // Consolidator.
         for (id, since) in sinces {
             self.sinces_tx
-                .send((id, since))
+                .send(ConsolidateRequest {
+                    id,
+                    since,
+                    done: None,
+                })
                 .expect("consolidator unexpectedly gone");
         }
         Ok(())
@@ -1083,8 +1112,8 @@ impl Stash {
 struct Consolidator {
     config: Arc<tokio::sync::Mutex<Config>>,
     tls: MakeTlsConnector,
-    sinces_rx: mpsc::UnboundedReceiver<(Id, Antichain<Timestamp>)>,
-    consolidations: BTreeMap<Id, Antichain<Timestamp>>,
+    sinces_rx: mpsc::UnboundedReceiver<ConsolidateRequest>,
+    consolidations: BTreeMap<Id, (Antichain<Timestamp>, Vec<oneshot::Sender<()>>)>,
 
     client: Option<Client>,
     reconnect: Interval,
@@ -1097,7 +1126,7 @@ impl Consolidator {
     pub fn start(
         config: Arc<tokio::sync::Mutex<Config>>,
         tls: MakeTlsConnector,
-        sinces_rx: mpsc::UnboundedReceiver<(Id, Antichain<Timestamp>)>,
+        sinces_rx: mpsc::UnboundedReceiver<ConsolidateRequest>,
     ) {
         let cons = Self {
             config,
@@ -1119,8 +1148,8 @@ impl Consolidator {
         // applied).
         mz_ore::task::spawn(|| "stash consolidation", async move {
             // Wait for the next consolidation request.
-            while let Some((id, ts)) = self.sinces_rx.recv().await {
-                self.insert(id, ts);
+            while let Some(req) = self.sinces_rx.recv().await {
+                self.insert(req);
 
                 if self.reconnect.tick().now_or_never().is_some() {
                     self.client = None;
@@ -1130,13 +1159,13 @@ impl Consolidator {
                     // Accumulate any pending requests that have come in during
                     // our work so we can attempt to get the most recent since
                     // for a quickly advancing collection.
-                    while let Ok((id, ts)) = self.sinces_rx.try_recv() {
-                        self.insert(id, ts);
+                    while let Ok(req) = self.sinces_rx.try_recv() {
+                        self.insert(req);
                     }
 
                     // Pick a random key to consolidate.
                     let id = *self.consolidations.keys().next().expect("must exist");
-                    let ts = self.consolidations.remove(&id).expect("must exist");
+                    let (ts, done) = self.consolidations.remove(&id).expect("must exist");
 
                     // Duplicate the loop-retry-connect structure as in the
                     // transact function by forcing reconnects anytime an error
@@ -1157,6 +1186,11 @@ impl Consolidator {
                             }
                         }
                     }
+                    // Once consolidation is complete, notify any waiters.
+                    for ch in done {
+                        // Not a correctness error if a waiter has gone away.
+                        let _ = ch.send(());
+                    }
                 }
             }
         });
@@ -1164,11 +1198,13 @@ impl Consolidator {
 
     // Update the set of pending consolidations to the most recent since
     // we've received for a collection.
-    fn insert(&mut self, id: Id, ts: Antichain<Timestamp>) {
-        self.consolidations
-            .entry(id)
-            .and_modify(|e| e.join_assign(&ts))
-            .or_insert(ts);
+    fn insert(&mut self, req: ConsolidateRequest) {
+        let entry = self
+            .consolidations
+            .entry(req.id)
+            .and_modify(|e| e.0.join_assign(&req.since))
+            .or_insert((req.since, Vec::new()));
+        entry.1.extend(req.done);
     }
 
     #[tracing::instrument(level = "trace", skip(self))]
@@ -1203,7 +1239,7 @@ impl Consolidator {
                     .collect::<Vec<_>>();
                 let deleted = rows.len();
                 // Perform the consolidation in Rust.
-                let rows = crate::consolidate(rows);
+                let rows = crate::consolidate(&rows);
                 // Then for any items that have a positive diff, INSERT them
                 // back into the database. Our current production stash usage
                 // will never have any results here (all consolidations sum to

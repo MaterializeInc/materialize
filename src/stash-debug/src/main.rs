@@ -245,7 +245,7 @@ impl Usage {
         // there is no overlap between expected names.
         Self::verify_all_usages()?;
 
-        let names = stash.collections().await?;
+        let names = BTreeSet::from_iter(stash.collections().await?.into_values());
         for usage in Self::all_usages() {
             // Some TypedCollections exist before any entries have been written
             // to a collection, so `stash.collections()` won't return it, and we
@@ -273,7 +273,7 @@ impl Usage {
         stash: &mut Stash,
     ) -> Result<BTreeMap<&str, serde_json::Value>, anyhow::Error> {
         let mut collections = Vec::new();
-        let collection_names = stash.collections().await?;
+        let collection_names = BTreeSet::from_iter(stash.collections().await?.into_values());
         macro_rules! dump_col {
             ($col:expr) => {
                 // Collections might not yet exist.

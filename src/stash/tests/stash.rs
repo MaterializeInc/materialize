@@ -83,11 +83,13 @@ use std::{
 
 use futures::Future;
 use postgres_openssl::MakeTlsConnector;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use tokio_postgres::Config;
 
-use mz_ore::{assert_contains, metrics::MetricsRegistry, task::spawn};
+use mz_ore::{assert_contains, collections::CollectionExt, metrics::MetricsRegistry, task::spawn};
 
 use mz_stash::{
     Stash, StashCollection, StashError, StashFactory, TableTransaction, Timestamp, TypedCollection,
@@ -188,6 +190,131 @@ async fn test_stash_postgres() {
         tx.send(()).unwrap();
         handle.await.unwrap();
     }
+    // Test collection_fix_unconsolidated_rows.
+    {
+        let mut stash = connect(&factory, &connstr, tls.clone(), true).await;
+        #[derive(Debug, Serialize, Deserialize, PartialOrd, PartialEq, Ord, Eq, Hash)]
+        struct S1 {
+            a: i64,
+        }
+        #[derive(Debug, Serialize, Deserialize, PartialOrd, PartialEq, Ord, Eq, Hash)]
+        struct S2 {
+            a: i64,
+            b: Option<i64>,
+        }
+        // Use the same collection name!
+        static CS1: TypedCollection<S1, i64> = TypedCollection::new("c");
+        static CS2: TypedCollection<S2, i64> = TypedCollection::new("c");
+        let (col1, mut batch) = CS1.make_batch(&mut stash).await.unwrap();
+        col1.append_to_batch(&mut batch, &S1 { a: 1 }, &2, 1);
+        stash.append(vec![batch]).await.unwrap();
+        assert_eq!(
+            CS1.peek_one(&mut stash).await.unwrap(),
+            BTreeMap::from([(S1 { a: 1 }, 2)])
+        );
+
+        // Remove the row using the new struct.
+        stash
+            .with_transaction(move |tx| {
+                Box::pin(async move {
+                    let col = CS2.from_tx(&tx).await?;
+                    let raw_rows = tx.peek_raw(col.id).await?.collect::<Vec<_>>();
+                    // Returned JSON values should not contain column b.
+                    assert_eq!(
+                        raw_rows,
+                        vec![(
+                            (
+                                json!({
+                                    "a": 1,
+                                }),
+                                json!(2),
+                            ),
+                            1
+                        )]
+                    );
+                    let col_rows = tx.peek_one(col).await?;
+                    let mut row = col_rows.into_element();
+                    // None is in the new struct for field b.
+                    assert_eq!(row, (S2 { a: 1, b: None }, 2));
+
+                    // Attempt to remove the old row and add the current one, simulating a catalog
+                    // migration.
+                    let mut batch = col.make_batch_tx(&tx).await?;
+                    col.append_to_batch(&mut batch, &row.0, &row.1, -1);
+                    row.0.b = Some(3);
+                    col.append_to_batch(&mut batch, &row.0, &row.1, 1);
+                    tx.append(vec![batch]).await?;
+
+                    // Refetch the raw rows, asserting that the unmatched retraction is present.
+                    let raw_rows = tx.peek_raw(col.id).await?.collect::<Vec<_>>();
+                    assert_eq!(
+                        raw_rows,
+                        vec![
+                            // The original row.
+                            (
+                                (
+                                    json!({
+                                        "a": 1,
+                                    }),
+                                    json!(2),
+                                ),
+                                1
+                            ),
+                            // The unmatched retraction.
+                            (
+                                (
+                                    json!({
+                                        "a": 1,
+                                        "b": null,
+                                    }),
+                                    json!(2),
+                                ),
+                                -1
+                            ),
+                            // The new row.
+                            (
+                                (
+                                    json!({
+                                        "a": 1,
+                                        "b": 3,
+                                    }),
+                                    json!(2),
+                                ),
+                                1
+                            ),
+                        ]
+                    );
+
+                    // But peek_one only sees a single row due to Rust consolidation.
+                    assert_eq!(
+                        tx.peek_one(col).await.unwrap(),
+                        BTreeMap::from([(S2 { a: 1, b: Some(3) }, 2)])
+                    );
+
+                    // Attempt to fix.
+                    tx.collection_fix_unconsolidated_rows(col).await?;
+                    Ok(())
+                })
+            })
+            .await
+            .unwrap();
+
+        // Wait for consolidation to occur, then expect that peek_raw sees a single row.
+        stash.consolidate_now(col1.id).await.unwrap();
+        let (raw_rows, rows) = stash
+            .with_transaction(move |tx| {
+                Box::pin(async move {
+                    let col = CS2.from_tx(&tx).await?;
+                    let raw_rows = tx.peek_raw(col.id).await?.collect::<Vec<_>>();
+                    let rows = tx.peek_one(col).await.unwrap();
+                    Ok((raw_rows, rows))
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(raw_rows.len(), 1);
+        assert_eq!(rows, BTreeMap::from([(S2 { a: 1, b: Some(3) }, 2)]));
+    }
     // Test readonly.
     {
         Stash::clear(&connstr, tls.clone()).await.unwrap();
@@ -262,7 +389,7 @@ async fn test_stash_postgres() {
         );
         // But the RW collection can't see it.
         assert_eq!(
-            stash_rw.collections().await.unwrap(),
+            BTreeSet::from_iter(stash_rw.collections().await.unwrap().into_values()),
             BTreeSet::from(["c1".to_string()])
         );
 

@@ -1002,9 +1002,9 @@ where
 /// Helper function to consolidate `serde_json::Value`. `Value` doesn't
 /// implement `Ord` which is required by `consolidate`, so we must serialize and
 /// deserialize through bytes.
-fn consolidate<I>(rows: I) -> impl Iterator<Item = ((Value, Value), Diff)>
+fn consolidate<'a, I>(rows: I) -> impl Iterator<Item = ((Value, Value), Diff)>
 where
-    I: IntoIterator<Item = ((Value, Value), Diff)>,
+    I: IntoIterator<Item = &'a ((Value, Value), Diff)>,
 {
     // This assumes the to bytes representation is deterministic. The current
     // backing of Map is a BTreeMap which is sorted, but this isn't a documented
@@ -1013,15 +1013,28 @@ where
     let mut rows = rows
         .into_iter()
         .map(|((key, value), diff)| {
-            let key = serde_json::to_vec(&key).expect("must serialize");
-            let value = serde_json::to_vec(&value).expect("must serialize");
-            ((key, value), diff)
+            let key = serde_json::to_vec(key).expect("must serialize");
+            let value = serde_json::to_vec(value).expect("must serialize");
+            ((key, value), *diff)
         })
         .collect();
     differential_dataflow::consolidation::consolidate(&mut rows);
     rows.into_iter().map(|((key, value), diff)| {
         let key = serde_json::from_slice(&key).expect("must deserialize");
         let value = serde_json::from_slice(&value).expect("must deserialize");
+        ((key, value), diff)
+    })
+}
+
+fn consolidate_kv<'a, K, V, I>(rows: I) -> impl Iterator<Item = ((K, V), Diff)>
+where
+    I: IntoIterator<Item = &'a ((Value, Value), Diff)>,
+    K: Data,
+    V: Data,
+{
+    consolidate(rows).map(|((key, value), diff)| {
+        let key: K = serde_json::from_value(key).expect("must deserialize");
+        let value: V = serde_json::from_value(value).expect("must deserialize");
         ((key, value), diff)
     })
 }
