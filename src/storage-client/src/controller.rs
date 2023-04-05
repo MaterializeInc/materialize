@@ -32,7 +32,6 @@ use bytes::BufMut;
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
-use mz_ore::error::ErrorExt;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
@@ -837,7 +836,7 @@ impl Error for StorageError {
             Self::UpdateBeyondUpper(_) => None,
             Self::ReadBeforeSince(_) => None,
             Self::InvalidUppers(_) => None,
-            Self::ClientError(_) => None,
+            Self::ClientError(err) => Some(err.as_ref()),
             Self::IOError(err) => Some(err),
             Self::DataflowError(err) => Some(err),
             Self::InvalidUsage(_) => None,
@@ -874,21 +873,17 @@ impl fmt::Display for StorageError {
                     id.iter().map(|id| id.to_string()).join(", ")
                 )
             }
-            Self::ClientError(err) => {
-                // WIP: Should we even try and print the causes here? Feels like thats the
-                // responsibility of the caller now.
-                write!(f, "underlying client error: {}", err.display_with_causes())
+            // N.B. For these three errors, the underlying error is reported in `source()`, and it
+            // is the responsibility of the caller to print the chain of errors, when desired.
+            Self::ClientError(_err) => {
+                write!(f, "underlying client error")
             }
-            Self::IOError(err) => write!(
-                f,
-                "failed to read or write state: {}",
-                err.display_with_causes()
-            ),
-            Self::DataflowError(err) => write!(
-                f,
-                "dataflow failed to process request: {}",
-                err.display_with_causes()
-            ),
+            // N.B. For these three errors, the underlying error is reported in `source()`, and it
+            // is the responsibility of the caller to print the chain of errors, when desired.
+            Self::IOError(_err) => write!(f, "failed to read or write state",),
+            // N.B. For these three errors, the underlying error is reported in `source()`, and it
+            // is the responsibility of the caller to print the chain of errors, when desired.
+            Self::DataflowError(_err) => write!(f, "dataflow failed to process request",),
             Self::InvalidUsage(err) => write!(f, "invalid usage: {}", err),
         }
     }

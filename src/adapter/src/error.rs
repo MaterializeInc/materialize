@@ -267,6 +267,9 @@ impl AdapterError {
                         .join("\n"))
                     .join("\n"))
             },
+            AdapterError::Storage(storage_error) => {
+                storage_error.source().map(|source_error| source_error.to_string_with_causes())
+            }
             _ => None,
         }
     }
