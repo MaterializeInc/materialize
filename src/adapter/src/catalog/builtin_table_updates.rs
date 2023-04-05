@@ -22,7 +22,6 @@ use mz_expr::MirScalarExpr;
 use mz_orchestrator::{CpuLimit, MemoryLimit, ServiceProcessMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
-use mz_ore::now::SYSTEM_TIME;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::role_id::RoleId;
@@ -51,7 +50,7 @@ use crate::catalog::{
     CatalogItem, CatalogState, Connection, DataSourceDesc, Database, Error, ErrorKind, Func, Index,
     MaterializedView, Sink, StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
-use crate::client::ConnectionId;
+use crate::session::Session;
 use crate::subscribe::ActiveSubscribe;
 
 use super::AwsPrincipalContext;
@@ -1182,22 +1181,13 @@ impl CatalogState {
         }
     }
 
-    pub fn pack_session_update(
-        &self,
-        id: ConnectionId,
-        role_id: RoleId,
-        diff: Diff,
-    ) -> BuiltinTableUpdate {
-        // We use the system clock to determine when a session
-        // connected to Materialize. This is not intended to be 100%
-        // accurate and correct, so we don't burden the timestamp
-        // oracle with generating a more correct timestamp.
-        let connect_dt = mz_ore::now::to_datetime(SYSTEM_TIME());
+    pub fn pack_session_update(&self, session: &Session, diff: Diff) -> BuiltinTableUpdate {
+        let connect_dt = mz_ore::now::to_datetime(session.connect_time());
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SESSIONS),
             row: Row::pack_slice(&[
-                Datum::UInt32(id),
-                Datum::String(&role_id.to_string()),
+                Datum::UInt32(session.conn_id()),
+                Datum::String(&session.role_id().to_string()),
                 Datum::TimestampTz(connect_dt.try_into().expect("must fit")),
             ]),
             diff,

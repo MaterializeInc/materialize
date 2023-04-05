@@ -171,7 +171,10 @@ impl ConnClient {
     ///
     /// It is the caller's responsibility to have authenticated the user.
     pub fn new_session(&self, user: User) -> Session {
-        Session::new(self.build_info, self.conn_id, user)
+        // We use the system clock to determine when a session connected to Materialize. This is not
+        // intended to be 100% accurate and correct, so we don't burden the timestamp oracle with
+        // generating a more correct timestamp.
+        Session::new(self.build_info, self.conn_id, user, (self.inner.now)())
     }
 
     /// Returns the ID of the connection associated with this client.
