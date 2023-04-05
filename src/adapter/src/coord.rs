@@ -1275,6 +1275,13 @@ impl Coordinator {
     fn catalog_and_controller_mut(&mut self) -> (&mut Catalog, &mut mz_controller::Controller) {
         (Arc::make_mut(&mut self.catalog), &mut self.controller)
     }
+
+    /// Publishes a notice message to all sessions.
+    pub(crate) fn broadcast_notice(&mut self, notice: AdapterNotice) {
+        for meta in self.active_conns.values() {
+            let _ = meta.notice_tx.send(notice.clone());
+        }
+    }
 }
 
 /// Serves the coordinator based on the provided configuration.
