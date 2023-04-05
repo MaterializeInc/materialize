@@ -440,25 +440,26 @@ impl From<InvalidVarCharMaxLengthError> for PlanError {
 
 impl From<anyhow::Error> for PlanError {
     fn from(e: anyhow::Error) -> PlanError {
-        sql_err!("{:#}", e)
+        // WIP: Do we maybe want to keep the alternate selector for these?
+        sql_err!("{}", e.display_with_causes())
     }
 }
 
 impl From<TryFromIntError> for PlanError {
     fn from(e: TryFromIntError) -> PlanError {
-        sql_err!("{:#}", e)
+        sql_err!("{}", e.display_with_causes())
     }
 }
 
 impl From<ParseIntError> for PlanError {
     fn from(e: ParseIntError) -> PlanError {
-        sql_err!("{:#}", e)
+        sql_err!("{}", e.display_with_causes())
     }
 }
 
 impl From<EvalError> for PlanError {
     fn from(e: EvalError) -> PlanError {
-        sql_err!("{:#}", e)
+        sql_err!("{}", e.display_with_causes())
     }
 }
 

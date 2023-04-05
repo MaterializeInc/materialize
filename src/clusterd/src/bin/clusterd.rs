@@ -91,6 +91,7 @@ use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_compute_client::service::proto_compute_server::ProtoComputeServer;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
+use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::netio::{Listener, SocketAddr};
 use mz_ore::now::SYSTEM_TIME;
@@ -170,7 +171,7 @@ async fn main() {
         enable_version_flag: true,
     });
     if let Err(err) = run(args).await {
-        eprintln!("clusterd: fatal: {:#}", err);
+        eprintln!("clusterd: fatal: {}", err.display_with_causes());
         process::exit(1);
     }
 }

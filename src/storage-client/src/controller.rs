@@ -32,6 +32,7 @@ use bytes::BufMut;
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
+use mz_ore::error::ErrorExt;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
@@ -873,10 +874,22 @@ impl fmt::Display for StorageError {
                     id.iter().map(|id| id.to_string()).join(", ")
                 )
             }
-            Self::ClientError(err) => write!(f, "underlying client error: {:#}", err),
-            Self::IOError(err) => write!(f, "failed to read or write state: {err}"),
-            Self::DataflowError(err) => write!(f, "dataflow failed to process request: {err}"),
-            Self::InvalidUsage(err) => write!(f, "invalid usage: {err}"),
+            Self::ClientError(err) => {
+                // WIP: Should we even try and print the causes here? Feels like thats the
+                // responsibility of the caller now.
+                write!(f, "underlying client error: {}", err.display_with_causes())
+            }
+            Self::IOError(err) => write!(
+                f,
+                "failed to read or write state: {}",
+                err.display_with_causes()
+            ),
+            Self::DataflowError(err) => write!(
+                f,
+                "dataflow failed to process request: {}",
+                err.display_with_causes()
+            ),
+            Self::InvalidUsage(err) => write!(f, "invalid usage: {}", err),
         }
     }
 }

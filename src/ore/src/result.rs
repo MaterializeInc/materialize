@@ -59,6 +59,7 @@ impl<T, E> ResultExt<T, E> for Result<T, E> {
     where
         E: std::fmt::Display,
     {
+        // WIP: Do we want to change these as well?
         self.as_ref().err().map(DisplayExt::to_string_alt)
     }
 

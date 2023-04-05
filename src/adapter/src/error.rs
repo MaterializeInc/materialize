@@ -19,6 +19,7 @@ use tokio::sync::oneshot;
 
 use mz_compute_client::controller::error as compute_error;
 use mz_expr::{EvalError, UnmaterializableFunc};
+use mz_ore::error::ErrorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
 use mz_repr::explain::ExplainError;
@@ -460,7 +461,7 @@ impl fmt::Display for AdapterError {
                 write!(f, "cannot materialize call to {}", func)
             }
             AdapterError::Unsupported(features) => write!(f, "{} are not supported", features),
-            AdapterError::Unstructured(e) => write!(f, "{:#}", e),
+            AdapterError::Unstructured(e) => write!(f, "{}", e.display_with_causes()),
             AdapterError::WriteOnlyTransaction => f.write_str("transaction in write-only mode"),
             AdapterError::UnknownPreparedStatement(name) => {
                 write!(f, "prepared statement {} does not exist", name.quoted())

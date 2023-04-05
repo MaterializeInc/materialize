@@ -62,6 +62,7 @@ use uuid::Uuid;
 use mz_controller::ControllerConfig;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_ore::cast::ReinterpretCast;
+use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
@@ -184,9 +185,19 @@ impl fmt::Display for Outcome<'_> {
         use Outcome::*;
         const INDENT: &str = "\n        ";
         match self {
-            Unsupported { error, location } => write!(f, "Unsupported:{}:\n{:#}", location, error),
+            Unsupported { error, location } => write!(
+                f,
+                "Unsupported:{}:\n{}",
+                location,
+                error.display_with_causes()
+            ),
             ParseFailure { error, location } => {
-                write!(f, "ParseFailure:{}:\n{:#}", location, error)
+                write!(
+                    f,
+                    "ParseFailure:{}:\n{}",
+                    location,
+                    error.display_with_causes()
+                )
             }
             PlanFailure { error, location } => write!(f, "PlanFailure:{}:\n{:#}", location, error),
             UnexpectedPlanSuccess {

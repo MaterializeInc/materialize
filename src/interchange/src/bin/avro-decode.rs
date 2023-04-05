@@ -85,6 +85,7 @@ use mz_interchange::avro::Decoder;
 use mz_interchange::confluent;
 use mz_ore::cli;
 use mz_ore::cli::CliConfig;
+use mz_ore::error::ErrorExt;
 
 /// Decode a single Avro row using Materialize's Avro decoder.
 #[derive(clap::Parser)]
@@ -102,7 +103,7 @@ struct Args {
 async fn main() {
     let args: Args = cli::parse_args(CliConfig::default());
     if let Err(e) = run(args).await {
-        println!("{e:#}");
+        println!("{}", e.display_with_causes());
         process::exit(1);
     }
 }

@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use anyhow::bail;
+use mz_ore::error::ErrorExt;
 use rdkafka::client::ClientContext;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
@@ -219,7 +220,7 @@ pub async fn create_consumer(
             &BTreeMap::new(),
         )
         .await
-        .map_err(|e| sql_err!("{:#}", e))?;
+        .map_err(|e| sql_err!("{}", e.display_with_causes()))?;
     let consumer = Arc::new(consumer);
 
     let context = Arc::clone(consumer.context());
@@ -390,10 +391,8 @@ impl ClientContext for KafkaErrCheckContext {
         // (i.e. logging).
 
         *self.error.lock().expect("lock poisoned") = Some(format!(
-            "{:#}: reason: {}",
-            // anyhow printed with `:#` prints the full chain of errors.
-            // TODO(guswynn): abstract this out to `mz_ore`.
-            anyhow::anyhow!(error.clone()),
+            "{}: reason: {}",
+            error.display_with_causes(),
             reason
         ));
         MzClientContext.error(error, reason)

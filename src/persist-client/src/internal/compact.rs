@@ -20,6 +20,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::TryFutureExt;
 use mz_ore::cast::CastFrom;
+use mz_ore::error::ErrorExt;
 use mz_ore::task::spawn;
 use mz_persist::location::Blob;
 use mz_persist_types::codec_impls::VecU8Schema;
@@ -371,7 +372,11 @@ where
             }
             Ok(Err(err)) | Err(err) => {
                 metrics.compaction.failed.inc();
-                debug!("compaction for {} failed: {:#}", machine.shard_id(), err);
+                debug!(
+                    "compaction for {} failed: {}",
+                    machine.shard_id(),
+                    err.display_with_causes()
+                );
                 Err(err)
             }
         }

@@ -56,6 +56,7 @@ use tracing::{info, trace, warn};
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::error::ErrorExt;
 use mz_ore::now::NowFn;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
@@ -553,7 +554,7 @@ where
             remap_relation_desc,
         )
         .await
-        .unwrap_or_else(|e| panic!("Failed to create remap handle for source {}: {:#}", name, e));
+        .unwrap_or_else(|e| panic!("Failed to create remap handle for source {}: {}", name, e.display_with_causes()));
         let clock = RemapClock::new(now.clone(), timestamp_interval);
         let (mut timestamper, mut initial_batch) = ReclockOperator::new(remap_handle, clock).await;
 

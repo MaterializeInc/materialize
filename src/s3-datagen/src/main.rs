@@ -88,6 +88,7 @@ use tracing_subscriber::filter::EnvFilter;
 
 use mz_ore::cast::CastFrom;
 use mz_ore::cli::{self, CliConfig};
+use mz_ore::error::ErrorExt;
 
 /// Generate meaningless data in S3 to test download speeds
 #[derive(Parser)]
@@ -134,7 +135,7 @@ struct Args {
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
-        error!("{:#}", e);
+        error!("{}", e.display_with_causes());
         std::process::exit(1);
     }
 }

@@ -23,6 +23,8 @@ use std::path::{Path, PathBuf};
 use atty::Stream;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
+use mz_ore::error::ErrorExt;
+
 /// An error produced when parsing or executing a testdrive script.
 ///
 /// Errors are optionally associated with a location in a testdrive script. When
@@ -65,7 +67,7 @@ impl Error {
                     write!(&mut stderr, "{}:{}: ", location.line, location.col)?;
                 }
                 write_error_heading(&mut stderr, &color_spec)?;
-                writeln!(&mut stderr, "{:#}", self.source)?;
+                writeln!(&mut stderr, "{}", self.source.display_with_causes())?;
                 color_spec.set_bold(false);
                 stderr.set_color(&color_spec)?;
                 write!(&mut stderr, "{}", location.snippet)?;
@@ -74,7 +76,7 @@ impl Error {
             None => {
                 let color_spec = ColorSpec::new();
                 write_error_heading(&mut stderr, &color_spec)?;
-                writeln!(&mut stderr, "{:#}", self.source)?;
+                writeln!(&mut stderr, "{}", self.source.display_with_causes())?;
                 Ok(())
             }
         }
@@ -83,7 +85,7 @@ impl Error {
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:#}", self.source)
+        write!(f, "{}", self.source.display_with_causes())
     }
 }
 
