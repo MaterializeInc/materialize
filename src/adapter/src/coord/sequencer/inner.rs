@@ -35,7 +35,6 @@ use mz_expr::{
     OptimizedMirRelationExpr, RowSetFinishing,
 };
 use mz_ore::collections::CollectionExt;
-use mz_ore::now::SYSTEM_TIME;
 use mz_ore::result::ResultExt as OreResultExt;
 use mz_ore::task;
 use mz_repr::explain::{ExplainFormat, Explainee};
@@ -2396,7 +2395,7 @@ impl Coordinator {
             arity: sink_desc.from_desc.arity(),
             cluster_id,
             depends_on: uses.into_iter().collect(),
-            start_time: SYSTEM_TIME(),
+            start_time: self.now(),
             dropping: false,
         };
         active_subscribe.initialize();
