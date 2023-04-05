@@ -196,6 +196,7 @@ impl<'a> Transaction<'a> {
         Ok(BTreeMap::from_iter(names))
     }
 
+    /// Returns the raw sealed rows as JSON, not consolidated.
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn peek_raw(
         &self,
@@ -224,11 +225,13 @@ impl<'a> Transaction<'a> {
     /// into a Rust struct, consolidating the Rust structs, subtracting those from the original
     /// untyped JSON rows. The leftover rows are the failed retraction attempts which we need to
     /// remove from on disk.
+    ///
+    /// Returns whether rows were removed.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn collection_fix_unconsolidated_rows<K, V>(
         &self,
         collection: StashCollection<K, V>,
-    ) -> Result<(), StashError>
+    ) -> Result<bool, StashError>
     where
         K: Data,
         V: Data,
@@ -236,16 +239,16 @@ impl<'a> Transaction<'a> {
         let raw_rows = self.peek_raw(collection.id).await?.collect::<Vec<_>>();
         if raw_rows.iter().all(|((_k, _v), diff)| *diff == 1) {
             // No retractions to even worry about.
-            return Ok(());
+            return Ok(false);
         }
 
         // Generate the set of consolidated rows AFTER converting to a non-JSON value (i.e., a real Rust
         // struct). This is required because it WILL consolidate things that have different JSON values, but
         // equal Rust values (None Options).
-        let col_rows = consolidate_kv::<K, V, _>(&raw_rows);
-        // Convert stringified-JSON (because we need an Ord impl) but with negative diffs for
+        let consolidated = consolidate_kv::<K, V, _>(&raw_rows);
+        // Convert to stringified-JSON (because we need an Ord impl) but with negative diffs for
         // removal from raw_rows.
-        let col_rows = col_rows.map(|((k, v), diff)| {
+        let consolidated = consolidated.map(|((k, v), diff)| {
             (
                 (
                     serde_json::to_string(&serde_json::to_value(k).expect("must serialize"))
@@ -268,13 +271,13 @@ impl<'a> Transaction<'a> {
                     *diff,
                 )
             })
-            .chain(col_rows)
+            .chain(consolidated)
             .collect::<Vec<_>>();
         // Consolidate away the expected rows. The rows leftover are the superfluous ones that we
         // need to remove from on disk.
         differential_dataflow::consolidation::consolidate(&mut to_retract);
         if to_retract.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
         let to_retract = to_retract.into_iter().map(|((k, v), diff)| {
             let k: Value = serde_json::from_str(&k).expect("must deserialize");
@@ -292,7 +295,7 @@ impl<'a> Transaction<'a> {
         }
         // Remove the on-disk data.
         self.append(vec![batch]).await?;
-        Ok(())
+        Ok(true)
     }
 
     #[tracing::instrument(level = "debug", skip(self))]

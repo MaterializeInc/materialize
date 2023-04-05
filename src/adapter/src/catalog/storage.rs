@@ -633,14 +633,14 @@ async fn fix_incorrect_retractions(stash: &mut Stash) -> Result<(), StashError> 
                     V: Data,
                 {
                     let col = typed.from_tx(tx).await?;
-                    tx.collection_fix_unconsolidated_rows(col).await?;
-                    ids.push(col.id);
+                    if tx.collection_fix_unconsolidated_rows(col).await? {
+                        ids.push(col.id);
+                    }
                     Ok(())
                 }
                 let mut ids = Vec::new();
                 // The only collections that broke are ones that added an Option field. We don't
                 // need to run the fix function (which does a full scan) on everything.
-                fix(&tx, &COLLECTION_DATABASE, &mut ids).await?;
                 fix(&tx, &COLLECTION_DATABASE, &mut ids).await?;
                 fix(&tx, &COLLECTION_SCHEMA, &mut ids).await?;
                 fix(&tx, &COLLECTION_ROLE, &mut ids).await?;
@@ -2077,7 +2077,7 @@ impl<'a> Transaction<'a> {
         async fn add_batch<'tx, K, V>(
             tx: &'tx mz_stash::Transaction<'tx>,
             batches: &mut Vec<AppendBatch>,
-            migration_retractions: &mut Vec<BoxFuture<'tx, Result<Id, StashError>>>,
+            migration_retractions: &mut Vec<BoxFuture<'tx, Result<Option<Id>, StashError>>>,
             typed: &'tx TypedCollection<K, V>,
             changes: &[(K, V, mz_stash::Diff)],
         ) -> Result<(), StashError>
@@ -2096,8 +2096,8 @@ impl<'a> Transaction<'a> {
             }
             batches.push(batch);
             migration_retractions.push(Box::pin(async move {
-                tx.collection_fix_unconsolidated_rows(collection).await?;
-                Ok(collection.id)
+                let fixed = tx.collection_fix_unconsolidated_rows(collection).await?;
+                Ok(fixed.then_some(collection.id))
             }));
             Ok(())
         }
@@ -2260,7 +2260,7 @@ impl<'a> Transaction<'a> {
                             // Wait for consolidations of fixed collections so that we're guaranteed
                             // any future envd boot will not observe old raw rows so that we can
                             // always use new structs.
-                            consolidate_ids.push(fut.await?);
+                            consolidate_ids.extend(fut.await?);
                         }
                     }
 
