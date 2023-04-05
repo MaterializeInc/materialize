@@ -374,7 +374,7 @@ impl Default for FuseAndCollapse {
 
 impl Transform for FuseAndCollapse {
     fn recursion_safe(&self) -> bool {
-        self.transforms.iter().all(|t| t.recursion_safe())
+        true
     }
 
     #[tracing::instrument(
@@ -388,13 +388,17 @@ impl Transform for FuseAndCollapse {
         relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), TransformError> {
+        let recursive = relation.is_recursive();
+
         for transform in self.transforms.iter() {
-            transform.transform(
-                relation,
-                TransformArgs {
-                    indexes: args.indexes,
-                },
-            )?;
+            if transform.recursion_safe() || !recursive {
+                transform.transform(
+                    relation,
+                    TransformArgs {
+                        indexes: args.indexes,
+                    },
+                )?;
+            }
         }
         mz_repr::explain::trace_plan(&*relation);
         Ok(())
