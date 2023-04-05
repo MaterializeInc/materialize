@@ -29,7 +29,7 @@ use mz_storage_client::controller::CollectionMetadata;
 
 use crate::client::ConnectionId;
 use crate::command::{Command, ExecuteResponse};
-use crate::coord::appends::{BuiltinTableUpdateSource, Deferred};
+use crate::coord::appends::Deferred;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
     Coordinator, CreateSourceStatementReady, Message, PendingReadTxn, RealTimeRecencyContext,
@@ -297,8 +297,7 @@ impl Coordinator {
                     } else {
                         vec![insertion]
                     };
-                    self.send_builtin_table_updates(updates, BuiltinTableUpdateSource::Background)
-                        .await;
+                    self.buffer_builtin_table_updates(updates);
                 }
             }
             ControllerResponse::ComputeReplicaMetrics(replica_id, new) => {
@@ -330,8 +329,7 @@ impl Coordinator {
                     } else {
                         insertions
                     };
-                    self.send_builtin_table_updates(updates, BuiltinTableUpdateSource::Background)
-                        .await;
+                    self.buffer_builtin_table_updates(updates);
                 }
             }
             ControllerResponse::ComputeReplicaWriteFrontiers(updates) => {
@@ -362,11 +360,7 @@ impl Coordinator {
                     }
                 }
 
-                self.send_builtin_table_updates(
-                    builtin_updates,
-                    BuiltinTableUpdateSource::Background,
-                )
-                .await;
+                self.buffer_builtin_table_updates(builtin_updates);
             }
         }
     }

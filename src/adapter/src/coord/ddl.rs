@@ -36,7 +36,6 @@ use crate::catalog::{
     TransactionResult, SYSTEM_CONN_ID,
 };
 use crate::client::ConnectionId;
-use crate::coord::appends::BuiltinTableUpdateSource;
 use crate::coord::{Coordinator, ReplicaMetadata};
 use crate::session::Session;
 use crate::telemetry::SegmentClientExt;
@@ -318,8 +317,7 @@ impl Coordinator {
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.
         let _: () = async {
-            self.send_builtin_table_updates(builtin_table_updates, BuiltinTableUpdateSource::DDL)
-                .await;
+            self.send_builtin_table_updates(builtin_table_updates).await;
 
             if !timeline_associations.is_empty() {
                 for (timeline, (should_be_empty, id_bundle)) in timeline_associations {
@@ -478,8 +476,7 @@ impl Coordinator {
                 -1,
             );
             updates.extend(retraction.into_iter());
-            self.send_builtin_table_updates(updates, BuiltinTableUpdateSource::Background)
-                .await;
+            self.buffer_builtin_table_updates(updates);
         }
         self.controller
             .drop_replica(cluster_id, replica_id)

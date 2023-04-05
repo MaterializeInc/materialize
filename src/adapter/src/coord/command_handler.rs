@@ -34,7 +34,7 @@ use crate::client::ConnectionId;
 use crate::command::{
     Canceled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
 };
-use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, PendingWriteTxn};
+use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::peek::PendingPeek;
 use crate::coord::{ConnMeta, Coordinator, CreateSourceStatementReady, Message, PendingTxn};
 use crate::error::AdapterError;
@@ -270,8 +270,7 @@ impl Coordinator {
             },
         );
         let update = self.catalog().state().pack_session_update(&session, 1);
-        self.send_builtin_table_updates(vec![update], BuiltinTableUpdateSource::DDL)
-            .await;
+        self.send_builtin_table_updates(vec![update]).await;
 
         ClientTransmitter::new(tx, self.internal_cmd_tx.clone())
             .send(Ok(StartupResponse { messages }), session)
@@ -641,7 +640,6 @@ impl Coordinator {
         self.active_conns.remove(&session.conn_id());
         self.cancel_pending_peeks(&session.conn_id());
         let update = self.catalog().state().pack_session_update(session, -1);
-        self.send_builtin_table_updates(vec![update], BuiltinTableUpdateSource::DDL)
-            .await;
+        self.send_builtin_table_updates(vec![update]).await;
     }
 }

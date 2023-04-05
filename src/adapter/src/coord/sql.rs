@@ -16,7 +16,6 @@ use mz_sql::plan::StatementDesc;
 use mz_sql_parser::ast::{Raw, Statement};
 
 use crate::catalog::Catalog;
-use crate::coord::appends::BuiltinTableUpdateSource;
 use crate::coord::Coordinator;
 use crate::session::{Session, TransactionStatus};
 use crate::subscribe::ActiveSubscribe;
@@ -203,8 +202,7 @@ impl Coordinator {
             .catalog()
             .state()
             .pack_subscribe_update(id, &active_subscribe, 1);
-        self.send_builtin_table_updates(vec![update], BuiltinTableUpdateSource::DDL)
-            .await;
+        self.send_builtin_table_updates(vec![update]).await;
 
         let session_type = metrics::session_type_label_value(&active_subscribe.user);
         self.metrics
@@ -222,8 +220,7 @@ impl Coordinator {
                 .catalog()
                 .state()
                 .pack_subscribe_update(id, &active_subscribe, -1);
-            self.send_builtin_table_updates(vec![update], BuiltinTableUpdateSource::DDL)
-                .await;
+            self.send_builtin_table_updates(vec![update]).await;
 
             let session_type = metrics::session_type_label_value(&active_subscribe.user);
             self.metrics
