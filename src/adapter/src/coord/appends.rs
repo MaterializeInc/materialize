@@ -381,8 +381,8 @@ impl Coordinator {
         self.trigger_group_commit();
     }
 
-    /// Submit a write to a system be executed during the next group commit. This method does not
-    /// trigger a group commit.
+    /// Submit a write to a system table be executed during the next group commit. This method does
+    /// not trigger a group commit.
     ///
     /// This is useful for non-critical writes like metric updates because it allows us to piggy
     /// back off the next group commit instead of triggering a potentially expensive group commit.
