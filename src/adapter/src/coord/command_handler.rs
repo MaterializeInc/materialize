@@ -640,7 +640,7 @@ impl Coordinator {
             .dec();
         self.active_conns.remove(&session.conn_id());
         self.cancel_pending_peeks(&session.conn_id());
-        let update = self.catalog().state().pack_session_update(&session, -1);
+        let update = self.catalog().state().pack_session_update(session, -1);
         self.send_builtin_table_updates(vec![update], BuiltinTableUpdateSource::DDL)
             .await;
     }
