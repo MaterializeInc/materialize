@@ -38,7 +38,6 @@ use tokio_postgres::SimpleQueryMessage;
 use tracing::{info, warn};
 
 use mz_expr::MirScalarExpr;
-use mz_ore::display::DisplayExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::TimeoutError;
 use mz_ore::task;

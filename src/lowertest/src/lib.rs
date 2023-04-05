@@ -126,7 +126,7 @@ pub struct ReflectedTypeInfo {
 
 /// Converts `s` into a [proc_macro2::TokenStream]
 pub fn tokenize(s: &str) -> Result<TokenStream, String> {
-    s.parse::<TokenStream>().map_err_to_string()
+    s.parse::<TokenStream>().map_err_to_string_with_causes()
 }
 
 /// Changes `"\"foo\""` to `"foo"`
