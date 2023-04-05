@@ -158,12 +158,14 @@ where
             }
 
             // Now we need to collate them together.
-            build_collation(
+            let (oks, errs) = build_collation(
                 debug_name,
                 to_collate,
                 expr.aggregate_types,
                 &mut collection.scope(),
-            )
+            );
+            err_collection = err_collection.concat(&errs);
+            oks
         }
     };
     (arrangement, err_collection)
@@ -287,7 +289,7 @@ fn build_collation<G>(
     arrangements: Vec<(ReductionType, Arrangement<G, Row>)>,
     aggregate_types: Vec<ReductionType>,
     scope: &mut G,
-) -> Arrangement<G, Row>
+) -> (Arrangement<G, Row>, Collection<G, DataflowError, Diff>)
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -317,92 +319,135 @@ where
     let mut distinct_aggregate_types = aggregate_types.clone();
     distinct_aggregate_types.sort_unstable();
     distinct_aggregate_types.dedup();
+    let n_distinct_aggregate_types = distinct_aggregate_types.len();
 
+    let aggregate_types_err = aggregate_types.clone();
     let debug_name = debug_name.to_string();
     use differential_dataflow::collection::concatenate;
-    concatenate(scope, to_concat)
+    let (oks, errs) = concatenate(scope, to_concat)
         .arrange_named::<RowSpine<_, _, _, _>>("Arrange ReduceCollation")
-        .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceCollation", {
-            let mut row_buf = Row::default();
-            move |key, input, output| {
-                // The inputs are pairs of a reduction type, and a row consisting of densely packed fused
-                // aggregate values.
-                // We need to reconstitute the final value by:
-                // 1. Extracting out the fused rows by type
-                // 2. For each aggregate, figure out what type it is, and grab the relevant value
-                //    from the corresponding fused row.
-                // 3. Stitch all the values together into one row.
-                let mut accumulable = DatumList::empty().iter();
-                let mut hierarchical = DatumList::empty().iter();
-                let mut basic = DatumList::empty().iter();
+        .reduce_pair::<_, RowSpine<_, _, _, _>, _, ErrValSpine<_, _, _>>(
+            "ReduceCollation",
+            "ReduceCollation Errors",
+            {
+                let mut row_buf = Row::default();
+                move |_key, input, output| {
+                    // The inputs are pairs of a reduction type, and a row consisting of densely
+                    // packed fused aggregate values.
+                    //
+                    // We need to reconstitute the final value by:
+                    // 1. Extracting out the fused rows by type
+                    // 2. For each aggregate, figure out what type it is, and grab the relevant
+                    //    value from the corresponding fused row.
+                    // 3. Stitch all the values together into one row.
+                    let mut accumulable = DatumList::empty().iter();
+                    let mut hierarchical = DatumList::empty().iter();
+                    let mut basic = DatumList::empty().iter();
 
-                // We expect not to have any negative multiplicities, but are not 100% sure it will
-                // never happen so for now just log an error if it does.
-                if input.iter().any(|(_val, cnt)| cnt < &0) {
-                    for (val, cnt) in input.iter() {
-                        // XXX: This reports user data, which we perhaps should not do!
-                        if *cnt < 0 {
-                            warn!("[customer-data] Negative accumulation for key {key:?} in ReduceCollation: {val:?} with count {cnt:?} in dataflow {debug_name}");
-                            soft_assert_or_log!(false, "Negative accumulation for key in ReduceCollation");
-                        }
+                    // Note that hierarchical and basic reductions guard against negative
+                    // multiplicities, and if we only had accumulable aggregations, we would not
+                    // have produced a collation plan, so we do not repeat the check here.
+                    if input.len() != n_distinct_aggregate_types {
+                        return;
                     }
-                } else if input.len() == distinct_aggregate_types.len() {
+
                     for ((reduction_type, row), _) in input.iter() {
                         match reduction_type {
-                            ReductionType::Accumulable => {
-                                accumulable = row.iter();
-                            }
-                            ReductionType::Hierarchical => {
-                                hierarchical = row.iter();
-                            }
-                            ReductionType::Basic => {
-                                basic = row.iter();
-                            }
+                            ReductionType::Accumulable => accumulable = row.iter(),
+                            ReductionType::Hierarchical => hierarchical = row.iter(),
+                            ReductionType::Basic => basic = row.iter(),
                         }
                     }
 
                     // Merge results into the order they were asked for.
                     let mut row_packer = row_buf.packer();
-                    let mut reconstruction_ok = true;
                     for typ in aggregate_types.iter() {
                         let datum = match typ {
                             ReductionType::Accumulable => accumulable.next(),
                             ReductionType::Hierarchical => hierarchical.next(),
                             ReductionType::Basic => basic.next(),
                         };
-                        if let Some(datum) = datum {
-                            row_packer.push(datum);
-                        } else {
-                            // We cannot properly reconstruct a row if aggregates are missing.
-                            // This situation is not expected, so we log an error if it occurs.
-                            reconstruction_ok = false;
-                            warn!("[customer-data] Missing {typ:?} value for key in ReduceCollation: {key} in dataflow {debug_name}");
-                            soft_assert_or_log!(false, "Missing value for key in ReduceCollation");
-                        }
+                        let Some(datum) = datum else { return };
+                        row_packer.push(datum);
                     }
-                    // If we did not have enough values to stitch together, then we do not
-                    // generate an output row. Not outputting here corresponds to the semantics
-                    // of an equi-join on the key, similarly to the proposal in PR #17013.
-                    if reconstruction_ok {
-                        // Note that we also do not want to have anything left over to stich.
-                        // If we do, then we also have an error and would violate join semantics.
-                        if accumulable.next() == None && hierarchical.next() == None && basic.next() == None {
-                            output.push((row_buf.clone(), 1));
-                        } else {
-                            warn!("[customer-data] Found excessively large row for key in ReduceCollation: {key} in dataflow {debug_name}");
-                            soft_assert_or_log!(false, "Rows too large for key in ReduceCollation");
-                        }
+                    // If we did not have enough values to stitch together, then we do not generate
+                    // an output row. Not outputting here corresponds to the semantics of an
+                    // equi-join on the key, similarly to the proposal in PR #17013.
+                    //
+                    // Note that we also do not want to have anything left over to stich.  If we do,
+                    // then we also have an error and would violate join semantics.
+                    if (accumulable.next(), hierarchical.next(), basic.next()) == (None, None, None)
+                    {
+                        output.push((row_buf.clone(), 1));
                     }
-                } else {
-                    // We expected to stitch together exactly as many aggregate types
-                    // as requested by the collation. If we cannot, we log an error and
-                    // produce no output for this key.
-                    warn!("[customer-data] Aggregates in input differ ({}) from requested ({}) for key in ReduceCollation: {key} in dataflow {debug_name}",
-                        input.len(), distinct_aggregate_types.len());
-                    soft_assert_or_log!(false, "Mismatched aggregates for key in ReduceCollation");
                 }
-            }
-        })
+            },
+            move |key, input, output| {
+                if input.len() != n_distinct_aggregate_types {
+                    // We expected to stitch together exactly as many aggregate types as requested
+                    // by the collation. If we cannot, we log an error and produce no output for
+                    // this key.
+                    let message = "Mismatched aggregates for key in ReduceCollation";
+                    warn!(
+                        ?key,
+                        debug_name,
+                        n_aggregates_requested = input.len(),
+                        n_distinct_aggregate_types,
+                        "[customer-data] {message}"
+                    );
+
+                    error!("{message}");
+                    output.push((EvalError::Internal(message.to_string()).into(), 1));
+                    return;
+                }
+
+                let mut accumulable = DatumList::empty().iter();
+                let mut hierarchical = DatumList::empty().iter();
+                let mut basic = DatumList::empty().iter();
+                for ((reduction_type, row), _) in input.iter() {
+                    match reduction_type {
+                        ReductionType::Accumulable => accumulable = row.iter(),
+                        ReductionType::Hierarchical => hierarchical = row.iter(),
+                        ReductionType::Basic => basic = row.iter(),
+                    }
+                }
+
+                for typ in aggregate_types_err.iter() {
+                    let datum = match typ {
+                        ReductionType::Accumulable => accumulable.next(),
+                        ReductionType::Hierarchical => hierarchical.next(),
+                        ReductionType::Basic => basic.next(),
+                    };
+                    if datum.is_some() {
+                        continue;
+                    }
+
+                    // We cannot properly reconstruct a row if aggregates are missing.
+                    // This situation is not expected, so we log an error if it occurs.
+                    let message = "Missing value for key in ReduceCollation";
+                    warn!(?typ, ?key, debug_name, "[customer-data] {message}");
+                    error!("{message}");
+                    output.push((EvalError::Internal(message.to_string()).into(), 1));
+                    return;
+                }
+
+                // Note that we also do not want to have anything left over to stich.
+                // If we do, then we also have an error and would violate join semantics.
+                if (accumulable.next(), hierarchical.next(), basic.next()) == (None, None, None) {
+                    return;
+                }
+
+                let message = "Rows too large for key in ReduceCollation";
+                warn!(
+                    ?key,
+                    debug_name,
+                    "[customer-data] Found excessively large row for key in ReduceCollation"
+                );
+                error!("{message}");
+                output.push((EvalError::Internal(message.to_string()).into(), 1));
+            },
+        );
+    (oks, errs.as_collection(|_, v| v.clone()))
 }
 
 /// Build the dataflow to compute the set of distinct keys.
