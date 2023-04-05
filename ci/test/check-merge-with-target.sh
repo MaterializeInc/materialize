@@ -15,6 +15,10 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
+if [[ $BUILDKITE_PULL_REQUEST == "false" ]]; then
+    exit 0
+fi
+
 ci_collapsed_heading "Configure git"
 BUILDKITE_REPO_REF="buildkite-origin"
 run git remote add "$BUILDKITE_REPO_REF" "$BUILDKITE_REPO"
