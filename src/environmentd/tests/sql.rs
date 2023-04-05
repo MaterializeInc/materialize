@@ -2591,7 +2591,13 @@ fn test_timelines_persist_after_failed_transaction() {
 // we have no way to disconnect sessions using SLT.
 #[test]
 fn test_mz_sessions() {
-    let config = util::Config::default().unsafe_mode();
+    // Set the timestamp to zero for deterministic initial timestamps.
+    let now = Arc::new(Mutex::new(0));
+    let now_fn = {
+        let now = Arc::clone(&now);
+        NowFn::from(move || *now.lock().unwrap())
+    };
+    let config = util::Config::default().with_now(now_fn).unsafe_mode();
     let server = util::start_server(config).unwrap();
 
     let mut foo_client = server
@@ -2623,6 +2629,7 @@ fn test_mz_sessions() {
 
     // Concurrent session appears in mz_sessions and is removed from mz_sessions.
     {
+        *now.lock().expect("lock poisoned") += 1_000;
         let _bar_client = server
             .pg_config()
             .user("bar")
@@ -2649,6 +2656,7 @@ fn test_mz_sessions() {
                 .get::<_, String>(0),
             "bar",
         );
+        *now.lock().expect("lock poisoned") += 1_000;
     }
 
     assert_eq!(
@@ -2669,6 +2677,7 @@ fn test_mz_sessions() {
     // Concurrent session, with the same name as active session,
     // appears in mz_sessions and is removed from mz_sessions.
     {
+        *now.lock().expect("lock poisoned") += 1_000;
         let _other_foo_client = server
             .pg_config()
             .user("foo")
@@ -2691,6 +2700,7 @@ fn test_mz_sessions() {
         let other_foo_role_id = other_foo_session_row.get::<_, String>("role_id");
         assert_ne!(foo_conn_id, other_foo_conn_id);
         assert_eq!(foo_role_id, other_foo_role_id);
+        *now.lock().expect("lock poisoned") += 1_000;
     }
 
     assert_eq!(
