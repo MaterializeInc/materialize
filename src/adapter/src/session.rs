@@ -22,6 +22,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::OwnedMutexGuard;
 
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
+use mz_ore::now::EpochMillis;
 use mz_pgrepr::Format;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType, TimestampManipulation};
@@ -44,11 +45,14 @@ pub use mz_sql::session::vars::{
 };
 
 const DUMMY_CONNECTION_ID: ConnectionId = 0;
+const DUMMY_CONNECT_TIME: EpochMillis = 0;
 
 /// A session holds per-connection state.
 #[derive(Debug)]
 pub struct Session<T = mz_repr::Timestamp> {
     conn_id: ConnectionId,
+    /// The time when the session's connection was initiated.
+    connect_time: EpochMillis,
     prepared_statements: BTreeMap<String, PreparedStatement>,
     portals: BTreeMap<String, Portal>,
     transaction: TransactionStatus<T>,
@@ -81,9 +85,10 @@ impl<T: TimestampManipulation> Session<T> {
         build_info: &'static BuildInfo,
         conn_id: ConnectionId,
         user: User,
+        connect_time: EpochMillis,
     ) -> Session<T> {
         assert_ne!(conn_id, DUMMY_CONNECTION_ID);
-        Self::new_internal(build_info, conn_id, user)
+        Self::new_internal(build_info, conn_id, user, connect_time)
     }
 
     /// Creates a new dummy session.
@@ -91,8 +96,12 @@ impl<T: TimestampManipulation> Session<T> {
     /// Dummy sessions are intended for use when executing queries on behalf of
     /// the system itself, rather than on behalf of a user.
     pub fn dummy() -> Session<T> {
-        let mut dummy =
-            Self::new_internal(&DUMMY_BUILD_INFO, DUMMY_CONNECTION_ID, SYSTEM_USER.clone());
+        let mut dummy = Self::new_internal(
+            &DUMMY_BUILD_INFO,
+            DUMMY_CONNECTION_ID,
+            SYSTEM_USER.clone(),
+            DUMMY_CONNECT_TIME,
+        );
         dummy.set_role_id(RoleId::User(0));
         dummy
     }
@@ -101,6 +110,7 @@ impl<T: TimestampManipulation> Session<T> {
         build_info: &'static BuildInfo,
         conn_id: ConnectionId,
         user: User,
+        connect_time: EpochMillis,
     ) -> Session<T> {
         let (notices_tx, notices_rx) = mpsc::unbounded_channel();
         let (external_metadata_tx, external_metadata_rx) = mpsc::unbounded_channel();
@@ -113,6 +123,7 @@ impl<T: TimestampManipulation> Session<T> {
         }
         Session {
             conn_id,
+            connect_time,
             transaction: TransactionStatus::Default,
             pcx: None,
             prepared_statements: BTreeMap::new(),
@@ -131,6 +142,11 @@ impl<T: TimestampManipulation> Session<T> {
     /// Returns the connection ID associated with the session.
     pub fn conn_id(&self) -> ConnectionId {
         self.conn_id
+    }
+
+    /// Returns the time at which the session connected to Materialize.
+    pub fn connect_time(&self) -> EpochMillis {
+        self.connect_time
     }
 
     /// Returns the secret key associated with the session.

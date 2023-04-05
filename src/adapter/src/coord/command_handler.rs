@@ -260,7 +260,6 @@ impl Coordinator {
             .active_sessions
             .with_label_values(&[session_type])
             .inc();
-        let connect_time = self.now();
         self.active_conns.insert(
             session.conn_id(),
             ConnMeta {
@@ -268,17 +267,12 @@ impl Coordinator {
                 secret_key: session.secret_key(),
                 notice_tx: session.retain_notice_transmitter(),
                 drop_sinks: Vec::new(),
-                // We use the system clock to determine when a connection
-                // connected to Materialize. This is not intended to be 100%
-                // accurate and correct, so we don't burden the timestamp
-                // oracle with generating a more correct timestamp.
-                connect_time: connect_time.clone(),
             },
         );
         let update = self.catalog().state().pack_session_update(
             session.conn_id(),
             *session.role_id(),
-            connect_time,
+            session.connect_time(),
             1,
         );
         self.send_builtin_table_updates(vec![update], BuiltinTableUpdateSource::DDL)
@@ -649,15 +643,12 @@ impl Coordinator {
             .active_sessions
             .with_label_values(&[session_type])
             .dec();
-        let conn_meta = self
-            .active_conns
-            .remove(&session.conn_id())
-            .expect("session metadata out of sync");
+        self.active_conns.remove(&session.conn_id());
         self.cancel_pending_peeks(&session.conn_id());
         let update = self.catalog().state().pack_session_update(
             session.conn_id(),
             *session.role_id(),
-            conn_meta.connect_time,
+            session.connect_time(),
             -1,
         );
         self.send_builtin_table_updates(vec![update], BuiltinTableUpdateSource::DDL)
