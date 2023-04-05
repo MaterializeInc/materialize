@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use itertools::Itertools;
 use mz_expr::EvalError;
+use mz_ore::error::ErrorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::{separated, StrExt};
 use mz_repr::adt::char::InvalidCharLengthError;
@@ -163,9 +164,11 @@ impl PlanError {
 
     pub fn detail(&self) -> Option<String> {
         match self {
-            Self::FetchingCsrSchemaFailed { cause, .. } => Some(cause.to_string()),
-            Self::FetchingPostgresPublicationInfoFailed { cause } => Some(cause.to_string()),
-            Self::InvalidProtobufSchema { cause } => Some(cause.to_string()),
+            Self::FetchingCsrSchemaFailed { cause, .. } => Some(cause.to_string_with_causes()),
+            Self::FetchingPostgresPublicationInfoFailed { cause } => {
+                Some(cause.to_string_with_causes())
+            }
+            Self::InvalidProtobufSchema { cause } => Some(cause.to_string_with_causes()),
             Self::InvalidOptionValue { err, .. } => err.detail(),
             _ => None,
         }
