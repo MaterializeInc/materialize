@@ -940,7 +940,7 @@ impl Coordinator {
                                     .await
                                 })
                                 .await
-                                .map_err(StorageError::from)
+                                .map_err(StorageError::Generic)
                                 .map_err(AdapterError::from);
                             // It is not an error for sink connections to become ready after `internal_cmd_rx` is dropped.
                             let result = internal_cmd_tx.send(Message::SinkConnectionReady(

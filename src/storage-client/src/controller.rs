@@ -26,7 +26,6 @@ use std::num::NonZeroI64;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::Context;
 use async_trait::async_trait;
 use bytes::BufMut;
 use derivative::Derivative;
@@ -816,15 +815,26 @@ pub enum StorageError {
     ReadBeforeSince(GlobalId),
     /// The expected upper of one or more appends was different from the actual upper of the collection
     InvalidUppers(Vec<GlobalId>),
-    /// An error from the underlying client.
-    ClientError(anyhow::Error),
     /// An operation failed to read or write state
     IOError(StashError),
+    /// The (client for) the requested cluster instance is missing.
+    IngestionInstanceMissing {
+        storage_instance_id: StorageInstanceId,
+        ingestion_id: GlobalId,
+    },
+    /// The (client for) the requested cluster instance is missing.
+    ExportInstanceMissing {
+        storage_instance_id: StorageInstanceId,
+        export_id: GlobalId,
+    },
     /// Dataflow was not able to process a request
     DataflowError(DataflowError),
     /// The controller API was used in some invalid way. This usually indicates
     /// a bug.
     InvalidUsage(String),
+    /// A generic error that happens during operations of the storage controller.
+    // TODO(aljoscha): Get rid of this!
+    Generic(anyhow::Error),
 }
 
 impl Error for StorageError {
@@ -836,10 +846,12 @@ impl Error for StorageError {
             Self::UpdateBeyondUpper(_) => None,
             Self::ReadBeforeSince(_) => None,
             Self::InvalidUppers(_) => None,
-            Self::ClientError(err) => Some(err.as_ref()),
+            Self::IngestionInstanceMissing { .. } => None,
+            Self::ExportInstanceMissing { .. } => None,
             Self::IOError(err) => Some(err),
             Self::DataflowError(err) => Some(err),
             Self::InvalidUsage(_) => None,
+            Self::Generic(err) => err.source(),
         }
     }
 }
@@ -873,25 +885,31 @@ impl fmt::Display for StorageError {
                     id.iter().map(|id| id.to_string()).join(", ")
                 )
             }
-            // N.B. For these three errors, the underlying error is reported in `source()`, and it
-            // is the responsibility of the caller to print the chain of errors, when desired.
-            Self::ClientError(_err) => {
-                write!(f, "underlying client error")
-            }
-            // N.B. For these three errors, the underlying error is reported in `source()`, and it
+            Self::IngestionInstanceMissing {
+                storage_instance_id,
+                ingestion_id,
+            } => write!(
+                f,
+                "instance {} missing for ingestion {}",
+                storage_instance_id, ingestion_id
+            ),
+            Self::ExportInstanceMissing {
+                storage_instance_id,
+                export_id,
+            } => write!(
+                f,
+                "instance {} missing for export {}",
+                storage_instance_id, export_id
+            ),
+            // N.B. For these errors, the underlying error is reported in `source()`, and it
             // is the responsibility of the caller to print the chain of errors, when desired.
             Self::IOError(_err) => write!(f, "failed to read or write state",),
-            // N.B. For these three errors, the underlying error is reported in `source()`, and it
+            // N.B. For these errors, the underlying error is reported in `source()`, and it
             // is the responsibility of the caller to print the chain of errors, when desired.
             Self::DataflowError(_err) => write!(f, "dataflow failed to process request",),
             Self::InvalidUsage(err) => write!(f, "invalid usage: {}", err),
+            Self::Generic(err) => std::fmt::Display::fmt(err, f),
         }
-    }
-}
-
-impl From<anyhow::Error> for StorageError {
-    fn from(error: anyhow::Error) -> Self {
-        Self::ClientError(error)
     }
 }
 
@@ -1228,7 +1246,7 @@ where
         // this stream cannot all have exclusive access.
         let this = &*self;
         let to_register: Vec<_> = futures::stream::iter(enriched_with_metadata)
-            .map(|data: Result<_, anyhow::Error>| async move {
+            .map(|data: Result<_, StorageError>| async move {
                 let (id, description, metadata) = data?;
 
                 // should be replaced with real introspection (https://github.com/MaterializeInc/materialize/issues/14266)
@@ -1247,7 +1265,7 @@ where
                     )
                     .await;
 
-                Ok::<_, anyhow::Error>((id, description, write, since_handle, metadata))
+                Ok::<_, StorageError>((id, description, write, since_handle, metadata))
             })
             // Poll each future for each collection concurrently, maximum of 50 at a time.
             .buffer_unordered(50)
@@ -1457,11 +1475,9 @@ where
                         .state
                         .clients
                         .get_mut(&ingestion.instance_id)
-                        .with_context(|| {
-                            format!(
-                                "instance {} missing for ingestion {}",
-                                ingestion.instance_id, id
-                            )
+                        .ok_or_else(|| StorageError::IngestionInstanceMissing {
+                            storage_instance_id: ingestion.instance_id,
+                            ingestion_id: id,
                         })?;
                     let augmented_ingestion = CreateSourceCommand {
                         id,
@@ -1719,11 +1735,9 @@ where
                 .state
                 .clients
                 .get_mut(&description.instance_id)
-                .with_context(|| {
-                    format!(
-                        "cluster {} missing for export {}",
-                        description.instance_id, id
-                    )
+                .ok_or_else(|| StorageError::ExportInstanceMissing {
+                    storage_instance_id: description.instance_id,
+                    export_id: id,
                 })?;
 
             client.send(StorageCommand::CreateSinks(vec![cmd]));
