@@ -28,8 +28,7 @@ goals of code review are threefold:
 3. To socialize changes with other engineers on the team.
 
 Once a PR is approved and merged to the `main` branch, CI will automatically
-deploy a new `materialized` binary to <https://binaries.materialize.com> and the
-[materialized Docker image][docker].
+deploy a new [materialized Docker image][docker].
 
 While we encourage customers to use the latest stable release in production,
 many of our prospective customers run their proofs-of-concept (POCs) off these
