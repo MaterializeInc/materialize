@@ -163,6 +163,10 @@ pub trait ConsensusKnobs: std::fmt::Debug + Send + Sync {
     fn batch_cas_enabled(&self) -> bool;
     /// Maximum batch size for batch CaS operations.
     fn max_batch_cas_size(&self) -> usize;
+    /// Maximum time to wait to batch CaS operations.
+    fn batch_cas_flush_interval(&self) -> Duration;
+    /// Whether to use time-based flushing.
+    fn batch_cas_flush_interval_enabled(&self) -> bool;
 }
 
 impl ConsensusConfig {

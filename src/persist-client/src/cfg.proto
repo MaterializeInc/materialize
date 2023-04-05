@@ -24,6 +24,8 @@ message ProtoPersistParameters {
     optional bool batch_cas_enabled = 8;
     optional uint64 connection_pool_batch_cas_max_size = 9;
     optional uint64 batch_cas_max_size = 10;
+    mz_proto.ProtoDuration batch_cas_flush_interval = 11;
+    optional bool batch_cas_flush_interval_enabled = 12;
 }
 
 message ProtoRetryParameters {

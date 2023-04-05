@@ -578,6 +578,24 @@ const PERSIST_BATCH_CAS_MAX_SIZE: ServerVar<usize> = ServerVar {
     safe: true,
 };
 
+/// Controls [`mz_persist_client::cfg::DynamicConfig::batch_cas_flush_interval`].
+const PERSIST_BATCH_CAS_FLUSH_INTERVAL: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("persist_batch_cas_flush_interval"),
+    value: &PersistConfig::DEFAULT_BATCH_CAS_FLUSH_INTERVAL,
+    description: "WIP",
+    internal: true,
+    safe: true,
+};
+
+/// Controls [`mz_persist_client::cfg::DynamicConfig::batch_cas_flush_interval_enabled`].
+const PERSIST_BATCH_CAS_FLUSH_INTERVAL_ENABLED: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("persist_batch_cas_flush_interval_enabled"),
+    value: &PersistConfig::DEFAULT_BATCH_CAS_FLUSH_INTERVAL_ENABLED,
+    description: "WIP",
+    internal: true,
+    safe: true,
+};
+
 /// Controls [`mz_persist_client::cfg::DynamicConfig::connection_pool_batch_cas_max_size`].
 const PERSIST_BATCH_CAS_POOL_SIZE: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_batch_cas_pool_size"),
@@ -1384,6 +1402,8 @@ impl Default for SystemVars {
             .with_var(&PERSIST_STATS_FILTER_ENABLED)
             .with_var(&PERSIST_BATCH_CAS_ENABLED)
             .with_var(&PERSIST_BATCH_CAS_MAX_SIZE)
+            .with_var(&PERSIST_BATCH_CAS_FLUSH_INTERVAL)
+            .with_var(&PERSIST_BATCH_CAS_FLUSH_INTERVAL_ENABLED)
             .with_var(&PERSIST_BATCH_CAS_POOL_SIZE)
             .with_var(&METRICS_RETENTION)
             .with_var(&MOCK_AUDIT_EVENT_TIMESTAMP)
@@ -1662,6 +1682,16 @@ impl SystemVars {
     /// WIP
     pub fn persist_batch_cas_max_size(&self) -> usize {
         *self.expect_value(&PERSIST_BATCH_CAS_MAX_SIZE)
+    }
+
+    /// WIP
+    pub fn persist_batch_cas_flush_interval(&self) -> Duration {
+        *self.expect_value(&PERSIST_BATCH_CAS_FLUSH_INTERVAL)
+    }
+
+    /// WIP
+    pub fn persist_batch_cas_flush_interval_enabled(&self) -> bool {
+        *self.expect_value(&PERSIST_BATCH_CAS_FLUSH_INTERVAL_ENABLED)
     }
 
     /// WIP
@@ -2670,4 +2700,6 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_BATCH_CAS_ENABLED.name()
         || name == PERSIST_BATCH_CAS_POOL_SIZE.name()
         || name == PERSIST_BATCH_CAS_MAX_SIZE.name()
+        || name == PERSIST_BATCH_CAS_FLUSH_INTERVAL.name()
+        || name == PERSIST_BATCH_CAS_FLUSH_INTERVAL_ENABLED.name()
 }

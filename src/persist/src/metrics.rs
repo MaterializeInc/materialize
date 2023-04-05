@@ -11,7 +11,7 @@
 
 use mz_ore::metric;
 use mz_ore::metrics::{Counter, IntCounter, MetricsRegistry, UIntGauge};
-use prometheus::IntCounterVec;
+use prometheus::{Histogram, IntCounterVec};
 
 /// Metrics specific to S3Blob's internal workings.
 #[derive(Debug, Clone)]
@@ -76,6 +76,7 @@ pub struct PostgresConsensusMetrics {
     pub(crate) connpool_connections_created: Counter,
     pub(crate) connpool_connection_errors: Counter,
     pub(crate) connpool_ttl_reconnections: Counter,
+    pub(crate) cas_batch_size: Histogram,
 }
 
 impl PostgresConsensusMetrics {
@@ -105,6 +106,11 @@ impl PostgresConsensusMetrics {
             connpool_ttl_reconnections: registry.register(metric!(
                 name: "mz_persist_postgres_connpool_ttl_reconnections",
                 help: "times a connection was recycled due to ttl",
+            )),
+            cas_batch_size: registry.register(metric!(
+                name: "mz_persist_postgres_cas_batch_size",
+                help: "WIP",
+                buckets: [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 100.0].to_vec(),
             )),
         }
     }

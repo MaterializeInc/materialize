@@ -20,7 +20,7 @@ use deadpool_postgres::{
     Hook, HookError, HookErrorCause, ManagerConfig, Object, PoolError, RecyclingMethod,
 };
 use deadpool_postgres::{Manager, Pool};
-use mz_ore::cast::CastFrom;
+use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use openssl::pkey::PKey;
@@ -159,6 +159,12 @@ impl PostgresConsensusConfig {
             fn max_batch_cas_size(&self) -> usize {
                 0
             }
+            fn batch_cas_flush_interval(&self) -> Duration {
+                Duration::from_millis(10)
+            }
+            fn batch_cas_flush_interval_enabled(&self) -> bool {
+                false
+            }
         }
 
         let config = PostgresConsensusConfig::new(
@@ -281,35 +287,52 @@ impl PostgresConsensus {
     fn start_task(&self, mut rx: UnboundedReceiver<BatchableCompareAndSet>) {
         let mut s = self.clone();
         let _ = mz_ore::task::spawn(|| format!("compare_and_set_batcher"), async move {
-            let mut must_flush_interval = tokio::time::interval(Duration::from_millis(1000));
+            let mut must_flush_interval = tokio::time::interval(s.knobs.batch_cas_flush_interval());
             let mut batch = BTreeMap::new();
 
             loop {
+                let flush_interval_enabled = s.knobs.batch_cas_flush_interval_enabled();
                 let should_proceed = select! {
                     Some(cas) = rx.recv() => {
-                        PostgresConsensus::add_cas_to_batch(&mut batch, cas);
-                        if batch.len() >= s.knobs.max_batch_cas_size() {
-                            info!("batch-size based flush");
-                            return true;
-                        }
-
-                        while let Ok(cas) = rx.try_recv() {
-                            let cas = cas;
+                        'abc: {
                             PostgresConsensus::add_cas_to_batch(&mut batch, cas);
-
                             if batch.len() >= s.knobs.max_batch_cas_size() {
-                                info!("batch-size based flush");
-                                return true;
+                                info!("batch-size based flush: {}", batch.len());
+                                break 'abc true;
+                            }
+
+                            while let Ok(cas) = rx.try_recv() {
+                                let cas = cas;
+                                PostgresConsensus::add_cas_to_batch(&mut batch, cas);
+
+                                if batch.len() >= s.knobs.max_batch_cas_size() {
+                                    info!("batch-size based flush: {}", batch.len());
+                                    break 'abc true;
+                                }
+                            }
+
+                            // without a flush interval, we proceed immediately because there's work
+                            // to do. otherwise, we linger to see if we can batch up more.
+                            if flush_interval_enabled {
+                                info!("not emitting batch of {} due to flush interval", batch.len());
+                                false
+                            } else {
+                                true
                             }
                         }
-
-                        false
                     }
                     _ = must_flush_interval.tick() => {
-                        info!("time-based flush");
-                        !batch.is_empty()
+                        let should_proceed = !batch.is_empty() && flush_interval_enabled;
+                        if should_proceed {
+                            info!("time-based flush: {}", batch.len());
+                        }
+                        should_proceed
                     }
                 };
+
+                s.metrics
+                    .cas_batch_size
+                    .observe(f64::try_cast_from(u64::cast_from(batch.len())).expect("abc"));
 
                 if !should_proceed {
                     continue;
@@ -398,7 +421,7 @@ impl PostgresConsensus {
                     }
                 });
 
-                must_flush_interval = tokio::time::interval(Duration::from_millis(1000));
+                must_flush_interval = tokio::time::interval(s.knobs.batch_cas_flush_interval());
             }
         });
     }
