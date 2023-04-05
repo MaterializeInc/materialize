@@ -216,6 +216,7 @@ async fn report_loop(
                 .extend(traits.as_object().unwrap().clone());
             segment_client.environment_track(
                 &environment_id,
+                "environmentd",
                 // We use the organization ID as the user ID for events
                 // that are not associated with a particular user.
                 environment_id.organization_id(),
