@@ -131,6 +131,17 @@ macro_rules! guard_write_critical_section {
 }
 
 impl Coordinator {
+    /// Send a message to the Coordinate to start a group commit.
+    pub(crate) fn trigger_group_commit(&mut self) {
+        self.internal_cmd_tx
+            .send(Message::GroupCommitInitiate)
+            .expect("sending to self.internal_cmd_tx cannot fail");
+        // Avoid excessive `Message::GroupCommitInitiate` by resetting the periodic table
+        // advancement. The group commit triggered by the message above will already advance all
+        // tables.
+        self.advance_timelines_interval.reset();
+    }
+
     /// Attempts to commit all pending write transactions in a group commit. If the timestamp
     /// chosen for the writes is not ahead of `now()`, then we can execute and commit the writes
     /// immediately. Otherwise we must wait for `now()` to advance past the timestamp chosen for the
@@ -366,9 +377,7 @@ impl Coordinator {
 
     /// Submit a write to be executed during the next group commit.
     pub(crate) fn submit_write(&mut self, pending_write_txn: PendingWriteTxn) {
-        self.internal_cmd_tx
-            .send(Message::GroupCommitInitiate)
-            .expect("sending to self.internal_cmd_tx cannot fail");
+        self.trigger_group_commit();
         self.pending_writes.push(pending_write_txn);
     }
 

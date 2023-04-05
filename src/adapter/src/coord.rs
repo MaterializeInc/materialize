@@ -478,6 +478,16 @@ pub struct Coordinator {
     write_lock_wait_group: VecDeque<Deferred>,
     /// Pending writes waiting for a group commit.
     pending_writes: Vec<PendingWriteTxn>,
+    /// For the realtime timeline, an explicit SELECT or INSERT on a table will bump the
+    /// table's timestamps, but there are cases where timestamps are not bumped but
+    /// we expect the closed timestamps to advance (`AS OF X`, SUBSCRIBing views over
+    /// RT sources and tables). To address these, spawn a task that forces table
+    /// timestamps to close on a regular interval. This roughly tracks the behavior
+    /// of realtime sources that close off timestamps on an interval.
+    ///
+    /// For non-realtime timelines, nothing pushes the timestamps forward, so we must do
+    /// it manually.
+    advance_timelines_interval: tokio::time::Interval,
 
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
@@ -1160,17 +1170,6 @@ impl Coordinator {
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingReadTxn>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     ) {
-        // For the realtime timeline, an explicit SELECT or INSERT on a table will bump the
-        // table's timestamps, but there are cases where timestamps are not bumped but
-        // we expect the closed timestamps to advance (`AS OF X`, TAILing views over
-        // RT sources and tables). To address these, spawn a task that forces table
-        // timestamps to close on a regular interval. This roughly tracks the behavior
-        // of realtime sources that close off timestamps on an interval.
-        //
-        // For non-realtime timelines, nothing pushes the timestamps forward, so we must do
-        // it manually.
-        let mut advance_timelines_interval =
-            tokio::time::interval(self.catalog().config().timestamp_interval);
         // // Watcher that listens for and reports cluster service status changes.
         let mut cluster_events = self.controller.events_stream();
         let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
@@ -1228,7 +1227,7 @@ impl Coordinator {
                 }
                 // `tick()` on `Interval` is cancel-safe:
                 // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
-                _ = advance_timelines_interval.tick() => Message::GroupCommitInitiate,
+                _ = self.advance_timelines_interval.tick() => Message::GroupCommitInitiate,
 
                 // Process the idle metric at the lowest priority to sample queue non-idle time.
                 // `recv()` on `Receiver` is cancellation safe:
@@ -1390,6 +1389,7 @@ pub async fn serve(
     let metrics_clone = metrics.clone();
     let span = tracing::Span::current();
     let coord_now = now.clone();
+    let advance_timelines_interval = tokio::time::interval(catalog.config().timestamp_interval);
     let thread = thread::Builder::new()
         // The Coordinator thread tends to keep a lot of data on its stack. To
         // prevent a stack overflow we allocate a stack twice as big as the default
@@ -1427,6 +1427,7 @@ pub async fn serve(
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
                 pending_writes: Vec::new(),
+                advance_timelines_interval,
                 secrets_controller,
                 cloud_resource_controller,
                 connection_context,
