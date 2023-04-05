@@ -20,7 +20,7 @@ official [`kubernetes`] Python library to control the Kubernetes cluster.
 
 1. Install [kubectl], the official Kubernetes command-line tool:
 
-    On MacOs, use [Homebrew] to install it:
+    On macOS, use [Homebrew] to install it:
 
     ```
     brew install kubectl
