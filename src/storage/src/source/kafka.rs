@@ -138,7 +138,7 @@ impl SourceRender for KafkaSourceConnection {
             let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
             let health_status = Arc::new(Mutex::new(None));
             let notificator = Arc::new(Notify::new());
-            let consumer: Result<BaseConsumer<_>, _> = connection
+            let consumer = connection
                 .create_with_context(
                     &connection_context,
                     GlueConsumerContext {
@@ -191,8 +191,8 @@ impl SourceRender for KafkaSourceConnection {
                 )
                 .await;
 
-            let consumer = match consumer {
-                Ok(consumer) => Arc::new(consumer),
+            let (consumer, mut error_stream): (Arc<BaseConsumer<_>>, _) = match consumer {
+                Ok((consumer, error_stream)) => (Arc::new(consumer), error_stream),
                 Err(e) => {
                     let update = HealthStatusUpdate {
                         update: HealthStatus::StalledWithError {
@@ -512,6 +512,26 @@ impl SourceRender for KafkaSourceConnection {
 
                 // Wait to be notified while also making progress with offset committing
                 tokio::select! {
+                    // Note that we do this AFTER emitting the `health_status` from the
+                    // metadata fetch. This way the active status of the source is
+                    // the actual connection error. When it recovers, we will
+                    // loop around and emit the last metadata error, or `Running`
+                    // if we recover in time.
+                    mut broken = error_stream.check_connection_statuses() => {
+                        while let Some(e) = broken.wait_for_recovery().await {
+                            health_output.give(
+                                &health_cap,
+                                HealthStatusUpdate {
+                                    update: HealthStatus::StalledWithError {
+                                        // Wrap it in an anyhow so we get the error chain printed.
+                                        error: format!("kafka connection failed: {}", e.display_with_causes()),
+                                        hint: None,
+                                    },
+                                    should_halt: false,
+                                }
+                            ).await;
+                        }
+                    },
                     // TODO(petrosagg): remove the timeout and rely purely on librdkafka waking us
                     // up
                     _  = tokio::time::timeout(Duration::from_secs(1), notificator.notified()) => {},

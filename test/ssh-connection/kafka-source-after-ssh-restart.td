@@ -26,3 +26,8 @@ three
   JOIN mz_sources s ON st.id = s.id
   WHERE s.name = 'mz_source'
 running
+
+> SELECT status FROM mz_internal.mz_source_statuses st
+  JOIN mz_sources s ON st.id = s.id
+  WHERE s.name = 'csr_source'
+running

@@ -9,7 +9,7 @@
 
 //! Connection types.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,6 +23,10 @@ use rdkafka::ClientContext;
 use serde::{Deserialize, Serialize};
 use tokio::net;
 use tokio_postgres::config::SslMode;
+use tokio_stream::{
+    wrappers::{errors::BroadcastStreamRecvError, UnboundedReceiverStream},
+    StreamExt, StreamMap,
+};
 use url::Url;
 
 use mz_ccsr::tls::{Certificate, Identity};
@@ -34,9 +38,9 @@ use mz_repr::url::any_url;
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_ssh_util::tunnel::SshTunnelConfig;
+use mz_ssh_util::tunnel::{SshTunnelConfig, SshTunnelError, SshTunnelErrorSubscription};
 
-use crate::ssh_tunnels::{ManagedSshTunnelHandle, SshTunnelManager};
+use crate::ssh_tunnels::{ManagedSshTunnelHandle, SshTunnelKey, SshTunnelManager};
 use crate::types::connections::aws::AwsConfig;
 
 pub mod aws;
@@ -262,6 +266,162 @@ pub struct KafkaConnection {
     pub options: BTreeMap<String, StringOrSecret>,
 }
 
+/// A type that allows users to inspect the status underlying connections
+/// that kafka uses.
+pub struct KafkaConnectionErrorSubscription {
+    subscriptions: StreamMap<SshTunnelKey, SshTunnelErrorSubscription>,
+    new_subs: UnboundedReceiverStream<(SshTunnelKey, SshTunnelErrorSubscription)>,
+    closed: bool,
+}
+
+impl KafkaConnectionErrorSubscription {
+    // Must be cancel-safe.
+    async fn next(
+        &mut self,
+    ) -> Option<(
+        SshTunnelKey,
+        Result<Result<(), SshTunnelError>, BroadcastStreamRecvError>,
+    )> {
+        // This loop is fairly complex; It polls the `StreamMap` of all
+        // error subscriptions for each tunnel we care about, but ALSO
+        // watch `new_subs` for new subscriptions that should be inspected
+        // as well.
+        loop {
+            // If there are no possible new subscriptions, just poll
+            // the existing ones.
+            if self.closed {
+                return self.subscriptions.next().await;
+            }
+
+            // If there are no subscriptions, wait for new ones, or return `None`
+            // if there are no possible new ones.
+            if self.subscriptions.is_empty() {
+                match self.new_subs.next().await {
+                    Some((key, new)) => {
+                        self.subscriptions.insert(key, new);
+                    }
+                    None => return None,
+                }
+                continue;
+            }
+
+            // Poll for new subscriptions and the existing subscriptions.
+            match futures::future::select(
+                std::pin::pin!(self.new_subs.next()),
+                std::pin::pin!(self.subscriptions.next()),
+            )
+            .await
+            {
+                futures::future::Either::Left((Some((key, new)), _)) => {
+                    if !self.subscriptions.contains_key(&key) {
+                        self.subscriptions.insert(key, new);
+                    }
+                    continue;
+                }
+                futures::future::Either::Left((None, _)) => {
+                    self.closed = true;
+                    continue;
+                }
+                futures::future::Either::Right((Some(val), _)) => {
+                    return Some(val);
+                }
+                futures::future::Either::Right((None, _)) => continue,
+            }
+        }
+    }
+
+    /// A future that returns if at least one underlying connection breaks. The return
+    /// type can be waited on until recovery occurs.
+    ///
+    /// This method is cancel-safe.
+    // The cancel-safety of this method is non-trivial to reason about. Note that in both
+    // `check_connection_statuses` AND `Self::next`, there are no intermediate values held
+    // across await points. This behavior MUST be preserved.
+    pub async fn check_connection_statuses(&mut self) -> BrokenKafkaConnection<'_> {
+        let (tunnel, error) = loop {
+            match self.next().await {
+                // There are no more possible errors, we just pend forever.
+                None => futures::future::pending().await,
+                Some((_, Err(_))) => {
+                    // We have fallen behind on this tunnel's broadcast channel.
+                    // This should be rare, as the broadcast channel is fairly big,
+                    // but we restart and catch up later. Worst case we may miss
+                    // an error update, and the source or sink may report
+                    // some less-comprehensible error.
+                    tracing::warn!(
+                        "fell behind on connection statuses, \
+                       the status of the source of sink using \
+                       this subscription may be inconsistent"
+                    )
+                }
+                // Some tunnel has reported itself healthy, so we continue.
+                Some((_, Ok(Ok(())))) => {
+                    continue;
+                }
+                Some((ssh_tunnel, Ok(Err(e)))) => {
+                    break (ssh_tunnel, e);
+                }
+            }
+        };
+
+        let mut errored_tunnels = BTreeSet::new();
+        errored_tunnels.insert(tunnel);
+
+        BrokenKafkaConnection {
+            to_emit: VecDeque::from([error]),
+            errored_tunnels,
+            error_stream: self,
+        }
+    }
+}
+
+pub struct BrokenKafkaConnection<'a> {
+    to_emit: VecDeque<SshTunnelError>,
+    errored_tunnels: BTreeSet<SshTunnelKey>,
+    error_stream: &'a mut KafkaConnectionErrorSubscription,
+}
+
+impl<'a> BrokenKafkaConnection<'a> {
+    /// Returns errors that should be reported to users, until `None`, which
+    /// means all underlying connections have recovered.
+    pub async fn wait_for_recovery(&mut self) -> Option<SshTunnelError> {
+        loop {
+            if let Some(error) = self.to_emit.pop_front() {
+                return Some(error);
+            }
+
+            if self.errored_tunnels.is_empty() {
+                return None;
+            }
+
+            match self.error_stream.next().await {
+                // If there are no tunnels left, then we assume we are healthy again.
+                None => return None,
+                Some((_, Err(_))) => {
+                    // We have fallen behind on a tunnel's broadcast channel.
+                    // This should be rare, as the broadcast channel is fairly big,
+                    // but we have to assume the tunnel is now healthy. If it
+                    // isn't, the source or sink may present as healthy temporarily,
+                    // until the next time it checks for the status of the tunnels.
+                    tracing::warn!(
+                        "fell behind on connection statuses, \
+                       the status of the source of sink using \
+                       this subscription may be inconsistent"
+                    );
+                    return None;
+                }
+                Some((ssh_tunnel, Ok(Ok(())))) => {
+                    self.errored_tunnels.remove(&ssh_tunnel);
+                }
+                Some((ssh_tunnel, Ok(Err(e)))) => {
+                    self.errored_tunnels.insert(ssh_tunnel.clone());
+                    self.to_emit.push_back(e);
+                }
+            }
+        }
+    }
+}
+
 impl KafkaConnection {
     /// Creates a Kafka client for the connection.
     pub async fn create_with_context<C, T>(
@@ -269,7 +429,7 @@ impl KafkaConnection {
         connection_context: &ConnectionContext,
         context: C,
         extra_options: &BTreeMap<&str, String>,
-    ) -> Result<T, anyhow::Error>
+    ) -> Result<(T, KafkaConnectionErrorSubscription), anyhow::Error>
     where
         C: ClientContext + Clone,
         T: FromClientConfigAndContext<BrokerRewritingClientContext<C>>,
@@ -302,7 +462,7 @@ impl KafkaConnection {
         connection_context: &ConnectionContext,
         context: C,
         extra_options: &BTreeMap<&str, String>,
-    ) -> Result<T, anyhow::Error>
+    ) -> Result<(T, KafkaConnectionErrorSubscription), anyhow::Error>
     where
         C: ClientContext,
         T: FromClientConfigAndContext<BrokerRewritingClientContext<C>>,
@@ -359,6 +519,7 @@ impl KafkaConnection {
         }
 
         let mut context = BrokerRewritingClientContext::new(context);
+        let mut error_stream = tokio_stream::StreamMap::new();
         for broker in &self.brokers {
             let mut addr_parts = broker.address.splitn(2, ':');
             let addr = BrokerAddr {
@@ -378,23 +539,30 @@ impl KafkaConnection {
                         aws_privatelink.availability_zone.as_deref(),
                     );
                     let port = aws_privatelink.port;
+                    // TODO(guswynn): add errors in the underlying aws connection
+                    // into the `error_stream`
                     context.add_broker_rewrite(addr, move || BrokerRewrite {
                         host: host.clone(),
                         port,
                     });
                 }
                 Tunnel::Ssh(ssh_tunnel) => {
-                    let ssh_tunnel = ssh_tunnel
-                        .connect(
-                            connection_context,
-                            &addr.host,
-                            addr.port.parse().context("parsing broker port")?,
-                        )
+                    let port = addr.port.parse().context("parsing broker port")?;
+                    let managed_ssh_tunnel = ssh_tunnel
+                        .connect(connection_context, &addr.host, port)
                         .await
                         .context("creating ssh tunnel")?;
 
+                    error_stream.insert(
+                        SshTunnelKey {
+                            connection_id: ssh_tunnel.connection_id,
+                            remote_host: addr.host.clone(),
+                            remote_port: port,
+                        },
+                        managed_ssh_tunnel.subscribe_to_errors(),
+                    );
                     context.add_broker_rewrite(addr, move || {
-                        let addr = ssh_tunnel.local_addr();
+                        let addr = managed_ssh_tunnel.local_addr();
                         BrokerRewrite {
                             host: addr.ip().to_string(),
                             port: Some(addr.port()),
@@ -404,7 +572,16 @@ impl KafkaConnection {
             }
         }
 
-        Ok(config.create_with_context(context)?)
+        Ok((
+            config.create_with_context(context)?,
+            KafkaConnectionErrorSubscription {
+                subscriptions: error_stream,
+                new_subs: tokio_stream::wrappers::UnboundedReceiverStream::new(
+                    tokio::sync::mpsc::unbounded_channel().1,
+                ),
+                closed: false,
+            },
+        ))
     }
 }
 

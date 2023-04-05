@@ -196,7 +196,10 @@ async fn build_kafka(
     connection_context: ConnectionContext,
 ) -> Result<StorageSinkConnection, anyhow::Error> {
     // Create Kafka topic.
-    let client: AdminClient<_> = builder
+    //
+    // We don't inspect the error stream, as this method is used in
+    // the adapter only.
+    let (client, _): (AdminClient<_>, _) = builder
         .connection
         .create_with_context(&connection_context, MzClientContext, &BTreeMap::new())
         .await

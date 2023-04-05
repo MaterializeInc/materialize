@@ -20,7 +20,9 @@ use anyhow::bail;
 use openssh::{ForwardType, Session};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use tokio::sync::broadcast::{channel, Sender};
 use tokio::time;
+use tokio_stream::wrappers::BroadcastStream;
 use tracing::{info, warn};
 
 use mz_ore::error::ErrorExt;
@@ -55,6 +57,27 @@ impl fmt::Debug for SshTunnelConfig {
     }
 }
 
+/// See `SshTunnelError`
+// This type is required because `Arc<anyhow::Error>`
+// does not implement `Error`, but this type does. We
+// need `SshTunnelError` to be `Clone` and also `Error`
+// so error chains are preserved and can be printed.
+// See
+// <https://play.rust-lang.org/?version=stable&mode=debug&edition=2021&gist=bbcaf787061e7edf4fdc3da15dcc96d2>
+// for an example.
+#[derive(thiserror::Error, Debug)]
+pub enum SshTunnelErrorInner {
+    #[error("ssh tunnel")]
+    Inner(#[from] anyhow::Error),
+}
+
+/// `Clone`-able errors produced by the creation
+/// of ssh tunnels.
+pub type SshTunnelError = Arc<SshTunnelErrorInner>;
+
+/// A type that can be polled for errors occurring in a particular ssh tunnel.
+pub type SshTunnelErrorSubscription = BroadcastStream<Result<(), SshTunnelError>>;
+
 impl SshTunnelConfig {
     /// Establishes a connection to the specified host and port via the
     /// configured SSH tunnel.
@@ -65,10 +88,24 @@ impl SshTunnelConfig {
         &self,
         remote_host: &str,
         remote_port: u16,
-    ) -> Result<SshTunnelHandle, anyhow::Error> {
-        let (mut session, local_port) = connect(self, remote_host, remote_port).await?;
+    ) -> Result<SshTunnelHandle, SshTunnelError> {
+        let (error_broadcaster, _) = channel(1000);
+
+        let (mut session, local_port) = match connect(self, remote_host, remote_port).await {
+            Ok(ret) => {
+                let _ = error_broadcaster.send(Ok(()));
+                ret
+            }
+            Err(e) => {
+                let e = Arc::new(SshTunnelErrorInner::Inner(e));
+                let _ = error_broadcaster.send(Err(Arc::clone(&e)));
+
+                return Err(e);
+            }
+        };
         let local_port = Arc::new(AtomicU16::new(local_port));
 
+        let sender = error_broadcaster.clone();
         let join_handle = task::spawn(|| format!("ssh_session_{remote_host}:{remote_port}"), {
             let config = self.clone();
             let remote_host = remote_host.to_string();
@@ -87,17 +124,22 @@ impl SshTunnelConfig {
                 loop {
                     time::sleep(CHECK_INTERVAL).await;
                     if let Err(e) = session.check().await {
+                        let e = anyhow::anyhow!(e);
                         warn!("ssh tunnel unhealthy: {}", e.display_with_causes());
                         match connect(&config, &remote_host, remote_port).await {
                             Ok((s, lp)) => {
+                                let _ = sender.send(Err(Arc::new(SshTunnelErrorInner::Inner(e))));
                                 session = s;
-                                local_port.store(lp, Ordering::SeqCst)
+                                local_port.store(lp, Ordering::SeqCst);
+                                let _ = sender.send(Ok(()));
                             }
                             Err(e) => {
+                                let e = anyhow::anyhow!(e);
                                 warn!(
                                     "reconnection to ssh tunnel failed: {}",
                                     e.display_with_causes()
-                                )
+                                );
+                                let _ = sender.send(Err(Arc::new(SshTunnelErrorInner::Inner(e))));
                             }
                         };
                     }
@@ -107,6 +149,7 @@ impl SshTunnelConfig {
 
         Ok(SshTunnelHandle {
             local_port,
+            error_broadcaster,
             _join_handle: join_handle.abort_on_drop(),
         })
     }
@@ -116,6 +159,7 @@ impl SshTunnelConfig {
 #[derive(Debug)]
 pub struct SshTunnelHandle {
     local_port: Arc<AtomicU16>,
+    error_broadcaster: Sender<Result<(), SshTunnelError>>,
     _join_handle: AbortOnDropHandle<()>,
 }
 
@@ -127,6 +171,11 @@ impl SshTunnelHandle {
         // that can resolve to IPv6, and the SSH tunnel is only listening for
         // IPv4 connections.
         SocketAddr::from((Ipv4Addr::LOCALHOST, port))
+    }
+
+    /// Returns a subscription to errors for this ssh tunnel.
+    pub fn subscribe_to_errors(&self) -> SshTunnelErrorSubscription {
+        BroadcastStream::new(self.error_broadcaster.subscribe())
     }
 }
 

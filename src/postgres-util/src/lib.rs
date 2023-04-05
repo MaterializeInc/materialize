@@ -105,7 +105,7 @@ pub enum PostgresError {
     Generic(#[from] anyhow::Error),
     /// Error using ssh.
     #[error(transparent)]
-    Ssh(#[from] openssh::Error),
+    Ssh(#[from] mz_ssh_util::tunnel::SshTunnelError),
     /// Error doing io to setup an ssh connection.
     #[error(transparent)]
     SshIo(#[from] std::io::Error),

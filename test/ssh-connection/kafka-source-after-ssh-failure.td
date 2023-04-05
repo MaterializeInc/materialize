@@ -13,7 +13,11 @@
 # This error comes from the Kafka source's metadata fetch loop.
 > SELECT status FROM mz_internal.mz_source_statuses st
   JOIN mz_sources s ON st.id = s.id
-  WHERE s.name = 'mz_source' AND error LIKE '%Meta data fetch error%'
+  WHERE s.name = 'mz_source' AND error LIKE '%Could not resolve hostname ssh-bastion-host: Name or service not known%'
+stalled
+> SELECT status FROM mz_internal.mz_source_statuses st
+  JOIN mz_sources s ON st.id = s.id
+  WHERE s.name = 'csr_source' AND error LIKE '%Could not resolve hostname ssh-bastion-host: Name or service not known%'
 stalled
 
 # Drop and recreate the source cluster's replica so we can test behavior after
@@ -25,5 +29,5 @@ stalled
 # unable to connect.
 > SELECT status FROM mz_internal.mz_source_statuses st
   JOIN mz_sources s ON st.id = s.id
-  WHERE s.name = 'mz_source' AND error LIKE '%failed creating kafka consumer: creating ssh tunnel: failed to connect to the remote host%'
+  WHERE s.name = 'mz_source' AND error LIKE '%failed creating kafka consumer: creating ssh tunnel: ssh tunnel: failed to connect to the remote host%'
 stalled

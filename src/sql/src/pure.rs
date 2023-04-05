@@ -226,9 +226,10 @@ pub async fn purify_create_source(
                 .topic
                 .ok_or_else(|| sql_err!("KAFKA CONNECTION without TOPIC"))?;
 
-            let consumer = kafka_util::create_consumer(&connection_context, &connection, &topic)
-                .await
-                .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
+            let (consumer, _) =
+                kafka_util::create_consumer(&connection_context, &connection, &topic)
+                    .await
+                    .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
 
             if let Some(offset_type) = offset_type {
                 // Translate `START TIMESTAMP` to a start offset

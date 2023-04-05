@@ -22,7 +22,9 @@ use mz_kafka_util::client::{BrokerRewritingClientContext, MzClientContext};
 use mz_ore::task;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{AstInfo, KafkaConfigOption, KafkaConfigOptionName};
-use mz_storage_client::types::connections::{ConnectionContext, KafkaConnection, StringOrSecret};
+use mz_storage_client::types::connections::{
+    ConnectionContext, KafkaConnection, KafkaConnectionErrorSubscription, StringOrSecret,
+};
 
 use crate::names::Aug;
 use crate::normalize::generate_extracted_config;
@@ -211,8 +213,14 @@ pub async fn create_consumer(
     connection_context: &ConnectionContext,
     kafka_connection: &KafkaConnection,
     topic: &str,
-) -> Result<Arc<BaseConsumer<BrokerRewritingClientContext<MzClientContext>>>, PlanError> {
-    let consumer: BaseConsumer<_> = kafka_connection
+) -> Result<
+    (
+        Arc<BaseConsumer<BrokerRewritingClientContext<MzClientContext>>>,
+        KafkaConnectionErrorSubscription,
+    ),
+    PlanError,
+> {
+    let (consumer, error_stream): (BaseConsumer<_>, _) = kafka_connection
         .create_with_context(connection_context, MzClientContext, &BTreeMap::new())
         .await
         .map_err(|e| sql_err!("{}", e.display_with_causes()))?;
@@ -234,7 +242,7 @@ pub async fn create_consumer(
     .await
     .map_err(|e| sql_err!("{}", e))?
     .map_err(|e| sql_err!("librdkafka: {}", e.display_with_causes()))?;
-    Ok(consumer)
+    Ok((consumer, error_stream))
 }
 
 /// Returns start offsets for the partitions of `topic` and the provided

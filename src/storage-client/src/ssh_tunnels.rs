@@ -172,11 +172,11 @@ impl SshTunnelManager {
 }
 
 /// Identifies a connection to a remote host via an SSH tunnel.
-#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
-struct SshTunnelKey {
-    connection_id: GlobalId,
-    remote_host: String,
-    remote_port: u16,
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
+pub struct SshTunnelKey {
+    pub connection_id: GlobalId,
+    pub remote_host: String,
+    pub remote_port: u16,
 }
 
 /// The state of an SSH tunnel connection.
