@@ -2091,14 +2091,20 @@ impl<'a> Transaction<'a> {
             let collection = typed.from_tx(tx).await?;
             let upper = tx.upper(collection.id).await?;
             let mut batch = collection.make_batch_lower(upper)?;
+            let mut has_negative_diff = false;
             for (k, v, diff) in changes {
                 collection.append_to_batch(&mut batch, k, v, *diff);
+                if *diff < 0 {
+                    has_negative_diff = true;
+                }
             }
             batches.push(batch);
-            migration_retractions.push(Box::pin(async move {
-                let fixed = tx.collection_fix_unconsolidated_rows(collection).await?;
-                Ok(fixed.then_some(collection.id))
-            }));
+            if has_negative_diff {
+                migration_retractions.push(Box::pin(async move {
+                    let fixed = tx.collection_fix_unconsolidated_rows(collection).await?;
+                    Ok(fixed.then_some(collection.id))
+                }));
+            }
             Ok(())
         }
 
