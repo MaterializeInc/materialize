@@ -20,6 +20,9 @@ SET CLUSTER TO c1;
 statement ok
 BEGIN
 
+statement ok
+SET auto_route_introspection_queries = false;
+
 # Transaction will force a read hold on this index.
 query TT rowsort
 SELECT * FROM mz_internal.mz_arrangement_batches_raw;
