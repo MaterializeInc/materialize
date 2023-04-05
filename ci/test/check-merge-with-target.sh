@@ -9,12 +9,15 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# check-merge-with-target.sh — check if merge with target branch succeeds and checks still pass.
+# check-merge-with-target.sh — check if merge with target branch
+# succeeds and checks still pass.
 
 set -euo pipefail
 
 . misc/shlib/shlib.bash
 
+# BUILDKITE_PULL_REQUEST will either contain the number of the PR or
+# the string "false".
 if [[ $BUILDKITE_PULL_REQUEST == "false" ]]; then
     exit 0
 fi
