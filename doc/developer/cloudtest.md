@@ -39,7 +39,7 @@ official [`kubernetes`] Python library to control the Kubernetes cluster.
 
 2. Install [kind], which manages local Kubernetes clusters:
 
-    On MacOs, use:
+    On macOS, use:
 
     ```
     brew install kind
