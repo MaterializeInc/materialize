@@ -26,7 +26,7 @@ This guide walks you through getting started with Materialize, covering:
 * Simulating a failure to see active replication in action
 
 {{< note >}}
-We are rolling out Early Access to the new, cloud-native version of Materialize. [Sign up](https://materialize.com/register/) to get on the list! 🚀
+Ready to get hands-on with Materialize? [Sign up](https://materialize.com/register/) to get started! 🚀
 {{</ note >}}
 
 ## Set up
