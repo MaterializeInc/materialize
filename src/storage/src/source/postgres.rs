@@ -527,7 +527,26 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
 async fn postgres_replication_loop_inner(
     task_info: &mut PostgresTaskInfo,
 ) -> Result<(), ReplicationError> {
-    if task_info.replication_lsn == PgLsn::from(0) {
+    let client = task_info
+        .connection_config
+        .clone()
+        .connect_replication()
+        .await
+        .err_indefinite()?;
+
+    // We provisioned our replication slot when creating the source, so we can be sure it exists here.
+    let res = client
+        .simple_query(&format!(
+            r#"SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name = '{}'"#,
+            task_info.slot
+        ))
+        .await?;
+
+    let slot_lsn: PgLsn = parse_single_row(&res, "confirmed_flush_lsn")?;
+
+    // Our replication task is behind the slot itself (usually this only happens on boot), so use a
+    // temporary slot to "catch up".
+    if task_info.replication_lsn < slot_lsn {
         // Get all the relevant tables for this publication
         let publication_tables = mz_postgres_util::publication_info(
             &task_info.connection_config,
@@ -548,51 +567,25 @@ async fn postgres_replication_loop_inner(
             .await
             .err_indefinite()?;
 
-        // Technically there is TOCTOU problem here but it makes the code easier and if we end
-        // up attempting to create a slot and it already exists we will simply retry
-        // Also, we must check if the slot exists before we start a transaction because creating a
-        // slot must be the first statement in a transaction
-        let res = client
-            .simple_query(&format!(
-                r#"SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name = '{}'"#,
-                task_info.slot
-            ))
-            .await?;
-        let slot_lsn = parse_single_row(&res, "confirmed_flush_lsn");
         client
             .simple_query("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ;")
             .await?;
 
-        let (slot_lsn, snapshot_lsn, temp_slot) = match slot_lsn {
-            Ok(slot_lsn) => {
-                // The main slot already exists which means we can't use it for the snapshot. So
-                // we'll create a temporary replication slot in order to both set the transaction's
-                // snapshot to be a consistent point and also to find out the LSN that the snapshot
-                // is going to run at.
-                //
-                // When this happens we'll most likely be snapshotting at a later LSN than the slot
-                // which we will take care below by rewinding.
-                let temp_slot = uuid::Uuid::new_v4().to_string().replace('-', "");
-                let res = client
-                    .simple_query(&format!(
-                        r#"CREATE_REPLICATION_SLOT {:?} TEMPORARY LOGICAL "pgoutput" USE_SNAPSHOT"#,
-                        temp_slot
-                    ))
-                    .await?;
-                let snapshot_lsn = parse_single_row(&res, "consistent_point")?;
-                (slot_lsn, snapshot_lsn, Some(temp_slot))
-            }
-            Err(_) => {
-                let res = client
-                    .simple_query(&format!(
-                        r#"CREATE_REPLICATION_SLOT {:?} LOGICAL "pgoutput" USE_SNAPSHOT"#,
-                        task_info.slot
-                    ))
-                    .await?;
-                let slot_lsn = parse_single_row(&res, "consistent_point")?;
-                (slot_lsn, slot_lsn, None)
-            }
-        };
+        // The main slot already exists which means we can't use it for the snapshot. So
+        // we'll create a temporary replication slot in order to both set the transaction's
+        // snapshot to be a consistent point and also to find out the LSN that the snapshot
+        // is going to run at.
+        //
+        // When this happens we'll most likely be snapshotting at a later LSN than the slot
+        // which we will take care below by rewinding.
+        let temp_slot = uuid::Uuid::new_v4().to_string().replace('-', "");
+        let res = client
+            .simple_query(&format!(
+                r#"CREATE_REPLICATION_SLOT {:?} TEMPORARY LOGICAL "pgoutput" USE_SNAPSHOT"#,
+                temp_slot
+            ))
+            .await?;
+        let snapshot_lsn: PgLsn = parse_single_row(&res, "consistent_point")?;
 
         let mut stream = Box::pin(
             produce_snapshot(&client, &task_info.metrics, &task_info.source_tables).enumerate(),
@@ -621,11 +614,10 @@ async fn postgres_replication_loop_inner(
                 .await;
         }
 
-        if let Some(temp_slot) = temp_slot {
-            let _ = client
-                .simple_query(&format!("DROP_REPLICATION_SLOT {temp_slot:?}"))
-                .await;
-        }
+        let _ = client
+            .simple_query(&format!("DROP_REPLICATION_SLOT {temp_slot:?}"))
+            .await;
+
         client.simple_query("COMMIT;").await?;
 
         // Drop the stream and the client, to ensure that the future `produce_replication` don't
