@@ -30,6 +30,7 @@ use rdkafka::{ClientContext, Message, TopicPartitionList};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
+use timely::order::PartialOrder;
 use tokio::sync::Notify;
 use tracing::{error, info, trace, warn};
 
@@ -449,6 +450,7 @@ impl SourceRender for KafkaSourceConnection {
                             if let Some((msg, time, diff)) = reader.handle_message(message, ts) {
                                 let pid = time.partition().unwrap();
                                 let part_cap = &reader.partition_capabilities[pid];
+                                assert!(PartialOrder::less_equal(part_cap.time(), &time));
                                 data_output.give(part_cap, (Ok(msg), time, diff)).await;
                             }
                         }
@@ -469,6 +471,7 @@ impl SourceRender for KafkaSourceConnection {
                             Ok(Some((msg, time, diff))) => {
                                 let pid = time.partition().unwrap();
                                 let part_cap = &reader.partition_capabilities[pid];
+                                assert!(PartialOrder::less_equal(part_cap.time(), &time));
                                 data_output.give(part_cap, (Ok(msg), time, diff)).await;
                             }
                             Ok(None) => continue,
