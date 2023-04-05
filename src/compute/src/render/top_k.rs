@@ -98,6 +98,18 @@ where
                         );
                     }
 
+                    let debug_name = self.debug_name.to_string();
+                    let (collection, errs) = collection.ensure_monotonic(move |data, diff| {
+                        warn!(
+                            "[customer-data] MonotonicTopK expected monotonic input but \
+                            received {data:?} with diff {diff:?} in dataflow {debug_name}"
+                        );
+                        error!("Non-monotonic input to MonotonicTopK");
+                        let m = "tried to build monotonic top-k on non-monotonic input".to_string();
+                        (DataflowError::from(EvalError::Internal(m)), 1)
+                    });
+                    err_collection = err_collection.concat(&errs);
+
                     // For monotonic inputs, we are able to thin the input relation in two stages:
                     // 1. First, we can do an intra-timestamp thinning which has the advantage of
                     //    being computed in a streaming fashion, even for the initial snapshot.

@@ -66,15 +66,20 @@ contains:Invalid data in source, saw non-positive accumulation
 
 # verify that some reduction in a collation plan catches a negative
 # multiplicity.
-! SELECT
-    data,
-    COUNT(DISTINCT data),
-    STRING_AGG(data::text || '1',  ','),
-    MIN(data),
-    MAX(DISTINCT data),
-    SUM(data),
-    STRING_AGG(data::text || '2',  ',')
-  FROM data
-  GROUP BY data
+> CREATE VIEW collation AS
+  SELECT
+      data,
+      COUNT(DISTINCT data),
+      STRING_AGG(data::text || '1',  ',') AS data_1,
+      MIN(data),
+      MAX(DISTINCT data),
+      SUM(data),
+      STRING_AGG(data::text || '2',  ',') AS data_2
+    FROM data
+    GROUP BY data;
+
+> CREATE DEFAULT INDEX ON collation;
+
+! SELECT * FROM collation;
 # Case-insensitive match for both 'Non' and 'non'
 contains:on-positive accumulation
