@@ -27,6 +27,25 @@ pub enum StatsFn {
     Custom(fn(&DynColumnRef) -> Result<Box<dyn DynStats>, String>),
 }
 
+/// Aggregate statistics about a column of type `T`.
+pub trait ColumnStats<T: Data>: DynStats {
+    /// An inclusive lower bound on the data contained in the column, if known.
+    ///
+    /// This will often be a tight bound, but it's not guaranteed. Persist
+    /// reserves the right to (for example) invent smaller bounds for long byte
+    /// strings. SUBTLE: This means that this exact value may not be present in
+    /// the column.
+    ///
+    /// Similarly, if the column is empty, this will contain `T: Default`.
+    /// Emptiness will be indicated in statistics higher up (i.e.
+    /// [StructStats]).
+    fn lower<'a>(&'a self) -> Option<T::Ref<'a>>;
+    /// Same as [Self::lower] but an (also inclusive) upper bound.
+    fn upper<'a>(&'a self) -> Option<T::Ref<'a>>;
+    /// The number of `None`s if this column is optional or 0 if it isn't.
+    fn none_count(&self) -> usize;
+}
+
 /// Type-erased aggregate statistics about a column of data.
 ///
 /// TODO(mfp): It feels like we haven't hit a global maximum here, both with
@@ -203,10 +222,11 @@ mod impls {
     use arrow2::types::NativeType;
     use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
+    use crate::columnar::Data;
     use crate::stats::{
-        proto_bytes_stats, proto_dyn_stats, proto_primitive_stats, BytesStats, DynStats, JsonStats,
-        OptionStats, PrimitiveStats, ProtoBytesStats, ProtoDynStats, ProtoJsonStats,
-        ProtoOptionStats, ProtoPrimitiveStats, ProtoStructStats, StructStats,
+        proto_bytes_stats, proto_dyn_stats, proto_primitive_stats, BytesStats, ColumnStats,
+        DynStats, JsonStats, OptionStats, PrimitiveStats, ProtoBytesStats, ProtoDynStats,
+        ProtoJsonStats, ProtoOptionStats, ProtoPrimitiveStats, ProtoStructStats, StructStats,
     };
 
     impl<T> DynStats for PrimitiveStats<T>
@@ -261,6 +281,78 @@ mod impls {
                 option: None,
                 kind: Some(proto_dyn_stats::Kind::Bytes(RustType::into_proto(self))),
             }
+        }
+    }
+
+    macro_rules! stats_primitive {
+        ($data:ty, $ref:ident) => {
+            impl ColumnStats<$data> for PrimitiveStats<$data> {
+                fn lower<'a>(&'a self) -> Option<<$data as Data>::Ref<'a>> {
+                    Some(self.lower.$ref())
+                }
+                fn upper<'a>(&'a self) -> Option<<$data as Data>::Ref<'a>> {
+                    Some(self.upper.$ref())
+                }
+                fn none_count(&self) -> usize {
+                    0
+                }
+            }
+
+            impl ColumnStats<Option<$data>> for OptionStats<PrimitiveStats<$data>> {
+                fn lower<'a>(&'a self) -> Option<<Option<$data> as Data>::Ref<'a>> {
+                    Some(self.some.lower())
+                }
+                fn upper<'a>(&'a self) -> Option<<Option<$data> as Data>::Ref<'a>> {
+                    Some(self.some.upper())
+                }
+                fn none_count(&self) -> usize {
+                    self.none
+                }
+            }
+        };
+    }
+
+    stats_primitive!(bool, clone);
+    stats_primitive!(u8, clone);
+    stats_primitive!(u16, clone);
+    stats_primitive!(u32, clone);
+    stats_primitive!(u64, clone);
+    stats_primitive!(i8, clone);
+    stats_primitive!(i16, clone);
+    stats_primitive!(i32, clone);
+    stats_primitive!(i64, clone);
+    stats_primitive!(f32, clone);
+    stats_primitive!(f64, clone);
+    stats_primitive!(Vec<u8>, as_slice);
+    stats_primitive!(String, as_str);
+
+    impl ColumnStats<Vec<u8>> for BytesStats {
+        fn lower<'a>(&'a self) -> Option<<Vec<u8> as Data>::Ref<'a>> {
+            match self {
+                BytesStats::Primitive(x) => x.lower(),
+                BytesStats::Json(_) => None,
+            }
+        }
+        fn upper<'a>(&'a self) -> Option<<Vec<u8> as Data>::Ref<'a>> {
+            match self {
+                BytesStats::Primitive(x) => x.upper(),
+                BytesStats::Json(_) => None,
+            }
+        }
+        fn none_count(&self) -> usize {
+            0
+        }
+    }
+
+    impl ColumnStats<Option<Vec<u8>>> for OptionStats<BytesStats> {
+        fn lower<'a>(&'a self) -> Option<<Option<Vec<u8>> as Data>::Ref<'a>> {
+            Some(self.some.lower())
+        }
+        fn upper<'a>(&'a self) -> Option<<Option<Vec<u8>> as Data>::Ref<'a>> {
+            Some(self.some.upper())
+        }
+        fn none_count(&self) -> usize {
+            self.none
         }
     }
 
