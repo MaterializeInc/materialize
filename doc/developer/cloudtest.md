@@ -20,6 +20,14 @@ official [`kubernetes`] Python library to control the Kubernetes cluster.
 
 1. Install [kubectl], the official Kubernetes command-line tool:
 
+    On MacOs, use [Homebrew] to install it:
+
+    ```
+    brew install kubectl
+    ```
+
+    On Linux, use:
+
     ```
     curl -fL https://dl.k8s.io/release/v1.24.3/bin/linux/amd64/kubectl > kubectl
     chmod +x kubectl
@@ -30,6 +38,14 @@ official [`kubernetes`] Python library to control the Kubernetes cluster.
     for additional installation options.
 
 2. Install [kind], which manages local Kubernetes clusters:
+
+    On MacOs, use:
+
+    ```
+    brew install kind
+    ```
+
+    On Linux, use:
 
     ```
     curl -fL https://kind.sigs.k8s.io/dl/v0.14.0/kind-linux-amd64 > kind
@@ -212,6 +228,7 @@ mz.environmentd.rbac_api()
 return API handles that can then be used with the official [`kubernetes`] Python
 module.
 
+[Homebrew]: https://brew.sh
 [`kubernetes`]: https://github.com/kubernetes-client/python
 [k9s]: https://k9scli.io
 [kind-installation]: https://kind.sigs.k8s.io/docs/user/quick-start/#installing-with-a-package-manager
