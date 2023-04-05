@@ -222,15 +222,19 @@ data_to_persist_primitive!(f64, unwrap_float64);
 data_to_persist_primitive!(Vec<u8>, unwrap_bytes);
 data_to_persist_primitive!(String, unwrap_str);
 
-/// A specification for which StatsFn to use with DatumToPersist impls that
-/// encode and decode via ProtoDatum.
-trait ProtoDatumStats {
-    const STATS_FN: StatsFn;
-}
+/// An implementation of [DatumToPersist] that maps to/from all non-nullable
+/// Datum types using the ProtoDatum representation.
+#[derive(Debug)]
+pub struct ProtoDatumToPersist;
 
-impl<T: ProtoDatumStats> DatumToPersist for T {
+impl DatumToPersist for ProtoDatumToPersist {
     type Data = Vec<u8>;
-    const STATS_FN: StatsFn = T::STATS_FN;
+    const STATS_FN: StatsFn =
+        StatsFn::Custom(|col: &DynColumnRef| -> Result<Box<dyn DynStats>, String> {
+            let (lower, upper, null_count) = proto_datum_min_max_nulls(col.downcast::<Vec<u8>>()?);
+            assert_eq!(null_count, 0);
+            Ok(Box::new(PrimitiveStats { lower, upper }))
+        });
     fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
         let proto = ProtoDatum::from(datum);
         let buf = proto.encode_to_vec();
@@ -244,26 +248,13 @@ impl<T: ProtoDatumStats> DatumToPersist for T {
     }
 }
 
-/// An implementation of [DatumToPersist] that maps to/from all non-nullable
-/// Datum types using the ProtoDatum representation.
-#[derive(Debug)]
-pub struct ProtoDatumToPersist;
-
-impl ProtoDatumStats for ProtoDatumToPersist {
-    const STATS_FN: StatsFn =
-        StatsFn::Custom(|col: &DynColumnRef| -> Result<Box<dyn DynStats>, String> {
-            let (lower, upper, null_count) = proto_datum_min_max_nulls(col.downcast::<Vec<u8>>()?);
-            assert_eq!(null_count, 0);
-            Ok(Box::new(PrimitiveStats { lower, upper }))
-        });
-}
-
 /// An implementation of [DatumToPersist] that maps to/from all nullable Datum
 /// types using the ProtoDatum representation.
 #[derive(Debug)]
 pub struct NullableProtoDatumToPersist;
 
-impl ProtoDatumStats for NullableProtoDatumToPersist {
+impl DatumToPersist for NullableProtoDatumToPersist {
+    type Data = Option<Vec<u8>>;
     const STATS_FN: StatsFn =
         StatsFn::Custom(|col: &DynColumnRef| -> Result<Box<dyn DynStats>, String> {
             let (lower, upper, null_count) = proto_datum_min_max_nulls(col.downcast::<Vec<u8>>()?);
@@ -272,26 +263,58 @@ impl ProtoDatumStats for NullableProtoDatumToPersist {
                 some: PrimitiveStats { lower, upper },
             }))
         });
+    fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
+        if datum == Datum::Null {
+            ColumnPush::<Self::Data>::push(col, None);
+        } else {
+            let proto = ProtoDatum::from(datum);
+            let buf = proto.encode_to_vec();
+            ColumnPush::<Self::Data>::push(col, Some(&buf));
+        }
+    }
+    fn decode(col: &<Self::Data as Data>::Col, idx: usize, row: &mut RowPacker) {
+        let Some(buf) = ColumnGet::<Self::Data>::get(col, idx) else {
+            row.push(Datum::Null);
+            return;
+        };
+        let proto = ProtoDatum::decode(buf).expect("col should be valid ProtoDatum");
+        row.try_push_proto(&proto)
+            .expect("ProtoDatum should be valid Datum");
+    }
 }
 
-impl ProtoDatumStats for Jsonb {
+impl DatumToPersist for Jsonb {
+    type Data = <ProtoDatumToPersist as DatumToPersist>::Data;
     const STATS_FN: StatsFn =
         StatsFn::Custom(|col: &DynColumnRef| -> Result<Box<dyn DynStats>, String> {
             let (stats, null_count) = jsonb_stats_nulls(col.downcast::<Vec<u8>>()?)?;
             assert_eq!(null_count, 0);
             Ok(Box::new(BytesStats::Json(stats)))
         });
+    fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
+        ProtoDatumToPersist::encode(col, datum)
+    }
+    fn decode(col: &<Self::Data as Data>::Col, idx: usize, row: &mut RowPacker) {
+        ProtoDatumToPersist::decode(col, idx, row)
+    }
 }
 
-impl ProtoDatumStats for Option<Jsonb> {
+impl DatumToPersist for Option<Jsonb> {
+    type Data = <NullableProtoDatumToPersist as DatumToPersist>::Data;
     const STATS_FN: StatsFn =
         StatsFn::Custom(|col: &DynColumnRef| -> Result<Box<dyn DynStats>, String> {
-            let (stats, null_count) = jsonb_stats_nulls(col.downcast::<Vec<u8>>()?)?;
+            let (stats, null_count) = jsonb_stats_nulls(col.downcast::<Option<Vec<u8>>>()?)?;
             Ok(Box::new(OptionStats {
                 some: BytesStats::Json(stats),
                 none: null_count,
             }))
         });
+    fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
+        NullableProtoDatumToPersist::encode(col, datum)
+    }
+    fn decode(col: &<Self::Data as Data>::Col, idx: usize, row: &mut RowPacker) {
+        NullableProtoDatumToPersist::decode(col, idx, row)
+    }
 }
 
 /// A helper for adapting mz's [Datum] to persist's columnar [Data].

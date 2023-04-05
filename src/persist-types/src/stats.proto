@@ -78,6 +78,7 @@ message ProtoJsonStats {
 
 message ProtoBytesStats {
     oneof kind {
+        // TODO(mfp): Pull bytes out of ProtoPrimitiveStats and inline it here?
         ProtoPrimitiveStats primitive = 1;
         ProtoJsonStats json = 2;
     }
