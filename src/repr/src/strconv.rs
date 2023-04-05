@@ -34,7 +34,6 @@ use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, 
 use dec::OrderedDecimal;
 use fast_float::FastFloat;
 use mz_lowertest::MzReflect;
-use mz_ore::display::DisplayExt;
 use mz_ore::result::ResultExt;
 use num_traits::Float as NumFloat;
 use once_cell::sync::Lazy;
@@ -45,6 +44,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use mz_ore::cast::ReinterpretCast;
+use mz_ore::error::ErrorExt;
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::lex::LexBuf;
 use mz_ore::str::StrExt;
@@ -616,7 +616,7 @@ pub fn parse_bytes(s: &str) -> Result<Vec<u8>, ParseError> {
     // [1]: https://www.postgresql.org/docs/current/datatype-binary.html#id-1.5.7.12.10
     if let Some(remainder) = s.strip_prefix(r"\x") {
         parse_bytes_hex(remainder).map_err(|e| {
-            ParseError::invalid_input_syntax("bytea", s).with_details(e.to_string_alt())
+            ParseError::invalid_input_syntax("bytea", s).with_details(e.to_string_with_causes())
         })
     } else {
         parse_bytes_traditional(s)
@@ -1796,6 +1796,7 @@ pub enum ParseHexError {
     InvalidHexDigit(char),
     OddLength,
 }
+impl Error for ParseHexError {}
 
 impl fmt::Display for ParseHexError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

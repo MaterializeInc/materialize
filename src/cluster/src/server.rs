@@ -24,6 +24,7 @@ use tracing::{info, warn};
 
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_ore::cast::CastFrom;
+use mz_ore::error::ErrorExt;
 use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::cache::PersistClientCache;
@@ -226,7 +227,7 @@ where
                     Self::build_timely(worker_config, config, epoch, persist_clients, handle).await;
                 match build_timely_result {
                     Err(e) => {
-                        warn!("timely initialization failed: {e:#}");
+                        warn!("timely initialization failed: {}", e.display_with_causes());
                         return Err(e);
                     }
                     Ok(ok) => ok,

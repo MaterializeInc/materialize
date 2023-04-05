@@ -116,6 +116,7 @@ use mz_orchestrator::{
     ServiceProcessMetrics, ServiceStatus,
 };
 use mz_ore::cast::{CastFrom, ReinterpretCast, TryCastFrom};
+use mz_ore::error::ErrorExt;
 use mz_ore::netio::UnixSocketAddr;
 use mz_ore::result::ResultExt;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
@@ -609,8 +610,9 @@ impl NamespacedProcessOrchestrator {
         let contents = serde_json::to_vec_pretty(&static_configs).expect("valid json");
         if let Err(e) = fs::write(&path, &contents).await {
             warn!(
-                "{}: failed to write prometheus service discovery file: {e:#}",
-                self.namespace
+                "{}: failed to write prometheus service discovery file: {}",
+                self.namespace,
+                e.display_with_causes()
             );
         }
     }
@@ -746,7 +748,7 @@ async fn tcp_proxy(
             }
             res = conns.try_next() => {
                 if let Err(e) = res {
-                    warn!("{name}: tcp proxy connection failed: {e:#}");
+                    warn!("{name}: tcp proxy connection failed: {}", e.display_with_causes());
                 }
             }
         }

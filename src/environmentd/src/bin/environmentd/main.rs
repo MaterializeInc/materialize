@@ -121,6 +121,7 @@ use mz_orchestrator_process::{
 };
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs, TracingOrchestrator};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
+use mz_ore::error::ErrorExt;
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -526,7 +527,7 @@ fn main() {
         enable_version_flag: true,
     });
     if let Err(err) = run(args) {
-        eprintln!("environmentd: {:#}", err);
+        eprintln!("environmentd: {}", err.display_with_causes());
         process::exit(1);
     }
 }

@@ -317,7 +317,9 @@ impl ShouldHalt for StorageError {
             StorageError::SourceIdReused(_)
             | StorageError::SinkIdReused(_)
             | StorageError::IdentifierMissing(_)
-            | StorageError::ClientError(_)
+            | StorageError::IngestionInstanceMissing { .. }
+            | StorageError::ExportInstanceMissing { .. }
+            | StorageError::Generic(_)
             | StorageError::DataflowError(_) => false,
             StorageError::IOError(e) => e.should_halt(),
         }

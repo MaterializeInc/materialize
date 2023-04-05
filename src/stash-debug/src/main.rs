@@ -100,6 +100,7 @@ use mz_adapter::{
 use mz_build_info::{build_info, BuildInfo};
 use mz_ore::{
     cli::{self, CliConfig},
+    error::ErrorExt,
     metrics::MetricsRegistry,
     now::SYSTEM_TIME,
 };
@@ -146,7 +147,7 @@ async fn main() {
         enable_version_flag: true,
     });
     if let Err(err) = run(args).await {
-        eprintln!("stash: {:#}", err);
+        eprintln!("stash: {}", err.display_with_causes());
         process::exit(1);
     }
 }

@@ -45,6 +45,7 @@ use mz_interchange::json::JsonEncoder;
 use mz_kafka_util::client::{BrokerRewritingClientContext, MzClientContext};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::error::ErrorExt;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::task;
@@ -942,7 +943,7 @@ impl KafkaSinkState {
                         });
 
                 self.update_status(SinkStatus::Stalled {
-                    error: format!("{:#}", error),
+                    error: format!("{}", error.display_with_causes()),
                     hint,
                 })
                 .await;

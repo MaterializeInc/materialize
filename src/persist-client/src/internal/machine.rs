@@ -22,6 +22,7 @@ use timely::PartialOrder;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
+use mz_ore::error::ErrorExt;
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
 use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
@@ -935,17 +936,17 @@ where
             Err(err) => {
                 if retry.attempt() >= INFO_MIN_ATTEMPTS {
                     info!(
-                        "external operation {} failed, retrying in {:?}: {:#}",
+                        "external operation {} failed, retrying in {:?}: {}",
                         metrics.name,
                         retry.next_sleep(),
-                        err
+                        err.display_with_causes()
                     );
                 } else {
                     debug!(
-                        "external operation {} failed, retrying in {:?}: {:#}",
+                        "external operation {} failed, retrying in {:?}: {}",
                         metrics.name,
                         retry.next_sleep(),
-                        err
+                        err.display_with_causes()
                     );
                 }
                 retry = retry.sleep().await;
@@ -984,10 +985,10 @@ where
                 // helpful. As a result, this intentionally ignores
                 // INFO_MIN_ATTEMPTS and always logs at debug.
                 debug!(
-                    "external operation {} failed, retrying in {:?}: {:#}",
+                    "external operation {} failed, retrying in {:?}: {}",
                     metrics.name,
                     retry.next_sleep(),
-                    err
+                    err.display_with_causes()
                 );
                 retry = retry.sleep().await;
                 continue;

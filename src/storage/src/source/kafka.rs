@@ -34,6 +34,7 @@ use tokio::sync::Notify;
 use tracing::{error, info, trace, warn};
 
 use mz_kafka_util::client::{BrokerRewritingClientContext, MzClientContext};
+use mz_ore::error::ErrorExt;
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::{adt::jsonb::Jsonb, Diff, GlobalId};
 use mz_storage_client::types::connections::{ConnectionContext, StringOrSecret};
@@ -197,7 +198,10 @@ impl SourceRender for KafkaSourceConnection {
                 Err(e) => {
                     let update = HealthStatusUpdate {
                         update: HealthStatus::StalledWithError {
-                            error: format!("failed creating kafka consumer: {e:#}"),
+                            error: format!(
+                                "failed creating kafka consumer: {}",
+                                e.display_with_causes()
+                            ),
                             hint: None,
                         },
                         should_halt: true,
@@ -327,7 +331,7 @@ impl SourceRender for KafkaSourceConnection {
                                 Err(e) => {
                                     *status_report.lock().unwrap() =
                                         Some(HealthStatus::StalledWithError {
-                                            error: format!("{:#}", e),
+                                            error: format!("{}", e.display_with_causes()),
                                             hint: None,
                                         });
                                     thread::park_timeout(metadata_refresh_frequency);

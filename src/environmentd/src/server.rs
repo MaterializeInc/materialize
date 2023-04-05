@@ -23,6 +23,7 @@ use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 use tracing::{debug, error};
 
+use mz_ore::error::ErrorExt;
 use mz_ore::task;
 
 /// TCP keepalive settings. The idle time and interval match CockroachDB [0].
@@ -123,7 +124,11 @@ where
         let fut = server.handle_connection(conn);
         task::spawn(|| &task_name, async {
             if let Err(e) = fut.await {
-                debug!("error handling connection in {}: {:#}", S::NAME, e);
+                debug!(
+                    "error handling connection in {}: {}",
+                    S::NAME,
+                    e.display_with_causes()
+                );
             }
         });
     }

@@ -86,6 +86,7 @@
 use mz_build_info::{build_info, BuildInfo};
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
+use mz_ore::error::ErrorExt;
 use mz_ore::task::RuntimeExt;
 use tokio::runtime::Handle;
 use tracing::{info_span, Instrument};
@@ -164,7 +165,7 @@ fn main() {
     };
 
     if let Err(err) = res {
-        eprintln!("error: {:#}", err);
+        eprintln!("error: {}", err.display_with_causes());
         std::process::exit(1);
     }
 }

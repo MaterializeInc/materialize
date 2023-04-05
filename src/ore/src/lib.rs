@@ -102,6 +102,7 @@ pub mod codegen;
 pub mod collections;
 pub mod display;
 pub mod env;
+pub mod error;
 pub mod fmt;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
 #[cfg(feature = "async")]

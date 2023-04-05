@@ -16,13 +16,14 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use openssh::{ForwardType, Session};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tokio::time;
 use tracing::{info, warn};
 
+use mz_ore::error::ErrorExt;
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 
 use crate::keys::SshKeyPair;
@@ -86,14 +87,17 @@ impl SshTunnelConfig {
                 loop {
                     time::sleep(CHECK_INTERVAL).await;
                     if let Err(e) = session.check().await {
-                        warn!("ssh tunnel unhealthy: {:#}", anyhow!(e));
+                        warn!("ssh tunnel unhealthy: {}", e.display_with_causes());
                         match connect(&config, &remote_host, remote_port).await {
                             Ok((s, lp)) => {
                                 session = s;
                                 local_port.store(lp, Ordering::SeqCst)
                             }
                             Err(e) => {
-                                warn!("reconnection to ssh tunnel failed: {:#}", anyhow!(e))
+                                warn!(
+                                    "reconnection to ssh tunnel failed: {}",
+                                    e.display_with_causes()
+                                )
                             }
                         };
                     }
@@ -189,8 +193,8 @@ async fn connect(
                     info!("port {local_port} already in use; testing another port");
                 }
                 _ => {
-                    warn!("ssh connection failed: {err:#}");
-                    bail!("failed to open SSH tunnel: {err:#}")
+                    warn!("ssh connection failed: {}", err.display_with_causes());
+                    bail!("failed to open SSH tunnel: {}", err.display_with_causes())
                 }
             },
         };

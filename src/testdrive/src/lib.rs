@@ -86,7 +86,7 @@ use std::path::Path;
 use action::Run;
 use anyhow::{anyhow, Context};
 
-use mz_ore::display::DisplayExt;
+use mz_ore::error::ErrorExt;
 
 use self::action::ControlFlow;
 use self::error::{ErrorLocation, PosError};
@@ -198,7 +198,7 @@ pub(crate) async fn run_line_reader(
     if config.reset {
         drop(state);
         if let Err(e) = state_cleanup.await {
-            errors.push(anyhow!("cleanup failed: error: {}", e.to_string_alt()).into());
+            errors.push(anyhow!("cleanup failed: error: {}", e.to_string_with_causes()).into());
         }
     }
 

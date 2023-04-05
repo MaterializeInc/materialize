@@ -34,7 +34,7 @@ use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
 use url::Url;
 
-use mz_ore::display::DisplayExt;
+use mz_ore::error::ErrorExt;
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_postgres_util::make_tls;
@@ -424,7 +424,10 @@ impl State {
             bail!(
                 "deleting Kafka topics: {} errors: {}",
                 errors.len(),
-                errors.into_iter().map(|e| e.to_string_alt()).join("\n")
+                errors
+                    .into_iter()
+                    .map(|e| e.to_string_with_causes())
+                    .join("\n")
             );
         }
     }

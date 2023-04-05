@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use mz_interchange::avro::Decoder;
+use mz_ore::error::ErrorExt;
 use mz_repr::Row;
 use mz_storage_client::types::errors::DecodeErrorKind;
 
@@ -37,8 +38,8 @@ impl AvroDecoderState {
                 Ok(Some(row))
             }
             Err(err) => Err(DecodeErrorKind::Text(format!(
-                "avro deserialization error: {:#}",
-                err
+                "avro deserialization error: {}",
+                err.display_with_causes()
             ))),
         }
     }
