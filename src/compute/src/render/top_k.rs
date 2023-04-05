@@ -178,7 +178,7 @@ where
             offset: usize,
             limit: Option<usize>,
             arity: usize,
-            _expected_group_size: Option<u64>,
+            expected_group_size: Option<u64>,
             debug_name: &str,
         ) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
         where
@@ -215,6 +215,12 @@ where
                 for log_modulus in
                     [60, 56, 52, 48, 44, 40, 36, 32, 28, 24, 20, 16, 12, 8, 4u64].iter()
                 {
+                    // Avoid building stages larger than the expected group size, if we were given
+                    // that hint.
+                    if expected_group_size.map_or(false, |g| g <= 1 << log_modulus) {
+                        continue;
+                    }
+
                     // here we do not apply `offset`, but instead restrict ourself with a limit
                     // that includes the offset. We cannot apply `offset` until we perform the
                     // final, complete reduction.
