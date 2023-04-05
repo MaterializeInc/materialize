@@ -74,7 +74,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.67.0"
+rust-version = "1.68.2"
 
 [profile.dev]
 # TODO(gusywnn|benesch): remove this when incremental ice's are improved
