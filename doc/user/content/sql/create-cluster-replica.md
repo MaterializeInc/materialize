@@ -47,6 +47,11 @@ _replica_name_ | A name for this replica.
 
 {{% replica-options %}}
 
+{{< note >}}
+If you do not specify an availability zone,  Materialize should automatically assign the availability zone with the least existing replicas. To view all replica availability zones, use
+the [`show mz_cluster_replicas`](/docs/sql/system-catalog/mz_catalog/#mz_cluster_replicas) command.
+{{< /note >}}
+
 ## Details
 
 ### Sizes
