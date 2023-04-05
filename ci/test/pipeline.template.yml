@@ -38,6 +38,17 @@ steps:
     agents:
       queue: builder-linux-aarch64
 
+  - id: check-merge-with-target
+    label: Merge skew cargo check
+    command: bin/ci-builder run stable ci/test/check-merge-with-target.sh
+    inputs:
+      - Cargo.lock
+      - "**/Cargo.toml"
+      - "**/*.rs"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+
   - id: devel-docker-tags
     label: Tag development docker images
     command: bin/ci-builder run stable bin/pyactivate -m ci.test.dev_tag
