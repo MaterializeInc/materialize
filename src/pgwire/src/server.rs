@@ -19,7 +19,7 @@ use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, Interest, ReadBuf, R
 use tokio_openssl::SslStream;
 use tracing::trace;
 
-use mz_frontegg_auth::FronteggAuthentication;
+use mz_frontegg_auth::Authentication as FronteggAuthentication;
 use mz_ore::netio::AsyncReady;
 
 use crate::codec::{self, FramedConn, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION};

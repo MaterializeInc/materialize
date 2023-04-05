@@ -98,7 +98,7 @@ use tower_http::cors::AllowOrigin;
 
 use mz_controller::ControllerConfig;
 use mz_environmentd::{TlsMode, WebSocketAuth, WebSocketResponse};
-use mz_frontegg_auth::FronteggAuthentication;
+use mz_frontegg_auth::Authentication as FronteggAuthentication;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};

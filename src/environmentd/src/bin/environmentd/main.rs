@@ -111,7 +111,9 @@ use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
 use mz_environmentd::{TlsConfig, TlsMode, BUILD_INFO};
-use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
+use mz_frontegg_auth::{
+    Authentication as FronteggAuthentication, AuthenticationConfig as FronteggConfig,
+};
 use mz_orchestrator::Orchestrator;
 use mz_orchestrator_kubernetes::{
     KubernetesImagePullPolicy, KubernetesOrchestrator, KubernetesOrchestratorConfig,
@@ -607,14 +609,17 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     ) {
         (None, None, None, None) => None,
         (Some(tenant_id), Some(admin_api_token_url), Some(jwk), Some(admin_role)) => {
-            Some(FronteggAuthentication::new(FronteggConfig {
-                admin_api_token_url,
-                decoding_key: DecodingKey::from_rsa_pem(jwk.as_bytes())?,
-                tenant_id,
-                now: mz_ore::now::SYSTEM_TIME.clone(),
-                refresh_before_secs: 60,
-                admin_role,
-            }))
+            Some(FronteggAuthentication::new(
+                FronteggConfig {
+                    admin_api_token_url,
+                    decoding_key: DecodingKey::from_rsa_pem(jwk.as_bytes())?,
+                    tenant_id,
+                    now: mz_ore::now::SYSTEM_TIME.clone(),
+                    refresh_before_secs: 60,
+                    admin_role,
+                },
+                mz_frontegg_auth::Client::environmentd_default(),
+            ))
         }
         _ => unreachable!("clap enforced"),
     };
