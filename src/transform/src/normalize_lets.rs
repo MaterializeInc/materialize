@@ -207,7 +207,8 @@ mod support {
 
             // Optimistically initialize the types of all Ids to `bottom` (except if there would be
             // too many keys).
-            for (id, value) in ids.iter().zip_eq(values.iter()) {
+            for (id, value) in ids.iter().zip_eq(values.iter_mut()) {
+                update_gets_with_given_types(value, &types)?;
                 let mut typ = value.typ();
                 // For nullability, `bottom` is false.
                 for col_type in typ.column_types.iter_mut() {
@@ -233,14 +234,13 @@ mod support {
                 let shadowed = types.insert(id.clone(), typ);
                 assert!(shadowed.is_none());
             }
-
-            // todo: comment
-            update_gets_with_given_types(values, body, &types)?;
+            update_gets_with_given_types(body, &types)?;
 
             // todo: comment
             loop {
                 let mut changed = false;
-                for (id, value) in ids.iter().zip_eq(values.iter()) {
+                for (id, value) in ids.iter().zip_eq(values.iter_mut()) {
+                    update_gets_with_given_types(value, &types)?;
                     let typ = types.get_mut(id).unwrap();
                     // Save it for fixpoint check
                     let old_typ = typ.clone();
@@ -257,7 +257,6 @@ mod support {
                         col_typ.nullable |= new_col_typ.nullable;
                     }
 
-
                     //assert!(cur_typ.keys.iter().all(|key| typ.keys.contains(key)));
                     if !cur_typ.keys.iter().all(|key| typ.keys.contains(key)) {
                         println!("###");
@@ -267,7 +266,6 @@ mod support {
                         println!("cur_typ: {:?}\n", cur_typ);
                         println!();
                     }
-
 
                     // Lattice join is intersection here.
                     typ.keys = typ
@@ -286,7 +284,7 @@ mod support {
                 if !changed {
                     break;
                 }
-                update_gets_with_given_types(values, body, &types)?;
+                update_gets_with_given_types(body, &types)?;
                 //todo: guardrail
             }
         } else {
@@ -295,20 +293,8 @@ mod support {
         Ok(())
     }
 
-    /// Applies `types` to all `Get` nodes in `values` and `body`.
-    fn update_gets_with_given_types(
-        values: &mut Vec<MirRelationExpr>,
-        body: &mut MirRelationExpr,
-        types: &BTreeMap<LocalId, mz_repr::RelationType>,
-    ) -> Result<(), crate::TransformError> {
-        for expr in values {
-            update_gets_with_given_types_inner(expr, types)?;
-        }
-        update_gets_with_given_types_inner(body, types)
-    }
-
     /// Applies `types` to all `Get` nodes in `expr`.
-    fn update_gets_with_given_types_inner(
+    fn update_gets_with_given_types(
         expr: &mut MirRelationExpr,
         types: &BTreeMap<LocalId, mz_repr::RelationType>,
     ) -> Result<(), crate::TransformError> {

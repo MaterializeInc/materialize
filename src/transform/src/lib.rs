@@ -386,7 +386,7 @@ impl Transform for FuseAndCollapse {
         relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), TransformError> {
-        let recursive = relation.is_recursive();
+        let recursive = relation.has_let_rec();
 
         for transform in self.transforms.iter() {
             if transform.recursion_safe() || !recursive {
