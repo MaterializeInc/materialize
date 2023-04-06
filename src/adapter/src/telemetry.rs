@@ -63,13 +63,12 @@ impl SegmentClientExt for mz_segment::Client {
                 "cloud_provider_region".into(),
                 json!(environment_id.cloud_provider_region()),
             );
+            properties.insert("application_name".into(), json!(app_name));
         }
-        let app = json!({ "name": app_name });
 
         // "Context" is a defined dictionary of extra information related to a datapoint. Please
         // consult the docs before adding anything here: https://segment.com/docs/connections/spec/common/#context
         let context = json!({
-            "app": app,
             "group_id": environment_id.organization_id()
         });
 
