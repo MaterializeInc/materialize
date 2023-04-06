@@ -126,7 +126,7 @@ pub(crate) async fn migrate(
 // they were not used to generate the DDL for the subsources and it is now too
 // late to apply them.
 //
-// TODO(migration): delete in version v.51 (released in v0.49 + 1 additional
+// TODO(migration): delete in version v.52 (released in v0.50 + 1 additional
 // release)
 async fn pg_source_table_metadata_rewrite(
     catalog: &ConnCatalog<'_>,
@@ -212,8 +212,9 @@ async fn pg_source_table_metadata_rewrite(
 
         let publication = match publication {
             mz_sql::ast::WithOptionValue::Value(mz_sql::ast::Value::String(publication)) => {
-                publication
+                &*publication
             }
+            mz_sql::ast::WithOptionValue::Ident(ident) => ident.as_str(),
             _ => unreachable!("corrupt catalog"),
         };
 
