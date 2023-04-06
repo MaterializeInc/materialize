@@ -166,7 +166,7 @@
 
 #![allow(clippy::cast_precision_loss)]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -632,7 +632,7 @@ async fn run_benchmark(
                     source_id,
                     &dir_path,
                     args.clone(),
-                    &rocks_options,
+                    rocks_options,
                 );
 
                 // Choose a different worker for the counting.
@@ -643,7 +643,7 @@ async fn run_benchmark(
                     usize::cast_from((source_id + 1).hashed() % u64::cast_from(worker_count));
                 let active_worker = chosen_worker == worker_id;
 
-                let rocks_options = Arc::clone(&rocks_options);
+                let rocks_options = Arc::clone(rocks_options);
                 let _output: Stream<_, ()> = upsert_stream.unary_frontier(
                     Exchange::new(move |_| u64::cast_from(chosen_worker)),
                     &format!("source-{source_id}-counter"),
@@ -688,36 +688,43 @@ async fn run_benchmark(
                                 let data_timestamp = frontier.clone().into_option().unwrap();
                                 let elapsed = start.elapsed();
 
-                                let lag = elapsed.as_millis() as u64 - data_timestamp;
-                                max_lag = std::cmp::max(max_lag, lag);
-                                let elapsed_seconds = elapsed.as_secs();
-                                let key_mb_read = (num_additions * args.key_record_size_bytes)
-                                    as f64
-                                    / MIB as f64;
-                                let mb_read = (num_additions
-                                    * (args.key_record_size_bytes + args.value_record_size_bytes))
-                                    as f64
-                                    / MIB as f64;
-                                let key_throughput = key_mb_read / elapsed_seconds as f64;
-                                let throughput = mb_read / elapsed_seconds as f64;
+                                #[allow(clippy::as_conversions)]
+                                {
+                                    let lag = elapsed.as_millis() as u64 - data_timestamp;
+                                    max_lag = std::cmp::max(max_lag, lag);
+                                    let elapsed_seconds = elapsed.as_secs();
+                                    let key_mb_read = (num_additions * args.key_record_size_bytes)
+                                        as f64
+                                        / MIB as f64;
+                                    let mb_read = (num_additions
+                                        * (args.key_record_size_bytes
+                                            + args.value_record_size_bytes))
+                                        as f64
+                                        / MIB as f64;
+                                    let key_throughput = key_mb_read / elapsed_seconds as f64;
+                                    let throughput = mb_read / elapsed_seconds as f64;
 
-                                let rocksdb_stats = if args.rocksdb_print_stats {
-                                    calculate_rocksdb_stats(Some(&rocks_options), elapsed_seconds)
+                                    let rocksdb_stats = if args.rocksdb_print_stats {
+                                        calculate_rocksdb_stats(
+                                            Some(&rocks_options),
+                                            elapsed_seconds,
+                                        )
                                         .unwrap_or_else(String::new)
-                                } else {
-                                    "".to_string()
-                                };
+                                    } else {
+                                        "".to_string()
+                                    };
 
-                                info!(
-                                    "After {} ms, source {source_id} has read {num_additions} \
+                                    info!(
+                                        "After {} ms, source {source_id} has read {num_additions} \
                                     records (throughput {:.3} MiB/s, key throughput {:.3} MiB/s). \
                                     Max processing lag {max_lag}ms, \
                                     most recent processing lag {lag}ms.{}",
-                                    elapsed.as_millis(),
-                                    throughput,
-                                    key_throughput,
-                                    rocksdb_stats
-                                );
+                                        elapsed.as_millis(),
+                                        throughput,
+                                        key_throughput,
+                                        rocksdb_stats
+                                    );
+                                }
                             }
                         }
                     },
@@ -904,18 +911,23 @@ where
     // TODO(aljoscha): Not liking this duplications...!
     if args.upsert_pre_reduce {
         match args.key_value_store {
-            KeyValueStore::Noop => {
-                upsert_core_pre_reduce(scope, &source_stream, source_id, NoopMap)
-            }
-            KeyValueStore::InMemoryHashMap => {
-                upsert_core_pre_reduce(scope, &source_stream, source_id, HashMap::new())
+            KeyValueStore::Noop => upsert_core_pre_reduce(scope, source_stream, source_id, NoopMap),
+            KeyValueStore::InMemoryHashMap =>
+            {
+                #[allow(clippy::disallowed_types)]
+                upsert_core_pre_reduce(
+                    scope,
+                    source_stream,
+                    source_id,
+                    std::collections::HashMap::new(),
+                )
             }
             KeyValueStore::InMemoryBTreeMap => {
-                upsert_core_pre_reduce(scope, &source_stream, source_id, BTreeMap::new())
+                upsert_core_pre_reduce(scope, source_stream, source_id, BTreeMap::new())
             }
             KeyValueStore::RocksDB => {
                 let rocksdb = IoThreadRocksDB::new(
-                    &instance_dir,
+                    instance_dir,
                     rocksdb_options,
                     scope.index(),
                     source_id,
@@ -923,21 +935,28 @@ where
                     args.rocksdb_clear_before_use,
                 );
 
-                upsert_core_pre_reduce(scope, &source_stream, source_id, rocksdb)
+                upsert_core_pre_reduce(scope, source_stream, source_id, rocksdb)
             }
         }
     } else {
         match args.key_value_store {
-            KeyValueStore::Noop => upsert_core(scope, &source_stream, source_id, NoopMap),
-            KeyValueStore::InMemoryHashMap => {
-                upsert_core(scope, &source_stream, source_id, HashMap::new())
+            KeyValueStore::Noop => upsert_core(scope, source_stream, source_id, NoopMap),
+            KeyValueStore::InMemoryHashMap =>
+            {
+                #[allow(clippy::disallowed_types)]
+                upsert_core(
+                    scope,
+                    source_stream,
+                    source_id,
+                    std::collections::HashMap::new(),
+                )
             }
             KeyValueStore::InMemoryBTreeMap => {
-                upsert_core(scope, &source_stream, source_id, BTreeMap::new())
+                upsert_core(scope, source_stream, source_id, BTreeMap::new())
             }
             KeyValueStore::RocksDB => {
                 let rocksdb = IoThreadRocksDB::new(
-                    &instance_dir,
+                    instance_dir,
                     rocksdb_options,
                     scope.index(),
                     source_id,
@@ -945,7 +964,7 @@ where
                     args.rocksdb_clear_before_use,
                 );
 
-                upsert_core(scope, &source_stream, source_id, rocksdb)
+                upsert_core(scope, source_stream, source_id, rocksdb)
             }
         }
     }
@@ -1075,6 +1094,7 @@ where
             match event {
                 AsyncEvent::Data(cap, buffer) => {
                     let mut batch = Vec::new();
+                    #[allow(clippy::extend_with_drain)]
                     batch.extend(buffer.drain(..));
 
                     for (k, v, previous_v) in current_values.ingest(vec![batch]).await {
@@ -1134,7 +1154,8 @@ impl Map for NoopMap {
 }
 
 #[async_trait::async_trait]
-impl Map for HashMap<Vec<u8>, Vec<u8>> {
+#[allow(clippy::disallowed_types)]
+impl Map for std::collections::HashMap<Vec<u8>, Vec<u8>> {
     async fn ingest(&mut self, batches: Vec<Batch>) -> Batch<KVAndPrevious> {
         let mut out = Vec::new();
         for batch in batches {
@@ -1190,14 +1211,14 @@ impl IoThreadRocksDB {
         ) = crossbeam_channel::unbounded();
 
         let instance_path = temp_dir
-            .join(format!("worker_id:{}", worker_id.to_string()))
-            .join(format!("source_id:{}", source_id.to_string()));
+            .join(format!("worker_id:{}", worker_id))
+            .join(format!("source_id:{}", source_id));
 
         if destroy_before_use && instance_path.exists() {
             DB::destroy(&rocksdb::Options::default(), &*instance_path).unwrap();
         }
 
-        let db: DB = DB::open(&options, instance_path).unwrap();
+        let db: DB = DB::open(options, instance_path).unwrap();
         std::thread::spawn(move || {
             let mut wo = rocksdb::WriteOptions::new();
             wo.disable_wal(!use_wal);
@@ -1270,6 +1291,7 @@ impl Map for IoThreadRocksDB {
     }
 }
 
+#[allow(clippy::as_conversions)]
 fn calculate_rocksdb_stats(
     opts: Option<&rocksdb::Options>,
     elapsed_seconds: u64,
