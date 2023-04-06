@@ -29,7 +29,7 @@ use mz_expr::visit::Visit;
 use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
-use crate::TransformArgs;
+use crate::{all, TransformArgs};
 
 /// Remove redundant collections of distinct elements from joins.
 #[derive(Debug)]
@@ -88,7 +88,7 @@ impl RedundantJoin {
         relation: &mut MirRelationExpr,
         lets: &mut BTreeMap<Id, Vec<ProvInfo>>,
     ) -> Result<Vec<ProvInfo>, crate::TransformError> {
-        self.checked_recur(|_| {
+        let result = self.checked_recur(|_| {
             match relation {
                 MirRelationExpr::Let { id, value, body } => {
                     // Recursively determine provenance of the value.
@@ -102,7 +102,12 @@ impl RedundantJoin {
                     }
                     Ok(result)
                 }
-                MirRelationExpr::LetRec { .. } => Err(crate::TransformError::LetRecUnsupported)?,
+
+                MirRelationExpr::LetRec { .. } => {
+                    // TODO
+                    Err(crate::TransformError::LetRecUnsupported)?
+                }
+
                 MirRelationExpr::Get { id, typ } => {
                     // Extract the value provenance, or an empty list if unavailable.
                     let mut val_info = lets.get(id).cloned().unwrap_or_default();
@@ -363,7 +368,12 @@ impl RedundantJoin {
 
                 MirRelationExpr::ArrangeBy { input, .. } => self.action(input, lets),
             }
-        })
+        })?;
+        // println!("{}", relation.pretty());
+        // println!("result = {result:?}");
+        // println!("lets: {lets:?}");
+        // println!("---------------------");
+        Ok(result)
     }
 }
 
@@ -514,7 +524,7 @@ fn find_redundancy(
     keys: &[Vec<usize>],
     input_mapper: &JoinInputMapper,
     equivalences: &[Vec<MirScalarExpr>],
-    input_prov: &[Vec<ProvInfo>],
+    input_provs: &[Vec<ProvInfo>],
 ) -> Option<Vec<MirScalarExpr>> {
     // Whether the `equivalence` contains an expression that only references
     // `input` that leads to the same as `root_expr` once dereferenced.
@@ -531,56 +541,60 @@ fn find_redundancy(
                     == Some(root_expr)
         })
     };
-    for provenance in input_prov[input].iter() {
+    for input_prov in input_provs[input].iter() {
         // We can only elide if the input contains all records, and binds all columns.
-        if provenance.exact
-            && provenance
+        if input_prov.exact
+            && input_prov
                 .dereferenced_projection
                 .iter()
                 .all(|e| e.is_some())
         {
             // examine all *other* inputs that have not been removed...
             for other in (0..input_mapper.total_inputs()).filter(|other| other != &input) {
-                for other_prov in input_prov[other].iter().filter(|p| p.id == provenance.id) {
-                    let all_columns_equated = |cols: &Vec<usize>| {
-                        cols.iter().all(|input_col| {
-                            // The root expression behind the key column, ie. the expression
-                            // re-written in terms of elements in the projection of the Get
-                            // operator.
+                for other_prov in input_provs[other].iter().filter(|p| p.id == input_prov.id) {
+                    let all_key_columns_equated = |key: &Vec<usize>| {
+                        key.iter().all(|key_col| {
+                            // The root expression behind the key column, ie.
+                            // the expression re-written in terms of elements in
+                            // the projection of the Get operator.
                             let root_expr =
-                                provenance.dereference(&MirScalarExpr::column(*input_col));
+                                input_prov.dereference(&MirScalarExpr::column(*key_col));
+                            // Check if there is a join equivalence that joins
+                            // 'input' and 'other' on expressions that lead to
+                            // the same root expression as the key column.
                             root_expr.as_ref().map_or(false, |root_expr| {
-                                // Check if there is a join equivalence that joins 'input' and
-                                // 'other' on expressions that lead to the same root expression
-                                // as the key column.
                                 equivalences.iter().any(|equivalence| {
-                                    contains_equivalent_expr_from_input(
-                                        equivalence,
-                                        root_expr,
-                                        input,
-                                        provenance,
-                                    ) && contains_equivalent_expr_from_input(
-                                        equivalence,
-                                        root_expr,
-                                        other,
-                                        other_prov,
-                                    )
+                                    all![
+                                        contains_equivalent_expr_from_input(
+                                            equivalence,
+                                            root_expr,
+                                            input,
+                                            input_prov,
+                                        ),
+                                        contains_equivalent_expr_from_input(
+                                            equivalence,
+                                            root_expr,
+                                            other,
+                                            other_prov,
+                                        ),
+                                    ]
                                 })
                             })
                         })
                     };
 
-                    if keys.iter().any(|key| all_columns_equated(key)) {
+                    // Find an unique key for input that has all columns equated to other.
+                    if keys.iter().any(|key| all_key_columns_equated(key)) {
                         // Find out whether we can produce input's projection strictly with
                         // elements in other's projection.
-                        let expressions = provenance
+                        let expressions = input_prov
                             .dereferenced_projection
                             .iter()
                             .enumerate()
                             .flat_map(|(c, _)| {
                                 // Check if the expression under input's 'c' column can be built
                                 // with elements in other's projection.
-                                provenance.dereferenced_projection[c].as_ref().map_or(
+                                input_prov.dereferenced_projection[c].as_ref().map_or(
                                     None,
                                     |root_expr| {
                                         try_build_expression_using_other(
@@ -593,7 +607,7 @@ fn find_redundancy(
                                 )
                             })
                             .collect_vec();
-                        if expressions.len() == provenance.dereferenced_projection.len() {
+                        if expressions.len() == input_prov.dereferenced_projection.len() {
                             return Some(expressions);
                         }
                     }
