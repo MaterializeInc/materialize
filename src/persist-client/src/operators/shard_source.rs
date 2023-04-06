@@ -13,6 +13,7 @@ use std::any::Any;
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::rc::Rc;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -21,6 +22,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
 use futures::StreamExt;
 use futures_util::future::Either;
+use mz_ore::assert::SOFT_ASSERTIONS;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::vec::VecExt;
@@ -405,15 +407,26 @@ where
                             // atomically emit all parts here (e.g. no awaits).
                             let bytes_emitted = {
                                 let mut bytes_emitted = 0;
-                                for part_desc in std::mem::take(&mut batch_parts) {
+                                for mut part_desc in std::mem::take(&mut batch_parts) {
                                     // TODO(mfp): Push the filter down into the Subscribe?
                                     if cfg.dynamic.stats_filter_enabled() {
                                         let should_fetch = part_desc.stats.as_ref().map_or(true, |stats| should_fetch_part(stats));
                                         if !should_fetch {
-                                            // TODO(mfp): Downgrade this to debug! at some point.
-                                            info!("skipping part because of stats filter {:?}", part_desc.stats);
-                                            lease_returner.return_leased_part(part_desc);
-                                            continue;
+                                            // TODO(mfp): We'll want to run this auditing in prod
+                                            // for e.g. some random fraction of parts. For now, turn
+                                            // it on for every part in CI via soft assert. We'll
+                                            // have to back that out once we want to bake in filter
+                                            // pushdown speedups in feature bench, but for now it's
+                                            // good to get maximal correctness coverage.
+                                            let should_audit = SOFT_ASSERTIONS.load(Ordering::Relaxed);
+                                            if should_audit {
+                                                part_desc.request_filter_pushdown_audit();
+                                            } else {
+                                                // TODO(mfp): Downgrade this to debug! at some point.
+                                                info!("skipping part because of stats filter {:?}", part_desc.stats);
+                                                lease_returner.return_leased_part(part_desc);
+                                                continue;
+                                            }
                                         }
                                     }
 

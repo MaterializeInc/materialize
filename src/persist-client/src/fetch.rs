@@ -221,6 +221,7 @@ where
         ts_filter,
         part: encoded_part,
         schemas,
+        filter_pushdown_audit: part.filter_pushdown_audit.then(|| part.key.0.clone()),
         _phantom: PhantomData,
     };
 
@@ -348,6 +349,7 @@ where
     /// long as necessary to ensure the `SeqNo` isn't garbage collected while a
     /// read still depends on it.
     pub(crate) leased_seqno: Option<SeqNo>,
+    pub(crate) filter_pushdown_audit: bool,
 }
 
 impl<T> LeasedBatchPart<T>
@@ -374,6 +376,7 @@ where
             encoded_size_bytes: self.encoded_size_bytes,
             leased_seqno: self.leased_seqno,
             reader_id: self.reader_id.clone(),
+            filter_pushdown_audit: self.filter_pushdown_audit,
         };
         // If `x` has a lease, we've effectively transferred it to `r`.
         let _ = self.leased_seqno.take();
@@ -402,6 +405,14 @@ where
     pub fn encoded_size_bytes(&self) -> usize {
         self.encoded_size_bytes
     }
+
+    /// The filter has indicated we don't need this part, we can verify the
+    /// ongoing end-to-end correctness of corner cases via "audit". This means
+    /// we fetch the part like normal and if the MFP keeps anything from it,
+    /// then something has gone horribly wrong.
+    pub fn request_filter_pushdown_audit(&mut self) {
+        self.filter_pushdown_audit = true;
+    }
 }
 
 impl<T> Drop for LeasedBatchPart<T>
@@ -421,6 +432,7 @@ pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     ts_filter: FetchBatchFilter<T>,
     part: EncodedPart<T>,
     schemas: Schemas<K, V>,
+    filter_pushdown_audit: Option<String>,
 
     _phantom: PhantomData<fn() -> (K, V, D)>,
 }
@@ -432,8 +444,20 @@ impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedPart<K, V, T, D> {
             ts_filter: self.ts_filter.clone(),
             part: self.part.clone(),
             schemas: self.schemas.clone(),
+            filter_pushdown_audit: self.filter_pushdown_audit.clone(),
             _phantom: self._phantom.clone(),
         }
+    }
+}
+
+impl<K: Codec, V: Codec, T, D> FetchedPart<K, V, T, D> {
+    /// Returns Some if this part was only fetched as part of a filter pushdown
+    /// audit. See [LeasedBatchPart::request_filter_pushdown_audit].
+    ///
+    /// If set, the String is for debugging and should be included in any error
+    /// messages.
+    pub fn is_filter_pushdown_audit(&self) -> Option<&String> {
+        self.filter_pushdown_audit.as_ref()
     }
 }
 
@@ -597,6 +621,7 @@ pub struct SerdeLeasedBatchPart {
     encoded_size_bytes: usize,
     leased_seqno: Option<SeqNo>,
     reader_id: LeasedReaderId,
+    filter_pushdown_audit: bool,
 }
 
 impl<T: Timestamp + Codec64> LeasedBatchPart<T> {
@@ -627,6 +652,7 @@ impl<T: Timestamp + Codec64> LeasedBatchPart<T> {
             stats: None,
             leased_seqno: x.leased_seqno,
             reader_id: x.reader_id,
+            filter_pushdown_audit: x.filter_pushdown_audit,
         }
     }
 }
