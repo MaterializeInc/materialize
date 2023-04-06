@@ -28,7 +28,7 @@ use crate::columnar::{
     ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
 };
 use crate::part::{ColumnsMut, ColumnsRef};
-use crate::stats::{OptionStats, PrimitiveStats};
+use crate::stats::{BytesStats, OptionStats, PrimitiveStats, StatsFn};
 use crate::{Codec, Codec64, Opaque};
 
 /// An implementation of [Schema] for [()].
@@ -47,7 +47,7 @@ impl Schema<()> for UnitSchema {
     type Encoder<'a> = Self;
     type Decoder<'a> = Self;
 
-    fn columns(&self) -> Vec<(String, DataType)> {
+    fn columns(&self) -> Vec<(String, DataType, StatsFn)> {
         Vec::new()
     }
 
@@ -121,12 +121,12 @@ impl Schema<String> for StringSchema {
 
     type Decoder<'a> = SimpleDecoder<'a, String>;
 
-    fn columns(&self) -> Vec<(String, DataType)> {
+    fn columns(&self) -> Vec<(String, DataType, StatsFn)> {
         let data_type = DataType {
             optional: false,
             format: ColumnFormat::String,
         };
-        vec![("".to_owned(), data_type)]
+        vec![("".to_owned(), data_type, StatsFn::Default)]
     }
 
     fn decoder<'a>(&self, mut cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
@@ -181,12 +181,12 @@ impl Schema<Vec<u8>> for VecU8Schema {
 
     type Decoder<'a> = SimpleDecoder<'a, Vec<u8>>;
 
-    fn columns(&self) -> Vec<(String, DataType)> {
+    fn columns(&self) -> Vec<(String, DataType, StatsFn)> {
         let data_type = DataType {
             optional: false,
             format: ColumnFormat::Bytes,
         };
-        vec![("".to_owned(), data_type)]
+        vec![("".to_owned(), data_type, StatsFn::Default)]
     }
 
     fn decoder<'a>(&self, mut cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
@@ -342,7 +342,7 @@ impl Data for Vec<u8> {
     // TODO: Something that more obviously isn't optional.
     type Col = BinaryArray<i32>;
     type Mut = MutableBinaryArray<i32>;
-    type Stats = PrimitiveStats<Vec<u8>>;
+    type Stats = BytesStats;
 }
 
 impl Data for Option<Vec<u8>> {
@@ -353,7 +353,7 @@ impl Data for Option<Vec<u8>> {
     type Ref<'a> = Option<&'a [u8]>;
     type Col = BinaryArray<i32>;
     type Mut = MutableBinaryArray<i32>;
-    type Stats = OptionStats<PrimitiveStats<Vec<u8>>>;
+    type Stats = OptionStats<BytesStats>;
 }
 
 impl Data for String {
@@ -655,7 +655,7 @@ impl<T: Debug + Send + Sync> Schema<T> for TodoSchema<T> {
     type Encoder<'a> = Self;
     type Decoder<'a> = Self;
 
-    fn columns(&self) -> Vec<(String, DataType)> {
+    fn columns(&self) -> Vec<(String, DataType, StatsFn)> {
         panic!("TODO")
     }
 

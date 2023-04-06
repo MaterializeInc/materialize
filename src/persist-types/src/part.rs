@@ -21,7 +21,7 @@ use arrow2::io::parquet::write::Encoding;
 
 use crate::columnar::sealed::ColumnRef;
 use crate::columnar::{ColumnFormat, Data, DataType, Schema};
-use crate::stats::DynStats;
+use crate::stats::{DynStats, StatsFn};
 
 /// A columnar representation of one blob's worth of data.
 #[derive(Debug, Default)]
@@ -170,7 +170,8 @@ impl Part {
                     assert!(key_array.validity().is_none());
                     assert_eq!(key_schema.len(), key_array.values().len());
                     let mut key = Vec::new();
-                    for ((name, typ), array) in key_schema.iter().zip(key_array.values()) {
+                    for ((name, typ, _stats_fn), array) in key_schema.iter().zip(key_array.values())
+                    {
                         let col = DynColumnRef::from_arrow(typ, array)?;
                         key.push((name.clone(), col));
                     }
@@ -191,7 +192,8 @@ impl Part {
                     assert!(val_array.validity().is_none());
                     assert_eq!(val_schema.len(), val_array.values().len());
                     let mut val = Vec::new();
-                    for ((name, typ), array) in val_schema.iter().zip(val_array.values()) {
+                    for ((name, typ, _stats_fn), array) in val_schema.iter().zip(val_array.values())
+                    {
                         let col = DynColumnRef::from_arrow(typ, array)?;
                         val.push((name.clone(), col));
                     }
@@ -295,12 +297,12 @@ impl PartBuilder {
         let key = key_schema
             .columns()
             .into_iter()
-            .map(|(name, data_type)| (name, DynColumnMut::new_untyped(&data_type)))
+            .map(|(name, data_type, _stats_fn)| (name, DynColumnMut::new_untyped(&data_type)))
             .collect();
         let val = val_schema
             .columns()
             .into_iter()
-            .map(|(name, data_type)| (name, DynColumnMut::new_untyped(&data_type)))
+            .map(|(name, data_type, _stats_fn)| (name, DynColumnMut::new_untyped(&data_type)))
             .collect();
         let ts = Vec::new();
         let diff = Vec::new();
@@ -410,15 +412,17 @@ pub struct PartMut<'a> {
     pub diff: &'a mut Vec<i64>,
 }
 
-/// Hack to make things work with `Arc<dyn Any>::downcast_ref`.
+/// A type-erased [crate::columnar::Data::Col].
 #[derive(Debug)]
-struct DynColumnRef(DataType, Arc<dyn Any + Send + Sync>);
+pub struct DynColumnRef(DataType, Arc<dyn Any + Send + Sync>);
 
 impl DynColumnRef {
-    pub fn new<T: Data>(col: T::Col) -> Self {
+    fn new<T: Data>(col: T::Col) -> Self {
         DynColumnRef(T::TYPE.clone(), Arc::new(col))
     }
 
+    /// Returns a typed, shared reference to the inner value if it is a column
+    /// of type `T`, or an Err if it isn't.
     pub fn downcast<T: Data>(&self) -> Result<&T::Col, String> {
         let col = self
             .1
@@ -427,6 +431,7 @@ impl DynColumnRef {
         Ok(col)
     }
 
+    /// Returns the number of elements in this column.
     pub fn len(&self) -> usize {
         struct LenDataFn<'a>(&'a DynColumnRef);
         impl DataFn<Result<usize, String>> for LenDataFn<'_> {
@@ -496,16 +501,16 @@ impl DynColumnRef {
     }
 }
 
-/// Hack to make things work with `Box<dyn Any>::downcast_mut`.
+/// A type-erased [crate::columnar::Data::Mut].
 #[derive(Debug)]
 struct DynColumnMut(DataType, Box<dyn Any + Send + Sync>);
 
 impl DynColumnMut {
-    pub fn new<T: Data>(col: T::Mut) -> Self {
+    fn new<T: Data>(col: T::Mut) -> Self {
         DynColumnMut(T::TYPE.clone(), Box::new(col))
     }
 
-    pub fn new_untyped(typ: &DataType) -> Self {
+    fn new_untyped(typ: &DataType) -> Self {
         struct NewUntypedDataFn;
         impl DataFn<DynColumnMut> for NewUntypedDataFn {
             fn call<T: Data>(self) -> DynColumnMut {
@@ -515,6 +520,8 @@ impl DynColumnMut {
         typ.data_fn(NewUntypedDataFn)
     }
 
+    /// Returns a typed, exclusive reference to the inner value if it is a
+    /// column of type `T`, or an Err if it isn't.
     pub fn downcast<T: Data>(&mut self) -> Result<&mut T::Mut, String> {
         let col = self
             .1
@@ -567,10 +574,12 @@ impl<'a> ColumnsRef<'a> {
     }
 
     /// Computes statistics for the named column and removes it from the set.
-    ///
-    /// TODO: Take a param here to allow Schemas to override the logic used.
-    pub fn stats(&mut self, name: &str) -> Result<Box<dyn DynStats>, String> {
-        Ok(self.dyn_col(name)?.stats_default())
+    pub fn stats(&mut self, name: &str, stats_fn: StatsFn) -> Result<Box<dyn DynStats>, String> {
+        let col = self.dyn_col(name)?;
+        match stats_fn {
+            StatsFn::Default => Ok(col.stats_default()),
+            StatsFn::Custom(stats_fn) => stats_fn(col),
+        }
     }
 
     /// Removes the named dynamic column from the set.

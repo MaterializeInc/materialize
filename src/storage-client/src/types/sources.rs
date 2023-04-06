@@ -22,6 +22,7 @@ use bytes::BufMut;
 use dec::OrderedDecimal;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
+use mz_persist_types::stats::StatsFn;
 use once_cell::sync::Lazy;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -2566,7 +2567,7 @@ impl Schema<SourceData> for RelationDesc {
 
     type Decoder<'a> = TodoSchema<SourceData>;
 
-    fn columns(&self) -> Vec<(String, DataType)> {
+    fn columns(&self) -> Vec<(String, DataType, StatsFn)> {
         // Constructing the fake RelationDesc is wasteful, but this only gets
         // called when the feature flag is on.
         Schema::<Row>::columns(&fake_relation_desc(self))

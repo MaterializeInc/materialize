@@ -53,7 +53,7 @@ use std::fmt::Debug;
 use crate::codec_impls::UnitSchema;
 use crate::columnar::sealed::ColumnRef;
 use crate::part::{ColumnsMut, ColumnsRef, PartBuilder};
-use crate::stats::DynStats;
+use crate::stats::{DynStats, StatsFn};
 use crate::Codec;
 
 /// A type understood by persist.
@@ -216,7 +216,7 @@ pub trait Schema<T>: Debug + Send + Sync {
     /// object with a method like `fn add<T: Data>(name: String)`. If we decide
     /// to support struct columns, a hypothetical StructSchemaBuilder would look
     /// very much like this. Decide if this is better/worth it.
-    fn columns(&self) -> Vec<(String, DataType)>;
+    fn columns(&self) -> Vec<(String, DataType, StatsFn)>;
 
     /// Returns a [Self::Decoder<'a>] for the given columns.
     fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String>;

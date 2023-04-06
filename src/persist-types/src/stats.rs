@@ -15,8 +15,17 @@ use std::any::Any;
 use std::collections::BTreeMap;
 
 use crate::columnar::Data;
+use crate::part::DynColumnRef;
 
 include!(concat!(env!("OUT_DIR"), "/mz_persist_types.stats.rs"));
+
+/// The logic to use when computing stats for a column of `T: Data`.
+///
+/// If Custom is used, the DynStats returned must be a`<T as Data>::Stats`.
+pub enum StatsFn {
+    Default,
+    Custom(fn(&DynColumnRef) -> Result<Box<dyn DynStats>, String>),
+}
 
 /// Type-erased aggregate statistics about a column of data.
 ///
@@ -105,6 +114,83 @@ impl StructStats {
     }
 }
 
+// Aggregate statistics about a column of Json elements.
+//
+// Each element could be any of a JsonNull, a bool, a string, a numeric, a list,
+// or a map/object. The column might be a single type but could also be a
+// mixture of any subset of these types.
+#[derive(Default)]
+pub struct JsonStats {
+    /// The count of `Datum::JsonNull`s, or 0 if there were none.
+    pub json_nulls: usize,
+    /// The min and max bools, or None if there were none.
+    pub bools: Option<PrimitiveStats<bool>>,
+    /// The min and max strings, or None if there were none.
+    pub string: Option<PrimitiveStats<String>>,
+    /// The min and max numerics, or None if there were none.
+    ///
+    /// TODO(mfp): Storing this as an f64 is not correct.
+    pub numeric: Option<PrimitiveStats<f64>>,
+    /// The count of `Datum::List`s, or 0 if there were none.
+    ///
+    /// TODO: We could also do something for list indexes analogous to what we
+    /// do for map keys, but it initially seems much less likely that a user
+    /// would expect that to work with pushdown, so don't bother keeping the
+    /// stats until someone asks for it.
+    pub list: usize,
+    /// Recursive statistics about the set of keys present in any maps/objects
+    /// in the column, or None if there were no maps/objects.
+    pub map: BTreeMap<String, JsonStats>,
+}
+
+impl std::fmt::Debug for JsonStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let JsonStats {
+            json_nulls,
+            bools,
+            string,
+            numeric,
+            list,
+            map,
+        } = self;
+        let mut f = &mut f.debug_tuple("json");
+        if json_nulls > &0 {
+            f = f.field(json_nulls);
+        }
+        if let Some(bools) = bools {
+            f = f.field(bools);
+        }
+        if let Some(string) = string {
+            f = f.field(string);
+        }
+        if let Some(numeric) = numeric {
+            f = f.field(numeric);
+        }
+        if list > &0 {
+            f = f.field(list);
+        }
+        if !map.is_empty() {
+            f = f.field(map);
+        }
+        f.finish()
+    }
+}
+
+/// Statistics about a column of `Vec<u8>`.
+pub enum BytesStats {
+    Primitive(PrimitiveStats<Vec<u8>>),
+    Json(JsonStats),
+}
+
+impl std::fmt::Debug for BytesStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BytesStats::Primitive(x) => std::fmt::Debug::fmt(x, f),
+            BytesStats::Json(x) => std::fmt::Debug::fmt(x, f),
+        }
+    }
+}
+
 mod impls {
     use std::any::Any;
     use std::collections::BTreeMap;
@@ -118,8 +204,9 @@ mod impls {
     use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
     use crate::stats::{
-        proto_dyn_stats, proto_primitive_stats, DynStats, OptionStats, PrimitiveStats,
-        ProtoDynStats, ProtoOptionStats, ProtoPrimitiveStats, ProtoStructStats, StructStats,
+        proto_bytes_stats, proto_dyn_stats, proto_primitive_stats, BytesStats, DynStats, JsonStats,
+        OptionStats, PrimitiveStats, ProtoBytesStats, ProtoDynStats, ProtoJsonStats,
+        ProtoOptionStats, ProtoPrimitiveStats, ProtoStructStats, StructStats,
     };
 
     impl<T> DynStats for PrimitiveStats<T>
@@ -160,14 +247,19 @@ mod impls {
         fn into_proto(&self) -> ProtoDynStats {
             ProtoDynStats {
                 option: None,
-                kind: Some(proto_dyn_stats::Kind::Struct(ProtoStructStats {
-                    len: self.len.into_proto(),
-                    cols: self
-                        .cols
-                        .iter()
-                        .map(|(k, v)| (k.into_proto(), v.into_proto()))
-                        .collect(),
-                })),
+                kind: Some(proto_dyn_stats::Kind::Struct(RustType::into_proto(self))),
+            }
+        }
+    }
+
+    impl DynStats for BytesStats {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn into_proto(&self) -> ProtoDynStats {
+            ProtoDynStats {
+                option: None,
+                kind: Some(proto_dyn_stats::Kind::Bytes(RustType::into_proto(self))),
             }
         }
     }
@@ -256,6 +348,22 @@ mod impls {
         }
     }
 
+    impl From<&BinaryArray<i32>> for BytesStats {
+        fn from(value: &BinaryArray<i32>) -> Self {
+            BytesStats::Primitive(value.into())
+        }
+    }
+
+    impl From<&BinaryArray<i32>> for OptionStats<BytesStats> {
+        fn from(value: &BinaryArray<i32>) -> Self {
+            let stats = OptionStats::<PrimitiveStats<Vec<u8>>>::from(value);
+            OptionStats {
+                none: stats.none,
+                some: BytesStats::Primitive(stats.some),
+            }
+        }
+    }
+
     impl From<&Utf8Array<i32>> for PrimitiveStats<String> {
         fn from(value: &Utf8Array<i32>) -> Self {
             assert!(value.validity().is_none());
@@ -306,6 +414,62 @@ mod impls {
                 len: proto.len.into_rust()?,
                 cols,
             })
+        }
+    }
+
+    impl RustType<ProtoJsonStats> for JsonStats {
+        fn into_proto(&self) -> ProtoJsonStats {
+            ProtoJsonStats {
+                json_nulls: self.json_nulls.into_proto(),
+                bools: self.bools.into_proto(),
+                string: self.string.into_proto(),
+                numeric: self.numeric.into_proto(),
+                list: self.list.into_proto(),
+                map: self
+                    .map
+                    .iter()
+                    .map(|(k, v)| (k.into_proto(), RustType::into_proto(v)))
+                    .collect(),
+            }
+        }
+
+        fn from_proto(proto: ProtoJsonStats) -> Result<Self, TryFromProtoError> {
+            let mut map = BTreeMap::new();
+            for (k, v) in proto.map {
+                map.insert(k.into_rust()?, v.into_rust()?);
+            }
+            Ok(JsonStats {
+                json_nulls: proto.json_nulls.into_rust()?,
+                bools: proto.bools.into_rust()?,
+                string: proto.string.into_rust()?,
+                numeric: proto.numeric.into_rust()?,
+                list: proto.list.into_rust()?,
+                map,
+            })
+        }
+    }
+
+    impl RustType<ProtoBytesStats> for BytesStats {
+        fn into_proto(&self) -> ProtoBytesStats {
+            let kind = match self {
+                BytesStats::Primitive(x) => {
+                    proto_bytes_stats::Kind::Primitive(RustType::into_proto(x))
+                }
+                BytesStats::Json(x) => proto_bytes_stats::Kind::Json(RustType::into_proto(x)),
+            };
+            ProtoBytesStats { kind: Some(kind) }
+        }
+
+        fn from_proto(proto: ProtoBytesStats) -> Result<Self, TryFromProtoError> {
+            match proto.kind {
+                Some(proto_bytes_stats::Kind::Primitive(x)) => Ok(BytesStats::Primitive(
+                    PrimitiveStats::<Vec<u8>>::from_proto(x)?,
+                )),
+                Some(proto_bytes_stats::Kind::Json(x)) => {
+                    Ok(BytesStats::Json(JsonStats::from_proto(x)?))
+                }
+                None => Err(TryFromProtoError::missing_field("ProtoBytesStats::kind")),
+            }
         }
     }
 
@@ -401,14 +565,8 @@ mod impls {
                 }
                 None => Err(TryFromProtoError::missing_field("ProtoPrimitiveStats::min")),
             },
-            proto_dyn_stats::Kind::Struct(x) => {
-                let len = x.len.into_rust()?;
-                let mut cols = BTreeMap::new();
-                for (k, v) in x.cols {
-                    cols.insert(k.into_rust()?, v.into_rust()?);
-                }
-                f.call(StructStats { len, cols })
-            }
+            proto_dyn_stats::Kind::Struct(x) => f.call(StructStats::from_proto(x)?),
+            proto_dyn_stats::Kind::Bytes(x) => f.call(BytesStats::from_proto(x)?),
         }
     }
 
