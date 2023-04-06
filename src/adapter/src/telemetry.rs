@@ -20,6 +20,7 @@ pub trait SegmentClientExt {
     fn environment_track<S>(
         &self,
         environment_id: &EnvironmentId,
+        app_name: &str,
         user_id: Uuid,
         event: S,
         properties: serde_json::Value,
@@ -39,6 +40,7 @@ impl SegmentClientExt for mz_segment::Client {
     fn environment_track<S>(
         &self,
         environment_id: &EnvironmentId,
+        app_name: &str,
         user_id: Uuid,
         event: S,
         mut properties: serde_json::Value,
@@ -61,12 +63,15 @@ impl SegmentClientExt for mz_segment::Client {
                 "cloud_provider_region".into(),
                 json!(environment_id.cloud_provider_region()),
             );
+            properties.insert("application_name".into(), json!(app_name));
         }
-        self.track(
-            user_id,
-            event,
-            properties,
-            Some(json!({ "group_id": environment_id.organization_id() })),
-        );
+
+        // "Context" is a defined dictionary of extra information related to a datapoint. Please
+        // consult the docs before adding anything here: https://segment.com/docs/connections/spec/common/#context
+        let context = json!({
+            "group_id": environment_id.organization_id()
+        });
+
+        self.track(user_id, event, properties, Some(context));
     }
 }

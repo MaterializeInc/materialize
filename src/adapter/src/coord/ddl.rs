@@ -435,8 +435,14 @@ impl Coordinator {
                     event.object_type.as_title_case(),
                     event.event_type.as_title_case()
                 );
+                // Note: when there is no Session, that means something internal to
+                // environmentd initiated the transaction, hence the default name.
+                let application_name = session
+                    .map(|s| s.application_name())
+                    .unwrap_or("environmentd");
                 segment_client.environment_track(
                     &self.catalog().config().environment_id,
+                    application_name,
                     user_metadata.user_id,
                     event_type,
                     json!({ "details": event.details.as_json() }),
