@@ -150,4 +150,4 @@ a
   FROM KAFKA CONNECTION kafka_sasl_no_ca (TOPIC 'testdrive-data-${testdrive.seed}')
     FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_ssl_no_ca
-contains: broker certificate could not be verified
+contains:Meta data fetch error: BrokerTransportFailure (Local: Broker transport failure)

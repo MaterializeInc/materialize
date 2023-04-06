@@ -31,10 +31,10 @@ def test_secrets(mz: MaterializeApplication) -> None:
               );
 
             # Our Redpanda instance is not configured for SASL, so we can not
-            # really establish a successful connection. Hence the expectation for an SSL error
+            # really establish a successful connection.
             ! CREATE SOURCE secrets_source
               FROM KAFKA CONNECTION secrets_conn (TOPIC 'foo_bar');
-            contains: SSL handshake failed
+            contains:Meta data fetch error: BrokerTransportFailure (Local: Broker transport failure)
             """
         )
     )
