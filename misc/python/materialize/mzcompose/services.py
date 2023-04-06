@@ -120,6 +120,7 @@ class Materialized(Service):
             # We wish to test the new implementation as its the canonical one, but
             # want to control the rollout to production.
             "--bootstrap-system-parameter=enable_multi_worker_storage_persist_sink=true",
+            "--bootstrap-system-parameter=storage_persist_sink_minimum_batch_updates=100",
         ]
 
         if external_cockroach:

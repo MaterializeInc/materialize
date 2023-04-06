@@ -136,6 +136,9 @@ impl PersistConfig {
                 sink_minimum_batch_updates: AtomicUsize::new(
                     Self::DEFAULT_SINK_MINIMUM_BATCH_UPDATES,
                 ),
+                storage_sink_minimum_batch_updates: AtomicUsize::new(
+                    Self::DEFAULT_SINK_MINIMUM_BATCH_UPDATES,
+                ),
                 next_listen_batch_retryer: RwLock::new(Self::DEFAULT_NEXT_LISTEN_BATCH_RETRYER),
                 stats_collection_enabled: AtomicBool::new(Self::DEFAULT_STATS_COLLECTION_ENABLED),
                 stats_filter_enabled: AtomicBool::new(Self::DEFAULT_STATS_FILTER_ENABLED),
@@ -161,6 +164,14 @@ impl PersistConfig {
     pub fn sink_minimum_batch_updates(&self) -> usize {
         self.dynamic
             .sink_minimum_batch_updates
+            .load(DynamicConfig::LOAD_ORDERING)
+    }
+
+    /// The same as `Self::sink_minimum_batch_updates`, but
+    /// for storage `persist_sink`'s.
+    pub fn storage_sink_minimum_batch_updates(&self) -> usize {
+        self.dynamic
+            .storage_sink_minimum_batch_updates
             .load(DynamicConfig::LOAD_ORDERING)
     }
 
@@ -272,6 +283,7 @@ pub struct DynamicConfig {
     usage_state_fetch_concurrency_limit: AtomicUsize,
     consensus_connect_timeout: RwLock<Duration>,
     sink_minimum_batch_updates: AtomicUsize,
+    storage_sink_minimum_batch_updates: AtomicUsize,
     stats_collection_enabled: AtomicBool,
     stats_filter_enabled: AtomicBool,
 
@@ -521,6 +533,8 @@ pub struct PersistParameters {
     pub next_listen_batch_retryer: Option<RetryParameters>,
     /// Configures [`PersistConfig::sink_minimum_batch_updates`].
     pub sink_minimum_batch_updates: Option<usize>,
+    /// Configures [`PersistConfig::storage_sink_minimum_batch_updates`].
+    pub storage_sink_minimum_batch_updates: Option<usize>,
     /// Configures [`DynamicConfig::stats_collection_enabled`].
     pub stats_collection_enabled: Option<bool>,
     /// Configures [`DynamicConfig::stats_filter_enabled`].
@@ -537,6 +551,7 @@ impl PersistParameters {
             compaction_minimum_timeout: self_compaction_minimum_timeout,
             consensus_connect_timeout: self_consensus_connect_timeout,
             sink_minimum_batch_updates: self_sink_minimum_batch_updates,
+            storage_sink_minimum_batch_updates: self_storage_sink_minimum_batch_updates,
             next_listen_batch_retryer: self_next_listen_batch_retryer,
             stats_collection_enabled: self_stats_collection_enabled,
             stats_filter_enabled: self_stats_filter_enabled,
@@ -546,6 +561,7 @@ impl PersistParameters {
             compaction_minimum_timeout: other_compaction_minimum_timeout,
             consensus_connect_timeout: other_consensus_connect_timeout,
             sink_minimum_batch_updates: other_sink_minimum_batch_updates,
+            storage_sink_minimum_batch_updates: other_storage_sink_minimum_batch_updates,
             next_listen_batch_retryer: other_next_listen_batch_retryer,
             stats_collection_enabled: other_stats_collection_enabled,
             stats_filter_enabled: other_stats_filter_enabled,
@@ -561,6 +577,9 @@ impl PersistParameters {
         }
         if let Some(v) = other_sink_minimum_batch_updates {
             *self_sink_minimum_batch_updates = Some(v);
+        }
+        if let Some(v) = other_storage_sink_minimum_batch_updates {
+            *self_storage_sink_minimum_batch_updates = Some(v);
         }
         if let Some(v) = other_next_listen_batch_retryer {
             *self_next_listen_batch_retryer = Some(v);
@@ -584,6 +603,7 @@ impl PersistParameters {
             compaction_minimum_timeout,
             consensus_connect_timeout,
             sink_minimum_batch_updates,
+            storage_sink_minimum_batch_updates,
             next_listen_batch_retryer,
             stats_collection_enabled,
             stats_filter_enabled,
@@ -592,6 +612,7 @@ impl PersistParameters {
             && compaction_minimum_timeout.is_none()
             && consensus_connect_timeout.is_none()
             && sink_minimum_batch_updates.is_none()
+            && storage_sink_minimum_batch_updates.is_none()
             && next_listen_batch_retryer.is_none()
             && stats_collection_enabled.is_none()
             && stats_filter_enabled.is_none()
@@ -609,6 +630,7 @@ impl PersistParameters {
             compaction_minimum_timeout,
             consensus_connect_timeout,
             sink_minimum_batch_updates,
+            storage_sink_minimum_batch_updates,
             next_listen_batch_retryer,
             stats_collection_enabled,
             stats_filter_enabled,
@@ -633,6 +655,12 @@ impl PersistParameters {
             cfg.dynamic
                 .sink_minimum_batch_updates
                 .store(*sink_minimum_batch_updates, DynamicConfig::STORE_ORDERING);
+        }
+        if let Some(storage_sink_minimum_batch_updates) = storage_sink_minimum_batch_updates {
+            cfg.dynamic.storage_sink_minimum_batch_updates.store(
+                *storage_sink_minimum_batch_updates,
+                DynamicConfig::STORE_ORDERING,
+            );
         }
         if let Some(retry_params) = next_listen_batch_retryer {
             let mut retry = cfg
@@ -662,6 +690,9 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             compaction_minimum_timeout: self.compaction_minimum_timeout.into_proto(),
             consensus_connect_timeout: self.consensus_connect_timeout.into_proto(),
             sink_minimum_batch_updates: self.sink_minimum_batch_updates.into_proto(),
+            storage_sink_minimum_batch_updates: self
+                .storage_sink_minimum_batch_updates
+                .into_proto(),
             next_listen_batch_retryer: self.next_listen_batch_retryer.into_proto(),
             stats_collection_enabled: self.stats_collection_enabled.into_proto(),
             stats_filter_enabled: self.stats_filter_enabled.into_proto(),
@@ -674,6 +705,9 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             compaction_minimum_timeout: proto.compaction_minimum_timeout.into_rust()?,
             consensus_connect_timeout: proto.consensus_connect_timeout.into_rust()?,
             sink_minimum_batch_updates: proto.sink_minimum_batch_updates.into_rust()?,
+            storage_sink_minimum_batch_updates: proto
+                .storage_sink_minimum_batch_updates
+                .into_rust()?,
             next_listen_batch_retryer: proto.next_listen_batch_retryer.into_rust()?,
             stats_collection_enabled: proto.stats_collection_enabled.into_rust()?,
             stats_filter_enabled: proto.stats_filter_enabled.into_rust()?,
