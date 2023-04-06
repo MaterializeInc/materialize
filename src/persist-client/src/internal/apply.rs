@@ -12,6 +12,7 @@
 use std::fmt::Debug;
 use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
 use std::sync::Arc;
+use std::time::Instant;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -250,6 +251,8 @@ where
         mut work_fn: WorkFn,
     ) -> Result<(SeqNo, Result<R, E>, RoutineMaintenance), Indeterminate> {
         loop {
+            cmd.started.inc();
+            let now = Instant::now();
             let ret = Self::apply_unbatched_cmd_locked(
                 &self.state,
                 cmd,
@@ -260,16 +263,22 @@ where
                 &self.state_versions,
             )
             .await;
+            cmd.seconds.inc_by(now.elapsed().as_secs_f64());
 
             match ret {
                 ApplyCmdResult::Committed((seqno, new_state, res, maintenance)) => {
+                    cmd.succeeded.inc();
+                    self.shard_metrics.cmd_succeeded.inc();
                     self.update_state(new_state);
                     return Ok((seqno, Ok(res), maintenance));
                 }
                 ApplyCmdResult::SkippedStateTransition((seqno, err, maintenance)) => {
+                    cmd.succeeded.inc();
+                    self.shard_metrics.cmd_succeeded.inc();
                     return Ok((seqno, Err(err), maintenance));
                 }
                 ApplyCmdResult::Indeterminate(err) => {
+                    cmd.failed.inc();
                     return Err(err);
                 }
                 ApplyCmdResult::ExpectationMismatch(seqno) => {
