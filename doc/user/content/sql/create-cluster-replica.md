@@ -60,6 +60,7 @@ the [`select * from mz_cluster_replicas`](/sql/system-catalog/mz_catalog/#mz_clu
 
 Valid `size` options are:
 
+- `3xsmall`
 - `2xsmall`
 - `xsmall`
 - `small`
