@@ -2796,13 +2796,13 @@ pub fn plan_create_cluster_replica(
     }: CreateClusterReplicaStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let cluster = scx.catalog.resolve_cluster(Some(&of_cluster.to_string()))?;
-    ensure_cluster_is_not_linked(scx, cluster.id())?;
     if is_storage_cluster(scx, cluster)
         && cluster.bound_objects().len() > 0
         && cluster.replicas().len() > 0
     {
         sql_bail!("cannot create more than one replica of a cluster containing sources or sinks");
     }
+    ensure_cluster_is_not_linked(scx, cluster.id())?;
     Ok(Plan::CreateClusterReplica(CreateClusterReplicaPlan {
         name: normalize::ident(name),
         cluster_id: cluster.id(),
