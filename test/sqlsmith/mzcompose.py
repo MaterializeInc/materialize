@@ -68,6 +68,7 @@ known_errors = [
     "range lower bound must be less than or equal to range upper bound",
     "violates not-null constraint",
     "division by zero",
+    "zero raised to a negative power is undefined",
     "operator does not exist",  # For list types
     "length must be nonnegative",
     "is only defined for finite arguments",
