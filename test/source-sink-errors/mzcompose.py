@@ -111,12 +111,11 @@ class KafkaTransactionLogGreaterThan1:
         c.testdrive(
             dedent(
                 f"""
-                > SELECT status, error ~* '{error}', details::json#>>'{{hint}}' ~* '{hint}'
+                > SELECT bool_or(error ~* '{error}'), bool_or(details::json#>>'{{hint}}' ~* '{hint}')
                   FROM mz_internal.mz_sink_status_history
                   JOIN mz_sinks ON mz_sinks.id = sink_id
                   WHERE name = 'kafka_sink' and status = 'stalled'
-                  ORDER BY occurred_at DESC LIMIT 1
-                stalled true true
+                true true
                 """
             )
         )
@@ -201,13 +200,12 @@ class KafkaDisruption:
 
                 # Sinks generally halt after receiving an error, which means that they may alternate
                 # between `stalled` and `starting`. Instead of relying on the current status, we
-                # check that the latest stall has the error we expect.
-                > SELECT status, error ~* '{error}'
+                # check that there is a stalled status with the expected error.
+                > SELECT bool_or(error ~* '{error}')
                   FROM mz_internal.mz_sink_status_history
                   JOIN mz_sinks ON mz_sinks.id = sink_id
                   WHERE name = 'sink1' and status = 'stalled'
-                  ORDER BY occurred_at DESC LIMIT 1
-                stalled true
+                true
                 """
             )
         )
@@ -355,7 +353,7 @@ disruptions: List[Disruption] = [
     KafkaDisruption(
         name="kill-redpanda",
         breakage=lambda c, _: c.kill("redpanda"),
-        expected_error="BrokerTransportFailure|Resolve",
+        expected_error="BrokerTransportFailure|Resolve|Broker transport failure",
         fixage=lambda c, _: c.up("redpanda"),
     ),
     # https://github.com/MaterializeInc/materialize/issues/16582

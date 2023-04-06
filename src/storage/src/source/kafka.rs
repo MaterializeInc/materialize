@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::Context;
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
@@ -21,11 +20,10 @@ use futures::StreamExt;
 use maplit::btreemap;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
-use rdkafka::error::{KafkaError, RDKafkaErrorCode};
+use rdkafka::error::KafkaError;
 use rdkafka::message::{BorrowedMessage, Headers};
 use rdkafka::statistics::Statistics;
 use rdkafka::topic_partition_list::Offset;
-use rdkafka::types::RDKafkaRespErr;
 use rdkafka::{ClientContext, Message, TopicPartitionList};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
@@ -33,7 +31,10 @@ use timely::progress::Antichain;
 use tokio::sync::Notify;
 use tracing::{error, info, trace, warn};
 
-use mz_kafka_util::client::{BrokerRewritingClientContext, MzClientContext};
+use mz_kafka_util::client::{
+    get_partitions, BrokerRewritingClientContext, MzClientContext, PartitionId,
+    DEFAULT_FETCH_METADATA_TIMEOUT,
+};
 use mz_ore::error::ErrorExt;
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::{adt::jsonb::Jsonb, Diff, GlobalId};
@@ -48,8 +49,6 @@ use crate::source::types::{HealthStatus, HealthStatusUpdate, SourceReaderMetrics
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 mod metrics;
-
-type PartitionId = i32;
 
 /// Contains all information necessary to ingest data from Kafka
 pub struct KafkaSourceReader {
@@ -140,7 +139,7 @@ impl SourceRender for KafkaSourceConnection {
             let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
             let health_status = Arc::new(Mutex::new(None));
             let notificator = Arc::new(Notify::new());
-            let consumer = connection
+            let consumer: Result<BaseConsumer<_>, _> = connection
                 .create_with_context(
                     &connection_context,
                     GlueConsumerContext {
@@ -307,8 +306,11 @@ impl SourceRender for KafkaSourceConnection {
                             "kafka metadata thread: starting..."
                         );
                         while let Some(partition_info) = partition_info.upgrade() {
-                            let result =
-                                get_kafka_partitions(&consumer, &topic, Duration::from_secs(30));
+                            let result = get_partitions(
+                                consumer.client(),
+                                &topic,
+                                DEFAULT_FETCH_METADATA_TIMEOUT,
+                            );
                             trace!(
                                 source_id = config.id.to_string(),
                                 worker_id = config.worker_id,
@@ -925,39 +927,6 @@ impl GlueConsumerContext {
 }
 
 impl ConsumerContext for GlueConsumerContext {}
-
-/// Return the list of partition ids associated with a specific topic
-fn get_kafka_partitions<C>(
-    consumer: &BaseConsumer<C>,
-    topic: &str,
-    timeout: Duration,
-) -> Result<Vec<PartitionId>, anyhow::Error>
-where
-    C: ConsumerContext,
-{
-    let metadata = consumer.fetch_metadata(Some(topic), timeout)?;
-    let topic_meta = metadata
-        .topics()
-        .get(0)
-        .context("expected a topic in the metadata result")?;
-
-    fn check_err(err: Option<RDKafkaRespErr>) -> anyhow::Result<()> {
-        if let Some(err) = err {
-            Err(RDKafkaErrorCode::from(err))?
-        }
-        Ok(())
-    }
-
-    check_err(topic_meta.error())?;
-
-    let mut partition_ids = Vec::with_capacity(topic_meta.partitions().len());
-    for partition_meta in topic_meta.partitions() {
-        check_err(partition_meta.error())?;
-
-        partition_ids.push(partition_meta.id());
-    }
-    Ok(partition_ids)
-}
 
 #[cfg(test)]
 mod tests {
