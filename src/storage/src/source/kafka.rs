@@ -434,7 +434,7 @@ impl SourceRender for KafkaSourceConnection {
                 // Additionally, assigning topics and splitting them off into separate queues is
                 // not atomic, so we expect to see at least some messages to show up when polling
                 // the consumer directly.
-                if let Some(result) = reader.consumer.poll(Duration::from_secs(0)) {
+                while let Some(result) = reader.consumer.poll(Duration::from_secs(0)) {
                     match result {
                         Err(e) => {
                             let error = format!(
