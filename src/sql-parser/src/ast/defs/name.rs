@@ -187,6 +187,7 @@ pub enum UnresolvedName {
     ClusterReplica(QualifiedReplica),
     Database(UnresolvedDatabaseName),
     Schema(UnresolvedSchemaName),
+    Role(Ident),
     Item(UnresolvedItemName),
 }
 
@@ -197,6 +198,7 @@ impl AstDisplay for UnresolvedName {
             UnresolvedName::ClusterReplica(n) => f.write_node(n),
             UnresolvedName::Database(n) => f.write_node(n),
             UnresolvedName::Schema(n) => f.write_node(n),
+            UnresolvedName::Role(n) => f.write_node(n),
             UnresolvedName::Item(n) => f.write_node(n),
         }
     }

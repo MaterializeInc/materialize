@@ -3244,34 +3244,40 @@ impl<'a> Parser<'a> {
         let if_exists = self.parse_if_exists()?;
         match object_type {
             ObjectType::Database => {
-                let name = self.parse_database_name()?;
+                let name = UnresolvedName::Database(self.parse_database_name()?);
                 let restrict = matches!(
                     self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
                     Some(RESTRICT),
                 );
-                Ok(Statement::DropDatabase(DropDatabaseStatement {
+                Ok(Statement::DropObjects(DropObjectsStatement {
+                    object_type: ObjectType::Database,
                     if_exists,
-                    name,
-                    restrict,
+                    names: vec![name],
+                    cascade: !restrict,
                 }))
             }
             ObjectType::Schema => {
-                let name = self.parse_schema_name()?;
+                let name = UnresolvedName::Schema(self.parse_schema_name()?);
                 let cascade = matches!(
                     self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
                     Some(CASCADE),
                 );
-                Ok(Statement::DropSchema(DropSchemaStatement {
-                    name,
+                Ok(Statement::DropObjects(DropObjectsStatement {
+                    object_type: ObjectType::Schema,
+                    names: vec![name],
                     if_exists,
                     cascade,
                 }))
             }
             ObjectType::Role => {
-                let names = self.parse_comma_separated(Parser::parse_object_name)?;
-                Ok(Statement::DropRoles(DropRolesStatement {
+                let names = self.parse_comma_separated(|parser| {
+                    Ok(UnresolvedName::Role(parser.parse_identifier()?))
+                })?;
+                Ok(Statement::DropObjects(DropObjectsStatement {
+                    object_type: ObjectType::Role,
                     if_exists,
                     names,
+                    cascade: false,
                 }))
             }
             ObjectType::Cluster => self.parse_drop_clusters(if_exists),
@@ -3285,7 +3291,9 @@ impl<'a> Parser<'a> {
             | ObjectType::Type
             | ObjectType::Secret
             | ObjectType::Connection => {
-                let names = self.parse_comma_separated(Parser::parse_object_name)?;
+                let names = self.parse_comma_separated(|parser| {
+                    Ok(UnresolvedName::Item(parser.parse_object_name()?))
+                })?;
                 let cascade = matches!(
                     self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
                     Some(CASCADE),
@@ -3306,12 +3314,15 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_drop_clusters(&mut self, if_exists: bool) -> Result<Statement<Raw>, ParserError> {
-        let names = self.parse_comma_separated(Parser::parse_object_name)?;
+        let names = self.parse_comma_separated(|parser| {
+            Ok(UnresolvedName::Cluster(parser.parse_identifier()?))
+        })?;
         let cascade = matches!(
             self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
             Some(CASCADE),
         );
-        Ok(Statement::DropClusters(DropClustersStatement {
+        Ok(Statement::DropObjects(DropObjectsStatement {
+            object_type: ObjectType::Cluster,
             if_exists,
             names,
             cascade,
@@ -3322,10 +3333,17 @@ impl<'a> Parser<'a> {
         &mut self,
         if_exists: bool,
     ) -> Result<Statement<Raw>, ParserError> {
-        let names = self.parse_comma_separated(|p| p.parse_cluster_replica_name())?;
-        Ok(Statement::DropClusterReplicas(
-            DropClusterReplicasStatement { if_exists, names },
-        ))
+        let names = self.parse_comma_separated(|p| {
+            Ok(UnresolvedName::ClusterReplica(
+                p.parse_cluster_replica_name()?,
+            ))
+        })?;
+        Ok(Statement::DropObjects(DropObjectsStatement {
+            object_type: ObjectType::ClusterReplica,
+            if_exists,
+            names,
+            cascade: false,
+        }))
     }
 
     fn parse_cluster_replica_name(&mut self) -> Result<QualifiedReplica, ParserError> {

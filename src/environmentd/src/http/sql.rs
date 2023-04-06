@@ -795,20 +795,7 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::Deleted(_)
         | ExecuteResponse::DiscardedTemp
         | ExecuteResponse::DiscardedAll
-        | ExecuteResponse::DroppedDatabase
-        | ExecuteResponse::DroppedSchema
-        | ExecuteResponse::DroppedRole
-        | ExecuteResponse::DroppedCluster
-        | ExecuteResponse::DroppedClusterReplica
-        | ExecuteResponse::DroppedSource
-        | ExecuteResponse::DroppedIndex
-        | ExecuteResponse::DroppedSink
-        | ExecuteResponse::DroppedTable
-        | ExecuteResponse::DroppedView
-        | ExecuteResponse::DroppedMaterializedView
-        | ExecuteResponse::DroppedType
-        | ExecuteResponse::DroppedSecret
-        | ExecuteResponse::DroppedConnection
+        | ExecuteResponse::DroppedObject(_)
         | ExecuteResponse::EmptyQuery
         | ExecuteResponse::GrantedRole
         | ExecuteResponse::Inserted(_)

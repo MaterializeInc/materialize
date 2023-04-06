@@ -46,7 +46,7 @@ use mz_sql::catalog::{
     CatalogTypeDetails,
 };
 use mz_sql::catalog::{CatalogItem as SqlCatalogItem, CatalogRole};
-use mz_sql::names::QualifiedItemName;
+use mz_sql::names::{ObjectId, QualifiedItemName};
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
     AlterOptionParameter, AlterOwnerPlan, AlterRolePlan, AlterSecretPlan, AlterSinkPlan,
@@ -54,8 +54,7 @@ use mz_sql::plan::{
     CreateClusterPlan, CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
     CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DropClusterReplicasPlan, DropClustersPlan, DropDatabasePlan, DropItemsPlan,
-    DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, GrantRolePlan, IndexOption,
+    CreateViewPlan, DropObjectsPlan, ExecutePlan, ExplainPlan, GrantRolePlan, IndexOption,
     InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan, QueryWhen,
     ReadThenWritePlan, ResetVariablePlan, RevokeRolePlan, SendDiffsPlan, SetVariablePlan,
     ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, VariableValue, View,
@@ -1113,7 +1112,7 @@ impl Coordinator {
         let mut ops = vec![];
 
         if let Some(id) = replace {
-            ops.extend(self.catalog().drop_items_ops(&[id]));
+            ops.extend(self.catalog().drop_items_ops(&[id], &mut BTreeSet::new()));
         }
         let view_id = self.catalog_mut().allocate_user_id().await?;
         let view_oid = self.catalog_mut().allocate_oid()?;
@@ -1214,7 +1213,10 @@ impl Coordinator {
 
         let mut ops = Vec::new();
         if let Some(drop_id) = replace {
-            ops.extend(self.catalog().drop_items_ops(&[drop_id]));
+            ops.extend(
+                self.catalog()
+                    .drop_items_ops(&[drop_id], &mut BTreeSet::new()),
+            );
         }
         ops.push(catalog::Op::CreateItem {
             id,
@@ -1387,82 +1389,112 @@ impl Coordinator {
         }
     }
 
-    pub(super) async fn sequence_drop_database(
+    pub(super) async fn sequence_drop_objects(
         &mut self,
         session: &mut Session,
-        plan: DropDatabasePlan,
+        plan: DropObjectsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let database_name = plan
-            .id
-            .map(|id| self.catalog().get_database(&id))
-            .map(|db| db.name.clone());
+        let mut ops = Vec::new();
+        let mut dropped_active_db = false;
+        let mut dropped_active_cluster = false;
 
-        let ops = self.catalog().drop_database_ops(plan.id);
-        self.catalog_transact(Some(session), ops).await?;
-
-        if let Some(name) = database_name {
-            if name.as_str() == session.vars().database() {
-                session.add_notice(AdapterNotice::DroppedActiveDatabase { name });
-            }
-        }
-
-        Ok(ExecuteResponse::DroppedDatabase)
-    }
-
-    pub(super) async fn sequence_drop_schema(
-        &mut self,
-        session: &Session,
-        plan: DropSchemaPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let ops = self.catalog().drop_schema_ops(plan.id);
-        self.catalog_transact(Some(session), ops).await?;
-        Ok(ExecuteResponse::DroppedSchema)
-    }
-
-    pub(super) async fn sequence_drop_roles(
-        &mut self,
-        session: &Session,
-        plan: DropRolesPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let dropped_roles: BTreeMap<_, _> = plan
+        let mut dropped_roles = plan
             .ids
             .iter()
-            .map(|(role_id, role_name)| (*role_id, role_name.as_str()))
+            .filter_map(|id| match id {
+                ObjectId::Role(role_id) => Some(role_id),
+                _ => None,
+            })
+            .map(|id| {
+                let name = self.catalog().get_role(id).name();
+                (*id, name)
+            })
             .collect();
-
-        // Check to make sure that no object is owned by a dropped role.
         self.validate_dropped_role_ownership(&dropped_roles)?;
-
-        let dropped_ids: BTreeSet<_> = dropped_roles.keys().collect();
-        let mut ops = Vec::new();
-
         // If any role is a member of a dropped role, then we must revoke that membership.
+        let dropped_role_ids: BTreeSet<_> = dropped_roles.keys().collect();
         for role in self.catalog().user_roles() {
-            for dropped_role_id in dropped_ids.intersection(&role.membership.map.keys().collect()) {
+            for dropped_role_id in
+                dropped_role_ids.intersection(&role.membership.map.keys().collect())
+            {
                 ops.push(catalog::Op::RevokeRole {
                     role_id: **dropped_role_id,
                     member_id: role.id(),
                 })
             }
         }
-        // We must also revoke all role memberships that the dropped roles belongs to.
-        for dropped_id in dropped_ids {
-            let role = self.catalog().get_role(dropped_id);
-            for group_id in role.membership.map.keys() {
-                ops.push(catalog::Op::RevokeRole {
-                    role_id: *group_id,
-                    member_id: *dropped_id,
-                });
+
+        let mut seen = BTreeSet::new();
+        for id in &plan.ids {
+            match id {
+                ObjectId::Database(id) => {
+                    let name = self.catalog().get_database(id).name();
+                    if name == session.vars().database() {
+                        dropped_active_db = true;
+                    }
+                    ops.extend_from_slice(&self.catalog().drop_database_ops(Some(*id), &mut seen));
+                }
+                ObjectId::Schema((database_id, schema_id)) => ops.extend_from_slice(
+                    &self
+                        .catalog()
+                        .drop_schema_ops(Some((*database_id, *schema_id)), &mut seen),
+                ),
+                ObjectId::Cluster(id) => {
+                    self.ensure_cluster_is_not_linked(*id)?;
+                    if let Some(active_id) = self
+                        .catalog()
+                        .active_cluster(session)
+                        .ok()
+                        .map(|cluster| cluster.id())
+                    {
+                        if id == &active_id {
+                            dropped_active_cluster = true;
+                        }
+                    }
+                    ops.extend_from_slice(&self.catalog().drop_cluster_ops(&[*id], &mut seen));
+                }
+                ObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                    self.ensure_cluster_is_not_linked(*cluster_id)?;
+                    ops.extend_from_slice(
+                        &self
+                            .catalog()
+                            .drop_cluster_replica_ops(&[(*cluster_id, *replica_id)], &mut seen),
+                    );
+                }
+                ObjectId::Role(id) => {
+                    let role = self.catalog().get_role(id);
+                    let name = role.name();
+                    dropped_roles.insert(*id, name);
+                    // We must revoke all role memberships that the dropped roles belongs to.
+                    for group_id in role.membership.map.keys() {
+                        ops.push(catalog::Op::RevokeRole {
+                            role_id: *group_id,
+                            member_id: *id,
+                        });
+                    }
+                    ops.push(catalog::Op::DropObject(ObjectId::Role(*id)));
+                }
+                ObjectId::Item(id) => {
+                    ops.extend_from_slice(&self.catalog().drop_items_ops(&[*id], &mut seen));
+                }
             }
         }
 
-        ops.extend(
-            plan.ids
-                .into_iter()
-                .map(|(id, name)| catalog::Op::DropRole { id, name }),
-        );
         self.catalog_transact(Some(session), ops).await?;
-        Ok(ExecuteResponse::DroppedRole)
+
+        fail::fail_point!("after_sequencer_drop_replica");
+
+        if dropped_active_db {
+            session.add_notice(AdapterNotice::DroppedActiveDatabase {
+                name: session.vars().database().to_string(),
+            });
+        }
+        if dropped_active_cluster {
+            session.add_notice(AdapterNotice::DroppedActiveCluster {
+                name: session.vars().cluster().to_string(),
+            });
+        }
+        Ok(ExecuteResponse::DroppedObject(plan.object_type))
     }
 
     fn validate_dropped_role_ownership(
@@ -1516,81 +1548,6 @@ impl Coordinator {
         } else {
             Ok(())
         }
-    }
-
-    pub(super) async fn sequence_drop_clusters(
-        &mut self,
-        session: &mut Session,
-        DropClustersPlan { ids }: DropClustersPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let active_cluster_id = self
-            .catalog()
-            .active_cluster(session)
-            .ok()
-            .map(|cluster| cluster.id);
-        for id in &ids {
-            self.ensure_cluster_is_not_linked(*id)?;
-        }
-
-        let ops = self.catalog().drop_cluster_ops(&ids, &mut BTreeSet::new());
-
-        self.catalog_transact(Some(session), ops).await?;
-
-        if let Some(active_cluster_id) = active_cluster_id {
-            if ids.contains(&active_cluster_id) {
-                session.add_notice(AdapterNotice::DroppedActiveCluster {
-                    name: session.vars().cluster().to_string(),
-                });
-            }
-        }
-
-        Ok(ExecuteResponse::DroppedCluster)
-    }
-
-    pub(super) async fn sequence_drop_cluster_replicas(
-        &mut self,
-        session: &Session,
-        DropClusterReplicasPlan { ids }: DropClusterReplicasPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        for (id, _) in &ids {
-            self.ensure_cluster_is_not_linked(*id)?;
-        }
-        let ops = self
-            .catalog()
-            .drop_cluster_replica_ops(&ids, &mut BTreeSet::new());
-
-        self.catalog_transact(Some(session), ops).await?;
-        fail::fail_point!("after_sequencer_drop_replica");
-
-        Ok(ExecuteResponse::DroppedClusterReplica)
-    }
-
-    pub(super) async fn sequence_drop_items(
-        &mut self,
-        session: &Session,
-        plan: DropItemsPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let ops = self.catalog().drop_items_ops(&plan.items);
-        self.catalog_transact(Some(session), ops).await?;
-        Ok(match plan.ty {
-            ObjectType::Source => ExecuteResponse::DroppedSource,
-            ObjectType::View => ExecuteResponse::DroppedView,
-            ObjectType::MaterializedView => ExecuteResponse::DroppedMaterializedView,
-            ObjectType::Table => ExecuteResponse::DroppedTable,
-            ObjectType::Sink => ExecuteResponse::DroppedSink,
-            ObjectType::Index => ExecuteResponse::DroppedIndex,
-            ObjectType::Type => ExecuteResponse::DroppedType,
-            ObjectType::Secret => ExecuteResponse::DroppedSecret,
-            ObjectType::Connection => ExecuteResponse::DroppedConnection,
-            ObjectType::Role
-            | ObjectType::Cluster
-            | ObjectType::ClusterReplica
-            | ObjectType::Database
-            | ObjectType::Schema => {
-                unreachable!("handled through their respective sequence_drop functions")
-            }
-            ObjectType::Func => unreachable!("rejected by the parser"),
-        })
     }
 
     pub(super) fn sequence_show_all_variables(

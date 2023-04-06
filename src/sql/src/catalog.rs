@@ -41,7 +41,7 @@ use mz_storage_client::types::sources::SourceDesc;
 use crate::func::Func;
 use crate::names::{
     Aug, DatabaseId, FullItemName, FullSchemaName, ObjectId, PartialItemName, QualifiedItemName,
-    QualifiedSchemaName, ResolvedDatabaseSpecifier, SchemaSpecifier,
+    QualifiedSchemaName, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
 };
 use crate::normalize;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
@@ -240,7 +240,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     fn system_vars_mut(&mut self) -> &mut SystemVars;
 
     /// Returns the [`RoleId`] of the owner of an object by its ID.
-    fn get_owner_id(&self, id: &ObjectId) -> RoleId;
+    fn get_owner_id(&self, id: &ObjectId) -> Option<RoleId>;
 }
 
 /// Configuration associated with a catalog.
@@ -292,6 +292,10 @@ pub trait CatalogDatabase {
     /// Returns whether the database contains schemas.
     fn has_schemas(&self) -> bool;
 
+    /// Returns the schemas of the database as a map from schema name to
+    /// schema ID.
+    fn schemas(&self) -> &BTreeMap<String, SchemaId>;
+
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;
 }
@@ -309,6 +313,10 @@ pub trait CatalogSchema {
 
     /// Lists the `CatalogItem`s for the schema.
     fn has_items(&self) -> bool;
+
+    /// Returns the items of the schema as a map from item name to
+    /// item ID.
+    fn items(&self) -> &BTreeMap<String, GlobalId>;
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;

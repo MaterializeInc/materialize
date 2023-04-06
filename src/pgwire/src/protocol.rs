@@ -1402,20 +1402,7 @@ where
             | ExecuteResponse::Deleted(..)
             | ExecuteResponse::DiscardedAll
             | ExecuteResponse::DiscardedTemp
-            | ExecuteResponse::DroppedCluster
-            | ExecuteResponse::DroppedClusterReplica
-            | ExecuteResponse::DroppedConnection
-            | ExecuteResponse::DroppedDatabase
-            | ExecuteResponse::DroppedIndex
-            | ExecuteResponse::DroppedMaterializedView
-            | ExecuteResponse::DroppedRole
-            | ExecuteResponse::DroppedSchema
-            | ExecuteResponse::DroppedSecret
-            | ExecuteResponse::DroppedSink
-            | ExecuteResponse::DroppedSource
-            | ExecuteResponse::DroppedTable
-            | ExecuteResponse::DroppedType
-            | ExecuteResponse::DroppedView
+            | ExecuteResponse::DroppedObject(_)
             | ExecuteResponse::GrantedRole
             | ExecuteResponse::Inserted(..)
             | ExecuteResponse::Prepare
