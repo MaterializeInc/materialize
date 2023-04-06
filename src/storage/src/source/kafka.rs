@@ -35,7 +35,8 @@ use mz_kafka_util::client::{
     get_partitions, BrokerRewritingClientContext, MzClientContext, PartitionId,
 };
 use mz_ore::error::ErrorExt;
-use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
+use mz_ore::task::{AbortOnDropHandle, JoinHandleExt as _};
+use mz_ore::thread::{JoinHandleExt as _, UnparkOnDropHandle};
 use mz_repr::{adt::jsonb::Jsonb, Diff, GlobalId};
 use mz_storage_client::types::connections::{ConnectionContext, StringOrSecret};
 use mz_storage_client::types::sources::{KafkaSourceConnection, MzOffset, SourceTimestamp};
@@ -48,6 +49,92 @@ use crate::source::types::{HealthStatus, HealthStatusUpdate, SourceReaderMetrics
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 mod metrics;
+
+/// A type that tracks health updates that need to be emitted
+/// to the health output. Note that we prioritize connection
+/// errors (from the connection status task) over errors
+/// directly from rdkafka, as we know they are the underlying
+/// cause.
+enum SourceReaderHealth {
+    Rdkafka {
+        additional_errors: Vec<HealthStatus>,
+        latest: Option<HealthStatus>,
+    },
+    ConnectionErrored {
+        errors: Vec<HealthStatus>,
+        source_error: Option<HealthStatus>,
+    },
+}
+
+impl SourceReaderHealth {
+    /// Set the latest health as communicated to
+    /// us from rdkafka.
+    fn set_rdkafka_health(&mut self, hc: HealthStatus) {
+        use SourceReaderHealth::*;
+        match self {
+            Rdkafka {
+                latest,
+                additional_errors: _,
+            } => *latest = Some(hc),
+            ConnectionErrored {
+                errors: _,
+                source_error,
+            } => *source_error = Some(hc),
+        }
+    }
+
+    /// Drain updates that need to be emitted.
+    fn drain_updates(&mut self) -> Vec<HealthStatus> {
+        use SourceReaderHealth::*;
+        match self {
+            Rdkafka {
+                latest,
+                additional_errors,
+            } => additional_errors.drain(..).chain(latest.take()).collect(),
+            ConnectionErrored {
+                errors,
+                source_error: _,
+            } => errors.drain(..).collect(),
+        }
+    }
+
+    /// Append a known connection status error.
+    fn append_connection_error(&mut self, hc: HealthStatus) {
+        use SourceReaderHealth::*;
+        match self {
+            Rdkafka {
+                additional_errors,
+                latest,
+            } => {
+                *self = ConnectionErrored {
+                    errors: additional_errors.drain(..).chain([hc]).collect(),
+                    source_error: latest.take(),
+                }
+            }
+            ConnectionErrored {
+                errors,
+                source_error: _,
+            } => errors.push(hc),
+        }
+    }
+
+    /// Mark the connection status as having been resolved.
+    fn clear_connection_error(&mut self) {
+        use SourceReaderHealth::*;
+        match self {
+            ConnectionErrored {
+                errors,
+                source_error,
+            } => {
+                *self = Rdkafka {
+                    additional_errors: errors.drain(..).collect(),
+                    latest: source_error.take(),
+                }
+            }
+            Rdkafka { .. } => {}
+        }
+    }
+}
 
 /// Contains all information necessary to ingest data from Kafka
 pub struct KafkaSourceReader {
@@ -79,12 +166,14 @@ pub struct KafkaSourceReader {
     // Drop order is important here, we want the thread to be unparked after the `partition_info`
     // Arc has been dropped, so that the unpacked thread notices it and exits immediately
     _metadata_thread_handle: UnparkOnDropHandle<()>,
+    /// A handle to the spawned connection status task.
+    _connection_status_handle: AbortOnDropHandle<()>,
     /// A handle to the partition specific metrics
     partition_metrics: KafkaPartitionMetrics,
     /// Whether or not to unpack and allocate headers and pass them through in the `SourceMessage`
     include_headers: bool,
     /// The latest status detected by the metadata refresh thread.
-    health_status: Arc<Mutex<Option<HealthStatus>>>,
+    health_status: Arc<Mutex<SourceReaderHealth>>,
     /// Per partition capabilities used to produce messages
     partition_capabilities: BTreeMap<PartitionId, Capability<Partitioned<PartitionId, MzOffset>>>,
 }
@@ -136,7 +225,10 @@ impl SourceRender for KafkaSourceConnection {
                 ..
             } = self;
             let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
-            let health_status = Arc::new(Mutex::new(None));
+            let health_status = Arc::new(Mutex::new(SourceReaderHealth::Rdkafka {
+                additional_errors: vec![],
+                latest: None,
+            }));
             let notificator = Arc::new(Notify::new());
             let consumer = connection
                 .create_with_context(
@@ -269,6 +361,29 @@ impl SourceRender for KafkaSourceConnection {
                 "instantiating Kafka source reader at offsets {start_offsets:?}"
             );
 
+            let connection_status_handle = {
+                let status_report = Arc::clone(&health_status);
+                mz_ore::task::spawn(|| "kafka-connection-status".to_string(), async move {
+                    loop {
+                        let mut broken = error_stream.check_connection_statuses().await;
+                        while let Some(e) = broken.wait_for_recovery().await {
+                            status_report.lock().unwrap().append_connection_error(
+                                HealthStatus::StalledWithError {
+                                    // Wrap it in an anyhow so we get the error chain printed.
+                                    error: format!(
+                                        "kafka connection failed: {}",
+                                        e.display_with_causes()
+                                    ),
+                                    hint: None,
+                                },
+                            )
+                        }
+                        status_report.lock().unwrap().clear_connection_error();
+                    }
+                })
+                .abort_on_drop()
+            };
+
             let partition_info = Arc::new(Mutex::new(None));
             let metadata_thread_handle = {
                 let partition_info = Arc::downgrade(&partition_info);
@@ -323,15 +438,19 @@ impl SourceRender for KafkaSourceConnection {
                                         num_workers = config.worker_count,
                                         "kafka metadata thread: updated partition metadata info",
                                     );
-                                    *status_report.lock().unwrap() = Some(HealthStatus::Running);
+                                    status_report
+                                        .lock()
+                                        .unwrap()
+                                        .set_rdkafka_health(HealthStatus::Running);
                                     thread::park_timeout(metadata_refresh_frequency);
                                 }
                                 Err(e) => {
-                                    *status_report.lock().unwrap() =
-                                        Some(HealthStatus::StalledWithError {
+                                    status_report.lock().unwrap().set_rdkafka_health(
+                                        HealthStatus::StalledWithError {
                                             error: format!("{}", e.display_with_causes()),
                                             hint: None,
-                                        });
+                                        },
+                                    );
                                     thread::park_timeout(metadata_refresh_frequency);
                                 }
                             }
@@ -365,6 +484,7 @@ impl SourceRender for KafkaSourceConnection {
                 partition_info,
                 include_headers: self.include_headers.is_some(),
                 _metadata_thread_handle: metadata_thread_handle,
+                _connection_status_handle: connection_status_handle,
                 partition_metrics: KafkaPartitionMetrics::new(
                     config.base_metrics,
                     partition_ids,
@@ -439,11 +559,12 @@ impl SourceRender for KafkaSourceConnection {
                                 "kafka error when polling consumer for source: {} topic: {} : {}",
                                 reader.source_name, reader.topic_name, e
                             );
-                            let status = HealthStatusUpdate::from(HealthStatus::StalledWithError {
-                                error,
-                                hint: None,
-                            });
-                            health_output.give(&health_cap, status).await;
+                            let status = HealthStatus::StalledWithError { error, hint: None };
+                            reader
+                                .health_status
+                                .lock()
+                                .unwrap()
+                                .set_rdkafka_health(status);
                         }
                         Ok(message) => {
                             let (message, ts) =
@@ -489,7 +610,11 @@ impl SourceRender for KafkaSourceConnection {
                                     ),
                                     hint: None,
                                 };
-                                health_output.give(&health_cap, status.into()).await;
+                                reader
+                                    .health_status
+                                    .lock()
+                                    .unwrap()
+                                    .set_rdkafka_health(status);
                             }
                         }
                     }
@@ -505,33 +630,15 @@ impl SourceRender for KafkaSourceConnection {
                     part_cap.downgrade(&upper);
                 }
 
-                let status = reader.health_status.lock().unwrap().take();
-                if let Some(status) = status {
+                // Separate to convince rust that the mutex guard isn't held across an
+                // await point.
+                let health_updates = reader.health_status.lock().unwrap().drain_updates();
+                for status in health_updates {
                     health_output.give(&health_cap, status.into()).await;
                 }
 
                 // Wait to be notified while also making progress with offset committing
                 tokio::select! {
-                    // Note that we do this AFTER emitting the `health_status` from the
-                    // metadata fetch. This way the active status of the source is
-                    // the actual connection error. When it recovers, we will
-                    // loop around and emit the last metadata error, or `Running`
-                    // if we recover in time.
-                    mut broken = error_stream.check_connection_statuses() => {
-                        while let Some(e) = broken.wait_for_recovery().await {
-                            health_output.give(
-                                &health_cap,
-                                HealthStatusUpdate {
-                                    update: HealthStatus::StalledWithError {
-                                        // Wrap it in an anyhow so we get the error chain printed.
-                                        error: format!("kafka connection failed: {}", e.display_with_causes()),
-                                        hint: None,
-                                    },
-                                    should_halt: false,
-                                }
-                            ).await;
-                        }
-                    },
                     // TODO(petrosagg): remove the timeout and rely purely on librdkafka waking us
                     // up
                     _  = tokio::time::timeout(Duration::from_secs(1), notificator.notified()) => {},
