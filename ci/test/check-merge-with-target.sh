@@ -27,4 +27,4 @@ run git fetch "$BUILDKITE_REPO_REF" "$BUILDKITE_PULL_REQUEST_BASE_BRANCH"
 run git merge "$BUILDKITE_REPO_REF"/"$BUILDKITE_PULL_REQUEST_BASE_BRANCH" --message "Merge"
 
 ci_collapsed_heading "Conduct checks"
-run cargo check
+bin/ci-builder run stable cargo check
