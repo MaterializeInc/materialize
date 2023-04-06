@@ -639,7 +639,21 @@ async fn postgres_replication_loop_inner(
         drop(client);
 
         assert!(slot_lsn <= snapshot_lsn);
-        if slot_lsn < snapshot_lsn {
+
+        // We only need to rewind values from the WAL if there are any values between the `slot_lsn`
+        // and `snapshot_lsn`. If there is nothing in the WAL for us to see between those times, we
+        // would just sit there dumbly waiting for a timeout.
+        if slot_lsn < snapshot_lsn
+            && peek_wal_lsns(
+                task_info.connection_config.clone(),
+                &task_info.slot,
+                &task_info.publication,
+                Some(snapshot_lsn),
+            )
+            .await?
+            .count()
+                > 0
+        {
             tracing::info!("postgres snapshot was at {snapshot_lsn:?} but we need it at {slot_lsn:?}. Rewinding");
             // Our snapshot was too far ahead so we must rewind it by reading the replication
             // stream until the snapshot lsn and emitting any rows that we find with negated diffs
@@ -1306,12 +1320,6 @@ async fn produce_replication<'a>(
             // `postgres_replication_loop_inner`, we drop clients aggressively out of caution.
             drop(stream);
 
-            let client = client_config
-                .clone()
-                .connect_replication()
-                .await
-                .err_indefinite()?;
-
             // We reach this place if the consume loop above detected large WAL lag. This
             // section determines whether or not we can skip over that part of the WAL by
             // peeking into the replication slot using a normal SQL query and the
@@ -1321,35 +1329,11 @@ async fn produce_replication<'a>(
             // relevant data from the current LSN to the observed WAL end. If there are no
             // messages then it is safe to fast forward last_commit_lsn to the WAL end LSN and restart
             // the replication stream from there.
-            let query = format!(
-                "SELECT lsn FROM pg_logical_slot_peek_binary_changes(
-                     '{name}', NULL, NULL,
-                     'proto_version', '1',
-                     'publication_names', '{publication}'
-                )",
-                name = &slot,
-                publication = publication
-            );
-
             let peek_binary_start_time = Instant::now();
-            let rows = client.simple_query(&query).await.err_indefinite()?;
 
-            let changes = rows
-                .into_iter()
-                .filter(|row| match row {
-                    SimpleQueryMessage::Row(row) => {
-                        let change_lsn: PgLsn = row
-                            .get("lsn")
-                            .expect("missing expected column: `lsn`")
-                            .parse()
-                            .expect("invalid lsn");
-                        // Keep all the changes that may exist after our last observed transaction
-                        // commit
-                        change_lsn > last_commit_lsn
-                    }
-                    SimpleQueryMessage::CommandComplete(_) => false,
-                    _ => panic!("unexpected enum variant"),
-                })
+            let changes = peek_wal_lsns(client_config.clone(), slot, publication, None)
+                .await?
+                .filter(|change_lsn| change_lsn > &last_commit_lsn)
                 .count();
 
             // If there are no changes until the end of the WAL it's safe to fast forward
@@ -1369,4 +1353,47 @@ async fn produce_replication<'a>(
             );
         }
     })
+}
+
+/// Return a peek of all LSNs in the WAL beyond the current position.
+///
+/// If `up_to` is `None`, this will be all LSNs until the end of the log, otherwise will be up to
+/// the specified LSN.
+///
+/// For more details, see <https://pgpedia.info/p/pg_logical_slot_peek_binary_changes.html>.
+async fn peek_wal_lsns(
+    config: mz_postgres_util::Config,
+    slot: &str,
+    publication: &str,
+    up_to: Option<PgLsn>,
+) -> Result<impl Iterator<Item = PgLsn>, ReplicationError> {
+    let client = config.connect_replication().await.err_indefinite()?;
+    let query = format!(
+        "SELECT lsn FROM pg_logical_slot_peek_binary_changes(
+            '{}', {}, NULL,
+            'proto_version', '1',
+            'publication_names', '{}'
+        )",
+        slot,
+        match up_to {
+            Some(lsn) => format!("'{lsn}'"),
+            None => "NULL".to_string(),
+        },
+        publication,
+    );
+
+    let rows = client.simple_query(&query).await.err_indefinite()?;
+
+    Ok(rows.into_iter().filter_map(|row| match row {
+        SimpleQueryMessage::Row(row) => {
+            let lsn: PgLsn = row
+                .get("lsn")
+                .expect("missing expected column: `lsn`")
+                .parse()
+                .expect("invalid lsn");
+            Some(lsn)
+        }
+        SimpleQueryMessage::CommandComplete(_) => None,
+        _ => panic!("unexpected enum variant"),
+    }))
 }
