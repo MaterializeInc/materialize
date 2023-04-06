@@ -307,6 +307,11 @@ impl StorageUsageClient {
             .inc_by(now.duration_since(start).as_secs_f64());
         start = now;
 
+        let shard_metrics = self.metrics.shards.shard(&shard_id);
+        shard_metrics
+            .gc_live_diffs
+            .set(u64::cast_from(states_iter.len()));
+
         let mut referenced_batches_bytes = BTreeMap::new();
         let mut referenced_other_bytes = 0;
         while let Some(_) = states_iter.next(|x| {
@@ -360,7 +365,6 @@ impl StorageUsageClient {
         // Sanity check that we didn't obviously do anything wrong.
         assert_eq!(ret.total_bytes(), blob_usage.total_bytes());
 
-        let shard_metrics = self.metrics.shards.shard(&shard_id);
         shard_metrics
             .usage_current_state_batches_bytes
             .set(ret.current_state_batches_bytes);
