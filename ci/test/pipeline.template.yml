@@ -40,7 +40,7 @@ steps:
 
   - id: check-merge-with-target
     label: Merge skew cargo check
-    command: bin/ci-builder run stable ci/test/check-merge-with-target.sh
+    command: ci/test/check-merge-with-target.sh
     inputs:
       - Cargo.lock
       - "**/Cargo.toml"
