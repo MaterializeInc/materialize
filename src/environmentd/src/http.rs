@@ -46,7 +46,7 @@ use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
 use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient};
-use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
+use mz_frontegg_auth::{Authentication as FronteggAuthentication, Error as FronteggError};
 use mz_ore::cast::u64_to_usize;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::TracingHandle;

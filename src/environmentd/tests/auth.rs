@@ -121,8 +121,8 @@ use uuid::Uuid;
 
 use mz_environmentd::{TlsMode, WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
-    ApiTokenArgs, ApiTokenResponse, Claims, FronteggAuthentication, FronteggConfig, RefreshToken,
-    REFRESH_SUFFIX,
+    ApiTokenArgs, ApiTokenResponse, Authentication as FronteggAuthentication,
+    AuthenticationConfig as FronteggConfig, Claims, RefreshToken, REFRESH_SUFFIX,
 };
 use mz_ore::assert_contains;
 use mz_ore::now::NowFn;
@@ -664,7 +664,7 @@ fn start_mzcloud(
                     .refresh_tokens
                     .lock()
                     .unwrap()
-                    .get(&args.refresh_token),
+                    .get(args.refresh_token),
                 context.enable_refresh.load(Ordering::Relaxed),
             ) {
                 (Some(email), true) => email.to_string(),
@@ -814,14 +814,17 @@ fn test_auth_expiry() {
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
     )
     .unwrap();
-    let frontegg_auth = FronteggAuthentication::new(FronteggConfig {
-        admin_api_token_url: frontegg_server.url.clone(),
-        decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
-        tenant_id,
-        now: SYSTEM_TIME.clone(),
-        refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
-        admin_role: "mzadmin".to_string(),
-    });
+    let frontegg_auth = FronteggAuthentication::new(
+        FronteggConfig {
+            admin_api_token_url: frontegg_server.url.clone(),
+            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            tenant_id,
+            now: SYSTEM_TIME.clone(),
+            refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
+            admin_role: "mzadmin".to_string(),
+        },
+        mz_frontegg_auth::Client::default(),
+    );
     let frontegg_user = "user@_.com";
     let frontegg_password = &format!("mzp_{client_id}{secret}");
 
@@ -954,14 +957,17 @@ fn test_auth_base() {
         1_000,
     )
     .unwrap();
-    let frontegg_auth = FronteggAuthentication::new(FronteggConfig {
-        admin_api_token_url: frontegg_server.url,
-        decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
-        tenant_id,
-        now,
-        refresh_before_secs: 0,
-        admin_role: "mzadmin".to_string(),
-    });
+    let frontegg_auth = FronteggAuthentication::new(
+        FronteggConfig {
+            admin_api_token_url: frontegg_server.url,
+            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            tenant_id,
+            now,
+            refresh_before_secs: 0,
+            admin_role: "mzadmin".to_string(),
+        },
+        mz_frontegg_auth::Client::default(),
+    );
     let frontegg_user = "user@_.com";
     let frontegg_password = &format!("mzp_{client_id}{secret}");
     let frontegg_basic = Authorization::basic(frontegg_user, frontegg_password);
@@ -1587,14 +1593,17 @@ fn test_auth_admin() {
     )
     .unwrap();
     let password_prefix = "mzp_";
-    let frontegg_auth = FronteggAuthentication::new(FronteggConfig {
-        admin_api_token_url: frontegg_server.url.clone(),
-        decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
-        tenant_id,
-        now,
-        refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
-        admin_role: admin_role.to_string(),
-    });
+    let frontegg_auth = FronteggAuthentication::new(
+        FronteggConfig {
+            admin_api_token_url: frontegg_server.url.clone(),
+            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            tenant_id,
+            now,
+            refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
+            admin_role: admin_role.to_string(),
+        },
+        mz_frontegg_auth::Client::default(),
+    );
 
     let frontegg_password = &format!("{password_prefix}{client_id}{secret}");
     let frontegg_basic = Authorization::basic(frontegg_user, frontegg_password);

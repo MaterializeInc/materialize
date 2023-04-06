@@ -101,7 +101,7 @@ use mz_adapter::config::{system_parameter_sync, SystemParameterBackend, SystemPa
 use mz_build_info::{build_info, BuildInfo};
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
-use mz_frontegg_auth::FronteggAuthentication;
+use mz_frontegg_auth::Authentication as FronteggAuthentication;
 use mz_ore::future::OreFutureExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
