@@ -64,7 +64,7 @@ where
     // Note also the special case in `ReducePlan::keys()`.
     if plan == ReducePlan::DistinctNegated {
         let (output, errs) = build_distinct_retractions(debug_name, collection);
-        return CollectionBundle::from_collections(output, errs);
+        return CollectionBundle::from_collections(output, err_input.concat(&errs));
     }
 
     let (arrangement, err_collection) =

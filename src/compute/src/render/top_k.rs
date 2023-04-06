@@ -158,7 +158,7 @@ where
                         arity,
                         &self.debug_name,
                     );
-                    err_collection = errs;
+                    err_collection = err_collection.concat(&errs);
                     oks
                 }
             };
