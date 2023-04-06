@@ -17,8 +17,7 @@ set -euo pipefail
 . misc/shlib/shlib.bash
 
 ci_collapsed_heading "Configure git"
-BUILDKITE_REPO_REF="buildkite-origin"
-run git remote add "$BUILDKITE_REPO_REF" "$BUILDKITE_REPO"
+BUILDKITE_REPO_REF="origin"
 run git config --global user.email "buildkite@materialize.com"
 run git config --global user.name "Buildkite"
 
