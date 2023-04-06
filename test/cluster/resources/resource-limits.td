@@ -285,6 +285,30 @@ ALTER SYSTEM RESET ALL
 > DROP TABLE t4;
 
 $ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_dataflows_per_cluster = 21
+
+> SHOW max_dataflows_per_cluster
+21
+
+> CREATE TABLE subscribe_table(a int)
+
+$ postgres-execute connection=mz_system
+BEGIN
+$ postgres-execute connection=mz_system
+DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM subscribe_table);
+$ postgres-execute connection=mz_system
+FETCH 1 c WITH (TIMEOUT='0s')
+
+! SUBSCRIBE (SELECT * FROM subscribe_table)
+contains: Max dataflows per cluster resource limit of 21 cannot be exceeded
+
+$ postgres-execute connection=mz_system
+ROLLBACK
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET max_dataflows_per_cluster
+
+$ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_sources = 2
 
 # Insert Postgres data

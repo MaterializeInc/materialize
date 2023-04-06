@@ -121,6 +121,13 @@ pub enum DataflowCreationError {
     MissingAsOf,
     #[error("dataflow has an as_of not beyond the since of collection: {0}")]
     SinceViolation(GlobalId),
+    #[error("dataflow tried to create more resources than is allowed in the system configuration. {resource_type} resource limit of {limit} cannot be exceeded. Current amount is {current_amount} instance, tried to create {new_instances} new instances.")]
+    ResourceExhaustion {
+        resource_type: String,
+        limit: u32,
+        current_amount: usize,
+        new_instances: i32,
+    },
 }
 
 impl From<InstanceMissing> for DataflowCreationError {

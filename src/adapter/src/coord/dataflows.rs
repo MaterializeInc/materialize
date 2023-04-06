@@ -17,6 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use differential_dataflow::lattice::Lattice;
+use mz_compute_client::controller::error::DataflowCreationError;
 use timely::progress::Antichain;
 use timely::PartialOrder;
 use tracing::warn;
@@ -117,7 +118,7 @@ impl Coordinator {
         dataflows: Vec<DataflowDesc>,
         instance: ComputeInstanceId,
     ) {
-        self.ship_dataflows(dataflows, instance)
+        self.ship_dataflows(dataflows, instance, None)
             .await
             .expect("failed to ship dataflows");
     }
@@ -132,7 +133,12 @@ impl Coordinator {
         dataflow: DataflowDesc,
         instance: ComputeInstanceId,
     ) -> Result<(), AdapterError> {
-        self.ship_dataflows(vec![dataflow], instance).await
+        self.ship_dataflows(
+            vec![dataflow],
+            instance,
+            Some(self.catalog().system_config().max_dataflows_per_cluster()),
+        )
+        .await
     }
 
     /// Finalizes a list of dataflows and then broadcasts it to all workers.
@@ -143,6 +149,7 @@ impl Coordinator {
         &mut self,
         dataflows: Vec<DataflowDesc>,
         instance: ComputeInstanceId,
+        dataflow_limit: Option<u32>,
     ) -> Result<(), AdapterError> {
         let mut output_ids = Vec::new();
         let mut dataflow_plans = Vec::with_capacity(dataflows.len());
@@ -160,10 +167,27 @@ impl Coordinator {
             }
             dataflow_plans.push(plan);
         }
-        self.controller
-            .active_compute()
-            .create_dataflows(instance, dataflow_plans)
-            .unwrap_or_terminate("dataflow creation cannot fail");
+        match self.controller.active_compute().create_dataflows(
+            instance,
+            dataflow_limit,
+            dataflow_plans,
+        ) {
+            Ok(()) => (),
+            Err(DataflowCreationError::ResourceExhaustion {
+                resource_type,
+                limit,
+                current_amount,
+                new_instances,
+            }) => {
+                return Err(AdapterError::ResourceExhaustion {
+                    resource_type,
+                    limit,
+                    current_amount,
+                    new_instances,
+                })
+            }
+            e @ Err(..) => e.unwrap_or_terminate("dataflow creation cannot fail"),
+        }
         self.initialize_compute_read_policies(
             output_ids,
             instance,

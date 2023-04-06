@@ -464,10 +464,28 @@ where
     pub fn create_dataflows(
         &mut self,
         instance_id: ComputeInstanceId,
+        dataflow_limit: Option<u32>,
         dataflows: Vec<DataflowDescription<crate::plan::Plan<T>, (), T>>,
     ) -> Result<(), DataflowCreationError> {
-        self.instance(instance_id)?.create_dataflows(dataflows)?;
-        Ok(())
+        let mut instance = self.instance(instance_id)?;
+        if let Some(dataflow_limit) = dataflow_limit {
+            let proposed_dataflows = instance.total_collections_after_dataflows(&dataflows);
+            match u32::try_from(proposed_dataflows) {
+                Ok(dataflows) if dataflows < dataflow_limit => {}
+                _ => {
+                    return Err(DataflowCreationError::ResourceExhaustion {
+                        resource_type: "Max dataflows per cluster".into(),
+                        limit: dataflow_limit,
+                        current_amount: instance.num_collections(),
+                        new_instances: i32::try_from(
+                            proposed_dataflows - instance.num_collections(),
+                        )
+                        .unwrap_or(1),
+                    })
+                }
+            }
+        }
+        Ok(instance.create_dataflows(dataflows)?)
     }
 
     /// Drop the read capability for the given collections and allow their resources to be

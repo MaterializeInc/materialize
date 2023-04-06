@@ -329,7 +329,8 @@ impl ShouldHalt for StorageError {
 impl ShouldHalt for DataflowCreationError {
     fn should_halt(&self) -> bool {
         match self {
-            DataflowCreationError::SinceViolation(_) => true,
+            DataflowCreationError::SinceViolation(_)
+            | DataflowCreationError::ResourceExhaustion { .. } => true,
             DataflowCreationError::InstanceMissing(_)
             | DataflowCreationError::CollectionMissing(_)
             | DataflowCreationError::MissingAsOf => false,

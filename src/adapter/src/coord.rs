@@ -931,7 +931,7 @@ impl Coordinator {
                             vec![self.must_finalize_dataflow(dataflow, idx.cluster_id)];
                         self.controller
                             .active_compute()
-                            .create_dataflows(idx.cluster_id, dataflow_plan)
+                            .create_dataflows(idx.cluster_id, None, dataflow_plan)
                             .unwrap_or_terminate("cannot fail to create dataflows");
                     }
                 }

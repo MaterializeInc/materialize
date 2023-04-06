@@ -17,6 +17,7 @@ use std::fmt;
 use std::num::NonZeroUsize;
 
 use futures::TryFutureExt;
+use mz_compute_client::controller::error::DataflowCreationError;
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 use tokio::sync::oneshot;
@@ -194,8 +195,7 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
         if let Some((rows, ..)) = mir.as_const() {
             // In the case of a constant, we can return the result now.
             return Ok(Some(FastPathPlan::Constant(
-                rows.clone()
-                    .map(|rows| rows.into_iter().map(|(row, diff)| (row, diff)).collect()),
+                rows.clone(),
                 // For best accuracy, we need to recalculate typ.
                 mir.typ(),
             )));
@@ -374,12 +374,30 @@ impl crate::coord::Coordinator {
                 thinned_arity: index_thinned_arity,
             }) => {
                 let output_ids = dataflow.export_ids().collect();
-
                 // Very important: actually create the dataflow (here, so we can destructure).
-                self.controller
-                    .active_compute()
-                    .create_dataflows(compute_instance, vec![dataflow])
-                    .unwrap_or_terminate("cannot fail to create dataflows");
+                let max_dataflows_per_cluster =
+                    self.catalog().system_config().max_dataflows_per_cluster();
+                match self.controller.active_compute().create_dataflows(
+                    compute_instance,
+                    Some(max_dataflows_per_cluster),
+                    vec![dataflow],
+                ) {
+                    Ok(()) => (),
+                    Err(DataflowCreationError::ResourceExhaustion {
+                        resource_type,
+                        limit,
+                        current_amount,
+                        new_instances,
+                    }) => {
+                        return Err(AdapterError::ResourceExhaustion {
+                            resource_type,
+                            limit,
+                            current_amount,
+                            new_instances,
+                        })
+                    }
+                    e @ Err(_) => e.unwrap_or_terminate("cannot fail to create dataflows"),
+                }
                 self.initialize_compute_read_policies(
                     output_ids,
                     compute_instance,

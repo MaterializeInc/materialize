@@ -501,6 +501,28 @@ where
         }
     }
 
+    pub fn num_collections(&self) -> usize {
+        self.compute.collections.len()
+    }
+
+    /// Number of collections we'll have after adding the given dataflows. This must match `create_dataflows`
+    pub fn total_collections_after_dataflows(
+        &self,
+        dataflows: &Vec<DataflowDescription<crate::plan::Plan<T>, (), T>>,
+    ) -> usize {
+        let mut total_collections = self.compute.collections.len();
+        for export_id in dataflows
+            .iter()
+            .flat_map(|d| d.export_ids())
+            .collect::<BTreeSet<_>>()
+        {
+            if self.compute.collections.get(&export_id).is_none() {
+                total_collections += 1;
+            }
+        }
+        total_collections
+    }
+
     /// Create the described dataflows and initializes state for their output.
     pub fn create_dataflows(
         &mut self,
@@ -508,7 +530,7 @@ where
     ) -> Result<(), DataflowCreationError> {
         // Validate dataflows as having inputs whose `since` is less or equal to the dataflow's `as_of`.
         // Start tracking frontiers for each dataflow, using its `as_of` for each index and sink.
-        for dataflow in dataflows.iter() {
+        for dataflow in &dataflows {
             let as_of = dataflow
                 .as_of
                 .as_ref()

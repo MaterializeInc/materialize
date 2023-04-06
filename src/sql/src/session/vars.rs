@@ -732,6 +732,14 @@ pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+pub const MAX_DATAFLOWS_PER_CLUSTER: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("max_dataflows_per_cluster"),
+    value: &500,
+    description: "The maximum number of concurrent dataflows on a single cluster (Materialize).",
+    internal: false,
+    safe: true,
+};
+
 /// Represents the input to a variable.
 ///
 /// Each variable has different rules for how it handles each style of input.
@@ -1467,6 +1475,7 @@ impl Default for SystemVars {
             .with_var(&PG_REPLICATION_KEEPALIVES_INTERVAL)
             .with_var(&PG_REPLICATION_KEEPALIVES_RETRIES)
             .with_var(&PG_REPLICATION_TCP_USER_TIMEOUT)
+            .with_var(&MAX_DATAFLOWS_PER_CLUSTER)
     }
 }
 
@@ -1800,6 +1809,11 @@ impl SystemVars {
     /// Note: this is generally intended to be set via LaunchDarkly
     pub fn enable_auto_route_introspection_queries(&self) -> bool {
         *self.expect_value(&ENABLE_AUTO_ROUTE_INTROSPECTION_QUERIES)
+    }
+
+    /// Returns the `max_dataflows_per_cluster` configuration parameter.
+    pub fn max_dataflows_per_cluster(&self) -> u32 {
+        *self.expect_value(&MAX_DATAFLOWS_PER_CLUSTER)
     }
 }
 
