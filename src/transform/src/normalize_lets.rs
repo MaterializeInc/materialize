@@ -101,7 +101,7 @@ impl NormalizeLets {
     pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
         // Record whether the relation was initially recursive, to confirm that we do not introduce
         // recursion to a non-recursive expression.
-        let was_recursive = relation.is_recursive();
+        let was_recursive = relation.has_let_rec();
 
         // Renumber all bindings to ensure that identifier order matches binding order.
         // In particular, as we use `BTreeMap` for binding order, we want to ensure that
@@ -150,7 +150,7 @@ impl NormalizeLets {
             }
         }
 
-        if !was_recursive && relation.is_recursive() {
+        if !was_recursive && relation.has_let_rec() {
             Err(crate::TransformError::Internal(
                 "NormalizeLets introduced LetRec to a LetRec-free expression".to_string(),
             ))?;
@@ -164,9 +164,8 @@ pub use renumbering::renumber_bindings;
 
 // Support methods that are unlikely to be useful to other modules.
 mod support {
-
     use itertools::Itertools;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use mz_expr::{Id, LocalId, MirRelationExpr};
 
@@ -195,93 +194,113 @@ mod support {
 
     /// Visit `LetRec` stages and determine and update type information for `Get` nodes.
     ///
-    /// This method errors if the scalar type information has changed (number of columns, or types).
-    /// It only refreshes the nullability and unique key information. As this information can regress,
-    /// we do not error if the type weakens, even though that may be something we want to look into.
+    /// This method errors if the scalar type information has changed (number of columns, or types)
+    /// (as determined by `base_eq`).
+    ///
+    /// The main point is to refresh the nullability and unique key information.
     pub(super) fn refresh_types(expr: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
-        let mut types = BTreeMap::new();
-        let mut prev_types;
-        println!("### Starting fixpoint loop");
-        loop {
-            prev_types = types.clone();
-            refresh_types_helper(expr, &mut types)?;
-            if types == prev_types {
-                break;
+        assert!(!expr.has_let()); // Lets were (temporarily) converted to LetRec by promote_let_rec.
+        if let MirRelationExpr::LetRec { ids, values, body } = expr {
+            // `types` will track the type of each `id`. We will repeatedly loosen `types` (move
+            // towards less constraints, i.e., up in the lattice) and update Gets.
+            let mut types = BTreeMap::new();
+
+            // Optimistically initialize the types of all Ids to `bottom` (except if there would be
+            // too many keys).
+            for (id, value) in ids.iter().zip_eq(values.iter()) {
+                let mut typ = value.typ();
+                // For nullability, `bottom` is false.
+                for col_type in typ.column_types.iter_mut() {
+                    col_type.nullable = false;
+                }
+                // For keys, `bottom` is all subsets of keys. However, this might be too big, in
+                // which case we just use the subsets that have size at most 1, plus what we got
+                // from the initial call of `typ()` (hence, the `extend`).
+                let all_cols = 0..typ.column_types.len();
+                typ.keys.extend(
+                    (0..=if all_cols.len() <= 6 {
+                        all_cols.len()
+                    } else {
+                        1
+                    })
+                        .map(|subset_size| all_cols.clone().combinations(subset_size))
+                        .flatten()
+                        .map(|key| key.into_iter().sorted().collect_vec()),
+                );
+                typ.keys.sort();
+                typ.keys.dedup();
+                let shadowed = types.insert(id.clone(), typ);
+                assert!(shadowed.is_none());
             }
+
+            // todo: comment
+            update_gets_with_given_types(values, body, &types)?;
+
+            // todo: comment
+            loop {
+                let mut changed = false;
+                for (id, value) in ids.iter().zip_eq(values.iter()) {
+                    let typ = types.get_mut(id).unwrap();
+                    // Save it for fixpoint check
+                    let old_typ = typ.clone();
+                    // Compute a type based on current Gets
+                    let cur_typ = value.typ();
+                    // Join-assign (in the lattice sense) the current iteration's typ into `typ`.
+                    // (nullability and keys)
+                    for (col_typ, new_col_typ) in typ
+                        .column_types
+                        .iter_mut()
+                        .zip_eq(cur_typ.column_types.iter())
+                    {
+                        assert!(col_typ.scalar_type.base_eq(&new_col_typ.scalar_type));
+                        col_typ.nullable |= new_col_typ.nullable;
+                    }
+                    // Lattice join is intersection here.
+                    typ.keys = typ
+                        .keys
+                        .iter()
+                        .cloned()
+                        .collect::<BTreeSet<_>>()
+                        .intersection(&cur_typ.keys.into_iter().collect::<BTreeSet<_>>())
+                        .cloned()
+                        .collect();
+                    // Fixpoint check
+                    if old_typ != *typ {
+                        changed = true;
+                    }
+                }
+                if !changed {
+                    break;
+                }
+                update_gets_with_given_types(values, body, &types)?;
+                //todo: guardrail
+            }
+        } else {
+            assert!(!expr.has_let_rec()); // LetRec nodes can be only at the root (possibly nested)
         }
         Ok(())
     }
 
-    /// Provided some existing type refreshment information, continue
-    fn refresh_types_helper(
-        expr: &mut MirRelationExpr,
-        types: &mut BTreeMap<LocalId, mz_repr::RelationType>,
+    /// Applies `types` to all `Get` nodes in `values` and `body`.
+    fn update_gets_with_given_types(
+        values: &mut Vec<MirRelationExpr>,
+        body: &mut MirRelationExpr,
+        types: &BTreeMap<LocalId, mz_repr::RelationType>,
     ) -> Result<(), crate::TransformError> {
-        if let MirRelationExpr::LetRec { ids, values, body } = expr {
-            for (id, value) in ids.iter().zip(values.iter_mut()) {
-                // Note that there can be an interleaving between steps of an outer and an inner
-                // WMR, i.e., it is not the case that we perform all steps of an inner WMR before
-                // performing a step in an outer WMR. This is fine, because we are in a lattice, so
-                // eventually we'll reach the same fixpoint.
-                refresh_types_helper(value, types)?;
-                let typ = value.typ();
-                let prior = types.insert(*id, typ.clone());
-
-                if let Some(prior) = prior.clone() {
-                    println!();
-                    println!("prior:   {:?}", prior);
-                    println!("current: {:?}", typ);
-                    println!("value:\n{}", value.pretty());
-                    println!();
-                }
-
-                // Assert that the constraints not weakened. If this assert fails, then
-                // `refresh_types` might diverge.
-                // (Note that `prior` can't come from a shadowed binding, because there is no
-                // shadowing.)
-                // assert!(prior.iter().all(|prior| {
-                //     // We have no less keys
-                //     prior.keys.iter().all(|key| typ.keys.contains(key))
-                //         // And no more nullability. Note that new nulls _can_ get introduced in the
-                //         // actual collections, but our nullability _analysis_ should be monotonic.
-                //         && prior
-                //             .column_types
-                //             .iter()
-                //             .zip_eq(typ.column_types.iter())
-                //             .all(|(prior_col_type, new_col_type)| {
-                //                 !(!prior_col_type.nullable && new_col_type.nullable) &&
-                //                 // Also assert that the base type didn't change.
-                //                 prior_col_type.scalar_type.base_eq(&new_col_type.scalar_type)
-                //             })
-                // }));
-            }
-            refresh_types_helper(body, types)?;
-            Ok(())
-        } else {
-            refresh_types_effector(expr, types)
+        for expr in values {
+            update_gets_with_given_types_inner(expr, types)?;
         }
+        update_gets_with_given_types_inner(body, types)
     }
 
     /// Applies `types` to all `Get` nodes in `expr`.
-    ///
-    /// This no longer considers new bindings, and will error if applied to `Let` and `LetRec`-free expressions.
-    fn refresh_types_effector(
+    fn update_gets_with_given_types_inner(
         expr: &mut MirRelationExpr,
         types: &BTreeMap<LocalId, mz_repr::RelationType>,
     ) -> Result<(), crate::TransformError> {
         let mut worklist = vec![&mut *expr];
         while let Some(expr) = worklist.pop() {
             match expr {
-                MirRelationExpr::Let { .. } => {
-                    Err(crate::TransformError::Internal(
-                        "Unexpected Let encountered".to_string(),
-                    ))?;
-                }
-                MirRelationExpr::LetRec { .. } => {
-                    Err(crate::TransformError::Internal(
-                        "Unexpected LetRec encountered".to_string(),
-                    ))?;
-                }
                 MirRelationExpr::Get {
                     id: Id::Local(id),
                     typ,
@@ -308,6 +327,8 @@ mod support {
                         }
 
                         typ.clone_from(new_type);
+                    } else {
+                        unreachable!(); //todo: use unwrap instead
                     }
                 }
                 _ => {}

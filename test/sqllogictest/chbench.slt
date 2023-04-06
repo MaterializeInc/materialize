@@ -1437,7 +1437,8 @@ Explained Query:
                           ArrangeBy keys=[[#2, #1, #0]] // { arity: 4 }
                             Get l2 // { arity: 4 }
                           Get l0 // { arity: 10 }
-                Get l2 // { arity: 4 }
+                Distinct group_by=[#0..=#3] // { arity: 4 }
+                  Get l2 // { arity: 4 }
     With
       cte l2 =
         Distinct group_by=[#0..=#3] // { arity: 4 }

@@ -1502,27 +1502,48 @@ Explained Query:
                 Filter (integer_to_numeric(#2) > #5) // { arity: 6 }
                   Join on=(#0 = #4 AND #1 = #3) type=differential // { arity: 6 }
                     implementation
-                      %1[#1, #0]UKK » %0:l1[#0, #1]KKf
-                    ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+                      %0:l1[#1, #0]KKf » %1[#0, #1]KKf
+                    ArrangeBy keys=[[#1, #0]] // { arity: 3 }
                       Project (#0, #1, #3) // { arity: 3 }
                         Filter (#0 = #2) // { arity: 4 }
                           Get l1 // { arity: 4 }
-                    ArrangeBy keys=[[#1, #0]] // { arity: 3 }
-                      Project (#0, #1, #3) // { arity: 3 }
-                        Map ((0.5 * #2)) // { arity: 4 }
-                          Reduce group_by=[#0, #1] aggregates=[sum(#2)] // { arity: 3 }
-                            Project (#0, #1, #6) // { arity: 3 }
-                              Filter (#12 >= 1995-01-01) AND (date_to_timestamp(#12) < 1996-01-01 00:00:00) // { arity: 18 }
-                                Join on=(#0 = #3 AND #1 = #4) type=differential // { arity: 18 }
-                                  implementation
-                                    %0[#0, #1]UKKA » %1:lineitem[#1, #2]KKAiif
-                                  ArrangeBy keys=[[#0, #1]] // { arity: 2 }
-                                    Distinct group_by=[#0, #1] // { arity: 2 }
-                                      Project (#1, #2) // { arity: 2 }
-                                        Get l1 // { arity: 4 }
-                                  ArrangeBy keys=[[#1, #2]] // { arity: 16 }
-                                    Get materialize.public.lineitem // { arity: 16 }
+                    ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+                      Union // { arity: 3 }
+                        Get l4 // { arity: 3 }
+                        Map (error("more than one record produced in subquery")) // { arity: 3 }
+                          Project (#0, #1) // { arity: 2 }
+                            Filter (#2 > 1) // { arity: 3 }
+                              Reduce group_by=[#0, #1] aggregates=[count(*)] // { arity: 3 }
+                                Project (#0, #1) // { arity: 2 }
+                                  Get l4 // { arity: 3 }
     With
+      cte l4 =
+        Project (#0, #1, #3) // { arity: 3 }
+          Map ((0.5 * #2)) // { arity: 4 }
+            Union // { arity: 3 }
+              Get l3 // { arity: 3 }
+              Map (null) // { arity: 3 }
+                Union // { arity: 2 }
+                  Negate // { arity: 2 }
+                    Project (#0, #1) // { arity: 2 }
+                      Get l3 // { arity: 3 }
+                  Distinct group_by=[#0, #1] // { arity: 2 }
+                    Get l2 // { arity: 2 }
+      cte l3 =
+        Reduce group_by=[#0, #1] aggregates=[sum(#2)] // { arity: 3 }
+          Project (#0, #1, #6) // { arity: 3 }
+            Filter (#12 >= 1995-01-01) AND (date_to_timestamp(#12) < 1996-01-01 00:00:00) // { arity: 18 }
+              Join on=(#0 = #3 AND #1 = #4) type=differential // { arity: 18 }
+                implementation
+                  %0:l2[#0, #1]UKKA » %1:lineitem[#1, #2]KKAiif
+                ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+                  Get l2 // { arity: 2 }
+                ArrangeBy keys=[[#1, #2]] // { arity: 16 }
+                  Get materialize.public.lineitem // { arity: 16 }
+      cte l2 =
+        Distinct group_by=[#0, #1] // { arity: 2 }
+          Project (#1, #2) // { arity: 2 }
+            Get l1 // { arity: 4 }
       cte l1 =
         Project (#0..=#3) // { arity: 4 }
           Join on=(#1 = #6) type=differential // { arity: 7 }
@@ -1624,7 +1645,8 @@ Explained Query:
                           ArrangeBy keys=[[#0]] // { arity: 2 }
                             Get l3 // { arity: 2 }
                           Get l1 // { arity: 16 }
-                Get l3 // { arity: 2 }
+                Distinct group_by=[#0, #1] // { arity: 2 }
+                  Get l3 // { arity: 2 }
     With
       cte l3 =
         Distinct group_by=[#1, #0] // { arity: 2 }

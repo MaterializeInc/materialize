@@ -217,7 +217,7 @@ impl ColumnKnowledge {
                     // Descend and return the knowledge from the body.
                     let body_knowledge = self.harvest(body, knowledge, knowledge_stack)?;
 
-                    // Remove shadowed bindings. This is good hygiene, as
+                    // Remove bindings. This is good hygiene, as
                     // otherwise with nested LetRec blocks the `loop { ... }`
                     // above will carry inner LetRec IDs across outer LetRec
                     // iterations. As a consequence, the "no shadowing"

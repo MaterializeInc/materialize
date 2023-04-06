@@ -1729,10 +1729,22 @@ impl MirRelationExpr {
 // `LetRec` helpers
 impl MirRelationExpr {
     /// True when `expr` contains a `LetRec` AST node.
-    pub fn is_recursive(self: &MirRelationExpr) -> bool {
+    pub fn has_let_rec(self: &MirRelationExpr) -> bool {
         let mut worklist = vec![self];
         while let Some(expr) = worklist.pop() {
             if let MirRelationExpr::LetRec { .. } = expr {
+                return true;
+            }
+            worklist.extend(expr.children());
+        }
+        false
+    }
+
+    /// True when `expr` contains a `Let` AST node.
+    pub fn has_let(self: &MirRelationExpr) -> bool {
+        let mut worklist = vec![self];
+        while let Some(expr) = worklist.pop() {
+            if let MirRelationExpr::Let { .. } = expr {
                 return true;
             }
             worklist.extend(expr.children());

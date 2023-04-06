@@ -258,7 +258,7 @@ impl Transform for Fixpoint {
         relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), TransformError> {
-        let recursive = relation.is_recursive();
+        let recursive = relation.has_let_rec();
 
         // The number of iterations for a relation to settle depends on the
         // number of nodes in the relation. Instead of picking an arbitrary
@@ -646,7 +646,7 @@ impl Optimizer {
         relation: &mut MirRelationExpr,
         indexes: &dyn IndexOracle,
     ) -> Result<(), TransformError> {
-        let recursive = relation.is_recursive();
+        let recursive = relation.has_let_rec();
         for transform in self.transforms.iter() {
             if transform.recursion_safe() || !recursive {
                 transform.transform(relation, TransformArgs { indexes })?;
