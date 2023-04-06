@@ -49,9 +49,10 @@ use mz_ore::error::ErrorExt;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::task;
+use mz_ore::task::{AbortOnDropHandle, JoinHandleExt as _};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::client::SinkStatisticsUpdate;
-use mz_storage_client::types::connections::{ConnectionContext, KafkaConnectionErrorSubscription};
+use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::DataflowError;
 use mz_storage_client::types::sinks::{
     KafkaSinkConnection, MetadataFilled, PublishedSchemaInfo, SinkAsOf, SinkEnvelope,
@@ -378,8 +379,6 @@ struct KafkaSinkState {
     ready_rows: VecDeque<(Timestamp, Vec<EncodedRow>)>,
     retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
 
-    error_stream: KafkaConnectionErrorSubscription,
-
     progress_topic: String,
     progress_key: String,
     progress_client: Option<Arc<BaseConsumer<BrokerRewritingClientContext<MzClientContext>>>>,
@@ -400,6 +399,9 @@ struct KafkaSinkState {
     /// ensures that we don't write updates more than once, ensuring
     /// exactly-once guarantees.
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
+
+    /// A handle to the spawned connection status task.
+    _connection_status_handle: AbortOnDropHandle<()>,
 }
 
 impl KafkaSinkState {
@@ -430,7 +432,7 @@ impl KafkaSinkState {
 
         let healthchecker: Arc<Mutex<Option<Healthchecker>>> = Arc::new(Mutex::new(None));
 
-        let (producer, error_stream) = connection
+        let (producer, mut error_stream) = connection
             .connection
             .create_with_context(
                 connection_context,
@@ -489,7 +491,38 @@ impl KafkaSinkState {
             .await
             .expect("creating Kafka progress client for sink failed");
 
-        KafkaSinkState {
+        let conn_healthchecker = Arc::clone(&healthchecker);
+        let connection_status_handle =
+            mz_ore::task::spawn(|| "kafka-connection-status".to_string(), async move {
+                loop {
+                    let mut broken = error_stream.check_connection_statuses().await;
+                    while let Some(e) = broken.wait_for_recovery().await {
+                        let mut locked = conn_healthchecker.lock().await;
+                        if let Some(hc) = &mut *locked {
+                            hc.update_status(SinkStatus::Stalled {
+                                // Wrap it in an anyhow so we get the error chain printed.
+                                error: format!(
+                                    "kafka connection failed: {}",
+                                    e.display_with_causes()
+                                ),
+                                hint: None,
+                            })
+                            .await
+                        }
+                    }
+
+                    // Note that we may end up emitting an error again if the producer
+                    // has not correctly recovered in the next loop, but
+                    // that will restart the sink anyways.
+                    let mut locked = conn_healthchecker.lock().await;
+                    if let Some(hc) = &mut *locked {
+                        hc.update_status(SinkStatus::Running).await
+                    }
+                }
+            })
+            .abort_on_drop();
+
+        let state = KafkaSinkState {
             sink_id: sink_id.clone(),
             name: sink_name,
             topic: connection.topic,
@@ -498,7 +531,6 @@ impl KafkaSinkState {
             pending_rows: BTreeMap::new(),
             ready_rows: VecDeque::new(),
             retry_manager,
-            error_stream,
             progress_topic: connection.progress.topic,
             progress_key: format!("mz-sink-{sink_id}"),
             progress_client: Some(Arc::new(progress_client)),
@@ -507,7 +539,9 @@ impl KafkaSinkState {
             gate_ts,
             latest_progress_ts: Timestamp::minimum(),
             write_frontier,
-        }
+            _connection_status_handle: connection_status_handle,
+        };
+        state
     }
 
     async fn send<'a, K, P>(&self, mut record: BaseRecord<'a, K, P>)
@@ -1122,44 +1156,7 @@ where
 
         s.update_status(SinkStatus::Running).await;
 
-        loop {
-            let event = match futures::future::select(
-                std::pin::pin!(s.error_stream.check_connection_statuses()),
-                std::pin::pin!(input.next_mut()),
-            )
-            .await
-            {
-                futures::future::Either::Left((mut broken, _)) => {
-                    while let Some(e) = broken.wait_for_recovery().await {
-                        let mut locked = s.healthchecker.lock().await;
-                        if let Some(hc) = &mut *locked {
-                            hc.update_status(SinkStatus::Stalled {
-                                // Wrap it in an anyhow so we get the error chain printed.
-                                error: format!(
-                                    "kafka connection failed: {}",
-                                    e.display_with_causes()
-                                ),
-                                hint: None,
-                            })
-                            .await
-                        }
-                    }
-
-                    // Note that we may end up emitting an error again if the producer
-                    // has not correctly recovered in the next loop, but
-                    // that will restart the sink anyways.
-                    let mut locked = s.healthchecker.lock().await;
-                    if let Some(hc) = &mut *locked {
-                        hc.update_status(SinkStatus::Running).await
-                    }
-                    continue;
-                }
-                futures::future::Either::Right((None, _)) => {
-                    break;
-                }
-                futures::future::Either::Right((Some(event), _)) => event,
-            };
-
+        while let Some(event) = input.next_mut().await {
             match event {
                 Event::Data(_, rows) => {
                     // Queue all pending rows waiting to be sent to kafka

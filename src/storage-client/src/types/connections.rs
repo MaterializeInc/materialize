@@ -275,7 +275,6 @@ pub struct KafkaConnectionErrorSubscription {
 }
 
 impl KafkaConnectionErrorSubscription {
-    // Must be cancel-safe.
     async fn next(
         &mut self,
     ) -> Option<(
@@ -332,11 +331,6 @@ impl KafkaConnectionErrorSubscription {
 
     /// A future that returns if at least one underlying connection breaks. The return
     /// type can be waited on until recovery occurs.
-    ///
-    /// This method is cancel-safe.
-    // The cancel-safety of this method is non-trivial to reason about. Note that in both
-    // `check_connection_statuses` AND `Self::next`, there are no intermediate values held
-    // across await points. This behavior MUST be preserved.
     pub async fn check_connection_statuses(&mut self) -> BrokenKafkaConnection<'_> {
         let (tunnel, error) = loop {
             match self.next().await {
