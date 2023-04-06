@@ -11,7 +11,9 @@
 
 set -euo pipefail
 
-echo "~~~ Assuming scratch AWS role"
+. misc/shlib/shlib.bash
+
+ci_unimportant_heading "Assuming scratch AWS role"
 
 creds=$(aws sts assume-role --role-arn "$AWS_SCRATCH_ROLE_ARN" --duration-seconds 43200 --role-session-name ci)
 
