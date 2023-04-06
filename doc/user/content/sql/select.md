@@ -107,7 +107,7 @@ The following query hints are valid within the `OPTION` clause.
 
 Hint | Value type | Description
 ------|------------|------------
-`EXPECTED GROUP SIZE` | `int` | How many rows will have the same group key. Materialize can render `min` and `max` expressions more efficiently with this information.
+`EXPECTED GROUP SIZE` | `int` | How many rows will have the same group key. Materialize can render `min` and `max` expressions, and some [Top K patterns](/guides/top-k), more efficiently with this information.
 
 For an example, see [Using query hints](#using-query-hints).
 
