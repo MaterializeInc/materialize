@@ -52,6 +52,7 @@ Err on the side of writing a design document.
 
 ## Creation
 1. Copy the [template](./00000000_template.md) to a new date-prefixed file in `doc/developer/design` and fill it in.
+   The template contains a skeleton that you can use as a guideline to write the design document, but it is fine to diverge from the structure.
 2. Submit a pull request---this makes it easy for others to add written comments.
 3. Announce that the design doc is ready for review in #eng-announce.
 
@@ -60,13 +61,18 @@ Err on the side of writing a design document.
 5. Gather explicit approvals from relevant stakeholders.
    Typically, there is a small set of people who have a vested interest in the area the design touches.
    If it's not clear who that is, ask a TL, EM, or in #eng-general.
-6. Keep the design doc open while working on the feature and keep it updated as you're refining the design.
 
 ## Finalization
 6. Announce the intent to close commenting on the design document in #eng-announce.
    Tag people that should be aware of the design and ask for their feedback.
 7. Allow two business days for any final comments.
 8. If no comments have raised new issues or if no one has asked for additional time to review, merge the design document.
+
+# Maintaining a design document
+
+Design documents capture a moment in time and thus should not receive regular updates such as documentation.
+Therefore, it represents the current agreed on state, or the state once the feature's work is complete.
+We recommend updating the design as part of implementation changes, to keep both in sync.
 
 # How should you push back on aspects of a design document?
 
