@@ -20,10 +20,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     maven
 
 # Rebuild since SQLancer repo might have changed
-ADD https://api.github.com/repos/def-/sqlancer/git/refs/heads/master version.json
+ADD https://api.github.com/repos/sqlancer/sqlancer/git/refs/heads/master version.json
 
 # Build SQLancer
-RUN git clone --depth=1 --single-branch https://github.com/def-/sqlancer \
+RUN git clone --depth=1 --single-branch https://github.com/sqlancer/sqlancer \
     && cd sqlancer \
     && mvn package -DskipTests
 

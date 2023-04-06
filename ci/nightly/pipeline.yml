@@ -620,7 +620,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqlancer
-          args: [--runtime=3300, --oracle=PQS]
+          args: [--runtime=3300, --oracle=PQS, --no-qpg]
 
   - id: sqlancer-norec
     label: "SQLancer NoREC"
