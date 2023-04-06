@@ -13,3 +13,9 @@
 //! Transformations inhabiting this module can be used both as part of a
 //! normalization pass and as a stand-alone optimization. The former is usually
 //! achieved by implementing a more restricted form of the latter.
+
+mod projection_lifting;
+mod projection_pushdown;
+
+pub use projection_lifting::ProjectionLifting;
+pub use projection_pushdown::ProjectionPushdown;

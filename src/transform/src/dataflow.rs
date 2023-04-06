@@ -283,7 +283,7 @@ where
     // Collect the mutable references to views after pushing projection down
     // in order to run cleanup actions on them in a second loop.
     let mut view_refs = Vec::new();
-    let projection_pushdown = crate::projection_pushdown::ProjectionPushdown;
+    let projection_pushdown = crate::movement::ProjectionPushdown;
     for (id, view) in view_sequence {
         if let Some(columns) = demand.get(&id) {
             let projection_pushed_down = columns.iter().map(|c| *c).collect();

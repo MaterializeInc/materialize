@@ -1,0 +1,116 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# This file contains tests for the ProjectionLifting transform.
+
+mode cockroach
+
+statement ok
+CREATE TABLE edges (src int, dst int)
+
+# Lifting the projections from the inner SELECT enables join fusion, resulting
+# in a single 3-way join in the optimized plan.
+query T multiline
+EXPLAIN
+SELECT
+  a, b, c
+FROM
+  edges as edge,
+  (
+    SELECT
+      e2.src as a,
+      e2.dst as b,
+      e3.dst as c
+    FROM
+      edges as e2,
+      edges as e3
+    WHERE
+      e2.dst = e3.src
+  ) as apex(a, b, c)
+WHERE
+  edge.dst = apex.a AND
+  edge.src = apex.c;
+----
+Explained Query:
+  Return
+    Project (#1, #3, #0)
+      Join on=(#0 = #5 AND #1 = #2 AND #3 = #4) type=differential
+        ArrangeBy keys=[[#1]]
+          Get l0
+        ArrangeBy keys=[[#0]]
+          Get l0
+        ArrangeBy keys=[[#0, #1]]
+          Get l0
+  With
+    cte l0 =
+      Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
+        Get materialize.public.edges
+
+Source materialize.public.edges
+  filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
+
+EOF
+
+
+# The above works also in WMR blocks.
+query T multiline
+EXPLAIN
+WITH MUTUALLY RECURSIVE
+  triangles(a int, b int, c int) AS (
+    SELECT
+      a, b, c
+    FROM
+      edges as edge,
+      (
+        SELECT
+        e2.src as a,
+        e2.dst as b,
+        e3.dst as c
+        FROM
+          edges as e2,
+          edges as e3
+        WHERE
+          e2.dst = e3.src
+      ) as apex(a, b, c)
+    WHERE
+      edge.dst = apex.a AND
+      edge.src = apex.c
+  ),
+  triangle_cycles(a int, b int, c int) AS (
+    SELECT a, b, c FROM triangles
+    UNION
+    SELECT c, a, b FROM triangle_cycles
+  )
+SELECT * FROM triangle_cycles;
+----
+Explained Query:
+  Return
+    Get l0
+  With Mutually Recursive
+    cte l0 =
+      Distinct group_by=[#0..=#2]
+        Union
+          Project (#2, #3, #5)
+            Join on=(#0 = #5 AND #1 = #2 AND #3 = #4) type=differential
+              ArrangeBy keys=[[#1]]
+                Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
+                  Get materialize.public.edges
+              ArrangeBy keys=[[#0]]
+                Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
+                  Get materialize.public.edges
+              ArrangeBy keys=[[#0, #1]]
+                Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
+                  Get materialize.public.edges
+          Project (#2, #0, #1)
+            Get l0
+
+Source materialize.public.edges
+  filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
+
+EOF
