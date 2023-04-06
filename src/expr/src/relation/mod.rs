@@ -493,7 +493,7 @@ impl MirRelationExpr {
     {
         use MirRelationExpr::*;
 
-        match self {
+        let mut output_keys = match self {
             Constant {
                 rows: Ok(rows),
                 typ,
@@ -831,7 +831,16 @@ impl MirRelationExpr {
                 // Important: do not inherit keys of either input, as not unique.
                 result
             }
+        };
+        // Normalize the keys:
+        // The components of each key should be sorted. // (E.g., the `Project` case can reorder.)
+        for key in output_keys.iter_mut() {
+            key.sort();
         }
+        // Keys should be sorted and deduplicated.
+        output_keys.sort();
+        output_keys.dedup();
+        output_keys
     }
 
     /// The number of columns in the relation.

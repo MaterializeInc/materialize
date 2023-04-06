@@ -477,6 +477,7 @@ impl Optimizer {
                 name: "fixpoint",
                 limit: 100,
                 transforms: vec![
+                    Box::new(crate::normalize_lets::NormalizeLets::new(false)),
                     Box::new(crate::semijoin_idempotence::SemijoinIdempotence),
                     // Pushes aggregations down
                     Box::new(crate::reduction_pushdown::ReductionPushdown),

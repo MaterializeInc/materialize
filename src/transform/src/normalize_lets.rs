@@ -225,7 +225,7 @@ mod support {
                     })
                         .map(|subset_size| all_cols.clone().combinations(subset_size))
                         .flatten()
-                        .map(|key| key.into_iter().sorted().collect_vec()),
+                        .map(|key| key.into_iter().sorted().collect_vec()), // sort each key
                 );
                 typ.keys.sort();
                 typ.keys.dedup();
@@ -328,8 +328,6 @@ mod support {
                         }
 
                         typ.clone_from(new_type);
-                    } else {
-                        unreachable!(); //todo: use unwrap instead
                     }
                 }
                 _ => {}
