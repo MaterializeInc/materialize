@@ -40,7 +40,7 @@ use mz_repr::{Diff, GlobalId, RelationType, Row};
 use crate::client::ConnectionId;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::util::{send_immediate_rows, ResultExt};
-use crate::{AdapterError, AdapterNotice};
+use crate::AdapterError;
 
 use super::id_bundle::CollectionIdBundle;
 
@@ -552,13 +552,6 @@ impl crate::coord::Coordinator {
             }
         }
         pending_peek
-    }
-
-    /// Publishes a notice message to all sessions.
-    pub(crate) fn broadcast_notice(&mut self, notice: AdapterNotice) {
-        for meta in self.active_conns.values() {
-            let _ = meta.notice_tx.send(notice.clone());
-        }
     }
 }
 
