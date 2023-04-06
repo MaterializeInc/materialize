@@ -745,9 +745,9 @@ impl MirRelationExpr {
                         );
                     }
                 }
-                if result.is_empty() {
+                //if result.is_empty() {
                     result.push((0..group_key.len()).collect());
-                }
+                //}
                 result
             }
             TopK {

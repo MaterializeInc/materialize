@@ -229,7 +229,7 @@ mod support {
                 );
                 typ.keys.sort();
                 typ.keys.dedup();
-                println!("\ntyp: {:?}\n", typ);
+                /////////println!("\ntyp: {:?}\n", typ);
                 let shadowed = types.insert(id.clone(), typ);
                 assert!(shadowed.is_none());
             }
@@ -256,6 +256,19 @@ mod support {
                         assert!(col_typ.scalar_type.base_eq(&new_col_typ.scalar_type));
                         col_typ.nullable |= new_col_typ.nullable;
                     }
+
+
+                    //assert!(cur_typ.keys.iter().all(|key| typ.keys.contains(key)));
+                    if !cur_typ.keys.iter().all(|key| typ.keys.contains(key)) {
+                        println!("###");
+                        println!("id: {}", id);
+                        println!("value: {}\n", value.pretty());
+                        println!("typ: {:?}\n", typ);
+                        println!("cur_typ: {:?}\n", cur_typ);
+                        println!();
+                    }
+
+
                     // Lattice join is intersection here.
                     typ.keys = typ
                         .keys
