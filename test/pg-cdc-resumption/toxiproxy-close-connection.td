@@ -13,8 +13,8 @@
 $ http-request method=POST url=http://toxiproxy:8474/proxies/postgres/toxics content-type=application/json
 {
   "name": "postgres",
-  "type": "limit_data",
-  "attributes": { "bytes": 65535 }
+  "type": "timeout",
+  "timeout": 0
 }
 
 > SELECT mz_internal.mz_sleep(5);
