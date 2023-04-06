@@ -262,7 +262,13 @@ impl Coordinator {
                 .unwrap_or_terminate("Normalize failed; unrecoverable error");
         }
 
-        mz_compute_client::plan::Plan::finalize_dataflow(dataflow).map_err(AdapterError::Internal)
+        mz_compute_client::plan::Plan::finalize_dataflow(
+            dataflow,
+            self.catalog()
+                .system_config()
+                .enable_monotonic_oneshot_selects(),
+        )
+        .map_err(AdapterError::Internal)
     }
 }
 

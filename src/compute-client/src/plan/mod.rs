@@ -1577,6 +1577,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
     )]
     pub fn finalize_dataflow(
         desc: DataflowDescription<OptimizedMirRelationExpr>,
+        enable_monotonic_oneshot_selects: bool,
     ) -> Result<DataflowDescription<Self>, String> {
         // Collect available arrangements by identifier.
         let mut arrangements = BTreeMap::new();
@@ -1680,14 +1681,13 @@ This is not expected to cause incorrect results, but could indicate a performanc
         // If a SELECT query (i.e. `until == as_of + 1`) upgrade plans to monotonic.
         // TODO: this would be much easier to check if `until` was a strict lower bound,
         // and we would be testing that `until == as_of`.
-        let single_time = match (dataflow.as_of.as_ref(), dataflow.until.as_ref()) {
-            (Some(as_of), until) => {
-                as_of.len() == 1
-                    && until.len() == 1
-                    && as_of[0].checked_add(1) == Some(until[0].clone())
-            }
-            _ => false,
-        };
+        let single_time = enable_monotonic_oneshot_selects
+            && match (dataflow.as_of.as_ref(), dataflow.until.as_option()) {
+                (Some(as_of), Some(until)) => {
+                    as_of.as_option().and_then(|as_of| as_of.checked_add(1)) == Some(*until)
+                }
+                _ => false,
+            };
         if single_time {
             for build_desc in dataflow.objects_to_build.iter_mut() {
                 let mut todo = vec![&mut build_desc.plan];

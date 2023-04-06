@@ -2222,7 +2222,7 @@ impl Coordinator {
             .collect();
         let (permutation, thinning) = permutation_for_arrangement(&key, typ.arity());
         // The assembled dataflow contains a view and an index of that view.
-        let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
+        let mut dataflow = DataflowDesc::new(format!("oneshot-select-{}", view_id));
         dataflow.set_as_of(timestamp_context.antichain());
         let mut builder = self.dataflow_builder(cluster_id);
         builder.import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
@@ -2593,8 +2593,13 @@ impl Coordinator {
 
             // Execute the `optimize/mir_to_lir` stage.
             let dataflow_plan = catch_unwind(no_errors, "mir_to_lir", || {
-                Plan::<mz_repr::Timestamp>::finalize_dataflow(dataflow)
-                    .map_err(AdapterError::Internal)
+                Plan::<mz_repr::Timestamp>::finalize_dataflow(
+                    dataflow,
+                    self.catalog()
+                        .system_config()
+                        .enable_monotonic_oneshot_selects(),
+                )
+                .map_err(AdapterError::Internal)
             })?;
 
             // Trace the resulting plan for the top-level `optimize` path.

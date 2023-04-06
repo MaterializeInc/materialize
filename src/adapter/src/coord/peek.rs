@@ -273,7 +273,8 @@ impl crate::coord::Coordinator {
                 // By default, `until` will be `Antichain::new()`, which prevents no updates and is safe.
                 if let Some(as_of) = dataflow.as_of.as_ref() {
                     if !as_of.is_empty() {
-                        if let Some(next) = as_of.elements()[0].checked_add(1) {
+                        if let Some(next) = as_of.as_option().and_then(|as_of| as_of.checked_add(1))
+                        {
                             dataflow.until = timely::progress::Antichain::from_elem(next);
                         }
                     }

@@ -266,7 +266,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                             write!(f, " order_by=[{}]", order_by)?;
                         }
                         if plan.must_consolidate {
-                            writeln!(f, "{}must_consolidate", ctx.indent)?;
+                            write!(f, " must_consolidate")?;
                         }
                     }
                     TopKPlan::MonotonicTopK(plan) => {
@@ -283,7 +283,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                             write!(f, " limit={}", limit)?;
                         }
                         if plan.must_consolidate {
-                            writeln!(f, "{}must_consolidate", ctx.indent)?;
+                            write!(f, " must_consolidate")?;
                         }
                     }
                     TopKPlan::Basic(plan) => {
