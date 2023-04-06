@@ -66,4 +66,5 @@ contains:Invalid data in source, saw non-positive accumulation
     STRING_AGG(data::text || '2',  ',')
   FROM data
   GROUP BY data
-contains:Non-positive accumulation in ReduceInaccumulable
+# Case-insensitive match for both 'Non' and 'non'
+contains:on-positive accumulation
