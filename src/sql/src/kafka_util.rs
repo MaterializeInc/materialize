@@ -10,7 +10,7 @@
 //! Provides parsing and convenience functions for working with Kafka from the `sql` package.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::bail;
 use mz_ore::error::ErrorExt;
@@ -355,45 +355,3 @@ where
         .map_err(|e| sql_err!("{}", e))?;
     Ok(high)
 }
-
-/// Gets error strings from `rdkafka` when creating test consumers.
-#[derive(Default, Debug, Clone)]
-pub struct KafkaErrCheckContext {
-    pub error: Arc<Mutex<Option<String>>>,
-}
-
-/*
-impl ConsumerContext for KafkaErrCheckContext {}
-
-impl ClientContext for KafkaErrCheckContext {
-    // `librdkafka` doesn't seem to propagate all errors up the stack, but does
-    // log them, so we are currently relying on the `log` callback for error
-    // handling in some situations.
-    fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
-        use rdkafka::config::RDKafkaLogLevel::*;
-        // `INFO` messages with a `fac` of `FAIL` occur when e.g. connecting to
-        // an SSL-authed broker without credentials.
-        if fac == "FAIL" || matches!(level, Emerg | Alert | Critical | Error) {
-            let mut error = self.error.lock().expect("lock poisoned");
-            // Do not allow logging to overwrite other values if
-            // present.
-            if error.is_none() {
-                *error = Some(format!("error logged: {}", log_message));
-            }
-        }
-        MzClientContext.log(level, fac, log_message)
-    }
-    // Refer to the comment on the `log` callback.
-    fn error(&self, error: rdkafka::error::KafkaError, reason: &str) {
-        // Allow error to overwrite value irrespective of other conditions
-        // (i.e. logging).
-
-        *self.error.lock().expect("lock poisoned") = Some(format!(
-            "{}: reason: {}",
-            error.display_with_causes(),
-            reason
-        ));
-        MzClientContext.error(error, reason)
-    }
-}
-*/

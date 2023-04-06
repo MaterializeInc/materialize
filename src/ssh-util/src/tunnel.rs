@@ -89,6 +89,7 @@ impl SshTunnelConfig {
         remote_host: &str,
         remote_port: u16,
     ) -> Result<SshTunnelHandle, SshTunnelError> {
+        // `broadcast` channels can be re-subscribed to obtain receivers.
         let (error_broadcaster, _) = channel(1000);
 
         let (mut session, local_port) = match connect(self, remote_host, remote_port).await {
