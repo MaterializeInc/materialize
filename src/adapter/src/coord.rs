@@ -275,6 +275,51 @@ impl RealTimeRecencyContext {
     }
 }
 
+#[derive(Debug)]
+pub enum PeekStage {
+    Validate(PeekStageValidate),
+    Timestamp(PeekStageTimestamp),
+    Finish(PeekStageFinish),
+}
+
+#[derive(Debug)]
+pub struct PeekStageValidate {
+    pub plan: mz_sql::plan::PeekPlan,
+}
+
+#[derive(Debug)]
+pub struct PeekStageTimestamp {
+    source: MirRelationExpr,
+    finishing: RowSetFinishing,
+    copy_to: Option<CopyFormat>,
+    view_id: GlobalId,
+    index_id: GlobalId,
+    source_ids: BTreeSet<GlobalId>,
+    cluster_id: ClusterId,
+    id_bundle: CollectionIdBundle,
+    when: QueryWhen,
+    target_replica: Option<ReplicaId>,
+    timeline_context: TimelineContext,
+    in_immediate_multi_stmt_txn: bool,
+}
+
+#[derive(Debug)]
+pub struct PeekStageFinish {
+    pub finishing: RowSetFinishing,
+    pub copy_to: Option<CopyFormat>,
+    pub source: MirRelationExpr,
+    pub cluster_id: ClusterId,
+    pub when: QueryWhen,
+    pub target_replica: Option<ReplicaId>,
+    pub view_id: GlobalId,
+    pub index_id: GlobalId,
+    pub timeline_context: TimelineContext,
+    pub source_ids: BTreeSet<GlobalId>,
+    pub id_bundle: CollectionIdBundle,
+    pub in_immediate_multi_stmt_txn: bool,
+    pub real_time_recency_ts: Option<mz_repr::Timestamp>,
+}
+
 /// Configures a coordinator.
 pub struct Config {
     pub dataflow_client: mz_controller::Controller,

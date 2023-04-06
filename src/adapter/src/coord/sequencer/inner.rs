@@ -50,7 +50,7 @@ use mz_sql::names::QualifiedItemName;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
     AlterOptionParameter, AlterOwnerPlan, AlterRolePlan, AlterSecretPlan, AlterSinkPlan,
-    AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, CopyFormat,
+    AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
     CreateClusterPlan, CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
     CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
@@ -84,8 +84,9 @@ use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampSource};
 use crate::coord::{
-    introspection, peek, Coordinator, Message, PendingReadTxn, PendingTxn, RealTimeRecencyContext,
-    SinkConnectionReady, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
+    introspection, peek, Coordinator, Message, PeekStage, PeekStageFinish, PeekStageTimestamp,
+    PeekStageValidate, PendingReadTxn, PendingTxn, RealTimeRecencyContext, SinkConnectionReady,
+    DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
@@ -1801,116 +1802,54 @@ impl Coordinator {
     /// be a simple read out of an existing arrangement, or required a new dataflow to build
     /// the results to return.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(super) async fn sequence_peek_begin(
+    pub(super) async fn sequence_peek(
         &mut self,
         tx: ClientTransmitter<ExecuteResponse>,
-        mut session: Session,
+        session: Session,
         plan: PeekPlan,
     ) {
-        let (
-            source,
-            finishing,
-            copy_to,
-            view_id,
-            index_id,
-            source_ids,
-            cluster_id,
-            id_bundle,
-            when,
-            target_replica,
-            timeline_context,
-            in_immediate_multi_stmt_txn,
-        ) = return_if_err!(
-            self.sequence_peek_begin_inner(&mut session, plan),
-            tx,
-            session
-        );
+        event!(Level::TRACE, plan = format!("{:?}", plan));
 
-        match self.recent_timestamp(&session, source_ids.iter().cloned()) {
-            Some(fut) => {
-                let transient_revision = self.catalog().transient_revision();
-                let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let conn_id = session.conn_id();
-                self.pending_real_time_recency_timestamp.insert(
-                    conn_id,
-                    RealTimeRecencyContext::Peek {
-                        tx,
-                        finishing,
-                        copy_to,
-                        source,
-                        session,
-                        cluster_id,
-                        when,
-                        target_replica,
-                        view_id,
-                        index_id,
-                        timeline_context,
-                        source_ids,
-                        id_bundle,
-                        in_immediate_multi_stmt_txn,
-                    },
-                );
-                task::spawn(|| "real_time_recency_peek", async move {
-                    let real_time_recency_ts = fut.await;
-                    // It is not an error for these results to be ready after `internal_cmd_rx` has been dropped.
-                    let result = internal_cmd_tx.send(Message::RealTimeRecencyTimestamp {
-                        conn_id,
-                        transient_revision,
-                        real_time_recency_ts,
-                    });
-                    if let Err(e) = result {
-                        warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+        self.sequence_peek_stage(tx, session, PeekStage::Validate(PeekStageValidate { plan }))
+            .await;
+    }
+
+    /// Processes as many peek stages as possible.
+    pub(crate) async fn sequence_peek_stage(
+        &mut self,
+        mut tx: ClientTransmitter<ExecuteResponse>,
+        mut session: Session,
+        mut stage: PeekStage,
+    ) {
+        // Process the current stage and allow for processing the next.
+        loop {
+            event!(Level::TRACE, stage = format!("{:?}", stage));
+            (tx, session, stage) = match stage {
+                PeekStage::Validate(stage) => {
+                    let next =
+                        return_if_err!(self.peek_stage_validate(&mut session, stage), tx, session);
+                    (tx, session, PeekStage::Timestamp(next))
+                }
+                PeekStage::Timestamp(stage) => {
+                    match self.peek_stage_timestamp(tx, session, stage) {
+                        Some((tx, session, next)) => (tx, session, PeekStage::Finish(next)),
+                        None => return,
                     }
-                });
-            }
-            None => {
-                tx.send(
-                    self.sequence_peek_finish(
-                        finishing,
-                        copy_to,
-                        source,
-                        &mut session,
-                        cluster_id,
-                        when,
-                        target_replica,
-                        view_id,
-                        index_id,
-                        timeline_context,
-                        source_ids,
-                        id_bundle,
-                        in_immediate_multi_stmt_txn,
-                        None,
-                    )
-                    .await,
-                    session,
-                );
+                }
+                PeekStage::Finish(stage) => {
+                    let res = self.peek_stage_finish(&mut session, stage).await;
+                    tx.send(res, session);
+                    return;
+                }
             }
         }
     }
 
-    fn sequence_peek_begin_inner(
+    fn peek_stage_validate(
         &mut self,
         session: &mut Session,
-        plan: PeekPlan,
-    ) -> Result<
-        (
-            MirRelationExpr,
-            RowSetFinishing,
-            Option<CopyFormat>,
-            GlobalId,
-            GlobalId,
-            BTreeSet<GlobalId>,
-            ClusterId,
-            CollectionIdBundle,
-            QueryWhen,
-            Option<ReplicaId>,
-            TimelineContext,
-            bool,
-        ),
-        AdapterError,
-    > {
-        event!(Level::TRACE, plan = format!("{:?}", plan));
-
+        PeekStageValidate { plan }: PeekStageValidate,
+    ) -> Result<PeekStageTimestamp, AdapterError> {
         let PeekPlan {
             source,
             when,
@@ -1971,39 +1910,121 @@ impl Coordinator {
             .index_oracle(cluster.id)
             .sufficient_collections(&source_ids);
 
-        Ok((
+        Ok(PeekStageTimestamp {
             source,
             finishing,
             copy_to,
             view_id,
             index_id,
             source_ids,
-            cluster.id(),
+            cluster_id: cluster.id(),
             id_bundle,
             when,
             target_replica,
             timeline_context,
             in_immediate_multi_stmt_txn,
-        ))
+        })
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(super) async fn sequence_peek_finish_inner(
+    fn peek_stage_timestamp(
         &mut self,
-        finishing: RowSetFinishing,
-        copy_to: Option<CopyFormat>,
-        source: MirRelationExpr,
+        tx: ClientTransmitter<ExecuteResponse>,
+        session: Session,
+        PeekStageTimestamp {
+            source,
+            finishing,
+            copy_to,
+            view_id,
+            index_id,
+            source_ids,
+            cluster_id,
+            id_bundle,
+            when,
+            target_replica,
+            timeline_context,
+            in_immediate_multi_stmt_txn,
+        }: PeekStageTimestamp,
+    ) -> Option<(ClientTransmitter<ExecuteResponse>, Session, PeekStageFinish)> {
+        match self.recent_timestamp(&session, source_ids.iter().cloned()) {
+            Some(fut) => {
+                let transient_revision = self.catalog().transient_revision();
+                let internal_cmd_tx = self.internal_cmd_tx.clone();
+                let conn_id = session.conn_id();
+                self.pending_real_time_recency_timestamp.insert(
+                    conn_id,
+                    RealTimeRecencyContext::Peek {
+                        tx,
+                        finishing,
+                        copy_to,
+                        source,
+                        session,
+                        cluster_id,
+                        when,
+                        target_replica,
+                        view_id,
+                        index_id,
+                        timeline_context,
+                        source_ids,
+                        id_bundle,
+                        in_immediate_multi_stmt_txn,
+                    },
+                );
+                task::spawn(|| "real_time_recency_peek", async move {
+                    let real_time_recency_ts = fut.await;
+                    // It is not an error for these results to be ready after `internal_cmd_rx` has been dropped.
+                    let result = internal_cmd_tx.send(Message::RealTimeRecencyTimestamp {
+                        conn_id,
+                        transient_revision,
+                        real_time_recency_ts,
+                    });
+                    if let Err(e) = result {
+                        warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                    }
+                });
+                None
+            }
+            None => Some((
+                tx,
+                session,
+                PeekStageFinish {
+                    finishing,
+                    copy_to,
+                    source,
+                    cluster_id,
+                    when,
+                    target_replica,
+                    view_id,
+                    index_id,
+                    timeline_context,
+                    source_ids,
+                    id_bundle,
+                    in_immediate_multi_stmt_txn,
+                    real_time_recency_ts: None,
+                },
+            )),
+        }
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn peek_stage_finish(
+        &mut self,
         session: &mut Session,
-        cluster_id: ClusterId,
-        when: QueryWhen,
-        target_replica: Option<ReplicaId>,
-        view_id: GlobalId,
-        index_id: GlobalId,
-        timeline_context: TimelineContext,
-        source_ids: BTreeSet<GlobalId>,
-        id_bundle: CollectionIdBundle,
-        in_immediate_multi_stmt_txn: bool,
-        real_time_recency_ts: Option<Timestamp>,
+        PeekStageFinish {
+            finishing,
+            copy_to,
+            source,
+            cluster_id,
+            when,
+            target_replica,
+            view_id,
+            index_id,
+            timeline_context,
+            source_ids,
+            id_bundle,
+            in_immediate_multi_stmt_txn,
+            real_time_recency_ts,
+        }: PeekStageFinish,
     ) -> Result<ExecuteResponse, AdapterError> {
         let mut peek_plan = self.plan_peek(
             source,
@@ -3107,7 +3128,7 @@ impl Coordinator {
 
         let (peek_tx, peek_rx) = oneshot::channel();
         let peek_client_tx = ClientTransmitter::new(peek_tx, self.internal_cmd_tx.clone());
-        self.sequence_peek_begin(
+        self.sequence_peek(
             peek_client_tx,
             session,
             PeekPlan {

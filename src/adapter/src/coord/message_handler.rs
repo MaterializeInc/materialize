@@ -38,6 +38,8 @@ use crate::coord::{
 use crate::util::ResultExt;
 use crate::{catalog, AdapterError, AdapterNotice};
 
+use super::{PeekStage, PeekStageFinish};
+
 impl Coordinator {
     pub(crate) async fn handle_message(&mut self, msg: Message) {
         match msg {
@@ -688,7 +690,7 @@ impl Coordinator {
                 finishing,
                 copy_to,
                 source,
-                mut session,
+                session,
                 cluster_id,
                 when,
                 target_replica,
@@ -699,12 +701,13 @@ impl Coordinator {
                 id_bundle,
                 in_immediate_multi_stmt_txn,
             } => {
-                tx.send(
-                    self.sequence_peek_finish(
+                self.sequence_peek_stage(
+                    tx,
+                    session,
+                    PeekStage::Finish(PeekStageFinish {
                         finishing,
                         copy_to,
                         source,
-                        &mut session,
                         cluster_id,
                         when,
                         target_replica,
@@ -714,11 +717,10 @@ impl Coordinator {
                         source_ids,
                         id_bundle,
                         in_immediate_multi_stmt_txn,
-                        Some(real_time_recency_ts),
-                    )
-                    .await,
-                    session,
-                );
+                        real_time_recency_ts: Some(real_time_recency_ts),
+                    }),
+                )
+                .await;
             }
         }
     }

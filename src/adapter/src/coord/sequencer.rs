@@ -12,23 +12,20 @@
 
 //! Logic for executing a planned SQL query.
 
-use std::collections::BTreeSet;
-
 use tracing::{event, Level};
 
 use inner::return_if_err;
-use mz_controller::clusters::{ClusterId, ReplicaId};
-use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_controller::clusters::ClusterId;
+use mz_expr::OptimizedMirRelationExpr;
 use mz_repr::explain::ExplainFormat;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::plan::{
-    AbortTransactionPlan, CommitTransactionPlan, CopyFormat, CopyRowsPlan, CreateRolePlan,
-    FetchPlan, Plan, PlanKind, QueryWhen, RaisePlan, RotateKeysPlan,
+    AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, FetchPlan, Plan,
+    PlanKind, RaisePlan, RotateKeysPlan,
 };
 
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::timeline::TimelineContext;
 use crate::coord::{Coordinator, Message};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
@@ -253,7 +250,7 @@ impl Coordinator {
                 self.sequence_end_transaction(tx, session, action);
             }
             Plan::Peek(plan) => {
-                self.sequence_peek_begin(tx, session, plan).await;
+                self.sequence_peek(tx, session, plan).await;
             }
             Plan::Subscribe(plan) => {
                 tx.send(
@@ -464,42 +461,6 @@ impl Coordinator {
         plan: CreateRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.sequence_create_role(session, plan).await
-    }
-
-    pub(crate) async fn sequence_peek_finish(
-        &mut self,
-        finishing: RowSetFinishing,
-        copy_to: Option<CopyFormat>,
-        source: MirRelationExpr,
-        session: &mut Session,
-        cluster_id: ClusterId,
-        when: QueryWhen,
-        target_replica: Option<ReplicaId>,
-        view_id: GlobalId,
-        index_id: GlobalId,
-        timeline_context: TimelineContext,
-        source_ids: BTreeSet<GlobalId>,
-        id_bundle: CollectionIdBundle,
-        in_immediate_multi_stmt_txn: bool,
-        real_time_recency_ts: Option<Timestamp>,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        self.sequence_peek_finish_inner(
-            finishing,
-            copy_to,
-            source,
-            session,
-            cluster_id,
-            when,
-            target_replica,
-            view_id,
-            index_id,
-            timeline_context,
-            source_ids,
-            id_bundle,
-            in_immediate_multi_stmt_txn,
-            real_time_recency_ts,
-        )
-        .await
     }
 
     pub(crate) fn sequence_explain_timestamp_finish(
