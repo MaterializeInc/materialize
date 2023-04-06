@@ -37,7 +37,7 @@ disallowed-methods = [
     { path = "differential_dataflow::operators::reduce::join::Join::semijoin", reason = "use the `differential_dataflow::operators::join::Join::join_core` function instead" },
 
     # Prevent access to Timely APIs with untested semantics.
-    { path = "timely::worker::Worker::drop_dataflow", reason = "Might break logging dataflows, check with #team-compute." },
+    { path = "timely::worker::Worker::drop_dataflow", reason = "Might break operators that assume graceful shutdown, check with #team-compute." },
 ]
 
 disallowed-macros = [

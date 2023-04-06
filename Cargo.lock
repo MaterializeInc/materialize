@@ -7398,7 +7398,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#134842aa6e1cce36a1d68bec3d79c1c3781cd11e"
+source = "git+https://github.com/antiguru/timely-dataflow?branch=reach_drop#2673e8c6078d4583b5905e53d350ea1161f96037"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7416,12 +7416,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#134842aa6e1cce36a1d68bec3d79c1c3781cd11e"
+source = "git+https://github.com/antiguru/timely-dataflow?branch=reach_drop#2673e8c6078d4583b5905e53d350ea1161f96037"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#134842aa6e1cce36a1d68bec3d79c1c3781cd11e"
+source = "git+https://github.com/antiguru/timely-dataflow?branch=reach_drop#2673e8c6078d4583b5905e53d350ea1161f96037"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7437,7 +7437,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#134842aa6e1cce36a1d68bec3d79c1c3781cd11e"
+source = "git+https://github.com/antiguru/timely-dataflow?branch=reach_drop#2673e8c6078d4583b5905e53d350ea1161f96037"
 dependencies = [
  "columnation",
  "serde",
@@ -7446,7 +7446,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#134842aa6e1cce36a1d68bec3d79c1c3781cd11e"
+source = "git+https://github.com/antiguru/timely-dataflow?branch=reach_drop#2673e8c6078d4583b5905e53d350ea1161f96037"
 
 [[package]]
 name = "tiny-keccak"

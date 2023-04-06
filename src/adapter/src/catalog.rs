@@ -6034,9 +6034,13 @@ impl Catalog {
     /// Return the current compute configuration, derived from the system configuration.
     pub fn compute_config(&self) -> ComputeParameters {
         let config = self.system_config();
+        let enable_active_dataflow_cancellation =
+            self.unsafe_mode() || config.enable_active_dataflow_cancellation();
+
         ComputeParameters {
             max_result_size: Some(config.max_result_size()),
             dataflow_max_inflight_bytes: Some(config.dataflow_max_inflight_bytes()),
+            enable_active_dataflow_cancellation: Some(enable_active_dataflow_cancellation),
             persist: self.persist_config(),
         }
     }

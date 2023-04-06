@@ -387,27 +387,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
     fn handle_command(&mut self, response_tx: &mut ResponseSender, cmd: ComputeCommand) {
         match &cmd {
             ComputeCommand::CreateInstance(_) => {
-                self.compute_state = Some(ComputeState {
-                    traces: TraceManager::new(
-                        self.trace_metrics.clone(),
-                        self.timely_worker.index(),
-                    ),
-                    sink_tokens: BTreeMap::new(),
-                    subscribe_response_buffer: std::rc::Rc::new(
-                        std::cell::RefCell::new(Vec::new()),
-                    ),
-                    sink_write_frontiers: BTreeMap::new(),
-                    flow_control_probes: BTreeMap::new(),
-                    pending_peeks: BTreeMap::new(),
-                    reported_frontiers: BTreeMap::new(),
-                    dropped_collections: Vec::new(),
-                    compute_logger: None,
-                    persist_clients: Arc::clone(&self.persist_clients),
-                    command_history: ComputeCommandHistory::default(),
-                    max_result_size: u32::MAX,
-                    dataflow_max_inflight_bytes: usize::MAX,
-                    metrics: self.compute_metrics.clone(),
-                });
+                let traces =
+                    TraceManager::new(self.trace_metrics.clone(), self.timely_worker.index());
+                self.compute_state = Some(ComputeState::new(
+                    traces,
+                    Arc::clone(&self.persist_clients),
+                    self.compute_metrics.clone(),
+                ));
             }
             _ => (),
         }

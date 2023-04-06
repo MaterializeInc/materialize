@@ -70,7 +70,13 @@ pub struct ComputeState {
     /// Tracks the frontier information that has been sent over `response_tx`.
     pub reported_frontiers: BTreeMap<GlobalId, ReportedFrontier>,
     /// Collections that were recently dropped and whose removal needs to be reported.
-    pub dropped_collections: Vec<GlobalId>,
+    dropped_collections: Vec<GlobalId>,
+    /// Maps exported collections to dataflow indexes.
+    ///
+    /// Used for dropping dataflows when collections are dropped.
+    /// Dataflow indexes are wrapped in `Rc`s and can be shared between collection keys, to reflect
+    /// the possibility that a single dataflow can have multiple exports.
+    dataflow_indexes: BTreeMap<GlobalId, Rc<usize>>,
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub compute_logger: Option<logging::compute::Logger>,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
@@ -79,14 +85,42 @@ pub struct ComputeState {
     /// History of commands received by this workers and all its peers.
     pub command_history: ComputeCommandHistory,
     /// Max size in bytes of any result.
-    pub max_result_size: u32,
+    max_result_size: u32,
     /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
     pub dataflow_max_inflight_bytes: usize,
+    /// Whether to enable the active dataflow cancellation feature.
+    enable_active_dataflow_cancellation: bool,
     /// Metrics for this replica.
     pub metrics: ComputeMetrics,
 }
 
 impl ComputeState {
+    /// Construct a new `ComputeState`.
+    pub fn new(
+        traces: TraceManager,
+        persist_clients: Arc<PersistClientCache>,
+        metrics: ComputeMetrics,
+    ) -> Self {
+        Self {
+            traces,
+            sink_tokens: Default::default(),
+            subscribe_response_buffer: Default::default(),
+            sink_write_frontiers: Default::default(),
+            flow_control_probes: Default::default(),
+            pending_peeks: Default::default(),
+            reported_frontiers: Default::default(),
+            dropped_collections: Default::default(),
+            dataflow_indexes: Default::default(),
+            compute_logger: None,
+            persist_clients,
+            command_history: Default::default(),
+            max_result_size: u32::MAX,
+            dataflow_max_inflight_bytes: usize::MAX,
+            enable_active_dataflow_cancellation: false,
+            metrics,
+        }
+    }
+
     /// Return whether a collection with the given ID exists.
     pub fn collection_exists(&self, id: GlobalId) -> bool {
         self.traces.get(&id).is_some() || self.sink_tokens.contains_key(&id)
@@ -156,6 +190,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         let ComputeParameters {
             max_result_size,
             dataflow_max_inflight_bytes,
+            enable_active_dataflow_cancellation,
             persist,
         } = params;
 
@@ -164,6 +199,9 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         }
         if let Some(v) = dataflow_max_inflight_bytes {
             self.compute_state.dataflow_max_inflight_bytes = v;
+        }
+        if let Some(v) = enable_active_dataflow_cancellation {
+            self.compute_state.enable_active_dataflow_cancellation = v;
         }
 
         persist.apply(self.compute_state.persist_clients.cfg())
@@ -186,9 +224,9 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 .map(|(idx_id, (idx, _))| (*idx_id, idx.on_id));
             let exported_ids = index_ids.chain(sink_ids);
 
-            let dataflow_index = self.timely_worker.next_dataflow_index();
+            let dataflow_index = Rc::new(self.timely_worker.next_dataflow_index());
 
-            // Initialize frontiers for each object, and optionally log their construction.
+            // Initialize compute state for each exported object, and optionally log its construction.
             for (object_id, collection_id) in exported_ids {
                 let reported_frontier = ReportedFrontier::NotReported {
                     lower: dataflow.as_of.clone().unwrap(),
@@ -199,7 +237,21 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                     .insert(object_id, reported_frontier)
                 {
                     error!(
-                        "existing frontier {frontier:?} for newly created dataflow id {object_id}"
+                        ?object_id,
+                        ?frontier,
+                        "existing reported frontier for newly created collection"
+                    );
+                }
+
+                if let Some(index) = self
+                    .compute_state
+                    .dataflow_indexes
+                    .insert(object_id, Rc::clone(&dataflow_index))
+                {
+                    error!(
+                        ?object_id,
+                        ?index,
+                        "existing dataflow index for newly created collection"
                     );
                 }
 
@@ -207,7 +259,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 if let Some(logger) = self.compute_state.compute_logger.as_mut() {
                     logger.log(ComputeEvent::Export {
                         id: object_id,
-                        dataflow_index,
+                        dataflow_index: *dataflow_index,
                     });
                     logger.log(ComputeEvent::Frontier {
                         id: object_id,
@@ -231,40 +283,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         for (id, frontier) in list {
             if frontier.is_empty() {
                 // Indicates that we may drop `id`, as there are no more valid times to read.
-
-                let is_subscribe = self.compute_state.sink_tokens.contains_key(&id)
-                    && !self.compute_state.sink_write_frontiers.contains_key(&id);
-
-                // Sink-specific work:
-                self.compute_state.sink_write_frontiers.remove(&id);
-                self.compute_state.sink_tokens.remove(&id);
-                // Index-specific work:
-                self.compute_state.traces.del_trace(&id);
-                self.compute_state.flow_control_probes.remove(&id);
-
-                // Work common to sinks and indexes (removing frontier tracking and cleaning up logging).
-                let prev_frontier = self
-                    .compute_state
-                    .reported_frontiers
-                    .remove(&id)
-                    .expect("Dropped compute collection with no frontier");
-                if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-                    logger.log(ComputeEvent::ExportDropped { id });
-                    if let Some(time) = prev_frontier.logging_time() {
-                        logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
-                    }
-                }
-
-                // We need to emit a final response reporting the dropping of this collection,
-                // unless:
-                //  * The collection is a subscribe, in which case we will emit a
-                //    `SubscribeResponse::Dropped` independently.
-                //  * The collection has already advanced to the empty frontier, in which case
-                //    the final `FrontierUppers` response already serves the purpose of reporting
-                //    the end of the dataflow.
-                if !is_subscribe && !prev_frontier.is_empty() {
-                    self.compute_state.dropped_collections.push(id);
-                }
+                self.drop_collection(id);
             } else {
                 self.compute_state
                     .traces
@@ -322,6 +341,58 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             } else {
                 self.compute_state.pending_peeks.insert(uuid, peek);
             }
+        }
+    }
+
+    fn drop_collection(&mut self, id: GlobalId) {
+        let is_subscribe = self.compute_state.sink_tokens.contains_key(&id)
+            && !self.compute_state.sink_write_frontiers.contains_key(&id);
+
+        // Sink-specific work:
+        self.compute_state.sink_write_frontiers.remove(&id);
+        self.compute_state.sink_tokens.remove(&id);
+        // Index-specific work:
+        self.compute_state.traces.del_trace(&id);
+        self.compute_state.flow_control_probes.remove(&id);
+
+        // Work common to sinks and indexes:
+
+        // Drop the dataflow, if all its exports have been dropped.
+        let dataflow_index = self
+            .compute_state
+            .dataflow_indexes
+            .remove(&id)
+            .expect("Dropped compute collection with no dataflow");
+        if self.compute_state.enable_active_dataflow_cancellation {
+            if let Ok(index) = Rc::try_unwrap(dataflow_index) {
+                // This code is behind a feature flag and not running in production.
+                #[allow(clippy::disallowed_methods)]
+                self.timely_worker.drop_dataflow(index);
+            }
+        }
+
+        // Remove removing frontier tracking and logging.
+        let prev_frontier = self
+            .compute_state
+            .reported_frontiers
+            .remove(&id)
+            .expect("Dropped compute collection with no frontier");
+        if let Some(logger) = self.compute_state.compute_logger.as_mut() {
+            logger.log(ComputeEvent::ExportDropped { id });
+            if let Some(time) = prev_frontier.logging_time() {
+                logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
+            }
+        }
+
+        // We need to emit a final response reporting the dropping of this collection,
+        // unless:
+        //  * The collection is a subscribe, in which case we will emit a
+        //    `SubscribeResponse::Dropped` independently.
+        //  * The collection has already advanced to the empty frontier, in which case
+        //    the final `FrontierUppers` response already serves the purpose of reporting
+        //    the end of the dataflow.
+        if !is_subscribe && !prev_frontier.is_empty() {
+            self.compute_state.dropped_collections.push(id);
         }
     }
 

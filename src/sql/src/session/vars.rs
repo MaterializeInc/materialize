@@ -648,6 +648,15 @@ pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+pub const ENABLE_ACTIVE_DATAFLOW_CANCELLATION: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_active_dataflow_cancellation"),
+    value: &false,
+    description:
+        "Feature flag indicating whether active dataflow cancellation is enabled (Materialize).",
+    internal: true,
+    safe: true,
+};
+
 /// Represents the input to a variable.
 ///
 /// Each variable has different rules for how it handles each style of input.
@@ -1360,6 +1369,7 @@ impl Default for SystemVars {
             .with_var(&ENABLE_WITH_MUTUALLY_RECURSIVE)
             .with_var(&ENABLE_RBAC_CHECKS)
             .with_var(&ENABLE_AUTO_ROUTE_INTROSPECTION_QUERIES)
+            .with_var(&ENABLE_ACTIVE_DATAFLOW_CANCELLATION)
     }
 }
 
@@ -1658,6 +1668,11 @@ impl SystemVars {
     /// Note: this is generally intended to be set via LaunchDarkly
     pub fn enable_auto_route_introspection_queries(&self) -> bool {
         *self.expect_value(&ENABLE_AUTO_ROUTE_INTROSPECTION_QUERIES)
+    }
+
+    /// Returns the `enable_active_dataflow_cancellation` configuration parameter.
+    pub fn enable_active_dataflow_cancellation(&self) -> bool {
+        *self.expect_value(&ENABLE_ACTIVE_DATAFLOW_CANCELLATION)
     }
 }
 
@@ -2603,6 +2618,7 @@ impl From<TransactionIsolationLevel> for IsolationLevel {
 pub fn is_compute_config_var(name: &str) -> bool {
     name == MAX_RESULT_SIZE.name()
         || name == DATAFLOW_MAX_INFLIGHT_BYTES.name()
+        || name == ENABLE_ACTIVE_DATAFLOW_CANCELLATION.name()
         || is_persist_config_var(name)
 }
 

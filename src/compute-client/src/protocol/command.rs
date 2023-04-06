@@ -365,6 +365,10 @@ pub struct ComputeParameters {
     pub max_result_size: Option<u32>,
     /// The maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
     pub dataflow_max_inflight_bytes: Option<usize>,
+    /// Whether the active dataflow cancellation feature should be used.
+    ///
+    /// TODO(teskje): Remove once this feature is rolled out everywhere.
+    pub enable_active_dataflow_cancellation: Option<bool>,
     /// Persist client configuration.
     pub persist: PersistParameters,
 }
@@ -375,6 +379,7 @@ impl ComputeParameters {
         let ComputeParameters {
             max_result_size,
             dataflow_max_inflight_bytes,
+            enable_active_dataflow_cancellation,
             persist,
         } = other;
 
@@ -383,6 +388,9 @@ impl ComputeParameters {
         }
         if dataflow_max_inflight_bytes.is_some() {
             self.dataflow_max_inflight_bytes = dataflow_max_inflight_bytes;
+        }
+        if enable_active_dataflow_cancellation.is_some() {
+            self.enable_active_dataflow_cancellation = enable_active_dataflow_cancellation;
         }
         self.persist.update(persist);
     }
@@ -398,6 +406,7 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
         ProtoComputeParameters {
             max_result_size: self.max_result_size.into_proto(),
             dataflow_max_inflight_bytes: self.dataflow_max_inflight_bytes.into_proto(),
+            enable_active_dataflow_cancellation: self.enable_active_dataflow_cancellation,
             persist: Some(self.persist.into_proto()),
         }
     }
@@ -406,6 +415,9 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
         Ok(Self {
             max_result_size: proto.max_result_size.into_rust()?,
             dataflow_max_inflight_bytes: proto.dataflow_max_inflight_bytes.into_rust()?,
+            enable_active_dataflow_cancellation: proto
+                .enable_active_dataflow_cancellation
+                .into_rust()?,
             persist: proto
                 .persist
                 .into_rust_if_some("ProtoComputeParameters::persist")?,
