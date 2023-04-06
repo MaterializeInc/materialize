@@ -175,32 +175,11 @@ impl Coordinator {
                     session,
                 );
             }
-            Plan::DropDatabase(plan) => {
+            Plan::DropObjects(plan) => {
                 tx.send(
-                    self.sequence_drop_database(&mut session, plan).await,
+                    self.sequence_drop_objects(&mut session, plan).await,
                     session,
                 );
-            }
-            Plan::DropSchema(plan) => {
-                tx.send(self.sequence_drop_schema(&session, plan).await, session);
-            }
-            Plan::DropRoles(plan) => {
-                tx.send(self.sequence_drop_roles(&session, plan).await, session);
-            }
-            Plan::DropClusters(plan) => {
-                tx.send(
-                    self.sequence_drop_clusters(&mut session, plan).await,
-                    session,
-                );
-            }
-            Plan::DropClusterReplicas(plan) => {
-                tx.send(
-                    self.sequence_drop_cluster_replicas(&session, plan).await,
-                    session,
-                );
-            }
-            Plan::DropItems(plan) => {
-                tx.send(self.sequence_drop_items(&session, plan).await, session);
             }
             Plan::EmptyQuery => {
                 tx.send(Ok(ExecuteResponse::EmptyQuery), session);

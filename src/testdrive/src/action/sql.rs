@@ -68,7 +68,6 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         | AlterObjectRename(_)
         | AlterIndex(_)
         | Discard(_)
-        | DropDatabase(_)
         | DropObjects(_)
         | SetVariable(_) => false,
         _ => true,
@@ -129,7 +128,6 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         | Statement::CreateSource { .. }
         | Statement::CreateTable { .. }
         | Statement::CreateView { .. }
-        | Statement::DropDatabase { .. }
         | Statement::DropObjects { .. } => {
             let disk_state = state
                 .with_catalog_copy(|catalog| catalog.state().dump())

@@ -501,7 +501,7 @@ impl Coordinator {
             Err(e) => {
                 // Drop the placeholder sink if still present.
                 if self.catalog().try_get_entry(&id).is_some() {
-                    let ops = self.catalog().drop_items_ops(&[id]);
+                    let ops = self.catalog().drop_items_ops(&[id], &mut BTreeSet::new());
                     self.catalog_transact(
                         session_and_tx.as_ref().map(|(ref session, _tx)| session),
                         ops,

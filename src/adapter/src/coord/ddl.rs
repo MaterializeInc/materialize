@@ -25,7 +25,7 @@ use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
-use mz_sql::names::ResolvedDatabaseSpecifier;
+use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier};
 use mz_sql::session::vars::{self, SystemVars, Var};
 use mz_storage_client::controller::{CreateExportToken, ExportDescription, ReadPolicy};
 use mz_storage_client::types::sinks::{SinkAsOf, StorageSinkConnection};
@@ -102,7 +102,7 @@ impl Coordinator {
 
         for op in &ops {
             match op {
-                catalog::Op::DropItem(id) => {
+                catalog::Op::DropObject(ObjectId::Item(id)) => {
                     match self.catalog().get_entry(id).item() {
                         CatalogItem::Table(_) => {
                             tables_to_drop.push(*id);
@@ -163,13 +163,10 @@ impl Coordinator {
                         _ => (),
                     }
                 }
-                catalog::Op::DropCluster { id } => {
+                catalog::Op::DropObject(ObjectId::Cluster(id)) => {
                     clusters_to_drop.push(*id);
                 }
-                catalog::Op::DropClusterReplica {
-                    cluster_id,
-                    replica_id,
-                } => {
+                catalog::Op::DropObject(ObjectId::ClusterReplica((cluster_id, replica_id))) => {
                     // Drop the cluster replica itself.
                     cluster_replicas_to_drop.push((*cluster_id, *replica_id));
                 }
@@ -764,7 +761,7 @@ impl Coordinator {
         };
 
         // We always need to drop the already existing item: either because we fail to create it or we're replacing it.
-        let mut ops = vec![catalog::Op::DropItem(id)];
+        let mut ops = vec![catalog::Op::DropObject(ObjectId::Item(id))];
 
         // Speculatively create the storage export before confirming in the catalog.  We chose this order of operations
         // for the following reasons:
@@ -888,60 +885,64 @@ impl Coordinator {
                         | CatalogItem::Func(_) => {}
                     }
                 }
-                Op::DropDatabase { .. } => {
-                    new_databases -= 1;
-                }
-                Op::DropSchema { database_id, .. } => {
-                    *new_schemas_per_database.entry(database_id).or_insert(0) -= 1;
-                }
-                Op::DropRole { .. } => {
-                    new_roles -= 1;
-                }
-                Op::DropCluster { .. } => {
-                    new_clusters -= 1;
-                }
-                Op::DropClusterReplica { cluster_id, .. } => {
-                    *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
-                }
-                Op::DropItem(id) => {
-                    let entry = self.catalog().get_entry(id);
-                    *new_objects_per_schema
-                        .entry((
-                            entry.name().qualifiers.database_spec.clone(),
-                            entry.name().qualifiers.schema_spec.clone(),
-                        ))
-                        .or_insert(0) -= 1;
-                    match entry.item() {
-                        CatalogItem::Connection(connection) => match connection.connection {
-                            mz_storage_client::types::connections::Connection::AwsPrivatelink(
-                                _,
-                            ) => {
-                                new_aws_privatelink_connections -= 1;
+                Op::DropObject(id) => {
+                    match id {
+                        ObjectId::Cluster(_) => {
+                            new_clusters -= 1;
+                        }
+                        ObjectId::ClusterReplica((cluster_id, _)) => {
+                            *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
+                        }
+                        ObjectId::Database(_) => {
+                            new_databases -= 1;
+                        }
+                        ObjectId::Schema((database_id, _)) => {
+                            *new_schemas_per_database.entry(database_id).or_insert(0) -= 1;
+                        }
+                        ObjectId::Role(_) => {
+                            new_roles -= 1;
+                        }
+                        ObjectId::Item(id) => {
+                            let entry = self.catalog().get_entry(id);
+                            *new_objects_per_schema
+                                .entry((
+                                    entry.name().qualifiers.database_spec.clone(),
+                                    entry.name().qualifiers.schema_spec.clone(),
+                                ))
+                                .or_insert(0) -= 1;
+                            match entry.item() {
+                                CatalogItem::Connection(connection) => match connection.connection {
+                                    mz_storage_client::types::connections::Connection::AwsPrivatelink(
+                                        _,
+                                    ) => {
+                                        new_aws_privatelink_connections -= 1;
+                                    }
+                                    _ => (),
+                                },
+                                CatalogItem::Table(_) => {
+                                    new_tables -= 1;
+                                }
+                                CatalogItem::Source(source) => {
+                                    if source.is_external() {
+                                        // Only sources that ingest data from an external system count
+                                        // towards resource limits.
+                                        new_sources -= 1;
+                                    }
+                                }
+                                CatalogItem::Sink(_) => new_sinks -= 1,
+                                CatalogItem::MaterializedView(_) => {
+                                    new_materialized_views -= 1;
+                                }
+                                CatalogItem::Secret(_) => {
+                                    new_secrets -= 1;
+                                }
+                                CatalogItem::Log(_)
+                                | CatalogItem::View(_)
+                                | CatalogItem::Index(_)
+                                | CatalogItem::Type(_)
+                                | CatalogItem::Func(_) => {}
                             }
-                            _ => (),
-                        },
-                        CatalogItem::Table(_) => {
-                            new_tables -= 1;
                         }
-                        CatalogItem::Source(source) => {
-                            if source.is_external() {
-                                // Only sources that ingest data from an external system count
-                                // towards resource limits.
-                                new_sources -= 1;
-                            }
-                        }
-                        CatalogItem::Sink(_) => new_sinks -= 1,
-                        CatalogItem::MaterializedView(_) => {
-                            new_materialized_views -= 1;
-                        }
-                        CatalogItem::Secret(_) => {
-                            new_secrets -= 1;
-                        }
-                        CatalogItem::Log(_)
-                        | CatalogItem::View(_)
-                        | CatalogItem::Index(_)
-                        | CatalogItem::Type(_)
-                        | CatalogItem::Func(_) => {}
                     }
                 }
                 Op::AlterRole { .. }

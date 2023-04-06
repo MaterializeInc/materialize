@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 
 pub use error::PlanError;
 pub use explain::normalize_subqueries;
-use mz_controller::clusters::{ClusterId, ReplicaId};
+use mz_controller::clusters::ClusterId;
 use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
@@ -60,9 +60,7 @@ use crate::ast::{
     Statement, StatementKind, TransactionAccessMode,
 };
 use crate::catalog::{CatalogType, IdReference, RoleAttributes};
-use crate::names::{
-    Aug, DatabaseId, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId,
-};
+use crate::names::{Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier};
 
 pub use self::expr::{
     AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType,
@@ -103,12 +101,7 @@ pub enum Plan {
     CreateType(CreateTypePlan),
     DiscardTemp,
     DiscardAll,
-    DropDatabase(DropDatabasePlan),
-    DropSchema(DropSchemaPlan),
-    DropRoles(DropRolesPlan),
-    DropClusters(DropClustersPlan),
-    DropClusterReplicas(DropClusterReplicasPlan),
-    DropItems(DropItemsPlan),
+    DropObjects(DropObjectsPlan),
     EmptyQuery,
     ShowAllVariables,
     ShowCreate(SendRowsPlan),
@@ -199,12 +192,7 @@ impl Plan {
             StatementKind::Declare => vec![PlanKind::Declare],
             StatementKind::Delete => vec![PlanKind::ReadThenWrite],
             StatementKind::Discard => vec![PlanKind::DiscardAll, PlanKind::DiscardTemp],
-            StatementKind::DropClusters => vec![PlanKind::DropClusters],
-            StatementKind::DropClusterReplicas => vec![PlanKind::DropClusterReplicas],
-            StatementKind::DropDatabase => vec![PlanKind::DropDatabase],
-            StatementKind::DropObjects => vec![PlanKind::DropItems],
-            StatementKind::DropRoles => vec![PlanKind::DropRoles],
-            StatementKind::DropSchema => vec![PlanKind::DropSchema],
+            StatementKind::DropObjects => vec![PlanKind::DropObjects],
             StatementKind::Execute => vec![PlanKind::Execute],
             StatementKind::Explain => vec![PlanKind::Explain],
             StatementKind::Fetch => vec![PlanKind::Fetch],
@@ -251,12 +239,7 @@ impl Plan {
             Plan::CreateType(_) => "create type",
             Plan::DiscardTemp => "discard temp",
             Plan::DiscardAll => "discard all",
-            Plan::DropDatabase(_) => "drop database",
-            Plan::DropSchema(_) => "drop schema",
-            Plan::DropRoles(_) => "drop roles",
-            Plan::DropClusters(_) => "drop cluster",
-            Plan::DropClusterReplicas(_) => "drop cluster replicas",
-            Plan::DropItems(plan) => match plan.ty {
+            Plan::DropObjects(plan) => match plan.object_type {
                 ObjectType::Table => "drop table",
                 ObjectType::View => "drop view",
                 ObjectType::MaterializedView => "drop materialized view",
@@ -264,9 +247,9 @@ impl Plan {
                 ObjectType::Sink => "drop sink",
                 ObjectType::Index => "drop index",
                 ObjectType::Type => "drop type",
-                ObjectType::Role => "drop role",
-                ObjectType::Cluster => "drop cluster",
-                ObjectType::ClusterReplica => "drop cluster",
+                ObjectType::Role => "drop roles",
+                ObjectType::Cluster => "drop clusters",
+                ObjectType::ClusterReplica => "drop cluster replicas",
                 ObjectType::Secret => "drop secret",
                 ObjectType::Connection => "drop connection",
                 ObjectType::Database => "drop database",
@@ -569,34 +552,11 @@ pub struct CreateTypePlan {
 }
 
 #[derive(Debug)]
-pub struct DropDatabasePlan {
-    pub id: Option<DatabaseId>,
-}
-
-#[derive(Debug)]
-pub struct DropSchemaPlan {
-    pub id: Option<(DatabaseId, SchemaId)>,
-}
-
-#[derive(Debug)]
-pub struct DropRolesPlan {
-    pub ids: Vec<(RoleId, String)>,
-}
-
-#[derive(Debug)]
-pub struct DropClustersPlan {
-    pub ids: Vec<ClusterId>,
-}
-
-#[derive(Debug)]
-pub struct DropClusterReplicasPlan {
-    pub ids: Vec<(ClusterId, ReplicaId)>,
-}
-
-#[derive(Debug)]
-pub struct DropItemsPlan {
-    pub items: Vec<GlobalId>,
-    pub ty: ObjectType,
+pub struct DropObjectsPlan {
+    pub ids: Vec<ObjectId>,
+    /// The type of object that was dropped explicitly in the DROP statement. `ids` may contain
+    /// objects of different types due to CASCADE.
+    pub object_type: ObjectType,
 }
 
 #[derive(Debug)]

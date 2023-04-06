@@ -287,34 +287,8 @@ pub enum ExecuteResponse {
     DiscardedTemp,
     /// All state associated with the session has been discarded.
     DiscardedAll,
-    /// The requested connection was dropped
-    DroppedConnection,
-    /// The requested cluster was dropped.
-    DroppedCluster,
-    /// The requested cluster replica was dropped.
-    DroppedClusterReplica,
-    /// The requested database was dropped.
-    DroppedDatabase,
-    /// The requested role was dropped.
-    DroppedRole,
-    /// The requested schema was dropped.
-    DroppedSchema,
-    /// The requested source was dropped.
-    DroppedSource,
-    /// The requested table was dropped.
-    DroppedTable,
-    /// The requested view was dropped.
-    DroppedView,
-    /// The requested materialized view was dropped.
-    DroppedMaterializedView,
-    /// The requested index was dropped.
-    DroppedIndex,
-    /// The requested sink was dropped.
-    DroppedSink,
-    /// The requested type was dropped.
-    DroppedType,
-    /// The requested secret was dropped.
-    DroppedSecret,
+    /// The requested object was dropped.
+    DroppedObject(ObjectType),
     /// The provided query was empty.
     EmptyQuery,
     /// Fetch results from a cursor.
@@ -395,20 +369,7 @@ impl ExecuteResponse {
             Deleted(n) => Some(format!("DELETE {}", n)),
             DiscardedTemp => Some("DISCARD TEMP".into()),
             DiscardedAll => Some("DISCARD ALL".into()),
-            DroppedConnection => Some("DROP CONNECTION".into()),
-            DroppedCluster => Some("DROP CLUSTER".into()),
-            DroppedClusterReplica => Some("DROP CLUSTER REPLICA".into()),
-            DroppedDatabase => Some("DROP DATABASE".into()),
-            DroppedRole => Some("DROP ROLE".into()),
-            DroppedSchema => Some("DROP SCHEMA".into()),
-            DroppedSource => Some("DROP SOURCE".into()),
-            DroppedTable => Some("DROP TABLE".into()),
-            DroppedView => Some("DROP VIEW".into()),
-            DroppedMaterializedView => Some("DROP MATERIALIZED VIEW".into()),
-            DroppedIndex => Some("DROP INDEX".into()),
-            DroppedSink => Some("DROP SINK".into()),
-            DroppedType => Some("DROP TYPE".into()),
-            DroppedSecret => Some("DROP SECRET".into()),
+            DroppedObject(o) => Some(format!("DROP {o}")),
             EmptyQuery => None,
             Fetch { .. } => None,
             GrantedRole => Some("GRANT ROLE".into()),
@@ -476,22 +437,7 @@ impl ExecuteResponse {
             Declare => vec![DeclaredCursor],
             DiscardTemp => vec![DiscardedTemp],
             DiscardAll => vec![DiscardedAll],
-            DropDatabase => vec![DroppedDatabase],
-            DropSchema => vec![DroppedSchema],
-            DropRoles => vec![DroppedRole],
-            DropClusters => vec![DroppedCluster],
-            DropClusterReplicas => vec![DroppedClusterReplica],
-            DropItems => vec![
-                DroppedConnection,
-                DroppedSource,
-                DroppedTable,
-                DroppedView,
-                DroppedMaterializedView,
-                DroppedIndex,
-                DroppedSink,
-                DroppedType,
-                DroppedSecret,
-            ],
+            DropObjects => vec![DroppedObject],
             PlanKind::EmptyQuery => vec![ExecuteResponseKind::EmptyQuery],
             Explain | Peek | SendRows | ShowAllVariables | ShowCreate | ShowVariable => {
                 vec![CopyTo, SendingRows]

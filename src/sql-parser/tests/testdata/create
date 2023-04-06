@@ -207,21 +207,21 @@ DROP ROLE IF EXISTS usr
 ----
 DROP ROLE IF EXISTS usr
 =>
-DropRoles(DropRolesStatement { if_exists: true, names: [UnresolvedItemName([Ident("usr")])] })
+DropObjects(DropObjectsStatement { object_type: Role, if_exists: true, names: [Role(Ident("usr"))], cascade: false })
 
 parse-statement
 DROP ROLE a, b, c
 ----
 DROP ROLE a, b, c
 =>
-DropRoles(DropRolesStatement { if_exists: false, names: [UnresolvedItemName([Ident("a")]), UnresolvedItemName([Ident("b")]), UnresolvedItemName([Ident("c")])] })
+DropObjects(DropObjectsStatement { object_type: Role, if_exists: false, names: [Role(Ident("a")), Role(Ident("b")), Role(Ident("c"))], cascade: false })
 
 parse-statement
 DROP USER usr
 ----
 DROP ROLE usr
 =>
-DropRoles(DropRolesStatement { if_exists: false, names: [UnresolvedItemName([Ident("usr")])] })
+DropObjects(DropObjectsStatement { object_type: Role, if_exists: false, names: [Role(Ident("usr"))], cascade: false })
 
 parse-statement
 CREATE TABLE "table_name" (col_name int)

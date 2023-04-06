@@ -24,7 +24,6 @@ use mz_controller::clusters::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTE
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::AvroSchemaGenerator;
 use mz_ore::cast::{self, CastFrom, TryCastFrom};
-use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
@@ -75,12 +74,11 @@ use crate::ast::{
     CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableStatement, CreateTypeAs,
     CreateTypeStatement, CreateViewStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
     CsrConnectionAvro, CsrConnectionOption, CsrConnectionOptionName, CsrConnectionProtobuf,
-    CsrSeedProtobuf, CsvColumns, DbzMode, DropClusterReplicasStatement, DropClustersStatement,
-    DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
-    Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaBroker,
-    KafkaBrokerAwsPrivatelinkOption, KafkaBrokerAwsPrivatelinkOptionName, KafkaBrokerTunnel,
-    KafkaConfigOptionName, KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint,
-    LoadGeneratorOption, LoadGeneratorOptionName, ObjectType, PgConfigOption, PgConfigOptionName,
+    CsrSeedProtobuf, CsvColumns, DbzMode, DropObjectsStatement, Envelope, Expr, Format, Ident,
+    IfExistsBehavior, IndexOption, IndexOptionName, KafkaBroker, KafkaBrokerAwsPrivatelinkOption,
+    KafkaBrokerAwsPrivatelinkOptionName, KafkaBrokerTunnel, KafkaConfigOptionName,
+    KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint, LoadGeneratorOption,
+    LoadGeneratorOptionName, ObjectType, PgConfigOption, PgConfigOptionName,
     PostgresConnectionOption, PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica,
     ReferencedSubsources, ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute,
     SourceIncludeMetadata, SourceIncludeMetadataType, SshConnectionOptionName, Statement,
@@ -112,10 +110,9 @@ use crate::plan::{
     CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
     CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
     CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
-    DropClusterReplicasPlan, DropClustersPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
-    DropSchemaPlan, FullItemName, GrantRolePlan, HirScalarExpr, Index, Ingestion, MaterializedView,
-    Params, Plan, QueryContext, ReplicaConfig, RevokeRolePlan, RotateKeysPlan, Secret, Sink,
-    Source, SourceSinkClusterConfig, Table, Type, View,
+    DropObjectsPlan, FullItemName, GrantRolePlan, HirScalarExpr, Index, Ingestion,
+    MaterializedView, Params, Plan, QueryContext, ReplicaConfig, RevokeRolePlan, RotateKeysPlan,
+    Secret, Sink, Source, SourceSinkClusterConfig, Table, Type, View,
 };
 
 pub fn describe_create_database(
@@ -1712,19 +1709,26 @@ pub fn plan_create_view(
         if_exists,
         definition,
     } = &mut stmt;
-    let partial_name = normalize::unresolved_item_name(definition.name.clone())?;
     let (name, view) = plan_view(scx, definition, params, *temporary)?;
 
     let replace = if *if_exists == IfExistsBehavior::Replace {
-        if let Ok(item) = scx.catalog.resolve_item(&partial_name) {
-            if view.expr.depends_on().contains(&item.id()) {
+        let if_exists = true;
+        let cascade = false;
+        if let Some(id) = plan_drop_item(
+            scx,
+            ObjectType::View,
+            if_exists,
+            definition.name.clone(),
+            cascade,
+        )? {
+            if view.expr.depends_on().contains(&id) {
+                let item = scx.catalog.get_item(&id);
                 sql_bail!(
                     "cannot replace view {0}: depended upon by new {0} definition",
                     scx.catalog.resolve_full_name(item.name())
                 );
             }
-            let cascade = false;
-            plan_drop_item(scx, ObjectType::View, item, cascade)?
+            Some(id)
         } else {
             None
         }
@@ -1805,15 +1809,23 @@ pub fn plan_create_materialized_view(
     let mut if_not_exists = false;
     match stmt.if_exists {
         IfExistsBehavior::Replace => {
-            if let Ok(item) = scx.catalog.resolve_item(&partial_name) {
-                if expr.depends_on().contains(&item.id()) {
+            let if_exists = true;
+            let cascade = false;
+            replace = plan_drop_item(
+                scx,
+                ObjectType::MaterializedView,
+                if_exists,
+                partial_name.into(),
+                cascade,
+            )?;
+            if let Some(id) = &replace {
+                if expr.depends_on().contains(id) {
+                    let item = scx.catalog.get_item(id);
                     sql_bail!(
                         "cannot replace materialized view {0}: depended upon by new {0} definition",
                         scx.catalog.resolve_full_name(item.name())
                     );
                 }
-                let cascade = false;
-                replace = plan_drop_item(scx, ObjectType::MaterializedView, item, cascade)?;
             }
         }
         IfExistsBehavior::Skip => if_not_exists = true,
@@ -3297,33 +3309,24 @@ pub fn plan_create_connection(
     };
     Ok(Plan::CreateConnection(plan))
 }
-
-pub fn describe_drop_database(
-    _: &StatementContext,
-    _: DropDatabaseStatement,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn plan_drop_database(
+fn plan_drop_database(
     scx: &StatementContext,
-    DropDatabaseStatement {
-        name,
-        restrict,
-        if_exists,
-    }: DropDatabaseStatement,
-) -> Result<Plan, PlanError> {
-    let database = resolve_database(scx, &name, if_exists)?;
-    if let Some(database) = database {
-        if restrict && database.has_schemas() {
-            sql_bail!(
-                "database '{}' cannot be dropped with RESTRICT while it contains schemas",
-                name,
-            );
+    if_exists: bool,
+    name: UnresolvedDatabaseName,
+    cascade: bool,
+) -> Result<Option<DatabaseId>, PlanError> {
+    Ok(match resolve_database(scx, &name, if_exists)? {
+        Some(database) => {
+            if !cascade && database.has_schemas() {
+                sql_bail!(
+                    "database '{}' cannot be dropped with RESTRICT while it contains schemas",
+                    name,
+                );
+            }
+            Some(database.id())
         }
-    }
-    let id = database.map(|database| database.id());
-    Ok(Plan::DropDatabase(DropDatabasePlan { id }))
+        None => None,
+    })
 }
 
 pub fn describe_drop_objects(
@@ -3337,46 +3340,48 @@ pub fn plan_drop_objects(
     scx: &StatementContext,
     DropObjectsStatement {
         object_type,
+        if_exists,
         names,
         cascade,
-        if_exists,
     }: DropObjectsStatement,
 ) -> Result<Plan, PlanError> {
-    assert!(
-        object_type.lives_in_schema(),
-        "{object_type}s handled through their respective plan_drop functions"
-    );
-    assert!(object_type != ObjectType::Func, "rejected in parser");
+    assert_ne!(object_type, ObjectType::Func, "rejected in parser");
 
-    let mut ids = vec![];
+    let mut ids = Vec::new();
     for name in names {
-        if let Some(item) = resolve_object(scx, name, if_exists)? {
-            ids.extend(plan_drop_item(scx, object_type, item, cascade)?);
+        let id = match name {
+            UnresolvedName::Cluster(name) => {
+                plan_drop_cluster(scx, if_exists, name, cascade)?.map(ObjectId::Cluster)
+            }
+            UnresolvedName::ClusterReplica(name) => {
+                plan_drop_cluster_replica(scx, if_exists, name)?.map(ObjectId::ClusterReplica)
+            }
+            UnresolvedName::Database(name) => {
+                plan_drop_database(scx, if_exists, name, cascade)?.map(ObjectId::Database)
+            }
+            UnresolvedName::Schema(name) => {
+                plan_drop_schema(scx, if_exists, name, cascade)?.map(ObjectId::Schema)
+            }
+            UnresolvedName::Role(name) => plan_drop_role(scx, if_exists, name)?.map(ObjectId::Role),
+            UnresolvedName::Item(name) => {
+                plan_drop_item(scx, object_type, if_exists, name, cascade)?.map(ObjectId::Item)
+            }
+        };
+        if let Some(id) = id {
+            ids.push(id);
         }
     }
 
-    Ok(Plan::DropItems(DropItemsPlan {
-        items: ids,
-        ty: object_type,
-    }))
+    Ok(Plan::DropObjects(DropObjectsPlan { ids, object_type }))
 }
 
-pub fn describe_drop_schema(
-    _: &StatementContext,
-    _: DropSchemaStatement,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn plan_drop_schema(
+fn plan_drop_schema(
     scx: &StatementContext,
-    DropSchemaStatement {
-        name,
-        cascade,
-        if_exists,
-    }: DropSchemaStatement,
-) -> Result<Plan, PlanError> {
-    match resolve_schema(scx, name, if_exists, "drop")? {
+    if_exists: bool,
+    name: UnresolvedSchemaName,
+    cascade: bool,
+) -> Result<Option<(DatabaseId, SchemaId)>, PlanError> {
+    Ok(match resolve_schema(scx, name, if_exists, "drop")? {
         Some((database_id, schema_id, schema)) => {
             if !cascade && schema.has_items() {
                 let full_schema_name = FullSchemaName {
@@ -3393,80 +3398,49 @@ pub fn plan_drop_schema(
                     full_schema_name
                 );
             }
-            Ok(Plan::DropSchema(DropSchemaPlan {
-                id: Some((database_id, schema_id)),
-            }))
+            Some((database_id, schema_id))
         }
-        None => Ok(Plan::DropSchema(DropSchemaPlan { id: None })),
+        None => None,
+    })
+}
+
+fn plan_drop_role(
+    scx: &StatementContext,
+    if_exists: bool,
+    name: Ident,
+) -> Result<Option<RoleId>, PlanError> {
+    match scx.catalog.resolve_role(name.as_str()) {
+        Ok(role) => {
+            let id = role.id();
+            if &id == scx.catalog.active_role_id() {
+                sql_bail!("current role cannot be dropped");
+            }
+            Ok(Some(role.id()))
+        }
+        Err(_) if if_exists => {
+            // TODO(benesch): generate a notice indicating that the
+            // role does not exist.
+            Ok(None)
+        }
+        Err(e) => Err(e.into()),
     }
 }
 
-pub fn describe_drop_role(
-    _: &StatementContext,
-    _: DropRolesStatement,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn plan_drop_role(
+fn plan_drop_cluster(
     scx: &StatementContext,
-    DropRolesStatement { if_exists, names }: DropRolesStatement,
-) -> Result<Plan, PlanError> {
-    let mut out = vec![];
-    for name in names {
-        let name = if name.0.len() == 1 {
-            normalize::ident(name.0.into_element())
-        } else {
-            sql_bail!("invalid role name {}", name.to_string().quoted())
-        };
-        match scx.catalog.resolve_role(&name) {
-            Ok(role) => {
-                let id = role.id();
-                if &id == scx.catalog.active_role_id() {
-                    sql_bail!("current role cannot be dropped");
-                }
-                out.push((role.id(), name));
-            }
-            Err(_) if if_exists => {
-                // TODO(benesch): generate a notice indicating that the
-                // role does not exist.
-            }
-            Err(e) => return Err(e.into()),
-        }
-    }
-    Ok(Plan::DropRoles(DropRolesPlan { ids: out }))
-}
-
-pub fn describe_drop_cluster(
-    _: &StatementContext,
-    _: DropClustersStatement,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn plan_drop_cluster(
-    scx: &StatementContext,
-    DropClustersStatement {
-        if_exists,
-        names,
-        cascade,
-    }: DropClustersStatement,
-) -> Result<Plan, PlanError> {
-    let mut ids = vec![];
-    for name in names {
-        let name = if name.0.len() == 1 {
-            name.0.into_element()
-        } else {
-            sql_bail!("invalid cluster name {}", name.to_string().quoted())
-        };
-        if let Some(cluster) = resolve_cluster(scx, &name, if_exists)? {
+    if_exists: bool,
+    name: Ident,
+    cascade: bool,
+) -> Result<Option<ClusterId>, PlanError> {
+    Ok(match resolve_cluster(scx, &name, if_exists)? {
+        Some(cluster) => {
             if !cascade && !cluster.bound_objects().is_empty() {
                 sql_bail!("cannot drop cluster with active objects");
             }
-            ids.push(cluster.id());
+            Some(cluster.id())
         }
-    }
-    Ok(Plan::DropClusters(DropClustersPlan { ids }))
+        None => None,
+    })
 }
 
 fn is_storage_cluster(scx: &StatementContext, cluster: &dyn CatalogCluster) -> bool {
@@ -3478,113 +3452,106 @@ fn is_storage_cluster(scx: &StatementContext, cluster: &dyn CatalogCluster) -> b
     })
 }
 
-pub fn describe_drop_cluster_replica(
-    _: &StatementContext,
-    _: DropClusterReplicasStatement,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn plan_drop_cluster_replica(
+fn plan_drop_cluster_replica(
     scx: &StatementContext,
-    DropClusterReplicasStatement { if_exists, names }: DropClusterReplicasStatement,
-) -> Result<Plan, PlanError> {
-    let mut ids = vec![];
-    for name in names {
-        if let Some(id) = resolve_cluster_replica(scx, &name, if_exists)? {
-            ids.push(id);
-        }
-    }
-
-    Ok(Plan::DropClusterReplicas(DropClusterReplicasPlan { ids }))
+    if_exists: bool,
+    name: QualifiedReplica,
+) -> Result<Option<(ClusterId, ReplicaId)>, PlanError> {
+    resolve_cluster_replica(scx, &name, if_exists)
 }
 
-pub fn plan_drop_item(
+fn plan_drop_item(
     scx: &StatementContext,
     object_type: ObjectType,
-    catalog_entry: &dyn CatalogItem,
+    if_exists: bool,
+    name: UnresolvedItemName,
     cascade: bool,
 ) -> Result<Option<GlobalId>, PlanError> {
-    if catalog_entry.id().is_system() {
-        sql_bail!(
-            "cannot drop item {} because it is required by the database system",
-            scx.catalog.resolve_full_name(catalog_entry.name()),
-        );
-    }
-    let item_type = catalog_entry.item_type();
+    Ok(match resolve_item(scx, name, if_exists)? {
+        Some(catalog_item) => {
+            if catalog_item.id().is_system() {
+                sql_bail!(
+                    "cannot drop item {} because it is required by the database system",
+                    scx.catalog.resolve_full_name(catalog_item.name()),
+                );
+            }
+            let item_type = catalog_item.item_type();
 
-    // Return a more helpful error on `DROP VIEW <materialized-view>`.
-    if object_type == ObjectType::View && item_type == CatalogItemType::MaterializedView {
-        let name = scx
-            .catalog
-            .resolve_full_name(catalog_entry.name())
-            .to_string();
-        return Err(PlanError::DropViewOnMaterializedView(name));
-    } else if object_type != item_type {
-        sql_bail!(
-            "\"{}\" is a {} not a {}",
-            scx.catalog.resolve_full_name(catalog_entry.name()),
-            catalog_entry.item_type(),
-            format!("{object_type}").to_lowercase(),
-        );
-    }
-
-    // We currently prohibit dropping subsources entirely and instead rely on
-    // dropping their primary sources.
-    if item_type == CatalogItemType::Source {
-        if let Some(source_id) = catalog_entry
-            .used_by()
-            .iter()
-            .find(|id| scx.catalog.get_item(id).item_type() == CatalogItemType::Source)
-        {
-            return Err(PlanError::DropSubsource {
-                subsource: scx
+            // Return a more helpful error on `DROP VIEW <materialized-view>`.
+            if object_type == ObjectType::View && item_type == CatalogItemType::MaterializedView {
+                let name = scx
                     .catalog
-                    .resolve_full_name(catalog_entry.name())
-                    .to_string(),
-                source: scx
-                    .catalog
-                    .resolve_full_name(scx.catalog.get_item(source_id).name())
-                    .to_string(),
-            });
-        }
-    }
+                    .resolve_full_name(catalog_item.name())
+                    .to_string();
+                return Err(PlanError::DropViewOnMaterializedView(name));
+            } else if object_type != item_type {
+                sql_bail!(
+                    "\"{}\" is a {} not a {}",
+                    scx.catalog.resolve_full_name(catalog_item.name()),
+                    catalog_item.item_type(),
+                    format!("{object_type}").to_lowercase(),
+                );
+            }
 
-    if !cascade {
-        let entry_id = catalog_entry.id();
-        // When this item gets dropped it will also drop its subsources, so we need to check the
-        // users of those
-        let mut dropped_items = catalog_entry
-            .subsources()
-            .iter()
-            .map(|id| scx.catalog.get_item(id))
-            .collect_vec();
-        dropped_items.push(catalog_entry);
-
-        for entry in dropped_items {
-            for id in entry.used_by() {
-                // The catalog_entry we're trying to drop will appear in the used_by list of its
-                // subsources so we need to exclude it from cascade checking since it will be
-                // dropped
-                if id == &entry_id {
-                    continue;
-                }
-
-                let dep = scx.catalog.get_item(id);
-                if dependency_prevents_drop(object_type, dep) {
-                    // TODO: Add a hint to add cascade.
-                    sql_bail!(
-                        "cannot drop {}: still depended upon by catalog item '{}'",
-                        scx.catalog.resolve_full_name(catalog_entry.name()),
-                        scx.catalog.resolve_full_name(dep.name())
-                    );
+            // We currently prohibit dropping subsources entirely and instead rely on
+            // dropping their primary sources.
+            if item_type == CatalogItemType::Source {
+                if let Some(source_id) = catalog_item
+                    .used_by()
+                    .iter()
+                    .find(|id| scx.catalog.get_item(id).item_type() == CatalogItemType::Source)
+                {
+                    return Err(PlanError::DropSubsource {
+                        subsource: scx
+                            .catalog
+                            .resolve_full_name(catalog_item.name())
+                            .to_string(),
+                        source: scx
+                            .catalog
+                            .resolve_full_name(scx.catalog.get_item(source_id).name())
+                            .to_string(),
+                    });
                 }
             }
-            // TODO(jkosh44) It would be nice to also check if any active subscribe or pending peek
-            //  relies on entry. Unfortunately, we don't have that information readily available.
+
+            if !cascade {
+                let entry_id = catalog_item.id();
+                // When this item gets dropped it will also drop its subsources, so we need to check the
+                // users of those
+                let mut dropped_items = catalog_item
+                    .subsources()
+                    .iter()
+                    .map(|id| scx.catalog.get_item(id))
+                    .collect_vec();
+                dropped_items.push(catalog_item);
+
+                for entry in dropped_items {
+                    for id in entry.used_by() {
+                        // The catalog_entry we're trying to drop will appear in the used_by list of its
+                        // subsources so we need to exclude it from cascade checking since it will be
+                        // dropped
+                        if id == &entry_id {
+                            continue;
+                        }
+
+                        let dep = scx.catalog.get_item(id);
+                        if dependency_prevents_drop(object_type, dep) {
+                            // TODO: Add a hint to add cascade.
+                            sql_bail!(
+                                "cannot drop {}: still depended upon by catalog item '{}'",
+                                scx.catalog.resolve_full_name(catalog_item.name()),
+                                scx.catalog.resolve_full_name(dep.name())
+                            );
+                        }
+                    }
+                    // TODO(jkosh44) It would be nice to also check if any active subscribe or pending peek
+                    //  relies on entry. Unfortunately, we don't have that information readily available.
+                }
+            }
+            Some(catalog_item.id())
         }
-    }
-    Ok(Some(catalog_entry.id()))
+        None => None,
+    })
 }
 
 /// Does the dependency `dep` prevent a drop of a non-cascade query?
@@ -3715,11 +3682,13 @@ pub fn plan_alter_owner(
         (ObjectType::Schema, UnresolvedName::Schema(name)) => {
             plan_alter_schema_owner(scx, if_exists, name, new_owner.id)
         }
+        (ObjectType::Role, UnresolvedName::Role(_)) => unreachable!("rejected by the parser"),
         (
             object_type @ ObjectType::Cluster
             | object_type @ ObjectType::ClusterReplica
             | object_type @ ObjectType::Database
-            | object_type @ ObjectType::Schema,
+            | object_type @ ObjectType::Schema
+            | object_type @ ObjectType::Role,
             name,
         )
         | (
@@ -3727,7 +3696,8 @@ pub fn plan_alter_owner(
             name @ UnresolvedName::Cluster(_)
             | name @ UnresolvedName::ClusterReplica(_)
             | name @ UnresolvedName::Database(_)
-            | name @ UnresolvedName::Schema(_),
+            | name @ UnresolvedName::Schema(_)
+            | name @ UnresolvedName::Role(_),
         ) => {
             unreachable!("parser set the wrong object type '{object_type:?}' for name {name:?}")
         }
@@ -3816,7 +3786,7 @@ fn plan_alter_item_owner(
     name: UnresolvedItemName,
     new_owner: RoleId,
 ) -> Result<Plan, PlanError> {
-    match resolve_object(scx, name, if_exists)? {
+    match resolve_item(scx, name, if_exists)? {
         Some(item) => {
             if item.id().is_system() {
                 sql_bail!(
@@ -3867,7 +3837,7 @@ pub fn plan_alter_object_rename(
         if_exists,
     }: AlterObjectRenameStatement,
 ) -> Result<Plan, PlanError> {
-    match resolve_object(scx, name, if_exists)? {
+    match resolve_item(scx, name, if_exists)? {
         Some(entry) => {
             let full_name = scx.catalog.resolve_full_name(entry.name());
             let item_type = entry.item_type();
@@ -4330,7 +4300,7 @@ fn resolve_schema<'a>(
     }
 }
 
-fn resolve_object<'a>(
+fn resolve_item<'a>(
     scx: &'a StatementContext,
     name: UnresolvedItemName,
     if_exists: bool,
