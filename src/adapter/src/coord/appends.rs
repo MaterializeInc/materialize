@@ -375,26 +375,40 @@ impl Coordinator {
             .expect("sending to self.internal_cmd_tx cannot fail");
     }
 
-    /// Submit a write to be executed during the next group commit.
+    /// Submit a write to be executed during the next group commit and trigger a group commit.
     pub(crate) fn submit_write(&mut self, pending_write_txn: PendingWriteTxn) {
-        self.trigger_group_commit();
         self.pending_writes.push(pending_write_txn);
+        self.trigger_group_commit();
     }
 
+    /// Submit a write to a system table be executed during the next group commit. This method does
+    /// not trigger a group commit.
+    ///
+    /// This is useful for non-critical writes like metric updates because it allows us to piggy
+    /// back off the next group commit instead of triggering a potentially expensive group commit.
+    ///
+    /// DO NOT call this for DDL which needs the system tables updated immediately.
     #[tracing::instrument(level = "debug", skip_all, fields(updates = updates.len()))]
-    pub(crate) async fn send_builtin_table_updates(
-        &mut self,
-        updates: Vec<BuiltinTableUpdate>,
-        source: BuiltinTableUpdateSource,
-    ) {
+    pub(crate) fn buffer_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
+        self.pending_writes.push(PendingWriteTxn::System {
+            updates,
+            source: BuiltinTableUpdateSource::Background,
+        });
+    }
+
+    /// Submit a write to a system table. This method will block until the write has been applied.
+    #[tracing::instrument(level = "debug", skip_all, fields(updates = updates.len()))]
+    pub(crate) async fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
         // Most DDL queries cause writes to system tables. Unlike writes to user tables, system
         // table writes do not wait for a group commit, they explicitly trigger one. There is a
         // possibility that if a user is executing DDL at a rate faster than 1 query per
         // millisecond, then the global timeline will unboundedly advance past the system clock.
         // This can cause future queries to block, but will not affect correctness. Since this
         // rate of DDL is unlikely, we allow DDL to explicitly trigger group commit.
-        self.pending_writes
-            .push(PendingWriteTxn::System { updates, source });
+        self.pending_writes.push(PendingWriteTxn::System {
+            updates,
+            source: BuiltinTableUpdateSource::DDL,
+        });
         self.group_commit_initiate(None).await;
         // Avoid excessive group commits by resetting the periodic table advancement timer. The
         // group commit triggered by above will already advance all tables.

@@ -122,7 +122,7 @@ use crate::catalog::{
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
 use crate::config::SystemParameterFrontend;
-use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, PendingWriteTxn};
+use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::ReadCapability;
@@ -1128,8 +1128,7 @@ impl Coordinator {
         }
 
         info!("coordinator init: sending builtin table updates");
-        self.send_builtin_table_updates(builtin_table_updates, BuiltinTableUpdateSource::DDL)
-            .await;
+        self.send_builtin_table_updates(builtin_table_updates).await;
 
         // Signal to the storage controller that it is now free to reconcile its
         // state with what it has learned from the adapter.
