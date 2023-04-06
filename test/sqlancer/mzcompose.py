@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import argparse
 import random
 import time
 from threading import Thread
@@ -33,6 +34,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--num-tries", default=100000, type=int)
     parser.add_argument("--num-threads", default=4, type=int)
     parser.add_argument("--seed", default=None, type=int)
+    parser.add_argument("--qpg", default=True, action=argparse.BooleanOptionalAction)
     parser.add_argument("--oracle", default="NOREC", type=str)
     args = parser.parse_args()
 
@@ -72,9 +74,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         f"{args.num_tries}",
         "--num-threads",
         f"{args.num_threads}",
+        "--qpg-enable",
+        f"{args.qpg}",
         "--random-string-generation",
         "ALPHANUMERIC_SPECIALCHAR",
-        "postgres",
+        "materialize",
         "--oracle",
         args.oracle,
         capture=True,
