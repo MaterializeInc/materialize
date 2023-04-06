@@ -229,6 +229,7 @@ mod support {
                 );
                 typ.keys.sort();
                 typ.keys.dedup();
+                println!("\ntyp: {:?}\n", typ);
                 let shadowed = types.insert(id.clone(), typ);
                 assert!(shadowed.is_none());
             }
