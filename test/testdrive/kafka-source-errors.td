@@ -32,7 +32,7 @@ contains:KAFKA CONNECTION without TOPIC
 
 ! CREATE SOURCE fawlty_broker_source
   FROM KAFKA CONNECTION fawlty_kafka_conn (TOPIC 'testdrive-fawlty-broker-source-${testdrive.seed}')
-contains: non-existent-broker:9092
+contains:Meta data fetch error: BrokerTransportFailure (Local: Broker transport failure)
 
 > CREATE CONNECTION IF NOT EXISTS fawlty_csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL 'http://non-existent-csr:8081'
