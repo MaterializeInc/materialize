@@ -369,7 +369,7 @@ impl<T: TimestampManipulation> Session<T> {
     }
 
     /// Adds a notice to the session.
-    pub fn add_notice(&mut self, notice: AdapterNotice) {
+    pub fn add_notice(&self, notice: AdapterNotice) {
         let _ = self.notices_tx.send(notice);
     }
 
