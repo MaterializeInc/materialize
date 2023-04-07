@@ -3225,7 +3225,11 @@ impl Coordinator {
                 mz_sql::plan::plan_copy_from(session.pcx(), &conn_catalog, id, columns, rows)
                     .err_into()
                     .and_then(|values| values.lower().err_into())
-                    .and_then(|values| Optimizer::logical_optimizer().optimize(values).err_into())
+                    .and_then(|values| {
+                        Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context())
+                            .optimize(values)
+                            .err_into()
+                    })
                     .and_then(|values| {
                         // Copied rows must always be constants.
                         Self::sequence_insert_constant(

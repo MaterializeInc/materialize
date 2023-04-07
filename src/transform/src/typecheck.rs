@@ -14,12 +14,12 @@ use std::{cell::RefCell, collections::BTreeMap};
 use mz_compute_client::types::dataflows::BuildDesc;
 use mz_expr::{Id, OptimizedMirRelationExpr};
 use mz_repr::ColumnType;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use crate::TransformError;
 
 /// Type checking contexts.
-/// 
+///
 /// We use a `RefCell` to ensure that contexts are shared by multiple typechecker passes.
 /// Shared contexts help catch consistency issues.
 pub type Context = RefCell<BTreeMap<Id, Vec<ColumnType>>>;
@@ -39,7 +39,7 @@ pub struct Typecheck {
 impl Typecheck {
     /// Creates a typechecking consistency checking pass using a given shared context
     pub fn new(ctx: Context) -> Self {
-        Self { ctx, }
+        Self { ctx }
     }
 }
 
@@ -58,7 +58,9 @@ impl crate::Transform for Typecheck {
         let ctx = self.ctx.borrow();
 
         if let Err(err) = relation.typecheck(&ctx) {
-            warn!("TYPE ERROR: {}\nIN UNKNOWN QUERY:\n{:#?}", err, relation);
+            return Err(TransformError::Internal(format!(
+                "TYPE ERROR: {err}\nIN UNKNOWN QUERY:\n{relation:#?}"
+            )));
         }
 
         Ok(())
@@ -81,10 +83,7 @@ impl crate::Transform for Typecheck {
         let expected = ctx.get(&Id::Global(*id));
 
         if expected.is_none() && !id.is_transient() {
-            info!(
-                "TYPECHECKER FOUND NEW NON-TRANSIENT TOP LEVEL QUERY {}\n{:#?}",
-                id, plan
-            );
+            info!("TYPECHECKER FOUND NEW NON-TRANSIENT TOP LEVEL QUERY {id}\n{plan:#?}");
         }
 
         let got = plan.typecheck(&ctx);
@@ -93,8 +92,7 @@ impl crate::Transform for Typecheck {
             (Ok(got), Some(expected)) => {
                 if !mz_expr::typecheck::columns_match(&got, expected) {
                     return Err(TransformError::Internal(format!(
-                        "TYPE ERROR: got {:#?} expected {:#?} \nIN QUERY BOUND TO {}:\n{:#?}",
-                        got, expected, id, plan
+                        "TYPE ERROR: got {got:#?} expected {expected:#?} \nIN QUERY BOUND TO {id}:\n{plan:#?}"
                     )));
                 }
             }
@@ -102,10 +100,9 @@ impl crate::Transform for Typecheck {
                 ctx.insert(Id::Global(*id), got);
             }
             (Err(err), _) => {
-                error!(
-                    "TYPE ERROR:\n{} expected type for this plan: {:#?} \nIN QUERY BOUND TO {}:\n{:#?}",
-                    err, expected, id, plan
-                );
+                return Err(TransformError::Internal(format!(
+                    "TYPE ERROR:\n{err} expected type for this plan: {expected:#?} \nIN QUERY BOUND TO {id}:\n{plan:#?}"
+                )));
             }
         }
 

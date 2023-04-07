@@ -537,7 +537,7 @@ impl MirRelationExpr {
 
                 // we've shadowed the id
                 if ids.contains(id) {
-                    warn!("id {} shadowed in {:#?}", id, self);
+                    warn!("id {id} shadowed in {self:#?}");
                     return Ok(());
                 }
 
@@ -550,7 +550,7 @@ impl MirRelationExpr {
             } => {
                 for inner_id in inner_ids {
                     if ids.contains(inner_id) {
-                        panic!("let recs shadowing other let recs (inner id {} appears in outer ids {:?}", inner_id, ids);
+                        warn!("let recs shadowing other let recs (inner id {inner_id} appears in outer ids {ids:?}");
                     }
                 }
 
@@ -660,7 +660,7 @@ impl MirScalarExpr {
                         source,
                         got: then_type,
                         expected: else_type,
-                        message: format!("couldn't compute union of column types for if: {:?}", e),
+                        message: format!("couldn't compute union of column types for if: {e:?}"),
                     })
             }
         }
@@ -704,13 +704,13 @@ impl<'a> std::fmt::Display for TypeError<'a> {
         use TypeError::*;
         match self {
             Unbound { source: _, id, typ } => {
-                writeln!(f, "{} is unbound\ndeclared type {:?}", id, typ)?
+                writeln!(f, "{id} is unbound\ndeclared type {typ:?}")?
             }
             NoSuchColumn {
                 source: _,
                 expr,
                 col,
-            } => writeln!(f, "{} references non-existent column {}", expr, *col)?,
+            } => writeln!(f, "{expr} references non-existent column {col}")?,
             MismatchColumn {
                 source: _,
                 got,
@@ -718,8 +718,7 @@ impl<'a> std::fmt::Display for TypeError<'a> {
                 message,
             } => writeln!(
                 f,
-                "mismatched column types: {}\ngot {:?}\nexpected {:?}\n",
-                message, got, expected
+                "mismatched column types: {message}\ngot {got:?}\nexpected {expected:?}"
             )?,
             MismatchColumns {
                 source: _,
@@ -728,8 +727,7 @@ impl<'a> std::fmt::Display for TypeError<'a> {
                 message,
             } => writeln!(
                 f,
-                "mismatched relation types: {}\ngot {:?}\nexpected {:?}",
-                message, got, expected
+                "mismatched relation types: {message}\ngot {got:?}\nexpected {expected:?}"
             )?,
             BadConstantRow {
                 source: _,
@@ -737,8 +735,7 @@ impl<'a> std::fmt::Display for TypeError<'a> {
                 expected,
             } => writeln!(
                 f,
-                "bad constant row\ngot {}\nexpected row of type {:?}",
-                got, expected
+                "bad constant row\ngot {got}\nexpected row of type {expected:?}"
             )?,
             BadProject {
                 source: _,
@@ -746,8 +743,7 @@ impl<'a> std::fmt::Display for TypeError<'a> {
                 input_type,
             } => writeln!(
                 f,
-                "projection of non-existant columns {:?} from type {:?}",
-                got, input_type
+                "projection of non-existant columns {got:?} from type {input_type:?}"
             )?,
             BadTopKGroupKey {
                 source: _,
@@ -755,18 +751,19 @@ impl<'a> std::fmt::Display for TypeError<'a> {
                 input_type,
             } => writeln!(
                 f,
-                "TopK group key {} references invalid column\ncolumns: {:?}",
-                key, input_type
+                "TopK group key {key} references invalid column\ncolumns: {input_type:?}"
             )?,
             BadTopKOrdering {
                 source: _,
                 order,
                 input_type,
-            } => writeln!(
+            } => {
+                let col = order.column;
+                writeln!(
                 f,
-                "TopK ordering {} references invalid column {} orderings\ncolumns: {:?}",
-                order, order.column, input_type
-            )?,
+                "TopK ordering {order} references invalid column {col} orderings\ncolumns: {input_type:?}"
+            )?
+            }
             BadLetRecBindings { source: _ } => {
                 writeln!(f, "LetRec ids and definitions don't line up")?
             }
