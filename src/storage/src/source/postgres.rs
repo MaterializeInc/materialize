@@ -1012,6 +1012,14 @@ async fn produce_replication<'a>(
 
             // The inner loop
             loop {
+                use LogicalReplicationMessage::*;
+                metrics.total.inc();
+
+                // Wait no longer than `FEEDBACK_INTERVAL` on the stream; if we exceed the deadline,
+                // we should let the upstream PG source know we're still here. This also gives us an
+                // opportunity to check that it's still alive.
+                let res = tokio::time::timeout(FEEDBACK_INTERVAL, stream.as_mut().next()).await;
+
                 // The upstream will periodically request status updates by setting the keepalive's
                 // reply field to 1. However, we cannot rely on these messages arriving on time. For
                 // example, when the upstream is sending a big transaction its keepalive messages are
@@ -1023,9 +1031,7 @@ async fn produce_replication<'a>(
                 // See: https://www.postgresql.org/message-id/CAMsr+YE2dSfHVr7iEv1GSPZihitWX-PMkD9QALEGcTYa+sdsgg@mail.gmail.com
                 let mut needs_status_update = last_feedback.elapsed() > FEEDBACK_INTERVAL;
 
-                metrics.total.inc();
-                use LogicalReplicationMessage::*;
-                match stream.as_mut().next().await {
+                match res.ok().flatten() {
                     Some(Ok(XLogData(xlog_data))) => match xlog_data.data() {
                         Begin(_) => {
                             last_data_message = Instant::now();
