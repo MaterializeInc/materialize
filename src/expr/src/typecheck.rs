@@ -165,7 +165,7 @@ impl MirRelationExpr {
                         return Err(TypeError::BadProject {
                             source: self,
                             got: outputs.clone(),
-                            input_type: t_in.into(),
+                            input_type: t_in,
                         });
                     }
                 }
@@ -408,7 +408,7 @@ impl MirRelationExpr {
                         return Err(TypeError::MismatchColumns {
                             source: self,
                             got: t_base.clone(),
-                            expected: t_input.clone(),
+                            expected: t_input,
                             message: "union branches have different numbers of columns".into(),
                         });
                     }
@@ -437,7 +437,7 @@ impl MirRelationExpr {
                 let mut body_ctx = ctx.clone();
                 body_ctx.insert(Id::Local(*id), t_value);
 
-                body.typecheck(&mut body_ctx)
+                body.typecheck(&body_ctx)
             }
             LetRec { ids, values, body } => {
                 if ids.len() != values.len() {
@@ -452,7 +452,7 @@ impl MirRelationExpr {
                 }
 
                 for (id, value) in ids.iter().zip_eq(values.iter()) {
-                    let typ = value.typecheck(&mut ctx)?;
+                    let typ = value.typecheck(&ctx)?;
 
                     let id = Id::Local(id.clone());
                     if let Some(ctx_typ) = ctx.get_mut(&id) {
@@ -474,7 +474,7 @@ impl MirRelationExpr {
                     }
                 }
 
-                body.typecheck(&mut ctx)
+                body.typecheck(&ctx)
             }
             ArrangeBy { input, keys } => {
                 let t_in = input.typecheck(ctx)?;
@@ -513,7 +513,7 @@ impl MirRelationExpr {
                     {
                         *base_col =
                             base_col
-                                .union(&input_col)
+                                .union(input_col)
                                 .map_err(|e| TypeError::MismatchColumn {
                                     source: self,
                                     got: input_col.clone(),
