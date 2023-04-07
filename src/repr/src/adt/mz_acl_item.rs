@@ -13,6 +13,7 @@ use crate::role_id::RoleId;
 use anyhow::{anyhow, Error};
 use bitflags::bitflags;
 use columnation::{CloneRegion, Columnation};
+use mz_ore::str::StrExt;
 use mz_proto::{RustType, TryFromProtoError};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -29,6 +30,13 @@ const DELETE_CHAR: char = 'd';
 const USAGE_CHAR: char = 'U';
 const CREATE_CHAR: char = 'C';
 
+const INSERT_STR: &str = "INSERT";
+const SELECT_STR: &str = "SELECT";
+const UPDATE_STR: &str = "UPDATE";
+const DELETE_STR: &str = "DELETE";
+const USAGE_STR: &str = "USAGE";
+const CREATE_STR: &str = "CREATE";
+
 bitflags! {
     /// A bit flag representing all the privileges that can be granted to a role.
     ///
@@ -42,6 +50,20 @@ bitflags! {
         const DELETE = 1 << 3;
         const USAGE = 1 << 8;
         const CREATE = 1 << 9;
+    }
+}
+
+impl AclMode {
+    pub fn parse_single_privilege(s: &str) -> Result<Self, Error> {
+        match s.trim().to_uppercase().as_str() {
+            INSERT_STR => Ok(AclMode::INSERT),
+            SELECT_STR => Ok(AclMode::SELECT),
+            UPDATE_STR => Ok(AclMode::UPDATE),
+            DELETE_STR => Ok(AclMode::DELETE),
+            USAGE_STR => Ok(AclMode::USAGE),
+            CREATE_STR => Ok(AclMode::CREATE),
+            _ => Err(anyhow!("unrecognized privilege type: {}", s.quoted())),
+        }
     }
 }
 

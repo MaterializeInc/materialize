@@ -3028,6 +3028,18 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
     use ParamType::*;
     use ScalarBaseType::*;
     builtins! {
+        "make_mz_aclitem" => Scalar {
+            params!(String, String, String) => VariadicFunc::MakeMzAclItem => MzAclItem, oid::FUNC_MAKE_MZ_ACL_ITEM_OID;
+        },
+        "mz_aclitem_grantor" => Scalar {
+            params!(MzAclItem) => UnaryFunc::MzAclItemGrantor(func::MzAclItemGrantor) => String, oid::FUNC_MZ_ACL_ITEM_GRANTOR_OID;
+        },
+        "mz_aclitem_grantee" => Scalar {
+            params!(MzAclItem) => UnaryFunc::MzAclItemGrantee(func::MzAclItemGrantee) => String, oid::FUNC_MZ_ACL_ITEM_GRANTEE_OID;
+        },
+        "mz_aclitem_privileges" => Scalar {
+            params!(MzAclItem) => UnaryFunc::MzAclItemPrivileges(func::MzAclItemPrivileges) => String, oid::FUNC_MZ_ACL_ITEM_PRIVILEGES_OID;
+        },
         "mz_all" => Aggregate {
             params!(Any) => AggregateFunc::All => Bool, oid::FUNC_MZ_ALL_OID;
         },
@@ -3673,6 +3685,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(RecordAny, RecordAny) => BinaryFunc::Eq => Bool, 2988;
             params!(MzTimestamp, MzTimestamp) => BinaryFunc::Eq => Bool, oid::FUNC_MZ_TIMESTAMP_EQ_MZ_TIMESTAMP_OID;
             params!(RangeAny, RangeAny) => BinaryFunc::Eq => Bool, 3882;
+            params!(MzAclItem, MzAclItem) => BinaryFunc::Eq => Bool, oid::FUNC_MZ_ACL_ITEM_EQ_MZ_ACL_ITEM_OID;
         },
         "<>" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::NotEq => Bool, 1753;
@@ -3701,6 +3714,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(RecordAny, RecordAny) => BinaryFunc::NotEq => Bool, 2989;
             params!(MzTimestamp, MzTimestamp) => BinaryFunc::NotEq => Bool, oid::FUNC_MZ_TIMESTAMP_NOT_EQ_MZ_TIMESTAMP_OID;
             params!(RangeAny, RangeAny) => BinaryFunc::NotEq => Bool, 3883;
+            params!(MzAclItem, MzAclItem) => BinaryFunc::NotEq => Bool, oid::FUNC_MZ_ACL_ITEM_NOT_EQ_MZ_ACL_ITEM_OID;
         }
     }
 });

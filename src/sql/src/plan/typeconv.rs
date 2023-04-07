@@ -638,7 +638,25 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
         (Range, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
             let ty = from_type.clone();
             Some(|e: HirScalarExpr| e.call_unary(CastRangeToString(func::CastRangeToString { ty })))
-        })
+        }),
+
+        // MzAclItem
+        (MzAclItem, String) => Explicit: sql_impl_cast("(
+                SELECT
+                    (CASE
+                        WHEN grantee_role_id = 'p' THEN ''
+                        ELSE COALESCE(grantee_role.name, grantee_role_id)
+                    END)
+                    || '='
+                    || mz_internal.mz_aclitem_privileges($1)
+                    || '/'
+                    || COALESCE(grantor_role.name, grantor_role_id)
+                FROM
+                    (SELECT mz_internal.mz_aclitem_grantee($1) AS grantee_role_id),
+                    (SELECT mz_internal.mz_aclitem_grantor($1) AS grantor_role_id)
+                LEFT JOIN mz_roles AS grantee_role ON grantee_role_id = grantee_role.id
+                LEFT JOIN mz_roles AS grantor_role ON grantor_role_id = grantor_role.id
+            )")
     }
 });
 
