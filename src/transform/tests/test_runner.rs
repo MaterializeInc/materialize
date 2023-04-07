@@ -111,8 +111,9 @@ mod tests {
     const TEST: &str = "test";
 
     thread_local! {
-        static FULL_TRANSFORM_LIST: Vec<Box<dyn Transform>> =
-            Optimizer::logical_optimizer()
+        static FULL_TRANSFORM_LIST: Vec<Box<dyn Transform>> = {
+            let ctx = mz_transform::typecheck::empty_context();
+            Optimizer::logical_optimizer(&ctx)
                 .transforms
                 .into_iter()
                 .chain(std::iter::once::<Box<dyn Transform>>(
@@ -121,9 +122,10 @@ mod tests {
                 .chain(std::iter::once::<Box<dyn Transform>>(
                     Box::new(mz_transform::normalize_lets::NormalizeLets::new(false))
                 ))
-                .chain(Optimizer::logical_cleanup_pass().transforms.into_iter())
-                .chain(Optimizer::physical_optimizer().transforms.into_iter())
-                .collect::<Vec<_>>();
+                .chain(Optimizer::logical_cleanup_pass(&ctx).transforms.into_iter())
+                .chain(Optimizer::physical_optimizer(&ctx).transforms.into_iter())
+                .collect::<Vec<_>>()
+            };
     }
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -411,7 +413,7 @@ mod tests {
         }
         let mut out = String::new();
         if test_type == TestType::Opt {
-            let optimizer = Optimizer::logical_optimizer();
+            let optimizer = Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
             dataflow = dataflow
                 .into_iter()
                 .map(|(id, rel)| (id, optimizer.optimize(rel).unwrap().into_inner()))
@@ -431,8 +433,9 @@ mod tests {
             _ => {}
         };
         if test_type == TestType::Opt {
-            let log_optimizer = Optimizer::logical_cleanup_pass();
-            let phys_optimizer = Optimizer::physical_optimizer();
+            let ctx = &mz_transform::typecheck::empty_context();
+            let log_optimizer = Optimizer::logical_cleanup_pass(&ctx);
+            let phys_optimizer = Optimizer::physical_optimizer(&ctx);
             dataflow = dataflow
                 .into_iter()
                 .map(|(id, rel)| {

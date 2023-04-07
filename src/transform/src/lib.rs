@@ -450,9 +450,9 @@ pub struct Optimizer {
 
 impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
-    pub fn logical_optimizer() -> Self {
+    pub fn logical_optimizer(ctx: &crate::typecheck::Context) -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
-            Box::new(crate::typecheck::Typecheck::default()),
+            Box::new(crate::typecheck::Typecheck::new(ctx.clone())),
             // 1. Structure-agnostic cleanup
             Box::new(normalize()),
             Box::new(crate::non_null_requirements::NonNullRequirements::default()),
@@ -506,7 +506,7 @@ impl Optimizer {
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
             }),
-            Box::new(crate::typecheck::Typecheck::default()),
+            Box::new(crate::typecheck::Typecheck::new(ctx.clone())),
         ];
         Self {
             name: "logical",
@@ -520,10 +520,10 @@ impl Optimizer {
     /// This is meant to be used for optimizing each view within a dataflow
     /// once view inlining has already happened, right before dataflow
     /// rendering.
-    pub fn physical_optimizer() -> Self {
+    pub fn physical_optimizer(ctx: &crate::typecheck::Context) -> Self {
         // Implementation transformations
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
-            Box::new(crate::typecheck::Typecheck::default()),
+            Box::new(crate::typecheck::Typecheck::new(ctx.clone())),
             // Considerations for the relationship between JoinImplementation and other transforms:
             // - there should be a run of LiteralConstraints before JoinImplementation lifts away
             //   the Filters from the Gets;
@@ -580,7 +580,7 @@ impl Optimizer {
             // identical. Check the `threshold_elision.slt` tests that fail if
             // you remove this transform for examples.
             Box::new(crate::threshold_elision::ThresholdElision),
-            Box::new(crate::typecheck::Typecheck::default()),
+            Box::new(crate::typecheck::Typecheck::new(ctx.clone())),
         ];
         Self {
             name: "physical",
@@ -590,9 +590,9 @@ impl Optimizer {
 
     /// Contains the logical optimizations that should run after cross-view
     /// transformations run.
-    pub fn logical_cleanup_pass() -> Self {
+    pub fn logical_cleanup_pass(ctx: &crate::typecheck::Context) -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
-            Box::new(crate::typecheck::Typecheck::default()),
+            Box::new(crate::typecheck::Typecheck::new(ctx.clone())),
             // Delete unnecessary maps.
             Box::new(crate::fusion::Fusion),
             Box::new(crate::Fixpoint {
@@ -617,7 +617,7 @@ impl Optimizer {
                     Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
                 ],
             }),
-            Box::new(crate::typecheck::Typecheck::default()),
+            Box::new(crate::typecheck::Typecheck::new(ctx.clone())),
         ];
         Self {
             name: "logical_cleanup",

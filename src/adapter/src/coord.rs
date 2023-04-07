@@ -1559,7 +1559,7 @@ pub async fn serve(
 
             let mut coord = Coordinator {
                 controller: dataflow_client,
-                view_optimizer: Optimizer::logical_optimizer(),
+                view_optimizer: Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context()),
                 catalog: Arc::new(catalog),
                 internal_cmd_tx,
                 strict_serializable_reads_tx,

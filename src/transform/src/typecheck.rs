@@ -18,18 +18,28 @@ use tracing::{error, info, warn};
 
 use crate::TransformError;
 
+/// Type checking contexts.
+/// 
+/// We use a `RefCell` to ensure that contexts are shared by multiple typechecker passes.
+/// Shared contexts help catch consistency issues.
+pub type Context = RefCell<BTreeMap<Id, Vec<ColumnType>>>;
+
+/// Generates an empty context
+pub fn empty_context() -> Context {
+    RefCell::new(BTreeMap::new())
+}
+
 /// Check that the visible type of each query has not been changed
 #[derive(Debug)]
 pub struct Typecheck {
     /// The known types of the queries so far
-    pub ctx: RefCell<BTreeMap<Id, Vec<ColumnType>>>,
+    pub ctx: Context,
 }
 
-impl Default for Typecheck {
-    fn default() -> Self {
-        Self {
-            ctx: RefCell::new(BTreeMap::new()),
-        }
+impl Typecheck {
+    /// Creates a typechecking consistency checking pass using a given shared context
+    pub fn new(ctx: Context) -> Self {
+        Self { ctx, }
     }
 }
 
