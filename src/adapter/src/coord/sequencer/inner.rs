@@ -894,7 +894,7 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip(self, tx))]
     pub(super) async fn sequence_create_sink(
         &mut self,
-        mut session: Session,
+        session: Session,
         plan: CreateSinkPlan,
         depends_on: Vec<GlobalId>,
         tx: ClientTransmitter<ExecuteResponse>,
