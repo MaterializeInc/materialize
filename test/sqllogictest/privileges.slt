@@ -1,4 +1,4 @@
-# Copyright default_owner, Inc. and contributors. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -118,3 +118,20 @@ query B
 SELECT mz_internal.make_mz_aclitem('u1', 'u3', 'DELETE, USAGE') <> mz_internal.make_mz_aclitem('u1', 'u2', 'DELETE')
 ----
 true
+
+# RoleIds that don't exist are printed as IDs instead of names
+
+query T
+SELECT mz_internal.make_mz_aclitem('u99991', 'u2', 'CREATE')::text
+----
+u99991=C/materialize
+
+query T
+SELECT mz_internal.make_mz_aclitem('u1', 'u87398', 'CREATE')::text
+----
+default_owner=C/u87398
+
+query T
+SELECT mz_internal.make_mz_aclitem('u3251', 's345', 'CREATE')::text
+----
+u3251=C/s345
