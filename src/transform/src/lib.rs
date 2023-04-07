@@ -87,11 +87,11 @@
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
 
+use mz_compute_client::types::dataflows::BuildDesc;
+use mz_expr::OptimizedMirRelationExpr;
 use std::error::Error;
 use std::fmt;
 use std::iter;
-use mz_compute_client::types::dataflows::BuildDesc;
-use mz_expr::OptimizedMirRelationExpr;
 use tracing::error;
 
 use mz_expr::visit::Visit;
@@ -171,7 +171,7 @@ pub trait Transform: std::fmt::Debug {
     ) -> Result<(), TransformError>;
 
     /// Transform a relation into a functionally equivalent relation
-    /// 
+    ///
     /// This version provides the entire `BuildDesc`.
     fn transform_query(
         &self,
@@ -198,7 +198,7 @@ pub enum TransformError {
     /// An ideally temporary error indicating transforms that do not support the `MirRelationExpr::LetRec` variant.
     LetRecUnsupported,
     /// A reference to an apparently unbound identifier.
-    IdentifierMissing(mz_expr::LocalId)
+    IdentifierMissing(mz_expr::LocalId),
 }
 
 impl fmt::Display for TransformError {

@@ -91,9 +91,9 @@ mod relation;
 mod scalar;
 
 pub mod explain;
+pub mod typecheck;
 pub mod virtual_syntax;
 pub mod visit;
-pub mod typecheck;
 
 pub use relation::canonicalize;
 

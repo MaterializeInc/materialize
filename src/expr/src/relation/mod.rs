@@ -368,8 +368,6 @@ impl MirRelationExpr {
         RelationType::new(column_types).with_keys(unique_keys)
     }
 
-
-
     /// Reports the column types of the relation given the column types of the input relations.
     ///
     /// `input_types` is required to contain the column types for the input relations of

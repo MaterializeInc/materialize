@@ -14,7 +14,7 @@ use std::{cell::RefCell, collections::BTreeMap};
 use mz_compute_client::types::dataflows::BuildDesc;
 use mz_expr::{typecheck::columns_match, Id, OptimizedMirRelationExpr};
 use mz_repr::ColumnType;
-use tracing::{warn, info, error};
+use tracing::{error, info, warn};
 
 use crate::TransformError;
 
@@ -71,14 +71,17 @@ impl crate::Transform for Typecheck {
         let expected = ctx.get(&Id::Global(*id));
 
         if expected.is_none() && !id.is_transient() {
-            info!("TYPECHECKER FOUND NEW NON-TRANSIENT TOP LEVEL QUERY {}\n{:#?}", id, plan);
+            info!(
+                "TYPECHECKER FOUND NEW NON-TRANSIENT TOP LEVEL QUERY {}\n{:#?}",
+                id, plan
+            );
         }
 
         let got = plan.typecheck(&ctx);
 
         match (got, expected) {
             (Ok(got), Some(expected)) => {
-                if !mz_expr::typecheck::columns_equal(&got, expected) {
+                if !mz_expr::typecheck::columns_match(&got, expected) {
                     return Err(TransformError::Internal(format!(
                         "TYPE ERROR: got {:#?} expected {:#?} \nIN QUERY BOUND TO {}:\n{:#?}",
                         got, expected, id, plan
