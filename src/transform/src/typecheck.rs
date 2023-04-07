@@ -12,7 +12,7 @@
 use std::{cell::RefCell, collections::BTreeMap};
 
 use mz_compute_client::types::dataflows::BuildDesc;
-use mz_expr::{typecheck::columns_match, Id, OptimizedMirRelationExpr};
+use mz_expr::{Id, OptimizedMirRelationExpr};
 use mz_repr::ColumnType;
 use tracing::{error, info, warn};
 
