@@ -468,7 +468,7 @@ impl Coordinator {
         Ok(GlobalId::Transient(id))
     }
 
-    fn maybe_send_rbac_notice(&self, session: &mut Session) {
+    fn maybe_send_rbac_notice(&self, session: &Session) {
         if !rbac::is_rbac_enabled_for_session(self.catalog.system_config(), session) {
             if !self.catalog.system_config().enable_ld_rbac_checks() {
                 session.add_notice(AdapterNotice::RbacSystemDisabled);
