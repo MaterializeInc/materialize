@@ -1580,7 +1580,7 @@ fn get_encoding_inner(
                     .map_err(|_| sql_err!("CSV delimiter must be an ASCII character"))?,
             })
         }
-        Format::Json => bail_unsupported!("JSON sources"),
+        Format::Json => DataEncodingInner::Json,
         Format::Text => DataEncodingInner::Text,
     }))
 }
@@ -1630,7 +1630,7 @@ fn get_unnamed_key_envelope(key: &DataEncoding) -> Result<KeyEnvelope, PlanError
         DataEncodingInner::RowCodec(_) => {
             sql_bail!("{} sources cannot use INCLUDE KEY", key.op_name())
         }
-        DataEncodingInner::Bytes | DataEncodingInner::Text => false,
+        DataEncodingInner::Bytes | DataEncodingInner::Json | DataEncodingInner::Text => false,
         DataEncodingInner::Avro(_)
         | DataEncodingInner::Csv(_)
         | DataEncodingInner::Protobuf(_)
