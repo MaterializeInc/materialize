@@ -67,7 +67,7 @@ class RenameSource(Check):
                 $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
                 ALTER SOURCE rename_source2 OWNER TO materialize;
                 """
-            if self.base_version >= MzVersion.parse("0.46.0-dev")
+            if self.base_version >= MzVersion.parse("0.47.0")
             else ""
         )
 

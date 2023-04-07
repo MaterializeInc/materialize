@@ -37,7 +37,7 @@ class RenameView(Check):
                 ALTER VIEW rename_view_viewB2 OWNER TO materialize;
                 ALTER VIEW rename_view_viewA2 OWNER TO materialize;
                 """
-            if self.base_version >= MzVersion.parse("0.46.0-dev")
+            if self.base_version >= MzVersion.parse("0.47.0")
             else ""
         )
 

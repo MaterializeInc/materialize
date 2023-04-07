@@ -37,7 +37,7 @@ class RenameIndex(Check):
                 ALTER INDEX rename_index_index1 OWNER TO materialize;
                 ALTER INDEX rename_index_index2 OWNER TO materialize;
                 """
-            if self.base_version >= MzVersion.parse("0.46.0-dev")
+            if self.base_version >= MzVersion.parse("0.47.0")
             else ""
         )
 
