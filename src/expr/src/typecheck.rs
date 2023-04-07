@@ -1,3 +1,14 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! Thorough consistency checking and type synthesis for MIR expressions
+
 use itertools::Itertools;
 use mz_repr::{ColumnType, RelationType, Row, ScalarType};
 use std::collections::{BTreeMap, BTreeSet};
@@ -8,6 +19,10 @@ use crate::{
     MirRelationExpr, MirScalarExpr, UnaryFunc,
 };
 
+/// The possible forms of inconsistency/errors discovered during typechecking.
+///
+/// Every variant has a `source` field identifying the MIR term that is home
+///  to the error (though not necessarily the root cause of the error).
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum TypeError<'a> {
     Unbound {
@@ -62,7 +77,7 @@ type Ctx = BTreeMap<Id, Vec<ColumnType>>;
 /// Returns true when it is safe to treat a `got` row as an `expected` row
 ///
 /// In particular, the core types must be equal, and if a column in `got` is nullable, that column should also be nullable in `expected`
-fn columns_match(got: &[ColumnType], expected: &[ColumnType]) -> bool {
+pub fn columns_match(got: &[ColumnType], expected: &[ColumnType]) -> bool {
     if got.len() != expected.len() {
         return false;
     }
@@ -80,7 +95,7 @@ impl MirRelationExpr {
     /// It should be linear in the size of the AST.
     ///
     /// ??? should we also compute keys and return a `RelationType`?
-    pub fn typecheck(&self, ctx: &mut Ctx) -> Result<Vec<ColumnType>, TypeError> {
+    pub fn typecheck(&self, ctx: &Ctx) -> Result<Vec<ColumnType>, TypeError> {
         use MirRelationExpr::*;
 
         match self {

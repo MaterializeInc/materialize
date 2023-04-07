@@ -90,6 +90,8 @@
 use std::error::Error;
 use std::fmt;
 use std::iter;
+use mz_compute_client::types::dataflows::BuildDesc;
+use mz_expr::OptimizedMirRelationExpr;
 use tracing::error;
 
 use mz_expr::visit::Visit;
@@ -122,6 +124,7 @@ pub mod reduction_pushdown;
 pub mod redundant_join;
 pub mod semijoin_idempotence;
 pub mod threshold_elision;
+pub mod typecheck;
 pub mod union_cancel;
 
 pub mod dataflow;
@@ -166,6 +169,18 @@ pub trait Transform: std::fmt::Debug {
         relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), TransformError>;
+
+    /// Transform a relation into a functionally equivalent relation
+    /// 
+    /// This version provides the entire `BuildDesc`.
+    fn transform_query(
+        &self,
+        build_desc: &mut BuildDesc<OptimizedMirRelationExpr>,
+        args: TransformArgs,
+    ) -> Result<(), TransformError> {
+        self.transform(build_desc.plan.as_inner_mut(), args)
+    }
+
     /// A string describing the transform.
     ///
     /// This is useful mainly when iterating through many `Box<Transform>`
@@ -437,6 +452,7 @@ impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
     pub fn logical_optimizer() -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
+            Box::new(crate::typecheck::Typecheck::default()),
             // 1. Structure-agnostic cleanup
             Box::new(normalize()),
             Box::new(crate::non_null_requirements::NonNullRequirements::default()),
@@ -490,6 +506,7 @@ impl Optimizer {
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
             }),
+            Box::new(crate::typecheck::Typecheck::default()),
         ];
         Self {
             name: "logical",
@@ -506,6 +523,7 @@ impl Optimizer {
     pub fn physical_optimizer() -> Self {
         // Implementation transformations
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
+            Box::new(crate::typecheck::Typecheck::default()),
             // Considerations for the relationship between JoinImplementation and other transforms:
             // - there should be a run of LiteralConstraints before JoinImplementation lifts away
             //   the Filters from the Gets;
@@ -562,6 +580,7 @@ impl Optimizer {
             // identical. Check the `threshold_elision.slt` tests that fail if
             // you remove this transform for examples.
             Box::new(crate::threshold_elision::ThresholdElision),
+            Box::new(crate::typecheck::Typecheck::default()),
         ];
         Self {
             name: "physical",
@@ -573,6 +592,7 @@ impl Optimizer {
     /// transformations run.
     pub fn logical_cleanup_pass() -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
+            Box::new(crate::typecheck::Typecheck::default()),
             // Delete unnecessary maps.
             Box::new(crate::fusion::Fusion),
             Box::new(crate::Fixpoint {
@@ -597,6 +617,7 @@ impl Optimizer {
                     Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
                 ],
             }),
+            Box::new(crate::typecheck::Typecheck::default()),
         ];
         Self {
             name: "logical_cleanup",
@@ -648,6 +669,21 @@ impl Optimizer {
         for transform in self.transforms.iter() {
             if transform.recursion_safe() || !recursive {
                 transform.transform(relation, TransformArgs { indexes })?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn transform_query(
+        &self,
+        build_desc: &mut BuildDesc<OptimizedMirRelationExpr>,
+        indexes: &dyn IndexOracle,
+    ) -> Result<(), TransformError> {
+        let recursive = build_desc.plan.is_recursive();
+        for transform in self.transforms.iter() {
+            if transform.recursion_safe() || !recursive {
+                transform.transform_query(build_desc, TransformArgs { indexes })?;
             }
         }
 

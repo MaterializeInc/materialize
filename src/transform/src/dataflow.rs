@@ -207,7 +207,7 @@ fn optimize_dataflow_relations(
     // add indexes imperatively to `DataflowDesc`.
     for object in dataflow.objects_to_build.iter_mut() {
         // Re-run all optimizations on the composite views.
-        optimizer.transform(object.plan.as_inner_mut(), indexes)?;
+        optimizer.transform_query(object, indexes)?;
     }
 
     mz_repr::explain::trace_plan(dataflow);
