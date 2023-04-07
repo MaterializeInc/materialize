@@ -14,7 +14,9 @@ use std::{cell::RefCell, collections::BTreeMap};
 use mz_compute_client::types::dataflows::BuildDesc;
 use mz_expr::{typecheck::columns_match, Id, OptimizedMirRelationExpr};
 use mz_repr::ColumnType;
-use tracing::warn;
+use tracing::{warn, info, error};
+
+use crate::TransformError;
 
 /// Check that the visible type of each query has not been changed
 #[derive(Debug)]
@@ -40,10 +42,16 @@ impl crate::Transform for Typecheck {
     )]
     fn transform(
         &self,
-        _relation: &mut mz_expr::MirRelationExpr,
+        relation: &mut mz_expr::MirRelationExpr,
         _args: crate::TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        unimplemented!("typechecking should be called with transform_query")
+        let ctx = self.ctx.borrow();
+
+        if let Err(err) = relation.typecheck(&ctx) {
+            warn!("TYPE ERROR: {}\nIN UNKNOWN QUERY:\n{:#?}", err, relation);
+        }
+
+        Ok(())
     }
 
     #[tracing::instrument(
@@ -62,29 +70,30 @@ impl crate::Transform for Typecheck {
 
         let expected = ctx.get(&Id::Global(*id));
 
-        if expected.is_none() {
-            warn!("NEW TOP LEVEL QUERY {}\n{:#?}", id, plan);
+        if expected.is_none() && !id.is_transient() {
+            info!("TYPECHECKER FOUND NEW NON-TRANSIENT TOP LEVEL QUERY {}\n{:#?}", id, plan);
         }
 
         let got = plan.typecheck(&ctx);
-        //            .map_err(|err| TransformError::Internal(format!("type error: {:?}", err)));
 
         match (got, expected) {
             (Ok(got), Some(expected)) => {
-                if !columns_match(&got, expected) {
-                    warn!(
+                if !mz_expr::typecheck::columns_equal(&got, expected) {
+                    return Err(TransformError::Internal(format!(
                         "TYPE ERROR: got {:#?} expected {:#?} \nIN QUERY BOUND TO {}:\n{:#?}",
                         got, expected, id, plan
-                    );
+                    )));
                 }
             }
             (Ok(got), None) => {
-                ctx.insert(Id::Global(id.clone()), got);
+                ctx.insert(Id::Global(*id), got);
             }
-            (Err(err), _) => warn!(
-                "TYPE ERROR: got {} expected {:#?} \nIN QUERY BOUND TO {}:\n{:#?}",
-                err, expected, id, plan
-            ),
+            (Err(err), _) => {
+                error!(
+                    "TYPE ERROR:\n{} expected type for this plan: {:#?} \nIN QUERY BOUND TO {}:\n{:#?}",
+                    err, expected, id, plan
+                );
+            }
         }
 
         Ok(())

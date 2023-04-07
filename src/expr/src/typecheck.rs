@@ -76,15 +76,26 @@ type Ctx = BTreeMap<Id, Vec<ColumnType>>;
 
 /// Returns true when it is safe to treat a `got` row as an `expected` row
 ///
-/// In particular, the core types must be equal, and if a column in `got` is nullable, that column should also be nullable in `expected`
-pub fn columns_match(got: &[ColumnType], expected: &[ColumnType]) -> bool {
+/// In particular, the core types must be equal, and if a column in `known` is nullable, that column should also be nullable in `got`
+/// Conversely, it is okay to treat a known non-nullable column as nullable: `got` may be nullable when `known` is not
+pub fn columns_match(got: &[ColumnType], known: &[ColumnType]) -> bool {
+    if got.len() != known.len() {
+        return false;
+    }
+
+    got.iter()
+        .zip_eq(known.iter())
+        .all(|(got, known)| (!known.nullable || got.nullable) && got.scalar_type.base_eq(&known.scalar_type))
+}
+
+pub fn columns_equal(got: &[ColumnType], expected: &[ColumnType]) -> bool {
     if got.len() != expected.len() {
         return false;
     }
 
     got.iter()
         .zip_eq(expected.iter())
-        .all(|(c1, c2)| (!c1.nullable || c2.nullable) && c1.scalar_type.base_eq(&c2.scalar_type))
+        .all(|(c1, c2)| (c1.nullable == c2.nullable) && c1.scalar_type.base_eq(&c2.scalar_type))
 }
 
 impl MirRelationExpr {
@@ -131,11 +142,9 @@ impl MirRelationExpr {
                 Ok(typ.column_types.clone())
             }
             Get { typ, id } => {
-                if let Id::Global(global_id) = id {
+                if let Id::Global(_global_id) = id {
                     if !ctx.contains_key(id) {
                         // TODO where can we find these types
-                        // TODO how should we warn folks about it?
-                        warn!("unknown global: {}", global_id);
                         return Ok(typ.column_types.clone());
                     }
                 }
