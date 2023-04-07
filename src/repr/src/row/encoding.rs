@@ -79,7 +79,7 @@ impl ColumnType {
     /// There is a 1:N correspondence between DatumToPersist impls and
     /// ColumnTypes because a number of ScalarTypes map to the same set of
     /// `Datum`s (e.g. `String` and `VarChar`).
-    fn to_persist<R, F: DatumToPersistFn<R>>(&self, f: F) -> R {
+    pub fn to_persist<R, F: DatumToPersistFn<R>>(&self, f: F) -> R {
         use ScalarType::*;
         let ColumnType {
             nullable,
@@ -165,15 +165,15 @@ pub trait DatumToPersist {
     /// Panics if the Datum doesn't match the persist column type.
     fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum);
 
-    /// Decodes the data in the persist column at the specific offset into a
-    /// Datum. This Datum is returned by pushing it in to the given RowPacker.
-    fn decode(col: &<Self::Data as Data>::Col, idx: usize, row: &mut RowPacker);
+    /// Decodes the data with the given reference into a Datum. This Datum is
+    /// returned by pushing it in to the given RowPacker.
+    fn decode(val: <Self::Data as Data>::Ref<'_>, row: &mut RowPacker);
 }
 
 /// `FnOnce<T: DatumToPersist>() -> R`
 ///
 /// This saves us from needing another `enum_dispatch` for [DatumToPersist].
-trait DatumToPersistFn<R> {
+pub trait DatumToPersistFn<R> {
     fn call<T: DatumToPersist>(self) -> R
     where
         for<'a> DatumDecoder<'a>: From<DataRef<'a, T>>,
@@ -188,8 +188,8 @@ macro_rules! data_to_persist_primitive {
             fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
                 ColumnPush::<Self::Data>::push(col, datum.$unwrap());
             }
-            fn decode(col: &<Self::Data as Data>::Col, idx: usize, row: &mut RowPacker) {
-                row.push(Datum::from(ColumnGet::<Self::Data>::get(col, idx)))
+            fn decode(val: <Self::Data as Data>::Ref<'_>, row: &mut RowPacker) {
+                row.push(Datum::from(val))
             }
         }
         impl DatumToPersist for Option<$data> {
@@ -202,8 +202,8 @@ macro_rules! data_to_persist_primitive {
                     ColumnPush::<Self::Data>::push(col, Some(datum.$unwrap()));
                 }
             }
-            fn decode(col: &<Self::Data as Data>::Col, idx: usize, row: &mut RowPacker) {
-                row.push(Datum::from(ColumnGet::<Self::Data>::get(col, idx)))
+            fn decode(val: <Self::Data as Data>::Ref<'_>, row: &mut RowPacker) {
+                row.push(Datum::from(val))
             }
         }
     };
@@ -240,9 +240,8 @@ impl DatumToPersist for ProtoDatumToPersist {
         let buf = proto.encode_to_vec();
         ColumnPush::<Self::Data>::push(col, &buf);
     }
-    fn decode(col: &<Self::Data as Data>::Col, idx: usize, row: &mut RowPacker) {
-        let buf = ColumnGet::<Self::Data>::get(col, idx);
-        let proto = ProtoDatum::decode(buf).expect("col should be valid ProtoDatum");
+    fn decode(val: <Self::Data as Data>::Ref<'_>, row: &mut RowPacker) {
+        let proto = ProtoDatum::decode(val).expect("col should be valid ProtoDatum");
         row.try_push_proto(&proto)
             .expect("ProtoDatum should be valid Datum");
     }
@@ -272,12 +271,12 @@ impl DatumToPersist for NullableProtoDatumToPersist {
             ColumnPush::<Self::Data>::push(col, Some(&buf));
         }
     }
-    fn decode(col: &<Self::Data as Data>::Col, idx: usize, row: &mut RowPacker) {
-        let Some(buf) = ColumnGet::<Self::Data>::get(col, idx) else {
+    fn decode(val: <Self::Data as Data>::Ref<'_>, row: &mut RowPacker) {
+        let Some(val) = val else {
             row.push(Datum::Null);
             return;
         };
-        let proto = ProtoDatum::decode(buf).expect("col should be valid ProtoDatum");
+        let proto = ProtoDatum::decode(val).expect("col should be valid ProtoDatum");
         row.try_push_proto(&proto)
             .expect("ProtoDatum should be valid Datum");
     }
@@ -294,8 +293,8 @@ impl DatumToPersist for Jsonb {
     fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
         ProtoDatumToPersist::encode(col, datum)
     }
-    fn decode(col: &<Self::Data as Data>::Col, idx: usize, row: &mut RowPacker) {
-        ProtoDatumToPersist::decode(col, idx, row)
+    fn decode(val: <Self::Data as Data>::Ref<'_>, row: &mut RowPacker) {
+        ProtoDatumToPersist::decode(val, row)
     }
 }
 
@@ -312,8 +311,8 @@ impl DatumToPersist for Option<Jsonb> {
     fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
         NullableProtoDatumToPersist::encode(col, datum)
     }
-    fn decode(col: &<Self::Data as Data>::Col, idx: usize, row: &mut RowPacker) {
-        NullableProtoDatumToPersist::decode(col, idx, row)
+    fn decode(val: <Self::Data as Data>::Ref<'_>, row: &mut RowPacker) {
+        NullableProtoDatumToPersist::decode(val, row)
     }
 }
 
@@ -460,7 +459,7 @@ impl<T: DatumToPersist> std::fmt::Debug for DataRef<'_, T> {
 
 impl<'a, T: DatumToPersist> DatumDecoderT<'a> for DataRef<'a, T> {
     fn decode(&self, idx: usize, row: &mut RowPacker) {
-        T::decode(self.0, idx, row);
+        T::decode(ColumnGet::<T::Data>::get(self.0, idx), row);
     }
 }
 

@@ -40,7 +40,7 @@ class DropIndex(Check):
                 ALTER INDEX drop_index_table_primary_idx OWNER TO materialize;
                 ALTER INDEX drop_index_index2 OWNER TO materialize;
                 """
-            if self.base_version >= MzVersion.parse("0.46.0-dev")
+            if self.base_version >= MzVersion.parse("0.47.0")
             else ""
         )
 

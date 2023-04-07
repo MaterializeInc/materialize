@@ -66,14 +66,16 @@ where
         let (output, errs) = build_distinct_retractions(debug_name, collection);
         return CollectionBundle::from_collections(output, err_input.concat(&errs));
     }
-
-    let (arrangement, err_collection) =
-        render_reduce_plan_inner(debug_name, plan, collection, err_input, key_arity);
+    let mut errors = Default::default();
+    let arrangement =
+        render_reduce_plan_inner(debug_name, plan, collection, &mut errors, key_arity);
     CollectionBundle::from_columns(
         0..key_arity,
         ArrangementFlavor::Local(
             arrangement,
-            err_collection.arrange_named("Arrange bundle err"),
+            err_input
+                .concatenate(errors)
+                .arrange_named("Arrange bundle err"),
         ),
     )
 }
@@ -82,51 +84,48 @@ fn render_reduce_plan_inner<G, T>(
     debug_name: &str,
     plan: ReducePlan,
     collection: Collection<G, (Row, Row), Diff>,
-    err_input: Collection<G, DataflowError, Diff>,
+    errors: &mut Vec<Collection<G, DataflowError, Diff>>,
     key_arity: usize,
-) -> (Arrangement<G, Row>, Collection<G, DataflowError, Diff>)
+) -> Arrangement<G, Row>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
 {
-    let mut err_collection = err_input;
-
     let arrangement: Arrangement<G, Row> = match plan {
         // If we have no aggregations or just a single type of reduction, we
         // can go ahead and render them directly.
         ReducePlan::Distinct => {
             let (arranged_output, errs) = build_distinct(debug_name, collection);
-            err_collection = err_collection.concat(&errs);
+            errors.push(errs);
             arranged_output
         }
         ReducePlan::DistinctNegated => panic!("should have been handled in render_reduce_plan()"),
         ReducePlan::Accumulable(expr) => {
             let (arranged_output, errs) = build_accumulable(debug_name, collection, expr);
-            err_collection = err_collection.concat(&errs);
+            errors.push(errs);
             arranged_output
         }
         ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(expr)) => {
             let (output, errs) = build_monotonic(debug_name, collection, expr);
-            err_collection = err_collection.concat(&errs);
+            errors.push(errs);
             output
         }
         ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(expr)) => {
             let (output, errs) = build_bucketed(debug_name, collection, expr);
             if let Some(e) = errs {
-                err_collection = err_collection.concat(&e);
+                errors.push(e);
             }
             output
         }
         ReducePlan::Basic(BasicPlan::Single(index, aggr)) => {
             let (output, errs) = build_basic_aggregate(debug_name, collection, index, &aggr, true);
-            err_collection = err_collection
-                .concat(&errs.expect("validation should have occurred as it was requested"));
+            errors.push(errs.expect("validation should have occurred as it was requested"));
             output
         }
         ReducePlan::Basic(BasicPlan::Multiple(aggrs)) => {
             let (output, errs) = build_basic_aggregates(debug_name, collection, aggrs);
-            err_collection = err_collection.concat(&errs);
+            errors.push(errs);
             output
         }
         // Otherwise, we need to render something different for each type of
@@ -146,14 +145,13 @@ where
                 let r#type = ReductionType::try_from(&plan)
                     .expect("only representable reduction types were used above");
 
-                let (arrangement, errs) = render_reduce_plan_inner(
+                let arrangement = render_reduce_plan_inner(
                     debug_name,
                     plan,
                     collection.clone(),
-                    err_collection,
+                    errors,
                     key_arity,
                 );
-                err_collection = errs;
                 to_collate.push((r#type, arrangement));
             }
 
@@ -164,11 +162,11 @@ where
                 expr.aggregate_types,
                 &mut collection.scope(),
             );
-            err_collection = err_collection.concat(&errs);
+            errors.push(errs);
             oks
         }
     };
-    (arrangement, err_collection)
+    arrangement
 }
 
 impl<G, T> Context<G, Row, T>

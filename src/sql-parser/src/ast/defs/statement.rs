@@ -72,12 +72,7 @@ pub enum Statement<T: AstInfo> {
     AlterConnection(AlterConnectionStatement),
     AlterRole(AlterRoleStatement<T>),
     Discard(DiscardStatement),
-    DropDatabase(DropDatabaseStatement),
-    DropSchema(DropSchemaStatement),
     DropObjects(DropObjectsStatement),
-    DropRoles(DropRolesStatement),
-    DropClusters(DropClustersStatement),
-    DropClusterReplicas(DropClusterReplicasStatement),
     SetVariable(SetVariableStatement),
     ResetVariable(ResetVariableStatement),
     Show(ShowStatement<T>),
@@ -133,12 +128,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterConnection(stmt) => f.write_node(stmt),
             Statement::AlterRole(stmt) => f.write_node(stmt),
             Statement::Discard(stmt) => f.write_node(stmt),
-            Statement::DropDatabase(stmt) => f.write_node(stmt),
-            Statement::DropSchema(stmt) => f.write_node(stmt),
             Statement::DropObjects(stmt) => f.write_node(stmt),
-            Statement::DropRoles(stmt) => f.write_node(stmt),
-            Statement::DropClusters(stmt) => f.write_node(stmt),
-            Statement::DropClusterReplicas(stmt) => f.write_node(stmt),
             Statement::SetVariable(stmt) => f.write_node(stmt),
             Statement::ResetVariable(stmt) => f.write_node(stmt),
             Statement::Show(stmt) => f.write_node(stmt),
@@ -1663,48 +1653,6 @@ impl AstDisplay for DiscardTarget {
 }
 impl_display!(DiscardTarget);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DropDatabaseStatement {
-    pub name: UnresolvedDatabaseName,
-    pub if_exists: bool,
-    pub restrict: bool,
-}
-
-impl AstDisplay for DropDatabaseStatement {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("DROP DATABASE ");
-        if self.if_exists {
-            f.write_str("IF EXISTS ");
-        }
-        f.write_node(&self.name);
-        if self.restrict {
-            f.write_str(" RESTRICT");
-        }
-    }
-}
-impl_display!(DropDatabaseStatement);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DropSchemaStatement {
-    pub name: UnresolvedSchemaName,
-    pub if_exists: bool,
-    pub cascade: bool,
-}
-
-impl AstDisplay for DropSchemaStatement {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("DROP SCHEMA ");
-        if self.if_exists {
-            f.write_str("IF EXISTS ");
-        }
-        f.write_node(&self.name);
-        if self.cascade {
-            f.write_str(" CASCADE");
-        }
-    }
-}
-impl_display!(DropSchemaStatement);
-
 /// `DROP`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DropObjectsStatement {
@@ -1713,7 +1661,7 @@ pub struct DropObjectsStatement {
     /// An optional `IF EXISTS` clause. (Non-standard.)
     pub if_exists: bool,
     /// One or more objects to drop. (ANSI SQL requires exactly one.)
-    pub names: Vec<UnresolvedItemName>,
+    pub names: Vec<UnresolvedName>,
     /// Whether `CASCADE` was specified. This will be `false` when
     /// `RESTRICT` or no drop behavior at all was specified.
     pub cascade: bool,
@@ -1728,56 +1676,14 @@ impl AstDisplay for DropObjectsStatement {
             f.write_str("IF EXISTS ");
         }
         f.write_node(&display::comma_separated(&self.names));
-        if self.cascade {
+        if self.cascade && self.object_type != ObjectType::Database {
             f.write_str(" CASCADE");
+        } else if !self.cascade && self.object_type == ObjectType::Database {
+            f.write_str(" RESTRICT");
         }
     }
 }
 impl_display!(DropObjectsStatement);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DropRolesStatement {
-    /// An optional `IF EXISTS` clause. (Non-standard.)
-    pub if_exists: bool,
-    /// One or more objects to drop. (ANSI SQL requires exactly one.)
-    pub names: Vec<UnresolvedItemName>,
-}
-
-impl AstDisplay for DropRolesStatement {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("DROP ROLE ");
-        if self.if_exists {
-            f.write_str("IF EXISTS ");
-        }
-        f.write_node(&display::comma_separated(&self.names));
-    }
-}
-impl_display!(DropRolesStatement);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DropClustersStatement {
-    /// An optional `IF EXISTS` clause. (Non-standard.)
-    pub if_exists: bool,
-    /// One or more objects to drop. (ANSI SQL requires exactly one.)
-    pub names: Vec<UnresolvedItemName>,
-    /// Whether `CASCADE` was specified. This will be `false` when
-    /// `RESTRICT` or no drop behavior at all was specified.
-    pub cascade: bool,
-}
-
-impl AstDisplay for DropClustersStatement {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("DROP CLUSTER ");
-        if self.if_exists {
-            f.write_str("IF EXISTS ");
-        }
-        f.write_node(&display::comma_separated(&self.names));
-        if self.cascade {
-            f.write_str(" CASCADE");
-        }
-    }
-}
-impl_display!(DropClustersStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct QualifiedReplica {
@@ -1793,25 +1699,6 @@ impl AstDisplay for QualifiedReplica {
     }
 }
 impl_display!(QualifiedReplica);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DropClusterReplicasStatement {
-    /// An optional `IF EXISTS` clause. (Non-standard.)
-    pub if_exists: bool,
-    /// One or more objects to drop. (ANSI SQL requires exactly one.)
-    pub names: Vec<QualifiedReplica>,
-}
-
-impl AstDisplay for DropClusterReplicasStatement {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("DROP CLUSTER REPLICA ");
-        if self.if_exists {
-            f.write_str("IF EXISTS ");
-        }
-        f.write_node(&display::comma_separated(&self.names));
-    }
-}
-impl_display!(DropClusterReplicasStatement);
 
 /// `SET <variable>`
 ///

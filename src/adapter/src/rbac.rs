@@ -78,8 +78,11 @@ pub struct Ownership(ObjectId);
 impl Ownership {
     /// Reports whether any role has ownership over an object.
     fn check_roles(&self, role_ids: &BTreeSet<RoleId>, catalog: &impl SessionCatalog) -> bool {
-        let owner_id = catalog.get_owner_id(&self.0);
-        role_ids.contains(&owner_id)
+        if let Some(owner_id) = catalog.get_owner_id(&self.0) {
+            role_ids.contains(&owner_id)
+        } else {
+            true
+        }
     }
 }
 
@@ -251,6 +254,7 @@ pub fn check_plan(
                     let name = catalog.resolve_full_name(item.name());
                     (item.item_type().into(), name.to_string())
                 }
+                ObjectId::Role(_) => unreachable!("roles have no owner"),
             })
             .collect();
         return Err(AdapterError::Unauthorized(UnauthorizedError::Ownership {
@@ -290,11 +294,12 @@ fn generate_required_plan_attribute(plan: &Plan) -> Option<Attribute> {
     match plan {
         Plan::CreateDatabase(_) => Some(Attribute::CreateDB),
         Plan::CreateCluster(_) => Some(Attribute::CreateCluster),
-        Plan::CreateRole(_)
-        | Plan::AlterRole(_)
-        | Plan::DropRoles(_)
-        | Plan::GrantRole(_)
-        | Plan::RevokeRole(_) => Some(Attribute::CreateRole),
+        Plan::CreateRole(_) | Plan::AlterRole(_) | Plan::GrantRole(_) | Plan::RevokeRole(_) => {
+            Some(Attribute::CreateRole)
+        }
+        Plan::DropObjects(plan) if plan.object_type == ObjectType::Role => {
+            Some(Attribute::CreateRole)
+        }
         Plan::CreateSource(_)
         | Plan::CreateSources(_)
         | Plan::CreateTable(_)
@@ -309,11 +314,7 @@ fn generate_required_plan_attribute(plan: &Plan) -> Option<Attribute> {
         | Plan::CreateType(_)
         | Plan::DiscardTemp
         | Plan::DiscardAll
-        | Plan::DropDatabase(_)
-        | Plan::DropSchema(_)
-        | Plan::DropClusters(_)
-        | Plan::DropClusterReplicas(_)
-        | Plan::DropItems(_)
+        | Plan::DropObjects(_)
         | Plan::EmptyQuery
         | Plan::ShowAllVariables
         | Plan::ShowCreate(_)
@@ -373,7 +374,6 @@ fn generate_required_ownership(plan: &Plan) -> Vec<Ownership> {
         | Plan::CreateType(_)
         | Plan::DiscardTemp
         | Plan::DiscardAll
-        | Plan::DropRoles(_)
         | Plan::EmptyQuery
         | Plan::ShowAllVariables
         | Plan::ShowVariable(_)
@@ -405,33 +405,7 @@ fn generate_required_ownership(plan: &Plan) -> Vec<Ownership> {
         | Plan::Raise(_)
         | Plan::GrantRole(_)
         | Plan::RevokeRole(_) => Vec::new(),
-        Plan::DropDatabase(plan) => match plan.id {
-            Some(id) => vec![Ownership(ObjectId::Database(id))],
-            None => Vec::new(),
-        },
-        Plan::DropSchema(plan) => match plan.id {
-            Some((database_id, schema_id)) => {
-                vec![Ownership(ObjectId::Schema((database_id, schema_id)))]
-            }
-            None => Vec::new(),
-        },
-        Plan::DropClusters(plan) => plan
-            .ids
-            .iter()
-            .map(|id| Ownership(ObjectId::Cluster(*id)))
-            .collect(),
-        Plan::DropClusterReplicas(plan) => plan
-            .ids
-            .iter()
-            .map(|(cluster_id, replica_id)| {
-                Ownership(ObjectId::ClusterReplica((*cluster_id, *replica_id)))
-            })
-            .collect(),
-        Plan::DropItems(plan) => plan
-            .items
-            .iter()
-            .map(|id| Ownership(ObjectId::Item(*id)))
-            .collect(),
+        Plan::DropObjects(plan) => plan.ids.iter().cloned().map(Ownership).collect(),
         Plan::AlterIndexSetOptions(plan) => vec![Ownership(ObjectId::Item(plan.id))],
         Plan::AlterIndexResetOptions(plan) => vec![Ownership(ObjectId::Item(plan.id))],
         Plan::AlterSink(plan) => vec![Ownership(ObjectId::Item(plan.id))],

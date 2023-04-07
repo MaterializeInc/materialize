@@ -152,12 +152,7 @@ pub fn user_privilege_hack(
         | Plan::CreateType(_)
         | Plan::DiscardTemp
         | Plan::DiscardAll
-        | Plan::DropDatabase(_)
-        | Plan::DropSchema(_)
-        | Plan::DropRoles(_)
-        | Plan::DropClusters(_)
-        | Plan::DropClusterReplicas(_)
-        | Plan::DropItems(_)
+        | Plan::DropObjects(_)
         | Plan::Insert(_)
         | Plan::AlterNoop(_)
         | Plan::AlterIndexSetOptions(_)

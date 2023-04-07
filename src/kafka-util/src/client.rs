@@ -19,12 +19,15 @@ use mz_ore::collections::CollectionExt;
 use rdkafka::client::{BrokerAddr, Client, NativeClient, OAuthToken};
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::{ConsumerContext, Rebalance};
-use rdkafka::error::{KafkaError, KafkaResult};
+use rdkafka::error::{KafkaError, KafkaResult, RDKafkaErrorCode};
 use rdkafka::producer::{DefaultProducerContext, DeliveryResult, ProducerContext};
 use rdkafka::types::RDKafkaRespErr;
 use rdkafka::util::Timeout;
 use rdkafka::{ClientContext, Statistics, TopicPartitionList};
 use tracing::{debug, error, info, warn, Level};
+
+/// A reasonable default timeout when fetching metadata or partitions.
+pub const DEFAULT_FETCH_METADATA_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A `ClientContext` implementation that uses `tracing` instead of `log`
 /// macros.
@@ -217,12 +220,15 @@ where
     }
 }
 
+/// Id of a partition in a topic.
+pub type PartitionId = i32;
+
 /// Retrieve number of partitions for a given `topic` using the given `client`
 pub fn get_partitions<C: ClientContext>(
     client: &Client<C>,
     topic: &str,
     timeout: Duration,
-) -> Result<Vec<i32>, anyhow::Error> {
+) -> Result<Vec<PartitionId>, anyhow::Error> {
     let meta = client.fetch_metadata(Some(topic), timeout)?;
     if meta.topics().len() != 1 {
         bail!(
@@ -231,7 +237,17 @@ pub fn get_partitions<C: ClientContext>(
             meta.topics().len()
         );
     }
+
+    fn check_err(err: Option<RDKafkaRespErr>) -> anyhow::Result<()> {
+        if let Some(err) = err {
+            Err(RDKafkaErrorCode::from(err))?
+        }
+        Ok(())
+    }
+
     let meta_topic = meta.topics().into_element();
+    check_err(meta_topic.error())?;
+
     if meta_topic.name() != topic {
         bail!(
             "got results for wrong topic {} (expected {})",
@@ -240,11 +256,18 @@ pub fn get_partitions<C: ClientContext>(
         );
     }
 
-    if meta_topic.partitions().len() == 0 {
+    let mut partition_ids = Vec::with_capacity(meta_topic.partitions().len());
+    for partition_meta in meta_topic.partitions() {
+        check_err(partition_meta.error())?;
+
+        partition_ids.push(partition_meta.id());
+    }
+
+    if partition_ids.len() == 0 {
         bail!("topic {} does not exist", topic);
     }
 
-    Ok(meta_topic.partitions().iter().map(|x| x.id()).collect())
+    Ok(partition_ids)
 }
 
 /// A simpler version of [`create_new_client_config`] that defaults

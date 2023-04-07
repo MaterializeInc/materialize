@@ -632,14 +632,14 @@ DROP DATABASE mydb
 ----
 DROP DATABASE mydb
 =>
-DropDatabase(DropDatabaseStatement { name: UnresolvedDatabaseName(Ident("mydb")), if_exists: false, restrict: false })
+DropObjects(DropObjectsStatement { object_type: Database, if_exists: false, names: [Database(UnresolvedDatabaseName(Ident("mydb")))], cascade: true })
 
 parse-statement
 DROP DATABASE IF EXISTS mydb
 ----
 DROP DATABASE IF EXISTS mydb
 =>
-DropDatabase(DropDatabaseStatement { name: UnresolvedDatabaseName(Ident("mydb")), if_exists: true, restrict: false })
+DropObjects(DropObjectsStatement { object_type: Database, if_exists: true, names: [Database(UnresolvedDatabaseName(Ident("mydb")))], cascade: true })
 
 parse-statement
 DROP DATABASE mydb.nope
@@ -653,14 +653,14 @@ DROP DATABASE mydb CASCADE
 ----
 DROP DATABASE mydb
 =>
-DropDatabase(DropDatabaseStatement { name: UnresolvedDatabaseName(Ident("mydb")), if_exists: false, restrict: false })
+DropObjects(DropObjectsStatement { object_type: Database, if_exists: false, names: [Database(UnresolvedDatabaseName(Ident("mydb")))], cascade: true })
 
 parse-statement
 DROP DATABASE mydb RESTRICT
 ----
 DROP DATABASE mydb RESTRICT
 =>
-DropDatabase(DropDatabaseStatement { name: UnresolvedDatabaseName(Ident("mydb")), if_exists: false, restrict: true })
+DropObjects(DropObjectsStatement { object_type: Database, if_exists: false, names: [Database(UnresolvedDatabaseName(Ident("mydb")))], cascade: false })
 
 parse-statement
 DROP DATABASE mydb CASCADE RESTRICT
@@ -688,21 +688,21 @@ DROP SCHEMA mydb.myschema
 ----
 DROP SCHEMA mydb.myschema
 =>
-DropSchema(DropSchemaStatement { name: UnresolvedSchemaName([Ident("mydb"), Ident("myschema")]), if_exists: false, cascade: false })
+DropObjects(DropObjectsStatement { object_type: Schema, if_exists: false, names: [Schema(UnresolvedSchemaName([Ident("mydb"), Ident("myschema")]))], cascade: false })
 
 parse-statement
 DROP TABLE foo
 ----
 DROP TABLE foo
 =>
-DropObjects(DropObjectsStatement { object_type: Table, if_exists: false, names: [UnresolvedItemName([Ident("foo")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: Table, if_exists: false, names: [Item(UnresolvedItemName([Ident("foo")]))], cascade: false })
 
 parse-statement
 DROP TABLE IF EXISTS foo, bar CASCADE
 ----
 DROP TABLE IF EXISTS foo, bar CASCADE
 =>
-DropObjects(DropObjectsStatement { object_type: Table, if_exists: true, names: [UnresolvedItemName([Ident("foo")]), UnresolvedItemName([Ident("bar")])], cascade: true })
+DropObjects(DropObjectsStatement { object_type: Table, if_exists: true, names: [Item(UnresolvedItemName([Ident("foo")])), Item(UnresolvedItemName([Ident("bar")]))], cascade: true })
 
 parse-statement
 DROP TABLE
@@ -723,28 +723,28 @@ DROP VIEW myschema.myview
 ----
 DROP VIEW myschema.myview
 =>
-DropObjects(DropObjectsStatement { object_type: View, if_exists: false, names: [UnresolvedItemName([Ident("myschema"), Ident("myview")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: View, if_exists: false, names: [Item(UnresolvedItemName([Ident("myschema"), Ident("myview")]))], cascade: false })
 
 parse-statement
 DROP MATERIALIZED VIEW myschema.myview
 ----
 DROP MATERIALIZED VIEW myschema.myview
 =>
-DropObjects(DropObjectsStatement { object_type: MaterializedView, if_exists: false, names: [UnresolvedItemName([Ident("myschema"), Ident("myview")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: MaterializedView, if_exists: false, names: [Item(UnresolvedItemName([Ident("myschema"), Ident("myview")]))], cascade: false })
 
 parse-statement
 DROP SOURCE myschema.mydatasource
 ----
 DROP SOURCE myschema.mydatasource
 =>
-DropObjects(DropObjectsStatement { object_type: Source, if_exists: false, names: [UnresolvedItemName([Ident("myschema"), Ident("mydatasource")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: Source, if_exists: false, names: [Item(UnresolvedItemName([Ident("myschema"), Ident("mydatasource")]))], cascade: false })
 
 parse-statement
 DROP INDEX IF EXISTS myschema.myindex
 ----
 DROP INDEX IF EXISTS myschema.myindex
 =>
-DropObjects(DropObjectsStatement { object_type: Index, if_exists: true, names: [UnresolvedItemName([Ident("myschema"), Ident("myindex")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: Index, if_exists: true, names: [Item(UnresolvedItemName([Ident("myschema"), Ident("myindex")]))], cascade: false })
 
 parse-statement
 SUBSCRIBE foo.bar
@@ -1154,21 +1154,21 @@ DROP CLUSTER cluster
 ----
 DROP CLUSTER cluster
 =>
-DropClusters(DropClustersStatement { if_exists: false, names: [UnresolvedItemName([Ident("cluster")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: Cluster, if_exists: false, names: [Cluster(Ident("cluster"))], cascade: false })
 
 parse-statement
 DROP CLUSTER IF EXISTS cluster
 ----
 DROP CLUSTER IF EXISTS cluster
 =>
-DropClusters(DropClustersStatement { if_exists: true, names: [UnresolvedItemName([Ident("cluster")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: Cluster, if_exists: true, names: [Cluster(Ident("cluster"))], cascade: false })
 
 parse-statement
 DROP CLUSTER IF EXISTS cluster RESTRICT
 ----
 DROP CLUSTER IF EXISTS cluster
 =>
-DropClusters(DropClustersStatement { if_exists: true, names: [UnresolvedItemName([Ident("cluster")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: Cluster, if_exists: true, names: [Cluster(Ident("cluster"))], cascade: false })
 
 parse-statement
 DROP CLUSTER REPLICA r1, r2
@@ -1182,7 +1182,7 @@ DROP CLUSTER REPLICA IF EXISTS cluster.replica
 ----
 DROP CLUSTER REPLICA IF EXISTS cluster.replica
 =>
-DropClusterReplicas(DropClusterReplicasStatement { if_exists: true, names: [QualifiedReplica { cluster: Ident("cluster"), replica: Ident("replica") }] })
+DropObjects(DropObjectsStatement { object_type: ClusterReplica, if_exists: true, names: [ClusterReplica(QualifiedReplica { cluster: Ident("cluster"), replica: Ident("replica") })], cascade: false })
 
 parse-statement
 DROP CLUSTER REPLICA IF EXISTS replica
@@ -1196,7 +1196,7 @@ DROP CLUSTER IF EXISTS cluster CASCADE
 ----
 DROP CLUSTER IF EXISTS cluster CASCADE
 =>
-DropClusters(DropClustersStatement { if_exists: true, names: [UnresolvedItemName([Ident("cluster")])], cascade: true })
+DropObjects(DropObjectsStatement { object_type: Cluster, if_exists: true, names: [Cluster(Ident("cluster"))], cascade: true })
 
 parse-statement
 CREATE SECRET secret AS decode('c2VjcmV0Cg==', 'base64')
@@ -1217,14 +1217,14 @@ DROP SECRET secret
 ----
 DROP SECRET secret
 =>
-DropObjects(DropObjectsStatement { object_type: Secret, if_exists: false, names: [UnresolvedItemName([Ident("secret")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: Secret, if_exists: false, names: [Item(UnresolvedItemName([Ident("secret")]))], cascade: false })
 
 parse-statement
 DROP SECRET IF EXISTS secret
 ----
 DROP SECRET IF EXISTS secret
 =>
-DropObjects(DropObjectsStatement { object_type: Secret, if_exists: true, names: [UnresolvedItemName([Ident("secret")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: Secret, if_exists: true, names: [Item(UnresolvedItemName([Ident("secret")]))], cascade: false })
 
 parse-statement
 SHOW SECRETS
@@ -1334,7 +1334,7 @@ DROP CONNECTION conn1
 ----
 DROP CONNECTION conn1
 =>
-DropObjects(DropObjectsStatement { object_type: Connection, if_exists: false, names: [UnresolvedItemName([Ident("conn1")])], cascade: false })
+DropObjects(DropObjectsStatement { object_type: Connection, if_exists: false, names: [Item(UnresolvedItemName([Ident("conn1")]))], cascade: false })
 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT BYTES

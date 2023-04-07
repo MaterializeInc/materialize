@@ -36,13 +36,15 @@ use timely::dataflow::operators::{Enter, Leave, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 use mz_interchange::avro::{AvroEncoder, AvroSchemaGenerator};
 use mz_interchange::encode::Encode;
 use mz_interchange::json::JsonEncoder;
-use mz_kafka_util::client::{BrokerRewritingClientContext, MzClientContext};
+use mz_kafka_util::client::{
+    BrokerRewritingClientContext, MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT,
+};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
@@ -224,7 +226,6 @@ impl KafkaSinkSendRetryManager {
 #[derive(Clone)]
 pub struct SinkProducerContext {
     metrics: Arc<SinkMetrics>,
-    status_tx: mpsc::Sender<SinkStatus>,
     retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
 }
 
@@ -235,11 +236,6 @@ impl ClientContext for SinkProducerContext {
         MzClientContext.log(level, fac, log_message)
     }
     fn error(&self, error: KafkaError, reason: &str) {
-        let status = SinkStatus::Stalled {
-            error: error.to_string(),
-            hint: None,
-        };
-        let _ = self.status_tx.try_send(status);
         MzClientContext.error(error, reason)
     }
 }
@@ -386,7 +382,7 @@ struct KafkaSinkState {
 
     progress_topic: String,
     progress_key: String,
-    progress_client: Option<Arc<BaseConsumer<BrokerRewritingClientContext<SinkConsumerContext>>>>,
+    progress_client: Option<Arc<BaseConsumer<BrokerRewritingClientContext<MzClientContext>>>>,
 
     healthchecker: Arc<Mutex<Option<Healthchecker>>>,
     internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
@@ -405,27 +401,6 @@ struct KafkaSinkState {
     /// exactly-once guarantees.
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
 }
-
-#[derive(Clone)]
-struct SinkConsumerContext {
-    status_tx: mpsc::Sender<SinkStatus>,
-}
-
-impl ClientContext for SinkConsumerContext {
-    fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
-        MzClientContext.log(level, fac, log_message)
-    }
-    fn error(&self, error: KafkaError, reason: &str) {
-        let status = SinkStatus::Stalled {
-            error: error.to_string(),
-            hint: None,
-        };
-        let _ = self.status_tx.try_send(status);
-        MzClientContext.error(error, reason)
-    }
-}
-
-impl ConsumerContext for SinkConsumerContext {}
 
 impl KafkaSinkState {
     async fn new(
@@ -448,26 +423,12 @@ impl KafkaSinkState {
 
         let retry_manager = Arc::new(Mutex::new(KafkaSinkSendRetryManager::new()));
 
-        let (status_tx, mut status_rx) = mpsc::channel(16);
-
         let producer_context = SinkProducerContext {
             metrics: Arc::clone(&metrics),
-            status_tx: status_tx.clone(),
             retry_manager: Arc::clone(&retry_manager),
         };
 
         let healthchecker: Arc<Mutex<Option<Healthchecker>>> = Arc::new(Mutex::new(None));
-
-        {
-            let healthchecker = Arc::clone(&healthchecker);
-            task::spawn(|| "producer-error-report", async move {
-                while let Some(status) = status_rx.recv().await {
-                    if let Some(hc) = healthchecker.lock().await.as_mut() {
-                        hc.update_status(status).await;
-                    }
-                }
-            });
-        }
 
         let producer = connection
             .connection
@@ -514,7 +475,7 @@ impl KafkaSinkState {
             .connection
             .create_with_context(
                 connection_context,
-                SinkConsumerContext { status_tx },
+                MzClientContext,
                 &btreemap! {
                     "group.id" => format!("materialize-bootstrap-sink-{sink_id}"),
                     "isolation.level" => "read_committed".into(),
@@ -769,7 +730,7 @@ impl KafkaSinkState {
                             &progress_topic,
                             &progress_key,
                             &progress_client,
-                            Duration::from_secs(10),
+                            DEFAULT_FETCH_METADATA_TIMEOUT,
                         )
                     },
                 )

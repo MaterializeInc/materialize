@@ -79,4 +79,4 @@ $ kafka-verify-data format=avro sink=materialize.public.data_snk sort-messages=t
 ! CREATE SOURCE connector_source
   FROM KAFKA CONNECTION kafka_sasl_no_ca (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_sasl
-contains: broker certificate could not be verified
+contains:Meta data fetch error: BrokerTransportFailure (Local: Broker transport failure)

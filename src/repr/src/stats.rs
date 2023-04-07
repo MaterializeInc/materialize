@@ -9,7 +9,7 @@
 
 use std::borrow::Borrow;
 
-use mz_persist_types::columnar::Data;
+use mz_persist_types::columnar::{ColumnGet, Data};
 use mz_persist_types::stats::{JsonStats, PrimitiveStats};
 use prost::Message;
 
@@ -95,7 +95,7 @@ pub(crate) fn proto_datum_min_max_nulls(col: &<Vec<u8> as Data>::Col) -> (Vec<u8
 
     let mut buf = Row::default();
     for idx in 0..col.len() {
-        ProtoDatumToPersist::decode(col, idx, &mut buf.packer());
+        ProtoDatumToPersist::decode(ColumnGet::<Vec<u8>>::get(col, idx), &mut buf.packer());
         let datum = as_optional_datum(&buf).expect("not enough datums");
         if datum == Datum::Null {
             null_count += 1;
@@ -127,7 +127,7 @@ pub(crate) fn jsonb_stats_nulls(
 
     let mut buf = Row::default();
     for idx in 0..col.len() {
-        ProtoDatumToPersist::decode(col, idx, &mut buf.packer());
+        ProtoDatumToPersist::decode(ColumnGet::<Vec<u8>>::get(col, idx), &mut buf.packer());
         let datum = as_optional_datum(&buf).expect("not enough datums");
         // Datum::Null only shows up at the top level of Jsonb, so we handle it
         // here instead of in the recursing function.

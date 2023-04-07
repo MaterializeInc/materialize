@@ -692,7 +692,47 @@ pub enum ObjectId {
     ClusterReplica((ClusterId, ReplicaId)),
     Database(DatabaseId),
     Schema((DatabaseId, SchemaId)),
+    Role(RoleId),
     Item(GlobalId),
+}
+
+impl ObjectId {
+    pub fn unwrap_cluster_id(self) -> ClusterId {
+        match self {
+            ObjectId::Cluster(id) => id,
+            _ => panic!("ObjectId::unwrap_cluster_id called on {self:?}"),
+        }
+    }
+    pub fn unwrap_cluster_replica_id(self) -> (ClusterId, ReplicaId) {
+        match self {
+            ObjectId::ClusterReplica(id) => id,
+            _ => panic!("ObjectId::unwrap_cluster_replica_id called on {self:?}"),
+        }
+    }
+    pub fn unwrap_database_id(self) -> DatabaseId {
+        match self {
+            ObjectId::Database(id) => id,
+            _ => panic!("ObjectId::unwrap_database_id called on {self:?}"),
+        }
+    }
+    pub fn unwrap_schema_id(self) -> (DatabaseId, SchemaId) {
+        match self {
+            ObjectId::Schema(id) => id,
+            _ => panic!("ObjectId::unwrap_schema_id called on {self:?}"),
+        }
+    }
+    pub fn unwrap_role_id(self) -> RoleId {
+        match self {
+            ObjectId::Role(id) => id,
+            _ => panic!("ObjectId::unwrap_role_id called on {self:?}"),
+        }
+    }
+    pub fn unwrap_item_id(self) -> GlobalId {
+        match self {
+            ObjectId::Item(id) => id,
+            _ => panic!("ObjectId::unwrap_item_id called on {self:?}"),
+        }
+    }
 }
 
 #[derive(Debug)]

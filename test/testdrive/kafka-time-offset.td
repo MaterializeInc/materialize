@@ -27,7 +27,7 @@ $ kafka-create-topic topic=t0
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=1, TOPIC 'missing_topic')
   FORMAT TEXT
   INCLUDE OFFSET
-contains:topic missing_topic does not exist
+contains:UnknownTopicOrPartition (Broker: Unknown topic or partition)
 
 ! CREATE SOURCE pick_one
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=1, START OFFSET=[1], TOPIC 'testdrive-t0-${testdrive.seed}')

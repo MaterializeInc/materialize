@@ -53,7 +53,7 @@ use std::fmt::Debug;
 use crate::codec_impls::UnitSchema;
 use crate::columnar::sealed::ColumnRef;
 use crate::part::{ColumnsMut, ColumnsRef, PartBuilder};
-use crate::stats::{DynStats, StatsFn};
+use crate::stats::{ColumnStats, StatsFn};
 use crate::Codec;
 
 /// A type understood by persist.
@@ -92,7 +92,7 @@ pub trait Data: Debug + Send + Sync + Sized + 'static {
     type Mut: ColumnPush<Self> + Default;
 
     /// The statistics type of columns of this type of data.
-    type Stats: DynStats + for<'a> From<&'a Self::Col>;
+    type Stats: ColumnStats<Self> + for<'a> From<&'a Self::Col>;
 }
 
 /// A type that may be retrieved from a column of `[T]`.

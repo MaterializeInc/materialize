@@ -138,12 +138,7 @@ pub fn describe(
         Statement::CreateMaterializedView(stmt) => {
             ddl::describe_create_materialized_view(&scx, stmt)?
         }
-        Statement::DropClusterReplicas(stmt) => ddl::describe_drop_cluster_replica(&scx, stmt)?,
-        Statement::DropClusters(stmt) => ddl::describe_drop_cluster(&scx, stmt)?,
-        Statement::DropDatabase(stmt) => ddl::describe_drop_database(&scx, stmt)?,
         Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
-        Statement::DropRoles(stmt) => ddl::describe_drop_role(&scx, stmt)?,
-        Statement::DropSchema(stmt) => ddl::describe_drop_schema(&scx, stmt)?,
         Statement::GrantRole(stmt) => ddl::describe_grant_role(&scx, stmt)?,
         Statement::RevokeRole(stmt) => ddl::describe_revoke_role(&scx, stmt)?,
 
@@ -276,12 +271,7 @@ pub fn plan(
         Statement::CreateMaterializedView(stmt) => {
             ddl::plan_create_materialized_view(scx, stmt, params)
         }
-        Statement::DropClusterReplicas(stmt) => ddl::plan_drop_cluster_replica(scx, stmt),
-        Statement::DropClusters(stmt) => ddl::plan_drop_cluster(scx, stmt),
-        Statement::DropDatabase(stmt) => ddl::plan_drop_database(scx, stmt),
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
-        Statement::DropRoles(stmt) => ddl::plan_drop_role(scx, stmt),
-        Statement::DropSchema(stmt) => ddl::plan_drop_schema(scx, stmt),
         Statement::GrantRole(stmt) => ddl::plan_grant_role(scx, stmt),
         Statement::RevokeRole(stmt) => ddl::plan_revoke_role(scx, stmt),
 

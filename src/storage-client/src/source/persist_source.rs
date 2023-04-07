@@ -17,6 +17,8 @@ use std::time::Instant;
 use mz_persist_client::operators::shard_source::shard_source;
 use mz_persist_client::stats::PartStats;
 use mz_persist_types::codec_impls::UnitSchema;
+use mz_persist_types::columnar::Data;
+use mz_persist_types::stats::{ColumnStats, DynStats};
 use mz_repr::stats::PersistSourceDataStats;
 use timely::communication::Push;
 use timely::dataflow::channels::pact::Pipeline;
@@ -30,7 +32,11 @@ use timely::scheduling::Activator;
 use mz_expr::{MfpPlan, MfpPushdown};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::fetch::FetchedPart;
-use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
+use mz_repr::{
+    Datum, DatumToPersist, DatumToPersistFn, DatumVec, Diff, GlobalId, RelationDesc, Row, RowArena,
+    Timestamp,
+};
+use tracing::error;
 
 use crate::controller::CollectionMetadata;
 use crate::types::errors::DataflowError;
@@ -311,6 +317,20 @@ struct PersistSourceDataStatsImpl<'a> {
     stats: &'a PartStats,
 }
 
+fn downcast_stats<'a, T: Data>(stats: &'a dyn DynStats) -> Option<&'a T::Stats> {
+    match stats.as_any().downcast_ref::<T::Stats>() {
+        Some(x) => Some(x),
+        None => {
+            error!(
+                "unexpected stats type for {}: {}",
+                std::any::type_name::<T>(),
+                stats.type_name()
+            );
+            None
+        }
+    }
+}
+
 impl PersistSourceDataStats for PersistSourceDataStatsImpl<'_> {
     fn len(&self) -> Option<usize> {
         Some(self.stats.key.len)
@@ -331,36 +351,54 @@ impl PersistSourceDataStats for PersistSourceDataStatsImpl<'_> {
         num_oks.map(|num_oks| num_results - num_oks)
     }
 
-    fn col_min<'a>(&'a self, idx: usize, _arena: &'a RowArena) -> Option<Datum<'a>> {
-        // The `RowArena` is unused now, but it will be needed for things like
-        // e.g. `Datum::List`.
+    fn col_min<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<Datum<'a>> {
+        struct ColMin<'a>(&'a dyn DynStats, &'a RowArena);
+        impl<'a> DatumToPersistFn<Option<Datum<'a>>> for ColMin<'a> {
+            fn call<T: DatumToPersist>(self) -> Option<Datum<'a>> {
+                let ColMin(stats, arena) = self;
+                downcast_stats::<T::Data>(stats)?
+                    .lower()
+                    .map(|val| arena.make_datum(|packer| T::decode(val, packer)))
+            }
+        }
+
         let name = self.desc.get_name(idx);
-        self.stats
-            .key
-            .col::<Option<u64>>(name.as_str())
-            .ok()?
-            .map(|x| Datum::UInt64(x.some.lower))
+        let typ = &self.desc.typ().column_types[idx];
+        let stats = self.stats.key.cols.get(name.as_str())?;
+        typ.to_persist(ColMin(stats.as_ref(), arena))
     }
 
-    fn col_max<'a>(&'a self, idx: usize, _arena: &'a RowArena) -> Option<Datum<'a>> {
-        // The `RowArena` is unused now, but it will be needed for things like
-        // e.g. `Datum::List`.
-        let name = self.desc.get_name(idx);
+    fn col_max<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<Datum<'a>> {
+        struct ColMax<'a>(&'a dyn DynStats, &'a RowArena);
+        impl<'a> DatumToPersistFn<Option<Datum<'a>>> for ColMax<'a> {
+            fn call<T: DatumToPersist>(self) -> Option<Datum<'a>> {
+                let ColMax(stats, arena) = self;
+                downcast_stats::<T::Data>(stats)?
+                    .upper()
+                    .map(|val| arena.make_datum(|packer| T::decode(val, packer)))
+            }
+        }
 
-        self.stats
-            .key
-            .col::<Option<u64>>(name.as_str())
-            .ok()?
-            .map(|x| Datum::UInt64(x.some.upper))
+        let name = self.desc.get_name(idx);
+        let typ = &self.desc.typ().column_types[idx];
+        let stats = self.stats.key.cols.get(name.as_str())?;
+        typ.to_persist(ColMax(stats.as_ref(), arena))
     }
 
     fn col_null_count(&self, idx: usize) -> Option<usize> {
+        struct ColNullCount<'a>(&'a dyn DynStats);
+        impl<'a> DatumToPersistFn<Option<usize>> for ColNullCount<'a> {
+            fn call<T: DatumToPersist>(self) -> Option<usize> {
+                let ColNullCount(stats) = self;
+                let stats = downcast_stats::<T::Data>(stats)?;
+                Some(stats.none_count())
+            }
+        }
+
         let name = self.desc.get_name(idx);
-        self.stats
-            .key
-            .col::<Option<u64>>(name.as_str())
-            .ok()?
-            .map(|x| x.none)
+        let typ = &self.desc.typ().column_types[idx];
+        let stats = self.stats.key.cols.get(name.as_str())?;
+        typ.to_persist(ColNullCount(stats.as_ref()))
     }
 
     fn row_min(&self, _row: &mut Row) -> Option<usize> {
